@@ -2,9 +2,16 @@
 
 import { db } from '@/db';
 import { users } from '@/db/schema';
+import bcrypt from 'bcryptjs';
+import { eq } from 'drizzle-orm';
 
 export async function getUsers() {
   return db.select().from(users).orderBy(users.fullName);
+}
+
+export async function getUserByEmail(email: string) {
+  const rows = await db.select().from(users).where(eq(users.email, email));
+  return rows[0] ?? null;
 }
 
 export async function createUser(data: {
@@ -17,16 +24,32 @@ export async function createUser(data: {
 }
 
 export async function seedUsers() {
-  // Only seed if the table is empty
-  const existing = await db.select().from(users);
-  if (existing.length > 0) return existing;
+  // Hash the default dev password for all seed users
+  const defaultPassword = 'Password123!';
+  const hash = await bcrypt.hash(defaultPassword, 12);
 
   const seedData = [
-    { email: 'admin@bytime.dev', fullName: 'Admin User', role: 'admin' as const },
-    { email: 'jane.smith@bytime.dev', fullName: 'Jane Smith', role: 'employee' as const },
-    { email: 'john.doe@bytime.dev', fullName: 'John Doe', role: 'employee' as const },
-    { email: 'sarah.wilson@bytime.dev', fullName: 'Sarah Wilson', role: 'supervisor' as const },
+    { email: 'admin@bytime.dev', fullName: 'Admin User', role: 'admin' as const, passwordHash: hash },
+    { email: 'jane.smith@bytime.dev', fullName: 'Jane Smith', role: 'employee' as const, passwordHash: hash },
+    { email: 'john.doe@bytime.dev', fullName: 'John Doe', role: 'employee' as const, passwordHash: hash },
+    { email: 'sarah.wilson@bytime.dev', fullName: 'Sarah Wilson', role: 'supervisor' as const, passwordHash: hash },
   ];
 
-  return db.insert(users).values(seedData).returning();
+  // Upsert: update password_hash for existing users, insert new ones
+  const results = [];
+  for (const user of seedData) {
+    const existing = await db.select().from(users).where(eq(users.email, user.email));
+    if (existing.length > 0) {
+      const updated = await db.update(users)
+        .set({ passwordHash: user.passwordHash })
+        .where(eq(users.email, user.email))
+        .returning();
+      results.push(updated[0]);
+    } else {
+      const inserted = await db.insert(users).values(user).returning();
+      results.push(inserted[0]);
+    }
+  }
+
+  return results;
 }

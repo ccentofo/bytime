@@ -17,6 +17,7 @@ export const users = pgTable('users', {
   fullName: varchar('full_name', { length: 255 }).notNull(),
   role: userRoleEnum('role').notNull().default('employee'),
   isActive: boolean('is_active').notNull().default(true),
+  passwordHash: varchar('password_hash', { length: 255 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

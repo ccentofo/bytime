@@ -4,8 +4,13 @@ import { Stack, NavLink, Divider, Text } from '@mantine/core';
 import { IconClock, IconFileText, IconUsers } from '@tabler/icons-react';
 import { usePathname } from 'next/navigation';
 
-export function AppNavbar() {
+type AppNavbarProps = {
+  userRole?: string | null;
+};
+
+export function AppNavbar({ userRole }: AppNavbarProps) {
   const pathname = usePathname();
+  const isAdmin = userRole === 'admin' || userRole === 'supervisor';
 
   return (
     <Stack gap={0} pt="sm">
@@ -20,24 +25,28 @@ export function AppNavbar() {
         active={pathname === '/timesheet'}
       />
 
-      <Divider my="sm" />
+      {isAdmin && (
+        <>
+          <Divider my="sm" />
 
-      {/* Admin Section */}
-      <Text size="xs" fw={700} c="dimmed" px="md" mb={4}>
-        ADMINISTRATION
-      </Text>
-      <NavLink
-        label="Contracts & CLINs"
-        href="/admin/contracts"
-        leftSection={<IconFileText size={18} />}
-        active={pathname === '/admin/contracts'}
-      />
-      <NavLink
-        label="User Assignments"
-        href="/admin/assignments"
-        leftSection={<IconUsers size={18} />}
-        active={pathname === '/admin/assignments'}
-      />
+          {/* Admin Section */}
+          <Text size="xs" fw={700} c="dimmed" px="md" mb={4}>
+            ADMINISTRATION
+          </Text>
+          <NavLink
+            label="Contracts & CLINs"
+            href="/admin/contracts"
+            leftSection={<IconFileText size={18} />}
+            active={pathname === '/admin/contracts'}
+          />
+          <NavLink
+            label="User Assignments"
+            href="/admin/assignments"
+            leftSection={<IconUsers size={18} />}
+            active={pathname === '/admin/assignments'}
+          />
+        </>
+      )}
     </Stack>
   );
 }

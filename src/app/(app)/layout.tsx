@@ -1,26 +1,23 @@
-'use client';
+import { auth } from '@/auth';
+import { redirect } from 'next/navigation';
+import { AppShellWrapper } from './AppShellWrapper';
 
-import { AppShell } from '@mantine/core';
-import { useDisclosure } from '@mantine/hooks';
-import { AppHeader } from '@/components/shell/AppHeader';
-import { AppNavbar } from '@/components/shell/AppNavbar';
+export default async function AppLayout({ children }: { children: React.ReactNode }) {
+  const session = await auth();
 
-export default function AppLayout({ children }: { children: React.ReactNode }) {
-  const [opened, { toggle }] = useDisclosure();
+  if (!session?.user) {
+    redirect('/login');
+  }
+
+  const user = {
+    fullName: (session.user as any).fullName ?? session.user.name ?? '',
+    email: session.user.email ?? '',
+    role: (session.user as any).role ?? 'employee',
+  };
 
   return (
-    <AppShell
-      header={{ height: 60 }}
-      navbar={{ width: 250, breakpoint: 'sm', collapsed: { mobile: !opened } }}
-      padding="md"
-    >
-      <AppShell.Header>
-        <AppHeader />
-      </AppShell.Header>
-      <AppShell.Navbar p="xs">
-        <AppNavbar />
-      </AppShell.Navbar>
-      <AppShell.Main>{children}</AppShell.Main>
-    </AppShell>
+    <AppShellWrapper user={user}>
+      {children}
+    </AppShellWrapper>
   );
 }
