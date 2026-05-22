@@ -1,11 +1,13 @@
 'use client';
 
 import React, { createContext, useContext, useReducer } from 'react';
+import dayjs from 'dayjs';
 import type { TimesheetState, TimesheetAction } from '@/types/timesheet';
 import {
   MOCK_CHARGE_CODES,
   MOCK_ENTRIES,
   MOCK_PERIOD_START,
+  generateMockEntries,
 } from '@/data/mock-timesheet';
 
 // ---------------------------------------------------------------------------
@@ -47,6 +49,37 @@ function timesheetReducer(
 
     case 'CLOSE_NOTE_MODAL': {
       return { ...state, activeNoteCell: null };
+    }
+
+    case 'NAVIGATE_PERIOD': {
+      const current = dayjs(state.periodStart);
+      let newStart: dayjs.Dayjs;
+
+      if (action.direction === 'next') {
+        if (current.date() === 1) {
+          // 1st → 16th of same month
+          newStart = current.date(16);
+        } else {
+          // 16th → 1st of next month
+          newStart = current.add(1, 'month').date(1);
+        }
+      } else {
+        if (current.date() === 1) {
+          // 1st → 16th of previous month
+          newStart = current.subtract(1, 'month').date(16);
+        } else {
+          // 16th → 1st of same month
+          newStart = current.date(1);
+        }
+      }
+
+      const newPeriodStart = newStart.toDate();
+      return {
+        ...state,
+        periodStart: newPeriodStart,
+        entries: generateMockEntries(newPeriodStart),
+        notes: {}, // clear notes when switching periods (mock behavior)
+      };
     }
 
     default:

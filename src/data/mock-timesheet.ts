@@ -1,11 +1,8 @@
 import dayjs from 'dayjs';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
 
-// Compute the most recent Monday as the bi-weekly period start
-const today = dayjs('2026-05-18'); // Fixed date to avoid hydration mismatch
-const dayOfWeek = today.day(); // 0=Sun, 1=Mon, ...
-const daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-export const MOCK_PERIOD_START: Date = today.subtract(daysToMonday, 'day').toDate();
+// Semi-monthly period: May 16 – May 31, 2026
+export const MOCK_PERIOD_START: Date = dayjs('2026-05-16').toDate();
 
 export const MOCK_CHARGE_CODES: ChargeCode[] = [
   {
@@ -40,31 +37,49 @@ export const MOCK_CHARGE_CODES: ChargeCode[] = [
   },
 ];
 
-// 14-day arrays: Mon–Sun, Mon–Sun (weekends = dayIndex 5,6,12,13)
-// Realistic distribution: 8h weekdays, 0h weekends, some variation
-export const MOCK_ENTRIES: TimesheetEntry[] = [
-  {
-    chargeCodeId: 'cc-001',
-    //              Mon   Tue   Wed   Thu   Fri   Sat   Sun   Mon   Tue   Wed   Thu   Fri   Sat   Sun
-    hours: [8.0, 8.0, 8.0, 8.0, 8.0, 0.0, 0.0, 8.0, 8.0, 8.0, 8.0, 8.0, 0.0, 0.0],
-  },
-  {
-    chargeCodeId: 'cc-002',
-    hours: [6.0, 6.0, 6.0, 6.0, 6.0, 0.0, 0.0, 6.0, 6.0, 6.0, 6.0, 6.0, 0.0, 0.0],
-  },
-  {
-    chargeCodeId: 'cc-003',
-    hours: [0.0, 2.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0, 2.0, 0.0, 0.0],
-  },
-  {
-    chargeCodeId: 'cc-004',
-    hours: [2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-  },
-  {
-    chargeCodeId: 'cc-005',
-    hours: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-  },
-];
+export function getNumDaysInPeriod(periodStart: Date): number {
+  const d = dayjs(periodStart);
+  if (d.date() === 1) {
+    return 15; // 1st through 15th
+  }
+  // 16th through end of month
+  return d.daysInMonth() - 15;
+}
+
+export function generateMockEntries(periodStart: Date): TimesheetEntry[] {
+  const numDays = getNumDaysInPeriod(periodStart);
+
+  // For each charge code, generate hours based on day-of-week
+  // Weekdays get hours, weekends get 0
+  const patterns: Record<string, number> = {
+    'cc-001': 8.0,
+    'cc-002': 6.0,
+    'cc-003': 2.0,
+    'cc-004': 2.0,
+    'cc-005': 0.0,
+  };
+
+  return MOCK_CHARGE_CODES.map((cc) => {
+    const dailyHours = patterns[cc.id] ?? 0;
+    const hours: number[] = [];
+    for (let i = 0; i < numDays; i++) {
+      const date = dayjs(periodStart).add(i, 'day');
+      const dow = date.day(); // 0=Sun, 6=Sat
+      const isWeekend = dow === 0 || dow === 6;
+      // cc-003 gets 0 on Mondays, cc-004 gets hours only on Mondays
+      if (cc.id === 'cc-003') {
+        hours.push(isWeekend || dow === 1 ? 0 : dailyHours);
+      } else if (cc.id === 'cc-004') {
+        hours.push(dow === 1 ? dailyHours : 0);
+      } else {
+        hours.push(isWeekend ? 0 : dailyHours);
+      }
+    }
+    return { chargeCodeId: cc.id, hours };
+  });
+}
+
+export const MOCK_ENTRIES: TimesheetEntry[] = generateMockEntries(MOCK_PERIOD_START);
 
 export const REASON_CODES: { value: string; label: string }[] = [
   { value: 'CORRECTION', label: 'Correction of Error' },

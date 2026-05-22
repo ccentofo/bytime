@@ -7,7 +7,7 @@ export interface ChargeCode {
 
 export interface TimesheetEntry {
   chargeCodeId: string;
-  hours: number[]; // length 14, one per day
+  hours: number[]; // variable length — matches the number of days in the active semi-monthly period
 }
 
 export interface NoteData {
@@ -27,4 +27,5 @@ export type TimesheetAction =
   | { type: 'SET_HOURS'; chargeCodeId: string; dayIndex: number; value: number }
   | { type: 'SET_NOTE'; chargeCodeId: string; dayIndex: number; note: NoteData }
   | { type: 'OPEN_NOTE_MODAL'; chargeCodeId: string; dayIndex: number }
-  | { type: 'CLOSE_NOTE_MODAL' };
+  | { type: 'CLOSE_NOTE_MODAL' }
+  | { type: 'NAVIGATE_PERIOD'; direction: 'prev' | 'next' };

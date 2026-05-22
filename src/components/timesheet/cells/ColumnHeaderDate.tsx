@@ -5,15 +5,12 @@ import dayjs from 'dayjs';
 
 interface ColumnHeaderDateProps {
   date: Date;
-  dayIndex: number;
+  dayIndex: number; // kept for potential future use
 }
 
-// Weekend day indices (assuming Monday start): 5=Sat, 6=Sun, 12=Sat, 13=Sun
-const WEEKEND_INDICES = new Set([5, 6, 12, 13]);
-
-export function ColumnHeaderDate({ date, dayIndex }: ColumnHeaderDateProps) {
+export function ColumnHeaderDate({ date, dayIndex: _dayIndex }: ColumnHeaderDateProps) {
   const d = dayjs(date);
-  const isWeekend = WEEKEND_INDICES.has(dayIndex);
+  const isWeekend = d.day() === 0 || d.day() === 6;
 
   return (
     <Stack align="center" gap={0}>

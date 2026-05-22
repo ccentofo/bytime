@@ -9,10 +9,8 @@ import { ChargeCodeCell } from '@/components/timesheet/cells/ChargeCodeCell';
 import { HourCell } from '@/components/timesheet/cells/HourCell';
 import { TotalHoursCell } from '@/components/timesheet/cells/TotalHoursCell';
 import { ColumnHeaderDate } from '@/components/timesheet/cells/ColumnHeaderDate';
+import { getNumDaysInPeriod } from '@/data/mock-timesheet';
 import type { TimesheetEntry } from '@/types/timesheet';
-
-// Weekend day indices (Monday start): 5=Sat, 6=Sun, 12=Sat, 13=Sun
-const WEEKEND_INDICES = new Set([5, 6, 12, 13]);
 
 // Row shape passed to MRT — merges ChargeCode + TimesheetEntry
 interface TableRow extends TimesheetEntry {
@@ -23,6 +21,8 @@ export function BiWeeklyTable() {
   const { state } = useTimesheet();
   const { chargeCodes, entries, periodStart } = state;
 
+  const numDays = getNumDaysInPeriod(periodStart);
+
   // Merge charge codes + entries into flat row objects
   const tableData: TableRow[] = useMemo(
     () =>
@@ -30,10 +30,10 @@ export function BiWeeklyTable() {
         const entry = entries.find((e) => e.chargeCodeId === cc.id);
         return {
           chargeCodeId: cc.id,
-          hours: entry ? entry.hours : Array(14).fill(0),
+          hours: entry ? entry.hours : Array(numDays).fill(0),
         };
       }),
-    [chargeCodes, entries]
+    [chargeCodes, entries, numDays]
   );
 
   const columns = useMemo<MRT_ColumnDef<TableRow>[]>(() => {
@@ -53,6 +53,14 @@ export function BiWeeklyTable() {
           Daily Totals
         </Text>
       ),
+      mantineTableHeadCellProps: {
+        style: {
+          textAlign: 'left' as const,
+          borderBottom: '2px solid var(--mantine-color-default-border)',
+          borderRight: '2px solid var(--mantine-color-default-border)',
+          padding: '8px',
+        },
+      },
       mantineTableBodyCellProps: {
         style: {
           backgroundColor: 'var(--mantine-color-body)',
@@ -71,10 +79,11 @@ export function BiWeeklyTable() {
       },
     };
 
-    // Columns 1–14 — Day columns
-    const dayColumns: MRT_ColumnDef<TableRow>[] = Array.from({ length: 14 }, (_, dayIndex) => {
+    // Columns 1–N — Day columns (dynamic count)
+    const dayColumns: MRT_ColumnDef<TableRow>[] = Array.from({ length: numDays }, (_, dayIndex) => {
       const date = dayjs(periodStart).add(dayIndex, 'day').toDate();
-      const isWeekend = WEEKEND_INDICES.has(dayIndex);
+      const dow = dayjs(periodStart).add(dayIndex, 'day').day();
+      const isWeekend = dow === 0 || dow === 6;
 
       return {
         id: `day-${dayIndex}`,
@@ -87,7 +96,7 @@ export function BiWeeklyTable() {
           <HourCell chargeCodeId={row.original.chargeCodeId} dayIndex={dayIndex} />
         ),
         Footer: () => {
-          const dayTotal = entries.reduce((sum, entry) => sum + entry.hours[dayIndex], 0);
+          const dayTotal = entries.reduce((sum, entry) => sum + (entry.hours[dayIndex] ?? 0), 0);
           return (
             <Text fw={700} ta="center" size="sm">
               {dayTotal.toFixed(2)}
@@ -108,6 +117,8 @@ export function BiWeeklyTable() {
             backgroundColor: isWeekend
               ? 'light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-7))'
               : undefined,
+            textAlign: 'center' as const,
+            verticalAlign: 'middle' as const,
           },
         },
         mantineTableFooterCellProps: {
@@ -123,7 +134,7 @@ export function BiWeeklyTable() {
       } as MRT_ColumnDef<TableRow>;
     });
 
-    // Column 15 — Total (pinned right)
+    // Column N+1 — Total (pinned right)
     const totalCol: MRT_ColumnDef<TableRow> = {
       id: 'total',
       accessorFn: (row) => row.hours.reduce((a, b) => a + b, 0),
@@ -142,6 +153,12 @@ export function BiWeeklyTable() {
           </Text>
         );
       },
+      mantineTableHeadCellProps: {
+        style: {
+          textAlign: 'center' as const,
+          borderLeft: '2px solid var(--mantine-color-default-border)',
+        },
+      },
       mantineTableBodyCellProps: {
         style: {
           borderLeft: '2px solid var(--mantine-color-default-border)',
@@ -159,7 +176,7 @@ export function BiWeeklyTable() {
     };
 
     return [chargeCodeCol, ...dayColumns, totalCol];
-  }, [chargeCodes, periodStart, entries]);
+  }, [chargeCodes, periodStart, entries, numDays]);
 
   const table = useMantineReactTable({
     columns,
