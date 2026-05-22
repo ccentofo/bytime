@@ -53,3 +53,32 @@ export async function seedUsers() {
 
   return results;
 }
+
+export async function updateUser(id: string, data: {
+  fullName?: string;
+  email?: string;
+  role?: 'admin' | 'supervisor' | 'employee';
+  isActive?: boolean;
+}) {
+  const rows = await db.update(users)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(users.id, id))
+    .returning();
+  return rows[0];
+}
+
+export async function createUserWithPassword(data: {
+  email: string;
+  fullName: string;
+  role: 'admin' | 'supervisor' | 'employee';
+  password: string;
+}) {
+  const hash = await bcrypt.hash(data.password, 12);
+  const rows = await db.insert(users).values({
+    email: data.email,
+    fullName: data.fullName,
+    role: data.role,
+    passwordHash: hash,
+  }).returning();
+  return rows[0];
+}

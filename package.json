@@ -16,6 +16,7 @@
     "@mantine/core": "^9.2.1",
     "@mantine/dates": "^9.2.1",
     "@mantine/hooks": "^9.2.1",
+    "@mantine/notifications": "^9.2.1",
     "@tabler/icons-react": "^3.44.0",
     "bcryptjs": "^3.0.3",
     "dayjs": "^1.11.20",

@@ -162,6 +162,34 @@ export function AssignmentsClient({ initialAssignments, users, contracts }: Prop
         Deactivate
       </Button>
     ),
+    mantineTableProps: {
+      highlightOnHover: true,
+      striped: 'odd',
+      withColumnBorders: false,
+    },
+    mantineTableHeadCellProps: {
+      style: {
+        fontWeight: 600,
+        fontSize: '0.85rem',
+      },
+    },
+    mantineTableBodyCellProps: {
+      style: {
+        fontSize: '0.875rem',
+      },
+    },
+    displayColumnDefOptions: {
+      'mrt-row-actions': {
+        header: 'Actions',
+        size: 110,
+        mantineTableHeadCellProps: {
+          style: { textAlign: 'center' as const },
+        },
+        mantineTableBodyCellProps: {
+          style: { textAlign: 'center' as const },
+        },
+      },
+    },
   });
 
   return (

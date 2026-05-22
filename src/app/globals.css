@@ -26,3 +26,65 @@ a {
   color: inherit;
   text-decoration: none;
 }
+
+/* ---------------------------------------------------------------------------
+   Mantine React Table — Global Style Overrides
+   Targets MRT's internal CSS classes to fix icon sizing, padding, and spacing.
+   --------------------------------------------------------------------------- */
+
+/* Shrink the sort arrow icons in column headers */
+.mrt-table-head-cell-sort-button svg {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+/* Shrink the column actions (three-dot menu) icons in headers */
+.mrt-table-head-cell-column-actions-button {
+  min-width: 24px !important;
+  min-height: 24px !important;
+  width: 24px !important;
+  height: 24px !important;
+}
+
+.mrt-table-head-cell-column-actions-button svg {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+/* Add consistent padding to header cells */
+.mrt-table-head-cell {
+  padding: 10px 12px !important;
+}
+
+/* Add consistent padding to body cells */
+.mrt-table-body-cell {
+  padding: 10px 12px !important;
+}
+
+/* Ensure header cell content (label + icons) doesn't wrap awkwardly */
+.mrt-table-head-cell-content {
+  gap: 4px !important;
+}
+
+/* Shrink top toolbar action icons (search, filter, density, fullscreen) */
+.mrt-toolbar-internal-buttons svg {
+  width: 18px !important;
+  height: 18px !important;
+}
+
+.mrt-toolbar-internal-buttons button {
+  min-width: 32px !important;
+  min-height: 32px !important;
+  width: 32px !important;
+  height: 32px !important;
+}
+
+/* Bottom toolbar (pagination) — tighten spacing */
+.mrt-table-pagination {
+  padding: 8px 12px !important;
+}
+
+/* Row action cells — ensure consistent padding */
+.mrt-table-body-cell[data-is-row-actions="true"] {
+  padding: 6px 12px !important;
+}

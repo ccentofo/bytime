@@ -11,13 +11,24 @@ interface ColumnHeaderDateProps {
 export function ColumnHeaderDate({ date, dayIndex: _dayIndex }: ColumnHeaderDateProps) {
   const d = dayjs(date);
   const isWeekend = d.day() === 0 || d.day() === 6;
+  const isPast = d.isBefore(dayjs(), 'day');
+  const isToday = d.isSame(dayjs(), 'day');
 
   return (
     <Stack align="center" gap={0}>
-      <Text fw={700} size="sm" c={isWeekend ? 'dimmed' : undefined}>
+      <Text
+        fw={isToday ? 900 : 700}
+        size="sm"
+        c={isToday ? 'blue' : isWeekend ? 'dimmed' : undefined}
+        td={isToday ? 'underline' : undefined}
+      >
         {d.format('ddd')}
       </Text>
-      <Text size="xs" c="dimmed">
+      <Text
+        size="xs"
+        c={isToday ? 'blue' : 'dimmed'}
+        fs={isPast && !isToday ? 'italic' : undefined}
+      >
         {d.format('MMM D')}
       </Text>
     </Stack>

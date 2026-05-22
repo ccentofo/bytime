@@ -9,7 +9,7 @@ import { ChargeCodeCell } from '@/components/timesheet/cells/ChargeCodeCell';
 import { HourCell } from '@/components/timesheet/cells/HourCell';
 import { TotalHoursCell } from '@/components/timesheet/cells/TotalHoursCell';
 import { ColumnHeaderDate } from '@/components/timesheet/cells/ColumnHeaderDate';
-import { getNumDaysInPeriod } from '@/data/mock-timesheet';
+import { getNumDaysInPeriod } from '@/lib/date-utils';
 import type { TimesheetEntry } from '@/types/timesheet';
 
 // Row shape passed to MRT — merges ChargeCode + TimesheetEntry

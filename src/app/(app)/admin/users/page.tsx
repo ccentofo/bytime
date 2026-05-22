@@ -1,16 +1,16 @@
 import { auth } from '@/auth';
 import { redirect } from 'next/navigation';
-import { getContracts } from '@/server/actions/contracts';
-import { ContractsClient } from './ContractsClient';
+import { getUsers } from '@/server/actions/users';
+import { UsersClient } from './UsersClient';
 
 export const dynamic = 'force-dynamic';
 
-export default async function ContractsPage() {
+export default async function UsersPage() {
   const session = await auth();
   if (!session?.user) redirect('/login');
   const role = (session.user as any).role;
   if (role !== 'admin' && role !== 'supervisor') redirect('/timesheet');
 
-  const contracts = await getContracts();
-  return <ContractsClient initialContracts={contracts} />;
+  const users = await getUsers();
+  return <UsersClient initialUsers={users} />;
 }

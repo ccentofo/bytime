@@ -4,10 +4,10 @@ import { ActionIcon, Group, Text, Title } from '@mantine/core';
 import { IconChevronLeft, IconChevronRight } from '@tabler/icons-react';
 import dayjs from 'dayjs';
 import { useTimesheet } from '@/components/timesheet/TimesheetContext';
-import { getNumDaysInPeriod } from '@/data/mock-timesheet';
+import { getNumDaysInPeriod } from '@/lib/date-utils';
 
 export function PayPeriodSelector() {
-  const { state, dispatch } = useTimesheet();
+  const { state, loadPeriod } = useTimesheet();
   const { periodStart } = state;
 
   const start = dayjs(periodStart);
@@ -21,8 +21,9 @@ export function PayPeriodSelector() {
         <ActionIcon
           variant="subtle"
           size="lg"
-          onClick={() => dispatch({ type: 'NAVIGATE_PERIOD', direction: 'prev' })}
+          onClick={() => loadPeriod('prev')}
           aria-label="Previous pay period"
+          disabled={state.isLoadingPeriod}
         >
           <IconChevronLeft size={20} />
         </ActionIcon>
@@ -35,8 +36,9 @@ export function PayPeriodSelector() {
         <ActionIcon
           variant="subtle"
           size="lg"
-          onClick={() => dispatch({ type: 'NAVIGATE_PERIOD', direction: 'next' })}
+          onClick={() => loadPeriod('next')}
           aria-label="Next pay period"
+          disabled={state.isLoadingPeriod}
         >
           <IconChevronRight size={20} />
         </ActionIcon>

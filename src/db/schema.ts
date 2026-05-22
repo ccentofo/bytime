@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, timestamp, boolean, pgEnum, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, timestamp, boolean, pgEnum, uniqueIndex, integer } from 'drizzle-orm/pg-core';
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -6,6 +6,7 @@ import { pgTable, uuid, varchar, text, timestamp, boolean, pgEnum, uniqueIndex }
 
 export const userRoleEnum = pgEnum('user_role', ['admin', 'supervisor', 'employee']);
 export const statusEnum = pgEnum('record_status', ['active', 'inactive', 'closed']);
+export const periodStatusEnum = pgEnum('period_status', ['draft', 'submitted', 'approved', 'rejected']);
 
 // ---------------------------------------------------------------------------
 // Users
@@ -65,4 +66,41 @@ export const userAssignments = pgTable('user_assignments', {
   assignedBy: uuid('assigned_by').references(() => users.id),
 }, (table) => [
   uniqueIndex('user_clin_unique_idx').on(table.userId, table.clinId),
+]);
+
+// ---------------------------------------------------------------------------
+// Timesheet Entries (DCAA append-only — NEVER update or delete rows)
+// ---------------------------------------------------------------------------
+
+export const timesheetEntries = pgTable('timesheet_entries', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  clinId: uuid('clin_id').notNull().references(() => clins.id),
+  entryDate: timestamp('entry_date', { withTimezone: true }).notNull(),
+  hours: varchar('hours', { length: 10 }).notNull().default('0'), // stored as string to preserve exact decimal input
+  revisionNumber: integer('revision_number').notNull().default(1),
+  changeReasonCode: varchar('change_reason_code', { length: 50 }),
+  comment: text('comment'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy: uuid('created_by').references(() => users.id),
+});
+
+// ---------------------------------------------------------------------------
+// Timesheet Periods (tracks period lifecycle: draft → submitted → approved/rejected)
+// ---------------------------------------------------------------------------
+
+export const timesheetPeriods = pgTable('timesheet_periods', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  periodStart: timestamp('period_start', { withTimezone: true }).notNull(),
+  status: periodStatusEnum('status').notNull().default('draft'),
+  submittedAt: timestamp('submitted_at', { withTimezone: true }),
+  submittedComment: text('submitted_comment'),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+  reviewedBy: uuid('reviewed_by').references(() => users.id),
+  reviewComment: text('review_comment'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('user_period_unique_idx').on(table.userId, table.periodStart),
 ]);

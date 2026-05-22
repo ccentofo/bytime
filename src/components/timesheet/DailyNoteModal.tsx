@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { Button, Group, Modal, Select, Textarea } from '@mantine/core';
 import dayjs from 'dayjs';
 import { useTimesheet } from '@/components/timesheet/TimesheetContext';
-import { REASON_CODES } from '@/data/mock-timesheet';
+import { REASON_CODES } from '@/lib/reason-codes';
 
 export function DailyNoteModal() {
   const { state, dispatch } = useTimesheet();
