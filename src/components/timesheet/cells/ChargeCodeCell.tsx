@@ -14,8 +14,11 @@ export function ChargeCodeCell({ chargeCode }: ChargeCodeCellProps) {
         {chargeCode.projectName}
       </Text>
       <Badge variant="light" size="sm">
-        {chargeCode.clin}
+        {chargeCode.clin}{chargeCode.slinNumber ? ` / ${chargeCode.slinNumber}` : ''}
       </Badge>
+      {chargeCode.slinNumber && (
+        <Text size="xs" c="dimmed">SLIN: {chargeCode.slinNumber}</Text>
+      )}
       <Text c="dimmed" size="xs">
         {chargeCode.description}
       </Text>

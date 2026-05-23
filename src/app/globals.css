@@ -28,63 +28,55 @@ a {
 }
 
 /* ---------------------------------------------------------------------------
-   Mantine React Table — Global Style Overrides
-   Targets MRT's internal CSS classes to fix icon sizing, padding, and spacing.
+   Mantine React Table v2 — Global Style Overrides
+   MRT v2 uses CSS Modules with hashed class names, so we target elements
+   using attribute selectors [class*="MRT_"] and standard HTML selectors.
    --------------------------------------------------------------------------- */
 
-/* Shrink the sort arrow icons in column headers */
-.mrt-table-head-cell-sort-button svg {
-  width: 14px !important;
-  height: 14px !important;
+/* Shrink sort icons in column headers */
+[class*="MRT_TableHeadCellSortLabel"] svg {
+  width: 16px !important;
+  height: 16px !important;
 }
 
-/* Shrink the column actions (three-dot menu) icons in headers */
-.mrt-table-head-cell-column-actions-button {
+/* Shrink column action menu buttons (three-dot icons) */
+[class*="MRT_TableHeadCell-module_content-actions"] button {
   min-width: 24px !important;
   min-height: 24px !important;
   width: 24px !important;
   height: 24px !important;
+  padding: 2px !important;
 }
 
-.mrt-table-head-cell-column-actions-button svg {
+[class*="MRT_TableHeadCell-module_content-actions"] svg {
   width: 14px !important;
   height: 14px !important;
 }
 
-/* Add consistent padding to header cells */
-.mrt-table-head-cell {
-  padding: 10px 12px !important;
-}
-
-/* Add consistent padding to body cells */
-.mrt-table-body-cell {
-  padding: 10px 12px !important;
-}
-
-/* Ensure header cell content (label + icons) doesn't wrap awkwardly */
-.mrt-table-head-cell-content {
-  gap: 4px !important;
-}
-
-/* Shrink top toolbar action icons (search, filter, density, fullscreen) */
-.mrt-toolbar-internal-buttons svg {
-  width: 18px !important;
-  height: 18px !important;
-}
-
-.mrt-toolbar-internal-buttons button {
+/* Shrink toolbar internal buttons (search, filter, density, fullscreen) */
+[class*="MRT_ToolbarInternalButtons"] button {
   min-width: 32px !important;
   min-height: 32px !important;
   width: 32px !important;
   height: 32px !important;
 }
 
-/* Bottom toolbar (pagination) — tighten spacing */
-.mrt-table-pagination {
+[class*="MRT_ToolbarInternalButtons"] svg {
+  width: 18px !important;
+  height: 18px !important;
+}
+
+/* Add padding to the top toolbar so buttons don't ride the edge */
+[class*="MRT_TopToolbar-module_root"] {
   padding: 8px 12px !important;
 }
 
-/* Row action cells — ensure consistent padding */
-.mrt-table-body-cell[data-is-row-actions="true"] {
+/* Tighten gap between header label text and sort/action icons */
+[class*="MRT_TableHeadCell-module_content__"] {
+  gap: 2px !important;
+}
+
+/* Bottom toolbar padding */
+[class*="MRT_BottomToolbar-module_root"] {
   padding: 6px 12px !important;
 }

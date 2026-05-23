@@ -6,6 +6,7 @@ import {
   Modal,
   TextInput,
   Textarea,
+  Select,
   Drawer,
   Group,
   Stack,
@@ -14,24 +15,30 @@ import {
   Badge,
   Table,
   ActionIcon,
+  Box,
 } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
-import { IconEdit, IconList, IconPlus } from '@tabler/icons-react';
+import { IconEdit, IconList, IconPlus, IconChevronDown, IconChevronRight } from '@tabler/icons-react';
 import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import {
   createContract,
   updateContract,
 } from '@/server/actions/contracts';
 import { getClinsByContract, createClin, updateClin } from '@/server/actions/clins';
+import { getSlinsByClin, createSlin, updateSlin } from '@/server/actions/slins';
+import classes from "./Contracts.module.css";
 
 type Contract = {
   id: string;
   contractNumber: string;
   name: string;
   description: string | null;
+  contractType: string;
   status: 'active' | 'inactive' | 'closed';
   startDate: Date | null;
   endDate: Date | null;
+  fundedValue: string | null;
+  ceilingValue: string | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -41,6 +48,18 @@ type Clin = {
   contractId: string;
   clinNumber: string;
   description: string | null;
+  fundedAmount: string | null;
+  status: 'active' | 'inactive' | 'closed';
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type Slin = {
+  id: string;
+  clinId: string;
+  slinNumber: string;
+  description: string | null;
+  fundedAmount: string | null;
   status: 'active' | 'inactive' | 'closed';
   createdAt: Date;
   updatedAt: Date;
@@ -50,8 +69,11 @@ type ContractForm = {
   contractNumber: string;
   name: string;
   description: string;
+  contractType: string;
   startDate: string | null;
   endDate: string | null;
+  fundedValue: string;
+  ceilingValue: string;
 };
 
 type Props = {
@@ -68,8 +90,11 @@ const EMPTY_FORM: ContractForm = {
   contractNumber: '',
   name: '',
   description: '',
+  contractType: 'prime',
   startDate: null,
   endDate: null,
+  fundedValue: '',
+  ceilingValue: '',
 };
 
 export function ContractsClient({ initialContracts }: Props) {
@@ -85,7 +110,12 @@ export function ContractsClient({ initialContracts }: Props) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
   const [clins, setClins] = useState<Clin[]>([]);
-  const [clinForm, setClinForm] = useState({ clinNumber: '', description: '' });
+  const [clinForm, setClinForm] = useState({ clinNumber: '', description: '', fundedAmount: '' });
+
+  // SLINs state
+  const [slinsByClin, setSlinsByClin] = useState<Record<string, Slin[]>>({});
+  const [slinForm, setSlinForm] = useState({ slinNumber: '', description: '', fundedAmount: '' });
+  const [expandedClinId, setExpandedClinId] = useState<string | null>(null);
 
   function openAddModal() {
     setEditingContract(null);
@@ -99,8 +129,11 @@ export function ContractsClient({ initialContracts }: Props) {
       contractNumber: contract.contractNumber,
       name: contract.name,
       description: contract.description ?? '',
+      contractType: contract.contractType ?? 'prime',
       startDate: contract.startDate ? contract.startDate.toISOString().split('T')[0] : null,
       endDate: contract.endDate ? contract.endDate.toISOString().split('T')[0] : null,
+      fundedValue: contract.fundedValue ?? '',
+      ceilingValue: contract.ceilingValue ?? '',
     });
     setModalOpen(true);
   }
@@ -108,6 +141,8 @@ export function ContractsClient({ initialContracts }: Props) {
   function openClinsDrawer(contract: Contract) {
     setSelectedContract(contract);
     setDrawerOpen(true);
+    setSlinsByClin({});
+    setExpandedClinId(null);
     startTransition(async () => {
       const data = await getClinsByContract(contract.id);
       setClins(data as Clin[]);
@@ -120,8 +155,11 @@ export function ContractsClient({ initialContracts }: Props) {
         contractNumber: contractForm.contractNumber,
         name: contractForm.name,
         description: contractForm.description || undefined,
+        contractType: contractForm.contractType || 'prime',
         startDate: contractForm.startDate ? new Date(contractForm.startDate) : undefined,
         endDate: contractForm.endDate ? new Date(contractForm.endDate) : undefined,
+        fundedValue: contractForm.fundedValue || undefined,
+        ceilingValue: contractForm.ceilingValue || undefined,
       };
 
       if (editingContract) {
@@ -148,10 +186,11 @@ export function ContractsClient({ initialContracts }: Props) {
         contractId: selectedContract.id,
         clinNumber: clinForm.clinNumber,
         description: clinForm.description || undefined,
+        fundedAmount: clinForm.fundedAmount || undefined,
       });
       if (created) {
         setClins((prev) => [...prev, created as Clin]);
-        setClinForm({ clinNumber: '', description: '' });
+        setClinForm({ clinNumber: '', description: '', fundedAmount: '' });
       }
     });
   }
@@ -162,6 +201,53 @@ export function ContractsClient({ initialContracts }: Props) {
       const updated = await updateClin(clin.id, { status: newStatus });
       if (updated) {
         setClins((prev) => prev.map((c) => (c.id === updated.id ? (updated as Clin) : c)));
+      }
+    });
+  }
+
+  function handleExpandClin(clinId: string) {
+    if (expandedClinId === clinId) {
+      setExpandedClinId(null);
+      return;
+    }
+    setExpandedClinId(clinId);
+    if (!slinsByClin[clinId]) {
+      startTransition(async () => {
+        const data = await getSlinsByClin(clinId);
+        setSlinsByClin((prev) => ({ ...prev, [clinId]: data as Slin[] }));
+      });
+    }
+  }
+
+  function handleSlinSubmit(clinId: string) {
+    startTransition(async () => {
+      const created = await createSlin({
+        clinId,
+        slinNumber: slinForm.slinNumber,
+        description: slinForm.description || undefined,
+        fundedAmount: slinForm.fundedAmount || undefined,
+      });
+      if (created) {
+        setSlinsByClin((prev) => ({
+          ...prev,
+          [clinId]: [...(prev[clinId] ?? []), created as Slin],
+        }));
+        setSlinForm({ slinNumber: '', description: '', fundedAmount: '' });
+      }
+    });
+  }
+
+  function handleSlinStatusToggle(slin: Slin) {
+    const newStatus = slin.status === 'active' ? 'inactive' : 'active';
+    startTransition(async () => {
+      const updated = await updateSlin(slin.id, { status: newStatus });
+      if (updated) {
+        setSlinsByClin((prev) => ({
+          ...prev,
+          [slin.clinId]: (prev[slin.clinId] ?? []).map((s) =>
+            s.id === updated.id ? (updated as Slin) : s
+          ),
+        }));
       }
     });
   }
@@ -178,6 +264,27 @@ export function ContractsClient({ initialContracts }: Props) {
         </Badge>
       ),
       size: 110,
+    },
+    {
+      accessorKey: 'contractType',
+      header: 'Type',
+      Cell: ({ cell }) => (
+        <Badge color={cell.getValue<string>() === 'prime' ? 'blue' : 'grape'} variant="light" size="sm">
+          {cell.getValue<string>() === 'prime' ? 'Prime' : 'Sub'}
+        </Badge>
+      ),
+      size: 90,
+    },
+    {
+      accessorKey: 'fundedValue',
+      header: 'Funded',
+      Cell: ({ cell }) => {
+        const val = cell.getValue<string | null>();
+        if (!val) return <Text size="sm" c="dimmed">—</Text>;
+        const num = parseFloat(val);
+        return isNaN(num) ? '—' : `$${num.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+      },
+      size: 130,
     },
     {
       accessorKey: 'startDate',
@@ -227,20 +334,31 @@ export function ContractsClient({ initialContracts }: Props) {
         Add Contract
       </Button>
     ),
+    enableColumnActions: false,
+    enableDensityToggle: false,
+    enableFullScreenToggle: false,
     mantineTableProps: {
       highlightOnHover: true,
       striped: 'odd',
       withColumnBorders: false,
     },
     mantineTableHeadCellProps: {
+      className: classes.tableHeaderCell,
       style: {
         fontWeight: 600,
         fontSize: '0.85rem',
+        padding: '12px 16px',
       },
     },
     mantineTableBodyCellProps: {
       style: {
         fontSize: '0.875rem',
+        padding: '12px 16px',
+      },
+    },
+    mantineTopToolbarProps: {
+      style: {
+        padding: '12px 16px',
       },
     },
     displayColumnDefOptions: {
@@ -248,10 +366,16 @@ export function ContractsClient({ initialContracts }: Props) {
         header: 'Actions',
         size: 100,
         mantineTableHeadCellProps: {
-          style: { textAlign: 'center' as const },
+          style: {
+            textAlign: 'center' as const,
+            padding: '12px 16px',
+          },
         },
         mantineTableBodyCellProps: {
-          style: { textAlign: 'center' as const },
+          style: {
+            textAlign: 'center' as const,
+            padding: '12px 16px',
+          },
         },
       },
     },
@@ -294,6 +418,27 @@ export function ContractsClient({ initialContracts }: Props) {
             value={contractForm.description}
             onChange={(e) => setContractForm((f) => ({ ...f, description: e.target.value }))}
           />
+          <Select
+            label="Contract Type"
+            data={[
+              { value: 'prime', label: 'Prime Contract' },
+              { value: 'sub', label: 'Subcontract' },
+            ]}
+            value={contractForm.contractType}
+            onChange={(val) => setContractForm((f) => ({ ...f, contractType: val ?? 'prime' }))}
+          />
+          <TextInput
+            label="Funded Value ($)"
+            placeholder="500000.00"
+            value={contractForm.fundedValue}
+            onChange={(e) => setContractForm((f) => ({ ...f, fundedValue: e.target.value }))}
+          />
+          <TextInput
+            label="Ceiling Value ($)"
+            placeholder="750000.00"
+            value={contractForm.ceilingValue}
+            onChange={(e) => setContractForm((f) => ({ ...f, ceilingValue: e.target.value }))}
+          />
           <DateInput
             label="Start Date"
             value={contractForm.startDate}
@@ -322,7 +467,7 @@ export function ContractsClient({ initialContracts }: Props) {
         opened={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         position="right"
-        size="lg"
+        size="xl"
         title={
           selectedContract
             ? `CLINs — ${selectedContract.name} (${selectedContract.contractNumber})`
@@ -345,6 +490,13 @@ export function ContractsClient({ initialContracts }: Props) {
               onChange={(e) => setClinForm((f) => ({ ...f, description: e.target.value }))}
               style={{ flex: 2 }}
             />
+            <TextInput
+              label="Funded Amount ($)"
+              placeholder="100000.00"
+              value={clinForm.fundedAmount}
+              onChange={(e) => setClinForm((f) => ({ ...f, fundedAmount: e.target.value }))}
+              style={{ minWidth: 150 }}
+            />
             <Button onClick={handleClinSubmit} loading={isPending} leftSection={<IconPlus size={14} />}>
               Add
             </Button>
@@ -355,37 +507,137 @@ export function ContractsClient({ initialContracts }: Props) {
           {clins.length === 0 ? (
             <Text c="dimmed" size="sm">No CLINs yet for this contract.</Text>
           ) : (
-            <Table striped highlightOnHover withTableBorder>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>CLIN #</Table.Th>
-                  <Table.Th>Description</Table.Th>
-                  <Table.Th>Status</Table.Th>
-                  <Table.Th>Toggle</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {clins.map((clin) => (
-                  <Table.Tr key={clin.id}>
-                    <Table.Td>{clin.clinNumber}</Table.Td>
-                    <Table.Td>{clin.description ?? '—'}</Table.Td>
-                    <Table.Td>
-                      <Badge color={STATUS_COLORS[clin.status] ?? 'gray'}>{clin.status}</Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Button
-                        size="xs"
-                        variant="subtle"
-                        onClick={() => handleClinStatusToggle(clin)}
-                        loading={isPending}
-                      >
-                        {clin.status === 'active' ? 'Deactivate' : 'Activate'}
-                      </Button>
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
+            <Stack gap="xs">
+              {clins.map((clin) => (
+                <Box key={clin.id}>
+                  {/* CLIN row */}
+                  <Table striped highlightOnHover withTableBorder>
+                    <Table.Tbody>
+                      <Table.Tr>
+                        <Table.Td style={{ width: 32 }}>
+                          <ActionIcon
+                            variant="subtle"
+                            size="sm"
+                            onClick={() => handleExpandClin(clin.id)}
+                            title={expandedClinId === clin.id ? 'Collapse SLINs' : 'Expand SLINs'}
+                          >
+                            {expandedClinId === clin.id
+                              ? <IconChevronDown size={14} />
+                              : <IconChevronRight size={14} />
+                            }
+                          </ActionIcon>
+                        </Table.Td>
+                        <Table.Td fw={600}>{clin.clinNumber}</Table.Td>
+                        <Table.Td>{clin.description ?? '—'}</Table.Td>
+                        <Table.Td>
+                          {clin.fundedAmount ? `$${parseFloat(clin.fundedAmount).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '—'}
+                        </Table.Td>
+                        <Table.Td>
+                          <Badge color={STATUS_COLORS[clin.status] ?? 'gray'}>{clin.status}</Badge>
+                        </Table.Td>
+                        <Table.Td>
+                          <Button
+                            size="xs"
+                            variant="subtle"
+                            onClick={() => handleClinStatusToggle(clin)}
+                            loading={isPending}
+                          >
+                            {clin.status === 'active' ? 'Deactivate' : 'Activate'}
+                          </Button>
+                        </Table.Td>
+                      </Table.Tr>
+                    </Table.Tbody>
+                  </Table>
+
+                  {/* SLINs section (collapsible) */}
+                  {expandedClinId === clin.id && (
+                    <Box pl="md" pt="xs" pb="sm" style={{ borderLeft: '2px solid var(--mantine-color-blue-3)', marginLeft: 16 }}>
+                      <Title order={6} mb="xs" c="dimmed">SLINs for CLIN {clin.clinNumber}</Title>
+
+                      {/* Add SLIN form */}
+                      <Group align="flex-end" mb="xs">
+                        <TextInput
+                          label="SLIN Number"
+                          placeholder="0001AA"
+                          value={slinForm.slinNumber}
+                          onChange={(e) => setSlinForm((f) => ({ ...f, slinNumber: e.target.value }))}
+                          size="xs"
+                          style={{ flex: 1 }}
+                        />
+                        <TextInput
+                          label="Description"
+                          placeholder="Base Year Labor"
+                          value={slinForm.description}
+                          onChange={(e) => setSlinForm((f) => ({ ...f, description: e.target.value }))}
+                          size="xs"
+                          style={{ flex: 2 }}
+                        />
+                        <TextInput
+                          label="Funded ($)"
+                          placeholder="50000.00"
+                          value={slinForm.fundedAmount}
+                          onChange={(e) => setSlinForm((f) => ({ ...f, fundedAmount: e.target.value }))}
+                          size="xs"
+                          style={{ minWidth: 120 }}
+                        />
+                        <Button
+                          size="xs"
+                          onClick={() => handleSlinSubmit(clin.id)}
+                          loading={isPending}
+                          leftSection={<IconPlus size={12} />}
+                          disabled={!slinForm.slinNumber.trim()}
+                        >
+                          Add SLIN
+                        </Button>
+                      </Group>
+
+                      {/* SLINs table */}
+                      {(slinsByClin[clin.id] ?? []).length === 0 ? (
+                        <Text size="xs" c="dimmed">No SLINs yet. Add one above.</Text>
+                      ) : (
+                        <Table striped highlightOnHover withTableBorder>
+                          <Table.Thead>
+                            <Table.Tr>
+                              <Table.Th>SLIN #</Table.Th>
+                              <Table.Th>Description</Table.Th>
+                              <Table.Th>Funded</Table.Th>
+                              <Table.Th>Status</Table.Th>
+                              <Table.Th>Toggle</Table.Th>
+                            </Table.Tr>
+                          </Table.Thead>
+                          <Table.Tbody>
+                            {(slinsByClin[clin.id] ?? []).map((slin) => (
+                              <Table.Tr key={slin.id}>
+                                <Table.Td>{slin.slinNumber}</Table.Td>
+                                <Table.Td>{slin.description ?? '—'}</Table.Td>
+                                <Table.Td>
+                                  {slin.fundedAmount
+                                    ? `$${parseFloat(slin.fundedAmount).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+                                    : '—'}
+                                </Table.Td>
+                                <Table.Td>
+                                  <Badge size="xs" color={STATUS_COLORS[slin.status] ?? 'gray'}>{slin.status}</Badge>
+                                </Table.Td>
+                                <Table.Td>
+                                  <Button
+                                    size="xs"
+                                    variant="subtle"
+                                    onClick={() => handleSlinStatusToggle(slin)}
+                                    loading={isPending}
+                                  >
+                                    {slin.status === 'active' ? 'Deactivate' : 'Activate'}
+                                  </Button>
+                                </Table.Td>
+                              </Table.Tr>
+                            ))}
+                          </Table.Tbody>
+                        </Table>
+                      )}
+                    </Box>
+                  )}
+                </Box>
+              ))}
+            </Stack>
           )}
         </Stack>
       </Drawer>

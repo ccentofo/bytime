@@ -22,6 +22,7 @@ import { approvePeriod, rejectPeriod, getAllPeriods } from '@/server/actions/per
 import { getTimesheetForReview } from '@/server/actions/timesheet';
 import { getNumDaysInPeriod } from '@/lib/date-utils';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
+import classes from "./Approvals.module.css";
 
 type Period = {
   id: string;
@@ -193,20 +194,31 @@ export function ApprovalsClient({ initialPeriods, currentUserId }: Props) {
         Review
       </Button>
     ),
+    enableColumnActions: false,
+    enableDensityToggle: false,
+    enableFullScreenToggle: false,
     mantineTableProps: {
       highlightOnHover: true,
       striped: 'odd',
       withColumnBorders: false,
     },
     mantineTableHeadCellProps: {
+      className: classes.tableHeaderCell,
       style: {
         fontWeight: 600,
         fontSize: '0.85rem',
+        padding: '12px 16px',
       },
     },
     mantineTableBodyCellProps: {
       style: {
         fontSize: '0.875rem',
+        padding: '12px 16px',
+      },
+    },
+    mantineTopToolbarProps: {
+      style: {
+        padding: '12px 16px',
       },
     },
     displayColumnDefOptions: {
@@ -214,10 +226,16 @@ export function ApprovalsClient({ initialPeriods, currentUserId }: Props) {
         header: 'Actions',
         size: 100,
         mantineTableHeadCellProps: {
-          style: { textAlign: 'center' as const },
+          style: {
+            textAlign: 'center' as const,
+            padding: '12px 16px',
+          },
         },
         mantineTableBodyCellProps: {
-          style: { textAlign: 'center' as const },
+          style: {
+            textAlign: 'center' as const,
+            padding: '12px 16px',
+          },
         },
       },
     },

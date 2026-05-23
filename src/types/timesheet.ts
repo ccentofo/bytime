@@ -1,8 +1,10 @@
 export interface ChargeCode {
-  id: string;         // maps to clins.id (UUID)
-  projectName: string; // maps to contracts.name
-  clin: string;        // maps to clins.clinNumber
-  description: string; // maps to clins.description
+  id: string;             // maps to clins.id (UUID)
+  projectName: string;    // maps to contracts.name
+  clin: string;           // maps to clins.clinNumber
+  description: string;    // maps to clins.description
+  slinId?: string;        // maps to slins.id (UUID) — optional
+  slinNumber?: string;    // maps to slins.slinNumber — optional
 }
 
 export interface TimesheetEntry {

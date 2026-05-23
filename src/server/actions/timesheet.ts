@@ -1,7 +1,7 @@
 'use server';
 
 import { db } from '@/db';
-import { timesheetEntries, userAssignments, clins, contracts } from '@/db/schema';
+import { timesheetEntries, userAssignments, clins, contracts, slins } from '@/db/schema';
 import { eq, and, gte, lt, desc, sql } from 'drizzle-orm';
 import dayjs from 'dayjs';
 import { getNumDaysInPeriod } from '@/lib/date-utils';
@@ -18,10 +18,13 @@ export async function getChargeCodesForUser(userId: string): Promise<ChargeCode[
       projectName: contracts.name,
       clin: clins.clinNumber,
       description: clins.description,
+      slinId: userAssignments.slinId,
+      slinNumber: slins.slinNumber,
     })
     .from(userAssignments)
     .innerJoin(clins, eq(userAssignments.clinId, clins.id))
     .innerJoin(contracts, eq(clins.contractId, contracts.id))
+    .leftJoin(slins, eq(userAssignments.slinId, slins.id))
     .where(
       and(
         eq(userAssignments.userId, userId),
@@ -37,6 +40,8 @@ export async function getChargeCodesForUser(userId: string): Promise<ChargeCode[
     projectName: r.projectName,
     clin: r.clin,
     description: r.description ?? '',
+    slinId: r.slinId ?? undefined,
+    slinNumber: r.slinNumber ?? undefined,
   }));
 }
 
@@ -142,6 +147,7 @@ export async function saveTimesheetBatch(data: {
   periodStart: Date;
   cells: Array<{
     clinId: string;
+    slinId?: string;
     dayIndex: number;
     hours: number;
     isEdit: boolean;
@@ -182,6 +188,7 @@ export async function saveTimesheetBatch(data: {
     await db.insert(timesheetEntries).values({
       userId: data.userId,
       clinId: cell.clinId,
+      slinId: cell.slinId ?? null,
       entryDate,
       hours: cell.hours.toString(),
       revisionNumber: nextRevision,
@@ -216,6 +223,7 @@ export async function getTimesheetForReview(
 export async function saveTimesheetEntry(data: {
   userId: string;
   clinId: string;
+  slinId?: string;
   entryDate: Date;
   hours: number;
   changeReasonCode?: string;
@@ -238,6 +246,7 @@ export async function saveTimesheetEntry(data: {
   await db.insert(timesheetEntries).values({
     userId: data.userId,
     clinId: data.clinId,
+    slinId: data.slinId ?? null,
     entryDate: data.entryDate,
     hours: data.hours.toString(),
     revisionNumber: nextRevision,

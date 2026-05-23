@@ -162,6 +162,9 @@ export function AssignmentsClient({ initialAssignments, users, contracts }: Prop
         Deactivate
       </Button>
     ),
+    enableColumnActions: false,
+    enableDensityToggle: false,
+    enableFullScreenToggle: false,
     mantineTableProps: {
       highlightOnHover: true,
       striped: 'odd',
@@ -171,11 +174,18 @@ export function AssignmentsClient({ initialAssignments, users, contracts }: Prop
       style: {
         fontWeight: 600,
         fontSize: '0.85rem',
+        padding: '12px 16px',
       },
     },
     mantineTableBodyCellProps: {
       style: {
         fontSize: '0.875rem',
+        padding: '12px 16px',
+      },
+    },
+    mantineTopToolbarProps: {
+      style: {
+        padding: '12px 16px',
       },
     },
     displayColumnDefOptions: {
@@ -183,10 +193,16 @@ export function AssignmentsClient({ initialAssignments, users, contracts }: Prop
         header: 'Actions',
         size: 110,
         mantineTableHeadCellProps: {
-          style: { textAlign: 'center' as const },
+          style: {
+            textAlign: 'center' as const,
+            padding: '12px 16px',
+          },
         },
         mantineTableBodyCellProps: {
-          style: { textAlign: 'center' as const },
+          style: {
+            textAlign: 'center' as const,
+            padding: '12px 16px',
+          },
         },
       },
     },

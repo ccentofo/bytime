@@ -1,0 +1,12 @@
+.tableHeaderCell button {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Dark mode: darken text on correction rows for contrast against orange-1 bg */
+:global([data-mantine-color-scheme='dark']) tr[data-correction='true'] td {
+  color: var(--mantine-color-dark-9);
+}

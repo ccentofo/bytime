@@ -12,6 +12,7 @@ export async function createClin(data: {
   contractId: string;
   clinNumber: string;
   description?: string;
+  fundedAmount?: string;
 }) {
   const rows = await db.insert(clins).values(data).returning();
   return rows[0];
@@ -20,6 +21,7 @@ export async function createClin(data: {
 export async function updateClin(id: string, data: {
   clinNumber?: string;
   description?: string;
+  fundedAmount?: string;
   status?: 'active' | 'inactive' | 'closed';
 }) {
   const rows = await db.update(clins)

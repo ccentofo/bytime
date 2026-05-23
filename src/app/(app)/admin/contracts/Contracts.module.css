@@ -1,0 +1,24 @@
+/* =========================================
+   MRT Header ActionIcons (Sort & Column Actions)
+   ========================================= */
+
+/* Forces the icons to be transparent, grays them out, and shrinks them */
+.tableHeaderCell :global(.mantine-ActionIcon-root) {
+  background-color: transparent !important;
+  color: var(--mantine-color-blue-7) !important;
+  
+  /* Shrinks the buttons so they stop crowding the text */
+  width: 26px !important;
+  height: 26px !important;
+  min-width: 26px !important;
+  min-height: 26px !important;
+  
+  /* Adds breathing room between the text and the buttons */
+  margin-left: 4px; 
+}
+
+/* Restores a subtle Mantine hover effect so the user knows it is clickable */
+.tableHeaderCell :global(.mantine-ActionIcon-root):hover {
+  background-color: var(--mantine-color-default-hover) !important;
+  color: var(--mantine-color-text) !important;
+}

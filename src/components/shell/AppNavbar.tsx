@@ -1,7 +1,7 @@
 'use client';
 
 import { Stack, NavLink, Divider, Text } from '@mantine/core';
-import { IconClock, IconFileText, IconUsers, IconChecklist, IconUserCog } from '@tabler/icons-react';
+import { IconClock, IconFileText, IconUsers, IconChecklist, IconUserCog, IconCategory, IconHistory, IconChartBar } from '@tabler/icons-react';
 import { usePathname } from 'next/navigation';
 
 type AppNavbarProps = {
@@ -34,6 +34,12 @@ export function AppNavbar({ userRole }: AppNavbarProps) {
             ADMINISTRATION
           </Text>
           <NavLink
+            label="Contract Dashboard"
+            href="/admin/dashboard"
+            leftSection={<IconChartBar size={18} />}
+            active={pathname === '/admin/dashboard'}
+          />
+          <NavLink
             label="Contracts & CLINs"
             href="/admin/contracts"
             leftSection={<IconFileText size={18} />}
@@ -50,6 +56,18 @@ export function AppNavbar({ userRole }: AppNavbarProps) {
             href="/admin/approvals"
             leftSection={<IconChecklist size={18} />}
             active={pathname === '/admin/approvals'}
+          />
+          <NavLink
+            label="Labor Categories"
+            href="/admin/labor-categories"
+            leftSection={<IconCategory size={18} />}
+            active={pathname === '/admin/labor-categories'}
+          />
+          <NavLink
+            label="Audit Trail"
+            href="/admin/audit-trail"
+            leftSection={<IconHistory size={18} />}
+            active={pathname === '/admin/audit-trail'}
           />
           <NavLink
             label="User Management"

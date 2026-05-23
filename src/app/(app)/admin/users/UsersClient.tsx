@@ -18,6 +18,7 @@ import { notifications } from '@mantine/notifications';
 import { IconPlus, IconEdit } from '@tabler/icons-react';
 import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { createUserWithPassword, updateUser, getUsers } from '@/server/actions/users';
+import classes from "./Users.module.css";
 
 type User = {
   id: string;
@@ -209,20 +210,31 @@ export function UsersClient({ initialUsers }: Props) {
         Add User
       </Button>
     ),
+    enableColumnActions: false,
+    enableDensityToggle: false,
+    enableFullScreenToggle: false,
     mantineTableProps: {
       highlightOnHover: true,
       striped: 'odd',
       withColumnBorders: false,
     },
     mantineTableHeadCellProps: {
+      className: classes.tableHeaderCell,
       style: {
         fontWeight: 600,
         fontSize: '0.85rem',
+        padding: '12px 16px',
       },
     },
     mantineTableBodyCellProps: {
       style: {
         fontSize: '0.875rem',
+        padding: '12px 16px',
+      },
+    },
+    mantineTopToolbarProps: {
+      style: {
+        padding: '12px 16px',
       },
     },
     displayColumnDefOptions: {
@@ -230,10 +242,16 @@ export function UsersClient({ initialUsers }: Props) {
         header: 'Actions',
         size: 80,
         mantineTableHeadCellProps: {
-          style: { textAlign: 'center' as const },
+          style: {
+            textAlign: 'center' as const,
+            padding: '12px 16px',
+          },
         },
         mantineTableBodyCellProps: {
-          style: { textAlign: 'center' as const },
+          style: {
+            textAlign: 'center' as const,
+            padding: '12px 16px',
+          },
         },
       },
     },
