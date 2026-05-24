@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import { Container, Paper, Skeleton, Stack } from '@mantine/core';
 import { TimesheetProvider, useTimesheet } from '@/components/timesheet/TimesheetContext';
 import { BiWeeklyTable } from '@/components/timesheet/BiWeeklyTable';
@@ -7,6 +8,8 @@ import { DailyNoteModal } from '@/components/timesheet/DailyNoteModal';
 import { PayPeriodSelector } from '@/components/timesheet/PayPeriodSelector';
 import { TimesheetToolbar } from '@/components/timesheet/TimesheetToolbar';
 import type { TimesheetPageData } from '@/types/timesheet';
+import { seedOfflineStore } from '@/lib/offline/offline-store';
+import { startSyncService, stopSyncService } from '@/lib/offline/sync-service';
 
 function TimesheetContent() {
   const { state } = useTimesheet();
@@ -40,6 +43,25 @@ type Props = {
 };
 
 export function BiWeeklyTimesheetClient({ initialData }: Props) {
+  useEffect(() => {
+    // Seed offline store with server-provided data
+    seedOfflineStore({
+      userId: initialData.userId,
+      periodStart: initialData.periodStart,
+      chargeCodes: initialData.chargeCodes,
+      entries: initialData.entries,
+      revisions: initialData.revisions ?? {},
+      periodStatus: initialData.periodStatus ?? 'draft',
+    });
+
+    // Start background sync
+    startSyncService(initialData.userId);
+
+    return () => {
+      stopSyncService();
+    };
+  }, [initialData.userId]);
+
   return (
     <TimesheetProvider initialData={initialData}>
       <TimesheetContent />

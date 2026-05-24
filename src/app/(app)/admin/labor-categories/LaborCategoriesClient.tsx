@@ -38,6 +38,7 @@ import classes from './LaborCategories.module.css';
 type LaborCategory = {
   id: string;
   clinId: string;
+  slinId: string | null;
   lcatCode: string;
   title: string;
   hourlyRate: string;
@@ -49,6 +50,7 @@ type LaborCategory = {
   clinDescription: string | null;
   contractName: string;
   contractNumber: string;
+  slinNumber: string | null;
 };
 
 type UserLcatAssignment = {
@@ -343,6 +345,12 @@ export function LaborCategoriesClient({
       size: 220,
     },
     { accessorKey: 'clinNumber', header: 'CLIN', size: 100 },
+    {
+      accessorKey: 'slinNumber',
+      header: 'SLIN',
+      size: 100,
+      Cell: ({ cell }) => cell.getValue<string | null>() ?? '—',
+    },
     { accessorKey: 'lcatCode', header: 'LCAT Code', size: 120 },
     { accessorKey: 'title', header: 'Title', size: 200 },
     {

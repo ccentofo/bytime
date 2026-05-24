@@ -1,12 +1,10 @@
 'use client';
 
 import { useState, useTransition } from 'react';
-import { useRouter } from 'next/navigation';
 import {
   Button,
   Select,
   Group,
-  Stack,
   Title,
   Badge,
   Paper,
@@ -14,6 +12,7 @@ import {
 import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { getClinsByContract } from '@/server/actions/clins';
 import { assignUserToClin, unassignUserFromClin, getAssignments } from '@/server/actions/assignments';
+import classes from './Assignments.module.css';
 
 type User = {
   id: string;
@@ -51,6 +50,7 @@ type Assignment = {
   id: string;
   userId: string;
   clinId: string;
+  slinId: string | null;
   isActive: boolean;
   assignedAt: Date;
   userName: string;
@@ -59,6 +59,8 @@ type Assignment = {
   clinDescription: string | null;
   contractName: string;
   contractNumber: string;
+  slinNumber: string | null;
+  slinDescription: string | null;
 };
 
 type Props = {
@@ -68,7 +70,6 @@ type Props = {
 };
 
 export function AssignmentsClient({ initialAssignments, users, contracts }: Props) {
-  const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [assignments, setAssignments] = useState<Assignment[]>(initialAssignments);
 
@@ -126,6 +127,12 @@ export function AssignmentsClient({ initialAssignments, users, contracts }: Prop
     },
     { accessorKey: 'clinNumber', header: 'CLIN', size: 100 },
     {
+      accessorKey: 'slinNumber',
+      header: 'SLIN',
+      size: 100,
+      Cell: ({ cell }) => cell.getValue<string | null>() ?? '—',
+    },
+    {
       accessorKey: 'isActive',
       header: 'Status',
       filterVariant: 'checkbox',
@@ -171,6 +178,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts }: Prop
       withColumnBorders: false,
     },
     mantineTableHeadCellProps: {
+      className: classes.tableHeaderCell,
       style: {
         fontWeight: 600,
         fontSize: '0.85rem',

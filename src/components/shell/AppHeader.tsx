@@ -1,8 +1,9 @@
 'use client';
 
-import { Group, Title, Avatar, ActionIcon, Text, Menu, UnstyledButton, useMantineColorScheme } from '@mantine/core';
+import { Group, Title, Avatar, ActionIcon, Text, Menu, UnstyledButton, useMantineColorScheme, Box } from '@mantine/core';
 import { IconSun, IconMoon, IconLogout, IconUser } from '@tabler/icons-react';
 import { signOut } from 'next-auth/react';
+import { SyncStatusIndicator } from '@/components/shell/SyncStatusIndicator';
 
 type AppHeaderProps = {
   user?: {
@@ -13,7 +14,7 @@ type AppHeaderProps = {
 };
 
 export function AppHeader({ user }: AppHeaderProps) {
-  const { colorScheme, toggleColorScheme } = useMantineColorScheme();
+  const { toggleColorScheme } = useMantineColorScheme();
 
   return (
     <Group h="100%" px="md" justify="space-between">
@@ -22,13 +23,15 @@ export function AppHeader({ user }: AppHeaderProps) {
         <Title order={3}>ByTime</Title>
       </Group>
       <Group gap="sm">
+        <SyncStatusIndicator />
         <ActionIcon
           variant="subtle"
           size="lg"
           onClick={toggleColorScheme}
           aria-label="Toggle color scheme"
         >
-          {colorScheme === 'dark' ? <IconSun size={20} /> : <IconMoon size={20} />}
+          <Box lightHidden><IconSun size={20} /></Box>
+          <Box darkHidden><IconMoon size={20} /></Box>
         </ActionIcon>
         {user && (
           <Menu shadow="md" width={200} position="bottom-end">

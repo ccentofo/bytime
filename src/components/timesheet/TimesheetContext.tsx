@@ -6,6 +6,7 @@ import type { TimesheetState, TimesheetAction, TimesheetPageData, DirtyCell } fr
 import { navigatePeriod, getNumDaysInPeriod } from '@/lib/date-utils';
 import { getTimesheetEntries, saveTimesheetBatch, getRevisionMap } from '@/server/actions/timesheet';
 import { submitPeriod, getPeriodStatus } from '@/server/actions/periods';
+import { seedOfflineStore, getOfflineEntries, getOfflineRevisions } from '@/lib/offline/offline-store';
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -231,9 +232,21 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
       const numDays = getNumDaysInPeriod(newPeriodStart);
 
       try {
+        // Try server first
         const entries = await getTimesheetEntries(state.userId, newPeriodStart, state.chargeCodes);
         const revisions = await getRevisionMap(state.userId, newPeriodStart, numDays);
         const periodInfo = await getPeriodStatus(state.userId, newPeriodStart);
+
+        // Seed offline store with fresh data
+        await seedOfflineStore({
+          userId: state.userId,
+          periodStart: newPeriodStart,
+          chargeCodes: state.chargeCodes,
+          entries,
+          revisions,
+          periodStatus: periodInfo.status,
+        });
+
         dispatch({
           type: 'SET_PERIOD_DATA',
           periodStart: newPeriodStart,
@@ -242,12 +255,18 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
           periodStatus: periodInfo.status,
         });
       } catch (error) {
-        console.error('Failed to load period data:', error);
-        const emptyEntries = state.chargeCodes.map((cc) => ({
-          chargeCodeId: cc.id,
-          hours: [] as number[],
-        }));
-        dispatch({ type: 'SET_PERIOD_DATA', periodStart: newPeriodStart, entries: emptyEntries, revisions: {} });
+        console.warn('Server unavailable, loading from offline store:', error);
+
+        // Fall back to offline store
+        const offlineEntries = await getOfflineEntries(newPeriodStart, state.chargeCodes);
+        const offlineRevisions = await getOfflineRevisions(newPeriodStart);
+
+        dispatch({
+          type: 'SET_PERIOD_DATA',
+          periodStart: newPeriodStart,
+          entries: offlineEntries,
+          revisions: offlineRevisions,
+        });
       }
     },
     [state.periodStart, state.userId, state.chargeCodes]
