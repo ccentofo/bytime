@@ -12,5 +12,5 @@ export default async function UsersPage() {
   if (role !== 'admin' && role !== 'supervisor') redirect('/timesheet');
 
   const users = await getUsers();
-  return <UsersClient initialUsers={users} />;
+  return <UsersClient initialUsers={users} currentUserId={session.user.id!} />;
 }

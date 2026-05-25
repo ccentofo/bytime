@@ -1,7 +1,7 @@
 'use client';
 
 import { Group, Title, Avatar, ActionIcon, Text, Menu, UnstyledButton, useMantineColorScheme, Box } from '@mantine/core';
-import { IconSun, IconMoon, IconLogout, IconUser } from '@tabler/icons-react';
+import { IconSun, IconMoon, IconLogout, IconUser, IconKey, IconBell } from '@tabler/icons-react';
 import { signOut } from 'next-auth/react';
 import { SyncStatusIndicator } from '@/components/shell/SyncStatusIndicator';
 
@@ -51,6 +51,20 @@ export function AppHeader({ user }: AppHeaderProps) {
               <Menu.Label>{user.email}</Menu.Label>
               <Menu.Label>Role: {user.role}</Menu.Label>
               <Menu.Divider />
+              <Menu.Item
+                leftSection={<IconKey size={14} />}
+                component="a"
+                href="/profile"
+              >
+                Change Password
+              </Menu.Item>
+              <Menu.Item
+                leftSection={<IconBell size={14} />}
+                component="a"
+                href="/admin/notifications"
+              >
+                Notification Settings
+              </Menu.Item>
               <Menu.Item
                 color="red"
                 leftSection={<IconLogout size={14} />}

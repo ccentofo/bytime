@@ -3,6 +3,7 @@
 import { db } from '@/db';
 import { userAssignments, users, clins, contracts, slins } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
+import { requireAdmin } from '@/lib/session';
 
 export async function getAssignments() {
   return db
@@ -57,6 +58,7 @@ export async function assignUserToClin(data: {
   slinId?: string;
   assignedBy?: string;
 }) {
+  await requireAdmin();
   const rows = await db
     .insert(userAssignments)
     .values(data)
@@ -69,6 +71,7 @@ export async function assignUserToClin(data: {
 }
 
 export async function unassignUserFromClin(userId: string, clinId: string) {
+  await requireAdmin();
   const rows = await db
     .update(userAssignments)
     .set({ isActive: false })

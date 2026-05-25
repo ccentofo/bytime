@@ -137,6 +137,7 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
         entry.userId,
         entry.clinId,
         entry.entryDate,
+        entry.indirectCodeId ?? null,
       );
       setRevisionHistory(history);
     });

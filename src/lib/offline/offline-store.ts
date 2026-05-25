@@ -164,7 +164,8 @@ export async function getOfflineChargeCodes(): Promise<ChargeCode[]> {
  * This replaces the direct server call — data is persisted locally first.
  */
 export async function saveOfflineEntry(data: {
-  clinId: string;
+  clinId?: string;
+  indirectCodeId?: string;
   dayIndex: number;
   hours: number;
   periodStart: Date;
@@ -175,10 +176,11 @@ export async function saveOfflineEntry(data: {
 }) {
   const entryDate = dayjs(data.periodStart).add(data.dayIndex, 'day').format('YYYY-MM-DD');
   const periodStartKey = dayjs(data.periodStart).format('YYYY-MM-DD');
+  const entryKey = data.clinId ?? data.indirectCodeId ?? '';
 
   // Update or create the local entry
   const existing = await offlineDb.entries
-    .where({ clinId: data.clinId, entryDate })
+    .where({ clinId: entryKey, entryDate })
     .first();
 
   if (existing) {
@@ -191,7 +193,7 @@ export async function saveOfflineEntry(data: {
     });
   } else {
     await offlineDb.entries.add({
-      clinId: data.clinId,
+      clinId: entryKey,
       entryDate,
       hours: data.hours,
       syncStatus: 'pending',
@@ -206,6 +208,7 @@ export async function saveOfflineEntry(data: {
   // Add to sync queue
   await offlineDb.syncQueue.add({
     clinId: data.clinId,
+    indirectCodeId: data.indirectCodeId,
     entryDate,
     hours: data.hours,
     changeReasonCode: data.changeReasonCode,

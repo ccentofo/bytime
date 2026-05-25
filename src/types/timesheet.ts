@@ -1,10 +1,12 @@
 export interface ChargeCode {
-  id: string;             // maps to clins.id (UUID)
-  projectName: string;    // maps to contracts.name
-  clin: string;           // maps to clins.clinNumber
-  description: string;    // maps to clins.description
-  slinId?: string;        // maps to slins.id (UUID) — optional
-  slinNumber?: string;    // maps to slins.slinNumber — optional
+  id: string;             // maps to clins.id OR indirectChargeCodes.id (UUID)
+  projectName: string;    // maps to contracts.name OR indirect category name
+  clin: string;           // maps to clins.clinNumber OR indirect code
+  description: string;    // maps to clins.description OR indirect description
+  slinId?: string;        // maps to slins.id (UUID) — optional, only for direct
+  slinNumber?: string;    // maps to slins.slinNumber — optional, only for direct
+  isIndirect?: boolean;   // true if this is an indirect charge code
+  indirectCategory?: string; // overhead | ga | irad | bp | leave | unallowable
 }
 
 export interface TimesheetEntry {
@@ -36,6 +38,7 @@ export interface TimesheetState {
   isSaving: boolean;
   isLoadingPeriod: boolean; // true while fetching data for a new period
   periodStatus: PeriodStatus; // current period's approval status
+  flsaExempt: boolean; // true if user is FLSA exempt (salaried)
 }
 
 export type TimesheetAction =
@@ -59,12 +62,16 @@ export interface DirtyCell {
   isLateEntry: boolean; // true if this is a first-time entry on a past date (revision = 0 AND date < today)
 }
 
+import type { EmployeeDashboardData } from '@/server/actions/employee-dashboard';
+
 // Props passed from server to client
 export interface TimesheetPageData {
   userId: string;
   chargeCodes: ChargeCode[];
   entries: TimesheetEntry[];
   periodStart: Date;
-  revisions?: Record<string, number>; // optional: revision map from server
-  periodStatus?: PeriodStatus; // optional: period status from server
+  revisions?: Record<string, number>;
+  periodStatus?: PeriodStatus;
+  flsaExempt?: boolean;
+  dashboardData?: EmployeeDashboardData;
 }

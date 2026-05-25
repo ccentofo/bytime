@@ -150,6 +150,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
     isSaving: false,
     isLoadingPeriod: false,
     periodStatus: initialData.periodStatus ?? 'draft',
+    flsaExempt: initialData.flsaExempt ?? false,
   };
 
   const [state, dispatch] = useReducer(timesheetReducer, initialState);
@@ -198,13 +199,19 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
         const newRevisions = await saveTimesheetBatch({
           userId: state.userId,
           periodStart: state.periodStart,
-          cells: dirtyCells.map((c) => ({
-            clinId: c.chargeCodeId,
-            dayIndex: c.dayIndex,
-            hours: c.hours,
-            isEdit: c.isEdit,
-            isLateEntry: c.isLateEntry,
-          })),
+          cells: dirtyCells.map((c) => {
+            const chargeCode = state.chargeCodes.find((cc) => cc.id === c.chargeCodeId);
+            const revisionKey = `${c.chargeCodeId}-${c.dayIndex}`;
+            return {
+              clinId: chargeCode?.isIndirect ? undefined : c.chargeCodeId,
+              indirectCodeId: chargeCode?.isIndirect ? c.chargeCodeId : undefined,
+              dayIndex: c.dayIndex,
+              hours: c.hours,
+              isEdit: c.isEdit,
+              isLateEntry: c.isLateEntry,
+              expectedRevision: state.savedCellRevisions[revisionKey] ?? 0,
+            };
+          }),
           changeReasonCode,
           comment,
         });

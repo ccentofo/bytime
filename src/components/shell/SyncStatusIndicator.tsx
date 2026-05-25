@@ -13,14 +13,22 @@ type SyncStatus = {
 };
 
 export function SyncStatusIndicator() {
+  // Client-only guard: this component renders real-time network status
+  // which is meaningless on the server. Rendering null on SSR prevents
+  // hydration mismatches caused by navigator.onLine and Badge CSS variables.
+  // DO NOT REMOVE this guard — it prevents a recurring hydration error.
+  const [mounted, setMounted] = useState(false);
   const [status, setStatus] = useState<SyncStatus>({
     pendingCount: 0,
     isSyncing: false,
     lastError: null,
-    isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
+    isOnline: true,
   });
 
   useEffect(() => {
+    setMounted(true);
+    // Set initial online status now that we're on the client
+    setStatus((s) => ({ ...s, isOnline: navigator.onLine }));
     onSyncStatusChange(setStatus);
 
     function handleOnline() {
@@ -38,6 +46,9 @@ export function SyncStatusIndicator() {
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
+  // Don't render on server — prevents hydration mismatch
+  if (!mounted) return null;
 
   // Determine display state
   let icon = <IconCheck size={14} />;

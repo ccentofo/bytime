@@ -14,7 +14,8 @@ export interface AuditEntry {
   userId: string;
   userName: string;
   userEmail: string;
-  clinId: string;
+  clinId: string | null;
+  indirectCodeId: string | null;
   clinNumber: string;
   contractName: string;
   contractNumber: string;
@@ -42,9 +43,11 @@ export interface AuditFilters {
 export interface CellRevisionHistory {
   userId: string;
   userName: string;
-  clinId: string;
+  clinId: string | null;
   clinNumber: string;
   contractName: string;
+  indirectCodeId?: string | null;
+  indirectCode?: string | null;
   entryDate: Date;
   revisions: Array<{
     id: string;
@@ -107,6 +110,7 @@ export async function getAuditEntries(filters: AuditFilters): Promise<AuditEntry
       userName: users.fullName,
       userEmail: users.email,
       clinId: timesheetEntries.clinId,
+      indirectCodeId: timesheetEntries.indirectCodeId,
       clinNumber: clins.clinNumber,
       contractName: contracts.name,
       contractNumber: contracts.contractNumber,
@@ -150,8 +154,9 @@ export async function getAuditEntries(filters: AuditFilters): Promise<AuditEntry
  */
 export async function getCellRevisionHistory(
   userId: string,
-  clinId: string,
-  entryDate: Date
+  clinId: string | null,
+  entryDate: Date,
+  indirectCodeId?: string | null
 ): Promise<CellRevisionHistory | null> {
   const entryStart = dayjs(entryDate).startOf('day').toDate();
   const entryEnd = dayjs(entryDate).add(1, 'day').startOf('day').toDate();
@@ -170,7 +175,9 @@ export async function getCellRevisionHistory(
     .where(
       and(
         eq(timesheetEntries.userId, userId),
-        eq(timesheetEntries.clinId, clinId),
+        clinId
+          ? eq(timesheetEntries.clinId, clinId)
+          : eq(timesheetEntries.indirectCodeId, indirectCodeId!),
         gte(timesheetEntries.entryDate, entryStart),
         lt(timesheetEntries.entryDate, entryEnd),
       )
@@ -179,27 +186,61 @@ export async function getCellRevisionHistory(
 
   if (rows.length === 0) return null;
 
-  // Get user and CLIN context
-  const context = await db
-    .select({
-      userName: users.fullName,
-      clinNumber: clins.clinNumber,
-      contractName: contracts.name,
-    })
+  // Get user context
+  const [userRow] = await db
+    .select({ userName: users.fullName })
     .from(users)
-    .innerJoin(clins, eq(clins.id, clinId))
-    .innerJoin(contracts, eq(clins.contractId, contracts.id))
-    .where(eq(users.id, userId))
-    .limit(1);
+    .where(eq(users.id, userId));
 
-  if (context.length === 0) return null;
+  if (!userRow) return null;
+
+  let clinNumber = '—';
+  let contractName = '—';
+  let indirectCode: string | null = null;
+
+  if (clinId) {
+    // Direct entry — get CLIN/contract context
+    const clinContext = await db
+      .select({
+        clinNumber: clins.clinNumber,
+        contractName: contracts.name,
+      })
+      .from(clins)
+      .innerJoin(contracts, eq(clins.contractId, contracts.id))
+      .where(eq(clins.id, clinId))
+      .limit(1);
+
+    if (clinContext.length > 0) {
+      clinNumber = clinContext[0].clinNumber;
+      contractName = clinContext[0].contractName;
+    }
+  } else if (indirectCodeId) {
+    // Indirect entry — get indirect code context
+    const { indirectChargeCodes } = await import('@/db/schema');
+    const indirectContext = await db
+      .select({
+        code: indirectChargeCodes.code,
+        name: indirectChargeCodes.name,
+      })
+      .from(indirectChargeCodes)
+      .where(eq(indirectChargeCodes.id, indirectCodeId))
+      .limit(1);
+
+    if (indirectContext.length > 0) {
+      clinNumber = indirectContext[0].code;
+      contractName = indirectContext[0].name;
+      indirectCode = indirectContext[0].code;
+    }
+  }
 
   return {
     userId,
-    userName: context[0].userName,
+    userName: userRow.userName,
     clinId,
-    clinNumber: context[0].clinNumber,
-    contractName: context[0].contractName,
+    clinNumber,
+    contractName,
+    indirectCodeId: indirectCodeId ?? null,
+    indirectCode,
     entryDate: entryStart,
     revisions: rows,
   };

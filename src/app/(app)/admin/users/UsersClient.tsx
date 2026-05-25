@@ -13,11 +13,14 @@ import {
   Badge,
   Switch,
   ActionIcon,
+  Alert,
+  Text,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconPlus, IconEdit } from '@tabler/icons-react';
+import { IconPlus, IconEdit, IconKey, IconAlertCircle, IconLockOpen } from '@tabler/icons-react';
 import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
-import { createUserWithPassword, updateUser, getUsers } from '@/server/actions/users';
+import { createUserWithPassword, updateUser, getUsers, unlockUserAccount } from '@/server/actions/users';
+import { adminResetPassword } from '@/server/actions/password';
 import classes from "./Users.module.css";
 
 type User = {
@@ -26,12 +29,14 @@ type User = {
   fullName: string;
   role: 'admin' | 'supervisor' | 'employee';
   isActive: boolean;
+  flsaExempt: boolean;
   createdAt: Date;
   updatedAt: Date;
 };
 
 type Props = {
   initialUsers: User[];
+  currentUserId: string;
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -60,7 +65,7 @@ const EMPTY_FORM: UserForm = {
   password: '',
 };
 
-export function UsersClient({ initialUsers }: Props) {
+export function UsersClient({ initialUsers, currentUserId }: Props) {
   const [users, setUsers] = useState<User[]>(initialUsers);
   const [isPending, startTransition] = useTransition();
 
@@ -69,6 +74,12 @@ export function UsersClient({ initialUsers }: Props) {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [form, setForm] = useState<UserForm>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // Reset password modal state
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resetTarget, setResetTarget] = useState<User | null>(null);
+  const [resetPassword, setResetPassword] = useState('');
+  const [resetError, setResetError] = useState<string | null>(null);
 
   function openCreateModal() {
     setEditingUser(null);
@@ -146,6 +157,64 @@ export function UsersClient({ initialUsers }: Props) {
     });
   }
 
+  function openResetModal(user: User) {
+    setResetTarget(user);
+    setResetPassword('');
+    setResetError(null);
+    setResetModalOpen(true);
+  }
+
+  function handleUnlockAccount(user: User) {
+    startTransition(async () => {
+      await unlockUserAccount(user.email);
+      notifications.show({
+        title: 'Account Unlocked',
+        message: `${user.fullName}'s account has been unlocked. They can now log in.`,
+        color: 'green',
+      });
+    });
+  }
+
+  function handleResetPassword() {
+    if (!resetTarget || !resetPassword) return;
+    startTransition(async () => {
+      try {
+        setResetError(null);
+        const result = await adminResetPassword({
+          targetUserId: resetTarget.id,
+          newPassword: resetPassword,
+          adminUserId: currentUserId,
+        });
+        if (result.success) {
+          setResetModalOpen(false);
+          notifications.show({
+            title: 'Password Reset',
+            message: `Password for ${resetTarget.fullName} has been reset.`,
+            color: 'green',
+          });
+        } else {
+          setResetError(result.error ?? 'Failed to reset password.');
+        }
+      } catch (error) {
+        setResetError(String(error));
+      }
+    });
+  }
+
+  function handleToggleFlsaExempt(user: User) {
+    startTransition(async () => {
+      const newExempt = !user.flsaExempt;
+      await updateUser(user.id, { flsaExempt: newExempt });
+      const refreshed = await getUsers();
+      setUsers(refreshed as User[]);
+      notifications.show({
+        title: newExempt ? 'FLSA Exempt' : 'FLSA Non-Exempt',
+        message: `${user.fullName} is now ${newExempt ? 'FLSA Exempt (salaried)' : 'FLSA Non-Exempt (hourly)'}.`,
+        color: newExempt ? 'blue' : 'gray',
+      });
+    });
+  }
+
   function handleToggleActive(user: User) {
     startTransition(async () => {
       const newActive = !user.isActive;
@@ -189,6 +258,20 @@ export function UsersClient({ initialUsers }: Props) {
       ),
       size: 90,
     },
+    {
+      accessorKey: 'flsaExempt',
+      header: 'FLSA Exempt',
+      Cell: ({ row }) => (
+        <Switch
+          checked={row.original.flsaExempt}
+          onChange={() => handleToggleFlsaExempt(row.original)}
+          disabled={isPending}
+          size="sm"
+          label={row.original.flsaExempt ? 'Exempt' : 'Non-Exempt'}
+        />
+      ),
+      size: 140,
+    },
   ];
 
   const table = useMantineReactTable({
@@ -197,13 +280,32 @@ export function UsersClient({ initialUsers }: Props) {
     enableRowActions: true,
     positionActionsColumn: 'last',
     renderRowActions: ({ row }) => (
-      <ActionIcon
-        variant="subtle"
-        onClick={() => openEditModal(row.original)}
-        title="Edit User"
-      >
-        <IconEdit size={16} />
-      </ActionIcon>
+      <Group gap="xs" wrap="nowrap">
+        <ActionIcon
+          variant="subtle"
+          onClick={() => openEditModal(row.original)}
+          title="Edit User"
+        >
+          <IconEdit size={16} />
+        </ActionIcon>
+        <ActionIcon
+          variant="subtle"
+          color="orange"
+          onClick={() => openResetModal(row.original)}
+          title="Reset Password"
+        >
+          <IconKey size={16} />
+        </ActionIcon>
+        <ActionIcon
+          variant="subtle"
+          color="green"
+          onClick={() => handleUnlockAccount(row.original)}
+          title="Unlock Account"
+          disabled={isPending}
+        >
+          <IconLockOpen size={16} />
+        </ActionIcon>
+      </Group>
     ),
     renderTopToolbarCustomActions: () => (
       <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
@@ -240,7 +342,7 @@ export function UsersClient({ initialUsers }: Props) {
     displayColumnDefOptions: {
       'mrt-row-actions': {
         header: 'Actions',
-        size: 80,
+        size: 120,
         mantineTableHeadCellProps: {
           style: {
             textAlign: 'center' as const,
@@ -261,6 +363,45 @@ export function UsersClient({ initialUsers }: Props) {
     <>
       <Title order={2} mb="md">User Management</Title>
       <MantineReactTable table={table} />
+
+      <Modal
+        opened={resetModalOpen}
+        onClose={() => setResetModalOpen(false)}
+        title={`Reset Password — ${resetTarget?.fullName}`}
+        size="sm"
+      >
+        <Stack>
+          <Text size="sm" c="dimmed">
+            Set a new password for {resetTarget?.fullName} ({resetTarget?.email}).
+            The user will need to use this password to log in.
+          </Text>
+          <PasswordInput
+            label="New Password"
+            placeholder="Minimum 8 characters"
+            value={resetPassword}
+            onChange={(e) => setResetPassword(e.currentTarget.value)}
+            required
+          />
+          {resetError && (
+            <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light">
+              {resetError}
+            </Alert>
+          )}
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setResetModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleResetPassword}
+              loading={isPending}
+              disabled={!resetPassword || resetPassword.length < 8}
+              color="orange"
+            >
+              Reset Password
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       <Modal
         opened={modalOpen}

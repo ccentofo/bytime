@@ -134,15 +134,18 @@ async function syncPendingEntries(userId: string): Promise<boolean> {
           cells: items.map((item) => {
             const dayIndex = dayjs(item.entryDate).diff(dayjs(periodStartStr), 'day');
             return {
-              clinId: item.clinId,
+              clinId: item.indirectCodeId ? undefined : item.clinId,
+              indirectCodeId: item.indirectCodeId,
               dayIndex,
               hours: item.hours,
               isEdit: item.isEdit,
               isLateEntry: item.isLateEntry,
+              // No expectedRevision for offline sync — use last-write-wins
             };
           }),
           changeReasonCode: hasEditsOrLate ? (firstReason?.changeReasonCode ?? 'OFFLINE_SYNC') : undefined,
           comment: hasEditsOrLate ? (firstReason?.comment ?? 'Synced from offline entry') : undefined,
+          skipConflictCheck: true, // Offline entries use last-write-wins policy
         });
 
         // On success: remove from queue, update local entries to synced

@@ -30,10 +30,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`} suppressHydrationWarning>
-      <head>
-        <ColorSchemeScript defaultColorScheme="auto" />
-      </head>
+      <head />
       <body>
+        {/* ColorSchemeScript MUST be in <body> before MantineProvider — NOT in <head>.
+            Placing it in <head> causes "Encountered a script tag" React errors in Next.js App Router.
+            This is the Mantine v9 recommended pattern for Next.js. */}
+        <ColorSchemeScript defaultColorScheme="auto" />
         <MantineProvider defaultColorScheme="auto" theme={theme}>
           <Notifications position="top-right" autoClose={4000} />
           {children}

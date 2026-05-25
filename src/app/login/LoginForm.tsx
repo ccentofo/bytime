@@ -12,26 +12,44 @@ import {
   Button,
   Alert,
   Avatar,
-  Group,
   Text,
 } from '@mantine/core';
-import { IconAlertCircle } from '@tabler/icons-react';
+import { IconAlertCircle, IconLock } from '@tabler/icons-react';
 import { signIn } from 'next-auth/react';
+import { checkLockout } from '@/server/actions/login-attempts';
 
 export function LoginForm() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [lockoutMessage, setLockoutMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [failedCount, setFailedCount] = useState(0);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
+    setLockoutMessage('');
+
+    if (!email.trim() || !password) {
+      setError('Please enter both email and password.');
+      return;
+    }
+
+    // Client-side lockout check (server also enforces this)
+    const lockoutInfo = await checkLockout(email.toLowerCase().trim());
+    if (lockoutInfo?.isLocked) {
+      setLockoutMessage(
+        `Account is temporarily locked due to too many failed login attempts. Please try again in ${lockoutInfo.minutesRemaining} minute${lockoutInfo.minutesRemaining !== 1 ? 's' : ''}.`
+      );
+      return;
+    }
+
     setLoading(true);
 
     const result = await signIn('credentials', {
-      email,
+      email: email.toLowerCase().trim(),
       password,
       redirect: false,
     });
@@ -39,7 +57,24 @@ export function LoginForm() {
     setLoading(false);
 
     if (result?.error) {
-      setError('Invalid email or password');
+      // Check updated lockout status after this failure
+      const updatedLockout = await checkLockout(email.toLowerCase().trim());
+      const attempts = updatedLockout?.failedAttempts ?? 0;
+      setFailedCount(attempts);
+
+      if (updatedLockout?.isLocked) {
+        setLockoutMessage(
+          `Account is temporarily locked due to too many failed login attempts. Please try again in ${updatedLockout.minutesRemaining} minute${updatedLockout.minutesRemaining !== 1 ? 's' : ''}.`
+        );
+        setError('');
+      } else {
+        const remaining = 5 - attempts;
+        if (remaining <= 2 && remaining > 0) {
+          setError(`Invalid email or password. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining before account lockout.`);
+        } else {
+          setError('Invalid email or password.');
+        }
+      }
       return;
     }
 
@@ -58,7 +93,19 @@ export function LoginForm() {
           </Text>
         </Stack>
 
-        {error && (
+        {lockoutMessage && (
+          <Alert
+            icon={<IconLock size={16} />}
+            color="orange"
+            mb="md"
+            variant="light"
+            title="Account Locked"
+          >
+            {lockoutMessage}
+          </Alert>
+        )}
+
+        {error && !lockoutMessage && (
           <Alert
             icon={<IconAlertCircle size={16} />}
             color="red"
@@ -79,6 +126,7 @@ export function LoginForm() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="email"
+              disabled={Boolean(lockoutMessage)}
             />
             <PasswordInput
               label="Password"
@@ -87,8 +135,14 @@ export function LoginForm() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
+              disabled={Boolean(lockoutMessage)}
             />
-            <Button type="submit" fullWidth loading={loading}>
+            <Button
+              type="submit"
+              fullWidth
+              loading={loading}
+              disabled={Boolean(lockoutMessage)}
+            >
               Sign In
             </Button>
           </Stack>

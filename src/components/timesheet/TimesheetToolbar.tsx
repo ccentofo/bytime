@@ -1,10 +1,10 @@
 'use client';
 
-import { Button, Group, Badge, Text, Alert } from '@mantine/core';
+import { Button, Group, Badge, Text, Alert, Paper } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconDeviceFloppy, IconArrowBack, IconSend, IconAlertCircle, IconCheck, IconX } from '@tabler/icons-react';
 import { useTimesheet } from '@/components/timesheet/TimesheetContext';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { ReasonModal } from '@/components/timesheet/ReasonModal';
 import { SubmitModal } from '@/components/timesheet/SubmitModal';
 import dayjs from 'dayjs';
@@ -42,6 +42,135 @@ export function TimesheetToolbar() {
     && state.entries.some((e) => e.hours.some((h) => h > 0));
 
   const statusBadge = STATUS_BADGES[periodStatus] ?? STATUS_BADGES.draft;
+
+  // Overtime calculations for FLSA exempt employees
+  const overtimeInfo = useMemo(() => {
+    if (!state.flsaExempt) return null;
+
+    const totalPeriodHours = state.entries.reduce(
+      (sum, entry) => sum + entry.hours.reduce((a, b) => a + b, 0),
+      0
+    );
+
+    // Calculate weekly totals within the period
+    const dailyTotals: number[] = [];
+    const numDaysInPeriod = state.entries[0]?.hours.length ?? 0;
+    for (let i = 0; i < numDaysInPeriod; i++) {
+      let dayTotal = 0;
+      for (const entry of state.entries) {
+        dayTotal += entry.hours[i] ?? 0;
+      }
+      dailyTotals.push(dayTotal);
+    }
+
+    // Group by week (Sun-Sat) and calculate compensated vs uncompensated
+    const weeklyTotals: { weekLabel: string; total: number; compensated: number; uncompensated: number }[] = [];
+    let currentWeekStart: dayjs.Dayjs | null = null;
+    let currentWeekHours = 0;
+    let currentWeekLabel = '';
+
+    for (let i = 0; i < numDaysInPeriod; i++) {
+      const date = dayjs(state.periodStart).add(i, 'day');
+      const weekStart = date.startOf('week');
+
+      if (!currentWeekStart || !weekStart.isSame(currentWeekStart, 'day')) {
+        if (currentWeekStart !== null) {
+          weeklyTotals.push({
+            weekLabel: currentWeekLabel,
+            total: Math.round(currentWeekHours * 100) / 100,
+            compensated: Math.min(currentWeekHours, 40),
+            uncompensated: Math.max(0, Math.round((currentWeekHours - 40) * 100) / 100),
+          });
+        }
+        currentWeekStart = weekStart;
+        currentWeekHours = 0;
+        currentWeekLabel = `Week of ${date.format('MMM D')}`;
+      }
+      currentWeekHours += dailyTotals[i];
+    }
+    if (currentWeekStart !== null) {
+      weeklyTotals.push({
+        weekLabel: currentWeekLabel,
+        total: Math.round(currentWeekHours * 100) / 100,
+        compensated: Math.min(currentWeekHours, 40),
+        uncompensated: Math.max(0, Math.round((currentWeekHours - 40) * 100) / 100),
+      });
+    }
+
+    const totalUncompensated = weeklyTotals.reduce((sum, w) => sum + w.uncompensated, 0);
+    const hasLowHoursWarning = weeklyTotals.some((w) => w.total > 0 && w.total < 40);
+
+    return {
+      totalPeriodHours: Math.round(totalPeriodHours * 100) / 100,
+      totalUncompensated: Math.round(totalUncompensated * 100) / 100,
+      weeklyTotals,
+      hasLowHoursWarning,
+    };
+  }, [state.entries, state.periodStart, state.flsaExempt]);
+
+  // Period completeness validation warnings
+  const completenessWarnings = useMemo(() => {
+    const warnings: string[] = [];
+    const numDaysInPeriod = state.entries[0]?.hours.length ?? 0;
+    if (numDaysInPeriod === 0) return warnings;
+
+    // Calculate daily totals across all charge codes
+    const dailyTotals: number[] = [];
+    for (let i = 0; i < numDaysInPeriod; i++) {
+      let dayTotal = 0;
+      for (const entry of state.entries) {
+        dayTotal += entry.hours[i] ?? 0;
+      }
+      dailyTotals.push(Math.round(dayTotal * 100) / 100);
+    }
+
+    // Check for missing workdays (weekdays with 0 hours)
+    const missingDays: string[] = [];
+    for (let i = 0; i < numDaysInPeriod; i++) {
+      const date = dayjs(state.periodStart).add(i, 'day');
+      const dow = date.day(); // 0=Sun, 6=Sat
+      const isWeekday = dow >= 1 && dow <= 5;
+      const isPastOrToday = date.isBefore(dayjs(), 'day') || date.isSame(dayjs(), 'day');
+
+      if (isWeekday && isPastOrToday && dailyTotals[i] === 0) {
+        missingDays.push(date.format('ddd MMM D'));
+      }
+    }
+
+    if (missingDays.length > 0) {
+      warnings.push(
+        `${missingDays.length} workday${missingDays.length !== 1 ? 's' : ''} with no hours recorded: ${missingDays.join(', ')}`
+      );
+    }
+
+    // Check for excessive hours on any single day (> 16 hours)
+    for (let i = 0; i < numDaysInPeriod; i++) {
+      if (dailyTotals[i] > 16) {
+        const date = dayjs(state.periodStart).add(i, 'day');
+        warnings.push(
+          `${dailyTotals[i].toFixed(2)} hours recorded on ${date.format('ddd MMM D')} — please verify this is correct`
+        );
+      }
+    }
+
+    // Total period hours
+    const totalHours = dailyTotals.reduce((sum, h) => sum + h, 0);
+
+    // Check for very low total hours (less than 50% of expected workdays × 8)
+    const workdayCount = Array.from({ length: numDaysInPeriod }, (_, i) => {
+      const dow = dayjs(state.periodStart).add(i, 'day').day();
+      return dow >= 1 && dow <= 5 ? 1 : 0;
+    }).reduce((a: number, b: number) => a + b, 0);
+
+    const expectedMinHours = workdayCount * 4; // 50% of expected (4 hrs/day minimum threshold)
+    if (totalHours > 0 && totalHours < expectedMinHours) {
+      warnings.push(
+        `Total period hours (${totalHours.toFixed(2)}) seem low for ${workdayCount} workdays. Ensure all time is accounted for.`
+      );
+    }
+
+    return warnings;
+  }, [state.entries, state.periodStart]);
 
   async function handleSave() {
     if (dirtyCount === 0) return;
@@ -182,6 +311,29 @@ export function TimesheetToolbar() {
         </Group>
       </Group>
 
+      {/* Overtime summary for FLSA exempt employees */}
+      {state.flsaExempt && overtimeInfo && overtimeInfo.totalPeriodHours > 0 && (
+        <Paper withBorder p="xs" mb="sm" radius="sm">
+          <Group justify="space-between" wrap="wrap">
+            <Group gap="md">
+              <Text size="sm" fw={600}>
+                Total Period Hours: {overtimeInfo.totalPeriodHours.toFixed(2)}
+              </Text>
+              {overtimeInfo.totalUncompensated > 0 && (
+                <Badge color="orange" variant="light" size="lg">
+                  {overtimeInfo.totalUncompensated.toFixed(2)} hrs uncompensated OT
+                </Badge>
+              )}
+            </Group>
+            {overtimeInfo.hasLowHoursWarning && (
+              <Text size="xs" c="orange" fw={500}>
+                ⚠ Some weeks have fewer than 40 hours — ensure all time is recorded
+              </Text>
+            )}
+          </Group>
+        </Paper>
+      )}
+
       <ReasonModal
         opened={reasonModalOpen}
         onClose={() => setReasonModalOpen(false)}
@@ -199,6 +351,10 @@ export function TimesheetToolbar() {
         onConfirm={handleSubmitConfirm}
         isSaving={state.isSaving}
         periodLabel={periodLabel}
+        flsaExempt={state.flsaExempt}
+        totalPeriodHours={overtimeInfo?.totalPeriodHours}
+        uncompensatedHours={overtimeInfo?.totalUncompensated}
+        completenessWarnings={completenessWarnings}
       />
     </>
   );

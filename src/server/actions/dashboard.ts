@@ -101,7 +101,8 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
     .from(slins)
     .orderBy(slins.slinNumber);
 
-  // Query 4: Total hours per CLIN (latest revision only, no rate needed)
+  // Query 4: Total hours per CLIN (latest revision only, direct entries only)
+  // Indirect entries (clinId IS NULL) are excluded — they don't belong in contract budget tracking
   const hoursData = await db
     .select({
       clinId: timesheetEntries.clinId,
@@ -109,15 +110,18 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
     })
     .from(timesheetEntries)
     .where(
-      eq(
-        timesheetEntries.revisionNumber,
-        sql`(
-          SELECT MAX(te2.revision_number)
-          FROM timesheet_entries te2
-          WHERE te2.user_id = ${timesheetEntries.userId}
-            AND te2.clin_id = ${timesheetEntries.clinId}
-            AND te2.entry_date = ${timesheetEntries.entryDate}
-        )`
+      and(
+        sql`${timesheetEntries.clinId} IS NOT NULL`,
+        eq(
+          timesheetEntries.revisionNumber,
+          sql`(
+            SELECT MAX(te2.revision_number)
+            FROM timesheet_entries te2
+            WHERE te2.user_id = ${timesheetEntries.userId}
+              AND te2.clin_id = ${timesheetEntries.clinId}
+              AND te2.entry_date = ${timesheetEntries.entryDate}
+          )`
+        ),
       )
     )
     .groupBy(timesheetEntries.clinId);
@@ -149,15 +153,18 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
       )
     )
     .where(
-      eq(
-        timesheetEntries.revisionNumber,
-        sql`(
-          SELECT MAX(te2.revision_number)
-          FROM timesheet_entries te2
-          WHERE te2.user_id = ${timesheetEntries.userId}
-            AND te2.clin_id = ${timesheetEntries.clinId}
-            AND te2.entry_date = ${timesheetEntries.entryDate}
-        )`
+      and(
+        sql`${timesheetEntries.clinId} IS NOT NULL`,
+        eq(
+          timesheetEntries.revisionNumber,
+          sql`(
+            SELECT MAX(te2.revision_number)
+            FROM timesheet_entries te2
+            WHERE te2.user_id = ${timesheetEntries.userId}
+              AND te2.clin_id = ${timesheetEntries.clinId}
+              AND te2.entry_date = ${timesheetEntries.entryDate}
+          )`
+        ),
       )
     )
     .groupBy(timesheetEntries.clinId);
@@ -232,12 +239,16 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
   // Build lookup maps
   const hoursMap = new Map<string, number>();
   for (const row of hoursData) {
-    hoursMap.set(row.clinId, Math.round(Number(row.totalHours) * 100) / 100);
+    if (row.clinId) {
+      hoursMap.set(row.clinId, Math.round(Number(row.totalHours) * 100) / 100);
+    }
   }
 
   const costMap = new Map<string, number>();
   for (const row of costData) {
-    costMap.set(row.clinId, Math.round(Number(row.totalCost) * 100) / 100);
+    if (row.clinId) {
+      costMap.set(row.clinId, Math.round(Number(row.totalCost) * 100) / 100);
+    }
   }
 
   const slinHoursMap = new Map<string, number>();

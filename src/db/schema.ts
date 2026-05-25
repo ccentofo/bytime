@@ -19,8 +19,70 @@ export const users = pgTable('users', {
   role: userRoleEnum('role').notNull().default('employee'),
   isActive: boolean('is_active').notNull().default(true),
   passwordHash: varchar('password_hash', { length: 255 }),
+  passwordChangedAt: timestamp('password_changed_at', { withTimezone: true }),
+  flsaExempt: boolean('flsa_exempt').notNull().default(false), // FLSA exempt = salaried, must record all hours including uncompensated OT
+  sessionVersion: integer('session_version').notNull().default(1),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// API Keys (for external system integration)
+// ---------------------------------------------------------------------------
+
+export const apiKeys = pgTable('api_keys', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: varchar('name', { length: 255 }).notNull(),               // "QuickBooks Integration", "Deltek Sync"
+  keyHash: varchar('key_hash', { length: 64 }).notNull().unique(), // SHA-256 hash of the API key
+  keyPrefix: varchar('key_prefix', { length: 8 }).notNull(),       // First 8 chars for identification (e.g., "byt_a1b2")
+  createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id),
+  permissions: varchar('permissions', { length: 50 }).notNull().default('read'), // 'read' or 'read-write'
+  isActive: boolean('is_active').notNull().default(true),
+  lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),        // nullable — null means no expiry
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// Indirect Charge Code Categories
+// ---------------------------------------------------------------------------
+
+export const indirectCategoryEnum = pgEnum('indirect_category', [
+  'overhead',      // Overhead / fringe
+  'ga',            // General & Administrative
+  'irad',          // Independent Research & Development
+  'bp',            // Bid & Proposal
+  'leave',         // Leave (annual, sick, holiday, LWOP)
+  'unallowable',   // Unallowable costs (FAR 31.205)
+]);
+
+// ---------------------------------------------------------------------------
+// Indirect Charge Codes (overhead, G&A, leave, etc.)
+// ---------------------------------------------------------------------------
+
+export const indirectChargeCodes = pgTable('indirect_charge_codes', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  code: varchar('code', { length: 50 }).notNull().unique(),
+  name: varchar('name', { length: 255 }).notNull(),
+  category: indirectCategoryEnum('category').notNull(),
+  description: text('description'),
+  isActive: boolean('is_active').notNull().default(true),
+  availableToAll: boolean('available_to_all').notNull().default(true), // if true, all employees can charge to this
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// Login Attempts (brute-force protection — tracks failed login attempts)
+// ---------------------------------------------------------------------------
+
+export const loginAttempts = pgTable('login_attempts', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  email: varchar('email', { length: 255 }).notNull(),
+  ipAddress: varchar('ip_address', { length: 45 }), // IPv4 or IPv6
+  attemptedAt: timestamp('attempted_at', { withTimezone: true }).notNull().defaultNow(),
+  successful: boolean('successful').notNull().default(false),
 });
 
 // ---------------------------------------------------------------------------
@@ -133,8 +195,9 @@ export const userLaborCategories = pgTable('user_labor_categories', {
 export const timesheetEntries = pgTable('timesheet_entries', {
   id: uuid('id').defaultRandom().primaryKey(),
   userId: uuid('user_id').notNull().references(() => users.id),
-  clinId: uuid('clin_id').notNull().references(() => clins.id),
+  clinId: uuid('clin_id').references(() => clins.id), // nullable — null for indirect charge entries
   slinId: uuid('slin_id').references(() => slins.id), // nullable — SLIN-level entry
+  indirectCodeId: uuid('indirect_code_id').references(() => indirectChargeCodes.id), // nullable — set for indirect entries
   entryDate: timestamp('entry_date', { withTimezone: true }).notNull(),
   hours: varchar('hours', { length: 10 }).notNull().default('0'), // stored as string to preserve exact decimal input
   revisionNumber: integer('revision_number').notNull().default(1),
@@ -163,3 +226,19 @@ export const timesheetPeriods = pgTable('timesheet_periods', {
 }, (table) => [
   uniqueIndex('user_period_unique_idx').on(table.userId, table.periodStart),
 ]);
+
+// ---------------------------------------------------------------------------
+// Notification Preferences (per-user email notification settings)
+// ---------------------------------------------------------------------------
+
+export const notificationPreferences = pgTable('notification_preferences', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }).unique(),
+  emailOnSubmit: boolean('email_on_submit').notNull().default(true),       // supervisor: when employee submits
+  emailOnApprove: boolean('email_on_approve').notNull().default(true),     // employee: when timesheet approved
+  emailOnReject: boolean('email_on_reject').notNull().default(true),       // employee: when timesheet rejected
+  emailDailyReminder: boolean('email_daily_reminder').notNull().default(true), // employee: daily entry reminder
+  emailDeadlineReminder: boolean('email_deadline_reminder').notNull().default(true), // employee: submission deadline
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});

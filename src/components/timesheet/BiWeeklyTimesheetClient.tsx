@@ -10,6 +10,7 @@ import { TimesheetToolbar } from '@/components/timesheet/TimesheetToolbar';
 import type { TimesheetPageData } from '@/types/timesheet';
 import { seedOfflineStore } from '@/lib/offline/offline-store';
 import { startSyncService, stopSyncService } from '@/lib/offline/sync-service';
+import { TimesheetDashboard } from '@/components/timesheet/TimesheetDashboard';
 
 function TimesheetContent() {
   const { state } = useTimesheet();
@@ -63,8 +64,15 @@ export function BiWeeklyTimesheetClient({ initialData }: Props) {
   }, [initialData.userId]);
 
   return (
-    <TimesheetProvider initialData={initialData}>
-      <TimesheetContent />
-    </TimesheetProvider>
+    <>
+      {initialData.dashboardData && (
+        <Container fluid px="md" pt="xl">
+          <TimesheetDashboard data={initialData.dashboardData} />
+        </Container>
+      )}
+      <TimesheetProvider initialData={initialData}>
+        <TimesheetContent />
+      </TimesheetProvider>
+    </>
   );
 }

@@ -4,6 +4,10 @@ import { db } from '@/db';
 import { users } from '@/db/schema';
 import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
+import { requireAdmin } from '@/lib/session';
+import { validateEmail, validateRequired, validateStringLength, validateEnum } from '@/lib/validation';
+
+const USER_ROLES = ['admin', 'supervisor', 'employee'] as const;
 
 export async function getUsers() {
   return db.select().from(users).orderBy(users.fullName);
@@ -19,11 +23,24 @@ export async function createUser(data: {
   fullName: string;
   role?: 'admin' | 'supervisor' | 'employee';
 }) {
-  const rows = await db.insert(users).values(data).returning();
+  await requireAdmin();
+  const validatedData = {
+    email: validateEmail(data.email),
+    fullName: validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255),
+    role: data.role ? validateEnum(data.role, 'Role', USER_ROLES) : 'employee' as const,
+  };
+  const rows = await db.insert(users).values(validatedData).returning();
   return rows[0];
 }
 
+export async function unlockUserAccount(email: string): Promise<void> {
+  await requireAdmin();
+  const { unlockAccount } = await import('@/server/actions/login-attempts');
+  await unlockAccount(email);
+}
+
 export async function seedUsers() {
+  await requireAdmin();
   // Hash the default dev password for all seed users
   const defaultPassword = 'Password123!';
   const hash = await bcrypt.hash(defaultPassword, 12);
@@ -59,9 +76,31 @@ export async function updateUser(id: string, data: {
   email?: string;
   role?: 'admin' | 'supervisor' | 'employee';
   isActive?: boolean;
+  flsaExempt?: boolean;
 }) {
+  await requireAdmin();
+  // Determine if this change should invalidate existing sessions
+  const shouldInvalidateSession = data.role !== undefined || data.isActive !== undefined;
+
+  const updateData: Record<string, unknown> = {
+    ...data,
+    updatedAt: new Date(),
+  };
+
+  if (shouldInvalidateSession) {
+    // Increment sessionVersion to force re-authentication
+    const [currentUser] = await db
+      .select({ sessionVersion: users.sessionVersion })
+      .from(users)
+      .where(eq(users.id, id));
+
+    if (currentUser) {
+      updateData.sessionVersion = currentUser.sessionVersion + 1;
+    }
+  }
+
   const rows = await db.update(users)
-    .set({ ...data, updatedAt: new Date() })
+    .set(updateData)
     .where(eq(users.id, id))
     .returning();
   return rows[0];
@@ -73,11 +112,15 @@ export async function createUserWithPassword(data: {
   role: 'admin' | 'supervisor' | 'employee';
   password: string;
 }) {
+  await requireAdmin();
+  const validatedEmail = validateEmail(data.email);
+  const validatedName = validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255);
+  const validatedRole = validateEnum(data.role, 'Role', USER_ROLES);
   const hash = await bcrypt.hash(data.password, 12);
   const rows = await db.insert(users).values({
-    email: data.email,
-    fullName: data.fullName,
-    role: data.role,
+    email: validatedEmail,
+    fullName: validatedName,
+    role: validatedRole,
     passwordHash: hash,
   }).returning();
   return rows[0];

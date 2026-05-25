@@ -5,6 +5,8 @@ import { getCurrentPeriodStart, getNumDaysInPeriod } from '@/lib/date-utils';
 import { BiWeeklyTimesheetClient } from '@/components/timesheet/BiWeeklyTimesheetClient';
 import type { TimesheetPageData } from '@/types/timesheet';
 import { getPeriodStatus } from '@/server/actions/periods';
+import { getUserByEmail } from '@/server/actions/users';
+import { getEmployeeDashboardData } from '@/server/actions/employee-dashboard';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,6 +26,11 @@ export default async function TimesheetPage() {
     getPeriodStatus(userId, periodStart),
   ]);
 
+  const [fullUser, dashboardData] = await Promise.all([
+    getUserByEmail(session.user.email!),
+    getEmployeeDashboardData(userId),
+  ]);
+
   const pageData: TimesheetPageData = {
     userId,
     chargeCodes,
@@ -31,6 +38,8 @@ export default async function TimesheetPage() {
     periodStart,
     revisions,
     periodStatus: periodInfo.status,
+    flsaExempt: fullUser?.flsaExempt ?? false,
+    dashboardData,
   };
 
   return <BiWeeklyTimesheetClient initialData={pageData} />;

@@ -18,7 +18,8 @@ import { IconCheck, IconX, IconEye, IconAlertCircle } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications';
 import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import dayjs from 'dayjs';
-import { approvePeriod, rejectPeriod, getAllPeriods } from '@/server/actions/periods';
+import { approvePeriod, rejectPeriod, getScopedPeriods } from '@/server/actions/periods';
+import { getSupervisedEmployeeIds } from '@/server/actions/supervisor-scope';
 import { getTimesheetForReview } from '@/server/actions/timesheet';
 import { getNumDaysInPeriod } from '@/lib/date-utils';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
@@ -35,9 +36,17 @@ type Period = {
   reviewedAt: Date | null;
 };
 
+type ScopeInfo = {
+  assignedContractCount: number;
+  assignedClinCount: number;
+  supervisedEmployeeCount: number;
+} | null;
+
 type Props = {
   initialPeriods: Period[];
   currentUserId: string;
+  userRole: string;
+  scopeInfo: ScopeInfo;
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -47,7 +56,7 @@ const STATUS_COLORS: Record<string, string> = {
   rejected: 'red',
 };
 
-export function ApprovalsClient({ initialPeriods, currentUserId }: Props) {
+export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scopeInfo }: Props) {
   const [periods, setPeriods] = useState(initialPeriods);
   const [isPending, startTransition] = useTransition();
 
@@ -85,7 +94,8 @@ export function ApprovalsClient({ initialPeriods, currentUserId }: Props) {
           reviewedBy: currentUserId,
           comment: approveComment.trim() || undefined,
         });
-        const refreshed = await getAllPeriods();
+        const scopedIds = await getSupervisedEmployeeIds(currentUserId, userRole);
+        const refreshed = await getScopedPeriods(scopedIds);
         setPeriods(refreshed);
         setDrawerOpen(false);
         notifications.show({
@@ -116,7 +126,8 @@ export function ApprovalsClient({ initialPeriods, currentUserId }: Props) {
           reviewedBy: currentUserId,
           comment: rejectComment.trim(),
         });
-        const refreshed = await getAllPeriods();
+        const scopedIds = await getSupervisedEmployeeIds(currentUserId, userRole);
+        const refreshed = await getScopedPeriods(scopedIds);
         setPeriods(refreshed);
         setDrawerOpen(false);
         notifications.show({
@@ -290,6 +301,42 @@ export function ApprovalsClient({ initialPeriods, currentUserId }: Props) {
   return (
     <>
       <Title order={2} mb="md">Timesheet Approvals</Title>
+
+      {/* Scope information banner */}
+      {userRole === 'supervisor' && scopeInfo && (
+        <Paper withBorder p="sm" mb="md" radius="md">
+          <Group gap="lg">
+            <Text size="sm" c="dimmed">
+              <strong>Your Approval Scope:</strong> You can review timesheets for{' '}
+              <Badge variant="light" color="blue" size="sm">{scopeInfo.supervisedEmployeeCount}</Badge>{' '}
+              employees across{' '}
+              <Badge variant="light" color="green" size="sm">{scopeInfo.assignedClinCount}</Badge>{' '}
+              CLINs you are assigned to.
+            </Text>
+          </Group>
+        </Paper>
+      )}
+
+      {userRole === 'admin' && (
+        <Paper withBorder p="sm" mb="md" radius="md">
+          <Text size="sm" c="dimmed">
+            <Badge variant="light" color="red" size="sm">Admin</Badge>{' '}
+            You have full access to all employee timesheets.
+          </Text>
+        </Paper>
+      )}
+
+      {/* Empty state for supervisors with no assignments */}
+      {userRole === 'supervisor' && scopeInfo && scopeInfo.supervisedEmployeeCount === 0 && (
+        <Paper withBorder p="xl" ta="center" radius="md">
+          <Text size="lg" c="dimmed" mb="sm">No Employees in Your Scope</Text>
+          <Text size="sm" c="dimmed">
+            You are not assigned to any CLINs, so there are no employees whose timesheets you can review.
+            Contact your administrator to get assigned to the appropriate contracts and CLINs.
+          </Text>
+        </Paper>
+      )}
+
       <MantineReactTable table={table} />
 
       <Drawer

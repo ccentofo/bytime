@@ -36,7 +36,8 @@ export interface OfflinePeriodMeta {
 
 export interface OfflineSyncQueueItem {
   id?: number;                    // auto-increment
-  clinId: string;
+  clinId?: string;                // set for direct entries (nullable for indirect)
+  indirectCodeId?: string;        // set for indirect entries
   entryDate: string;
   hours: number;
   changeReasonCode?: string;
@@ -57,7 +58,7 @@ class ByTimeOfflineDB extends Dexie {
   constructor() {
     super('bytime-offline');
 
-    this.version(1).stores({
+    this.version(2).stores({
       entries: '++id, [clinId+entryDate], periodStartKey, syncStatus',
       chargeCodes: 'id',
       periodMeta: 'periodStartKey',

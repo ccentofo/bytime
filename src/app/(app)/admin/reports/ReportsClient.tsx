@@ -1,0 +1,254 @@
+'use client';
+
+import { useState } from 'react';
+import {
+  Title,
+  Paper,
+  Stack,
+  Group,
+  Button,
+  Select,
+  Divider,
+  Text,
+  SimpleGrid,
+  ThemeIcon,
+} from '@mantine/core';
+import {
+  IconFileTypePdf,
+  IconFileTypeCsv,
+  IconFileSpreadsheet,
+  IconDownload,
+  IconReportAnalytics,
+} from '@tabler/icons-react';
+import { notifications } from '@mantine/notifications';
+import dayjs from 'dayjs';
+
+type FilterOptions = {
+  users: Array<{ id: string; fullName: string; email: string }>;
+  contracts: Array<{ id: string; name: string; contractNumber: string }>;
+};
+
+type Props = {
+  filterOptions: FilterOptions;
+};
+
+export function ReportsClient({ filterOptions }: Props) {
+  // Timesheet PDF state
+  const [pdfUserId, setPdfUserId] = useState<string | null>(null);
+  const [pdfPeriodStart, setPdfPeriodStart] = useState<string>('');
+
+  // Cost Report state
+  const [costStartDate, setCostStartDate] = useState<string>('');
+  const [costEndDate, setCostEndDate] = useState<string>('');
+  const [costContractId, setCostContractId] = useState<string | null>(null);
+
+  // Employee Summary state
+  const [summaryStartDate, setSummaryStartDate] = useState<string>('');
+  const [summaryEndDate, setSummaryEndDate] = useState<string>('');
+
+  function downloadTimesheetPdf() {
+    if (!pdfUserId || !pdfPeriodStart) {
+      notifications.show({ title: 'Missing Fields', message: 'Select an employee and period start date.', color: 'yellow' });
+      return;
+    }
+    const params = new URLSearchParams({
+      userId: pdfUserId,
+      periodStart: dayjs(pdfPeriodStart).format('YYYY-MM-DD'),
+    });
+    window.open(`/api/reports/timesheet-pdf?${params.toString()}`, '_blank');
+  }
+
+  function downloadCostCsv() {
+    if (!costStartDate || !costEndDate) {
+      notifications.show({ title: 'Missing Fields', message: 'Select start and end dates.', color: 'yellow' });
+      return;
+    }
+    const params = new URLSearchParams({
+      startDate: dayjs(costStartDate).format('YYYY-MM-DD'),
+      endDate: dayjs(costEndDate).format('YYYY-MM-DD'),
+    });
+    if (costContractId) params.set('contractId', costContractId);
+    window.open(`/api/reports/cost-report-csv?${params.toString()}`, '_blank');
+  }
+
+  function downloadCostExcel() {
+    if (!costStartDate || !costEndDate) {
+      notifications.show({ title: 'Missing Fields', message: 'Select start and end dates.', color: 'yellow' });
+      return;
+    }
+    const params = new URLSearchParams({
+      startDate: dayjs(costStartDate).format('YYYY-MM-DD'),
+      endDate: dayjs(costEndDate).format('YYYY-MM-DD'),
+    });
+    if (costContractId) params.set('contractId', costContractId);
+    window.open(`/api/reports/cost-report-xlsx?${params.toString()}`, '_blank');
+  }
+
+  function downloadSummaryExcel() {
+    if (!summaryStartDate || !summaryEndDate) {
+      notifications.show({ title: 'Missing Fields', message: 'Select start and end dates.', color: 'yellow' });
+      return;
+    }
+    // Uses the same Excel endpoint but with summary format — we can add a format param
+    const params = new URLSearchParams({
+      startDate: dayjs(summaryStartDate).format('YYYY-MM-DD'),
+      endDate: dayjs(summaryEndDate).format('YYYY-MM-DD'),
+      format: 'summary',
+    });
+    window.open(`/api/reports/cost-report-xlsx?${params.toString()}`, '_blank');
+  }
+
+  return (
+    <>
+      <Title order={2} mb="md">Reports & Export</Title>
+
+      <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="xl">
+        {/* --- Individual Timesheet PDF --- */}
+        <Paper withBorder p="lg" radius="md">
+          <Group mb="md">
+            <ThemeIcon color="red" variant="light" size="lg" radius="md">
+              <IconFileTypePdf size={20} />
+            </ThemeIcon>
+            <div>
+              <Text fw={600}>Individual Timesheet (PDF)</Text>
+              <Text size="xs" c="dimmed">DCAA-compliant timesheet with certification statement</Text>
+            </div>
+          </Group>
+
+          <Stack gap="sm">
+            <Select
+              label="Employee"
+              placeholder="Select employee"
+              data={filterOptions.users.map((u) => ({ value: u.id, label: `${u.fullName} (${u.email})` }))}
+              value={pdfUserId}
+              onChange={setPdfUserId}
+              searchable
+            />
+            <input
+              type="date"
+              id="pdfPeriodStart"
+              value={pdfPeriodStart}
+              onChange={(e) => setPdfPeriodStart(e.target.value)}
+              style={{ padding: '8px', borderRadius: '4px', border: '1px solid #ced4da', fontSize: '14px', width: '100%' }}
+            />
+            <Button
+              leftSection={<IconDownload size={16} />}
+              onClick={downloadTimesheetPdf}
+              disabled={!pdfUserId || !pdfPeriodStart}
+              color="red"
+            >
+              Download PDF
+            </Button>
+          </Stack>
+        </Paper>
+
+        {/* --- Cost Report (CSV/Excel) --- */}
+        <Paper withBorder p="lg" radius="md">
+          <Group mb="md">
+            <ThemeIcon color="green" variant="light" size="lg" radius="md">
+              <IconReportAnalytics size={20} />
+            </ThemeIcon>
+            <div>
+              <Text fw={600}>Detailed Cost Report</Text>
+              <Text size="xs" c="dimmed">Hours × rates by employee, CLIN, and LCAT</Text>
+            </div>
+          </Group>
+
+          <Stack gap="sm">
+            <Group grow>
+              <div>
+                <Text size="sm" fw={500} mb={4}>Start Date</Text>
+                <input
+                  type="date"
+                  value={costStartDate}
+                  onChange={(e) => setCostStartDate(e.target.value)}
+                  style={{ padding: '8px', borderRadius: '4px', border: '1px solid #ced4da', fontSize: '14px', width: '100%' }}
+                />
+              </div>
+              <div>
+                <Text size="sm" fw={500} mb={4}>End Date</Text>
+                <input
+                  type="date"
+                  value={costEndDate}
+                  onChange={(e) => setCostEndDate(e.target.value)}
+                  style={{ padding: '8px', borderRadius: '4px', border: '1px solid #ced4da', fontSize: '14px', width: '100%' }}
+                />
+              </div>
+            </Group>
+            <Select
+              label="Contract (optional)"
+              placeholder="All contracts"
+              data={filterOptions.contracts.map((c) => ({ value: c.id, label: `${c.name} (${c.contractNumber})` }))}
+              value={costContractId}
+              onChange={setCostContractId}
+              clearable
+              searchable
+            />
+            <Group>
+              <Button
+                leftSection={<IconFileTypeCsv size={16} />}
+                onClick={downloadCostCsv}
+                disabled={!costStartDate || !costEndDate}
+                variant="default"
+              >
+                Download CSV
+              </Button>
+              <Button
+                leftSection={<IconFileSpreadsheet size={16} />}
+                onClick={downloadCostExcel}
+                disabled={!costStartDate || !costEndDate}
+                color="green"
+              >
+                Download Excel
+              </Button>
+            </Group>
+          </Stack>
+        </Paper>
+
+        {/* --- Employee Summary --- */}
+        <Paper withBorder p="lg" radius="md">
+          <Group mb="md">
+            <ThemeIcon color="blue" variant="light" size="lg" radius="md">
+              <IconFileSpreadsheet size={20} />
+            </ThemeIcon>
+            <div>
+              <Text fw={600}>Employee Summary Report</Text>
+              <Text size="xs" c="dimmed">Aggregated hours & cost by employee per contract/CLIN</Text>
+            </div>
+          </Group>
+
+          <Stack gap="sm">
+            <Group grow>
+              <div>
+                <Text size="sm" fw={500} mb={4}>Start Date</Text>
+                <input
+                  type="date"
+                  value={summaryStartDate}
+                  onChange={(e) => setSummaryStartDate(e.target.value)}
+                  style={{ padding: '8px', borderRadius: '4px', border: '1px solid #ced4da', fontSize: '14px', width: '100%' }}
+                />
+              </div>
+              <div>
+                <Text size="sm" fw={500} mb={4}>End Date</Text>
+                <input
+                  type="date"
+                  value={summaryEndDate}
+                  onChange={(e) => setSummaryEndDate(e.target.value)}
+                  style={{ padding: '8px', borderRadius: '4px', border: '1px solid #ced4da', fontSize: '14px', width: '100%' }}
+                />
+              </div>
+            </Group>
+            <Button
+              leftSection={<IconFileSpreadsheet size={16} />}
+              onClick={downloadSummaryExcel}
+              disabled={!summaryStartDate || !summaryEndDate}
+              color="blue"
+            >
+              Download Summary Excel
+            </Button>
+          </Stack>
+        </Paper>
+      </SimpleGrid>
+    </>
+  );
+}

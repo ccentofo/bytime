@@ -3,6 +3,8 @@
 import { db } from '@/db';
 import { laborCategories, userLaborCategories, users, clins, contracts, slins } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
+import { requireAdmin } from '@/lib/session';
+import { validateRequired, validateStringLength, validateOptionalString, validateRate } from '@/lib/validation';
 
 // ---------------------------------------------------------------------------
 // Labor Category CRUD
@@ -60,7 +62,16 @@ export async function createLaborCategory(data: {
   hourlyRate: string;
   ceilingRate?: string;
 }) {
-  const rows = await db.insert(laborCategories).values(data).returning();
+  await requireAdmin();
+  const validatedData = {
+    clinId: data.clinId,
+    slinId: data.slinId,
+    lcatCode: validateStringLength(validateRequired(data.lcatCode, 'LCAT code'), 'LCAT code', 1, 50),
+    title: validateStringLength(validateRequired(data.title, 'Title'), 'Title', 1, 255),
+    hourlyRate: validateRate(data.hourlyRate, 'Hourly rate'),
+    ceilingRate: data.ceilingRate ? validateRate(data.ceilingRate, 'Ceiling rate') : undefined,
+  };
+  const rows = await db.insert(laborCategories).values(validatedData).returning();
   return rows[0];
 }
 
@@ -74,8 +85,15 @@ export async function updateLaborCategory(id: string, data: {
   ceilingRate?: string;
   status?: 'active' | 'inactive' | 'closed';
 }) {
+  await requireAdmin();
+  const validatedData: Record<string, unknown> = { updatedAt: new Date() };
+  if (data.lcatCode !== undefined) validatedData.lcatCode = validateStringLength(validateRequired(data.lcatCode, 'LCAT code'), 'LCAT code', 1, 50);
+  if (data.title !== undefined) validatedData.title = validateStringLength(validateRequired(data.title, 'Title'), 'Title', 1, 255);
+  if (data.hourlyRate !== undefined) validatedData.hourlyRate = validateRate(data.hourlyRate, 'Hourly rate');
+  if (data.ceilingRate !== undefined) validatedData.ceilingRate = data.ceilingRate ? validateRate(data.ceilingRate, 'Ceiling rate') : undefined;
+  if (data.status !== undefined) validatedData.status = data.status;
   const rows = await db.update(laborCategories)
-    .set({ ...data, updatedAt: new Date() })
+    .set(validatedData)
     .where(eq(laborCategories.id, id))
     .returning();
   return rows[0];
@@ -124,6 +142,7 @@ export async function assignUserToLaborCategory(data: {
   endDate?: Date;
   assignedBy?: string;
 }) {
+  await requireAdmin();
   const rows = await db.insert(userLaborCategories).values(data).returning();
   return rows[0];
 }
@@ -132,6 +151,7 @@ export async function assignUserToLaborCategory(data: {
  * End a user's labor category assignment by setting the end_date.
  */
 export async function endUserLaborCategoryAssignment(id: string, endDate: Date) {
+  await requireAdmin();
   const rows = await db.update(userLaborCategories)
     .set({ endDate, updatedAt: new Date() })
     .where(eq(userLaborCategories.id, id))
