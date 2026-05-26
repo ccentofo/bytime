@@ -1,6 +1,72 @@
-import { Container, Title, Text, Button, Group, Stack, Paper, SimpleGrid, ThemeIcon, Badge, Divider, Center } from '@mantine/core';
+# Blueprint: Demo Landing Page — Public Product Showcase
+
+## 1. Architectural Overview
+
+### The Problem
+
+When someone visits `bytime.vercel.app`, they're immediately redirected to `/login` with no context about what the product is. For a demo/prospect scenario, visitors need to understand what ByTime is before they create an account or try the demo.
+
+### The Solution
+
+Create a **public landing page** at `/` that:
+- Showcases the product with a hero section
+- Lists key features with icons
+- Displays demo credentials so visitors can try immediately
+- Has a prominent "Try the Demo" button linking to `/login`
+- Does NOT require authentication (public route)
+
+### Design
+
+The landing page uses Mantine components exclusively (consistent with the rest of the app) and supports dark/light mode. It's a single-page static component — no database queries, no server actions.
+
+---
+
+## 2. File Topology
+
+```
+Files to CREATE:
+├── src/app/(public)/
+│   └── page.tsx                                     ← Public landing page (Server Component)
+
+Files to MODIFY:
+├── src/app/page.tsx                                  ← Change redirect to render landing page
+├── src/middleware.ts                                 ← Ensure / is NOT protected by auth
+
+Files NOT TOUCHED:
+├── src/app/(app)/**                                  ← ❌ DO NOT MODIFY
+├── src/app/login/**                                  ← ❌ DO NOT MODIFY
+├── src/components/**                                 ← ❌ DO NOT MODIFY
+├── src/server/**                                     ← ❌ DO NOT MODIFY
+├── src/db/**                                         ← ❌ DO NOT MODIFY
+```
+
+---
+
+## 3. Step-by-Step Execution Plan
+
+> **⚠️ CRITICAL GUARDRAILS:**
+> - **DO NOT** modify any authenticated app code.
+> - The landing page must be **fully public** — no auth required.
+> - Use **Mantine v9** components only.
+> - **After each phase, run `npm run build` to verify zero errors.**
+
+---
+
+### Phase A: Update Root Page (A1)
+
+#### A1. Modify `src/app/page.tsx` — Replace redirect with landing page
+
+The current file is:
+```tsx
+import { redirect } from 'next/navigation';
+export default function Home() { redirect('/timesheet'); }
+```
+
+Replace with a landing page component. Since the root layout already has `MantineProvider`, Mantine components work here.
+
+```tsx
+import { Container, Title, Text, Button, Group, Stack, Paper, SimpleGrid, ThemeIcon, Badge, Divider, Center, Anchor } from '@mantine/core';
 import { IconClock, IconShieldCheck, IconCloudLock, IconReportAnalytics, IconUsers, IconDeviceFloppy, IconApi, IconMoon } from '@tabler/icons-react';
-import React from 'react';
 
 export default function LandingPage() {
   return (
@@ -160,3 +226,56 @@ function FeatureCard({ icon, color, title, description }: {
     </Paper>
   );
 }
+```
+
+---
+
+### Phase B: Ensure Root Route is Public (B1)
+
+#### B1. Verify `src/middleware.ts` does NOT protect `/`
+
+The current middleware matcher should only protect `/timesheet/*` and `/admin/*`:
+
+```typescript
+export const config = {
+  matcher: [
+    '/timesheet/:path*',
+    '/admin/:path*',
+  ],
+};
+```
+
+The root `/` is NOT in the matcher, so it's already public. **No changes needed** — just verify.
+
+If the middleware currently matches `/`, remove it from the matcher.
+
+---
+
+## 4. Verification
+
+### 4a. Build Check
+
+```bash
+npm run build
+```
+
+### 4b. Landing Page Checks
+
+| Check | Expected |
+|---|---|
+| Visit `/` | Landing page renders (not redirect to /login) |
+| "Try the Demo" button | Links to `/login` |
+| Demo credentials visible | 3 role cards with emails |
+| Feature cards render | 8 feature cards with icons |
+| Dark mode | Landing page respects color scheme |
+| Mobile responsive | Cards stack vertically on small screens |
+| Login still works | `/login` page unchanged |
+| Authenticated routes still protected | `/timesheet` redirects to `/login` if not logged in |
+
+### 4c. Common Errors
+
+| Error | Fix |
+|---|---|
+| Root page protected by middleware | Verify matcher doesn't include `/` |
+| Mantine components unstyled | Root layout already has MantineProvider — should work |
+| Hydration mismatch | Landing page is a Server Component (no `'use client'`) — no hydration issues |

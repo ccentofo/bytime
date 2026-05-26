@@ -20,6 +20,7 @@ import {
   IconDownload,
   IconReportAnalytics,
 } from '@tabler/icons-react';
+import { DateInput } from '@mantine/dates';
 import { notifications } from '@mantine/notifications';
 import dayjs from 'dayjs';
 import { getNumDaysInPeriod, navigatePeriod, getCurrentPeriodStart } from '@/lib/date-utils';
@@ -177,24 +178,20 @@ export function ReportsClient({ filterOptions }: Props) {
 
           <Stack gap="sm">
             <Group grow>
-              <div>
-                <Text size="sm" fw={500} mb={4}>Start Date</Text>
-                <input
-                  type="date"
-                  value={costStartDate}
-                  onChange={(e) => setCostStartDate(e.target.value)}
-                  style={{ padding: '8px', borderRadius: '4px', border: '1px solid #ced4da', fontSize: '14px', width: '100%' }}
-                />
-              </div>
-              <div>
-                <Text size="sm" fw={500} mb={4}>End Date</Text>
-                <input
-                  type="date"
-                  value={costEndDate}
-                  onChange={(e) => setCostEndDate(e.target.value)}
-                  style={{ padding: '8px', borderRadius: '4px', border: '1px solid #ced4da', fontSize: '14px', width: '100%' }}
-                />
-              </div>
+              <DateInput
+                label="Start Date"
+                placeholder="Select start date"
+                value={costStartDate ? new Date(costStartDate + 'T00:00:00') : null}
+                onChange={(date) => setCostStartDate(date ? dayjs(date).format('YYYY-MM-DD') : '')}
+                clearable
+              />
+              <DateInput
+                label="End Date"
+                placeholder="Select end date"
+                value={costEndDate ? new Date(costEndDate + 'T00:00:00') : null}
+                onChange={(date) => setCostEndDate(date ? dayjs(date).format('YYYY-MM-DD') : '')}
+                clearable
+              />
             </Group>
             <Select
               label="Contract (optional)"
@@ -240,24 +237,20 @@ export function ReportsClient({ filterOptions }: Props) {
 
           <Stack gap="sm">
             <Group grow>
-              <div>
-                <Text size="sm" fw={500} mb={4}>Start Date</Text>
-                <input
-                  type="date"
-                  value={summaryStartDate}
-                  onChange={(e) => setSummaryStartDate(e.target.value)}
-                  style={{ padding: '8px', borderRadius: '4px', border: '1px solid #ced4da', fontSize: '14px', width: '100%' }}
-                />
-              </div>
-              <div>
-                <Text size="sm" fw={500} mb={4}>End Date</Text>
-                <input
-                  type="date"
-                  value={summaryEndDate}
-                  onChange={(e) => setSummaryEndDate(e.target.value)}
-                  style={{ padding: '8px', borderRadius: '4px', border: '1px solid #ced4da', fontSize: '14px', width: '100%' }}
-                />
-              </div>
+              <DateInput
+                label="Start Date"
+                placeholder="Select start date"
+                value={summaryStartDate ? new Date(summaryStartDate + 'T00:00:00') : null}
+                onChange={(date) => setSummaryStartDate(date ? dayjs(date).format('YYYY-MM-DD') : '')}
+                clearable
+              />
+              <DateInput
+                label="End Date"
+                placeholder="Select end date"
+                value={summaryEndDate ? new Date(summaryEndDate + 'T00:00:00') : null}
+                onChange={(date) => setSummaryEndDate(date ? dayjs(date).format('YYYY-MM-DD') : '')}
+                clearable
+              />
             </Group>
             <Button
               leftSection={<IconFileSpreadsheet size={16} />}
