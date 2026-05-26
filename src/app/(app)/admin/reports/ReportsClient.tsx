@@ -22,6 +22,26 @@ import {
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import dayjs from 'dayjs';
+import { getNumDaysInPeriod, navigatePeriod, getCurrentPeriodStart } from '@/lib/date-utils';
+
+// Generate semi-monthly pay period options (current + last 11 = 12 total, ~6 months)
+function generatePeriodOptions(): { value: string; label: string }[] {
+  const options: { value: string; label: string }[] = [];
+  let periodStart = getCurrentPeriodStart();
+
+  for (let i = 0; i < 12; i++) {
+    const start = dayjs(periodStart);
+    const numDays = getNumDaysInPeriod(periodStart);
+    const end = start.add(numDays - 1, 'day');
+    options.push({
+      value: start.format('YYYY-MM-DD'),
+      label: `${start.format('MMM D')} – ${end.format('MMM D, YYYY')}`,
+    });
+    periodStart = navigatePeriod(periodStart, 'prev');
+  }
+
+  return options;
+}
 
 type FilterOptions = {
   users: Array<{ id: string; fullName: string; email: string }>;
@@ -124,12 +144,13 @@ export function ReportsClient({ filterOptions }: Props) {
               onChange={setPdfUserId}
               searchable
             />
-            <input
-              type="date"
-              id="pdfPeriodStart"
-              value={pdfPeriodStart}
-              onChange={(e) => setPdfPeriodStart(e.target.value)}
-              style={{ padding: '8px', borderRadius: '4px', border: '1px solid #ced4da', fontSize: '14px', width: '100%' }}
+            <Select
+              label="Pay Period"
+              placeholder="Select pay period"
+              data={generatePeriodOptions()}
+              value={pdfPeriodStart || null}
+              onChange={(val) => setPdfPeriodStart(val ?? '')}
+              searchable
             />
             <Button
               leftSection={<IconDownload size={16} />}

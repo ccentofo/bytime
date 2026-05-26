@@ -77,10 +77,25 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         }
       }
 
-      // On every subsequent request, validate the sessionVersion
+      // On every subsequent request, validate the sessionVersion.
+      // This query runs on EVERY request via middleware. It MUST be resilient:
+      // - 3-second timeout prevents hangs from stalling all page loads
+      // - Fail-open on ANY error (DB down, connection pool exhausted, cold start)
+      // - No console.error logging to avoid log spam during transient DB issues
+      // DO NOT add console.error here — it fires on every request when DB is unavailable
+      // PERFORMANCE: Only check DB every 60 seconds, not on every request.
+      // The JWT stores a lastSessionCheck timestamp — if less than 60s old, skip the DB query.
       if (token.id && !user) {
+        const now = Date.now();
+        const lastChecked = (token.lastSessionCheck as number) ?? 0;
+        const SESSION_CHECK_INTERVAL_MS = 60_000; // 60 seconds
+
+        if (now - lastChecked <= SESSION_CHECK_INTERVAL_MS) {
+          return token; // Skip DB check — recently validated
+        }
+
         try {
-          const [dbUser] = await db
+          const dbPromise = db
             .select({
               sessionVersion: users.sessionVersion,
               isActive: users.isActive,
@@ -88,7 +103,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
               fullName: users.fullName,
             })
             .from(users)
-            .where(eq(users.id, token.id as string));
+            .where(eq(users.id, token.id as string))
+            .then((rows) => rows[0] ?? null);
+
+          const timeoutPromise = new Promise<null>((_, reject) =>
+            setTimeout(() => reject(new Error('Session validation timeout')), 3000)
+          );
+
+          const dbUser = await Promise.race([dbPromise, timeoutPromise]);
 
           if (!dbUser) {
             // User deleted — invalidate
@@ -108,9 +130,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           // Keep role and name in sync with database
           token.role = dbUser.role;
           token.fullName = dbUser.fullName;
-        } catch (error) {
-          // On DB error, allow the request to proceed (fail-open)
-          console.error('Session validation error:', error);
+          token.lastSessionCheck = now;
+        } catch {
+          // DB unavailable, timeout, or connection error — fail-open.
+          // Return token as-is without modification. The user continues
+          // with their existing JWT data until DB recovers.
+          return token;
         }
       }
 

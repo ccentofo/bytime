@@ -12,7 +12,13 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:check": "drizzle-kit check",
-    "db:deploy": "tsx scripts/migrate.ts"
+    "db:deploy": "tsx scripts/migrate.ts",
+    "db:seed": "tsx scripts/seed-users.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:integration": "vitest run --config vitest.config.integration.ts",
+    "test:all": "vitest run && vitest run --config vitest.config.integration.ts"
   },
   "dependencies": {
     "@mantine/core": "^9.2.1",
@@ -36,6 +42,9 @@
     "resend": "^6.12.3"
   },
   "devDependencies": {
+    "@rolldown/binding-linux-x64-gnu": "^1.0.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/bcryptjs": "^3.0.0",
     "@types/node": "^20",
     "@types/react": "^19",
@@ -44,7 +53,9 @@
     "drizzle-kit": "^0.31.10",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
+    "jsdom": "^29.1.1",
     "tsx": "^4.22.3",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^2.1.9"
   }
 }

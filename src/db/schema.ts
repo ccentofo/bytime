@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, timestamp, boolean, pgEnum, uniqueIndex, integer } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, timestamp, boolean, pgEnum, uniqueIndex, integer, index } from 'drizzle-orm/pg-core';
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -205,7 +205,13 @@ export const timesheetEntries = pgTable('timesheet_entries', {
   comment: text('comment'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy: uuid('created_by').references(() => users.id),
-});
+}, (table) => [
+  // Performance index: speeds up the MAX(revision_number) correlated subquery
+  // used in every timesheet read query. Without this, each lookup scans the full table.
+  // DO NOT REMOVE — this is critical for page load performance.
+  index('idx_entries_user_clin_date_rev').on(table.userId, table.clinId, table.entryDate, table.revisionNumber),
+  index('idx_entries_user_indirect_date_rev').on(table.userId, table.indirectCodeId, table.entryDate, table.revisionNumber),
+]);
 
 // ---------------------------------------------------------------------------
 // Timesheet Periods (tracks period lifecycle: draft → submitted → approved/rejected)

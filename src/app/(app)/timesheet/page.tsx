@@ -19,17 +19,19 @@ export default async function TimesheetPage() {
   const userId = session.user.id;
   const periodStart = getCurrentPeriodStart();
   const numDays = getNumDaysInPeriod(periodStart);
-  const chargeCodes = await getChargeCodesForUser(userId);
-  const [entries, revisions, periodInfo] = await Promise.all([
-    getTimesheetEntries(userId, periodStart, chargeCodes),
+
+  // Fetch ALL independent data in parallel (single await)
+  // Only getTimesheetEntries depends on chargeCodes — everything else is independent
+  const [chargeCodes, revisions, periodInfo, fullUser, dashboardData] = await Promise.all([
+    getChargeCodesForUser(userId),
     getRevisionMap(userId, periodStart, numDays),
     getPeriodStatus(userId, periodStart),
-  ]);
-
-  const [fullUser, dashboardData] = await Promise.all([
     getUserByEmail(session.user.email!),
     getEmployeeDashboardData(userId),
   ]);
+
+  // Only this depends on chargeCodes — runs after the parallel batch
+  const entries = await getTimesheetEntries(userId, periodStart, chargeCodes);
 
   const pageData: TimesheetPageData = {
     userId,

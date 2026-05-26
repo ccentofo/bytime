@@ -5,6 +5,7 @@ import { getTimesheetReportData } from '@/server/actions/reports';
 import { TimesheetPdfDocument } from '@/lib/reports/timesheet-pdf';
 import { checkReportRateLimit } from '@/lib/rate-limit';
 import React from 'react';
+import dayjs from 'dayjs';
 
 export async function GET(request: NextRequest) {
   const rateLimited = checkReportRateLimit(request);
@@ -23,7 +24,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Missing userId or periodStart' }, { status: 400 });
   }
 
-  const data = await getTimesheetReportData(userId, new Date(periodStart));
+  // Parse with dayjs to avoid timezone offset: new Date('2026-05-16') parses as UTC midnight,
+  // which shifts to May 15 in US timezones. dayjs().startOf('day') ensures local midnight.
+  const data = await getTimesheetReportData(userId, dayjs(periodStart).startOf('day').toDate());
   if (!data) {
     return NextResponse.json({ error: 'No data found' }, { status: 404 });
   }
