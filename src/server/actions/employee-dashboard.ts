@@ -49,43 +49,54 @@ export async function getEmployeeDashboardData(userId: string): Promise<Employee
   const periodEnd = dayjs(periodStart).add(numDays - 1, 'day');
   const periodLabel = `${dayjs(periodStart).format('MMM D')} – ${periodEnd.format('MMM D, YYYY')}`;
 
-  // Get current period status
-  const periodRows = await db
-    .select()
-    .from(timesheetPeriods)
-    .where(
-      and(
-        eq(timesheetPeriods.userId, userId),
-        eq(timesheetPeriods.periodStart, periodStart),
-      )
-    );
+  // Parallel fetch: current period status + hours + recent periods
+  const [periodRows, hoursResult, recentRows] = await Promise.all([
+    db
+      .select()
+      .from(timesheetPeriods)
+      .where(
+        and(
+          eq(timesheetPeriods.userId, userId),
+          eq(timesheetPeriods.periodStart, periodStart),
+        )
+      ),
+    db
+      .select({
+        totalHours: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
+        distinctDays: sql<number>`COUNT(DISTINCT ${timesheetEntries.entryDate})`,
+      })
+      .from(timesheetEntries)
+      .where(
+        and(
+          eq(timesheetEntries.userId, userId),
+          gte(timesheetEntries.entryDate, periodStart),
+          lt(timesheetEntries.entryDate, dayjs(periodStart).add(numDays, 'day').toDate()),
+          eq(
+            timesheetEntries.revisionNumber,
+            sql`(
+              SELECT MAX(te2.revision_number)
+              FROM timesheet_entries te2
+              WHERE te2.user_id = ${timesheetEntries.userId}
+                AND COALESCE(te2.clin_id, te2.indirect_code_id) = COALESCE(${timesheetEntries.clinId}, ${timesheetEntries.indirectCodeId})
+                AND te2.entry_date = ${timesheetEntries.entryDate}
+            )`
+          ),
+        )
+      ),
+    db
+      .select({
+        periodStart: timesheetPeriods.periodStart,
+        status: timesheetPeriods.status,
+        submittedAt: timesheetPeriods.submittedAt,
+        reviewedAt: timesheetPeriods.reviewedAt,
+      })
+      .from(timesheetPeriods)
+      .where(eq(timesheetPeriods.userId, userId))
+      .orderBy(desc(timesheetPeriods.periodStart))
+      .limit(5),
+  ]);
 
   const period = periodRows[0];
-
-  // Get total hours entered in current period
-  const hoursResult = await db
-    .select({
-      totalHours: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
-      distinctDays: sql<number>`COUNT(DISTINCT ${timesheetEntries.entryDate})`,
-    })
-    .from(timesheetEntries)
-    .where(
-      and(
-        eq(timesheetEntries.userId, userId),
-        gte(timesheetEntries.entryDate, periodStart),
-        lt(timesheetEntries.entryDate, dayjs(periodStart).add(numDays, 'day').toDate()),
-        eq(
-          timesheetEntries.revisionNumber,
-          sql`(
-            SELECT MAX(te2.revision_number)
-            FROM timesheet_entries te2
-            WHERE te2.user_id = ${timesheetEntries.userId}
-              AND COALESCE(te2.clin_id, te2.indirect_code_id) = COALESCE(${timesheetEntries.clinId}, ${timesheetEntries.indirectCodeId})
-              AND te2.entry_date = ${timesheetEntries.entryDate}
-          )`
-        ),
-      )
-    );
 
   // Count expected workdays (Mon-Fri) up to today
   let expectedWorkdays = 0;
@@ -106,20 +117,7 @@ export async function getEmployeeDashboardData(userId: string): Promise<Employee
 
   const canSubmitToday = dayjs().isSameOrAfter(periodEnd, 'day');
 
-  // Get recent periods (last 5)
-  const recentRows = await db
-    .select({
-      periodStart: timesheetPeriods.periodStart,
-      status: timesheetPeriods.status,
-      submittedAt: timesheetPeriods.submittedAt,
-      reviewedAt: timesheetPeriods.reviewedAt,
-    })
-    .from(timesheetPeriods)
-    .where(eq(timesheetPeriods.userId, userId))
-    .orderBy(desc(timesheetPeriods.periodStart))
-    .limit(5);
-
-  // Build recent periods with hours — sequential queries but fast with the new index
+  // Build recent periods with hours
   const recentPeriods = recentRows.map((rp) => {
     const rpNumDays = getNumDaysInPeriod(rp.periodStart);
     const rpEnd = dayjs(rp.periodStart).add(rpNumDays - 1, 'day');
@@ -133,33 +131,38 @@ export async function getEmployeeDashboardData(userId: string): Promise<Employee
     };
   });
 
-  // Get hours for all recent periods — simplified query (no MAX revision subquery)
-  // For dashboard summary display, approximate totals are acceptable
-  for (const rp of recentPeriods) {
-    const rpNumDays = getNumDaysInPeriod(rp.periodStart);
-    const rpHours = await db
-      .select({
-        total: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
-      })
-      .from(timesheetEntries)
-      .where(
-        and(
-          eq(timesheetEntries.userId, userId),
-          gte(timesheetEntries.entryDate, rp.periodStart),
-          lt(timesheetEntries.entryDate, dayjs(rp.periodStart).add(rpNumDays, 'day').toDate()),
-          eq(
-            timesheetEntries.revisionNumber,
-            sql`(
-              SELECT MAX(te2.revision_number)
-              FROM timesheet_entries te2
-              WHERE te2.user_id = ${timesheetEntries.userId}
-                AND COALESCE(te2.clin_id, te2.indirect_code_id) = COALESCE(${timesheetEntries.clinId}, ${timesheetEntries.indirectCodeId})
-                AND te2.entry_date = ${timesheetEntries.entryDate}
-            )`
-          ),
-        )
-      );
-    rp.totalHours = Math.round(Number(rpHours[0]?.total ?? 0) * 100) / 100;
+  // Parallel fetch: get hours for all recent periods concurrently
+  const recentHoursResults = await Promise.all(
+    recentPeriods.map((rp) => {
+      const rpNumDays = getNumDaysInPeriod(rp.periodStart);
+      return db
+        .select({
+          total: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
+        })
+        .from(timesheetEntries)
+        .where(
+          and(
+            eq(timesheetEntries.userId, userId),
+            gte(timesheetEntries.entryDate, rp.periodStart),
+            lt(timesheetEntries.entryDate, dayjs(rp.periodStart).add(rpNumDays, 'day').toDate()),
+            eq(
+              timesheetEntries.revisionNumber,
+              sql`(
+                SELECT MAX(te2.revision_number)
+                FROM timesheet_entries te2
+                WHERE te2.user_id = ${timesheetEntries.userId}
+                  AND COALESCE(te2.clin_id, te2.indirect_code_id) = COALESCE(${timesheetEntries.clinId}, ${timesheetEntries.indirectCodeId})
+                  AND te2.entry_date = ${timesheetEntries.entryDate}
+              )`
+            ),
+          )
+        );
+    })
+  );
+
+  // Assign results back to periods
+  for (let i = 0; i < recentPeriods.length; i++) {
+    recentPeriods[i].totalHours = Math.round(Number(recentHoursResults[i][0]?.total ?? 0) * 100) / 100;
   }
 
   return {

@@ -256,29 +256,21 @@ export async function getAuditSummary(): Promise<{
   totalLateEntries: number;
   uniqueUsers: number;
 }> {
-  const [totalResult] = await db
-    .select({ count: sql<number>`COUNT(*)` })
-    .from(timesheetEntries);
-
-  const [correctionsResult] = await db
-    .select({ count: sql<number>`COUNT(*)` })
-    .from(timesheetEntries)
-    .where(eq(timesheetEntries.changeReasonCode, 'CORRECTION'));
-
-  const [lateResult] = await db
-    .select({ count: sql<number>`COUNT(*)` })
-    .from(timesheetEntries)
-    .where(eq(timesheetEntries.changeReasonCode, 'LATE_ENTRY'));
-
-  const [usersResult] = await db
-    .select({ count: sql<number>`COUNT(DISTINCT ${timesheetEntries.userId})` })
+  // Single query with FILTER clauses — replaces 4 sequential COUNT queries
+  const [result] = await db
+    .select({
+      totalEntries: sql<number>`COUNT(*)`,
+      totalCorrections: sql<number>`COUNT(*) FILTER (WHERE ${timesheetEntries.changeReasonCode} = 'CORRECTION')`,
+      totalLateEntries: sql<number>`COUNT(*) FILTER (WHERE ${timesheetEntries.changeReasonCode} = 'LATE_ENTRY')`,
+      uniqueUsers: sql<number>`COUNT(DISTINCT ${timesheetEntries.userId})`,
+    })
     .from(timesheetEntries);
 
   return {
-    totalEntries: totalResult.count,
-    totalCorrections: correctionsResult.count,
-    totalLateEntries: lateResult.count,
-    uniqueUsers: usersResult.count,
+    totalEntries: result.totalEntries,
+    totalCorrections: result.totalCorrections,
+    totalLateEntries: result.totalLateEntries,
+    uniqueUsers: result.uniqueUsers,
   };
 }
 

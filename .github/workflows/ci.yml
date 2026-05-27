@@ -7,7 +7,7 @@ on:
     branches: [main, develop]
 
 env:
-  NODE_VERSION: '21'
+  NODE_VERSION: '22'
   DATABASE_URL: postgresql://bytime:bytime_dev@localhost:5432/bytime_test
 
 jobs:

@@ -16,12 +16,14 @@ export default async function ApprovalsPage() {
 
   // Get supervisor's scope
   const scopedEmployeeIds = await getSupervisedEmployeeIds(userId, role);
-  const periods = await getScopedPeriods(scopedEmployeeIds);
 
-  // Get scope metadata for UI display
-  const scopeInfo = role === 'supervisor'
-    ? await getSupervisorScopeInfo(userId)
-    : null;
+  // Parallel fetch: periods + scope info (scope info is independent of periods)
+  const [periods, scopeInfo] = await Promise.all([
+    getScopedPeriods(scopedEmployeeIds),
+    role === 'supervisor'
+      ? getSupervisorScopeInfo(userId)
+      : Promise.resolve(null),
+  ]);
 
   return (
     <ApprovalsClient

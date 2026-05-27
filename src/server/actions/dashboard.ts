@@ -83,158 +83,151 @@ export interface PeriodCostEntry {
  * were worked (CAS 418 compliance).
  */
 export async function getContractSummaries(): Promise<ContractSummary[]> {
-  // Query 1: All contracts
-  const allContracts = await db
-    .select()
-    .from(contracts)
-    .orderBy(contracts.name);
+  // All 7 queries run in parallel — zero dependencies between them
+  const [allContracts, allClins, allSlins, hoursData, costData, slinHoursData, slinCostData] = await Promise.all([
+    // Query 1: All contracts
+    db.select().from(contracts).orderBy(contracts.name),
 
-  // Query 2: All CLINs
-  const allClins = await db
-    .select()
-    .from(clins)
-    .orderBy(clins.clinNumber);
+    // Query 2: All CLINs
+    db.select().from(clins).orderBy(clins.clinNumber),
 
-  // Query 3: All SLINs
-  const allSlins = await db
-    .select()
-    .from(slins)
-    .orderBy(slins.slinNumber);
+    // Query 3: All SLINs
+    db.select().from(slins).orderBy(slins.slinNumber),
 
-  // Query 4: Total hours per CLIN (latest revision only, direct entries only)
-  // Indirect entries (clinId IS NULL) are excluded — they don't belong in contract budget tracking
-  const hoursData = await db
-    .select({
-      clinId: timesheetEntries.clinId,
-      totalHours: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
-    })
-    .from(timesheetEntries)
-    .where(
-      and(
-        sql`${timesheetEntries.clinId} IS NOT NULL`,
-        eq(
-          timesheetEntries.revisionNumber,
-          sql`(
-            SELECT MAX(te2.revision_number)
-            FROM timesheet_entries te2
-            WHERE te2.user_id = ${timesheetEntries.userId}
-              AND te2.clin_id = ${timesheetEntries.clinId}
-              AND te2.entry_date = ${timesheetEntries.entryDate}
-          )`
-        ),
-      )
-    )
-    .groupBy(timesheetEntries.clinId);
-
-  // Query 5: Total cost per CLIN (latest revision × effective rate)
-  const costData = await db
-    .select({
-      clinId: timesheetEntries.clinId,
-      totalCost: sql<number>`COALESCE(SUM(
-        CAST(${timesheetEntries.hours} AS NUMERIC) *
-        CAST(${laborCategories.hourlyRate} AS NUMERIC)
-      ), 0)`,
-    })
-    .from(timesheetEntries)
-    .innerJoin(
-      userLaborCategories,
-      and(
-        eq(userLaborCategories.userId, timesheetEntries.userId),
-        sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-        sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} > ${timesheetEntries.entryDate})`,
-      )
-    )
-    .innerJoin(
-      laborCategories,
-      and(
-        eq(laborCategories.id, userLaborCategories.laborCategoryId),
-        eq(laborCategories.clinId, timesheetEntries.clinId),
-        eq(laborCategories.status, 'active'),
-      )
-    )
-    .where(
-      and(
-        sql`${timesheetEntries.clinId} IS NOT NULL`,
-        eq(
-          timesheetEntries.revisionNumber,
-          sql`(
-            SELECT MAX(te2.revision_number)
-            FROM timesheet_entries te2
-            WHERE te2.user_id = ${timesheetEntries.userId}
-              AND te2.clin_id = ${timesheetEntries.clinId}
-              AND te2.entry_date = ${timesheetEntries.entryDate}
-          )`
-        ),
-      )
-    )
-    .groupBy(timesheetEntries.clinId);
-
-  // Query 6: Total hours per SLIN (latest revision only)
-  const slinHoursData = await db
-    .select({
-      slinId: timesheetEntries.slinId,
-      totalHours: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
-    })
-    .from(timesheetEntries)
-    .where(
-      and(
-        sql`${timesheetEntries.slinId} IS NOT NULL`,
-        eq(
-          timesheetEntries.revisionNumber,
-          sql`(
-            SELECT MAX(te2.revision_number)
-            FROM timesheet_entries te2
-            WHERE te2.user_id = ${timesheetEntries.userId}
-              AND te2.clin_id = ${timesheetEntries.clinId}
-              AND te2.entry_date = ${timesheetEntries.entryDate}
-          )`
+    // Query 4: Total hours per CLIN (latest revision only, direct entries only)
+    db
+      .select({
+        clinId: timesheetEntries.clinId,
+        totalHours: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
+      })
+      .from(timesheetEntries)
+      .where(
+        and(
+          sql`${timesheetEntries.clinId} IS NOT NULL`,
+          eq(
+            timesheetEntries.revisionNumber,
+            sql`(
+              SELECT MAX(te2.revision_number)
+              FROM timesheet_entries te2
+              WHERE te2.user_id = ${timesheetEntries.userId}
+                AND te2.clin_id = ${timesheetEntries.clinId}
+                AND te2.entry_date = ${timesheetEntries.entryDate}
+            )`
+          ),
         )
       )
-    )
-    .groupBy(timesheetEntries.slinId);
+      .groupBy(timesheetEntries.clinId),
 
-  // Query 7: Total cost per SLIN (latest revision × effective rate)
-  const slinCostData = await db
-    .select({
-      slinId: timesheetEntries.slinId,
-      totalCost: sql<number>`COALESCE(SUM(
-        CAST(${timesheetEntries.hours} AS NUMERIC) *
-        CAST(${laborCategories.hourlyRate} AS NUMERIC)
-      ), 0)`,
-    })
-    .from(timesheetEntries)
-    .innerJoin(
-      userLaborCategories,
-      and(
-        eq(userLaborCategories.userId, timesheetEntries.userId),
-        sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-        sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} > ${timesheetEntries.entryDate})`,
-      )
-    )
-    .innerJoin(
-      laborCategories,
-      and(
-        eq(laborCategories.id, userLaborCategories.laborCategoryId),
-        eq(laborCategories.clinId, timesheetEntries.clinId),
-        eq(laborCategories.status, 'active'),
-      )
-    )
-    .where(
-      and(
-        sql`${timesheetEntries.slinId} IS NOT NULL`,
-        eq(
-          timesheetEntries.revisionNumber,
-          sql`(
-            SELECT MAX(te2.revision_number)
-            FROM timesheet_entries te2
-            WHERE te2.user_id = ${timesheetEntries.userId}
-              AND te2.clin_id = ${timesheetEntries.clinId}
-              AND te2.entry_date = ${timesheetEntries.entryDate}
-          )`
+    // Query 5: Total cost per CLIN (latest revision × effective rate)
+    db
+      .select({
+        clinId: timesheetEntries.clinId,
+        totalCost: sql<number>`COALESCE(SUM(
+          CAST(${timesheetEntries.hours} AS NUMERIC) *
+          CAST(${laborCategories.hourlyRate} AS NUMERIC)
+        ), 0)`,
+      })
+      .from(timesheetEntries)
+      .innerJoin(
+        userLaborCategories,
+        and(
+          eq(userLaborCategories.userId, timesheetEntries.userId),
+          sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
+          sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} > ${timesheetEntries.entryDate})`,
         )
       )
-    )
-    .groupBy(timesheetEntries.slinId);
+      .innerJoin(
+        laborCategories,
+        and(
+          eq(laborCategories.id, userLaborCategories.laborCategoryId),
+          eq(laborCategories.clinId, timesheetEntries.clinId),
+          eq(laborCategories.status, 'active'),
+        )
+      )
+      .where(
+        and(
+          sql`${timesheetEntries.clinId} IS NOT NULL`,
+          eq(
+            timesheetEntries.revisionNumber,
+            sql`(
+              SELECT MAX(te2.revision_number)
+              FROM timesheet_entries te2
+              WHERE te2.user_id = ${timesheetEntries.userId}
+                AND te2.clin_id = ${timesheetEntries.clinId}
+                AND te2.entry_date = ${timesheetEntries.entryDate}
+            )`
+          ),
+        )
+      )
+      .groupBy(timesheetEntries.clinId),
+
+    // Query 6: Total hours per SLIN (latest revision only)
+    db
+      .select({
+        slinId: timesheetEntries.slinId,
+        totalHours: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
+      })
+      .from(timesheetEntries)
+      .where(
+        and(
+          sql`${timesheetEntries.slinId} IS NOT NULL`,
+          eq(
+            timesheetEntries.revisionNumber,
+            sql`(
+              SELECT MAX(te2.revision_number)
+              FROM timesheet_entries te2
+              WHERE te2.user_id = ${timesheetEntries.userId}
+                AND te2.clin_id = ${timesheetEntries.clinId}
+                AND te2.entry_date = ${timesheetEntries.entryDate}
+            )`
+          )
+        )
+      )
+      .groupBy(timesheetEntries.slinId),
+
+    // Query 7: Total cost per SLIN (latest revision × effective rate)
+    db
+      .select({
+        slinId: timesheetEntries.slinId,
+        totalCost: sql<number>`COALESCE(SUM(
+          CAST(${timesheetEntries.hours} AS NUMERIC) *
+          CAST(${laborCategories.hourlyRate} AS NUMERIC)
+        ), 0)`,
+      })
+      .from(timesheetEntries)
+      .innerJoin(
+        userLaborCategories,
+        and(
+          eq(userLaborCategories.userId, timesheetEntries.userId),
+          sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
+          sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} > ${timesheetEntries.entryDate})`,
+        )
+      )
+      .innerJoin(
+        laborCategories,
+        and(
+          eq(laborCategories.id, userLaborCategories.laborCategoryId),
+          eq(laborCategories.clinId, timesheetEntries.clinId),
+          eq(laborCategories.status, 'active'),
+        )
+      )
+      .where(
+        and(
+          sql`${timesheetEntries.slinId} IS NOT NULL`,
+          eq(
+            timesheetEntries.revisionNumber,
+            sql`(
+              SELECT MAX(te2.revision_number)
+              FROM timesheet_entries te2
+              WHERE te2.user_id = ${timesheetEntries.userId}
+                AND te2.clin_id = ${timesheetEntries.clinId}
+                AND te2.entry_date = ${timesheetEntries.entryDate}
+            )`
+          )
+        )
+      )
+      .groupBy(timesheetEntries.slinId),
+  ]);
 
   // Build lookup maps
   const hoursMap = new Map<string, number>();

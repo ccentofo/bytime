@@ -1,0 +1,4 @@
+Name,Email,Role,FLSA Exempt
+Jane Smith,jane.smith@company.com,employee,yes
+John Doe,john.doe@company.com,supervisor,yes
+Sarah Wilson,sarah.wilson@company.com,admin,no
