@@ -26,24 +26,28 @@ export function HourCell({ chargeCodeId, dayIndex }: HourCellProps) {
   const savedValue = savedEntry ? (savedEntry.hours[dayIndex] ?? 0) : 0;
   const isDirty = value !== savedValue;
 
-  // Check if this cell is a candidate for late entry (past date, never saved)
-  const revisionKey = `${chargeCodeId}-${dayIndex}`;
-  const revisionNumber = state.savedCellRevisions[revisionKey] ?? 0;
-  const cellDate = dayjs(state.periodStart).add(dayIndex, 'day');
-  const isPastDate = cellDate.isBefore(dayjs(), 'day');
-  const isLateEntryCandidate = isPastDate && revisionNumber === 0 && savedValue === 0;
-
   // Future date detection
+  const cellDate = dayjs(state.periodStart).add(dayIndex, 'day');
   const isFutureDate = cellDate.isAfter(dayjs(), 'day');
 
   const noteKey = `${chargeCodeId}-${dayIndex}`;
   const hasNote = Boolean(state.notes[noteKey]);
+
+  const cellId = `cell-${chargeCodeId}-${dayIndex}`;
 
   const handleClick = () => {
     if (!isEditable) return; // Period is locked (submitted/approved)
     if (isFutureDate) return; // Cannot enter hours for future dates
     setLocalValue(value);
     setIsEditing(true);
+    // Focus the input on the next animation frame — after React renders the NumberInput
+    requestAnimationFrame(() => {
+      const input = document.getElementById(cellId)?.querySelector('input');
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    });
   };
 
   const handleBlur = () => {
@@ -62,18 +66,16 @@ export function HourCell({ chargeCodeId, dayIndex }: HourCellProps) {
 
   return (
     <div
+      id={cellId}
       style={{
         position: 'relative',
         width: '100%',
         minHeight: 32,
         backgroundColor: isDirty
           ? 'light-dark(var(--mantine-color-yellow-0), var(--mantine-color-yellow-9))'
-          : isLateEntryCandidate
-            ? 'light-dark(var(--mantine-color-orange-0), var(--mantine-color-orange-9))'
-            : undefined,
-        borderRadius: (isDirty || isLateEntryCandidate) ? 2 : undefined,
-        borderLeft: isLateEntryCandidate ? '3px solid var(--mantine-color-orange-5)' : undefined,
-        cursor: isEditable && !isFutureDate ? 'pointer' : 'default',
+          : undefined,
+        borderRadius: isDirty ? 2 : undefined,
+        cursor: isEditable && !isFutureDate ? 'text' : 'default',
         opacity: isFutureDate ? 0.4 : isEditable ? 1 : undefined,
       }}
       onMouseEnter={() => setIsHovered(true)}
@@ -94,6 +96,7 @@ export function HourCell({ chargeCodeId, dayIndex }: HourCellProps) {
           style={{ width: 60, textAlign: 'center' }}
           styles={{ input: { textAlign: 'center', padding: 0, color: 'var(--mantine-color-text)' } }}
           autoFocus
+          onFocus={(e) => e.target.select()}
           onBlur={handleBlur}
           onChange={(val) => setLocalValue(val)}
         />

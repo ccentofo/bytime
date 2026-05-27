@@ -1,14 +1,15 @@
 'use client';
 
-import { Stack, Text } from '@mantine/core';
+import { Stack, Text, Badge } from '@mantine/core';
 import dayjs from 'dayjs';
 
 interface ColumnHeaderDateProps {
   date: Date;
   dayIndex: number; // kept for potential future use
+  hasMissingHours?: boolean; // true if this weekday has 0 total hours (past date)
 }
 
-export function ColumnHeaderDate({ date, dayIndex: _dayIndex }: ColumnHeaderDateProps) {
+export function ColumnHeaderDate({ date, dayIndex: _dayIndex, hasMissingHours }: ColumnHeaderDateProps) {
   const d = dayjs(date);
   const isWeekend = d.day() === 0 || d.day() === 6;
   const isPast = d.isBefore(dayjs(), 'day');
@@ -31,6 +32,11 @@ export function ColumnHeaderDate({ date, dayIndex: _dayIndex }: ColumnHeaderDate
       >
         {d.format('MMM D')}
       </Text>
+      {hasMissingHours && (
+        <Badge size="xs" color="orange" variant="light">
+          Late
+        </Badge>
+      )}
     </Stack>
   );
 }

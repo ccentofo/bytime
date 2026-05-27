@@ -53,3 +53,19 @@ export function getPeriodEndDate(periodStart: Date): Date {
   const numDays = getNumDaysInPeriod(periodStart);
   return dayjs(periodStart).add(numDays - 1, 'day').startOf('day').toDate();
 }
+
+/**
+ * Returns the last weekday (Mon-Fri) in a semi-monthly pay period.
+ * The submit deadline is the last business day, not the last calendar day.
+ */
+export function getLastWeekdayInPeriod(periodStart: Date): Date {
+  const numDays = getNumDaysInPeriod(periodStart);
+  let lastDay = dayjs(periodStart).add(numDays - 1, 'day');
+
+  // Walk backward until we find a weekday
+  while (lastDay.day() === 0 || lastDay.day() === 6) {
+    lastDay = lastDay.subtract(1, 'day');
+  }
+
+  return lastDay.toDate();
+}

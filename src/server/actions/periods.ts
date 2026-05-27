@@ -8,7 +8,7 @@ import { sendTimesheetSubmittedEmail, sendTimesheetApprovedEmail, sendTimesheetR
 import { isNotificationEnabled } from '@/server/actions/notifications';
 import dayjs from 'dayjs';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
-import { getNumDaysInPeriod } from '@/lib/date-utils';
+import { getNumDaysInPeriod, getLastWeekdayInPeriod } from '@/lib/date-utils';
 
 dayjs.extend(isSameOrAfter);
 
@@ -69,14 +69,15 @@ export async function submitPeriod(data: {
   periodStart: Date;
   comment?: string;
 }): Promise<PeriodInfo> {
-  // Server-side validation: cannot submit before the last day of the period
-  const numDays = getNumDaysInPeriod(data.periodStart);
-  const periodEndDate = dayjs(data.periodStart).add(numDays - 1, 'day');
+  // Server-side validation: cannot submit before the last WEEKDAY of the period
+  const lastWeekday = getLastWeekdayInPeriod(data.periodStart);
+  const periodEndDate = dayjs(lastWeekday);
   if (!dayjs().isSameOrAfter(periodEndDate, 'day')) {
     throw new Error(`Cannot submit before the last day of the pay period (${periodEndDate.format('MMM D, YYYY')}).`);
   }
 
   // Server-side validation: cannot submit a completely empty timesheet
+  const numDays = getNumDaysInPeriod(data.periodStart);
   const periodEndExclusive = dayjs(data.periodStart).add(numDays, 'day').toDate();
   const entryCount = await db
     .select({ count: sql<number>`COUNT(*)` })

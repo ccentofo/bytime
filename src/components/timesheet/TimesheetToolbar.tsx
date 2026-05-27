@@ -9,7 +9,7 @@ import { ReasonModal } from '@/components/timesheet/ReasonModal';
 import { SubmitModal } from '@/components/timesheet/SubmitModal';
 import dayjs from 'dayjs';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
-import { getNumDaysInPeriod } from '@/lib/date-utils';
+import { getNumDaysInPeriod, getLastWeekdayInPeriod } from '@/lib/date-utils';
 
 dayjs.extend(isSameOrAfter);
 
@@ -35,8 +35,9 @@ export function TimesheetToolbar() {
   const end = start.add(numDays - 1, 'day');
   const periodLabel = `${start.format('MMM D')} – ${end.format('MMM D, YYYY')}`;
 
-  // Submit only available on or after the last day of the pay period
-  const periodEndDate = dayjs(periodStart).add(numDays - 1, 'day');
+  // Submit only available on or after the last WEEKDAY of the pay period
+  const lastWeekday = getLastWeekdayInPeriod(periodStart);
+  const periodEndDate = dayjs(lastWeekday);
   const isPeriodComplete = dayjs().isSameOrAfter(periodEndDate, 'day');
   const canSubmit = isEditable && dirtyCount === 0 && isPeriodComplete
     && state.entries.some((e) => e.hours.some((h) => h > 0));

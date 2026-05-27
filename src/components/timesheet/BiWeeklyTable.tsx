@@ -79,6 +79,23 @@ export function BiWeeklyTable() {
       },
     };
 
+    // Compute daily totals for missing hours detection
+    const dailyHasMissing = Array.from({ length: numDays }, (_, i) => {
+      const date = dayjs(periodStart).add(i, 'day');
+      const dow = date.day();
+      const isWeekday = dow >= 1 && dow <= 5;
+      const isPast = date.isBefore(dayjs(), 'day');
+
+      if (!isWeekday || !isPast) return false;
+
+      // Sum hours across all charge codes for this day
+      let totalHours = 0;
+      for (const entry of state.entries) {
+        totalHours += entry.hours[i] ?? 0;
+      }
+      return totalHours === 0;
+    });
+
     // Columns 1–N — Day columns (dynamic count)
     const dayColumns: MRT_ColumnDef<TableRow>[] = Array.from({ length: numDays }, (_, dayIndex) => {
       const date = dayjs(periodStart).add(dayIndex, 'day').toDate();
@@ -91,7 +108,7 @@ export function BiWeeklyTable() {
         header: `Day ${dayIndex}`,
         size: 72,
         enableSorting: false,
-        Header: () => <ColumnHeaderDate date={date} dayIndex={dayIndex} />,
+        Header: () => <ColumnHeaderDate date={date} dayIndex={dayIndex} hasMissingHours={dailyHasMissing[dayIndex]} />,
         Cell: ({ row }: { row: { original: TableRow } }) => (
           <HourCell chargeCodeId={row.original.chargeCodeId} dayIndex={dayIndex} />
         ),

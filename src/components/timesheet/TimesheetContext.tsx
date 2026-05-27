@@ -120,6 +120,7 @@ interface TimesheetContextValue {
   hasLateEntries: boolean;  // true if any dirty cell is a late first-time entry
   saveAll: (changeReasonCode?: string, comment?: string) => Promise<void>;
   loadPeriod: (direction: 'prev' | 'next') => Promise<void>;
+  loadPeriodByDate: (periodStart: Date) => Promise<void>;
   discardChanges: () => void;
   submitTimesheet: (comment?: string) => Promise<void>;
 }
@@ -239,13 +240,15 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
       const numDays = getNumDaysInPeriod(newPeriodStart);
 
       try {
-        // Try server first
-        const entries = await getTimesheetEntries(state.userId, newPeriodStart, state.chargeCodes);
-        const revisions = await getRevisionMap(state.userId, newPeriodStart, numDays);
-        const periodInfo = await getPeriodStatus(state.userId, newPeriodStart);
+        // Parallel fetch — all 3 queries at once instead of sequential
+        const [entries, revisions, periodInfo] = await Promise.all([
+          getTimesheetEntries(state.userId, newPeriodStart, state.chargeCodes),
+          getRevisionMap(state.userId, newPeriodStart, numDays),
+          getPeriodStatus(state.userId, newPeriodStart),
+        ]);
 
-        // Seed offline store with fresh data
-        await seedOfflineStore({
+        // Fire-and-forget offline seeding — don't block rendering
+        seedOfflineStore({
           userId: state.userId,
           periodStart: newPeriodStart,
           chargeCodes: state.chargeCodes,
@@ -279,6 +282,52 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
     [state.periodStart, state.userId, state.chargeCodes]
   );
 
+  const loadPeriodByDate = useCallback(
+    async (newPeriodStart: Date) => {
+      // Dispatch a navigate action to show loading state
+      dispatch({ type: 'NAVIGATE_PERIOD', direction: 'next' }); // Direction doesn't matter — we override below
+
+      const numDays = getNumDaysInPeriod(newPeriodStart);
+
+      try {
+        const [entries, revisions, periodInfo] = await Promise.all([
+          getTimesheetEntries(state.userId, newPeriodStart, state.chargeCodes),
+          getRevisionMap(state.userId, newPeriodStart, numDays),
+          getPeriodStatus(state.userId, newPeriodStart),
+        ]);
+
+        // Fire-and-forget offline seeding
+        seedOfflineStore({
+          userId: state.userId,
+          periodStart: newPeriodStart,
+          chargeCodes: state.chargeCodes,
+          entries,
+          revisions,
+          periodStatus: periodInfo.status,
+        });
+
+        dispatch({
+          type: 'SET_PERIOD_DATA',
+          periodStart: newPeriodStart,
+          entries,
+          revisions,
+          periodStatus: periodInfo.status,
+        });
+      } catch (error) {
+        console.warn('Server unavailable, loading from offline store:', error);
+        const offlineEntries = await getOfflineEntries(newPeriodStart, state.chargeCodes);
+        const offlineRevisions = await getOfflineRevisions(newPeriodStart);
+        dispatch({
+          type: 'SET_PERIOD_DATA',
+          periodStart: newPeriodStart,
+          entries: offlineEntries,
+          revisions: offlineRevisions,
+        });
+      }
+    },
+    [state.userId, state.chargeCodes]
+  );
+
   const discardChanges = useCallback(() => {
     dispatch({ type: 'DISCARD_CHANGES' });
   }, []);
@@ -305,7 +354,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
 
   return (
     <TimesheetContext.Provider
-      value={{ state, dispatch, dirtyCells, hasEdits, hasLateEntries, saveAll, loadPeriod, discardChanges, submitTimesheet }}
+      value={{ state, dispatch, dirtyCells, hasEdits, hasLateEntries, saveAll, loadPeriod, loadPeriodByDate, discardChanges, submitTimesheet }}
     >
       {children}
     </TimesheetContext.Provider>

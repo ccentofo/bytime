@@ -37,16 +37,18 @@ export function LoginForm() {
       return;
     }
 
+    // Show loading IMMEDIATELY — before any async calls
+    setLoading(true);
+
     // Client-side lockout check (server also enforces this)
     const lockoutInfo = await checkLockout(email.toLowerCase().trim());
     if (lockoutInfo?.isLocked) {
+      setLoading(false);
       setLockoutMessage(
         `Account is temporarily locked due to too many failed login attempts. Please try again in ${lockoutInfo.minutesRemaining} minute${lockoutInfo.minutesRemaining !== 1 ? 's' : ''}.`
       );
       return;
     }
-
-    setLoading(true);
 
     const result = await signIn('credentials', {
       email: email.toLowerCase().trim(),
