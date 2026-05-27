@@ -208,6 +208,9 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     enableColumnActions: false,
     enableDensityToggle: false,
     enableFullScreenToggle: false,
+    initialState: {
+      sorting: [{ id: 'periodStart', desc: true }],
+    },
     mantineTableProps: {
       highlightOnHover: true,
       striped: 'odd',
@@ -305,24 +308,26 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
       {/* Scope information banner */}
       {userRole === 'supervisor' && scopeInfo && (
         <Paper withBorder p="sm" mb="md" radius="md">
-          <Group gap="lg">
-            <Text size="sm" c="dimmed">
-              <strong>Your Approval Scope:</strong> You can review timesheets for{' '}
-              <Badge variant="light" color="blue" size="sm">{scopeInfo.supervisedEmployeeCount}</Badge>{' '}
-              employees across{' '}
-              <Badge variant="light" color="green" size="sm">{scopeInfo.assignedClinCount}</Badge>{' '}
-              CLINs you are assigned to.
+          <Group gap="xs" align="center" wrap="wrap">
+            <Text size="sm" c="dimmed" component="span">
+              <strong>Your Approval Scope:</strong> You can review timesheets for
             </Text>
+            <Badge variant="light" color="blue" size="sm">{scopeInfo.supervisedEmployeeCount}</Badge>
+            <Text size="sm" c="dimmed" component="span">employees across</Text>
+            <Badge variant="light" color="green" size="sm">{scopeInfo.assignedClinCount}</Badge>
+            <Text size="sm" c="dimmed" component="span">CLINs you are assigned to.</Text>
           </Group>
         </Paper>
       )}
 
       {userRole === 'admin' && (
         <Paper withBorder p="sm" mb="md" radius="md">
-          <Text size="sm" c="dimmed">
-            <Badge variant="light" color="red" size="sm">Admin</Badge>{' '}
-            You have full access to all employee timesheets.
-          </Text>
+          <Group gap="xs" align="center">
+            <Badge variant="light" color="red" size="sm">Admin</Badge>
+            <Text size="sm" c="dimmed" component="span">
+              You have full access to all employee timesheets.
+            </Text>
+          </Group>
         </Paper>
       )}
 
@@ -343,7 +348,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         opened={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         position="right"
-        size="xl"
+        size="90%"
         title={
           selectedPeriod
             ? `Review — ${selectedPeriod.userName}`
@@ -382,6 +387,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
                 placeholder="Any feedback for the employee..."
                 value={approveComment}
                 onChange={(e) => setApproveComment(e.currentTarget.value)}
+                style={{ maxWidth: 500 }}
               />
 
               <Textarea
@@ -389,6 +395,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
                 placeholder="Explain what needs to be corrected..."
                 value={rejectComment}
                 onChange={(e) => setRejectComment(e.currentTarget.value)}
+                style={{ maxWidth: 500 }}
               />
 
               <Group justify="flex-end" mt="md">
