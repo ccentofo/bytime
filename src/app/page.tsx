@@ -1,4 +1,4 @@
-import { Container, Title, Text, Button, Group, Stack, Paper, SimpleGrid, ThemeIcon, Badge, Divider, Center } from '@mantine/core';
+import { Container, Title, Text, Button, Group, Stack, Paper, SimpleGrid, ThemeIcon, Badge, Divider, Center, Anchor } from '@mantine/core';
 import { IconClock, IconShieldCheck, IconCloudLock, IconReportAnalytics, IconUsers, IconDeviceFloppy, IconApi, IconMoon } from '@tabler/icons-react';
 import React from 'react';
 
@@ -137,9 +137,15 @@ export default function LandingPage() {
 
       {/* Footer */}
       <Divider my="xl" />
-      <Text size="xs" c="dimmed" ta="center" pb="xl">
-        © 2026 ByTime — DCAA-Compliant Timekeeping for Government Contractors
-      </Text>
+      <Stack align="center" gap={4} pb="xl">
+        <Text size="xs" c="dimmed" ta="center">
+          © 2026 ByTime — DCAA-Compliant Timekeeping for Government Contractors
+        </Text>
+        <Group gap="md">
+          <Anchor href="/terms" size="xs" c="dimmed">Terms of Service</Anchor>
+          <Anchor href="/privacy" size="xs" c="dimmed">Privacy Policy</Anchor>
+        </Group>
+      </Stack>
     </Container>
   );
 }

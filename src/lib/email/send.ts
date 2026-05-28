@@ -4,6 +4,7 @@ import { TimesheetApprovedEmail } from './templates/timesheet-approved';
 import { TimesheetRejectedEmail } from './templates/timesheet-rejected';
 import { DailyReminderEmail } from './templates/daily-reminder';
 import { SubmissionDeadlineEmail } from './templates/submission-deadline';
+import { PasswordResetEmail } from './templates/password-reset';
 import React from 'react';
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
@@ -157,5 +158,33 @@ export async function sendSubmissionDeadlineEmail(data: {
     });
   } catch (error) {
     console.error('Failed to send submission deadline email:', error);
+  }
+}
+
+/**
+ * Send password reset email with a secure reset link.
+ */
+export async function sendPasswordResetEmail(data: {
+  employeeEmail: string;
+  employeeName: string;
+  resetUrl: string;
+  expiresIn: string;
+}): Promise<void> {
+  if (!isEmailEnabled() || !resend) return;
+
+  try {
+    await resend.emails.send({
+      from: EMAIL_FROM,
+      to: data.employeeEmail,
+      subject: 'Reset Your ByTime Password',
+      react: React.createElement(PasswordResetEmail, {
+        employeeName: data.employeeName,
+        resetUrl: data.resetUrl,
+        expiresIn: data.expiresIn,
+        appUrl: APP_URL,
+      }),
+    });
+  } catch (error) {
+    console.error('Failed to send password reset email:', error);
   }
 }

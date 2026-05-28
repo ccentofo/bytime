@@ -248,3 +248,16 @@ export const notificationPreferences = pgTable('notification_preferences', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ---------------------------------------------------------------------------
+// Password Reset Tokens (self-service forgot password)
+// ---------------------------------------------------------------------------
+
+export const passwordResetTokens = pgTable('password_reset_tokens', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  email: varchar('email', { length: 255 }).notNull(),
+  tokenHash: varchar('token_hash', { length: 64 }).notNull().unique(), // SHA-256 hash of the reset token
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true }),                // null until token is consumed
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});

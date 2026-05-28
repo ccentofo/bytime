@@ -8,6 +8,13 @@
       "when": 1779660552800,
       "tag": "0000_useful_scarlet_witch",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1779925164664,
+      "tag": "0001_bumpy_the_enforcers",
+      "breakpoints": true
     }
   ]
 }

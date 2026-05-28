@@ -13,6 +13,7 @@ import {
   Alert,
   Avatar,
   Text,
+  Anchor,
 } from '@mantine/core';
 import { IconAlertCircle, IconLock } from '@tabler/icons-react';
 import { signIn } from 'next-auth/react';
@@ -139,6 +140,9 @@ export function LoginForm() {
               autoComplete="current-password"
               disabled={Boolean(lockoutMessage)}
             />
+            <Anchor href="/forgot-password" size="sm" ta="right">
+              Forgot password?
+            </Anchor>
             <Button
               type="submit"
               fullWidth
