@@ -1,0 +1,7 @@
+.connectorCard {
+  transition: border-color 0.15s ease;
+}
+
+.connectorCard:hover {
+  border-color: var(--mantine-color-blue-4);
+}

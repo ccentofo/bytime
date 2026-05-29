@@ -1,0 +1,1 @@
+ALTER TABLE "integration_sync_records" ALTER COLUMN "bytime_entity_id" SET DATA TYPE varchar(255);

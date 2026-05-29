@@ -15,6 +15,20 @@
       "when": 1779925164664,
       "tag": "0001_bumpy_the_enforcers",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780002351968,
+      "tag": "0002_workable_la_nuit",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1780011447513,
+      "tag": "0003_typical_wasp",
+      "breakpoints": true
     }
   ]
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { Stack, NavLink, Divider, Text } from '@mantine/core';
-import { IconClock, IconFileText, IconUsers, IconChecklist, IconUserCog, IconCategory, IconHistory, IconChartBar, IconReportAnalytics, IconReceipt, IconApi, IconUpload, IconRocket } from '@tabler/icons-react';
+import { IconClock, IconFileText, IconUsers, IconChecklist, IconUserCog, IconCategory, IconHistory, IconChartBar, IconReportAnalytics, IconReceipt, IconApi, IconUpload, IconRocket, IconPlug } from '@tabler/icons-react';
 import { usePathname } from 'next/navigation';
 
 type AppNavbarProps = {
@@ -98,6 +98,12 @@ export function AppNavbar({ userRole }: AppNavbarProps) {
             href="/admin/api-keys"
             leftSection={<IconApi size={18} />}
             active={pathname === '/admin/api-keys'}
+          />
+          <NavLink
+            label="Integrations"
+            href="/admin/integrations"
+            leftSection={<IconPlug size={18} />}
+            active={pathname === '/admin/integrations'}
           />
           <NavLink
             label="Reports & Export"

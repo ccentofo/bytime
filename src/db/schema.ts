@@ -261,3 +261,107 @@ export const passwordResetTokens = pgTable('password_reset_tokens', {
   usedAt: timestamp('used_at', { withTimezone: true }),                // null until token is consumed
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ---------------------------------------------------------------------------
+// Integration Provider Enum
+// ---------------------------------------------------------------------------
+
+export const integrationProviderEnum = pgEnum('integration_provider', [
+  'quickbooks_online',
+  'gusto',
+  'adp',
+  'paychex',
+  'sage_intacct',
+  'csv_export',
+]);
+
+export const integrationSyncStatusEnum = pgEnum('integration_sync_status', [
+  'pending',
+  'running',
+  'success',
+  'partial',   // some records succeeded, some failed
+  'failed',
+]);
+
+// ---------------------------------------------------------------------------
+// Integration Connections (OAuth tokens + connection state per provider)
+// ---------------------------------------------------------------------------
+
+export const integrationConnections = pgTable('integration_connections', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  provider: integrationProviderEnum('provider').notNull(),
+  displayName: varchar('display_name', { length: 255 }).notNull(),  // "QuickBooks — Acme Corp"
+  externalCompanyId: varchar('external_company_id', { length: 255 }), // QBO realmId, Gusto companyId, etc.
+  externalCompanyName: varchar('external_company_name', { length: 255 }),
+  accessTokenEncrypted: text('access_token_encrypted'),              // AES-256-GCM encrypted
+  refreshTokenEncrypted: text('refresh_token_encrypted'),            // AES-256-GCM encrypted
+  tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }),
+  scopes: text('scopes'),                                            // comma-separated OAuth scopes granted
+  isActive: boolean('is_active').notNull().default(true),
+  autoSyncOnApproval: boolean('auto_sync_on_approval').notNull().default(false),
+  lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
+  lastSyncStatus: integrationSyncStatusEnum('last_sync_status'),
+  connectedBy: uuid('connected_by').notNull().references(() => users.id),
+  connectedAt: timestamp('connected_at', { withTimezone: true }).notNull().defaultNow(),
+  disconnectedAt: timestamp('disconnected_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// Integration Entity Mappings (ByTime entity ↔ External entity)
+// ---------------------------------------------------------------------------
+
+export const integrationEntityMappings = pgTable('integration_entity_mappings', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  connectionId: uuid('connection_id').notNull().references(() => integrationConnections.id, { onDelete: 'cascade' }),
+  entityType: varchar('entity_type', { length: 50 }).notNull(),      // 'employee', 'contract', 'clin', 'indirect_code'
+  bytimeEntityId: uuid('bytime_entity_id').notNull(),                 // ID of the ByTime record
+  bytimeEntityName: varchar('bytime_entity_name', { length: 255 }),   // Display name for UI
+  externalEntityId: varchar('external_entity_id', { length: 255 }).notNull(),  // ID in the external system
+  externalEntityName: varchar('external_entity_name', { length: 255 }),         // Display name from external system
+  metadata: text('metadata'),                                         // JSON — provider-specific extra data
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('mapping_unique_idx').on(table.connectionId, table.entityType, table.bytimeEntityId),
+]);
+
+// ---------------------------------------------------------------------------
+// Integration Sync Logs (audit trail of every sync operation)
+// ---------------------------------------------------------------------------
+
+export const integrationSyncLogs = pgTable('integration_sync_logs', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  connectionId: uuid('connection_id').notNull().references(() => integrationConnections.id, { onDelete: 'cascade' }),
+  syncType: varchar('sync_type', { length: 50 }).notNull(),          // 'timesheet_push', 'invoice_push', 'employee_sync'
+  periodStart: timestamp('period_start', { withTimezone: true }),
+  periodEnd: timestamp('period_end', { withTimezone: true }),
+  triggeredBy: uuid('triggered_by').references(() => users.id),      // null for auto-sync
+  triggerType: varchar('trigger_type', { length: 20 }).notNull().default('manual'), // 'manual', 'auto', 'retry'
+  recordsPushed: integer('records_pushed').notNull().default(0),
+  recordsFailed: integer('records_failed').notNull().default(0),
+  recordsSkipped: integer('records_skipped').notNull().default(0),
+  status: integrationSyncStatusEnum('status').notNull().default('pending'),
+  errorSummary: text('error_summary'),                                // High-level error message if failed
+  startedAt: timestamp('started_at', { withTimezone: true }),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// Integration Sync Records (per-record detail within a sync)
+// ---------------------------------------------------------------------------
+
+export const integrationSyncRecords = pgTable('integration_sync_records', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  syncLogId: uuid('sync_log_id').notNull().references(() => integrationSyncLogs.id, { onDelete: 'cascade' }),
+  bytimeEntityType: varchar('bytime_entity_type', { length: 50 }).notNull(), // 'timesheet_entry', 'invoice_line'
+  bytimeEntityId: varchar('bytime_entity_id', { length: 255 }).notNull(), // ID of the ByTime record pushed (composite key for timesheet entries)
+  externalEntityId: varchar('external_entity_id', { length: 255 }),   // ID assigned by external system
+  status: varchar('status', { length: 20 }).notNull(),                // 'success', 'failed', 'skipped'
+  errorMessage: text('error_message'),
+  requestPayload: text('request_payload'),                            // JSON — what was sent (for debugging)
+  responsePayload: text('response_payload'),                          // JSON — what came back
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
