@@ -92,11 +92,26 @@ async function syncPendingEntries(userId: string): Promise<boolean> {
 
   try {
     // Get pending queue items, oldest first
-    const pending = await offlineDb.syncQueue
-      .where('attempts')
-      .below(MAX_RETRY_ATTEMPTS)
-      .limit(BATCH_SIZE)
-      .toArray();
+    let pending;
+    try {
+      pending = await offlineDb.syncQueue
+        .where('attempts')
+        .below(MAX_RETRY_ATTEMPTS)
+        .limit(BATCH_SIZE)
+        .toArray();
+    } catch (indexError) {
+      // Fallback: if 'attempts' index doesn't exist, get all items and filter in memory
+      console.warn('Sync queue index query failed, falling back to full scan:', indexError);
+      try {
+        const all = await offlineDb.syncQueue.toArray();
+        pending = all.filter((item) => (item.attempts ?? 0) < MAX_RETRY_ATTEMPTS).slice(0, BATCH_SIZE);
+      } catch {
+        // IndexedDB completely unavailable — skip sync silently
+        isSyncing = false;
+        notifyStatus();
+        return false;
+      }
+    }
 
     if (pending.length === 0) {
       isSyncing = false;
@@ -198,16 +213,31 @@ async function syncPendingEntries(userId: string): Promise<boolean> {
 async function notifyStatus() {
   if (!statusCallback) return;
 
-  const pendingCount = await offlineDb.syncQueue.count();
-  const errorItems = await offlineDb.syncQueue
-    .where('attempts')
-    .aboveOrEqual(MAX_RETRY_ATTEMPTS)
-    .count();
+  try {
+    const pendingCount = await offlineDb.syncQueue.count();
+    let errorItems = 0;
+    try {
+      errorItems = await offlineDb.syncQueue
+        .where('attempts')
+        .aboveOrEqual(MAX_RETRY_ATTEMPTS)
+        .count();
+    } catch {
+      // Index not available — skip error count
+    }
 
-  statusCallback({
-    pendingCount,
-    isSyncing,
-    lastError: errorItems > 0 ? `${errorItems} entries failed to sync` : null,
-    isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
-  });
+    statusCallback({
+      pendingCount,
+      isSyncing,
+      lastError: errorItems > 0 ? `${errorItems} entries failed to sync` : null,
+      isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
+    });
+  } catch {
+    // IndexedDB unavailable — report safe defaults
+    statusCallback({
+      pendingCount: 0,
+      isSyncing: false,
+      lastError: null,
+      isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
+    });
+  }
 }

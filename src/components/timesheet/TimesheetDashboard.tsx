@@ -85,7 +85,7 @@ export function TimesheetDashboard({ data }: Props) {
           <Group justify="space-between">
             <div>
               <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Hours This Period</Text>
-              <Text size="xl" fw={700} mt={4}>{currentPeriod.totalHoursEntered.toFixed(1)}</Text>
+              <Text size="xl" fw={700} mt={4}>{(currentPeriod.totalHoursEntered ?? 0).toFixed(1)}</Text>
             </div>
             <ThemeIcon color="blue" variant="light" size="lg" radius="md">
               <IconClock size={20} />
@@ -164,7 +164,7 @@ export function TimesheetDashboard({ data }: Props) {
                       {STATUS_LABELS[rp.status] ?? rp.status}
                     </Badge>
                   </Table.Td>
-                  <Table.Td>{rp.totalHours.toFixed(1)}</Table.Td>
+                   <Table.Td>{(rp.totalHours ?? 0).toFixed(1)}</Table.Td>
                   <Table.Td>
                     {rp.submittedAt ? dayjs(rp.submittedAt).format('MMM D') : '—'}
                   </Table.Td>

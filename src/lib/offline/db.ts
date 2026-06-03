@@ -58,11 +58,20 @@ class ByTimeOfflineDB extends Dexie {
   constructor() {
     super('bytime-offline');
 
+    // Version 2: Original schema
     this.version(2).stores({
       entries: '++id, [clinId+entryDate], periodStartKey, syncStatus',
       chargeCodes: 'id',
       periodMeta: 'periodStartKey',
       syncQueue: '++id, clinId, entryDate',
+    });
+
+    // Version 3: Add 'attempts' index to syncQueue (required for .where('attempts') queries)
+    this.version(3).stores({
+      entries: '++id, [clinId+entryDate], periodStartKey, syncStatus',
+      chargeCodes: 'id',
+      periodMeta: 'periodStartKey',
+      syncQueue: '++id, clinId, entryDate, attempts',
     });
   }
 }

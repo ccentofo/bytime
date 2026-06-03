@@ -247,15 +247,19 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
           getPeriodStatus(state.userId, newPeriodStart),
         ]);
 
-        // Fire-and-forget offline seeding — don't block rendering
-        seedOfflineStore({
-          userId: state.userId,
-          periodStart: newPeriodStart,
-          chargeCodes: state.chargeCodes,
-          entries,
-          revisions,
-          periodStatus: periodInfo.status,
-        });
+        // Fire-and-forget offline seeding — wrapped in try/catch to prevent IndexedDB errors from crashing the app
+        try {
+          seedOfflineStore({
+            userId: state.userId,
+            periodStart: newPeriodStart,
+            chargeCodes: state.chargeCodes,
+            entries,
+            revisions,
+            periodStatus: periodInfo.status,
+          });
+        } catch {
+          // IndexedDB unavailable or corrupted — app continues without offline support
+        }
 
         dispatch({
           type: 'SET_PERIOD_DATA',
@@ -296,15 +300,19 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
           getPeriodStatus(state.userId, newPeriodStart),
         ]);
 
-        // Fire-and-forget offline seeding
-        seedOfflineStore({
-          userId: state.userId,
-          periodStart: newPeriodStart,
-          chargeCodes: state.chargeCodes,
-          entries,
-          revisions,
-          periodStatus: periodInfo.status,
-        });
+        // Fire-and-forget offline seeding — wrapped in try/catch to prevent IndexedDB errors from crashing the app
+        try {
+          seedOfflineStore({
+            userId: state.userId,
+            periodStart: newPeriodStart,
+            chargeCodes: state.chargeCodes,
+            entries,
+            revisions,
+            periodStatus: periodInfo.status,
+          });
+        } catch {
+          // IndexedDB unavailable or corrupted — app continues without offline support
+        }
 
         dispatch({
           type: 'SET_PERIOD_DATA',
