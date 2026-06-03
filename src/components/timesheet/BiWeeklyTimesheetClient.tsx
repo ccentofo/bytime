@@ -46,20 +46,35 @@ type Props = {
 export function BiWeeklyTimesheetClient({ initialData }: Props) {
   useEffect(() => {
     // Seed offline store with server-provided data
-    seedOfflineStore({
-      userId: initialData.userId,
-      periodStart: initialData.periodStart,
-      chargeCodes: initialData.chargeCodes,
-      entries: initialData.entries,
-      revisions: initialData.revisions ?? {},
-      periodStatus: initialData.periodStatus ?? 'draft',
-    });
+    // Wrapped in try/catch — IndexedDB corruption or unavailability must not crash the app
+    try {
+      seedOfflineStore({
+        userId: initialData.userId,
+        periodStart: initialData.periodStart,
+        chargeCodes: initialData.chargeCodes,
+        entries: initialData.entries,
+        revisions: initialData.revisions ?? {},
+        periodStatus: initialData.periodStatus ?? 'draft',
+      }).catch(() => {
+        // Async IndexedDB errors — silently ignore, app works without offline support
+      });
+    } catch {
+      // Synchronous errors — silently ignore
+    }
 
-    // Start background sync
-    startSyncService(initialData.userId);
+    // Start background sync — also wrapped to prevent IndexedDB crashes
+    try {
+      startSyncService(initialData.userId);
+    } catch {
+      // Sync service unavailable — app continues without background sync
+    }
 
     return () => {
-      stopSyncService();
+      try {
+        stopSyncService();
+      } catch {
+        // Cleanup error — ignore
+      }
     };
   }, [initialData.userId]);
 
