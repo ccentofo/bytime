@@ -30,7 +30,7 @@ export function BiWeeklyTable() {
         const entry = entries.find((e) => e.chargeCodeId === cc.id);
         return {
           chargeCodeId: cc.id,
-          hours: entry ? entry.hours : Array(numDays).fill(0),
+          hours: entry?.hours ?? Array(numDays).fill(0),
         };
       }),
     [chargeCodes, entries, numDays]
@@ -91,7 +91,7 @@ export function BiWeeklyTable() {
       // Sum hours across all charge codes for this day
       let totalHours = 0;
       for (const entry of state.entries) {
-        totalHours += entry.hours[i] ?? 0;
+        totalHours += (entry.hours ?? [])[i] ?? 0;
       }
       return totalHours === 0;
     });
@@ -113,10 +113,10 @@ export function BiWeeklyTable() {
           <HourCell chargeCodeId={row.original.chargeCodeId} dayIndex={dayIndex} />
         ),
         Footer: () => {
-          const dayTotal = entries.reduce((sum, entry) => sum + (entry.hours[dayIndex] ?? 0), 0);
+          const dayTotal = entries.reduce((sum, entry) => sum + ((entry.hours ?? [])[dayIndex] ?? 0), 0);
           return (
             <Text fw={700} ta="center" size="sm">
-              {dayTotal.toFixed(2)}
+              {(dayTotal ?? 0).toFixed(2)}
             </Text>
           );
         },
@@ -154,19 +154,19 @@ export function BiWeeklyTable() {
     // Column N+1 — Total (pinned right)
     const totalCol: MRT_ColumnDef<TableRow> = {
       id: 'total',
-      accessorFn: (row) => row.hours.reduce((a, b) => a + b, 0),
+      accessorFn: (row) => (row.hours ?? []).reduce((a, b) => a + (b ?? 0), 0),
       header: 'Total',
       size: 80,
       enableSorting: false,
       Cell: ({ row }) => <TotalHoursCell chargeCodeId={row.original.chargeCodeId} />,
       Footer: () => {
         const grandTotal = entries.reduce(
-          (sum, entry) => sum + entry.hours.reduce((a, b) => a + b, 0),
+          (sum, entry) => sum + (entry.hours ?? []).reduce((a, b) => a + (b ?? 0), 0),
           0
         );
         return (
           <Text fw={900} ta="center" size="sm" c="blue">
-            {grandTotal.toFixed(2)}
+            {(grandTotal ?? 0).toFixed(2)}
           </Text>
         );
       },

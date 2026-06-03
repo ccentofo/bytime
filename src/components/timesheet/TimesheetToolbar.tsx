@@ -49,17 +49,17 @@ export function TimesheetToolbar() {
     if (!state.flsaExempt) return null;
 
     const totalPeriodHours = state.entries.reduce(
-      (sum, entry) => sum + entry.hours.reduce((a, b) => a + b, 0),
+      (sum, entry) => sum + (entry.hours ?? []).reduce((a, b) => a + (b ?? 0), 0),
       0
     );
 
     // Calculate weekly totals within the period
     const dailyTotals: number[] = [];
-    const numDaysInPeriod = state.entries[0]?.hours.length ?? 0;
+    const numDaysInPeriod = state.entries[0]?.hours?.length ?? 0;
     for (let i = 0; i < numDaysInPeriod; i++) {
       let dayTotal = 0;
       for (const entry of state.entries) {
-        dayTotal += entry.hours[i] ?? 0;
+        dayTotal += (entry.hours ?? [])[i] ?? 0;
       }
       dailyTotals.push(dayTotal);
     }
@@ -318,11 +318,11 @@ export function TimesheetToolbar() {
           <Group justify="space-between" wrap="wrap">
             <Group gap="md">
               <Text size="sm" fw={600}>
-                Total Period Hours: {overtimeInfo.totalPeriodHours.toFixed(2)}
+                Total Period Hours: {(overtimeInfo.totalPeriodHours ?? 0).toFixed(2)}
               </Text>
               {overtimeInfo.totalUncompensated > 0 && (
                 <Badge color="orange" variant="light" size="lg">
-                  {overtimeInfo.totalUncompensated.toFixed(2)} hrs uncompensated OT
+                  {(overtimeInfo.totalUncompensated ?? 0).toFixed(2)} hrs uncompensated OT
                 </Badge>
               )}
             </Group>

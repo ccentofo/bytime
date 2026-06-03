@@ -19,11 +19,11 @@ export function HourCell({ chargeCodeId, dayIndex }: HourCellProps) {
   const [localValue, setLocalValue] = useState<number | string>(0);
 
   const entry = state.entries.find((e) => e.chargeCodeId === chargeCodeId);
-  const value = entry ? entry.hours[dayIndex] : 0;
+  const value = entry ? ((entry.hours ?? [])[dayIndex] ?? 0) : 0;
 
   // Check if this cell is dirty (unsaved changes)
   const savedEntry = state.savedEntries.find((e) => e.chargeCodeId === chargeCodeId);
-  const savedValue = savedEntry ? (savedEntry.hours[dayIndex] ?? 0) : 0;
+  const savedValue = savedEntry ? ((savedEntry.hours ?? [])[dayIndex] ?? 0) : 0;
   const isDirty = value !== savedValue;
 
   // Future date detection
@@ -102,7 +102,7 @@ export function HourCell({ chargeCodeId, dayIndex }: HourCellProps) {
         />
       ) : (
         <Text ta="center" size="sm" style={{ lineHeight: '32px' }}>
-          {value === 0 ? '—' : value.toFixed(2)}
+          {value === 0 ? '—' : (value ?? 0).toFixed(2)}
         </Text>
       )}
 
