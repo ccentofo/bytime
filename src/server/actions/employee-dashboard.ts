@@ -6,6 +6,7 @@ import { eq, and, gte, lt, desc, sql } from 'drizzle-orm';
 import dayjs from 'dayjs';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 import { getNumDaysInPeriod, getCurrentPeriodStart } from '@/lib/date-utils';
+import { getPayPeriodConfig } from '@/server/actions/pay-period-config';
 
 dayjs.extend(isSameOrAfter);
 
@@ -44,8 +45,9 @@ export interface EmployeeDashboardData {
 // ---------------------------------------------------------------------------
 
 export async function getEmployeeDashboardData(userId: string): Promise<EmployeeDashboardData> {
-  const periodStart = getCurrentPeriodStart();
-  const numDays = getNumDaysInPeriod(periodStart);
+  const periodConfig = await getPayPeriodConfig();
+  const periodStart = getCurrentPeriodStart(periodConfig);
+  const numDays = getNumDaysInPeriod(periodStart, periodConfig);
   const periodEnd = dayjs(periodStart).add(numDays - 1, 'day');
   const periodLabel = `${dayjs(periodStart).format('MMM D')} – ${periodEnd.format('MMM D, YYYY')}`;
 

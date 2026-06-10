@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { Center, Stack, Title, Text, Button, Group, Paper } from '@mantine/core';
 import { IconAlertTriangle, IconRefresh, IconHome } from '@tabler/icons-react';
+import * as Sentry from '@sentry/nextjs';
 
 export default function RootError({
   error,
@@ -12,7 +13,7 @@ export default function RootError({
   reset: () => void;
 }) {
   useEffect(() => {
-    console.error('Root error:', error);
+    Sentry.captureException(error);
   }, [error]);
 
   return (

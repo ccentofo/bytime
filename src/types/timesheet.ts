@@ -1,3 +1,5 @@
+import type { PeriodConfig } from '@/lib/date-utils';
+
 export interface ChargeCode {
   id: string;             // maps to clins.id OR indirectChargeCodes.id (UUID)
   projectName: string;    // maps to contracts.name OR indirect category name
@@ -11,7 +13,7 @@ export interface ChargeCode {
 
 export interface TimesheetEntry {
   chargeCodeId: string;
-  hours: number[]; // variable length — matches the number of days in the active semi-monthly period
+  hours: number[]; // variable length — matches the number of days in the active pay period
 }
 
 export interface NoteData {
@@ -39,6 +41,7 @@ export interface TimesheetState {
   isLoadingPeriod: boolean; // true while fetching data for a new period
   periodStatus: PeriodStatus; // current period's approval status
   flsaExempt: boolean; // true if user is FLSA exempt (salaried)
+  periodConfig: PeriodConfig; // pay period configuration
 }
 
 export type TimesheetAction =
@@ -74,4 +77,5 @@ export interface TimesheetPageData {
   periodStatus?: PeriodStatus;
   flsaExempt?: boolean;
   dashboardData?: EmployeeDashboardData;
+  periodConfig?: PeriodConfig;
 }

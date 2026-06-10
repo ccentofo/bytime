@@ -81,7 +81,13 @@ export function LoginForm() {
       return;
     }
 
-    router.push('/timesheet');
+    // Check if 2FA is required — redirect to MFA page
+    const session = await import('next-auth/react').then((m) => m.getSession());
+    if ((session?.user as any)?.totpEnabled) {
+      router.push(`/login/mfa?userId=${session?.user?.id}&email=${encodeURIComponent(session?.user?.email ?? '')}`);
+    } else {
+      router.push('/timesheet');
+    }
     router.refresh();
   }
 

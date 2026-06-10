@@ -1,0 +1,5 @@
+Employee Email,Entry Date,Contract Number,CLIN Number,Indirect Code,Hours,Change Reason,Comment,Created At
+jane.smith@company.com,2025-06-02,W58RGZ-21-C-0001,0001,,8.00,,,2025-06-02T17:30:00Z
+jane.smith@company.com,2025-06-02,,,OH-001,1.00,,,2025-06-02T17:30:00Z
+jane.smith@company.com,2025-06-03,W58RGZ-21-C-0001,0001,,7.50,CORRECTION,Adjusted from 8.00,2025-06-04T09:00:00Z
+john.doe@company.com,2025-06-02,HC1028-22-C-0015,0001,,6.00,,,2025-06-02T16:45:00Z

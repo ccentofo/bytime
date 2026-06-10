@@ -1,0 +1,53 @@
+version: '3.8'
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      DATABASE_URL: postgresql://bytime:${DB_PASSWORD:-bytime_prod}@db:5432/bytime
+      AUTH_SECRET: ${AUTH_SECRET}
+      NEXT_PUBLIC_APP_URL: ${APP_URL:-http://localhost:3000}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      # Optional
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-noreply@bytime.app}
+      QBO_CLIENT_ID: ${QBO_CLIENT_ID:-}
+      QBO_CLIENT_SECRET: ${QBO_CLIENT_SECRET:-}
+      GUSTO_CLIENT_ID: ${GUSTO_CLIENT_ID:-}
+      GUSTO_CLIENT_SECRET: ${GUSTO_CLIENT_SECRET:-}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bytime
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-bytime_prod}
+      POSTGRES_DB: bytime
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U bytime']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

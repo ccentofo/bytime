@@ -22,6 +22,9 @@ export const users = pgTable('users', {
   passwordChangedAt: timestamp('password_changed_at', { withTimezone: true }),
   flsaExempt: boolean('flsa_exempt').notNull().default(false), // FLSA exempt = salaried, must record all hours including uncompensated OT
   sessionVersion: integer('session_version').notNull().default(1),
+  totpSecret: text('totp_secret'),                    // Encrypted TOTP secret (null = 2FA disabled)
+  totpEnabled: boolean('totp_enabled').notNull().default(false),
+  totpRecoveryCodes: text('totp_recovery_codes'),     // Encrypted JSON array of hashed recovery codes
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -227,6 +230,9 @@ export const timesheetPeriods = pgTable('timesheet_periods', {
   reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
   reviewedBy: uuid('reviewed_by').references(() => users.id),
   reviewComment: text('review_comment'),
+  // Period config snapshot — locks the period to the config active when created
+  periodType: varchar('period_type', { length: 20 }),        // 'weekly'|'biweekly'|'semimonthly'|'monthly'
+  periodNumDays: integer('period_num_days'),                  // number of days in this specific period
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -364,4 +370,25 @@ export const integrationSyncRecords = pgTable('integration_sync_records', {
   requestPayload: text('request_payload'),                            // JSON — what was sent (for debugging)
   responsePayload: text('response_payload'),                          // JSON — what came back
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// Pay Period Configuration
+// ---------------------------------------------------------------------------
+
+export const payPeriodTypeEnum = pgEnum('pay_period_type', [
+  'weekly',
+  'biweekly',
+  'semimonthly',
+  'monthly',
+]);
+
+export const payPeriodConfig = pgTable('pay_period_config', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  periodType: payPeriodTypeEnum('period_type').notNull().default('semimonthly'),
+  anchorDate: timestamp('anchor_date', { withTimezone: true }).notNull(),
+  // For weekly/biweekly: which day of the week starts the period (0=Sun, 1=Mon)
+  weekStartDay: integer('week_start_day').notNull().default(1), // Monday
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

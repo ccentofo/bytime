@@ -41,11 +41,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
         await recordSuccessfulLogin(email);
 
+        // Check if 2FA is enabled — if so, signal the client to redirect to MFA page
+        // We return the user with a mfaPending flag; the LoginForm handles the redirect
         return {
           id: user.id,
           email: user.email,
           name: user.fullName,
           role: user.role,
+          totpEnabled: user.totpEnabled ?? false,
         };
       },
     }),
@@ -64,6 +67,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.id = user.id;
         token.role = (user as any).role;
         token.fullName = (user as any).name;
+        token.totpEnabled = (user as any).totpEnabled ?? false;
 
         // Fetch and store the current sessionVersion
         try {

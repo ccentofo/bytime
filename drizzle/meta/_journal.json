@@ -29,6 +29,27 @@
       "when": 1780011447513,
       "tag": "0003_typical_wasp",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1780524111829,
+      "tag": "0004_quiet_expediter",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1780531824573,
+      "tag": "0005_eager_invaders",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1780678137150,
+      "tag": "0006_aromatic_dark_phoenix",
+      "breakpoints": true
     }
   ]
 }

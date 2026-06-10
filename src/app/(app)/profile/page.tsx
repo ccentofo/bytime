@@ -1,6 +1,7 @@
 import { auth } from '@/auth';
 import { redirect } from 'next/navigation';
 import { getPasswordInfo } from '@/server/actions/password';
+import { getMFAStatus } from '@/server/actions/mfa';
 import { ProfileClient } from './ProfileClient';
 
 export const dynamic = 'force-dynamic';
@@ -14,7 +15,10 @@ export default async function ProfilePage() {
   const email = session.user.email ?? '';
   const role = (session.user as any).role ?? 'employee';
 
-  const passwordInfo = await getPasswordInfo(userId);
+  const [passwordInfo, mfaStatus] = await Promise.all([
+    getPasswordInfo(userId),
+    getMFAStatus(),
+  ]);
 
   return (
     <ProfileClient
@@ -23,6 +27,7 @@ export default async function ProfilePage() {
       email={email}
       role={role}
       passwordInfo={passwordInfo}
+      mfaStatus={mfaStatus}
     />
   );
 }

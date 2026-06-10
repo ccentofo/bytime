@@ -31,12 +31,12 @@ export function TimesheetToolbar() {
 
   // Build period label for the submit modal
   const start = dayjs(periodStart);
-  const numDays = getNumDaysInPeriod(periodStart);
+  const numDays = getNumDaysInPeriod(periodStart, state.periodConfig);
   const end = start.add(numDays - 1, 'day');
   const periodLabel = `${start.format('MMM D')} – ${end.format('MMM D, YYYY')}`;
 
   // Submit only available on or after the last WEEKDAY of the pay period
-  const lastWeekday = getLastWeekdayInPeriod(periodStart);
+  const lastWeekday = getLastWeekdayInPeriod(periodStart, state.periodConfig);
   const periodEndDate = dayjs(lastWeekday);
   const isPeriodComplete = dayjs().isSameOrAfter(periodEndDate, 'day');
   const canSubmit = isEditable && dirtyCount === 0 && isPeriodComplete

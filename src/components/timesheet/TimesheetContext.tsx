@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useReducer, useCallback, useMemo } from 'react';
 import dayjs from 'dayjs';
 import type { TimesheetState, TimesheetAction, TimesheetPageData, DirtyCell } from '@/types/timesheet';
-import { navigatePeriod, getNumDaysInPeriod } from '@/lib/date-utils';
+import { navigatePeriod, getNumDaysInPeriod, DEFAULT_PERIOD_CONFIG, type PeriodType } from '@/lib/date-utils';
 import { getTimesheetEntries, saveTimesheetBatch, getRevisionMap } from '@/server/actions/timesheet';
 import { submitPeriod, getPeriodStatus } from '@/server/actions/periods';
 import { seedOfflineStore, getOfflineEntries, getOfflineRevisions } from '@/lib/offline/offline-store';
@@ -152,6 +152,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
     isLoadingPeriod: false,
     periodStatus: initialData.periodStatus ?? 'draft',
     flsaExempt: initialData.flsaExempt ?? false,
+    periodConfig: initialData.periodConfig ?? DEFAULT_PERIOD_CONFIG,
   };
 
   const [state, dispatch] = useReducer(timesheetReducer, initialState);
@@ -236,8 +237,8 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
     async (direction: 'prev' | 'next') => {
       dispatch({ type: 'NAVIGATE_PERIOD', direction });
 
-      const newPeriodStart = navigatePeriod(state.periodStart, direction);
-      const numDays = getNumDaysInPeriod(newPeriodStart);
+      const newPeriodStart = navigatePeriod(state.periodStart, direction, state.periodConfig);
+      const numDays = getNumDaysInPeriod(newPeriodStart, state.periodConfig);
 
       try {
         // Parallel fetch — all 3 queries at once instead of sequential
@@ -246,6 +247,16 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
           getRevisionMap(state.userId, newPeriodStart, numDays),
           getPeriodStatus(state.userId, newPeriodStart),
         ]);
+
+        // If the period has a stored config snapshot, use it instead of the global config
+        let effectiveConfig = state.periodConfig;
+        if (periodInfo.periodType && periodInfo.periodNumDays) {
+          effectiveConfig = {
+            periodType: periodInfo.periodType as PeriodType,
+            anchorDate: state.periodConfig.anchorDate,
+            weekStartDay: state.periodConfig.weekStartDay,
+          };
+        }
 
         // Fire-and-forget offline seeding — wrapped in try/catch to prevent IndexedDB errors from crashing the app
         try {
@@ -291,7 +302,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
       // Dispatch a navigate action to show loading state
       dispatch({ type: 'NAVIGATE_PERIOD', direction: 'next' }); // Direction doesn't matter — we override below
 
-      const numDays = getNumDaysInPeriod(newPeriodStart);
+      const numDays = getNumDaysInPeriod(newPeriodStart, state.periodConfig);
 
       try {
         const [entries, revisions, periodInfo] = await Promise.all([
@@ -299,6 +310,16 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
           getRevisionMap(state.userId, newPeriodStart, numDays),
           getPeriodStatus(state.userId, newPeriodStart),
         ]);
+
+        // If the period has a stored config snapshot, use it instead of the global config
+        let effectiveConfig = state.periodConfig;
+        if (periodInfo.periodType && periodInfo.periodNumDays) {
+          effectiveConfig = {
+            periodType: periodInfo.periodType as PeriodType,
+            anchorDate: state.periodConfig.anchorDate,
+            weekStartDay: state.periodConfig.weekStartDay,
+          };
+        }
 
         // Fire-and-forget offline seeding — wrapped in try/catch to prevent IndexedDB errors from crashing the app
         try {

@@ -9,6 +9,7 @@ import { isNotificationEnabled } from '@/server/actions/notifications';
 import dayjs from 'dayjs';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 import { getNumDaysInPeriod, getLastWeekdayInPeriod } from '@/lib/date-utils';
+import { getPayPeriodConfig } from '@/server/actions/pay-period-config';
 
 dayjs.extend(isSameOrAfter);
 
@@ -21,6 +22,8 @@ export interface PeriodInfo {
   reviewedAt: Date | null;
   reviewedBy: string | null;
   reviewComment: string | null;
+  periodType: string | null;
+  periodNumDays: number | null;
 }
 
 /**
@@ -46,6 +49,8 @@ export async function getPeriodStatus(userId: string, periodStart: Date): Promis
       reviewedAt: null,
       reviewedBy: null,
       reviewComment: null,
+      periodType: null,
+      periodNumDays: null,
     };
   }
 
@@ -57,6 +62,8 @@ export async function getPeriodStatus(userId: string, periodStart: Date): Promis
     reviewedAt: row.reviewedAt,
     reviewedBy: row.reviewedBy,
     reviewComment: row.reviewComment,
+    periodType: row.periodType ?? null,
+    periodNumDays: row.periodNumDays ?? null,
   };
 }
 
@@ -105,13 +112,18 @@ export async function submitPeriod(data: {
     );
 
   if (existing.length === 0) {
-    // Create new period record
+    // Create new period record — snapshot the current period config
+    const periodConfig = await getPayPeriodConfig();
+    const snapshotNumDays = getNumDaysInPeriod(data.periodStart, periodConfig);
+
     const rows = await db.insert(timesheetPeriods).values({
       userId: data.userId,
       periodStart: data.periodStart,
       status: 'submitted',
       submittedAt: new Date(),
       submittedComment: data.comment,
+      periodType: periodConfig.periodType,
+      periodNumDays: snapshotNumDays,
     }).returning();
 
     return {
@@ -121,6 +133,8 @@ export async function submitPeriod(data: {
       reviewedAt: null,
       reviewedBy: null,
       reviewComment: null,
+      periodType: rows[0].periodType ?? null,
+      periodNumDays: rows[0].periodNumDays ?? null,
     };
   }
 
@@ -150,6 +164,8 @@ export async function submitPeriod(data: {
     reviewedAt: null,
     reviewedBy: null,
     reviewComment: null,
+    periodType: rows[0].periodType ?? null,
+    periodNumDays: rows[0].periodNumDays ?? null,
   };
 
   // Fire-and-forget: notify supervisor(s) via email

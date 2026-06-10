@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { Container, Stack, Text, Button, Group, Alert } from '@mantine/core';
 import { IconAlertTriangle, IconRefresh, IconClock } from '@tabler/icons-react';
+import * as Sentry from '@sentry/nextjs';
 
 export default function AppError({
   error,
@@ -12,7 +13,7 @@ export default function AppError({
   reset: () => void;
 }) {
   useEffect(() => {
-    console.error('App error:', error);
+    Sentry.captureException(error);
   }, [error]);
 
   return (

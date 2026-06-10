@@ -1,0 +1,12 @@
+.uploadArea {
+  border: 2px dashed var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-md);
+  padding: var(--mantine-spacing-xl);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.uploadArea:hover {
+  border-color: var(--mantine-color-blue-4);
+}

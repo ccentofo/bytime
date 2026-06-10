@@ -14,6 +14,7 @@ import {
   Alert,
   ThemeIcon,
   Anchor,
+  SimpleGrid,
 } from '@mantine/core';
 import {
   IconReceipt,
@@ -220,25 +221,23 @@ export function SetupWizardClient({ initialStatus }: Props) {
         {/* Summary stats */}
         <Paper p="md" radius="md" withBorder mt="lg">
           <Title order={4} mb="sm">Setup Summary</Title>
-          <Group grow>
+          <SimpleGrid cols={{ base: 2, sm: 3, md: 6 }} spacing="sm">
             {STEPS.map((step) => (
-              <Paper key={step.key} p="sm" radius="sm" withBorder>
-                <Group gap="xs">
-                  {isStepComplete(step) ? (
-                    <ThemeIcon size="sm" color="green" variant="light" radius="xl">
-                      <IconCheck size={12} />
-                    </ThemeIcon>
-                  ) : (
-                    <Badge size="xs" color="yellow" variant="light">Pending</Badge>
-                  )}
-                  <Text size="sm" fw={500}>{step.title}</Text>
-                </Group>
+              <Paper key={step.key} p="sm" radius="sm" withBorder style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', minHeight: 90 }}>
+                {isStepComplete(step) ? (
+                  <ThemeIcon size="md" color="green" variant="light" radius="xl" mb={6}>
+                    <IconCheck size={14} />
+                  </ThemeIcon>
+                ) : (
+                  <Badge size="xs" color="yellow" variant="light" mb={6}>Pending</Badge>
+                )}
+                <Text size="sm" fw={500} lh={1.2}>{step.title}</Text>
                 <Text size="xs" c="dimmed" mt={4}>
                   {status[step.key]} {step.entityLabel}
                 </Text>
               </Paper>
             ))}
-          </Group>
+          </SimpleGrid>
         </Paper>
       </Container>
     );

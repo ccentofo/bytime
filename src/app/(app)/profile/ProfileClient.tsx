@@ -17,6 +17,7 @@ import { IconKey, IconCheck, IconAlertCircle, IconUser } from '@tabler/icons-rea
 import { notifications } from '@mantine/notifications';
 import { changePassword } from '@/server/actions/password';
 import dayjs from 'dayjs';
+import { MFASetup } from './MFASetup';
 
 type Props = {
   userId: string;
@@ -27,6 +28,10 @@ type Props = {
     hasPassword: boolean;
     lastChangedAt: Date | null;
   };
+  mfaStatus: {
+    enabled: boolean;
+    recoveryCodesRemaining: number;
+  };
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -35,7 +40,7 @@ const ROLE_COLORS: Record<string, string> = {
   employee: 'green',
 };
 
-export function ProfileClient({ userId, fullName, email, role, passwordInfo }: Props) {
+export function ProfileClient({ userId, fullName, email, role, passwordInfo, mfaStatus }: Props) {
   const [isPending, startTransition] = useTransition();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -175,6 +180,12 @@ export function ProfileClient({ userId, fullName, email, role, passwordInfo }: P
           </Stack>
         )}
       </Paper>
+
+      {/* 2FA Section */}
+      <MFASetup
+        mfaEnabled={mfaStatus.enabled}
+        recoveryCodesRemaining={mfaStatus.recoveryCodesRemaining}
+      />
     </>
   );
 }

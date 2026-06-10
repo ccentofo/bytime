@@ -21,7 +21,7 @@ export function BiWeeklyTable() {
   const { state } = useTimesheet();
   const { chargeCodes, entries, periodStart } = state;
 
-  const numDays = getNumDaysInPeriod(periodStart);
+  const numDays = getNumDaysInPeriod(periodStart, state.periodConfig);
 
   // Merge charge codes + entries into flat row objects
   const tableData: TableRow[] = useMemo(
