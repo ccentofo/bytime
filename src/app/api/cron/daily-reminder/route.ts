@@ -18,8 +18,10 @@ export async function GET(request: NextRequest) {
   const rateLimited = checkCronRateLimit(request);
   if (rateLimited) return rateLimited;
 
-  // Optional: verify cron secret
-  const cronSecret = request.headers.get('x-cron-secret');
+  // Verify cron secret — accepts x-cron-secret (GitHub Actions) or
+  // Authorization: Bearer (Vercel native crons).
+  const cronSecret = request.headers.get('x-cron-secret')
+    ?? request.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
   if (process.env.CRON_SECRET && cronSecret !== process.env.CRON_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }

@@ -47,7 +47,6 @@
     "resend": "^6.12.3"
   },
   "devDependencies": {
-    "@rolldown/binding-linux-x64-gnu": "^1.0.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/bcryptjs": "^3.0.0",

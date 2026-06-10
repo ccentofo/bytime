@@ -38,9 +38,14 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
 
-      # Add your deployment step here (e.g., Docker push, Vercel, Railway, etc.)
-      - name: Deploy
-        run: echo "Add deployment command here (e.g., docker push, vercel deploy, etc.)"
+      - name: Install Vercel CLI
+        run: npm i -g vercel@latest
+
+      - name: Deploy to Vercel (staging/preview)
+        run: |
+          vercel pull --yes --environment=preview --token="${{ secrets.VERCEL_TOKEN }}"
+          vercel build --token="${{ secrets.VERCEL_TOKEN }}"
+          vercel deploy --prebuilt --token="${{ secrets.VERCEL_TOKEN }}"
         env:
-          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
-          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}

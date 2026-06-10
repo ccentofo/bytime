@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, timestamp, boolean, pgEnum, uniqueIndex, integer, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, timestamp, boolean, pgEnum, uniqueIndex, integer, index, jsonb } from 'drizzle-orm/pg-core';
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -233,6 +233,9 @@ export const timesheetPeriods = pgTable('timesheet_periods', {
   // Period config snapshot — locks the period to the config active when created
   periodType: varchar('period_type', { length: 20 }),        // 'weekly'|'biweekly'|'semimonthly'|'monthly'
   periodNumDays: integer('period_num_days'),                  // number of days in this specific period
+  // Structured snapshot of completeness/total-time warnings captured at submission time.
+  // Advisory only — never blocks submission. Null if the client sent no snapshot.
+  completenessSnapshot: jsonb('completeness_snapshot'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [

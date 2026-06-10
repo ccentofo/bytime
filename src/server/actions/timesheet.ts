@@ -4,9 +4,10 @@ import { db } from '@/db';
 import { timesheetEntries, userAssignments, clins, contracts, slins, indirectChargeCodes } from '@/db/schema';
 import { eq, and, gte, lt, desc, sql } from 'drizzle-orm';
 import dayjs from 'dayjs';
-import { getNumDaysInPeriod } from '@/lib/date-utils';
+import { getNumDaysInPeriod, getPeriodStartForDate } from '@/lib/date-utils';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
 import { validateUUID, validateHours } from '@/lib/validation';
+import { getPeriodStatus } from '@/server/actions/periods';
 
 /**
  * Validate that a user has an active assignment to a specific CLIN.
@@ -28,6 +29,21 @@ async function validateClinAssignment(userId: string, clinId: string): Promise<v
 
   if (assignment.length === 0) {
     throw new Error(`Unauthorized: You are not assigned to CLIN ${clinId}. Cannot save timesheet entry.`);
+  }
+}
+
+/**
+ * Assert that a user's period is editable (draft or rejected).
+ * Throws if the period has been certified (submitted) or approved.
+ * This enforces DCAA audit-trail integrity: certified timesheets are immutable.
+ */
+async function assertPeriodEditable(userId: string, periodStart: Date): Promise<void> {
+  const info = await getPeriodStatus(userId, periodStart);
+  if (info.status !== 'draft' && info.status !== 'rejected') {
+    throw new Error(
+      `Cannot modify a ${info.status} timesheet. This period has been certified and is locked. ` +
+      `If a correction is required, the supervisor must reject the period first.`
+    );
   }
 }
 
@@ -225,6 +241,9 @@ export async function saveTimesheetBatch(data: {
   const today = dayjs().startOf('day');
   const newRevisions: Record<string, number> = {};
 
+  // Server-side guard: reject writes to a certified (submitted/approved) period
+  await assertPeriodEditable(data.userId, data.periodStart);
+
   // Validate userId and hours for all cells
   validateUUID(data.userId, 'User ID');
   for (const cell of data.cells) {
@@ -300,7 +319,31 @@ export async function saveTimesheetBatch(data: {
         )
       );
 
-    const nextRevision = (existing[0]?.maxRevision ?? 0) + 1;
+    const priorRevision = existing[0]?.maxRevision ?? 0;
+    const nextRevision = priorRevision + 1;
+
+    // Server-authoritative reason-code determination (ignore client flags).
+    // An entry is an EDIT if a prior revision exists.
+    // An entry is a LATE entry if it is the first revision for a past-dated cell.
+    const serverIsEdit = priorRevision > 0;
+    const serverIsLate =
+      priorRevision === 0 && dayjs(entryDate).isBefore(today, 'day');
+    const requiresReason = serverIsEdit || serverIsLate;
+
+    if (requiresReason) {
+      const code = (data.changeReasonCode ?? '').trim();
+      if (!code) {
+        const label = dayjs(entryDate).format('MMM D, YYYY');
+        throw new Error(
+          serverIsLate
+            ? `A reason code is required for the late entry on ${label}.`
+            : `A reason code is required to edit the entry on ${label}.`
+        );
+      }
+      const { REASON_CODES } = await import('@/lib/reason-codes');
+      const valid = REASON_CODES.some((rc) => rc.value === code);
+      if (!valid) throw new Error(`Invalid change reason code: ${code}`);
+    }
 
     await db.insert(timesheetEntries).values({
       userId: data.userId,
@@ -310,8 +353,8 @@ export async function saveTimesheetBatch(data: {
       entryDate,
       hours: cell.hours.toString(),
       revisionNumber: nextRevision,
-      changeReasonCode: (cell.isEdit || cell.isLateEntry) ? (data.changeReasonCode ?? undefined) : undefined,
-      comment: (cell.isEdit || cell.isLateEntry) ? (data.comment ?? undefined) : undefined,
+      changeReasonCode: requiresReason ? (data.changeReasonCode ?? undefined) : undefined,
+      comment: requiresReason ? (data.comment ?? undefined) : undefined,
       createdBy: data.userId,
     });
 
@@ -347,6 +390,9 @@ export async function saveTimesheetEntry(data: {
   changeReasonCode?: string;
   comment?: string;
 }): Promise<void> {
+  // Server-side guard: reject writes to a certified (submitted/approved) period.
+  await assertPeriodEditable(data.userId, getPeriodStartForDate(data.entryDate));
+
   // Validate CLIN assignment (DCAA RBAC enforcement)
   await validateClinAssignment(data.userId, data.clinId);
 
@@ -362,7 +408,14 @@ export async function saveTimesheetEntry(data: {
       )
     );
 
-  const nextRevision = (existing[0]?.maxRevision ?? 0) + 1;
+  const priorRevision = existing[0]?.maxRevision ?? 0;
+  const nextRevision = priorRevision + 1;
+
+  const isEdit = priorRevision > 0;
+  const isLate = priorRevision === 0 && dayjs(data.entryDate).isBefore(dayjs().startOf('day'), 'day');
+  if ((isEdit || isLate) && !(data.changeReasonCode ?? '').trim()) {
+    throw new Error('A reason code is required for edits and late entries.');
+  }
 
   await db.insert(timesheetEntries).values({
     userId: data.userId,
@@ -371,8 +424,8 @@ export async function saveTimesheetEntry(data: {
     entryDate: data.entryDate,
     hours: data.hours.toString(),
     revisionNumber: nextRevision,
-    changeReasonCode: nextRevision > 1 ? (data.changeReasonCode ?? 'CORRECTION') : undefined,
-    comment: data.comment,
+    changeReasonCode: (isEdit || isLate) ? (data.changeReasonCode ?? undefined) : undefined,
+    comment: (isEdit || isLate) ? (data.comment ?? undefined) : undefined,
     createdBy: data.userId,
   });
 }

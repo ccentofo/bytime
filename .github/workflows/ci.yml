@@ -82,7 +82,7 @@ jobs:
         run: npm ci
 
       - name: Run database migrations
-        run: npx drizzle-kit push
+        run: npm run db:deploy
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
 

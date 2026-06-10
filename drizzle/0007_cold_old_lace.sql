@@ -1,0 +1,1 @@
+ALTER TABLE "timesheet_periods" ADD COLUMN "completeness_snapshot" jsonb;

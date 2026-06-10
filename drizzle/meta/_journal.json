@@ -50,6 +50,13 @@
       "when": 1780678137150,
       "tag": "0006_aromatic_dark_phoenix",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1781108684266,
+      "tag": "0007_cold_old_lace",
+      "breakpoints": true
     }
   ]
 }

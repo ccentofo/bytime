@@ -75,6 +75,7 @@ export async function submitPeriod(data: {
   userId: string;
   periodStart: Date;
   comment?: string;
+  completeness?: unknown; // structured warnings snapshot from the client (advisory)
 }): Promise<PeriodInfo> {
   // Server-side validation: cannot submit before the last WEEKDAY of the period
   const lastWeekday = getLastWeekdayInPeriod(data.periodStart);
@@ -124,6 +125,7 @@ export async function submitPeriod(data: {
       submittedComment: data.comment,
       periodType: periodConfig.periodType,
       periodNumDays: snapshotNumDays,
+      completenessSnapshot: data.completeness ?? null,
     }).returning();
 
     return {
@@ -152,6 +154,7 @@ export async function submitPeriod(data: {
       reviewedAt: null,
       reviewedBy: null,
       reviewComment: null,
+      completenessSnapshot: data.completeness ?? null,
       updatedAt: new Date(),
     })
     .where(eq(timesheetPeriods.id, row.id))
