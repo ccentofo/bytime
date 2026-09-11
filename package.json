@@ -13,8 +13,15 @@
     "db:studio": "drizzle-kit studio",
     "db:check": "drizzle-kit check",
     "db:deploy": "tsx scripts/migrate.ts",
+    "db:generate:cp": "drizzle-kit generate --config=drizzle.control-plane.config.ts",
+    "db:migrate:cp": "drizzle-kit migrate --config=drizzle.control-plane.config.ts",
     "db:seed": "tsx scripts/seed-users.ts",
     "db:seed:full": "tsx scripts/seed-full.ts",
+    "seed:tenant": "tsx scripts/seed-tenant.ts",
+    "seed:demo": "tsx scripts/seed-demo.ts",
+    "demo:local": "bash scripts/setup-local-demo.sh",
+    "stress:isolation": "tsx scripts/stress-isolation.ts",
+    "provision:tenant": "tsx scripts/provision-tenant.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -22,6 +29,7 @@
     "test:all": "vitest run && vitest run --config vitest.config.integration.ts"
   },
   "dependencies": {
+    "stripe": "^17.0.0",
     "@mantine/core": "^9.2.1",
     "@mantine/dates": "^9.2.1",
     "@mantine/hooks": "^9.2.1",

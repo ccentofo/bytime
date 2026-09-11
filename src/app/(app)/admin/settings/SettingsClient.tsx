@@ -13,15 +13,18 @@ import {
   Button,
   Alert,
   ThemeIcon,
+  Badge,
 } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
-import { IconSettings, IconAlertCircle, IconCheck } from '@tabler/icons-react';
+import { IconSettings, IconAlertCircle, IconCheck, IconClock } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
-import { updatePayPeriodConfig } from '@/server/actions/pay-period-config';
+import { updatePayPeriodConfig, type ConfigHistoryRow, type UpdatePayPeriodConfigResult } from '@/server/actions/pay-period-config';
 import type { PeriodConfig, PeriodType } from '@/lib/date-utils';
+import dayjs from 'dayjs';
 
 interface Props {
   initialConfig: PeriodConfig;
+  pendingChange: ConfigHistoryRow | null;
 }
 
 const PERIOD_TYPE_OPTIONS = [
@@ -36,11 +39,21 @@ const WEEK_START_OPTIONS = [
   { value: '1', label: 'Monday' },
 ];
 
-export function SettingsClient({ initialConfig }: Props) {
+const PERIOD_TYPE_LABELS: Record<string, string> = {
+  weekly: 'Weekly',
+  biweekly: 'Bi-Weekly',
+  semimonthly: 'Semi-Monthly',
+  monthly: 'Monthly',
+};
+
+export function SettingsClient({ initialConfig, pendingChange }: Props) {
   const [periodType, setPeriodType] = useState<PeriodType>(initialConfig.periodType);
   const [anchorDate, setAnchorDate] = useState<Date | null>(initialConfig.anchorDate);
   const [weekStartDay, setWeekStartDay] = useState<string>(String(initialConfig.weekStartDay));
   const [isPending, startTransition] = useTransition();
+  const [scheduledEffectiveFrom, setScheduledEffectiveFrom] = useState<Date | null>(
+    pendingChange ? pendingChange.effectiveFrom : null
+  );
 
   async function handleSave() {
     if (!anchorDate) {
@@ -50,16 +63,18 @@ export function SettingsClient({ initialConfig }: Props) {
 
     startTransition(async () => {
       try {
-        await updatePayPeriodConfig({
+        const result: UpdatePayPeriodConfigResult = await updatePayPeriodConfig({
           periodType,
           anchorDate,
           weekStartDay: parseInt(weekStartDay, 10),
         });
+        setScheduledEffectiveFrom(result.effectiveFrom);
         notifications.show({
-          title: 'Settings saved',
-          message: 'Pay period configuration updated. New periods will use the updated schedule.',
+          title: 'Schedule change saved',
+          message: `Your new ${PERIOD_TYPE_LABELS[periodType]} schedule takes effect ${dayjs(result.effectiveFrom).format('MMM D, YYYY')}. Current and past periods are unchanged.`,
           color: 'green',
           icon: <IconCheck size={16} />,
+          autoClose: 8000,
         });
       } catch (error) {
         notifications.show({ title: 'Save failed', message: String(error), color: 'red' });
@@ -81,10 +96,24 @@ export function SettingsClient({ initialConfig }: Props) {
       <Paper withBorder p="lg" radius="md" mb="xl">
         <Title order={4} mb="md">Pay Period Configuration</Title>
 
+        {/* Pending change banner */}
+        {scheduledEffectiveFrom && (
+          <Alert icon={<IconClock size={16} />} color="blue" variant="light" mb="lg">
+            <Group gap="xs">
+              <Text size="sm">
+                <strong>Scheduled change:</strong> Your new {PERIOD_TYPE_LABELS[periodType] ?? periodType} schedule
+                takes effect <strong>{dayjs(scheduledEffectiveFrom).format('MMM D, YYYY')}</strong>.
+                Current and past periods are unchanged.
+              </Text>
+              <Badge color="blue" variant="light" size="sm">Pending</Badge>
+            </Group>
+          </Alert>
+        )}
+
         <Alert icon={<IconAlertCircle size={16} />} color="yellow" variant="light" mb="lg">
           <Text size="sm">
-            <strong>Warning:</strong> Changing the pay period type only affects future periods.
-            Historical timesheet data is preserved and remains valid.
+            <strong>Future-effective only.</strong> Changes apply starting at the next period boundary —
+            the current period and all historical data are preserved. You cannot set a retroactive schedule.
           </Text>
         </Alert>
 
@@ -134,13 +163,15 @@ export function SettingsClient({ initialConfig }: Props) {
           )}
 
           <Group>
-            <Button
-              onClick={handleSave}
-              loading={isPending}
-            >
-              Save Settings
+            <Button onClick={handleSave} loading={isPending}>
+              Save Schedule Change
             </Button>
           </Group>
+
+          <Text size="xs" c="dimmed">
+            The change will take effect at the start of the next pay period. You can update this
+            setting again before it takes effect — your most recent save replaces any pending change.
+          </Text>
         </Stack>
       </Paper>
     </Container>

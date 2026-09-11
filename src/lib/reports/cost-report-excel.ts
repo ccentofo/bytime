@@ -11,7 +11,7 @@ export async function generateCostReportExcel(
   dateRange: string
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'ByTime';
+  workbook.creator = 'CadenzPoint';
   workbook.created = new Date();
 
   // --- Sheet 1: Detailed Entries ---
@@ -93,7 +93,7 @@ export async function generateEmployeeSummaryExcel(
   dateRange: string
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'ByTime';
+  workbook.creator = 'CadenzPoint';
   workbook.created = new Date();
 
   const sheet = workbook.addWorksheet('Employee Summary');

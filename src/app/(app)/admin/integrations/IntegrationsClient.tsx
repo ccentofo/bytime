@@ -82,7 +82,7 @@ export function IntegrationsClient({ initialConnections, availableConnectors }: 
             <Title order={2}>Integrations</Title>
           </Group>
           <Text c="dimmed" size="sm">
-            Connect ByTime to your accounting and payroll systems.
+            Connect CadenzPoint to your accounting and payroll systems.
           </Text>
         </div>
       </Group>

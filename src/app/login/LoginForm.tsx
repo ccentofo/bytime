@@ -6,18 +6,17 @@ import {
   Center,
   Stack,
   Paper,
-  Title,
   TextInput,
   PasswordInput,
   Button,
   Alert,
-  Avatar,
   Text,
   Anchor,
 } from '@mantine/core';
 import { IconAlertCircle, IconLock } from '@tabler/icons-react';
 import { signIn } from 'next-auth/react';
 import { checkLockout } from '@/server/actions/login-attempts';
+import { Logo } from '@/components/brand/Logo';
 
 export function LoginForm() {
   const router = useRouter();
@@ -95,8 +94,7 @@ export function LoginForm() {
     <Center mih="100vh" bg="var(--mantine-color-body)">
       <Paper shadow="md" p="xl" radius="md" w={420} withBorder>
         <Stack align="center" mb="lg">
-          <Avatar src="/logo.png" size="lg" radius="sm" />
-          <Title order={2}>ByTime</Title>
+          <Logo size="lg" />
           <Text c="dimmed" size="sm">
             DCAA-Compliant Timekeeping
           </Text>

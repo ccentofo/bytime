@@ -81,30 +81,32 @@ export function ReasonModal({
     return (
       <>
         <Text fw={600} size="sm">{label}:</Text>
-        <Table striped withTableBorder>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>Charge Code</Table.Th>
-              <Table.Th>Date</Table.Th>
-              <Table.Th>New Hours</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {cells.map((cell, idx) => {
-              const cc = chargeCodes.find((c) => c.id === cell.chargeCodeId);
-              const date = dayjs(periodStart).add(cell.dayIndex, 'day');
-              return (
-                <Table.Tr key={idx}>
-                  <Table.Td>{cc?.clin ?? cell.chargeCodeId} — {cc?.projectName ?? ''}</Table.Td>
-                  <Table.Td>{date.format('MMM D, YYYY')}</Table.Td>
-                  <Table.Td>
-                    <Badge color={badgeColor} variant="light">{cell.hours.toFixed(2)}</Badge>
-                  </Table.Td>
-                </Table.Tr>
-              );
-            })}
-          </Table.Tbody>
-        </Table>
+        <Table.ScrollContainer minWidth={500}>
+          <Table striped withTableBorder>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Charge Code</Table.Th>
+                <Table.Th>Date</Table.Th>
+                <Table.Th>New Hours</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {cells.map((cell, idx) => {
+                const cc = chargeCodes.find((c) => c.id === cell.chargeCodeId);
+                const date = dayjs(periodStart).add(cell.dayIndex, 'day');
+                return (
+                  <Table.Tr key={idx}>
+                    <Table.Td>{cc?.clin ?? cell.chargeCodeId} — {cc?.projectName ?? ''}</Table.Td>
+                    <Table.Td>{date.format('MMM D, YYYY')}</Table.Td>
+                    <Table.Td>
+                      <Badge color={badgeColor} variant="light">{cell.hours.toFixed(2)}</Badge>
+                    </Table.Td>
+                  </Table.Tr>
+                );
+              })}
+            </Table.Tbody>
+          </Table>
+        </Table.ScrollContainer>
       </>
     );
   }

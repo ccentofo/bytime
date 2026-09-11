@@ -1,12 +1,13 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { slins } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
 import { validateSlinNumber, validateOptionalString, validateMonetaryValue } from '@/lib/validation';
 
 export async function getSlinsByClin(clinId: string) {
+  const db = await getDb();
   return db.select().from(slins).where(eq(slins.clinId, clinId)).orderBy(slins.slinNumber);
 }
 
@@ -16,6 +17,7 @@ export async function createSlin(data: {
   description?: string;
   fundedAmount?: string;
 }) {
+  const db = await getDb();
   await requireAdmin();
   const validatedData = {
     clinId: data.clinId,
@@ -33,6 +35,7 @@ export async function updateSlin(id: string, data: {
   fundedAmount?: string;
   status?: 'active' | 'inactive' | 'closed';
 }) {
+  const db = await getDb();
   await requireAdmin();
   const validatedData: Record<string, unknown> = { updatedAt: new Date() };
   if (data.slinNumber !== undefined) validatedData.slinNumber = validateSlinNumber(data.slinNumber);

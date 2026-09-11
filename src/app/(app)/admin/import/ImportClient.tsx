@@ -151,39 +151,41 @@ function ImportWizard({
           </Group>
 
           {parseResult.rows.length > 0 && (
-            <Paper withBorder radius="sm" style={{ overflowX: 'auto', maxHeight: 300, overflowY: 'auto' }}>
-              <Table striped>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Row</Table.Th>
-                    <Table.Th>Status</Table.Th>
-                    {parseResult.headers.map((h) => (
-                      <Table.Th key={h}>{h}</Table.Th>
-                    ))}
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {parseResult.rows.map((row) => (
-                    <Table.Tr key={row.rowIndex}>
-                      <Table.Td>{row.rowIndex}</Table.Td>
-                      <Table.Td>
-                        {row.isValid ? (
-                          <Badge color="green" size="xs" variant="light">Valid</Badge>
-                        ) : (
-                          <Badge color="red" size="xs" variant="light" title={row.errors.join(', ')}>
-                            Error
-                          </Badge>
-                        )}
-                      </Table.Td>
+            <Paper withBorder radius="sm" style={{ maxHeight: 300, overflowY: 'auto' }}>
+              <Table.ScrollContainer minWidth={500}>
+                <Table striped>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Row</Table.Th>
+                      <Table.Th>Status</Table.Th>
                       {parseResult.headers.map((h) => (
-                        <Table.Td key={h} style={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {row.data[h] ?? ''}
-                        </Table.Td>
+                        <Table.Th key={h}>{h}</Table.Th>
                       ))}
                     </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {parseResult.rows.map((row) => (
+                      <Table.Tr key={row.rowIndex}>
+                        <Table.Td>{row.rowIndex}</Table.Td>
+                        <Table.Td>
+                          {row.isValid ? (
+                            <Badge color="green" size="xs" variant="light">Valid</Badge>
+                          ) : (
+                            <Badge color="red" size="xs" variant="light" title={row.errors.join(', ')}>
+                              Error
+                            </Badge>
+                          )}
+                        </Table.Td>
+                        {parseResult.headers.map((h) => (
+                          <Table.Td key={h} style={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {row.data[h] ?? ''}
+                          </Table.Td>
+                        ))}
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
             </Paper>
           )}
 

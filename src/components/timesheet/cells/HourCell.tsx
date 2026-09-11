@@ -5,13 +5,26 @@ import { ActionIcon, NumberInput, Text } from '@mantine/core';
 import { IconNote } from '@tabler/icons-react';
 import { useTimesheet } from '@/components/timesheet/TimesheetContext';
 import dayjs from 'dayjs';
+import type { Density } from '../BiWeeklyTable';
 
 interface HourCellProps {
   chargeCodeId: string;
   dayIndex: number;
+  density?: Density;
 }
 
-export function HourCell({ chargeCodeId, dayIndex }: HourCellProps) {
+function formatHours(value: number, density: Density): string {
+  if (value === 0) return '—';
+  if (density === 'dense') {
+    // Integers plain, fractions compact (no trailing zeros)
+    if (value === Math.floor(value)) return String(Math.floor(value));
+    // Show minimal decimals: 8.5 not 8.50, 8.25 as 8.25
+    return value % 0.5 === 0 ? value.toFixed(1) : value.toFixed(2);
+  }
+  return value.toFixed(2);
+}
+
+export function HourCell({ chargeCodeId, dayIndex, density = 'comfortable' }: HourCellProps) {
   const { state, dispatch } = useTimesheet();
   const isEditable = state.periodStatus === 'draft' || state.periodStatus === 'rejected';
   const [isEditing, setIsEditing] = useState(false);
@@ -21,32 +34,24 @@ export function HourCell({ chargeCodeId, dayIndex }: HourCellProps) {
   const entry = state.entries.find((e) => e.chargeCodeId === chargeCodeId);
   const value = entry ? ((entry.hours ?? [])[dayIndex] ?? 0) : 0;
 
-  // Check if this cell is dirty (unsaved changes)
   const savedEntry = state.savedEntries.find((e) => e.chargeCodeId === chargeCodeId);
   const savedValue = savedEntry ? ((savedEntry.hours ?? [])[dayIndex] ?? 0) : 0;
   const isDirty = value !== savedValue;
 
-  // Future date detection
   const cellDate = dayjs(state.periodStart).add(dayIndex, 'day');
   const isFutureDate = cellDate.isAfter(dayjs(), 'day');
 
   const noteKey = `${chargeCodeId}-${dayIndex}`;
   const hasNote = Boolean(state.notes[noteKey]);
-
   const cellId = `cell-${chargeCodeId}-${dayIndex}`;
 
   const handleClick = () => {
-    if (!isEditable) return; // Period is locked (submitted/approved)
-    if (isFutureDate) return; // Cannot enter hours for future dates
+    if (!isEditable || isFutureDate) return;
     setLocalValue(value);
     setIsEditing(true);
-    // Focus the input on the next animation frame — after React renders the NumberInput
     requestAnimationFrame(() => {
       const input = document.getElementById(cellId)?.querySelector('input');
-      if (input) {
-        input.focus();
-        input.select();
-      }
+      if (input) { input.focus(); input.select(); }
     });
   };
 
@@ -54,7 +59,6 @@ export function HourCell({ chargeCodeId, dayIndex }: HourCellProps) {
     const numVal = typeof localValue === 'number' ? localValue : parseFloat(String(localValue)) || 0;
     dispatch({ type: 'SET_HOURS', chargeCodeId, dayIndex, value: numVal });
     setIsEditing(false);
-    // NO auto-save — user must click the Save button
   };
 
   const handleNoteClick = (e: React.MouseEvent) => {
@@ -63,6 +67,9 @@ export function HourCell({ chargeCodeId, dayIndex }: HourCellProps) {
   };
 
   const showNoteIcon = isHovered || hasNote;
+  const isDense = density === 'dense';
+  const minHeight = isDense ? 24 : 32;
+  const fontSize = isDense ? 10 : undefined;
 
   return (
     <div
@@ -70,13 +77,16 @@ export function HourCell({ chargeCodeId, dayIndex }: HourCellProps) {
       style={{
         position: 'relative',
         width: '100%',
-        minHeight: 32,
+        minHeight,
         backgroundColor: isDirty
           ? 'light-dark(var(--mantine-color-yellow-0), var(--mantine-color-yellow-9))'
           : undefined,
         borderRadius: isDirty ? 2 : undefined,
         cursor: isEditable && !isFutureDate ? 'text' : 'default',
-        opacity: isFutureDate ? 0.4 : isEditable ? 1 : undefined,
+        opacity: isFutureDate ? 0.4 : 1,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
       }}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
@@ -93,20 +103,36 @@ export function HourCell({ chargeCodeId, dayIndex }: HourCellProps) {
           fixedDecimalScale
           hideControls
           variant="unstyled"
-          style={{ width: 60, textAlign: 'center' }}
-          styles={{ input: { textAlign: 'center', padding: 0, color: 'var(--mantine-color-text)' } }}
+          style={{ width: isDense ? 36 : 52, textAlign: 'center' }}
+          styles={{
+            input: {
+              textAlign: 'center',
+              padding: 0,
+              fontSize: isDense ? 10 : undefined,
+              color: 'var(--mantine-color-text)',
+              fontVariantNumeric: 'tabular-nums',
+            },
+          }}
           autoFocus
           onFocus={(e) => e.target.select()}
           onBlur={handleBlur}
           onChange={(val) => setLocalValue(val)}
         />
       ) : (
-        <Text ta="center" size="sm" style={{ lineHeight: '32px' }}>
-          {value === 0 ? '—' : (value ?? 0).toFixed(2)}
+        <Text
+          ta="center"
+          size={isDense ? 'xs' : 'sm'}
+          style={{
+            lineHeight: `${minHeight}px`,
+            fontSize,
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          {formatHours(value, density)}
         </Text>
       )}
 
-      {showNoteIcon && (
+      {showNoteIcon && !isDense && (
         <ActionIcon
           variant="subtle"
           size="xs"
@@ -117,6 +143,20 @@ export function HourCell({ chargeCodeId, dayIndex }: HourCellProps) {
         >
           <IconNote size={12} />
         </ActionIcon>
+      )}
+      {showNoteIcon && isDense && hasNote && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 2,
+            right: 2,
+            width: 4,
+            height: 4,
+            borderRadius: '50%',
+            backgroundColor: 'var(--mantine-color-blue-5)',
+          }}
+          aria-label="Has note"
+        />
       )}
     </div>
   );

@@ -1,10 +1,12 @@
 'use client';
 
-import { Badge, Stack, Text } from '@mantine/core';
+import { Badge, Stack, Text, Tooltip } from '@mantine/core';
 import type { ChargeCode } from '@/types/timesheet';
+import type { Density } from '../BiWeeklyTable';
 
 interface ChargeCodeCellProps {
   chargeCode: ChargeCode;
+  density?: Density;
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -16,26 +18,66 @@ const CATEGORY_COLORS: Record<string, string> = {
   unallowable: 'red',
 };
 
-export function ChargeCodeCell({ chargeCode }: ChargeCodeCellProps) {
-  return (
-    <Stack gap={4}>
-      <Text fw={700} size="sm">
-        {chargeCode.projectName}
+const LOCATION_COLORS: Record<string, string> = {
+  onsite: 'blue',
+  telework: 'teal',
+  other: 'gray',
+};
+
+export function ChargeCodeCell({ chargeCode, density = 'comfortable' }: ChargeCodeCellProps) {
+  const isDense = density === 'dense';
+  const descFontSize = isDense ? 10 : undefined;
+
+  // For direct codes: description = the charge code name; clin = the code string; projectName = contract name
+  // For indirect codes: unchanged
+  const primaryLabel = chargeCode.isIndirect ? chargeCode.projectName : chargeCode.description;
+  const codeLabel = chargeCode.clin; // charge_codes.code for direct, indirect code for indirect
+  const secondaryLabel = chargeCode.isIndirect ? null : chargeCode.projectName; // contract name as context
+
+  const descElement = isDense && secondaryLabel ? (
+    <Tooltip label={secondaryLabel} withArrow multiline maw={260} position="right">
+      <Text c="dimmed" size="xs" style={{ fontSize: descFontSize, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%', cursor: 'default' }}>
+        {secondaryLabel}
       </Text>
-      <Badge variant="light" size="sm" color={chargeCode.isIndirect ? (CATEGORY_COLORS[chargeCode.indirectCategory ?? ''] ?? 'gray') : undefined}>
-        {chargeCode.clin}{chargeCode.slinNumber ? ` / ${chargeCode.slinNumber}` : ''}
+    </Tooltip>
+  ) : secondaryLabel ? (
+    <Text c="dimmed" size="xs">{secondaryLabel}</Text>
+  ) : null;
+
+  return (
+    <Stack gap={isDense ? 2 : 4}>
+      <Text fw={700} size={isDense ? 'xs' : 'sm'}
+        style={isDense ? { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } : undefined}>
+        {primaryLabel}
+      </Text>
+      <Badge
+        variant="light"
+        size={isDense ? 'xs' : 'sm'}
+        color={chargeCode.isIndirect ? (CATEGORY_COLORS[chargeCode.indirectCategory ?? ''] ?? 'gray') : 'ink'}
+      >
+        {codeLabel}{chargeCode.slinNumber ? ` / ${chargeCode.slinNumber}` : ''}
       </Badge>
+
+      {/* Work-location badge for direct codes */}
+      {!chargeCode.isIndirect && chargeCode.workLocation && (
+        <Badge size="xs" variant="light" color={LOCATION_COLORS[chargeCode.workLocation] ?? 'gray'}>
+          {chargeCode.workLocation}
+        </Badge>
+      )}
+
       {chargeCode.isIndirect && chargeCode.indirectCategory && (
         <Badge size="xs" variant="light" color={CATEGORY_COLORS[chargeCode.indirectCategory] ?? 'gray'}>
           {chargeCode.indirectCategory.toUpperCase()}
         </Badge>
       )}
+
       {chargeCode.slinNumber && !chargeCode.isIndirect && (
-        <Text size="xs" c="dimmed">SLIN: {chargeCode.slinNumber}</Text>
+        <Text size="xs" c="dimmed" style={isDense ? { fontSize: 10 } : undefined}>
+          SLIN: {chargeCode.slinNumber}
+        </Text>
       )}
-      <Text c="dimmed" size="xs">
-        {chargeCode.description}
-      </Text>
+
+      {descElement}
     </Stack>
   );
 }

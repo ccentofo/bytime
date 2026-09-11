@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { integrationConnections, users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
@@ -12,6 +12,7 @@ import { executeSyncOperation } from '@/lib/integrations/sync-engine';
  */
 export async function fetchGustoEmployeesForMapping(connectionId: string) {
   await requireAdmin();
+  const db = await getDb();
   const accessToken = await ensureValidGustoToken(connectionId);
 
   const [connection] = await db
@@ -29,6 +30,7 @@ export async function fetchGustoEmployeesForMapping(connectionId: string) {
  */
 export async function getBytimeEmployeesForGustoMapping() {
   await requireAdmin();
+  const db = await getDb();
   return db
     .select({ id: users.id, fullName: users.fullName, email: users.email })
     .from(users)

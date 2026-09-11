@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { timesheetPeriods, users, timesheetEntries } from '@/db/schema';
 import { eq, and, inArray, gte, lt, sql } from 'drizzle-orm';
 import { getSupervisedEmployeeIds } from '@/server/actions/supervisor-scope';
@@ -9,7 +9,7 @@ import { isNotificationEnabled } from '@/server/actions/notifications';
 import dayjs from 'dayjs';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 import { getNumDaysInPeriod, getLastWeekdayInPeriod } from '@/lib/date-utils';
-import { getPayPeriodConfig } from '@/server/actions/pay-period-config';
+import { getEffectiveConfigAt } from '@/server/actions/pay-period-config';
 
 dayjs.extend(isSameOrAfter);
 
@@ -31,6 +31,7 @@ export interface PeriodInfo {
  * Returns draft if no record exists yet.
  */
 export async function getPeriodStatus(userId: string, periodStart: Date): Promise<PeriodInfo> {
+  const db = await getDb();
   const rows = await db
     .select()
     .from(timesheetPeriods)
@@ -77,15 +78,20 @@ export async function submitPeriod(data: {
   comment?: string;
   completeness?: unknown; // structured warnings snapshot from the client (advisory)
 }): Promise<PeriodInfo> {
+  const db = await getDb();
+
+  // Resolve the config that was in effect for this specific period
+  const periodConfig = await getEffectiveConfigAt(data.periodStart);
+
   // Server-side validation: cannot submit before the last WEEKDAY of the period
-  const lastWeekday = getLastWeekdayInPeriod(data.periodStart);
+  const lastWeekday = getLastWeekdayInPeriod(data.periodStart, periodConfig);
   const periodEndDate = dayjs(lastWeekday);
   if (!dayjs().isSameOrAfter(periodEndDate, 'day')) {
     throw new Error(`Cannot submit before the last day of the pay period (${periodEndDate.format('MMM D, YYYY')}).`);
   }
 
   // Server-side validation: cannot submit a completely empty timesheet
-  const numDays = getNumDaysInPeriod(data.periodStart);
+  const numDays = getNumDaysInPeriod(data.periodStart, periodConfig);
   const periodEndExclusive = dayjs(data.periodStart).add(numDays, 'day').toDate();
   const entryCount = await db
     .select({ count: sql<number>`COUNT(*)` })
@@ -113,8 +119,8 @@ export async function submitPeriod(data: {
     );
 
   if (existing.length === 0) {
-    // Create new period record — snapshot the current period config
-    const periodConfig = await getPayPeriodConfig();
+    // Create new period record — snapshot the effective config at this period's start date
+    // (full config stored as audit record; periodConfig already resolved above)
     const snapshotNumDays = getNumDaysInPeriod(data.periodStart, periodConfig);
 
     const rows = await db.insert(timesheetPeriods).values({
@@ -172,7 +178,7 @@ export async function submitPeriod(data: {
   };
 
   // Fire-and-forget: notify supervisor(s) via email
-  const periodEnd = dayjs(data.periodStart).add(getNumDaysInPeriod(data.periodStart) - 1, 'day');
+  const periodEnd = dayjs(data.periodStart).add(getNumDaysInPeriod(data.periodStart, periodConfig) - 1, 'day');
   const periodLabel = `${dayjs(data.periodStart).format('MMM D')} – ${periodEnd.format('MMM D, YYYY')}`;
 
   const [employee] = await db
@@ -217,6 +223,7 @@ export async function approvePeriod(data: {
   reviewedBy: string;
   comment?: string;
 }): Promise<void> {
+  const db = await getDb();
   const existing = await db
     .select()
     .from(timesheetPeriods)
@@ -261,7 +268,7 @@ export async function approvePeriod(data: {
   if (employee) {
     const enabled = await isNotificationEnabled(period.userId, 'emailOnApprove');
     if (enabled) {
-      const periodEnd = dayjs(period.periodStart).add(getNumDaysInPeriod(period.periodStart) - 1, 'day');
+      const periodEnd = dayjs(period.periodStart).add((period.periodNumDays ?? getNumDaysInPeriod(period.periodStart)) - 1, 'day');
       const periodLabel = `${dayjs(period.periodStart).format('MMM D')} – ${periodEnd.format('MMM D, YYYY')}`;
 
       sendTimesheetApprovedEmail({
@@ -284,6 +291,7 @@ export async function rejectPeriod(data: {
   reviewedBy: string;
   comment: string; // Required for rejections
 }): Promise<void> {
+  const db = await getDb();
   const existing = await db
     .select()
     .from(timesheetPeriods)
@@ -328,7 +336,7 @@ export async function rejectPeriod(data: {
   if (employee) {
     const enabled = await isNotificationEnabled(period.userId, 'emailOnReject');
     if (enabled) {
-      const periodEnd = dayjs(period.periodStart).add(getNumDaysInPeriod(period.periodStart) - 1, 'day');
+      const periodEnd = dayjs(period.periodStart).add((period.periodNumDays ?? getNumDaysInPeriod(period.periodStart)) - 1, 'day');
       const periodLabel = `${dayjs(period.periodStart).format('MMM D')} – ${periodEnd.format('MMM D, YYYY')}`;
 
       sendTimesheetRejectedEmail({
@@ -355,6 +363,7 @@ export async function getPendingApprovals(): Promise<Array<{
   status: PeriodStatus;
   submittedAt: Date | null;
 }>> {
+  const db = await getDb();
   const rows = await db
     .select({
       id: timesheetPeriods.id,
@@ -391,6 +400,7 @@ export async function getScopedPeriods(
   submittedAt: Date | null;
   reviewedAt: Date | null;
 }>> {
+  const db = await getDb();
   if (scopedEmployeeIds === 'all') {
     // Admin — return all periods (existing behavior)
     return getAllPeriods();
@@ -433,6 +443,7 @@ export async function getScopedPendingApprovals(
   status: PeriodStatus;
   submittedAt: Date | null;
 }>> {
+  const db = await getDb();
   if (scopedEmployeeIds === 'all') {
     return getPendingApprovals();
   }
@@ -468,6 +479,7 @@ export async function getScopedPendingApprovals(
  * Get all timesheet periods for a supervisor to review (all statuses).
  */
 async function getReviewerRole(userId: string): Promise<string> {
+  const db = await getDb();
   const [user] = await db
     .select({ role: users.role })
     .from(users)
@@ -485,6 +497,7 @@ export async function getAllPeriods(): Promise<Array<{
   submittedAt: Date | null;
   reviewedAt: Date | null;
 }>> {
+  const db = await getDb();
   const rows = await db
     .select({
       id: timesheetPeriods.id,

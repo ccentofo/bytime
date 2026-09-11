@@ -1,0 +1,291 @@
+'use client';
+
+import { useState, useTransition } from 'react';
+import {
+  Button, Modal, TextInput, Textarea, Select, Group, Stack, Title,
+  Badge, Switch, ActionIcon, Text,
+} from '@mantine/core';
+import { notifications } from '@mantine/notifications';
+import { IconPlus, IconEdit, IconBolt } from '@tabler/icons-react';
+import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import {
+  createChargeCode, updateChargeCode, deactivateChargeCode,
+  autobridgeChargeCodesFromClins, createCostClass, listChargeCodes,
+} from '@/server/actions/charge-codes';
+
+type ChargeCodeRow = {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  clinId: string;
+  clinNumber: string;
+  slinId: string | null;
+  contractName: string;
+  contractNumber: string;
+  laborCategoryId: string | null;
+  classId: string | null;
+  className: string | null;
+  workLocation: 'onsite' | 'telework' | 'other' | null;
+  billable: boolean;
+  isActive: boolean;
+  createdAt: Date;
+};
+
+type ClinOption = { id: string; clinNumber: string; description: string | null };
+type ContractOption = { id: string; name: string; contractNumber: string; clins: ClinOption[] };
+
+type Props = {
+  initialCodes: ChargeCodeRow[];
+  costClasses: Array<{ id: string; name: string }>;
+  contracts: ContractOption[];
+};
+
+type CodeForm = {
+  code: string;
+  name: string;
+  description: string;
+  contractId: string;
+  clinId: string;
+  classId: string;
+  workLocation: string;
+  billable: boolean;
+};
+
+const EMPTY_FORM: CodeForm = {
+  code: '', name: '', description: '',
+  contractId: '', clinId: '', classId: '',
+  workLocation: '', billable: true,
+};
+
+const WORK_LOCATION_OPTIONS = [
+  { value: '', label: 'Not specified' },
+  { value: 'onsite', label: 'Onsite' },
+  { value: 'telework', label: 'Telework' },
+  { value: 'other', label: 'Other' },
+];
+
+const LOCATION_COLORS: Record<string, string> = { onsite: 'blue', telework: 'teal', other: 'gray' };
+
+export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Props) {
+  const [codes, setCodes] = useState(initialCodes);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<CodeForm>(EMPTY_FORM);
+  const [isPending, startTransition] = useTransition();
+  const [newClassName, setNewClassName] = useState('');
+  const [classList, setClassList] = useState(costClasses);
+
+  async function refreshCodes() {
+    const fresh = await listChargeCodes();
+    setCodes(fresh as ChargeCodeRow[]);
+  }
+
+  function openCreate() {
+    setEditingId(null);
+    setForm(EMPTY_FORM);
+    setModalOpen(true);
+  }
+
+  function openEdit(row: ChargeCodeRow) {
+    // Find the contract for this code's CLIN
+    const contract = contracts.find((c) => c.clins.some((cl) => cl.id === row.clinId));
+    setEditingId(row.id);
+    setForm({
+      code: row.code,
+      name: row.name,
+      description: row.description ?? '',
+      contractId: contract?.id ?? '',
+      clinId: row.clinId,
+      classId: row.classId ?? '',
+      workLocation: row.workLocation ?? '',
+      billable: row.billable,
+    });
+    setModalOpen(true);
+  }
+
+  async function handleSave() {
+    if (!form.code.trim() || !form.name.trim() || !form.clinId) {
+      notifications.show({ title: 'Required fields missing', message: 'Code, Name, and CLIN are required.', color: 'red' });
+      return;
+    }
+    startTransition(async () => {
+      try {
+        if (editingId) {
+          await updateChargeCode(editingId, {
+            code: form.code.trim(), name: form.name.trim(),
+            description: form.description || undefined,
+            clinId: form.clinId, classId: form.classId || null,
+            workLocation: (form.workLocation as 'onsite' | 'telework' | 'other') || null,
+            billable: form.billable,
+          });
+          notifications.show({ title: 'Updated', message: `${form.code} updated.`, color: 'green' });
+        } else {
+          await createChargeCode({
+            code: form.code.trim(), name: form.name.trim(),
+            description: form.description || undefined,
+            clinId: form.clinId, classId: form.classId || undefined,
+            workLocation: (form.workLocation as 'onsite' | 'telework' | 'other') || undefined,
+            billable: form.billable,
+          });
+          notifications.show({ title: 'Created', message: `${form.code} created.`, color: 'green' });
+        }
+        setModalOpen(false);
+        await refreshCodes();
+      } catch (e) {
+        notifications.show({ title: 'Error', message: String(e), color: 'red' });
+      }
+    });
+  }
+
+  async function handleDeactivate(id: string, code: string) {
+    startTransition(async () => {
+      await deactivateChargeCode(id);
+      notifications.show({ title: 'Deactivated', message: `${code} deactivated.`, color: 'orange' });
+      await refreshCodes();
+    });
+  }
+
+  async function handleAutobridge() {
+    startTransition(async () => {
+      try {
+        const result = await autobridgeChargeCodesFromClins();
+        notifications.show({ title: 'Auto-generated', message: `Created ${result.created} charge code(s) from ${result.total} active CLINs.`, color: 'green' });
+        await refreshCodes();
+      } catch (e) {
+        notifications.show({ title: 'Error', message: String(e), color: 'red' });
+      }
+    });
+  }
+
+  async function handleAddClass() {
+    if (!newClassName.trim()) return;
+    startTransition(async () => {
+      const created = await createCostClass(newClassName.trim());
+      if (created) {
+        setClassList([...classList, { id: created.id, name: created.name }]);
+        setForm((f) => ({ ...f, classId: created.id }));
+        setNewClassName('');
+        notifications.show({ title: 'Class added', message: created.name, color: 'green' });
+      }
+    });
+  }
+
+  const selectedContract = contracts.find((c) => c.id === form.contractId);
+  const clinOptions = selectedContract?.clins.map((cl) => ({
+    value: cl.id, label: `${cl.clinNumber}${cl.description ? ` — ${cl.description}` : ''}`,
+  })) ?? [];
+
+  const columns: MRT_ColumnDef<ChargeCodeRow>[] = [
+    { accessorKey: 'code', header: 'Code', size: 160 },
+    { accessorKey: 'name', header: 'Name', size: 200 },
+    {
+      id: 'contract',
+      header: 'Contract / CLIN',
+      accessorFn: (r) => `${r.contractNumber} / ${r.clinNumber}`,
+      size: 180,
+    },
+    {
+      accessorKey: 'className',
+      header: 'Class',
+      Cell: ({ cell }) => cell.getValue() ? <Badge variant="light" color="violet">{cell.getValue<string>()}</Badge> : null,
+    },
+    {
+      accessorKey: 'workLocation',
+      header: 'Location',
+      Cell: ({ cell }) => {
+        const loc = cell.getValue<string | null>();
+        return loc ? <Badge color={LOCATION_COLORS[loc] ?? 'gray'} variant="light">{loc}</Badge> : null;
+      },
+    },
+    {
+      accessorKey: 'isActive',
+      header: 'Active',
+      Cell: ({ cell }) => <Badge color={cell.getValue() ? 'green' : 'gray'} variant="light">{cell.getValue() ? 'Active' : 'Inactive'}</Badge>,
+    },
+  ];
+
+  const table = useMantineReactTable({
+    columns, data: codes,
+    enableRowActions: true, positionActionsColumn: 'last',
+    renderRowActions: ({ row }) => (
+      <Group gap="xs">
+        <ActionIcon variant="subtle" onClick={() => openEdit(row.original)}><IconEdit size={16} /></ActionIcon>
+        {row.original.isActive && (
+          <Button size="xs" variant="subtle" color="red" loading={isPending}
+            onClick={() => handleDeactivate(row.original.id, row.original.code)}>
+            Deactivate
+          </Button>
+        )}
+      </Group>
+    ),
+    enableColumnActions: false, enableDensityToggle: false, enableFullScreenToggle: false,
+    layoutMode: 'semantic',
+    mantinePaperProps: { style: { width: '100%' } },
+    mantineTableContainerProps: { style: { maxWidth: '100%', overflowX: 'auto' } },
+    mantineTableProps: { highlightOnHover: true, striped: 'odd', withColumnBorders: false },
+    renderTopToolbarCustomActions: () => (
+      <Group gap="sm">
+        <Button leftSection={<IconPlus size={16} />} onClick={openCreate} size="sm">New Charge Code</Button>
+        <Button leftSection={<IconBolt size={16} />} variant="default" onClick={handleAutobridge} loading={isPending} size="sm">
+          Auto-generate from CLINs
+        </Button>
+      </Group>
+    ),
+  });
+
+  return (
+    <>
+      <Stack gap="md" p="md">
+        <Title order={2}>Charge Codes</Title>
+        <Text c="dimmed" size="sm">
+          Direct charge codes that employees charge to. Each code rolls up to a CLIN → Contract.
+          Use "Auto-generate from CLINs" to create one code per active CLIN, or create custom codes (e.g. Onsite/Telework variants).
+        </Text>
+        <MantineReactTable table={table} />
+      </Stack>
+
+      <Modal opened={modalOpen} onClose={() => setModalOpen(false)} title={editingId ? 'Edit Charge Code' : 'New Charge Code'} size="lg">
+        <Stack gap="md">
+          <TextInput label="Code" placeholder="G0490.ID.IaaS.OY7.SWE3" required
+            value={form.code} onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))} />
+          <TextInput label="Name" placeholder="Human-readable label" required
+            value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+          <Textarea label="Description" placeholder="Optional description"
+            value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
+
+          <Select label="Contract" placeholder="Select contract" required
+            data={contracts.map((c) => ({ value: c.id, label: `${c.contractNumber} — ${c.name}` }))}
+            value={form.contractId} onChange={(v) => setForm((f) => ({ ...f, contractId: v ?? '', clinId: '' }))} />
+
+          <Select label="CLIN" placeholder="Select CLIN" required
+            data={clinOptions} value={form.clinId}
+            onChange={(v) => setForm((f) => ({ ...f, clinId: v ?? '' }))}
+            disabled={!form.contractId} />
+
+          <Select label="Work Location" placeholder="Not specified"
+            data={WORK_LOCATION_OPTIONS} value={form.workLocation}
+            onChange={(v) => setForm((f) => ({ ...f, workLocation: v ?? '' }))} />
+
+          <Group align="flex-end">
+            <Select label="Class (optional)" placeholder="Select class" clearable
+              data={classList.map((c) => ({ value: c.id, label: c.name }))}
+              value={form.classId || null} onChange={(v) => setForm((f) => ({ ...f, classId: v ?? '' }))}
+              style={{ flex: 1 }} />
+            <TextInput placeholder="New class name" value={newClassName}
+              onChange={(e) => setNewClassName(e.target.value)} style={{ flex: 1 }} />
+            <Button variant="default" onClick={handleAddClass} loading={isPending}>Add</Button>
+          </Group>
+
+          <Switch label="Billable" checked={form.billable}
+            onChange={(e) => setForm((f) => ({ ...f, billable: e.target.checked }))} />
+
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setModalOpen(false)}>Cancel</Button>
+            <Button onClick={handleSave} loading={isPending}>Save</Button>
+          </Group>
+        </Stack>
+      </Modal>
+    </>
+  );
+}

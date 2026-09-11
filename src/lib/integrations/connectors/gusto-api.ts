@@ -1,4 +1,4 @@
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { integrationConnections } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { decrypt, encrypt } from '@/lib/encryption';
@@ -143,6 +143,7 @@ export async function refreshGustoToken(refreshToken: string): Promise<{
  * If expired or about to expire (within 5 minutes), refresh it.
  */
 export async function ensureValidGustoToken(connectionId: string): Promise<string> {
+  const db = await getDb();
   const [connection] = await db
     .select({
       accessTokenEncrypted: integrationConnections.accessTokenEncrypted,

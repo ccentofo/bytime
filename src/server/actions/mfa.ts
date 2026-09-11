@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { auth } from '@/auth';
@@ -43,6 +43,7 @@ export async function completeMFASetup(data: {
   pendingSecret: string;
   code: string;
 }): Promise<{ success: boolean; recoveryCodes?: string[]; error?: string }> {
+  const db = await getDb();
   const session = await auth();
   if (!session?.user?.id) redirect('/login');
 
@@ -76,6 +77,7 @@ export async function completeMFASetup(data: {
  * Disable MFA — requires current password confirmation.
  */
 export async function disableMFA(currentPassword: string): Promise<{ success: boolean; error?: string }> {
+  const db = await getDb();
   const session = await auth();
   if (!session?.user?.id) redirect('/login');
 
@@ -118,6 +120,7 @@ export async function verifyMFALogin(data: {
   code: string;
   isRecoveryCode?: boolean;
 }): Promise<{ success: boolean; error?: string }> {
+  const db = await getDb();
   const [user] = await db
     .select({
       totpSecret: users.totpSecret,
@@ -170,6 +173,7 @@ export async function verifyMFALogin(data: {
  * Get MFA status for the current user.
  */
 export async function getMFAStatus(): Promise<{ enabled: boolean; recoveryCodesRemaining: number }> {
+  const db = await getDb();
   const session = await auth();
   if (!session?.user?.id) return { enabled: false, recoveryCodesRemaining: 0 };
 

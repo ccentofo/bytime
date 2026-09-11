@@ -12,11 +12,11 @@ import {
   Alert,
   Text,
   Anchor,
-  Avatar,
   Loader,
 } from '@mantine/core';
 import { IconCheck, IconAlertCircle, IconArrowLeft, IconLock } from '@tabler/icons-react';
 import { verifyResetToken, resetPassword } from '@/server/actions/password-reset';
+import { Logo } from '@/components/brand/Logo';
 
 function ResetPasswordForm() {
   const searchParams = useSearchParams();
@@ -84,7 +84,7 @@ function ResetPasswordForm() {
   return (
     <Paper shadow="md" p="xl" radius="md" w={420} withBorder>
       <Stack align="center" mb="lg">
-        <Avatar src="/logo.png" size="lg" radius="sm" />
+        <Logo size="lg" />
         <Title order={2}>Set New Password</Title>
       </Stack>
 

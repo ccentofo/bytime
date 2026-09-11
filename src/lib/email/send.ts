@@ -176,7 +176,7 @@ export async function sendPasswordResetEmail(data: {
     await resend.emails.send({
       from: EMAIL_FROM,
       to: data.employeeEmail,
-      subject: 'Reset Your ByTime Password',
+      subject: 'Reset Your CadenzPoint Password',
       react: React.createElement(PasswordResetEmail, {
         employeeName: data.employeeName,
         resetUrl: data.resetUrl,

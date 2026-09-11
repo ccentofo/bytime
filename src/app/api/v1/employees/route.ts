@@ -1,10 +1,11 @@
 import { NextRequest } from 'next/server';
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { validateApiKey, apiResponse, apiError } from '@/lib/api-auth';
 
 export async function GET(request: NextRequest) {
+  const db = await getDb();
   const authResult = await validateApiKey(request);
   if (authResult instanceof Response) return authResult;
 

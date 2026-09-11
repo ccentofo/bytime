@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { userAssignments, users } from '@/db/schema';
 import { eq, and, sql, inArray } from 'drizzle-orm';
 
@@ -19,6 +19,7 @@ export async function getSupervisedEmployeeIds(
   supervisorId: string,
   supervisorRole: string
 ): Promise<string[] | 'all'> {
+  const db = await getDb();
   // Admins see everything
   if (supervisorRole === 'admin') {
     return 'all';
@@ -66,6 +67,7 @@ export async function getSupervisorScopeInfo(supervisorId: string): Promise<{
   assignedClinCount: number;
   supervisedEmployeeCount: number;
 }> {
+  const db = await getDb();
   // Count supervisor's CLIN assignments
   const clinAssignments = await db
     .select({ clinId: userAssignments.clinId })

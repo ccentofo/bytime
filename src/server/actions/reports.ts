@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import {
   users,
   contracts,
@@ -82,6 +82,7 @@ export async function getTimesheetReportData(
   userId: string,
   periodStart: Date
 ): Promise<TimesheetReportData | null> {
+  const db = await getDb();
   // Get user info
   const [user] = await db
     .select({ id: users.id, fullName: users.fullName, email: users.email })
@@ -231,6 +232,7 @@ export async function getDetailedCostReport(
   endDate: Date,
   contractId?: string
 ): Promise<CostReportEntry[]> {
+  const db = await getDb();
   const endDateExclusive = dayjs(endDate).add(1, 'day').toDate();
 
   const conditions = [
@@ -321,6 +323,7 @@ export async function getEmployeeSummaryReport(
   startDate: Date,
   endDate: Date
 ): Promise<EmployeeSummaryEntry[]> {
+  const db = await getDb();
   const endDateExclusive = dayjs(endDate).add(1, 'day').toDate();
 
   const rows = await db
@@ -391,6 +394,7 @@ export async function getEmployeeSummaryReport(
 // ---------------------------------------------------------------------------
 
 export async function getReportFilterOptions() {
+  const db = await getDb();
   const allUsers = await db
     .select({ id: users.id, fullName: users.fullName, email: users.email })
     .from(users)

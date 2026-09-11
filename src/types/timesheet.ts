@@ -1,14 +1,20 @@
 import type { PeriodConfig } from '@/lib/date-utils';
 
 export interface ChargeCode {
-  id: string;             // maps to clins.id OR indirectChargeCodes.id (UUID)
-  projectName: string;    // maps to contracts.name OR indirect category name
-  clin: string;           // maps to clins.clinNumber OR indirect code
-  description: string;    // maps to clins.description OR indirect description
-  slinId?: string;        // maps to slins.id (UUID) — optional, only for direct
-  slinNumber?: string;    // maps to slins.slinNumber — optional, only for direct
+  id: string;             // chargeCodeId for DIRECT codes; indirectChargeCodes.id for indirect
+  projectName: string;    // contracts.name for direct; indirect category label for indirect
+  clin: string;           // charge_codes.code for direct (the charge code string); indirect code for indirect
+  description: string;    // charge_codes.name or description; indirect description
+  slinId?: string;        // slins.id — optional, only for direct
+  slinNumber?: string;    // slins.slinNumber — optional, only for direct
   isIndirect?: boolean;   // true if this is an indirect charge code
   indirectCategory?: string; // overhead | ga | irad | bp | leave | unallowable
+  // Extended fields for direct charge codes (undefined for indirect):
+  clinId?: string;        // the underlying clin_id (for denormalization on save + supervisor scope)
+  clinNumber?: string;    // clins.clinNumber
+  workLocation?: 'onsite' | 'telework' | 'other' | null;
+  className?: string;     // cost_classes.name
+  billable?: boolean;
 }
 
 export interface TimesheetEntry {
@@ -50,7 +56,7 @@ export type TimesheetAction =
   | { type: 'OPEN_NOTE_MODAL'; chargeCodeId: string; dayIndex: number }
   | { type: 'CLOSE_NOTE_MODAL' }
   | { type: 'NAVIGATE_PERIOD'; direction: 'prev' | 'next' }
-  | { type: 'SET_PERIOD_DATA'; periodStart: Date; entries: TimesheetEntry[]; revisions: Record<string, number>; periodStatus?: PeriodStatus }
+  | { type: 'SET_PERIOD_DATA'; periodStart: Date; entries: TimesheetEntry[]; revisions: Record<string, number>; periodStatus?: PeriodStatus; periodConfig?: PeriodConfig }
   | { type: 'SET_SAVING'; isSaving: boolean }
   | { type: 'MARK_SAVED'; entries: TimesheetEntry[]; revisions: Record<string, number> }
   | { type: 'DISCARD_CHANGES' }

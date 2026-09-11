@@ -19,7 +19,8 @@ function TimesheetContent() {
     <Container fluid px="md" py="xl">
       <PayPeriodSelector />
       <TimesheetToolbar />
-      <Paper shadow="xs" p="md" radius="md" style={{ overflowX: 'auto' }}>
+      {/* The grid fits 100% width — no scroll at ≥1024px. Mobile scroll guard is in Timesheet.module.css. */}
+      <Paper shadow="xs" p="md" radius="md">
         {state.isLoadingPeriod ? (
           <Stack gap="sm">
             <Skeleton height={40} radius="sm" />

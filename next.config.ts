@@ -9,21 +9,27 @@ const isDev = process.env.NODE_ENV !== "production";
 //   Replace the *.ingest.sentry.io host below with your project's ingest host if different.
 const csp = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://js.stripe.com`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
-  "connect-src 'self' https://*.ingest.sentry.io https://*.ingest.us.sentry.io",
+  "connect-src 'self' https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://api.stripe.com",
+  "frame-src 'self' https://js.stripe.com https://hooks.stripe.com",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",
   "object-src 'none'",
 ].join("; ");
 
+// CSP mode: default to REPORT-ONLY (safe — logs violations without breaking the page).
+// Flip to enforcing only after a browser smoke test confirms zero violations, by setting
+// CSP_MODE=enforce in that environment. This avoids silently breaking prod before validation.
+const cspMode = (process.env.CSP_MODE ?? "report-only").toLowerCase();
+const cspHeaderKey =
+  cspMode === "enforce" ? "Content-Security-Policy" : "Content-Security-Policy-Report-Only";
+
 const securityHeaders = [
-  // Start CSP in REPORT-ONLY. After verifying the app renders with no console CSP
-  // violations, rename this header to "Content-Security-Policy" to enforce.
-  { key: "Content-Security-Policy", value: csp },
+  { key: cspHeaderKey, value: csp },
   { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },

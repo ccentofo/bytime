@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { notificationPreferences, users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 
@@ -29,6 +29,7 @@ const DEFAULT_PREFS: NotificationPrefs = {
  * Returns defaults if no record exists.
  */
 export async function getNotificationPreferences(userId: string): Promise<NotificationPrefs> {
+  const db = await getDb();
   const rows = await db
     .select()
     .from(notificationPreferences)
@@ -54,6 +55,7 @@ export async function updateNotificationPreferences(
   userId: string,
   prefs: Partial<NotificationPrefs>
 ): Promise<void> {
+  const db = await getDb();
   const existing = await db
     .select()
     .from(notificationPreferences)

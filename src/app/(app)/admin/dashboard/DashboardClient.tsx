@@ -178,6 +178,7 @@ export function DashboardClient({ initialSummaries }: Props) {
       }
       return (
         <Stack gap="xs" style={{ margin: '8px 16px' }}>
+          <Table.ScrollContainer minWidth={600}>
           <Table striped highlightOnHover withColumnBorders={false}>
             <Table.Thead>
               <Table.Tr>
@@ -243,12 +244,16 @@ export function DashboardClient({ initialSummaries }: Props) {
               })}
             </Table.Tbody>
           </Table>
+          </Table.ScrollContainer>
         </Stack>
       );
     },
     enableColumnActions: false,
     enableDensityToggle: false,
     enableFullScreenToggle: false,
+    mantinePaperProps: { style: { width: '100%' } },
+    mantineTableContainerProps: { style: { maxWidth: '100%', overflowX: 'auto' } },
+    layoutMode: 'semantic',
     mantineTableProps: {
       highlightOnHover: true,
       striped: 'odd',

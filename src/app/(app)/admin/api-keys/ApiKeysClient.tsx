@@ -183,6 +183,9 @@ export function ApiKeysClient({ initialKeys, currentUserId }: Props) {
     enableColumnActions: false,
     enableDensityToggle: false,
     enableFullScreenToggle: false,
+    mantinePaperProps: { style: { width: '100%' } },
+    mantineTableContainerProps: { style: { maxWidth: '100%', overflowX: 'auto' } },
+    layoutMode: 'semantic',
     mantineTableProps: { highlightOnHover: true, striped: 'odd', withColumnBorders: false },
     mantineTableHeadCellProps: {
       className: classes.tableHeaderCell,

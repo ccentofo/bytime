@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import {
   integrationConnections,
   integrationEntityMappings,
@@ -17,6 +17,7 @@ import { getAllConnectorMetadata } from '@/lib/integrations/registry';
 // ---------------------------------------------------------------------------
 
 export async function getConnections() {
+  const db = await getDb();
   await requireAdmin();
   return db
     .select({
@@ -45,6 +46,7 @@ export async function createConnection(data: {
   scopes?: string;
   connectedBy: string;
 }) {
+  const db = await getDb();
   await requireAdmin();
 
   const values: Record<string, unknown> = {
@@ -76,6 +78,7 @@ export async function updateConnectionTokens(
     expiresIn: number;
   }
 ) {
+  const db = await getDb();
   await db.update(integrationConnections)
     .set({
       accessTokenEncrypted: encrypt(tokens.accessToken),
@@ -87,6 +90,7 @@ export async function updateConnectionTokens(
 }
 
 export async function disconnectIntegration(connectionId: string) {
+  const db = await getDb();
   await requireAdmin();
   await db.update(integrationConnections)
     .set({
@@ -100,6 +104,7 @@ export async function disconnectIntegration(connectionId: string) {
 }
 
 export async function toggleAutoSync(connectionId: string, enabled: boolean) {
+  const db = await getDb();
   await requireAdmin();
   await db.update(integrationConnections)
     .set({
@@ -114,6 +119,7 @@ export async function toggleAutoSync(connectionId: string, enabled: boolean) {
 // ---------------------------------------------------------------------------
 
 export async function getMappings(connectionId: string) {
+  const db = await getDb();
   await requireAdmin();
   return db
     .select()
@@ -131,6 +137,7 @@ export async function saveMapping(data: {
   externalEntityName: string;
   metadata?: string;
 }) {
+  const db = await getDb();
   await requireAdmin();
 
   // Upsert — update if mapping already exists for this connection + entity type + bytime ID
@@ -160,6 +167,7 @@ export async function saveMapping(data: {
 }
 
 export async function deleteMapping(mappingId: string) {
+  const db = await getDb();
   await requireAdmin();
   await db.delete(integrationEntityMappings).where(eq(integrationEntityMappings.id, mappingId));
 }
@@ -169,6 +177,7 @@ export async function deleteMapping(mappingId: string) {
 // ---------------------------------------------------------------------------
 
 export async function getSyncLogs(connectionId: string, limit = 20) {
+  const db = await getDb();
   await requireAdmin();
   return db
     .select()
@@ -179,6 +188,7 @@ export async function getSyncLogs(connectionId: string, limit = 20) {
 }
 
 export async function getSyncRecords(syncLogId: string) {
+  const db = await getDb();
   await requireAdmin();
   return db
     .select()

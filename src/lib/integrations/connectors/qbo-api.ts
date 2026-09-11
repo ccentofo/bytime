@@ -1,4 +1,4 @@
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { integrationConnections } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { decrypt, encrypt } from '@/lib/encryption';
@@ -136,6 +136,7 @@ export async function refreshQBOToken(refreshToken: string): Promise<{
  * Returns the valid access token.
  */
 export async function ensureValidToken(connectionId: string): Promise<string> {
+  const db = await getDb();
   const [connection] = await db
     .select({
       accessTokenEncrypted: integrationConnections.accessTokenEncrypted,
@@ -432,14 +433,30 @@ export async function fetchQBOCompanyInfo(
 // TimeActivity Push
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// QBO Class (dimension for charge code → cost class mapping)
+// ---------------------------------------------------------------------------
+
+export interface QBOClass {
+  Id: string;
+  Name: string;
+  FullyQualifiedName?: string;
+  Active?: boolean;
+}
+
+export async function fetchQBOClasses(accessToken: string, realmId: string): Promise<QBOClass[]> {
+  return qboQuery<QBOClass>(accessToken, realmId, 'SELECT * FROM Class WHERE Active = true MAXRESULTS 1000');
+}
+
 export interface TimeActivityInput {
-  entryId: string;          // ByTime entry ID for logging
+  entryId: string;          // CadenzPoint entry ID for logging
   date: string;             // YYYY-MM-DD
   nameOf: 'Employee' | 'Vendor';  // QBO NameOf field
   employeeRef?: string;     // QBO employee ID (when nameOf = 'Employee')
   vendorRef?: string;       // QBO vendor ID (when nameOf = 'Vendor')
   customerRef?: string;     // QBO customer ID (for billable)
-  itemRef?: string;         // QBO service item ID
+  itemRef?: string;         // QBO service item ID (charge code's service item)
+  classRef?: string;        // QBO class ID (charge code's cost class)
   hours: number;
   minutes: number;
   isBillable: boolean;
@@ -483,6 +500,9 @@ export async function pushTimeActivities(
       }
       if (entry.itemRef) {
         timeActivity.ItemRef = { value: entry.itemRef };
+      }
+      if (entry.classRef) {
+        timeActivity.ClassRef = { value: entry.classRef };
       }
 
       return {

@@ -1,10 +1,11 @@
 import { NextRequest } from 'next/server';
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { contracts, clins, slins } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { validateApiKey, apiResponse, apiError } from '@/lib/api-auth';
 
 export async function GET(request: NextRequest) {
+  const db = await getDb();
   const authResult = await validateApiKey(request);
   if (authResult instanceof Response) return authResult;
 
@@ -13,6 +14,7 @@ export async function GET(request: NextRequest) {
 
     const result = await Promise.all(
       allContracts.map(async (contract) => {
+  const db = await getDb();
         const contractClins = await db
           .select()
           .from(clins)
@@ -21,6 +23,7 @@ export async function GET(request: NextRequest) {
 
         const clinsWithSlins = await Promise.all(
           contractClins.map(async (clin) => {
+  const db = await getDb();
             const clinSlins = await db
               .select()
               .from(slins)

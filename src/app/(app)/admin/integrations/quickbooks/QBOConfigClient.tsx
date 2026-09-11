@@ -332,7 +332,7 @@ export function QBOConfigClient({
         {/* Employee Mapping Tab */}
         <Tabs.Panel value="employees">
           <Text size="xs" c="dimmed" mb="sm">
-            Map ByTime employees to QBO W-2 employees. For 1099 contractors, use the Vendors tab instead.
+            Map CadenzPoint employees to QBO W-2 employees. For 1099 contractors, use the Vendors tab instead.
           </Text>
           <MappingTable
             entityType="employee"
@@ -347,8 +347,8 @@ export function QBOConfigClient({
         {/* Vendor Mapping Tab */}
         <Tabs.Panel value="vendors">
           <Text size="xs" c="dimmed" mb="sm">
-            Map ByTime employees to QBO vendors for 1099 subcontractors. Time entries will be pushed as vendor TimeActivity records.
-            A ByTime user should be mapped as either an Employee OR a Vendor — not both.
+            Map CadenzPoint employees to QBO vendors for 1099 subcontractors. Time entries will be pushed as vendor TimeActivity records.
+            A CadenzPoint user should be mapped as either an Employee OR a Vendor — not both.
           </Text>
           <MappingTable
             entityType="vendor"
@@ -387,6 +387,8 @@ export function QBOConfigClient({
         {/* Sync History Tab */}
         <Tabs.Panel value="history">
           <Paper withBorder radius="md">
+            <Table.ScrollContainer minWidth={600}>
+
             <Table striped highlightOnHover>
               <Table.Thead>
                 <Table.Tr>
@@ -427,6 +429,7 @@ export function QBOConfigClient({
                 )}
               </Table.Tbody>
             </Table>
+            </Table.ScrollContainer>
           </Paper>
         </Tabs.Panel>
       </Tabs>
@@ -458,7 +461,7 @@ function MappingTable({
       <Table striped highlightOnHover>
         <Table.Thead>
           <Table.Tr>
-            <Table.Th>ByTime</Table.Th>
+            <Table.Th>CadenzPoint</Table.Th>
             <Table.Th>→</Table.Th>
             <Table.Th>QuickBooks Online</Table.Th>
             <Table.Th>Status</Table.Th>

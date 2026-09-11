@@ -299,10 +299,12 @@ export function GustoConfigClient({
 
         <Tabs.Panel value="employees">
           <Paper withBorder radius="md">
+            <Table.ScrollContainer minWidth={500}>
+
             <Table striped highlightOnHover>
               <Table.Thead>
                 <Table.Tr>
-                  <Table.Th>ByTime Employee</Table.Th>
+                  <Table.Th>CadenzPoint Employee</Table.Th>
                   <Table.Th>→</Table.Th>
                   <Table.Th>Gusto Employee</Table.Th>
                   <Table.Th>Status</Table.Th>
@@ -355,6 +357,7 @@ export function GustoConfigClient({
                 })}
               </Table.Tbody>
             </Table>
+            </Table.ScrollContainer>
           </Paper>
         </Tabs.Panel>
 

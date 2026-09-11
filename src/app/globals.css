@@ -80,3 +80,15 @@ a {
 [class*="MRT_BottomToolbar-module_root"] {
   padding: 6px 12px !important;
 }
+
+/* ---------------------------------------------------------------------------
+   CadenzPoint design tokens — tabular figures for aligned numbers.
+   Hours, totals, and report figures must line up in columns ("we understand data").
+   --------------------------------------------------------------------------- */
+.tnum,
+table td,
+table th,
+[class*="MRT_"] td,
+[class*="MRT_"] th {
+  font-variant-numeric: tabular-nums;
+}

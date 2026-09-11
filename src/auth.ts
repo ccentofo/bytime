@@ -1,9 +1,9 @@
 import NextAuth from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
 import bcrypt from 'bcryptjs';
-import { getUserByEmail } from '@/server/actions/users';
 import { checkLockout, recordFailedAttempt, recordSuccessfulLogin } from '@/server/actions/login-attempts';
-import { db } from '@/db';
+import { getDbForUrl, getDbForAuth } from '@/db';
+import { getTenantBySlug } from '@/lib/tenant/registry';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 
@@ -27,7 +27,18 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           return null;
         }
 
-        const user = await getUserByEmail(email);
+        // Use suspended-tolerant DB resolver so suspended admins can still log in
+        // and reach the billing wall. getDb() stays strict everywhere else.
+        let user: typeof users.$inferSelect | null = null;
+        try {
+          const db = await getDbForAuth();
+          const rows = await db.select().from(users).where(eq(users.email, email));
+          user = rows[0] ?? null;
+        } catch {
+          // Workspace not found / deleting / other error — treat as bad credentials
+          await recordFailedAttempt(email);
+          return null;
+        }
         if (!user || !user.passwordHash || !user.isActive) {
           await recordFailedAttempt(email);
           return null;
@@ -69,13 +80,28 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.fullName = (user as any).name;
         token.totpEnabled = (user as any).totpEnabled ?? false;
 
-        // Fetch and store the current sessionVersion
+        // Bind this session to the tenant it logged into.
         try {
-          const [dbUser] = await db
-            .select({ sessionVersion: users.sessionVersion })
-            .from(users)
-            .where(eq(users.id, user.id as string));
-          token.sessionVersion = dbUser?.sessionVersion ?? 1;
+          const { getTenantSlug } = await import('@/lib/tenant/context');
+          token.tenantSlug = await getTenantSlug();
+        } catch {
+          token.tenantSlug = '';
+        }
+
+        // Fetch and store the current sessionVersion using the tenant DB.
+        try {
+          const slug = (token.tenantSlug as string) ?? '';
+          const tenant = slug ? await getTenantBySlug(slug) : null;
+          if (tenant) {
+            const db = getDbForUrl(tenant.dbUrl);
+            const [dbUser] = await db
+              .select({ sessionVersion: users.sessionVersion })
+              .from(users)
+              .where(eq(users.id, user.id as string));
+            token.sessionVersion = dbUser?.sessionVersion ?? 1;
+          } else {
+            token.sessionVersion = 1;
+          }
         } catch {
           token.sessionVersion = 1;
         }
@@ -99,6 +125,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         }
 
         try {
+          const slug = (token.tenantSlug as string) ?? '';
+          const tenant = slug ? await getTenantBySlug(slug) : null;
+          if (!tenant) return token; // can't validate without a tenant — fail-open like the DB-down case
+          const db = getDbForUrl(tenant.dbUrl);
+
           const dbPromise = db
             .select({
               sessionVersion: users.sessionVersion,
@@ -108,7 +139,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             })
             .from(users)
             .where(eq(users.id, token.id as string))
-            .then((rows) => rows[0] ?? null);
+            .then((rows: any[]) => rows[0] ?? null);
 
           const timeoutPromise = new Promise<null>((_, reject) =>
             setTimeout(() => reject(new Error('Session validation timeout')), 3000)
@@ -156,6 +187,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         session.user.id = token.id as string;
         (session.user as any).role = token.role as string;
         (session.user as any).fullName = token.fullName as string;
+        (session.user as any).tenantSlug = token.tenantSlug as string;
       }
       return session;
     },

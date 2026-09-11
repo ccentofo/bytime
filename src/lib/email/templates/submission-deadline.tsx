@@ -45,7 +45,7 @@ export function SubmissionDeadlineEmail({
           </Section>
           <Hr style={hrStyle} />
           <Text style={footerStyle}>
-            ByTime — DCAA-Compliant Timekeeping<br />
+            CadenzPoint — DCAA-Compliant Timekeeping<br />
             You can disable these reminders in your notification settings.
           </Text>
         </Container>

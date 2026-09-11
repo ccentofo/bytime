@@ -141,6 +141,8 @@ export function TimesheetDashboard({ data }: Props) {
             <IconHistory size={18} />
             <Text fw={600} size="sm">Recent Periods</Text>
           </Group>
+          <Table.ScrollContainer minWidth={500}>
+
           <Table striped highlightOnHover>
             <Table.Thead>
               <Table.Tr>
@@ -175,6 +177,7 @@ export function TimesheetDashboard({ data }: Props) {
               ))}
             </Table.Tbody>
           </Table>
+          </Table.ScrollContainer>
         </Paper>
       )}
     </Stack>

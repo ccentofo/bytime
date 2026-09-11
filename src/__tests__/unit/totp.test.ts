@@ -19,7 +19,7 @@ describe('generateTOTPSecret', () => {
 
     expect(result.uri).toBeDefined();
     expect(result.uri).toContain('otpauth://totp/');
-    expect(result.uri).toContain('ByTime');
+    expect(result.uri).toContain('CadenzPoint');
     expect(result.uri).toContain('test%40example.com');
   });
 

@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
@@ -35,6 +35,7 @@ export async function changePassword(data: {
   currentPassword: string;
   newPassword: string;
 }): Promise<{ success: boolean; error?: string }> {
+  const db = await getDb();
   // Validate new password
   const validationError = validatePassword(data.newPassword);
   if (validationError) {
@@ -101,6 +102,7 @@ export async function adminResetPassword(data: {
   newPassword: string;
   adminUserId: string;
 }): Promise<{ success: boolean; error?: string }> {
+  const db = await getDb();
   // Validate new password
   const validationError = validatePassword(data.newPassword);
   if (validationError) {
@@ -159,6 +161,7 @@ export async function getPasswordInfo(userId: string): Promise<{
   hasPassword: boolean;
   lastChangedAt: Date | null;
 }> {
+  const db = await getDb();
   const [user] = await db
     .select({
       passwordHash: users.passwordHash,

@@ -172,6 +172,9 @@ export function AssignmentsClient({ initialAssignments, users, contracts }: Prop
     enableColumnActions: false,
     enableDensityToggle: false,
     enableFullScreenToggle: false,
+    mantinePaperProps: { style: { width: '100%' } },
+    mantineTableContainerProps: { style: { maxWidth: '100%', overflowX: 'auto' } },
+    layoutMode: 'semantic',
     mantineTableProps: {
       highlightOnHover: true,
       striped: 'odd',

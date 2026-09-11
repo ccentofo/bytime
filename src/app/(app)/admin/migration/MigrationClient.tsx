@@ -238,6 +238,8 @@ export function MigrationClient() {
 
             {entryValidation.length > 0 && (
               <Paper withBorder radius="md">
+                <Table.ScrollContainer minWidth={700}>
+
                 <Table striped highlightOnHover>
                   <Table.Thead>
                     <Table.Tr>
@@ -279,6 +281,7 @@ export function MigrationClient() {
                     ))}
                   </Table.Tbody>
                 </Table>
+                </Table.ScrollContainer>
               </Paper>
             )}
           </Stack>

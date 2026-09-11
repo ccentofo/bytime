@@ -1,6 +1,8 @@
 'use client';
 
-import { Group, Title, Avatar, ActionIcon, Text, Menu, UnstyledButton, useMantineColorScheme, Box } from '@mantine/core';
+import { Group, Avatar, ActionIcon, Text, Menu, UnstyledButton, useMantineColorScheme, Box, Burger } from '@mantine/core';
+import Link from 'next/link';
+import { Logo } from '@/components/brand/Logo';
 import { IconSun, IconMoon, IconLogout, IconUser, IconKey, IconBell } from '@tabler/icons-react';
 import { signOut } from 'next-auth/react';
 import { SyncStatusIndicator } from '@/components/shell/SyncStatusIndicator';
@@ -11,16 +13,26 @@ type AppHeaderProps = {
     email: string;
     role: string;
   } | null;
+  /** Mobile nav toggle — wired to AppShellWrapper's useDisclosure toggle */
+  mobileNavOpened?: boolean;
+  onMobileNavToggle?: () => void;
 };
 
-export function AppHeader({ user }: AppHeaderProps) {
+export function AppHeader({ user, mobileNavOpened, onMobileNavToggle }: AppHeaderProps) {
   const { toggleColorScheme } = useMantineColorScheme();
 
   return (
     <Group h="100%" px="md" justify="space-between">
       <Group gap="sm">
-        <Avatar src="/logo.png" size="md" radius="sm" />
-        <Title order={3}>ByTime</Title>
+        {/* Burger shown only on mobile (hiddenFrom="sm") to open the overlay nav */}
+        <Burger
+          opened={mobileNavOpened ?? false}
+          onClick={onMobileNavToggle}
+          hiddenFrom="sm"
+          size="sm"
+          aria-label="Toggle navigation"
+        />
+        <Logo size="sm" />
       </Group>
       <Group gap="sm">
         <SyncStatusIndicator />
@@ -53,14 +65,14 @@ export function AppHeader({ user }: AppHeaderProps) {
               <Menu.Divider />
               <Menu.Item
                 leftSection={<IconKey size={14} />}
-                component="a"
+                component={Link}
                 href="/profile"
               >
                 Change Password
               </Menu.Item>
               <Menu.Item
                 leftSection={<IconBell size={14} />}
-                component="a"
+                component={Link}
                 href="/admin/notifications"
               >
                 Notification Settings

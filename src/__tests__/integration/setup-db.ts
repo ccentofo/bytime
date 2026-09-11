@@ -1,8 +1,14 @@
-import { beforeAll, afterAll } from 'vitest';
+import { beforeAll, afterAll, vi } from 'vitest';
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import * as schema from '@/db/schema';
+
+// Server-only modules (src/lib/tenant/context.ts, registry.ts, provision.ts, neon.ts) import
+// the `server-only` guard, which the integration runner can't resolve. Stub it (and client-only)
+// so integration tests can import those modules. Mirrors the unit setup's approach.
+vi.mock('server-only', () => ({}));
+vi.mock('client-only', () => ({}));
 
 // ALWAYS use a separate test database — NEVER the dev database.
 // The dev DB fallback was removed because cleanupTestData() deletes ALL rows,

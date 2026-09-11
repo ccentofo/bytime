@@ -232,6 +232,8 @@ export function PayrollExportClient() {
 
           {/* Employee Table */}
           <Paper withBorder radius="md">
+            <Table.ScrollContainer minWidth={600}>
+
             <Table striped highlightOnHover>
               <Table.Thead>
                 <Table.Tr>
@@ -285,6 +287,7 @@ export function PayrollExportClient() {
                 )}
               </Table.Tbody>
             </Table>
+            </Table.ScrollContainer>
           </Paper>
         </>
       )}

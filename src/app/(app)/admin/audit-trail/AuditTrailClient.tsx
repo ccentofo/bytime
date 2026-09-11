@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import {
+  ActionIcon,
   Button,
   Drawer,
   Select,
@@ -15,11 +16,11 @@ import {
   Switch,
   Timeline,
   ThemeIcon,
+  Tooltip,
 } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
 import {
   IconSearch,
-  IconEye,
   IconEdit,
   IconClock,
   IconAlertTriangle,
@@ -146,19 +147,17 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
   // --- Table columns ---
 
   const columns: MRT_ColumnDef<AuditEntry>[] = [
-    { accessorKey: 'userName', header: 'Employee', size: 160 },
+    { accessorKey: 'userName', header: 'Employee' },
     {
       id: 'contract',
       header: 'Contract',
       accessorFn: (row) => `${row.contractName} (${row.contractNumber})`,
-      size: 200,
     },
-    { accessorKey: 'clinNumber', header: 'CLIN', size: 100 },
+    { accessorKey: 'clinNumber', header: 'CLIN' },
     {
       accessorKey: 'entryDate',
       header: 'Entry Date',
       Cell: ({ cell }) => dayjs(cell.getValue<Date>()).format('MMM D, YYYY'),
-      size: 130,
     },
     {
       accessorKey: 'hours',
@@ -168,20 +167,32 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
         const num = parseFloat(val);
         return isNaN(num) ? val : num.toFixed(2);
       },
-      size: 80,
     },
     {
       accessorKey: 'revisionNumber',
       header: 'Rev #',
-      Cell: ({ cell }) => {
+      // Holds the revision badge AND the history trigger — replaces the old dedicated actions column.
+      Cell: ({ cell, row }) => {
         const rev = cell.getValue<number>();
         return (
-          <Badge color={rev === 1 ? 'green' : 'orange'} variant="light" size="sm">
-            {rev}
-          </Badge>
+          <Group gap={6} wrap="nowrap">
+            <Badge color={rev === 1 ? 'green' : 'orange'} variant="light" size="sm">
+              {rev}
+            </Badge>
+            <Tooltip label="View revision history" withArrow openDelay={300}>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                size="sm"
+                aria-label="View revision history"
+                onClick={() => handleViewHistory(row.original)}
+              >
+                <IconHistory size={16} />
+              </ActionIcon>
+            </Tooltip>
+          </Group>
         );
       },
-      size: 80,
     },
     {
       accessorKey: 'changeReasonCode',
@@ -189,13 +200,15 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
       Cell: ({ cell }) => {
         const code = cell.getValue<string | null>();
         if (!code) return <Text size="sm" c="dimmed">—</Text>;
+        const label = REASON_LABEL_MAP[code] ?? code;
         return (
-          <Badge variant="light" color="gray" size="sm">
-            {REASON_LABEL_MAP[code] ?? code}
-          </Badge>
+          <Tooltip label={label} withArrow openDelay={300}>
+            <Badge variant="light" color="gray" size="sm" tt="none" style={{ maxWidth: '100%' }}>
+              {label}
+            </Badge>
+          </Tooltip>
         );
       },
-      size: 160,
     },
     {
       accessorKey: 'comment',
@@ -204,18 +217,16 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
         const val = cell.getValue<string | null>();
         if (!val) return <Text size="sm" c="dimmed">—</Text>;
         return (
-          <Text size="sm" lineClamp={1} title={val}>
+          <Text size="sm" lineClamp={1} title={val} style={{ maxWidth: 280 }}>
             {val}
           </Text>
         );
       },
-      size: 200,
     },
     {
       accessorKey: 'createdAt',
       header: 'Entered At',
       Cell: ({ cell }) => dayjs(cell.getValue<Date>()).format('MMM D, YYYY h:mm A'),
-      size: 180,
     },
     {
       accessorKey: 'createdByName',
@@ -224,29 +235,33 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
         const val = cell.getValue<string | null>();
         return val ?? <Text size="sm" c="dimmed">—</Text>;
       },
-      size: 140,
     },
   ];
 
   const table = useMantineReactTable({
     columns,
     data: entries,
-    enableRowActions: true,
-    positionActionsColumn: 'last',
-    renderRowActions: ({ row }) => (
-      <Button
-        size="xs"
-        variant="light"
-        leftSection={<IconEye size={14} />}
-        onClick={() => handleViewHistory(row.original)}
-      >
-        History
-      </Button>
-    ),
     enableColumnActions: false,
     enableDensityToggle: false,
     enableFullScreenToggle: false,
     enableGlobalFilter: true,
+    // Content-based column widths: semantic layout lets each column size to its data (e.g. the
+    // mostly-empty Reason column auto-shrinks) instead of the fixed-pixel grid that column pinning
+    // forces. The revision-history trigger now lives in the Rev # cell, so there's no actions column.
+    layoutMode: 'semantic',
+    initialState: {
+      // Verbose/redundant detail lives in the revision-history drawer; users can re-enable these via
+      // the column-visibility toolbar button. Comment = long free-text; Entered By usually == Employee.
+      columnVisibility: { comment: false, createdByName: false },
+    },
+    // Safety net if a user re-enables every column on a narrow screen: the table gets its own
+    // scrollbar instead of stretching the page.
+    mantinePaperProps: {
+      style: { width: '100%' },
+    },
+    mantineTableContainerProps: {
+      style: { maxWidth: '100%', overflowX: 'auto' },
+    },
     mantineTableProps: {
       highlightOnHover: true,
       striped: 'odd',
@@ -277,24 +292,6 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
     mantineTopToolbarProps: {
       style: {
         padding: '12px 16px',
-      },
-    },
-    displayColumnDefOptions: {
-      'mrt-row-actions': {
-        header: 'Details',
-        size: 100,
-        mantineTableHeadCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
-        mantineTableBodyCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
       },
     },
     state: {

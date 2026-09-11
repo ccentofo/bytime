@@ -1,4 +1,4 @@
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { apiKeys } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import crypto from 'crypto';
@@ -19,6 +19,7 @@ export interface ApiKeyInfo {
  * Returns the key info if valid, or a Response object if invalid.
  */
 export async function validateApiKey(request: Request): Promise<ApiKeyInfo | Response> {
+  const db = await getDb();
   // Check rate limit first (by IP)
   const ip = getClientIp(request);
   const rateResult = checkRateLimit(`api:${ip}`, API_RATE_LIMIT, API_RATE_WINDOW);

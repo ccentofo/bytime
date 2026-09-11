@@ -12,11 +12,12 @@ import {
   fetchQBOEmployees,
   fetchQBOCustomers,
   fetchQBOServiceItems,
+  fetchQBOClasses,
   fetchQBOCompanyInfo,
   pushTimeActivities,
   type TimeActivityInput,
 } from './qbo-api';
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { integrationSyncRecords } from '@/db/schema';
 import dayjs from 'dayjs';
 
@@ -33,7 +34,7 @@ const metadata: ConnectorMetadata = {
   category: 'accounting',
   authType: 'oauth2',
   requiredMappings: ['employee', 'contract', 'clin'],
-  capabilities: ['push_timesheets', 'pull_employees', 'pull_customers', 'pull_service_items'],
+  capabilities: ['push_timesheets', 'pull_employees', 'pull_customers', 'pull_service_items', 'pull_classes'],
 };
 
 // ---------------------------------------------------------------------------
@@ -97,7 +98,13 @@ export const quickbooksOnlineConnector: IntegrationConnector = {
     return fetchQBOServiceItems(accessToken, companyId);
   },
 
+  async fetchExternalClasses(accessToken: string, companyId: string) {
+    const classes = await fetchQBOClasses(accessToken, companyId);
+    return classes.map((c) => ({ id: c.Id, name: c.Name, fullyQualifiedName: c.FullyQualifiedName }));
+  },
+
   async pushTimesheetEntries(context: SyncContext, entries: TimesheetSyncEntry[]): Promise<SyncResult> {
+  const db = await getDb();
     const employeeMappings = context.mappings.get('employee') ?? new Map();
     const vendorMappings = context.mappings.get('vendor') ?? new Map();
     const contractMappings = context.mappings.get('contract') ?? new Map();

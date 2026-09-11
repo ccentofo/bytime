@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import {
   integrationConnections,
   integrationSyncLogs,
@@ -27,6 +27,7 @@ export async function getApprovedEntriesForSync(
   periodStart: Date,
   periodEnd: Date
 ): Promise<TimesheetSyncEntry[]> {
+  const db = await getDb();
   const endExclusive = dayjs(periodEnd).add(1, 'day').toDate();
 
   // Get approved periods in the range
@@ -132,6 +133,7 @@ export async function executeSyncOperation(
   triggeredBy: string | null,
   triggerType: 'manual' | 'auto' | 'retry' = 'manual'
 ): Promise<{ syncLogId: string; result: SyncResult }> {
+  const db = await getDb();
   // Get connection details
   const [connection] = await db
     .select()

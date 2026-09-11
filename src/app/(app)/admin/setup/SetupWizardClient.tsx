@@ -193,7 +193,7 @@ export function SetupWizardClient({ initialStatus }: Props) {
             <Title order={2}>Setup Complete!</Title>
             <Text c="dimmed" ta="center" maw={500}>
               {allSixDone
-                ? 'All 6 setup steps are complete. Your ByTime instance is fully configured and ready for your team to start logging time.'
+                ? 'All 6 setup steps are complete. Your CadenzPoint workspace is fully configured and ready for your team to start logging time.'
                 : 'All required setup steps are complete. Your team can start logging time. You can still complete the recommended steps below for full DCAA compliance.'}
             </Text>
 
@@ -254,7 +254,7 @@ export function SetupWizardClient({ initialStatus }: Props) {
             <Title order={2}>Setup Wizard</Title>
           </Group>
           <Text c="dimmed" size="sm">
-            Complete these steps to get your ByTime instance ready for your team.
+            Complete these steps to get your CadenzPoint workspace ready for your team.
           </Text>
         </div>
         <Button

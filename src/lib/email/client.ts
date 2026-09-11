@@ -8,7 +8,7 @@ export const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
   : null;
 
-export const EMAIL_FROM = process.env.EMAIL_FROM ?? 'noreply@bytime.dev';
+export const EMAIL_FROM = process.env.EMAIL_FROM ?? 'noreply@cadenzpoint.dev';
 
 /**
  * Check if email sending is configured and available.

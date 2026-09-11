@@ -211,6 +211,9 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     initialState: {
       sorting: [{ id: 'periodStart', desc: true }],
     },
+    mantinePaperProps: { style: { width: '100%' } },
+    mantineTableContainerProps: { style: { maxWidth: '100%', overflowX: 'auto' } },
+    layoutMode: 'semantic',
     mantineTableProps: {
       highlightOnHover: true,
       striped: 'odd',
@@ -264,6 +267,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     reviewContent = (
       <Stack mt="md">
         <Text fw={600} size="sm">Time Entries:</Text>
+        <Table.ScrollContainer minWidth={600}>
         <Table striped withTableBorder>
           <Table.Thead>
             <Table.Tr>
@@ -297,6 +301,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
             })}
           </Table.Tbody>
         </Table>
+        </Table.ScrollContainer>
       </Stack>
     );
   }

@@ -15,7 +15,7 @@ export interface ConnectorMetadata {
   capabilities: ConnectorCapability[];
 }
 
-export type EntityMappingType = 'employee' | 'contract' | 'clin' | 'indirect_code';
+export type EntityMappingType = 'employee' | 'contract' | 'clin' | 'indirect_code' | 'charge_code' | 'class';
 
 export type ConnectorCapability =
   | 'push_timesheets'       // Push approved hours
@@ -24,6 +24,7 @@ export type ConnectorCapability =
   | 'pull_employees'        // Pull employee list for mapping
   | 'pull_customers'        // Pull customer list for mapping
   | 'pull_service_items'    // Pull service items for mapping
+  | 'pull_classes'          // Pull QBO Class list for mapping
   | 'file_export';          // Download a file (CSV, IIF, etc.)
 
 export interface OAuthConfig {
@@ -88,6 +89,11 @@ export interface IntegrationConnector {
   fetchExternalServiceItems?(accessToken: string, companyId: string): Promise<Array<{
     id: string;
     name: string;
+  }>>;
+  fetchExternalClasses?(accessToken: string, companyId: string): Promise<Array<{
+    id: string;
+    name: string;
+    fullyQualifiedName?: string;
   }>>;
 
   // Sync operations

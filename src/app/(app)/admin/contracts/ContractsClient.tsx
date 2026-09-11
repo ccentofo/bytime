@@ -337,6 +337,9 @@ export function ContractsClient({ initialContracts }: Props) {
     enableColumnActions: false,
     enableDensityToggle: false,
     enableFullScreenToggle: false,
+    mantinePaperProps: { style: { width: '100%' } },
+    mantineTableContainerProps: { style: { maxWidth: '100%', overflowX: 'auto' } },
+    layoutMode: 'semantic',
     mantineTableProps: {
       highlightOnHover: true,
       striped: 'odd',
@@ -511,6 +514,7 @@ export function ContractsClient({ initialContracts }: Props) {
               {clins.map((clin) => (
                 <Box key={clin.id}>
                   {/* CLIN row */}
+                  <Table.ScrollContainer minWidth={500}>
                   <Table striped highlightOnHover withTableBorder>
                     <Table.Tbody>
                       <Table.Tr>
@@ -548,6 +552,7 @@ export function ContractsClient({ initialContracts }: Props) {
                       </Table.Tr>
                     </Table.Tbody>
                   </Table>
+                  </Table.ScrollContainer>
 
                   {/* SLINs section (collapsible) */}
                   {expandedClinId === clin.id && (
@@ -595,6 +600,7 @@ export function ContractsClient({ initialContracts }: Props) {
                       {(slinsByClin[clin.id] ?? []).length === 0 ? (
                         <Text size="xs" c="dimmed">No SLINs yet. Add one above.</Text>
                       ) : (
+                        <Table.ScrollContainer minWidth={400}>
                         <Table striped highlightOnHover withTableBorder>
                           <Table.Thead>
                             <Table.Tr>
@@ -632,6 +638,7 @@ export function ContractsClient({ initialContracts }: Props) {
                             ))}
                           </Table.Tbody>
                         </Table>
+                        </Table.ScrollContainer>
                       )}
                     </Box>
                   )}

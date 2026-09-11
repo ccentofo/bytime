@@ -45,7 +45,7 @@ export function TimesheetApprovedEmail({
           </Section>
           <Hr style={hrStyle} />
           <Text style={footerStyle}>
-            ByTime — DCAA-Compliant Timekeeping
+            CadenzPoint — DCAA-Compliant Timekeeping
           </Text>
         </Container>
       </Body>

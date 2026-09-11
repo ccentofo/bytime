@@ -7,8 +7,7 @@ import type { TimesheetPageData } from '@/types/timesheet';
 import { getPeriodStatus } from '@/server/actions/periods';
 import { getUserByEmail } from '@/server/actions/users';
 import { getEmployeeDashboardData } from '@/server/actions/employee-dashboard';
-import { getPayPeriodConfig } from '@/server/actions/pay-period-config';
-import type { PeriodType } from '@/lib/date-utils';
+import { getCurrentEffectiveConfig, getEffectiveConfigAt } from '@/server/actions/pay-period-config';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,12 +18,17 @@ export default async function TimesheetPage() {
   }
 
   const userId = session.user.id;
-  const periodConfig = await getPayPeriodConfig();
-  const periodStart = getCurrentPeriodStart(periodConfig);
+
+  // Use the config currently in effect to determine which period to land on
+  const landingConfig = await getCurrentEffectiveConfig();
+  const periodStart = getCurrentPeriodStart(landingConfig);
+
+  // Resolve the config authoritative for this specific period start date
+  // (may differ from landingConfig if a schedule change is pending)
+  const periodConfig = await getEffectiveConfigAt(periodStart);
   const numDays = getNumDaysInPeriod(periodStart, periodConfig);
 
   // Fetch ALL independent data in parallel (single await)
-  // Only getTimesheetEntries depends on chargeCodes — everything else is independent
   const [chargeCodes, revisions, periodInfo, fullUser, dashboardData] = await Promise.all([
     getChargeCodesForUser(userId),
     getRevisionMap(userId, periodStart, numDays),
@@ -32,15 +36,6 @@ export default async function TimesheetPage() {
     getUserByEmail(session.user.email!),
     getEmployeeDashboardData(userId),
   ]);
-
-  // Use stored period config if the period has one, otherwise use global config
-  let effectivePeriodConfig = periodConfig;
-  if (periodInfo.periodType) {
-    effectivePeriodConfig = {
-      ...periodConfig,
-      periodType: periodInfo.periodType as PeriodType,
-    };
-  }
 
   // Only this depends on chargeCodes — runs after the parallel batch
   const entries = await getTimesheetEntries(userId, periodStart, chargeCodes);
@@ -54,7 +49,7 @@ export default async function TimesheetPage() {
     periodStatus: periodInfo.status,
     flsaExempt: fullUser?.flsaExempt ?? false,
     dashboardData,
-    periodConfig: effectivePeriodConfig,
+    periodConfig,
   };
 
   return <BiWeeklyTimesheetClient initialData={pageData} />;

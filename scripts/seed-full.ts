@@ -1,25 +1,25 @@
 /**
- * Comprehensive database seed — 6 months of realistic GovCon timesheet data.
- * Run with: npm run db:seed:full
+ * Comprehensive GovCon seed — 6 months of realistic timesheet data.
+ *
+ * Exposes `seedRichData(db, { emailDomain })` so it can be reused to populate ANY tenant
+ * database (see scripts/seed-demo.ts, which migrates + registers a tenant and then calls this).
+ *
+ * Run standalone against the local single-tenant DB with: npm run db:seed:full
  *
  * Creates: 8 users, 3 contracts, 8 CLINs, 4 SLINs, 10 LCATs, 15 assignments,
- * 9 indirect codes, ~2400 timesheet entries, 72 period records, notification prefs,
- * login attempts, and 1 API key.
+ * 9 indirect codes, ~2400 timesheet entries, period records (draft/submitted/approved),
+ * revision-2 corrections with reason codes, notification prefs, login attempts, and 1 API key.
  *
  * Safe to re-run: clears existing data first, then re-seeds.
  */
 import 'dotenv/config';
-import { drizzle } from 'drizzle-orm/postgres-js';
+import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from '../src/db/schema';
 import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import dayjs from 'dayjs';
-
-const connectionString = process.env.DATABASE_URL ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime';
-const client = postgres(connectionString, { max: 1 });
-const db = drizzle(client);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -38,18 +38,26 @@ function isWeekday(date: dayjs.Dayjs): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Main Seed
+// Reusable seed — populates the given database with the full demo dataset.
+// `emailDomain` controls the demo account addresses (default on-brand cadenzpoint.dev).
 // ---------------------------------------------------------------------------
 
-async function seed() {
-  console.log('🌱 Starting comprehensive database seed...\n');
+export async function seedRichData(
+  db: PostgresJsDatabase<Record<string, never>>,
+  opts: { emailDomain?: string } = {},
+): Promise<{ entryCount: number; periodCount: number; apiKeyPrefix: string }> {
+  const ED = opts.emailDomain ?? 'cadenzpoint.dev';
+  console.log('🌱 Seeding rich GovCon dataset...\n');
 
   // ── Clear existing data (reverse FK order) ──
   console.log('  Clearing existing data...');
   await db.delete(schema.timesheetEntries);
   await db.delete(schema.timesheetPeriods);
   await db.delete(schema.userLaborCategories);
+  await db.delete(schema.userChargeCodes);
   await db.delete(schema.userAssignments);
+  await db.delete(schema.chargeCodes);
+  await db.delete(schema.costClasses);
   await db.delete(schema.laborCategories);
   await db.delete(schema.slins);
   await db.delete(schema.clins);
@@ -70,14 +78,14 @@ async function seed() {
   };
 
   await db.insert(schema.users).values([
-    { id: userIds.admin, email: 'admin@bytime.dev', fullName: 'Admin User', role: 'admin', passwordHash: hash, isActive: true, flsaExempt: false },
-    { id: userIds.sarah, email: 'sarah.wilson@bytime.dev', fullName: 'Sarah Wilson', role: 'supervisor', passwordHash: hash, isActive: true, flsaExempt: true },
-    { id: userIds.mike, email: 'mike.chen@bytime.dev', fullName: 'Mike Chen', role: 'supervisor', passwordHash: hash, isActive: true, flsaExempt: true },
-    { id: userIds.jane, email: 'jane.smith@bytime.dev', fullName: 'Jane Smith', role: 'employee', passwordHash: hash, isActive: true, flsaExempt: true },
-    { id: userIds.john, email: 'john.doe@bytime.dev', fullName: 'John Doe', role: 'employee', passwordHash: hash, isActive: true, flsaExempt: false },
-    { id: userIds.emily, email: 'emily.davis@bytime.dev', fullName: 'Emily Davis', role: 'employee', passwordHash: hash, isActive: true, flsaExempt: true },
-    { id: userIds.robert, email: 'robert.taylor@bytime.dev', fullName: 'Robert Taylor', role: 'employee', passwordHash: hash, isActive: true, flsaExempt: false },
-    { id: userIds.lisa, email: 'lisa.anderson@bytime.dev', fullName: 'Lisa Anderson', role: 'employee', passwordHash: hash, isActive: false, flsaExempt: true },
+    { id: userIds.admin, email: `admin@${ED}`, fullName: 'Admin User', role: 'admin', passwordHash: hash, isActive: true, flsaExempt: false },
+    { id: userIds.sarah, email: `sarah.wilson@${ED}`, fullName: 'Sarah Wilson', role: 'supervisor', passwordHash: hash, isActive: true, flsaExempt: true },
+    { id: userIds.mike, email: `mike.chen@${ED}`, fullName: 'Mike Chen', role: 'supervisor', passwordHash: hash, isActive: true, flsaExempt: true },
+    { id: userIds.jane, email: `jane.smith@${ED}`, fullName: 'Jane Smith', role: 'employee', passwordHash: hash, isActive: true, flsaExempt: true },
+    { id: userIds.john, email: `john.doe@${ED}`, fullName: 'John Doe', role: 'employee', passwordHash: hash, isActive: true, flsaExempt: false },
+    { id: userIds.emily, email: `emily.davis@${ED}`, fullName: 'Emily Davis', role: 'employee', passwordHash: hash, isActive: true, flsaExempt: true },
+    { id: userIds.robert, email: `robert.taylor@${ED}`, fullName: 'Robert Taylor', role: 'employee', passwordHash: hash, isActive: true, flsaExempt: false },
+    { id: userIds.lisa, email: `lisa.anderson@${ED}`, fullName: 'Lisa Anderson', role: 'employee', passwordHash: hash, isActive: false, flsaExempt: true },
   ]);
   console.log('    ✓ 8 users created');
 
@@ -189,6 +197,65 @@ async function seed() {
   ]);
   console.log('    ✓ 15 user assignments created');
 
+  // ── 6b. Cost Classes + Charge Codes + User Charge Codes ──
+  console.log('  Creating cost classes and charge codes...');
+
+  // Cost classes (QBO "Class" dimension)
+  const costClassIds: Record<string, string> = {};
+  const costClassList = [
+    { name: 'Government Services' },
+    { name: 'R&D Programs' },
+  ];
+  for (const cc of costClassList) {
+    const id = uuid();
+    costClassIds[cc.name] = id;
+    await db.insert(schema.costClasses).values({ id, name: cc.name, isActive: true });
+  }
+
+  // Charge codes — one base code per CLIN, plus onsite/telework pair on nav01
+  const chargeCodeIds: Record<string, string> = {};
+  const chargeCodeList = [
+    // NAVAIR CLINs — one pair (onsite + telework) to demonstrate the split
+    { key: 'nav01-onsite', code: 'NAVAIR-0001-ONSITE', name: 'NAVAIR Base Year — Onsite', clinId: clinIds.nav01, workLocation: 'onsite' as const, classId: costClassIds['Government Services'] },
+    { key: 'nav01-telework', code: 'NAVAIR-0001-TELEWORK', name: 'NAVAIR Base Year — Telework', clinId: clinIds.nav01, workLocation: 'telework' as const, classId: costClassIds['Government Services'] },
+    { key: 'nav02', code: 'NAVAIR-0002', name: 'NAVAIR Option Year 1', clinId: clinIds.nav02, classId: costClassIds['Government Services'] },
+    // DISA
+    { key: 'disa01', code: 'DISA-0001', name: 'DISA Cyber Operations', clinId: clinIds.disa01, classId: costClassIds['Government Services'] },
+    { key: 'disa02', code: 'DISA-0002', name: 'DISA Cloud Infrastructure', clinId: clinIds.disa02, classId: costClassIds['R&D Programs'] },
+    // Army
+    { key: 'army01', code: 'ARMY-0001', name: 'Army Help Desk', clinId: clinIds.army01, classId: costClassIds['Government Services'] },
+    { key: 'army02', code: 'ARMY-0002', name: 'Army Network Operations', clinId: clinIds.army02, classId: costClassIds['Government Services'] },
+  ];
+  for (const cc of chargeCodeList) {
+    const id = uuid();
+    chargeCodeIds[cc.key] = id;
+    await db.insert(schema.chargeCodes).values({
+      id, code: cc.code, name: cc.name, clinId: cc.clinId,
+      workLocation: cc.workLocation ?? null, classId: cc.classId ?? null,
+      billable: true, isActive: true,
+    });
+  }
+
+  // Map employee assignments to charge codes (and upsert user_assignments for CLIN scope)
+  const userChargeAssignments = [
+    { userId: userIds.jane, keys: ['nav01-onsite', 'nav01-telework', 'nav02'] },
+    { userId: userIds.john, keys: ['nav01-onsite', 'disa01'] },
+    { userId: userIds.emily, keys: ['disa01', 'army01'] },
+    { userId: userIds.robert, keys: ['army01', 'army02'] },
+    { userId: userIds.sarah, keys: ['nav01-onsite', 'nav01-telework'] },
+    { userId: userIds.mike, keys: ['army01'] },
+  ];
+  for (const ua of userChargeAssignments) {
+    for (const key of ua.keys) {
+      const ccId = chargeCodeIds[key];
+      if (!ccId) continue;
+      await db.insert(schema.userChargeCodes).values({
+        userId: ua.userId, chargeCodeId: ccId, isActive: true, assignedBy: userIds.admin,
+      }).onConflictDoNothing();
+    }
+  }
+  console.log(`    ✓ ${chargeCodeList.length} charge codes and ${userChargeAssignments.reduce((s, u) => s + u.keys.length, 0)} user-charge-code assignments created`);
+
   // ── 7. User Labor Categories ──
   console.log('  Creating user labor category assignments...');
   const ulcats = [
@@ -238,16 +305,17 @@ async function seed() {
   }
   console.log('    ✓ 9 indirect charge codes created');
 
-  // ── 9. Timesheet Entries + Periods (6 months: Dec 2025 → May 2026) ──
+  // ── 9. Timesheet Entries + Periods (6 months: Dec 2025 → current) ──
   console.log('  Creating timesheet entries and periods (6 months)...');
 
+  // Map to charge codes for entries (chargeCodeId + denormalized clinId)
   const activeEmployees = [
-    { id: userIds.jane, clinIds: [clinIds.nav01, clinIds.nav02], hours: [6, 2] },
-    { id: userIds.john, clinIds: [clinIds.nav01, clinIds.disa01], hours: [5, 3] },
-    { id: userIds.emily, clinIds: [clinIds.disa01, clinIds.army01], hours: [4, 4] },
-    { id: userIds.robert, clinIds: [clinIds.army01, clinIds.army02], hours: [5, 3] },
-    { id: userIds.sarah, clinIds: [clinIds.nav01], hours: [4] },
-    { id: userIds.mike, clinIds: [clinIds.army01], hours: [3] },
+    { id: userIds.jane, entries: [{ chargeCodeId: chargeCodeIds['nav01-onsite'], clinId: clinIds.nav01, h: 6 }, { chargeCodeId: chargeCodeIds['nav02'], clinId: clinIds.nav02, h: 2 }] },
+    { id: userIds.john, entries: [{ chargeCodeId: chargeCodeIds['nav01-onsite'], clinId: clinIds.nav01, h: 5 }, { chargeCodeId: chargeCodeIds['disa01'], clinId: clinIds.disa01, h: 3 }] },
+    { id: userIds.emily, entries: [{ chargeCodeId: chargeCodeIds['disa01'], clinId: clinIds.disa01, h: 4 }, { chargeCodeId: chargeCodeIds['army01'], clinId: clinIds.army01, h: 4 }] },
+    { id: userIds.robert, entries: [{ chargeCodeId: chargeCodeIds['army01'], clinId: clinIds.army01, h: 5 }, { chargeCodeId: chargeCodeIds['army02'], clinId: clinIds.army02, h: 3 }] },
+    { id: userIds.sarah, entries: [{ chargeCodeId: chargeCodeIds['nav01-onsite'], clinId: clinIds.nav01, h: 4 }] },
+    { id: userIds.mike, entries: [{ chargeCodeId: chargeCodeIds['army01'], clinId: clinIds.army01, h: 3 }] },
   ];
 
   // Generate all semi-monthly periods from Dec 1 2025 to current
@@ -256,7 +324,6 @@ async function seed() {
   const now = dayjs();
   while (pStart.isBefore(now)) {
     periods.push(pStart.toDate());
-    const numDays = getNumDays(pStart.toDate());
     if (pStart.date() === 1) {
       pStart = pStart.date(16);
     } else {
@@ -285,7 +352,7 @@ async function seed() {
       const submittedAt = status !== 'draft' ? dayjs(periodStart).add(numDays, 'day').add(1, 'day').toDate() : null;
       const reviewedAt = status === 'approved' ? dayjs(periodStart).add(numDays + 2, 'day').toDate() : null;
       const reviewedBy = status === 'approved'
-        ? (emp.clinIds.includes(clinIds.army01) || emp.clinIds.includes(clinIds.army02) ? userIds.mike : userIds.sarah)
+        ? (emp.entries.some((e) => e.clinId === clinIds.army01 || e.clinId === clinIds.army02) ? userIds.mike : userIds.sarah)
         : null;
 
       await db.insert(schema.timesheetPeriods).values({
@@ -315,16 +382,19 @@ async function seed() {
           continue;
         }
 
-        // Log direct hours to assigned CLINs
-        for (let ci = 0; ci < emp.clinIds.length; ci++) {
-          const baseHours = emp.hours[ci] ?? 4;
-          // Add some variation
+        // Log direct hours to assigned charge codes (with denormalized clinId)
+        for (let ci = 0; ci < emp.entries.length; ci++) {
+          const e = emp.entries[ci];
+          const baseHours = e.h;
           const variation = ((d + pi + ci) % 3 === 0) ? 0.5 : ((d + pi) % 5 === 0 ? -0.5 : 0);
           const hours = Math.max(0, Math.min(10, baseHours + variation));
 
           if (hours > 0) {
             await db.insert(schema.timesheetEntries).values({
-              userId: emp.id, clinId: emp.clinIds[ci], indirectCodeId: null,
+              userId: emp.id,
+              chargeCodeId: e.chargeCodeId,  // new charge code id
+              clinId: e.clinId,               // denormalized from charge code (preserves CLIN-based queries)
+              indirectCodeId: null,
               entryDate: entryDate.toDate(), hours: hours.toFixed(2),
               revisionNumber: 1, createdBy: emp.id,
             });
@@ -345,9 +415,12 @@ async function seed() {
       // Add some corrections (revision 2) for older periods
       if (pi < periods.length - 3 && pi % 3 === 0) {
         const corrDate = dayjs(periodStart).add(2, 'day');
-        if (isWeekday(corrDate)) {
+        if (isWeekday(corrDate) && emp.entries.length > 0) {
           await db.insert(schema.timesheetEntries).values({
-            userId: emp.id, clinId: emp.clinIds[0], indirectCodeId: null,
+            userId: emp.id,
+            chargeCodeId: emp.entries[0].chargeCodeId,
+            clinId: emp.entries[0].clinId,
+            indirectCodeId: null,
             entryDate: corrDate.toDate(), hours: '7.50',
             revisionNumber: 2, changeReasonCode: 'CORRECTION',
             comment: 'Corrected hours — was on training for part of the day',
@@ -375,16 +448,16 @@ async function seed() {
   // ── 11. Login Attempts ──
   console.log('  Creating login attempt history...');
   const loginData = [
-    { email: 'admin@bytime.dev', successful: true },
-    { email: 'admin@bytime.dev', successful: true },
-    { email: 'jane.smith@bytime.dev', successful: true },
-    { email: 'jane.smith@bytime.dev', successful: false },
-    { email: 'jane.smith@bytime.dev', successful: true },
-    { email: 'john.doe@bytime.dev', successful: true },
+    { email: `admin@${ED}`, successful: true },
+    { email: `admin@${ED}`, successful: true },
+    { email: `jane.smith@${ED}`, successful: true },
+    { email: `jane.smith@${ED}`, successful: false },
+    { email: `jane.smith@${ED}`, successful: true },
+    { email: `john.doe@${ED}`, successful: true },
     { email: 'unknown@hacker.com', successful: false },
     { email: 'unknown@hacker.com', successful: false },
-    { email: 'emily.davis@bytime.dev', successful: true },
-    { email: 'robert.taylor@bytime.dev', successful: true },
+    { email: `emily.davis@${ED}`, successful: true },
+    { email: `robert.taylor@${ED}`, successful: true },
   ];
   for (const la of loginData) {
     await db.insert(schema.loginAttempts).values(la);
@@ -403,34 +476,34 @@ async function seed() {
     permissions: 'read',
     isActive: true,
   });
-  console.log(`    ✓ 1 API key created (prefix: ${apiKeyValue.substring(0, 8)}...)`);
+  const apiKeyPrefix = apiKeyValue.substring(0, 8);
+  console.log(`    ✓ 1 API key created (prefix: ${apiKeyPrefix}...)`);
 
-  // ── Done ──
-  console.log('\n✅ Database seed complete!');
-  console.log('\n📋 Summary:');
-  console.log('  • 8 users (password: Password123!)');
-  console.log('  • 3 contracts, 8 CLINs, 4 SLINs');
-  console.log('  • 10 labor categories, 8 user-LCAT assignments');
-  console.log('  • 9 indirect charge codes');
-  console.log(`  • ${entryCount} timesheet entries (6 months)`);
-  console.log(`  • ${periodCount} period records`);
-  console.log('  • 8 notification preferences');
-  console.log('  • 10 login attempts, 1 API key');
-  console.log('\n👤 Login credentials:');
-  console.log('  admin@bytime.dev / Password123! (admin)');
-  console.log('  sarah.wilson@bytime.dev / Password123! (supervisor)');
-  console.log('  mike.chen@bytime.dev / Password123! (supervisor)');
-  console.log('  jane.smith@bytime.dev / Password123! (employee)');
-  console.log('  john.doe@bytime.dev / Password123! (employee)');
-  console.log('  emily.davis@bytime.dev / Password123! (employee)');
-  console.log('  robert.taylor@bytime.dev / Password123! (employee)');
-  console.log('  lisa.anderson@bytime.dev / Password123! (employee, inactive)');
+  console.log('\n✅ Rich dataset seeded.');
+  console.log(`\n👤 Demo logins (password: Password123!), domain @${ED}:`);
+  console.log(`  admin@${ED} (admin) · sarah.wilson@${ED} / mike.chen@${ED} (supervisors)`);
+  console.log(`  jane.smith@${ED} · john.doe@${ED} · emily.davis@${ED} · robert.taylor@${ED} (employees)`);
 
+  return { entryCount, periodCount, apiKeyPrefix };
+}
+
+// ---------------------------------------------------------------------------
+// CLI entry — seed the local single-tenant DB (npm run db:seed:full)
+// ---------------------------------------------------------------------------
+
+async function main() {
+  const connectionString = process.env.DATABASE_URL ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime';
+  const client = postgres(connectionString, { max: 1 });
+  const db = drizzle(client);
+  await seedRichData(db);
   await client.end();
   process.exit(0);
 }
 
-seed().catch((err) => {
-  console.error('Seed failed:', err);
-  process.exit(1);
-});
+// Only run the CLI when executed directly, not when imported by seed-demo.ts.
+if (process.argv[1] && process.argv[1].endsWith('seed-full.ts')) {
+  main().catch((err) => {
+    console.error('Seed failed:', err);
+    process.exit(1);
+  });
+}

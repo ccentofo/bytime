@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { users, passwordResetTokens } from '@/db/schema';
 import { eq, and, gte, isNull } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
@@ -16,6 +16,7 @@ const MAX_REQUESTS_PER_HOUR = 3;
 // ---------------------------------------------------------------------------
 
 export async function requestPasswordReset(email: string): Promise<{ success: boolean; error?: string }> {
+  const db = await getDb();
   const normalizedEmail = email.toLowerCase().trim();
 
   if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
@@ -81,6 +82,7 @@ export async function requestPasswordReset(email: string): Promise<{ success: bo
 // ---------------------------------------------------------------------------
 
 export async function verifyResetToken(email: string, token: string): Promise<{ valid: boolean }> {
+  const db = await getDb();
   const normalizedEmail = email.toLowerCase().trim();
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
@@ -116,6 +118,7 @@ export async function resetPassword(data: {
   token: string;
   newPassword: string;
 }): Promise<{ success: boolean; error?: string }> {
+  const db = await getDb();
   const normalizedEmail = data.email.toLowerCase().trim();
 
   // Validate password
