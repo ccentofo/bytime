@@ -10,14 +10,15 @@ import { SubmitModal } from '@/components/timesheet/SubmitModal';
 import dayjs from 'dayjs';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 import { getNumDaysInPeriod, getLastWeekdayInPeriod } from '@/lib/date-utils';
+import { PERIOD_STATUS_COLOR } from '@/lib/ui/status-colors';
 
 dayjs.extend(isSameOrAfter);
 
 const STATUS_BADGES: Record<string, { color: string; label: string }> = {
-  draft: { color: 'yellow', label: 'Draft' },
-  submitted: { color: 'blue', label: 'Submitted — Pending Review' },
-  approved: { color: 'green', label: 'Approved' },
-  rejected: { color: 'red', label: 'Rejected — Corrections Needed' },
+  draft: { color: PERIOD_STATUS_COLOR.draft, label: 'Draft' },
+  submitted: { color: PERIOD_STATUS_COLOR.submitted, label: 'Submitted — Pending Review' },
+  approved: { color: PERIOD_STATUS_COLOR.approved, label: 'Approved' },
+  rejected: { color: PERIOD_STATUS_COLOR.rejected, label: 'Rejected — Corrections Needed' },
 };
 
 export function TimesheetToolbar() {
@@ -186,7 +187,7 @@ export function TimesheetToolbar() {
       notifications.show({
         title: 'Timesheet Saved',
         message: `${dirtyCount} ${dirtyCount === 1 ? 'entry' : 'entries'} saved successfully.`,
-        color: 'green',
+        color: 'success',
         icon: <IconCheck size={16} />,
       });
     } catch {
@@ -206,7 +207,7 @@ export function TimesheetToolbar() {
       notifications.show({
         title: 'Timesheet Saved',
         message: `${dirtyCount} ${dirtyCount === 1 ? 'entry' : 'entries'} saved with reason: ${reasonCode}.`,
-        color: 'green',
+        color: 'success',
         icon: <IconCheck size={16} />,
       });
     } catch {
@@ -235,7 +236,7 @@ export function TimesheetToolbar() {
       notifications.show({
         title: 'Timesheet Submitted',
         message: `Your timesheet for ${periodLabel} has been submitted for supervisor review.`,
-        color: 'blue',
+        color: 'signal',
         icon: <IconCheck size={16} />,
       });
     } catch {
@@ -268,7 +269,7 @@ export function TimesheetToolbar() {
         {/* Right: Action buttons */}
         <Group gap="sm">
           {dirtyCount > 0 && (
-            <Badge variant="light" color="yellow" size="lg">
+            <Badge variant="light" color="warning" size="lg">
               {dirtyCount} unsaved {dirtyCount === 1 ? 'change' : 'changes'}
             </Badge>
           )}
@@ -293,7 +294,7 @@ export function TimesheetToolbar() {
               </Button>
               <div>
                 <Button
-                  color="green"
+                  color="success"
                   leftSection={<IconSend size={16} />}
                   onClick={() => setSubmitModalOpen(true)}
                   disabled={!canSubmit}
@@ -321,13 +322,13 @@ export function TimesheetToolbar() {
                 Total Period Hours: {(overtimeInfo.totalPeriodHours ?? 0).toFixed(2)}
               </Text>
               {overtimeInfo.totalUncompensated > 0 && (
-                <Badge color="orange" variant="light" size="lg">
+                <Badge color="warning" variant="light" size="lg">
                   {(overtimeInfo.totalUncompensated ?? 0).toFixed(2)} hrs uncompensated OT
                 </Badge>
               )}
             </Group>
             {overtimeInfo.hasLowHoursWarning && (
-              <Text size="xs" c="orange" fw={500}>
+              <Text size="xs" c="warning" fw={500}>
                 ⚠ Some weeks have fewer than 40 hours — ensure all time is recorded
               </Text>
             )}

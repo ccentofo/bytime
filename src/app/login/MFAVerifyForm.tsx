@@ -11,12 +11,12 @@ import {
   Button,
   Alert,
   Anchor,
-  Avatar,
   TextInput,
 } from '@mantine/core';
 import { IconShieldCheck, IconAlertCircle } from '@tabler/icons-react';
 import { verifyMFALogin } from '@/server/actions/mfa';
 import { signIn } from 'next-auth/react';
+import { Logo } from '@/components/brand/Logo';
 
 interface Props {
   userId: string;
@@ -73,7 +73,7 @@ export function MFAVerifyForm({ userId, email }: Props) {
     <Center mih="100vh" bg="var(--mantine-color-body)">
       <Paper shadow="md" p="xl" radius="md" w={420} withBorder>
         <Stack align="center" mb="lg">
-          <Avatar src="/logo.png" size="lg" radius="sm" />
+          <Logo size="lg" />
           <Title order={2}>Two-Factor Authentication</Title>
           <Text c="dimmed" size="sm" ta="center">
             {useRecovery

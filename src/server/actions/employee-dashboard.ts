@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { timesheetEntries, timesheetPeriods } from '@/db/schema';
 import { eq, and, gte, lt, desc, sql } from 'drizzle-orm';
 import dayjs from 'dayjs';
@@ -45,6 +45,7 @@ export interface EmployeeDashboardData {
 // ---------------------------------------------------------------------------
 
 export async function getEmployeeDashboardData(userId: string): Promise<EmployeeDashboardData> {
+  const db = await getDb();
   const periodConfig = await getPayPeriodConfig();
   const periodStart = getCurrentPeriodStart(periodConfig);
   const numDays = getNumDaysInPeriod(periodStart, periodConfig);

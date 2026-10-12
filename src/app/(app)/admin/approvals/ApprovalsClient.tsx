@@ -2,7 +2,6 @@
 
 import { useState, useTransition } from 'react';
 import {
-  Title,
   Badge,
   Button,
   Drawer,
@@ -16,14 +15,17 @@ import {
 } from '@mantine/core';
 import { IconCheck, IconX, IconEye, IconAlertCircle } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
-import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { useAppTable } from '@/components/table/mrtDefaults';
 import dayjs from 'dayjs';
 import { approvePeriod, rejectPeriod, getScopedPeriods } from '@/server/actions/periods';
 import { getSupervisedEmployeeIds } from '@/server/actions/supervisor-scope';
 import { getTimesheetForReview } from '@/server/actions/timesheet';
 import { getNumDaysInPeriod } from '@/lib/date-utils';
+import { formatDate, formatDateTime, formatShortDate } from '@/lib/format';
+import { PERIOD_STATUS_COLOR, ROLE_COLOR } from '@/lib/ui/status-colors';
+import { PageHeader } from '@/components/ui/PageHeader';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
-import classes from "./Approvals.module.css";
 
 type Period = {
   id: string;
@@ -47,13 +49,6 @@ type Props = {
   currentUserId: string;
   userRole: string;
   scopeInfo: ScopeInfo;
-};
-
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'yellow',
-  submitted: 'blue',
-  approved: 'green',
-  rejected: 'red',
 };
 
 export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scopeInfo }: Props) {
@@ -101,7 +96,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         notifications.show({
           title: 'Timesheet Approved',
           message: `${selectedPeriod.userName}'s timesheet has been approved.`,
-          color: 'green',
+          color: 'success',
           icon: <IconCheck size={16} />,
         });
       } catch (error) {
@@ -133,7 +128,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         notifications.show({
           title: 'Timesheet Rejected',
           message: `${selectedPeriod.userName}'s timesheet has been returned for corrections.`,
-          color: 'orange',
+          color: 'warning',
           icon: <IconX size={16} />,
         });
       } catch (error) {
@@ -161,7 +156,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         const start = dayjs(cell.getValue<Date>());
         const numDays = getNumDaysInPeriod(start.toDate());
         const end = start.add(numDays - 1, 'day');
-        return `${start.format('MMM D')} – ${end.format('MMM D, YYYY')}`;
+        return `${formatShortDate(start.toDate())} – ${formatDate(end.toDate())}`;
       },
       size: 200,
     },
@@ -169,9 +164,9 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
       accessorKey: 'status',
       header: 'Status',
       Cell: ({ cell }) => {
-        const status = cell.getValue<string>();
+        const status = cell.getValue<string>() as keyof typeof PERIOD_STATUS_COLOR;
         return (
-          <Badge color={STATUS_COLORS[status] ?? 'gray'}>
+          <Badge color={PERIOD_STATUS_COLOR[status] ?? 'gray'}>
             {status.charAt(0).toUpperCase() + status.slice(1)}
           </Badge>
         );
@@ -181,19 +176,15 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     {
       accessorKey: 'submittedAt',
       header: 'Submitted',
-      Cell: ({ cell }) => {
-        const val = cell.getValue<Date | null>();
-        return val ? dayjs(val).format('MMM D, YYYY h:mm A') : '—';
-      },
+      Cell: ({ cell }) => formatDateTime(cell.getValue<Date | null>()),
       size: 180,
     },
   ];
 
-  const table = useMantineReactTable({
+  const table = useAppTable({
     columns,
     data: periods,
     enableRowActions: true,
-    positionActionsColumn: 'last',
     renderRowActions: ({ row }) => (
       <Button
         size="xs"
@@ -205,52 +196,14 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         Review
       </Button>
     ),
-    enableColumnActions: false,
-    enableDensityToggle: false,
-    enableFullScreenToggle: false,
     initialState: {
       sorting: [{ id: 'periodStart', desc: true }],
-    },
-    mantineTableProps: {
-      highlightOnHover: true,
-      striped: 'odd',
-      withColumnBorders: false,
-    },
-    mantineTableHeadCellProps: {
-      className: classes.tableHeaderCell,
-      style: {
-        fontWeight: 600,
-        fontSize: '0.85rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTableBodyCellProps: {
-      style: {
-        fontSize: '0.875rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTopToolbarProps: {
-      style: {
-        padding: '12px 16px',
-      },
     },
     displayColumnDefOptions: {
       'mrt-row-actions': {
         header: 'Actions',
-        size: 100,
-        mantineTableHeadCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
-        mantineTableBodyCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
+        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
+        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
       },
     },
   });
@@ -264,6 +217,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     reviewContent = (
       <Stack mt="md">
         <Text fw={600} size="sm">Time Entries:</Text>
+        <Table.ScrollContainer minWidth={600}>
         <Table striped withTableBorder>
           <Table.Thead>
             <Table.Tr>
@@ -297,13 +251,14 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
             })}
           </Table.Tbody>
         </Table>
+        </Table.ScrollContainer>
       </Stack>
     );
   }
 
   return (
     <>
-      <Title order={2} mb="md">Timesheet Approvals</Title>
+      <PageHeader title="Timesheet Approvals" />
 
       {/* Scope information banner */}
       {userRole === 'supervisor' && scopeInfo && (
@@ -312,9 +267,9 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
             <Text size="sm" c="dimmed" component="span">
               <strong>Your Approval Scope:</strong> You can review timesheets for
             </Text>
-            <Badge variant="light" color="blue" size="sm">{scopeInfo.supervisedEmployeeCount}</Badge>
+            <Badge color="signal" size="sm">{scopeInfo.supervisedEmployeeCount}</Badge>
             <Text size="sm" c="dimmed" component="span">employees across</Text>
-            <Badge variant="light" color="green" size="sm">{scopeInfo.assignedClinCount}</Badge>
+            <Badge color="success" size="sm">{scopeInfo.assignedClinCount}</Badge>
             <Text size="sm" c="dimmed" component="span">CLINs you are assigned to.</Text>
           </Group>
         </Paper>
@@ -323,7 +278,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
       {userRole === 'admin' && (
         <Paper withBorder p="sm" mb="md" radius="md">
           <Group gap="xs" align="center">
-            <Badge variant="light" color="red" size="sm">Admin</Badge>
+            <Badge color={ROLE_COLOR.admin} size="sm">Admin</Badge>
             <Text size="sm" c="dimmed" component="span">
               You have full access to all employee timesheets.
             </Text>
@@ -361,7 +316,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
               <Group>
                 <Text size="sm"><strong>Employee:</strong> {selectedPeriod.userName}</Text>
                 <Text size="sm"><strong>Email:</strong> {selectedPeriod.userEmail}</Text>
-                <Badge color={STATUS_COLORS[selectedPeriod.status] ?? 'gray'}>
+                <Badge color={PERIOD_STATUS_COLOR[selectedPeriod.status as keyof typeof PERIOD_STATUS_COLOR] ?? 'gray'}>
                   {selectedPeriod.status}
                 </Badge>
               </Group>
@@ -375,7 +330,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
           {reviewContent}
 
           {actionError && (
-            <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light">
+            <Alert icon={<IconAlertCircle size={16} />} color="red">
               {actionError}
             </Alert>
           )}
@@ -410,7 +365,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
                   Reject
                 </Button>
                 <Button
-                  color="green"
+                  color="success"
                   leftSection={<IconCheck size={16} />}
                   onClick={handleApprove}
                   loading={isPending}

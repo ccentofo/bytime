@@ -9,16 +9,18 @@ import {
   Textarea,
   Group,
   Stack,
-  Title,
   Badge,
   Switch,
   ActionIcon,
+  Tooltip,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconPlus, IconEdit } from '@tabler/icons-react';
-import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { useAppTable } from '@/components/table/mrtDefaults';
 import { createIndirectCode, updateIndirectCode, getIndirectChargeCodes, seedIndirectCodes } from '@/server/actions/indirect-codes';
-import classes from './IndirectCodes.module.css';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { INDIRECT_CATEGORY_COLOR } from '@/lib/ui/status-colors';
 
 type IndirectCode = {
   id: string;
@@ -44,15 +46,6 @@ const CATEGORY_OPTIONS = [
   { value: 'leave', label: 'Leave' },
   { value: 'unallowable', label: 'Unallowable (FAR 31.205)' },
 ];
-
-const CATEGORY_COLORS: Record<string, string> = {
-  overhead: 'blue',
-  ga: 'grape',
-  irad: 'cyan',
-  bp: 'orange',
-  leave: 'green',
-  unallowable: 'red',
-};
 
 const CATEGORY_LABELS: Record<string, string> = {
   overhead: 'Overhead',
@@ -124,7 +117,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
             description: form.description || undefined,
             availableToAll: form.availableToAll,
           });
-          notifications.show({ title: 'Code Updated', message: `${form.name} has been updated.`, color: 'green' });
+          notifications.show({ title: 'Code Updated', message: `${form.name} has been updated.`, color: 'success' });
         } else {
           await createIndirectCode({
             code: form.code,
@@ -133,7 +126,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
             description: form.description || undefined,
             availableToAll: form.availableToAll,
           });
-          notifications.show({ title: 'Code Created', message: `${form.name} has been created.`, color: 'green' });
+          notifications.show({ title: 'Code Created', message: `${form.name} has been created.`, color: 'success' });
         }
 
         const refreshed = await getIndirectChargeCodes();
@@ -153,7 +146,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
       notifications.show({
         title: code.isActive ? 'Code Deactivated' : 'Code Activated',
         message: `${code.name} is now ${code.isActive ? 'inactive' : 'active'}.`,
-        color: code.isActive ? 'yellow' : 'green',
+        color: code.isActive ? 'warning' : 'success',
       });
     });
   }
@@ -163,7 +156,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
       await seedIndirectCodes();
       const refreshed = await getIndirectChargeCodes();
       setCodes(refreshed as IndirectCode[]);
-      notifications.show({ title: 'Defaults Seeded', message: 'Default indirect charge codes have been created.', color: 'green' });
+      notifications.show({ title: 'Defaults Seeded', message: 'Default indirect charge codes have been created.', color: 'success' });
     });
   }
 
@@ -175,7 +168,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
       header: 'Category',
       Cell: ({ cell }) => {
         const cat = cell.getValue<string>();
-        return <Badge color={CATEGORY_COLORS[cat] ?? 'gray'} variant="light">{CATEGORY_LABELS[cat] ?? cat}</Badge>;
+        return <Badge color={INDIRECT_CATEGORY_COLOR[cat] ?? 'gray'}>{CATEGORY_LABELS[cat] ?? cat}</Badge>;
       },
       size: 140,
     },
@@ -201,49 +194,40 @@ export function IndirectCodesClient({ initialCodes }: Props) {
     },
   ];
 
-  const table = useMantineReactTable({
+  const table = useAppTable({
     columns,
     data: codes,
     enableRowActions: true,
-    positionActionsColumn: 'last',
     renderRowActions: ({ row }) => (
-      <ActionIcon variant="subtle" onClick={() => openEditModal(row.original)} title="Edit">
-        <IconEdit size={16} />
-      </ActionIcon>
+      <Tooltip label="Edit">
+        <ActionIcon variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit indirect code">
+          <IconEdit size={16} />
+        </ActionIcon>
+      </Tooltip>
     ),
-    renderTopToolbarCustomActions: () => (
-      <Group>
-        <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
-          Add Code
-        </Button>
-        <Button variant="default" onClick={handleSeedDefaults} loading={isPending}>
-          Seed Defaults
-        </Button>
-      </Group>
-    ),
-    enableColumnActions: false,
-    enableDensityToggle: false,
-    enableFullScreenToggle: false,
-    mantineTableProps: { highlightOnHover: true, striped: 'odd', withColumnBorders: false },
-    mantineTableHeadCellProps: {
-      className: classes.tableHeaderCell,
-      style: { fontWeight: 600, fontSize: '0.85rem', padding: '12px 16px' },
-    },
-    mantineTableBodyCellProps: { style: { fontSize: '0.875rem', padding: '12px 16px' } },
-    mantineTopToolbarProps: { style: { padding: '12px 16px' } },
     displayColumnDefOptions: {
       'mrt-row-actions': {
-        header: 'Actions',
-        size: 80,
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const, padding: '12px 16px' } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const, padding: '12px 16px' } },
+        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
+        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
       },
     },
   });
 
   return (
     <>
-      <Title order={2} mb="md">Indirect Charge Codes</Title>
+      <PageHeader
+        title="Indirect Charge Codes"
+        actions={
+          <Group>
+            <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
+              Add Code
+            </Button>
+            <Button variant="default" onClick={handleSeedDefaults} loading={isPending}>
+              Seed Defaults
+            </Button>
+          </Group>
+        }
+      />
       <MantineReactTable table={table} />
 
       <Modal
@@ -287,7 +271,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
             onChange={(e) => setForm((f) => ({ ...f, availableToAll: e.currentTarget.checked }))}
           />
           {formError && (
-            <Badge color="red" variant="light" size="lg" style={{ whiteSpace: 'normal', height: 'auto', padding: '8px' }}>
+            <Badge color="red" size="lg" style={{ whiteSpace: 'normal', height: 'auto', padding: '8px' }}>
               {formError}
             </Badge>
           )}

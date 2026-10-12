@@ -1,11 +1,12 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { userAssignments, users, clins, contracts, slins } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
 
 export async function getAssignments() {
+  const db = await getDb();
   return db
     .select({
       id: userAssignments.id,
@@ -32,6 +33,7 @@ export async function getAssignments() {
 }
 
 export async function getAssignmentsForUser(userId: string) {
+  const db = await getDb();
   return db
     .select({
       id: userAssignments.id,
@@ -59,6 +61,7 @@ export async function assignUserToClin(data: {
   assignedBy?: string;
 }) {
   await requireAdmin();
+  const db = await getDb();
   const rows = await db
     .insert(userAssignments)
     .values(data)
@@ -72,6 +75,7 @@ export async function assignUserToClin(data: {
 
 export async function unassignUserFromClin(userId: string, clinId: string) {
   await requireAdmin();
+  const db = await getDb();
   const rows = await db
     .update(userAssignments)
     .set({ isActive: false })

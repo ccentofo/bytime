@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { timesheetEntries, users, clins, contracts, slins } from '@/db/schema';
 import { eq, and, gte, lt, desc, sql } from 'drizzle-orm';
 import dayjs from 'dayjs';
@@ -70,6 +70,7 @@ export interface CellRevisionHistory {
  * Limits to 500 rows to prevent overwhelming the UI.
  */
 export async function getAuditEntries(filters: AuditFilters): Promise<AuditEntry[]> {
+  const db = await getDb();
   // We need to alias the 'users' table for the createdBy join
   // Drizzle doesn't support table aliases easily, so we'll do two queries
   // or use a raw subselect. For simplicity, we'll join to users for the
@@ -158,6 +159,7 @@ export async function getCellRevisionHistory(
   entryDate: Date,
   indirectCodeId?: string | null
 ): Promise<CellRevisionHistory | null> {
+  const db = await getDb();
   const entryStart = dayjs(entryDate).startOf('day').toDate();
   const entryEnd = dayjs(entryDate).add(1, 'day').startOf('day').toDate();
 
@@ -256,6 +258,7 @@ export async function getAuditSummary(): Promise<{
   totalLateEntries: number;
   uniqueUsers: number;
 }> {
+  const db = await getDb();
   // Single query with FILTER clauses — replaces 4 sequential COUNT queries
   const [result] = await db
     .select({
@@ -279,6 +282,7 @@ export async function getAuditSummary(): Promise<{
  * Re-exported here to avoid importing from contracts.ts in the client.
  */
 export async function getContractsForFilter() {
+  const db = await getDb();
   return db
     .select({
       id: contracts.id,
@@ -293,6 +297,7 @@ export async function getContractsForFilter() {
  * Get all CLINs for a specific contract (for filter dropdown cascade).
  */
 export async function getClinsForFilter(contractId: string) {
+  const db = await getDb();
   return db
     .select({
       id: clins.id,
@@ -309,6 +314,7 @@ export async function getClinsForFilter(contractId: string) {
  * Re-exported here to keep the audit page self-contained.
  */
 export async function getUsersForFilter() {
+  const db = await getDb();
   return db
     .select({
       id: users.id,

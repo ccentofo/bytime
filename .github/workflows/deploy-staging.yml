@@ -13,6 +13,9 @@ jobs:
     name: Deploy to Staging
     runs-on: ubuntu-latest
     if: github.event.inputs.confirm == 'deploy'
+    # Secrets (CONTROL_PLANE_DATABASE_URL, ENCRYPTION_KEY, …) come from the GitHub "staging"
+    # Environment — NOT repo-level secrets — so a staging deploy can never migrate production DBs.
+    environment: staging
 
     steps:
       - name: Checkout code
@@ -21,7 +24,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '21'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -31,16 +34,32 @@ jobs:
         run: npm run build
         env:
           AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
-          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
 
-      - name: Run database migrations
-        run: npm run db:deploy
+      - name: Migrate control plane + all tenants
+        run: npm run db:migrate:all
         env:
-          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          CONTROL_PLANE_DATABASE_URL: ${{ secrets.CONTROL_PLANE_DATABASE_URL }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
 
-      # Add your deployment step here (e.g., Docker push, Vercel, Railway, etc.)
-      - name: Deploy
-        run: echo "Add deployment command here (e.g., docker push, vercel deploy, etc.)"
+      - name: Verify every database is current
+        run: npm run db:migrate:check
         env:
-          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
-          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+          CONTROL_PLANE_DATABASE_URL: ${{ secrets.CONTROL_PLANE_DATABASE_URL }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+
+      - name: Install Vercel CLI
+        run: npm i -g vercel@latest
+
+      # Staging is its OWN Vercel project (VERCEL_PROJECT_ID comes from the "staging" GitHub
+      # Environment), deployed as that project's production deployment. A preview deployment
+      # would get a random *.vercel.app URL, which can't serve tenant subdomains — the
+      # staging domains (staging.cadenzpoint.com + *.staging.cadenzpoint.com) attach only to
+      # the project's production deployment.
+      - name: Deploy to Vercel (staging project)
+        run: |
+          vercel pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"
+          vercel build --prod --token="${{ secrets.VERCEL_TOKEN }}"
+          vercel deploy --prebuilt --prod --token="${{ secrets.VERCEL_TOKEN }}"
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}

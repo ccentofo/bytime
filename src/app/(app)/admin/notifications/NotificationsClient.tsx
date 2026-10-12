@@ -14,6 +14,7 @@ import {
 import { IconBell, IconCheck } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { updateNotificationPreferences, type NotificationPrefs } from '@/server/actions/notifications';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 type Props = {
   userId: string;
@@ -33,7 +34,7 @@ export function NotificationsClient({ userId, initialPrefs }: Props) {
       notifications.show({
         title: 'Preferences Saved',
         message: 'Your notification settings have been updated.',
-        color: 'green',
+        color: 'success',
         icon: <IconCheck size={16} />,
       });
     });
@@ -41,7 +42,7 @@ export function NotificationsClient({ userId, initialPrefs }: Props) {
 
   return (
     <>
-      <Title order={2} mb="lg">Notification Settings</Title>
+      <PageHeader title="Notification Settings" />
 
       <Paper withBorder p="lg" radius="md" maw={600}>
         <Group mb="md">

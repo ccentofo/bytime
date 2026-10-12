@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { laborCategories, userLaborCategories, users, clins, contracts, slins } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
@@ -14,6 +14,7 @@ import { validateRequired, validateStringLength, validateOptionalString, validat
  * Get all labor categories for a specific CLIN.
  */
 export async function getLaborCategoriesByClin(clinId: string) {
+  const db = await getDb();
   return db
     .select()
     .from(laborCategories)
@@ -26,6 +27,7 @@ export async function getLaborCategoriesByClin(clinId: string) {
  * Used for the main Labor Categories admin page.
  */
 export async function getAllLaborCategories() {
+  const db = await getDb();
   return db
     .select({
       id: laborCategories.id,
@@ -62,6 +64,7 @@ export async function createLaborCategory(data: {
   hourlyRate: string;
   ceilingRate?: string;
 }) {
+  const db = await getDb();
   await requireAdmin();
   const validatedData = {
     clinId: data.clinId,
@@ -85,6 +88,7 @@ export async function updateLaborCategory(id: string, data: {
   ceilingRate?: string;
   status?: 'active' | 'inactive' | 'closed';
 }) {
+  const db = await getDb();
   await requireAdmin();
   const validatedData: Record<string, unknown> = { updatedAt: new Date() };
   if (data.lcatCode !== undefined) validatedData.lcatCode = validateStringLength(validateRequired(data.lcatCode, 'LCAT code'), 'LCAT code', 1, 50);
@@ -107,6 +111,7 @@ export async function updateLaborCategory(id: string, data: {
  * Get all user-LCAT assignments with user and LCAT context.
  */
 export async function getUserLaborCategoryAssignments() {
+  const db = await getDb();
   return db
     .select({
       id: userLaborCategories.id,
@@ -142,6 +147,7 @@ export async function assignUserToLaborCategory(data: {
   endDate?: Date;
   assignedBy?: string;
 }) {
+  const db = await getDb();
   await requireAdmin();
   const rows = await db.insert(userLaborCategories).values(data).returning();
   return rows[0];
@@ -151,6 +157,7 @@ export async function assignUserToLaborCategory(data: {
  * End a user's labor category assignment by setting the end_date.
  */
 export async function endUserLaborCategoryAssignment(id: string, endDate: Date) {
+  const db = await getDb();
   await requireAdmin();
   const rows = await db.update(userLaborCategories)
     .set({ endDate, updatedAt: new Date() })
@@ -164,6 +171,7 @@ export async function endUserLaborCategoryAssignment(id: string, endDate: Date) 
  * Returns a flat list with contract/CLIN/SLIN context for dropdown population.
  */
 export async function getAssignableLaborCategories() {
+  const db = await getDb();
   return db
     .select({
       id: laborCategories.id,

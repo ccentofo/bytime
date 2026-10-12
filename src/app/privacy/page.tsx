@@ -14,7 +14,7 @@ export default function PrivacyPage() {
         <Text size="sm" c="dimmed">Last updated: May 2026</Text>
 
         <Title order={3}>1. Information We Collect</Title>
-        <Text>ByTime collects the following types of information:</Text>
+        <Text>CadenzPoint collects the following types of information:</Text>
         <Stack gap={4} pl="md">
           <Text size="sm">• <strong>Account information:</strong> Name, email address, role (provided by your administrator)</Text>
           <Text size="sm">• <strong>Timesheet data:</strong> Hours worked, charge codes, daily notes, submission/approval records</Text>
@@ -66,7 +66,7 @@ export default function PrivacyPage() {
 
         <Title order={3}>7. Cookies and Local Storage</Title>
         <Text>
-          ByTime uses HTTP-only session cookies for authentication. The offline support feature
+          CadenzPoint uses HTTP-only session cookies for authentication. The offline support feature
           stores timesheet data in your browser's IndexedDB for sync purposes. No third-party
           tracking cookies are used.
         </Text>

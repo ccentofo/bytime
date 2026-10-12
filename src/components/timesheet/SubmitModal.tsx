@@ -54,7 +54,7 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
       closeOnEscape={!isSaving}
     >
       <Stack>
-        <Alert icon={<IconAlertTriangle size={16} />} color="yellow" variant="light">
+        <Alert icon={<IconAlertTriangle size={16} />} color="warning" variant="light">
           <Text size="sm" fw={600}>
             You are submitting your timesheet for {periodLabel}.
           </Text>
@@ -65,7 +65,7 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
         </Alert>
 
         {completenessWarnings && completenessWarnings.length > 0 && (
-          <Alert icon={<IconAlertTriangle size={16} />} color="orange" variant="light">
+          <Alert icon={<IconAlertTriangle size={16} />} color="warning" variant="light">
             <Text size="sm" fw={600} mb={4}>
               Period Completeness Warnings ({completenessWarnings.length}):
             </Text>
@@ -120,7 +120,7 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
             onClick={handleSubmit}
             disabled={!certified}
             loading={isSaving}
-            color="green"
+            color="success"
           >
             Submit Timesheet
           </Button>

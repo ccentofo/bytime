@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/db';
+import { controlDb } from '@/db/control-plane';
 import { sql } from 'drizzle-orm';
 
 export async function GET() {
   try {
-    // Quick DB connectivity check
-    await db.execute(sql`SELECT 1`);
+    // Check control-plane DB connectivity
+    await controlDb.execute(sql`SELECT 1`);
 
     return NextResponse.json({
       status: 'healthy',

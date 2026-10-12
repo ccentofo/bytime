@@ -20,7 +20,7 @@ export function PasswordResetEmail({ employeeName, resetUrl, expiresIn, appUrl }
             Hi {employeeName},
           </Text>
           <Text style={{ fontSize: '14px', color: '#374151', lineHeight: '1.6' }}>
-            We received a request to reset your ByTime password. Click the button below to set a new password:
+            We received a request to reset your CadenzPoint password. Click the button below to set a new password:
           </Text>
           <Section style={{ textAlign: 'center', margin: '24px 0' }}>
             <Button
@@ -43,7 +43,7 @@ export function PasswordResetEmail({ employeeName, resetUrl, expiresIn, appUrl }
           </Text>
           <Hr style={{ borderColor: '#e5e7eb', margin: '24px 0' }} />
           <Text style={{ fontSize: '11px', color: '#9ca3af' }}>
-            ByTime — DCAA-Compliant Timekeeping
+            CadenzPoint — DCAA-Compliant Timekeeping
           </Text>
         </Container>
       </Body>

@@ -1,13 +1,14 @@
 'use server';
 
-import { db } from '@/db';
-import { integrationConnections, users, contracts, clins } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { getDb } from '@/db';
+import { integrationConnections, users, contracts, clins, integrationEntityMappings } from '@/db/schema';
+import { eq, and } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
 import { decrypt } from '@/lib/encryption';
-import { ensureValidToken, getQBOAuthUrl, fetchQBOEmployees, fetchQBOCustomers, fetchQBOServiceItems, fetchQBOVendors } from '@/lib/integrations/connectors/qbo-api';
+import { ensureValidToken, getQBOAuthUrl, fetchQBOEmployees, fetchQBOCustomers, fetchQBOServiceItems, fetchQBOVendors, fetchQBOClasses } from '@/lib/integrations/connectors/qbo-api';
 import { getMappings } from '@/server/actions/integrations';
 import { executeSyncOperation } from '@/lib/integrations/sync-engine';
+import { createCostClass, createChargeCode } from '@/server/actions/charge-codes';
 
 /**
  * Get the QBO OAuth authorization URL for initiating the connection.
@@ -23,6 +24,7 @@ export async function getQBOConnectUrl(): Promise<string> {
  */
 export async function fetchQBOEmployeesForMapping(connectionId: string) {
   await requireAdmin();
+  const db = await getDb();
   const accessToken = await ensureValidToken(connectionId);
 
   const [connection] = await db
@@ -40,6 +42,7 @@ export async function fetchQBOEmployeesForMapping(connectionId: string) {
  */
 export async function fetchQBOCustomersForMapping(connectionId: string) {
   await requireAdmin();
+  const db = await getDb();
   const accessToken = await ensureValidToken(connectionId);
 
   const [connection] = await db
@@ -57,6 +60,7 @@ export async function fetchQBOCustomersForMapping(connectionId: string) {
  */
 export async function fetchQBOServiceItemsForMapping(connectionId: string) {
   await requireAdmin();
+  const db = await getDb();
   const accessToken = await ensureValidToken(connectionId);
 
   const [connection] = await db
@@ -74,6 +78,7 @@ export async function fetchQBOServiceItemsForMapping(connectionId: string) {
  */
 export async function getBytimeEmployeesForMapping() {
   await requireAdmin();
+  const db = await getDb();
   return db
     .select({ id: users.id, fullName: users.fullName, email: users.email })
     .from(users)
@@ -86,6 +91,7 @@ export async function getBytimeEmployeesForMapping() {
  */
 export async function getBytimeContractsForMapping() {
   await requireAdmin();
+  const db = await getDb();
   return db
     .select({
       id: contracts.id,
@@ -102,6 +108,7 @@ export async function getBytimeContractsForMapping() {
  */
 export async function getBytimeClinsForMapping() {
   await requireAdmin();
+  const db = await getDb();
   return db
     .select({
       id: clins.id,
@@ -120,6 +127,7 @@ export async function getBytimeClinsForMapping() {
  */
 export async function fetchQBOVendorsForMapping(connectionId: string) {
   await requireAdmin();
+  const db = await getDb();
   const accessToken = await ensureValidToken(connectionId);
 
   const [connection] = await db
@@ -150,4 +158,125 @@ export async function triggerQBOSync(data: {
     data.triggeredBy,
     'manual'
   );
+}
+
+/**
+ * Fetch QBO Classes for the mapping/import UI.
+ */
+export async function fetchQBOClassesForMapping(connectionId: string) {
+  await requireAdmin();
+  const db = await getDb();
+  const accessToken = await ensureValidToken(connectionId);
+  const [connection] = await db
+    .select({ externalCompanyId: integrationConnections.externalCompanyId })
+    .from(integrationConnections).where(eq(integrationConnections.id, connectionId)).limit(1);
+  const realmId = connection?.externalCompanyId ?? '';
+
+  const classes = await fetchQBOClasses(accessToken, realmId);
+
+  // Annotate with existing mappings
+  const mappingRows = await db.select()
+    .from(integrationEntityMappings)
+    .where(and(eq(integrationEntityMappings.connectionId, connectionId), eq(integrationEntityMappings.entityType, 'class')));
+  const mapped = new Set(mappingRows.map((m) => m.externalEntityId));
+
+  return classes.map((c) => ({ id: c.Id, name: c.Name, fullyQualifiedName: c.FullyQualifiedName, alreadyMapped: mapped.has(c.Id) }));
+}
+
+/**
+ * Import QBO Classes as CadenzPoint cost_classes.
+ * Idempotent: re-running updates mapping, doesn't duplicate.
+ */
+export async function importQboClasses(connectionId: string, selected: Array<{ qboId: string; name: string }>) {
+  await requireAdmin();
+  const db = await getDb();
+  let created = 0;
+  let updated = 0;
+
+  for (const item of selected) {
+    const existing = await db.select({ id: integrationEntityMappings.id, bytimeEntityId: integrationEntityMappings.bytimeEntityId })
+      .from(integrationEntityMappings)
+      .where(and(
+        eq(integrationEntityMappings.connectionId, connectionId),
+        eq(integrationEntityMappings.entityType, 'class'),
+        eq(integrationEntityMappings.externalEntityId, item.qboId),
+      )).limit(1);
+
+    if (existing.length > 0) {
+      updated++;
+      continue; // already imported
+    }
+
+    // Create the cost class (idempotent via UNIQUE constraint on name)
+    const costClass = await createCostClass(item.name);
+    if (!costClass) continue;
+
+    await db.insert(integrationEntityMappings).values({
+      connectionId, entityType: 'class',
+      bytimeEntityId: costClass.id,
+      bytimeEntityName: costClass.name,
+      externalEntityId: item.qboId,
+      externalEntityName: item.name,
+    });
+    created++;
+  }
+
+  return { created, updated };
+}
+
+/**
+ * Import QBO Service Items as CadenzPoint charge_codes.
+ * Each item must be assigned to a CLIN. Idempotent via charge_code mapping.
+ */
+export async function importQboChargeCodes(
+  connectionId: string,
+  items: Array<{
+    qboId: string;
+    name: string;
+    clinId: string;           // resolved by admin
+    classId?: string;         // optional: from imported classes
+    workLocation?: 'onsite' | 'telework' | 'other';
+  }>
+) {
+  await requireAdmin();
+  const db = await getDb();
+  let created = 0;
+  let updated = 0;
+
+  for (const item of items) {
+    if (!item.clinId) throw new Error(`Charge code "${item.name}" requires a CLIN selection.`);
+
+    const existing = await db.select({ id: integrationEntityMappings.id, bytimeEntityId: integrationEntityMappings.bytimeEntityId })
+      .from(integrationEntityMappings)
+      .where(and(
+        eq(integrationEntityMappings.connectionId, connectionId),
+        eq(integrationEntityMappings.entityType, 'charge_code'),
+        eq(integrationEntityMappings.externalEntityId, item.qboId),
+      )).limit(1);
+
+    if (existing.length > 0) {
+      // Already imported — idempotent skip (could update name here if desired)
+      updated++;
+      continue;
+    }
+
+    // Use QBO item name as both code and human name (admin can edit later)
+    const code = item.name.replace(/\s+/g, '-').substring(0, 100);
+    const chargeCode = await createChargeCode({
+      code, name: item.name, clinId: item.clinId,
+      classId: item.classId ?? undefined, workLocation: item.workLocation,
+    });
+    if (!chargeCode) continue;
+
+    await db.insert(integrationEntityMappings).values({
+      connectionId, entityType: 'charge_code',
+      bytimeEntityId: chargeCode.id,
+      bytimeEntityName: chargeCode.name,
+      externalEntityId: item.qboId,
+      externalEntityName: item.name,
+    });
+    created++;
+  }
+
+  return { created, updated };
 }

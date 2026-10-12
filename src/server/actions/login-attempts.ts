@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { loginAttempts } from '@/db/schema';
 import { eq, and, gte, desc } from 'drizzle-orm';
 import dayjs from 'dayjs';
@@ -26,6 +26,7 @@ export async function checkLockout(email: string): Promise<{
   lockoutExpiresAt: Date | null;
   minutesRemaining: number;
 } | null> {
+  const db = await getDb();
   const normalizedEmail = email.toLowerCase().trim();
   const windowStart = dayjs().subtract(LOCKOUT_DURATION_MINUTES, 'minute').toDate();
 
@@ -97,6 +98,7 @@ export async function recordFailedAttempt(
   email: string,
   ipAddress?: string
 ): Promise<void> {
+  const db = await getDb();
   const normalizedEmail = email.toLowerCase().trim();
 
   await db.insert(loginAttempts).values({
@@ -113,6 +115,7 @@ export async function recordSuccessfulLogin(
   email: string,
   ipAddress?: string
 ): Promise<void> {
+  const db = await getDb();
   const normalizedEmail = email.toLowerCase().trim();
 
   await db.insert(loginAttempts).values({
@@ -127,6 +130,7 @@ export async function recordSuccessfulLogin(
  * This inserts a successful login record, which resets the counter.
  */
 export async function unlockAccount(email: string): Promise<void> {
+  const db = await getDb();
   const normalizedEmail = email.toLowerCase().trim();
 
   // Insert a "successful" record to reset the counter

@@ -1,7 +1,7 @@
 import * as OTPAuth from 'otpauth';
 import crypto from 'crypto';
 
-const APP_NAME = 'ByTime';
+const APP_NAME = 'CadenzPoint';
 
 /**
  * Generate a new TOTP secret and return the secret + otpauth:// URI for QR code.

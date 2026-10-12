@@ -1,13 +1,13 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Inter } from "next/font/google";
 import "@mantine/core/styles.css";
 import "@mantine/dates/styles.css";
 import "@mantine/notifications/styles.css";
+import "mantine-react-table/styles.css";
 import "./globals.css";
-import { MantineProvider, ColorSchemeScript, createTheme } from "@mantine/core";
+import { MantineProvider, ColorSchemeScript } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
-
-const theme = createTheme({});
+import { theme } from "@/theme";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -19,8 +19,10 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
+
 export const metadata: Metadata = {
-  title: "ByTime — DCAA-Compliant Timekeeping",
+  title: "CadenzPoint — DCAA-Compliant Timekeeping",
   description: "Modern timekeeping for Government Contractors",
 };
 
@@ -30,7 +32,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`} suppressHydrationWarning>
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} ${inter.variable}`} suppressHydrationWarning>
       <head />
       <body>
         {/* ColorSchemeScript MUST be in <body> before MantineProvider — NOT in <head>.

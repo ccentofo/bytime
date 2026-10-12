@@ -52,7 +52,7 @@ export function SyncStatusIndicator() {
 
   // Determine display state
   let icon = <IconCheck size={14} />;
-  let color = 'green';
+  let color = 'success';
   let label = 'Synced';
   let tooltip = 'All data is saved to the server';
 
@@ -68,12 +68,12 @@ export function SyncStatusIndicator() {
     tooltip = status.lastError;
   } else if (status.isSyncing) {
     icon = <IconRefresh size={14} />;
-    color = 'blue';
+    color = 'signal';
     label = 'Syncing...';
     tooltip = `Uploading ${status.pendingCount} pending entries`;
   } else if (status.pendingCount > 0) {
     icon = <IconCloud size={14} />;
-    color = 'yellow';
+    color = 'warning';
     label = `${status.pendingCount} pending`;
     tooltip = `${status.pendingCount} entries waiting to sync`;
   }

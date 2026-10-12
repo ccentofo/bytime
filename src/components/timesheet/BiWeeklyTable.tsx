@@ -1,8 +1,7 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useRef, useState, useEffect } from 'react';
 import { Text } from '@mantine/core';
-import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import dayjs from 'dayjs';
 import { useTimesheet } from '@/components/timesheet/TimesheetContext';
 import { ChargeCodeCell } from '@/components/timesheet/cells/ChargeCodeCell';
@@ -10,230 +9,176 @@ import { HourCell } from '@/components/timesheet/cells/HourCell';
 import { TotalHoursCell } from '@/components/timesheet/cells/TotalHoursCell';
 import { ColumnHeaderDate } from '@/components/timesheet/cells/ColumnHeaderDate';
 import { getNumDaysInPeriod } from '@/lib/date-utils';
-import type { TimesheetEntry } from '@/types/timesheet';
+import styles from './Timesheet.module.css';
 
-// Row shape passed to MRT — merges ChargeCode + TimesheetEntry
-interface TableRow extends TimesheetEntry {
-  chargeCodeId: string;
+export type Density = 'comfortable' | 'compact' | 'dense';
+
+// Fixed column widths (px). Day columns get all remaining space via 1fr.
+const CC_WIDTH_COMFORTABLE = 240;
+const CC_WIDTH_DENSE = 180;
+const TOTAL_WIDTH = 72;
+
+function getDensity(perDayPx: number): Density {
+  if (perDayPx >= 52) return 'comfortable';
+  if (perDayPx >= 36) return 'compact';
+  return 'dense';
+}
+
+function formatFooterHours(value: number, density: Density): string {
+  if (density === 'dense') {
+    return value === Math.floor(value) ? String(Math.floor(value)) : value.toFixed(1);
+  }
+  return value.toFixed(2);
 }
 
 export function BiWeeklyTable() {
   const { state } = useTimesheet();
   const { chargeCodes, entries, periodStart } = state;
-
   const numDays = getNumDaysInPeriod(periodStart, state.periodConfig);
 
-  // Merge charge codes + entries into flat row objects
-  const tableData: TableRow[] = useMemo(
-    () =>
-      chargeCodes.map((cc) => {
-        const entry = entries.find((e) => e.chargeCodeId === cc.id);
-        return {
-          chargeCodeId: cc.id,
-          hours: entry?.hours ?? Array(numDays).fill(0),
-        };
-      }),
-    [chargeCodes, entries, numDays]
+  // Measure container width for density calculation
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      setContainerWidth(entries[0].contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const ccWidth = containerWidth < 900 ? CC_WIDTH_DENSE : CC_WIDTH_COMFORTABLE;
+  const perDayPx = containerWidth > 0
+    ? (containerWidth - ccWidth - TOTAL_WIDTH) / numDays
+    : 52; // default comfortable until measured
+  const density = getDensity(perDayPx);
+
+  // Compute daily totals and missing-hours flags
+  const { dailyTotals, dailyHasMissing } = useMemo(() => {
+    const hasChargeCodes = chargeCodes.length > 0;
+    const totals: number[] = Array(numDays).fill(0);
+    const missing: boolean[] = Array(numDays).fill(false);
+
+    for (let i = 0; i < numDays; i++) {
+      let dayTotal = 0;
+      for (const entry of entries) {
+        dayTotal += (entry.hours ?? [])[i] ?? 0;
+      }
+      totals[i] = dayTotal;
+
+      if (hasChargeCodes) {
+        const date = dayjs(periodStart).add(i, 'day');
+        const dow = date.day();
+        const isWeekday = dow >= 1 && dow <= 5;
+        const isPast = date.isBefore(dayjs(), 'day');
+        missing[i] = isWeekday && isPast && dayTotal === 0;
+      }
+    }
+    return { dailyTotals: totals, dailyHasMissing: missing };
+  }, [entries, numDays, periodStart, chargeCodes.length]);
+
+  const grandTotal = useMemo(
+    () => entries.reduce((sum, e) => sum + (e.hours ?? []).reduce((a, b) => a + (b ?? 0), 0), 0),
+    [entries]
   );
 
-  const columns = useMemo<MRT_ColumnDef<TableRow>[]>(() => {
-    // Column 0 — Charge Code (pinned left)
-    const chargeCodeCol: MRT_ColumnDef<TableRow> = {
-      accessorKey: 'chargeCodeId',
-      header: 'Charge Code',
-      size: 260,
-      enableSorting: false,
-      Cell: ({ row }) => {
-        const cc = chargeCodes.find((c) => c.id === row.original.chargeCodeId);
-        if (!cc) return null;
-        return <ChargeCodeCell chargeCode={cc} />;
-      },
-      Footer: () => (
-        <Text fw={700} size="sm">
-          Daily Totals
-        </Text>
-      ),
-      mantineTableHeadCellProps: {
-        style: {
-          textAlign: 'left' as const,
-          borderBottom: '2px solid var(--mantine-color-default-border)',
-          borderRight: '2px solid var(--mantine-color-default-border)',
-          padding: '8px',
-        },
-      },
-      mantineTableBodyCellProps: {
-        style: {
-          backgroundColor: 'var(--mantine-color-body)',
-          borderRight: '2px solid var(--mantine-color-default-border)',
-          verticalAlign: 'top',
-          padding: '8px',
-        },
-      },
-      mantineTableFooterCellProps: {
-        style: {
-          backgroundColor: 'var(--mantine-color-body)',
-          borderRight: '2px solid var(--mantine-color-default-border)',
-          borderTop: '2px solid var(--mantine-color-default-border)',
-          padding: '8px',
-        },
-      },
-    };
+  // CSS grid template
+  const gridTemplateColumns = `${ccWidth}px repeat(${numDays}, minmax(0, 1fr)) ${TOTAL_WIDTH}px`;
 
-    // Compute daily totals for missing hours detection
-    const dailyHasMissing = Array.from({ length: numDays }, (_, i) => {
-      const date = dayjs(periodStart).add(i, 'day');
-      const dow = date.day();
-      const isWeekday = dow >= 1 && dow <= 5;
-      const isPast = date.isBefore(dayjs(), 'day');
-
-      if (!isWeekday || !isPast) return false;
-
-      // Sum hours across all charge codes for this day
-      let totalHours = 0;
-      for (const entry of state.entries) {
-        totalHours += (entry.hours ?? [])[i] ?? 0;
-      }
-      return totalHours === 0;
-    });
-
-    // Columns 1–N — Day columns (dynamic count)
-    const dayColumns: MRT_ColumnDef<TableRow>[] = Array.from({ length: numDays }, (_, dayIndex) => {
-      const date = dayjs(periodStart).add(dayIndex, 'day').toDate();
-      const dow = dayjs(periodStart).add(dayIndex, 'day').day();
-      const isWeekend = dow === 0 || dow === 6;
-
-      return {
-        id: `day-${dayIndex}`,
-        accessorFn: (row: TableRow) => row.hours[dayIndex],
-        header: `Day ${dayIndex}`,
-        size: 72,
-        enableSorting: false,
-        Header: () => <ColumnHeaderDate date={date} dayIndex={dayIndex} hasMissingHours={dailyHasMissing[dayIndex]} />,
-        Cell: ({ row }: { row: { original: TableRow } }) => (
-          <HourCell chargeCodeId={row.original.chargeCodeId} dayIndex={dayIndex} />
-        ),
-        Footer: () => {
-          const dayTotal = entries.reduce((sum, entry) => sum + ((entry.hours ?? [])[dayIndex] ?? 0), 0);
+  return (
+    <div className={styles.gridWrapper} ref={containerRef}>
+      <div
+        className={styles.grid}
+        style={{ gridTemplateColumns }}
+        role="table"
+        aria-label="Timesheet"
+      >
+        {/* ── HEADER ROW ── */}
+        <div className={styles.headerCellCC} role="columnheader">
+          <Text fw={700} size="sm">Charge Code</Text>
+        </div>
+        {Array.from({ length: numDays }, (_, i) => {
+          const date = dayjs(periodStart).add(i, 'day').toDate();
+          const isWeekend = dayjs(date).day() === 0 || dayjs(date).day() === 6;
           return (
-            <Text fw={700} ta="center" size="sm">
-              {(dayTotal ?? 0).toFixed(2)}
-            </Text>
+            <div
+              key={`hdr-${i}`}
+              className={`${styles.headerCell}${isWeekend ? ' ' + styles.weekend : ''}`}
+              role="columnheader"
+            >
+              <ColumnHeaderDate
+                date={date}
+                dayIndex={i}
+                hasMissingHours={dailyHasMissing[i]}
+                density={density}
+              />
+            </div>
           );
-        },
-        mantineTableBodyCellProps: {
-          style: {
-            backgroundColor: isWeekend
-              ? 'light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-7))'
-              : undefined,
-            padding: '6px 4px',
-            verticalAlign: 'middle' as const,
-          },
-        },
-        mantineTableHeadCellProps: {
-          style: {
-            backgroundColor: isWeekend
-              ? 'light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-7))'
-              : undefined,
-            textAlign: 'center' as const,
-            verticalAlign: 'middle' as const,
-          },
-        },
-        mantineTableFooterCellProps: {
-          style: {
-            backgroundColor: isWeekend
-              ? 'light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-7))'
-              : undefined,
-            borderTop: '2px solid var(--mantine-color-default-border)',
-            padding: '6px 4px',
-            textAlign: 'center' as const,
-          },
-        },
-      } as MRT_ColumnDef<TableRow>;
-    });
+        })}
+        <div className={styles.headerCellTotal} role="columnheader">
+          <Text fw={700} size="sm">Total</Text>
+        </div>
 
-    // Column N+1 — Total (pinned right)
-    const totalCol: MRT_ColumnDef<TableRow> = {
-      id: 'total',
-      accessorFn: (row) => (row.hours ?? []).reduce((a, b) => a + (b ?? 0), 0),
-      header: 'Total',
-      size: 80,
-      enableSorting: false,
-      Cell: ({ row }) => <TotalHoursCell chargeCodeId={row.original.chargeCodeId} />,
-      Footer: () => {
-        const grandTotal = entries.reduce(
-          (sum, entry) => sum + (entry.hours ?? []).reduce((a, b) => a + (b ?? 0), 0),
-          0
-        );
-        return (
-          <Text fw={900} ta="center" size="sm" c="blue">
-            {(grandTotal ?? 0).toFixed(2)}
+        {/* ── BODY ROWS ── */}
+        {chargeCodes.map((cc, rowIdx) => {
+          const isOdd = rowIdx % 2 === 1;
+          const rowClass = isOdd ? styles.rowOdd : '';
+          return [
+            // Charge code cell
+            <div key={`cc-${cc.id}`} className={`${styles.bodyCellCC} ${rowClass}`} role="cell">
+              <ChargeCodeCell chargeCode={cc} density={density} />
+            </div>,
+            // Day cells
+            ...Array.from({ length: numDays }, (_, i) => {
+              const isWeekend = dayjs(periodStart).add(i, 'day').day() === 0
+                || dayjs(periodStart).add(i, 'day').day() === 6;
+              return (
+                <div
+                  key={`cell-${cc.id}-${i}`}
+                  className={`${styles.bodyCell} ${rowClass}${isWeekend ? ' ' + styles.weekend : ''}`}
+                  role="cell"
+                >
+                  <HourCell chargeCodeId={cc.id} dayIndex={i} density={density} />
+                </div>
+              );
+            }),
+            // Total cell
+            <div key={`total-${cc.id}`} className={`${styles.bodyCellTotal} ${rowClass}`} role="cell">
+              <TotalHoursCell chargeCodeId={cc.id} density={density} />
+            </div>,
+          ];
+        })}
+
+        {/* ── FOOTER ROW ── */}
+        <div className={styles.footerCellCC} role="cell">
+          <Text fw={700} size="sm">Daily Totals</Text>
+        </div>
+        {Array.from({ length: numDays }, (_, i) => {
+          const isWeekend = dayjs(periodStart).add(i, 'day').day() === 0
+            || dayjs(periodStart).add(i, 'day').day() === 6;
+          return (
+            <div
+              key={`ftr-${i}`}
+              className={`${styles.footerCell}${isWeekend ? ' ' + styles.weekend : ''}`}
+              role="cell"
+            >
+              <Text fw={700} ta="center" size={density === 'dense' ? 'xs' : 'sm'}
+                style={{ fontVariantNumeric: 'tabular-nums' }}>
+                {formatFooterHours(dailyTotals[i], density)}
+              </Text>
+            </div>
+          );
+        })}
+        <div className={styles.footerCellTotal} role="cell">
+          <Text fw={900} ta="center" size="sm" c="signal"
+            style={{ fontVariantNumeric: 'tabular-nums' }}>
+            {formatFooterHours(grandTotal, density)}
           </Text>
-        );
-      },
-      mantineTableHeadCellProps: {
-        style: {
-          textAlign: 'center' as const,
-          borderLeft: '2px solid var(--mantine-color-default-border)',
-        },
-      },
-      mantineTableBodyCellProps: {
-        style: {
-          borderLeft: '2px solid var(--mantine-color-default-border)',
-          padding: '6px 4px',
-          verticalAlign: 'middle' as const,
-        },
-      },
-      mantineTableFooterCellProps: {
-        style: {
-          borderLeft: '2px solid var(--mantine-color-default-border)',
-          borderTop: '2px solid var(--mantine-color-default-border)',
-          padding: '6px 4px',
-        },
-      },
-    };
-
-    return [chargeCodeCol, ...dayColumns, totalCol];
-  }, [chargeCodes, periodStart, entries, numDays]);
-
-  const table = useMantineReactTable({
-    columns,
-    data: tableData,
-    enableColumnActions: false,
-    enableColumnFilters: false,
-    enablePagination: false,
-    enableSorting: false,
-    enableTopToolbar: false,
-    enableBottomToolbar: false,
-    enableRowSelection: false,
-    enableDensityToggle: false,
-    enableFullScreenToggle: false,
-    enableHiding: false,
-    enableGlobalFilter: false,
-    enableTableFooter: true,
-    mantineTableProps: {
-      withColumnBorders: false,
-      highlightOnHover: false,
-      striped: 'odd',
-      style: { tableLayout: 'fixed' },
-    },
-    mantineTableHeadCellProps: {
-      style: {
-        borderBottom: '2px solid var(--mantine-color-default-border)',
-        textAlign: 'center' as const,
-        padding: '8px 4px',
-      },
-    },
-    mantineTableBodyCellProps: {
-      style: {
-        borderBottom: '1px solid var(--mantine-color-default-border)',
-        padding: '6px 4px',
-        verticalAlign: 'middle' as const,
-      },
-    },
-    initialState: {
-      columnPinning: { left: ['chargeCodeId'], right: ['total'] },
-    },
-  });
-
-  return <MantineReactTable table={table} />;
+        </div>
+      </div>
+    </div>
+  );
 }

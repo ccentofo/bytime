@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { timesheetEntries, timesheetPeriods, users, contracts, clins, indirectChargeCodes } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
@@ -41,6 +41,7 @@ export interface MigrationResult {
 export async function validateMigrationData(
   rows: MigrationEntryRow[]
 ): Promise<MigrationValidationResult[]> {
+  const db = await getDb();
   await requireAdmin();
 
   // Pre-fetch all lookups
@@ -64,7 +65,7 @@ export async function validateMigrationData(
       errors.push('Employee Email is required');
     } else {
       userId = userMap.get(row.employeeEmail.toLowerCase().trim());
-      if (!userId) errors.push(`Employee "${row.employeeEmail}" not found in ByTime`);
+      if (!userId) errors.push(`Employee "${row.employeeEmail}" not found in CadenzPoint`);
     }
 
     // Validate date
@@ -133,6 +134,7 @@ export async function validateMigrationData(
 export async function importMigrationData(
   rows: MigrationEntryRow[]
 ): Promise<MigrationResult> {
+  const db = await getDb();
   await requireAdmin();
 
   // Re-validate to get resolved IDs
@@ -185,6 +187,7 @@ export async function importMigrationPeriods(
     reviewComment: string;
   }>
 ): Promise<MigrationResult> {
+  const db = await getDb();
   await requireAdmin();
 
   const allUsers = await db.select({ id: users.id, email: users.email }).from(users);

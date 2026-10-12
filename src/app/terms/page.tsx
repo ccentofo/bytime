@@ -15,13 +15,13 @@ export default function TermsPage() {
 
         <Title order={3}>1. Acceptance of Terms</Title>
         <Text>
-          By accessing and using ByTime ("the Service"), you agree to be bound by these Terms of Service.
+          By accessing and using CadenzPoint ("the Service"), you agree to be bound by these Terms of Service.
           If you do not agree to these terms, do not use the Service.
         </Text>
 
         <Title order={3}>2. Description of Service</Title>
         <Text>
-          ByTime is a DCAA-compliant timekeeping application designed for Government Contractors.
+          CadenzPoint is a DCAA-compliant timekeeping application designed for Government Contractors.
           The Service enables time entry, approval workflows, audit trail management, and reporting
           in accordance with Defense Contract Audit Agency requirements.
         </Text>
@@ -36,7 +36,7 @@ export default function TermsPage() {
         <Title order={3}>4. Data Ownership</Title>
         <Text>
           All timesheet data, contract information, and business records entered into the Service
-          remain the property of the subscribing organization. ByTime does not claim ownership of
+          remain the property of the subscribing organization. CadenzPoint does not claim ownership of
           your data and will not share it with third parties except as required by law.
         </Text>
 
@@ -65,7 +65,7 @@ export default function TermsPage() {
 
         <Title order={3}>8. Limitation of Liability</Title>
         <Text>
-          ByTime is provided "as is" without warranties of any kind. In no event shall ByTime
+          CadenzPoint is provided "as is" without warranties of any kind. In no event shall CadenzPoint
           be liable for any indirect, incidental, special, or consequential damages arising from
           use of the Service.
         </Text>

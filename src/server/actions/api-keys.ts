@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { apiKeys } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
@@ -16,6 +16,7 @@ export async function createApiKey(data: {
   permissions?: 'read' | 'read-write';
   expiresAt?: Date;
 }): Promise<{ id: string; key: string; prefix: string }> {
+  const db = await getDb();
   await requireAdmin();
 
   // Generate a random API key: "byt_" + 32 random hex chars
@@ -47,6 +48,7 @@ export async function createApiKey(data: {
  * Get all API keys (without the actual key — only prefix shown).
  */
 export async function getApiKeys() {
+  const db = await getDb();
   await requireAdmin();
   return db.select({
     id: apiKeys.id,
@@ -64,6 +66,7 @@ export async function getApiKeys() {
  * Revoke (deactivate) an API key.
  */
 export async function revokeApiKey(id: string): Promise<void> {
+  const db = await getDb();
   await requireAdmin();
   await db.update(apiKeys)
     .set({ isActive: false, updatedAt: new Date() })
@@ -74,6 +77,7 @@ export async function revokeApiKey(id: string): Promise<void> {
  * Delete an API key permanently.
  */
 export async function deleteApiKey(id: string): Promise<void> {
+  const db = await getDb();
   await requireAdmin();
   await db.delete(apiKeys).where(eq(apiKeys.id, id));
 }

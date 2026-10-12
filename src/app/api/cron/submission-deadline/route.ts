@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/db';
+import { getDbForUrl } from '@/db';
+import { controlDb } from '@/db/control-plane';
+import { tenants } from '@/db/control-plane/schema';
+import { decrypt } from '@/lib/encryption';
 import { users, timesheetPeriods, notificationPreferences } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import dayjs from 'dayjs';
@@ -11,13 +14,18 @@ import { checkCronRateLimit } from '@/lib/rate-limit';
  * Cron endpoint: Send submission deadline reminders.
  * Should be called daily. Sends reminders 2 days before and on the last day of each period.
  *
+ * Iterates all active tenants.
+ *
  * Protect this endpoint with a CRON_SECRET header in production.
  */
 export async function GET(request: NextRequest) {
   const rateLimited = checkCronRateLimit(request);
   if (rateLimited) return rateLimited;
 
-  const cronSecret = request.headers.get('x-cron-secret');
+  // Verify cron secret — accepts x-cron-secret (GitHub Actions) or
+  // Authorization: Bearer (Vercel native crons).
+  const cronSecret = request.headers.get('x-cron-secret')
+    ?? request.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
   if (process.env.CRON_SECRET && cronSecret !== process.env.CRON_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -36,48 +44,53 @@ export async function GET(request: NextRequest) {
   const periodLabel = `${dayjs(periodStart).format('MMM D')} – ${periodEnd.format('MMM D, YYYY')}`;
   const deadlineDate = periodEnd.format('dddd, MMM D, YYYY');
 
-  // Get all active employees
-  const allEmployees = await db
-    .select({ id: users.id, fullName: users.fullName, email: users.email })
-    .from(users)
-    .where(and(eq(users.isActive, true), eq(users.role, 'employee')));
+  // Load all active tenants from the control plane
+  const activeTenants = await controlDb.select().from(tenants).where(eq(tenants.status, 'active'));
 
-  let sent = 0;
-  for (const emp of allEmployees) {
-    // Check if this user has a submitted/approved period
-    const periods = await db
-      .select({ status: timesheetPeriods.status })
-      .from(timesheetPeriods)
-      .where(
-        and(
-          eq(timesheetPeriods.userId, emp.id),
-          eq(timesheetPeriods.periodStart, periodStart),
-        )
-      );
+  let totalSent = 0;
 
-    const period = periods[0];
-    if (period && (period.status === 'submitted' || period.status === 'approved')) {
-      continue; // Already submitted or approved
-    }
+  for (const tenant of activeTenants) {
+    const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted));
 
-    // Check notification preference
-    const prefs = await db
-      .select({ enabled: notificationPreferences.emailDeadlineReminder })
-      .from(notificationPreferences)
-      .where(eq(notificationPreferences.userId, emp.id));
+    const allEmployees = await db
+      .select({ id: users.id, fullName: users.fullName, email: users.email })
+      .from(users)
+      .where(and(eq(users.isActive, true), eq(users.role, 'employee')));
 
-    const enabled = prefs.length === 0 ? true : prefs[0].enabled;
+    for (const emp of allEmployees) {
+      const periods = await db
+        .select({ status: timesheetPeriods.status })
+        .from(timesheetPeriods)
+        .where(
+          and(
+            eq(timesheetPeriods.userId, emp.id),
+            eq(timesheetPeriods.periodStart, periodStart),
+          )
+        );
 
-    if (enabled) {
-      await sendSubmissionDeadlineEmail({
-        employeeEmail: emp.email,
-        employeeName: emp.fullName,
-        periodLabel,
-        deadlineDate,
-      });
-      sent++;
+      const period = periods[0];
+      if (period && (period.status === 'submitted' || period.status === 'approved')) {
+        continue;
+      }
+
+      const prefs = await db
+        .select({ enabled: notificationPreferences.emailDeadlineReminder })
+        .from(notificationPreferences)
+        .where(eq(notificationPreferences.userId, emp.id));
+
+      const enabled = prefs.length === 0 ? true : prefs[0].enabled;
+
+      if (enabled) {
+        await sendSubmissionDeadlineEmail({
+          employeeEmail: emp.email,
+          employeeName: emp.fullName,
+          periodLabel,
+          deadlineDate,
+        });
+        totalSent++;
+      }
     }
   }
 
-  return NextResponse.json({ message: 'Submission deadline reminders sent', sent });
+  return NextResponse.json({ message: 'Submission deadline reminders sent', sent: totalSent });
 }

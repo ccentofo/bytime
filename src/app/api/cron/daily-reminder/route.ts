@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/db';
+import { getDbForUrl } from '@/db';
+import { controlDb } from '@/db/control-plane';
+import { tenants } from '@/db/control-plane/schema';
+import { decrypt } from '@/lib/encryption';
 import { users, timesheetEntries, notificationPreferences } from '@/db/schema';
 import { eq, and, gte, lt } from 'drizzle-orm';
 import dayjs from 'dayjs';
@@ -10,7 +13,8 @@ import { checkCronRateLimit } from '@/lib/rate-limit';
  * Cron endpoint: Send daily time entry reminders.
  * Should be called once per day (e.g., 4:00 PM local time) on weekdays.
  *
- * Sends reminders to employees who have NOT entered time for today.
+ * Iterates all active tenants and sends reminders to employees who have
+ * NOT entered time for today.
  *
  * Protect this endpoint with a CRON_SECRET header in production.
  */
@@ -18,8 +22,10 @@ export async function GET(request: NextRequest) {
   const rateLimited = checkCronRateLimit(request);
   if (rateLimited) return rateLimited;
 
-  // Optional: verify cron secret
-  const cronSecret = request.headers.get('x-cron-secret');
+  // Verify cron secret — accepts x-cron-secret (GitHub Actions) or
+  // Authorization: Bearer (Vercel native crons).
+  const cronSecret = request.headers.get('x-cron-secret')
+    ?? request.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
   if (process.env.CRON_SECRET && cronSecret !== process.env.CRON_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -33,46 +39,53 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ message: 'Weekend — no reminders sent', sent: 0 });
   }
 
-  // Get all active employees
-  const allEmployees = await db
-    .select({ id: users.id, fullName: users.fullName, email: users.email })
-    .from(users)
-    .where(and(eq(users.isActive, true), eq(users.role, 'employee')));
+  // Load all active tenants from the control plane
+  const activeTenants = await controlDb.select().from(tenants).where(eq(tenants.status, 'active'));
 
-  // Find who has entered time today
-  const entriesForToday = await db
-    .select({ userId: timesheetEntries.userId })
-    .from(timesheetEntries)
-    .where(
-      and(
-        gte(timesheetEntries.entryDate, today.toDate()),
-        lt(timesheetEntries.entryDate, tomorrow.toDate()),
-      )
-    );
+  let totalSent = 0;
 
-  const usersWithEntries = new Set(entriesForToday.map((e) => e.userId));
+  for (const tenant of activeTenants) {
+    const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted));
 
-  let sent = 0;
-  for (const emp of allEmployees) {
-    if (usersWithEntries.has(emp.id)) continue; // Already entered time
+    // Get all active employees for this tenant
+    const allEmployees = await db
+      .select({ id: users.id, fullName: users.fullName, email: users.email })
+      .from(users)
+      .where(and(eq(users.isActive, true), eq(users.role, 'employee')));
 
-    // Check notification preference
-    const prefs = await db
-      .select({ enabled: notificationPreferences.emailDailyReminder })
-      .from(notificationPreferences)
-      .where(eq(notificationPreferences.userId, emp.id));
+    // Find who has entered time today
+    const entriesForToday = await db
+      .select({ userId: timesheetEntries.userId })
+      .from(timesheetEntries)
+      .where(
+        and(
+          gte(timesheetEntries.entryDate, today.toDate()),
+          lt(timesheetEntries.entryDate, tomorrow.toDate()),
+        )
+      );
 
-    const enabled = prefs.length === 0 ? true : prefs[0].enabled; // Default to enabled
+    const usersWithEntries = new Set(entriesForToday.map((e) => e.userId));
 
-    if (enabled) {
-      await sendDailyReminderEmail({
-        employeeEmail: emp.email,
-        employeeName: emp.fullName,
-        todayDate: today.format('dddd, MMM D, YYYY'),
-      });
-      sent++;
+    for (const emp of allEmployees) {
+      if (usersWithEntries.has(emp.id)) continue;
+
+      const prefs = await db
+        .select({ enabled: notificationPreferences.emailDailyReminder })
+        .from(notificationPreferences)
+        .where(eq(notificationPreferences.userId, emp.id));
+
+      const enabled = prefs.length === 0 ? true : prefs[0].enabled;
+
+      if (enabled) {
+        await sendDailyReminderEmail({
+          employeeEmail: emp.email,
+          employeeName: emp.fullName,
+          todayDate: today.format('dddd, MMM D, YYYY'),
+        });
+        totalSent++;
+      }
     }
   }
 
-  return NextResponse.json({ message: `Daily reminders sent`, sent });
+  return NextResponse.json({ message: 'Daily reminders sent', sent: totalSent });
 }

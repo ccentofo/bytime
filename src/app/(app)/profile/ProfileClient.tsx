@@ -16,7 +16,9 @@ import {
 import { IconKey, IconCheck, IconAlertCircle, IconUser } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { changePassword } from '@/server/actions/password';
-import dayjs from 'dayjs';
+import { formatDateTime } from '@/lib/format';
+import { ROLE_COLOR } from '@/lib/ui/status-colors';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { MFASetup } from './MFASetup';
 
 type Props = {
@@ -32,12 +34,6 @@ type Props = {
     enabled: boolean;
     recoveryCodesRemaining: number;
   };
-};
-
-const ROLE_COLORS: Record<string, string> = {
-  admin: 'red',
-  supervisor: 'blue',
-  employee: 'green',
 };
 
 export function ProfileClient({ userId, fullName, email, role, passwordInfo, mfaStatus }: Props) {
@@ -85,7 +81,7 @@ export function ProfileClient({ userId, fullName, email, role, passwordInfo, mfa
         notifications.show({
           title: 'Password Changed',
           message: 'Your password has been updated successfully.',
-          color: 'green',
+          color: 'success',
           icon: <IconCheck size={16} />,
         });
       } else {
@@ -96,7 +92,7 @@ export function ProfileClient({ userId, fullName, email, role, passwordInfo, mfa
 
   return (
     <>
-      <Title order={2} mb="lg">My Profile</Title>
+      <PageHeader title="My Profile" />
 
       {/* User Info Card */}
       <Paper withBorder p="lg" radius="md" mb="xl">
@@ -106,7 +102,7 @@ export function ProfileClient({ userId, fullName, email, role, passwordInfo, mfa
             <Text fw={600} size="lg">{fullName}</Text>
             <Text size="sm" c="dimmed">{email}</Text>
           </div>
-          <Badge color={ROLE_COLORS[role] ?? 'gray'} variant="light" size="lg" ml="auto">
+          <Badge color={ROLE_COLOR[role as keyof typeof ROLE_COLOR] ?? 'gray'} size="lg" ml="auto">
             {role.charAt(0).toUpperCase() + role.slice(1)}
           </Badge>
         </Group>
@@ -121,18 +117,18 @@ export function ProfileClient({ userId, fullName, email, role, passwordInfo, mfa
 
         {passwordInfo.lastChangedAt && (
           <Text size="xs" c="dimmed" mb="md">
-            Last changed: {dayjs(passwordInfo.lastChangedAt).format('MMM D, YYYY h:mm A')}
+            Last changed: {formatDateTime(passwordInfo.lastChangedAt)}
           </Text>
         )}
 
         {!passwordInfo.hasPassword && (
-          <Alert icon={<IconAlertCircle size={16} />} color="yellow" variant="light" mb="md">
+          <Alert icon={<IconAlertCircle size={16} />} color="warning" variant="light" mb="md">
             Your account does not have a password set. Contact your administrator.
           </Alert>
         )}
 
         {success && (
-          <Alert icon={<IconCheck size={16} />} color="green" variant="light" mb="md">
+          <Alert icon={<IconCheck size={16} />} color="success" variant="light" mb="md">
             Your password has been changed successfully.
           </Alert>
         )}

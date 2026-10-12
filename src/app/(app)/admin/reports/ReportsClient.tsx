@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import {
-  Title,
   Paper,
   Stack,
   Group,
@@ -24,6 +23,8 @@ import { DateInput } from '@mantine/dates';
 import { notifications } from '@mantine/notifications';
 import dayjs from 'dayjs';
 import { getNumDaysInPeriod, navigatePeriod, getCurrentPeriodStart } from '@/lib/date-utils';
+import { formatDate, formatShortDate } from '@/lib/format';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 // Generate semi-monthly pay period options (current + last 11 = 12 total, ~6 months)
 function generatePeriodOptions(): { value: string; label: string }[] {
@@ -36,7 +37,7 @@ function generatePeriodOptions(): { value: string; label: string }[] {
     const end = start.add(numDays - 1, 'day');
     options.push({
       value: start.format('YYYY-MM-DD'),
-      label: `${start.format('MMM D')} – ${end.format('MMM D, YYYY')}`,
+      label: `${formatShortDate(start.toDate())} – ${formatDate(end.toDate())}`,
     });
     periodStart = navigatePeriod(periodStart, 'prev');
   }
@@ -69,7 +70,7 @@ export function ReportsClient({ filterOptions }: Props) {
 
   function downloadTimesheetPdf() {
     if (!pdfUserId || !pdfPeriodStart) {
-      notifications.show({ title: 'Missing Fields', message: 'Select an employee and period start date.', color: 'yellow' });
+      notifications.show({ title: 'Missing Fields', message: 'Select an employee and period start date.', color: 'warning' });
       return;
     }
     const params = new URLSearchParams({
@@ -81,7 +82,7 @@ export function ReportsClient({ filterOptions }: Props) {
 
   function downloadCostCsv() {
     if (!costStartDate || !costEndDate) {
-      notifications.show({ title: 'Missing Fields', message: 'Select start and end dates.', color: 'yellow' });
+      notifications.show({ title: 'Missing Fields', message: 'Select start and end dates.', color: 'warning' });
       return;
     }
     const params = new URLSearchParams({
@@ -94,7 +95,7 @@ export function ReportsClient({ filterOptions }: Props) {
 
   function downloadCostExcel() {
     if (!costStartDate || !costEndDate) {
-      notifications.show({ title: 'Missing Fields', message: 'Select start and end dates.', color: 'yellow' });
+      notifications.show({ title: 'Missing Fields', message: 'Select start and end dates.', color: 'warning' });
       return;
     }
     const params = new URLSearchParams({
@@ -107,7 +108,7 @@ export function ReportsClient({ filterOptions }: Props) {
 
   function downloadSummaryExcel() {
     if (!summaryStartDate || !summaryEndDate) {
-      notifications.show({ title: 'Missing Fields', message: 'Select start and end dates.', color: 'yellow' });
+      notifications.show({ title: 'Missing Fields', message: 'Select start and end dates.', color: 'warning' });
       return;
     }
     // Uses the same Excel endpoint but with summary format — we can add a format param
@@ -121,7 +122,7 @@ export function ReportsClient({ filterOptions }: Props) {
 
   return (
     <>
-      <Title order={2} mb="md">Reports & Export</Title>
+      <PageHeader title="Reports & Export" />
 
       <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="xl">
         {/* --- Individual Timesheet PDF --- */}
@@ -167,7 +168,7 @@ export function ReportsClient({ filterOptions }: Props) {
         {/* --- Cost Report (CSV/Excel) --- */}
         <Paper withBorder p="lg" radius="md">
           <Group mb="md">
-            <ThemeIcon color="green" variant="light" size="lg" radius="md">
+            <ThemeIcon color="success" variant="light" size="lg" radius="md">
               <IconReportAnalytics size={20} />
             </ThemeIcon>
             <div>
@@ -215,7 +216,7 @@ export function ReportsClient({ filterOptions }: Props) {
                 leftSection={<IconFileSpreadsheet size={16} />}
                 onClick={downloadCostExcel}
                 disabled={!costStartDate || !costEndDate}
-                color="green"
+                color="success"
               >
                 Download Excel
               </Button>
@@ -226,7 +227,7 @@ export function ReportsClient({ filterOptions }: Props) {
         {/* --- Employee Summary --- */}
         <Paper withBorder p="lg" radius="md">
           <Group mb="md">
-            <ThemeIcon color="blue" variant="light" size="lg" radius="md">
+            <ThemeIcon color="signal" variant="light" size="lg" radius="md">
               <IconFileSpreadsheet size={20} />
             </ThemeIcon>
             <div>
@@ -256,7 +257,7 @@ export function ReportsClient({ filterOptions }: Props) {
               leftSection={<IconFileSpreadsheet size={16} />}
               onClick={downloadSummaryExcel}
               disabled={!summaryStartDate || !summaryEndDate}
-              color="blue"
+              color="signal"
             >
               Download Summary Excel
             </Button>

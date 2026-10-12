@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { users, contracts, clins, slins, laborCategories, userAssignments } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
@@ -25,11 +25,13 @@ export interface ImportResult {
 }
 
 export async function bulkImportEmployees(rows: EmployeeImportRow[]): Promise<ImportResult> {
+  const db = await getDb();
   await requireAdmin();
 
   const result: ImportResult = { created: 0, skipped: 0, errors: [], generatedPasswords: [] };
 
   for (let i = 0; i < rows.length; i++) {
+  const db = await getDb();
     const row = rows[i];
     try {
       const email = row.email.toLowerCase().trim();
@@ -83,11 +85,13 @@ export interface ContractImportRow {
 }
 
 export async function bulkImportContracts(rows: ContractImportRow[]): Promise<ImportResult> {
+  const db = await getDb();
   await requireAdmin();
 
   const result: ImportResult = { created: 0, skipped: 0, errors: [] };
 
   for (let i = 0; i < rows.length; i++) {
+  const db = await getDb();
     const row = rows[i];
     try {
       const existing = await db.select({ id: contracts.id }).from(contracts)
@@ -130,11 +134,13 @@ export interface ClinImportRow {
 }
 
 export async function bulkImportClins(rows: ClinImportRow[]): Promise<ImportResult> {
+  const db = await getDb();
   await requireAdmin();
 
   const result: ImportResult = { created: 0, skipped: 0, errors: [] };
 
   for (let i = 0; i < rows.length; i++) {
+  const db = await getDb();
     const row = rows[i];
     try {
       // Look up contract by number
@@ -177,11 +183,13 @@ export interface LcatImportRow {
 }
 
 export async function bulkImportLaborCategories(rows: LcatImportRow[]): Promise<ImportResult> {
+  const db = await getDb();
   await requireAdmin();
 
   const result: ImportResult = { created: 0, skipped: 0, errors: [] };
 
   for (let i = 0; i < rows.length; i++) {
+  const db = await getDb();
     const row = rows[i];
     try {
       // Look up contract
@@ -229,11 +237,13 @@ export interface AssignmentImportRow {
 }
 
 export async function bulkImportAssignments(rows: AssignmentImportRow[]): Promise<ImportResult> {
+  const db = await getDb();
   await requireAdmin();
 
   const result: ImportResult = { created: 0, skipped: 0, errors: [] };
 
   for (let i = 0; i < rows.length; i++) {
+  const db = await getDb();
     const row = rows[i];
     try {
       // Look up user

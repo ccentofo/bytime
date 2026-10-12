@@ -36,6 +36,9 @@ import {
   triggerGustoSync,
 } from '@/server/actions/gusto';
 import { saveMapping, disconnectIntegration } from '@/server/actions/integrations';
+import { formatDate, formatDateTime } from '@/lib/format';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { SYNC_STATUS_COLOR } from '@/lib/ui/status-colors';
 
 dayjs.extend(relativeTime);
 
@@ -85,13 +88,6 @@ interface Props {
   currentUserId: string;
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  success: 'green',
-  partial: 'yellow',
-  failed: 'red',
-  running: 'blue',
-  pending: 'gray',
-};
 
 export function GustoConfigClient({
   connection,
@@ -106,13 +102,15 @@ export function GustoConfigClient({
 
   const [gustoEmployees, setGustoEmployees] = useState<Array<{ id: string; name: string; email?: string }>>([]);
   const [loadingGusto, setLoadingGusto] = useState(false);
+  const [confirmDisconnectOpen, setConfirmDisconnectOpen] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
 
   async function loadGustoEmployees() {
     setLoadingGusto(true);
     try {
       const employees = await fetchGustoEmployeesForMapping(connection.id);
       setGustoEmployees(employees);
-      notifications.show({ title: 'Gusto data loaded', message: `${employees.length} employees fetched`, color: 'green' });
+      notifications.show({ title: 'Gusto data loaded', message: `${employees.length} employees fetched`, color: 'success' });
     } catch (error) {
       notifications.show({ title: 'Failed to load Gusto data', message: String(error), color: 'red' });
     } finally {
@@ -122,7 +120,7 @@ export function GustoConfigClient({
 
   async function handleAutoMatch() {
     if (gustoEmployees.length === 0) {
-      notifications.show({ title: 'Load Gusto data first', message: 'Click "Load Gusto Employees" before auto-matching.', color: 'yellow' });
+      notifications.show({ title: 'Load Gusto data first', message: 'Click "Load Gusto Employees" before auto-matching.', color: 'warning' });
       return;
     }
 
@@ -146,7 +144,7 @@ export function GustoConfigClient({
     notifications.show({
       title: 'Auto-match complete',
       message: `${matched} employees matched by email. Review and adjust any remaining unmapped employees.`,
-      color: matched > 0 ? 'green' : 'yellow',
+      color: matched > 0 ? 'success' : 'warning',
     });
   }
 
@@ -202,7 +200,7 @@ export function GustoConfigClient({
         notifications.show({
           title: 'Sync complete',
           message: `Pushed: ${result.result.pushed}, Failed: ${result.result.failed}, Skipped: ${result.result.skipped}`,
-          color: result.result.failed === 0 ? 'green' : 'yellow',
+          color: result.result.failed === 0 ? 'success' : 'warning',
         });
       } catch (error) {
         notifications.show({ title: 'Sync failed', message: String(error), color: 'red' });
@@ -211,12 +209,14 @@ export function GustoConfigClient({
   }
 
   async function handleDisconnect() {
-    if (!confirm('Disconnect Gusto? Tokens will be removed. Mappings and sync logs will be preserved.')) return;
+    setDisconnecting(true);
     try {
       await disconnectIntegration(connection.id);
       window.location.href = '/admin/integrations';
     } catch (error) {
       notifications.show({ title: 'Failed to disconnect', message: String(error), color: 'red' });
+      setDisconnecting(false);
+      setConfirmDisconnectOpen(false);
     }
   }
 
@@ -234,27 +234,27 @@ export function GustoConfigClient({
       <Group justify="space-between" align="flex-start" mb="xl">
         <div>
           <Group gap="sm" mb={4}>
-            <ThemeIcon size="lg" color="teal" variant="light" radius="md">
+            <ThemeIcon size="lg" color="signal" variant="light" radius="md">
               <IconCash size={20} />
             </ThemeIcon>
             <Title order={2}>{connection.displayName}</Title>
           </Group>
           <Text c="dimmed" size="sm">
             {connection.externalCompanyName ?? 'Gusto'}
-            {' • '}Connected {dayjs(connection.connectedAt).format('MMM D, YYYY')}
+            {' • '}Connected {formatDate(connection.connectedAt)}
           </Text>
         </div>
         <Group>
           <Button variant="light" size="sm" leftSection={<IconRefresh size={14} />} onClick={loadGustoEmployees} loading={loadingGusto}>
             Load Gusto Employees
           </Button>
-          <Button variant="light" size="sm" color="grape" leftSection={<IconWand size={14} />} onClick={handleAutoMatch} disabled={gustoEmployees.length === 0}>
+          <Button variant="light" size="sm" color="signal" leftSection={<IconWand size={14} />} onClick={handleAutoMatch} disabled={gustoEmployees.length === 0}>
             Auto-Match by Email
           </Button>
           <Button variant="filled" size="sm" leftSection={<IconPlayerPlay size={14} />} onClick={handleSync} loading={isPending} disabled={employeeMappingCount === 0}>
             Sync Now
           </Button>
-          <Button variant="subtle" color="red" size="sm" onClick={handleDisconnect}>
+          <Button variant="subtle" color="red" size="sm" onClick={() => setConfirmDisconnectOpen(true)}>
             Disconnect
           </Button>
         </Group>
@@ -274,7 +274,7 @@ export function GustoConfigClient({
             </div>
           </Group>
           {connection.lastSyncStatus && (
-            <Badge color={STATUS_COLORS[connection.lastSyncStatus] ?? 'gray'} variant="light">
+            <Badge color={SYNC_STATUS_COLOR[connection.lastSyncStatus] ?? 'gray'} variant="light">
               {connection.lastSyncStatus}
             </Badge>
           )}
@@ -282,7 +282,7 @@ export function GustoConfigClient({
       </Paper>
 
       {gustoEmployees.length === 0 && (
-        <Alert color="blue" variant="light" mb="xl">
+        <Alert color="signal" variant="light" mb="xl">
           Click <strong>&quot;Load Gusto Employees&quot;</strong> to fetch employees from Gusto. Then use <strong>&quot;Auto-Match by Email&quot;</strong> for automatic mapping.
         </Alert>
       )}
@@ -299,10 +299,12 @@ export function GustoConfigClient({
 
         <Tabs.Panel value="employees">
           <Paper withBorder radius="md">
+            <Table.ScrollContainer minWidth={500}>
+
             <Table striped highlightOnHover>
               <Table.Thead>
                 <Table.Tr>
-                  <Table.Th>ByTime Employee</Table.Th>
+                  <Table.Th>CadenzPoint Employee</Table.Th>
                   <Table.Th>→</Table.Th>
                   <Table.Th>Gusto Employee</Table.Th>
                   <Table.Th>Status</Table.Th>
@@ -345,7 +347,7 @@ export function GustoConfigClient({
                       </Table.Td>
                       <Table.Td>
                         {mapping ? (
-                          <Badge color="green" variant="light" size="sm" leftSection={<IconCheck size={10} />}>Mapped</Badge>
+                          <Badge color="success" variant="light" size="sm" leftSection={<IconCheck size={10} />}>Mapped</Badge>
                         ) : (
                           <Badge color="gray" variant="light" size="sm" leftSection={<IconX size={10} />}>Unmapped</Badge>
                         )}
@@ -355,6 +357,7 @@ export function GustoConfigClient({
                 })}
               </Table.Tbody>
             </Table>
+            </Table.ScrollContainer>
           </Paper>
         </Tabs.Panel>
 
@@ -381,13 +384,13 @@ export function GustoConfigClient({
                 ) : (
                   syncLogs.map((log) => (
                     <Table.Tr key={log.id}>
-                      <Table.Td>{dayjs(log.createdAt).format('MMM D, YYYY h:mm A')}</Table.Td>
+                      <Table.Td>{formatDateTime(log.createdAt)}</Table.Td>
                       <Table.Td><Badge size="xs" variant="light">{log.triggerType}</Badge></Table.Td>
                       <Table.Td>{log.recordsPushed}</Table.Td>
                       <Table.Td>{log.recordsFailed > 0 ? <Text c="red" size="sm" fw={600}>{log.recordsFailed}</Text> : '0'}</Table.Td>
                       <Table.Td>{log.recordsSkipped}</Table.Td>
                       <Table.Td>
-                        <Badge color={STATUS_COLORS[log.status] ?? 'gray'} variant="light" size="sm">{log.status}</Badge>
+                        <Badge color={SYNC_STATUS_COLOR[log.status] ?? 'gray'} variant="light" size="sm">{log.status}</Badge>
                       </Table.Td>
                     </Table.Tr>
                   ))
@@ -397,6 +400,16 @@ export function GustoConfigClient({
           </Paper>
         </Tabs.Panel>
       </Tabs>
+
+      <ConfirmModal
+        opened={confirmDisconnectOpen}
+        title="Disconnect Gusto?"
+        message="Tokens will be removed. Mappings and sync logs will be preserved."
+        confirmLabel="Disconnect"
+        loading={disconnecting}
+        onConfirm={handleDisconnect}
+        onCancel={() => setConfirmDisconnectOpen(false)}
+      />
     </Container>
   );
 }

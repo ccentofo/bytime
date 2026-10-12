@@ -3,9 +3,10 @@
 import React, { createContext, useContext, useReducer, useCallback, useMemo } from 'react';
 import dayjs from 'dayjs';
 import type { TimesheetState, TimesheetAction, TimesheetPageData, DirtyCell } from '@/types/timesheet';
-import { navigatePeriod, getNumDaysInPeriod, DEFAULT_PERIOD_CONFIG, type PeriodType } from '@/lib/date-utils';
+import { navigatePeriod, getNumDaysInPeriod, DEFAULT_PERIOD_CONFIG } from '@/lib/date-utils';
 import { getTimesheetEntries, saveTimesheetBatch, getRevisionMap } from '@/server/actions/timesheet';
 import { submitPeriod, getPeriodStatus } from '@/server/actions/periods';
+import { getNeighborPeriod, getEffectiveConfigAt } from '@/server/actions/pay-period-config';
 import { seedOfflineStore, getOfflineEntries, getOfflineRevisions } from '@/lib/offline/offline-store';
 
 // ---------------------------------------------------------------------------
@@ -75,6 +76,7 @@ function timesheetReducer(
         savedEntries: action.entries.map((e) => ({ ...e, hours: [...e.hours] })),
         savedCellRevisions: action.revisions,
         periodStatus: action.periodStatus ?? state.periodStatus,
+        periodConfig: action.periodConfig ?? state.periodConfig,
         isLoadingPeriod: false,
       };
     }
@@ -205,7 +207,9 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
             const chargeCode = state.chargeCodes.find((cc) => cc.id === c.chargeCodeId);
             const revisionKey = `${c.chargeCodeId}-${c.dayIndex}`;
             return {
-              clinId: chargeCode?.isIndirect ? undefined : c.chargeCodeId,
+              // Direct entries: send chargeCodeId; server denormalizes clinId/slinId from the charge code.
+              // Indirect entries: send indirectCodeId as before.
+              chargeCodeId: chargeCode?.isIndirect ? undefined : c.chargeCodeId,
               indirectCodeId: chargeCode?.isIndirect ? c.chargeCodeId : undefined,
               dayIndex: c.dayIndex,
               hours: c.hours,
@@ -237,26 +241,18 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
     async (direction: 'prev' | 'next') => {
       dispatch({ type: 'NAVIGATE_PERIOD', direction });
 
-      const newPeriodStart = navigatePeriod(state.periodStart, direction, state.periodConfig);
-      const numDays = getNumDaysInPeriod(newPeriodStart, state.periodConfig);
-
       try {
+        // Server resolves the neighbor period start + the config effective there,
+        // handling schedule changes correctly (two-sided snap).
+        const neighbor = await getNeighborPeriod(state.periodStart, direction);
+        const { periodStart: newPeriodStart, periodConfig: neighborConfig, numDays } = neighbor;
+
         // Parallel fetch — all 3 queries at once instead of sequential
         const [entries, revisions, periodInfo] = await Promise.all([
           getTimesheetEntries(state.userId, newPeriodStart, state.chargeCodes),
           getRevisionMap(state.userId, newPeriodStart, numDays),
           getPeriodStatus(state.userId, newPeriodStart),
         ]);
-
-        // If the period has a stored config snapshot, use it instead of the global config
-        let effectiveConfig = state.periodConfig;
-        if (periodInfo.periodType && periodInfo.periodNumDays) {
-          effectiveConfig = {
-            periodType: periodInfo.periodType as PeriodType,
-            anchorDate: state.periodConfig.anchorDate,
-            weekStartDay: state.periodConfig.weekStartDay,
-          };
-        }
 
         // Fire-and-forget offline seeding — wrapped in try/catch to prevent IndexedDB errors from crashing the app
         try {
@@ -278,11 +274,17 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
           entries,
           revisions,
           periodStatus: periodInfo.status,
+          periodConfig: neighborConfig,
         });
       } catch (error) {
         console.warn('Server unavailable, loading from offline store:', error);
 
-        // Fall back to offline store
+        // Fall back to offline store using current config as best-effort
+        const { periodStart: newPeriodStart } = await getNeighborPeriod(state.periodStart, direction).catch(() => ({
+          periodStart: state.periodStart,
+          periodConfig: state.periodConfig,
+          numDays: getNumDaysInPeriod(state.periodStart, state.periodConfig),
+        }));
         const offlineEntries = await getOfflineEntries(newPeriodStart, state.chargeCodes);
         const offlineRevisions = await getOfflineRevisions(newPeriodStart);
 
@@ -294,7 +296,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
         });
       }
     },
-    [state.periodStart, state.userId, state.chargeCodes]
+    [state.periodStart, state.userId, state.chargeCodes, state.periodConfig]
   );
 
   const loadPeriodByDate = useCallback(
@@ -302,7 +304,10 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
       // Dispatch a navigate action to show loading state
       dispatch({ type: 'NAVIGATE_PERIOD', direction: 'next' }); // Direction doesn't matter — we override below
 
-      const numDays = getNumDaysInPeriod(newPeriodStart, state.periodConfig);
+      // Resolve the schedule effective at the TARGET period (not the one we're leaving),
+      // so jumping across a pay-schedule change renders the correct period shape.
+      const periodConfig = await getEffectiveConfigAt(newPeriodStart);
+      const numDays = getNumDaysInPeriod(newPeriodStart, periodConfig);
 
       try {
         const [entries, revisions, periodInfo] = await Promise.all([
@@ -310,16 +315,6 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
           getRevisionMap(state.userId, newPeriodStart, numDays),
           getPeriodStatus(state.userId, newPeriodStart),
         ]);
-
-        // If the period has a stored config snapshot, use it instead of the global config
-        let effectiveConfig = state.periodConfig;
-        if (periodInfo.periodType && periodInfo.periodNumDays) {
-          effectiveConfig = {
-            periodType: periodInfo.periodType as PeriodType,
-            anchorDate: state.periodConfig.anchorDate,
-            weekStartDay: state.periodConfig.weekStartDay,
-          };
-        }
 
         // Fire-and-forget offline seeding — wrapped in try/catch to prevent IndexedDB errors from crashing the app
         try {
@@ -341,6 +336,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
           entries,
           revisions,
           periodStatus: periodInfo.status,
+          periodConfig,
         });
       } catch (error) {
         console.warn('Server unavailable, loading from offline store:', error);
@@ -351,6 +347,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
           periodStart: newPeriodStart,
           entries: offlineEntries,
           revisions: offlineRevisions,
+          periodConfig,
         });
       }
     },

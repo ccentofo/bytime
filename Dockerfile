@@ -27,7 +27,8 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Copy drizzle migrations for runtime schema push
+# Copy migration files + runner so `npm run db:deploy` (drizzle migrate) can run
+# as a one-off before the app starts. The app itself never pushes schema at runtime.
 COPY --from=builder /app/drizzle ./drizzle
 COPY --from=builder /app/drizzle.config.ts ./drizzle.config.ts
 COPY --from=builder /app/scripts ./scripts

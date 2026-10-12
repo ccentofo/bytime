@@ -11,10 +11,10 @@ import {
   Alert,
   Text,
   Anchor,
-  Avatar,
 } from '@mantine/core';
 import { IconMail, IconCheck, IconArrowLeft } from '@tabler/icons-react';
 import { requestPasswordReset } from '@/server/actions/password-reset';
+import { Logo } from '@/components/brand/Logo';
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
@@ -42,7 +42,7 @@ export default function ForgotPasswordPage() {
     <Center mih="100vh" bg="var(--mantine-color-body)">
       <Paper shadow="md" p="xl" radius="md" w={420} withBorder>
         <Stack align="center" mb="lg">
-          <Avatar src="/logo.png" size="lg" radius="sm" />
+          <Logo size="lg" />
           <Title order={2}>Reset Password</Title>
           <Text c="dimmed" size="sm" ta="center">
             Enter your email and we'll send you a link to reset your password.
@@ -51,7 +51,7 @@ export default function ForgotPasswordPage() {
 
         {sent ? (
           <Stack align="center" gap="md">
-            <Alert icon={<IconCheck size={16} />} color="green" variant="light">
+            <Alert icon={<IconCheck size={16} />} color="success" variant="light">
               If an account exists with that email, we've sent a password reset link.
               Please check your inbox (and spam folder).
             </Alert>

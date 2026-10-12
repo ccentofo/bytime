@@ -1,19 +1,39 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { users } from '@/db/schema';
 import bcrypt from 'bcryptjs';
-import { eq } from 'drizzle-orm';
+import { count, eq } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
 import { validateEmail, validateRequired, validateStringLength, validateEnum } from '@/lib/validation';
+import { getTenantOrThrow } from '@/lib/tenant/context';
+import { PLANS, type PlanKey } from '@/lib/billing/plans';
+
+async function assertSeatAvailable(): Promise<void> {
+  const db = await getDb();
+  const tenant = await getTenantOrThrow();
+  const limit = PLANS[(tenant.plan as PlanKey)]?.seatLimit ?? PLANS.trial.seatLimit;
+  if (limit == null) return; // unlimited (enterprise)
+  const [result] = await db
+    .select({ value: count() })
+    .from(users)
+    .where(eq(users.isActive, true));
+  if (Number(result.value) >= limit) {
+    throw new Error(
+      `Your ${PLANS[tenant.plan as PlanKey]?.label ?? 'current'} plan allows ${limit} active users. Upgrade in Billing to add more.`
+    );
+  }
+}
 
 const USER_ROLES = ['admin', 'supervisor', 'employee'] as const;
 
 export async function getUsers() {
+  const db = await getDb();
   return db.select().from(users).orderBy(users.fullName);
 }
 
 export async function getUserByEmail(email: string) {
+  const db = await getDb();
   const rows = await db.select().from(users).where(eq(users.email, email));
   return rows[0] ?? null;
 }
@@ -23,7 +43,9 @@ export async function createUser(data: {
   fullName: string;
   role?: 'admin' | 'supervisor' | 'employee';
 }) {
+  const db = await getDb();
   await requireAdmin();
+  await assertSeatAvailable();
   const validatedData = {
     email: validateEmail(data.email),
     fullName: validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255),
@@ -40,16 +62,17 @@ export async function unlockUserAccount(email: string): Promise<void> {
 }
 
 export async function seedUsers() {
+  const db = await getDb();
   await requireAdmin();
   // Hash the default dev password for all seed users
   const defaultPassword = 'Password123!';
   const hash = await bcrypt.hash(defaultPassword, 12);
 
   const seedData = [
-    { email: 'admin@bytime.dev', fullName: 'Admin User', role: 'admin' as const, passwordHash: hash },
-    { email: 'jane.smith@bytime.dev', fullName: 'Jane Smith', role: 'employee' as const, passwordHash: hash },
-    { email: 'john.doe@bytime.dev', fullName: 'John Doe', role: 'employee' as const, passwordHash: hash },
-    { email: 'sarah.wilson@bytime.dev', fullName: 'Sarah Wilson', role: 'supervisor' as const, passwordHash: hash },
+    { email: 'admin@cadenzpoint.dev', fullName: 'Admin User', role: 'admin' as const, passwordHash: hash },
+    { email: 'jane.smith@cadenzpoint.dev', fullName: 'Jane Smith', role: 'employee' as const, passwordHash: hash },
+    { email: 'john.doe@cadenzpoint.dev', fullName: 'John Doe', role: 'employee' as const, passwordHash: hash },
+    { email: 'sarah.wilson@cadenzpoint.dev', fullName: 'Sarah Wilson', role: 'supervisor' as const, passwordHash: hash },
   ];
 
   // Upsert: update password_hash for existing users, insert new ones
@@ -78,6 +101,7 @@ export async function updateUser(id: string, data: {
   isActive?: boolean;
   flsaExempt?: boolean;
 }) {
+  const db = await getDb();
   await requireAdmin();
   // Determine if this change should invalidate existing sessions
   const shouldInvalidateSession = data.role !== undefined || data.isActive !== undefined;
@@ -112,7 +136,9 @@ export async function createUserWithPassword(data: {
   role: 'admin' | 'supervisor' | 'employee';
   password: string;
 }) {
+  const db = await getDb();
   await requireAdmin();
+  await assertSeatAvailable();
   const validatedEmail = validateEmail(data.email);
   const validatedName = validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255);
   const validatedRole = validateEnum(data.role, 'Role', USER_ROLES);

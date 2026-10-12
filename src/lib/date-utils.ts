@@ -109,6 +109,36 @@ export function getPeriodEndDate(periodStart: Date, config: PeriodConfig = DEFAU
 }
 
 /**
+ * Returns the period start date that contains the given arbitrary date.
+ * Generalizes getCurrentPeriodStart to work on any date (not just "now").
+ * Used by saveTimesheetEntry which receives an entryDate, not a periodStart.
+ */
+export function getPeriodStartForDate(date: Date, config: PeriodConfig = DEFAULT_PERIOD_CONFIG): Date {
+  const d = dayjs(date).startOf('day');
+  switch (config.periodType) {
+    case 'weekly': {
+      let start = d;
+      while (start.day() !== config.weekStartDay) {
+        start = start.subtract(1, 'day');
+      }
+      return start.toDate();
+    }
+    case 'biweekly': {
+      const anchor = dayjs(config.anchorDate);
+      const daysSinceAnchor = d.diff(anchor, 'day');
+      const periodNumber = Math.floor(daysSinceAnchor / 14);
+      return anchor.add(periodNumber * 14, 'day').startOf('day').toDate();
+    }
+    case 'semimonthly': {
+      if (d.date() <= 15) return d.date(1).startOf('day').toDate();
+      return d.date(16).startOf('day').toDate();
+    }
+    case 'monthly':
+      return d.date(1).startOf('day').toDate();
+  }
+}
+
+/**
  * Returns the last weekday (Mon-Fri) in a pay period.
  * The submit deadline is the last business day, not the last calendar day.
  */

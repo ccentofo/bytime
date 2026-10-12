@@ -71,6 +71,28 @@ export async function createTestIndirectCode(overrides: Partial<typeof schema.in
   return code;
 }
 
+export async function createTestCostClass(name?: string) {
+  const db = getTestDb();
+  const [row] = await db.insert(schema.costClasses).values({
+    name: name ?? `Test Class ${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    isActive: true,
+  }).returning();
+  return row;
+}
+
+export async function createTestChargeCode(clinId: string, overrides: Partial<typeof schema.chargeCodes.$inferInsert> = {}) {
+  const db = getTestDb();
+  const [code] = await db.insert(schema.chargeCodes).values({
+    clinId,
+    code: `CC-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    name: 'Test Charge Code',
+    isActive: true,
+    billable: true,
+    ...overrides,
+  }).returning();
+  return code;
+}
+
 // ---------------------------------------------------------------------------
 // Cleanup Helper
 // ---------------------------------------------------------------------------
@@ -80,6 +102,9 @@ export async function cleanupTestData() {
   // Delete in reverse FK order
   await db.delete(schema.timesheetEntries);
   await db.delete(schema.timesheetPeriods);
+  await db.delete(schema.userChargeCodes);
+  await db.delete(schema.chargeCodes);
+  await db.delete(schema.costClasses); // name is UNIQUE — leftovers collide across tests
   await db.delete(schema.userAssignments);
   await db.delete(schema.userLaborCategories);
   await db.delete(schema.laborCategories);

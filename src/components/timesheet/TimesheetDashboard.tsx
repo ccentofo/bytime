@@ -22,17 +22,14 @@ import {
 } from '@tabler/icons-react';
 import dayjs from 'dayjs';
 import type { EmployeeDashboardData } from '@/server/actions/employee-dashboard';
+import { PERIOD_STATUS_COLOR } from '@/lib/ui/status-colors';
 
 type Props = {
   data: EmployeeDashboardData;
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'yellow',
-  submitted: 'blue',
-  approved: 'green',
-  rejected: 'red',
-};
+// Shared period-status palette (string-keyed view for lookups by DB status value).
+const STATUS_COLORS: Record<string, string> = PERIOD_STATUS_COLOR;
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Draft',
@@ -49,7 +46,7 @@ export function TimesheetDashboard({ data }: Props) {
     ? Math.min(100, Math.round((currentPeriod.daysWithEntries / currentPeriod.expectedWorkdays) * 100))
     : 0;
 
-  const completionColor = completionPct >= 80 ? 'green' : completionPct >= 50 ? 'yellow' : 'red';
+  const completionColor = completionPct >= 80 ? 'success' : completionPct >= 50 ? 'warning' : 'red';
 
   return (
     <Stack gap="md" mb="lg">
@@ -87,7 +84,7 @@ export function TimesheetDashboard({ data }: Props) {
               <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Hours This Period</Text>
               <Text size="xl" fw={700} mt={4}>{(currentPeriod.totalHoursEntered ?? 0).toFixed(1)}</Text>
             </div>
-            <ThemeIcon color="blue" variant="light" size="lg" radius="md">
+            <ThemeIcon color="signal" variant="light" size="lg" radius="md">
               <IconClock size={20} />
             </ThemeIcon>
           </Group>
@@ -116,14 +113,14 @@ export function TimesheetDashboard({ data }: Props) {
               <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Submit By</Text>
               <Text size="lg" fw={700} mt={4}>{currentPeriod.submissionDeadline}</Text>
               {currentPeriod.canSubmitToday && currentPeriod.status === 'draft' && (
-                <Text size="xs" c="green" fw={500}>Ready to submit</Text>
+                <Text size="xs" c="success" fw={500}>Ready to submit</Text>
               )}
               {!currentPeriod.canSubmitToday && currentPeriod.daysRemaining > 0 && (
                 <Text size="xs" c="dimmed">{currentPeriod.daysRemaining} workdays remaining</Text>
               )}
             </div>
             <ThemeIcon
-              color={currentPeriod.canSubmitToday ? 'green' : 'gray'}
+              color={currentPeriod.canSubmitToday ? 'success' : 'gray'}
               variant="light"
               size="lg"
               radius="md"
@@ -141,6 +138,8 @@ export function TimesheetDashboard({ data }: Props) {
             <IconHistory size={18} />
             <Text fw={600} size="sm">Recent Periods</Text>
           </Group>
+          <Table.ScrollContainer minWidth={500}>
+
           <Table striped highlightOnHover>
             <Table.Thead>
               <Table.Tr>
@@ -175,6 +174,7 @@ export function TimesheetDashboard({ data }: Props) {
               ))}
             </Table.Tbody>
           </Table>
+          </Table.ScrollContainer>
         </Paper>
       )}
     </Stack>

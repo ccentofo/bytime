@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { contracts, clins, laborCategories, users, userAssignments, indirectChargeCodes } from '@/db/schema';
 import { ne, count } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
@@ -21,6 +21,7 @@ export interface SetupStatus {
  * All queries run in parallel for performance.
  */
 export async function getSetupStatus(): Promise<SetupStatus> {
+  const db = await getDb();
   await requireAdmin();
 
   const [
@@ -64,6 +65,7 @@ export async function getSetupStatus(): Promise<SetupStatus> {
  * Used by the app layout to avoid a redundant auth() call.
  */
 export async function getSetupStatusInternal(): Promise<SetupStatus> {
+  const db = await getDb();
   const [
     indirectResult,
     contractResult,

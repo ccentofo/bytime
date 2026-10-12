@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { indirectChargeCodes } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
@@ -12,6 +12,7 @@ const INDIRECT_CATEGORIES = ['overhead', 'ga', 'irad', 'bp', 'leave', 'unallowab
  * Get all indirect charge codes.
  */
 export async function getIndirectChargeCodes() {
+  const db = await getDb();
   return db.select().from(indirectChargeCodes).orderBy(indirectChargeCodes.category, indirectChargeCodes.code);
 }
 
@@ -19,6 +20,7 @@ export async function getIndirectChargeCodes() {
  * Get active indirect charge codes available to all employees.
  */
 export async function getActiveIndirectCodes() {
+  const db = await getDb();
   return db
     .select()
     .from(indirectChargeCodes)
@@ -36,6 +38,7 @@ export async function createIndirectCode(data: {
   description?: string;
   availableToAll?: boolean;
 }) {
+  const db = await getDb();
   await requireAdmin();
   const validatedData = {
     code: validateStringLength(validateRequired(data.code, 'Code'), 'Code', 1, 50),
@@ -59,6 +62,7 @@ export async function updateIndirectCode(id: string, data: {
   isActive?: boolean;
   availableToAll?: boolean;
 }) {
+  const db = await getDb();
   await requireAdmin();
   const validatedData: Record<string, unknown> = { updatedAt: new Date() };
   if (data.code !== undefined) validatedData.code = validateStringLength(validateRequired(data.code, 'Code'), 'Code', 1, 50);
@@ -79,6 +83,7 @@ export async function updateIndirectCode(id: string, data: {
  * Creates standard codes if they don't exist.
  */
 export async function seedIndirectCodes() {
+  const db = await getDb();
   await requireAdmin();
 
   const defaults = [

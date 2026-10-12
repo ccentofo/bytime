@@ -1,6 +1,6 @@
 'use server';
 
-import { db } from '@/db';
+import { getDb } from '@/db';
 import {
   contracts,
   clins,
@@ -83,6 +83,7 @@ export interface PeriodCostEntry {
  * were worked (CAS 418 compliance).
  */
 export async function getContractSummaries(): Promise<ContractSummary[]> {
+  const db = await getDb();
   // All 7 queries run in parallel — zero dependencies between them
   const [allContracts, allClins, allSlins, hoursData, costData, slinHoursData, slinCostData] = await Promise.all([
     // Query 1: All contracts
@@ -341,6 +342,7 @@ export async function getPeriodCostReport(
   startDate: Date,
   endDate: Date
 ): Promise<PeriodCostEntry[]> {
+  const db = await getDb();
   const endDateExclusive = dayjs(endDate).add(1, 'day').toDate();
 
   // Single optimized query: aggregate hours and costs by (user, clin, slin, lcat)

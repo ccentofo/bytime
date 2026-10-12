@@ -15,7 +15,6 @@ import {
   Divider,
 } from '@mantine/core';
 import {
-  IconPlug,
   IconPlugConnected,
   IconRefresh,
   IconCash,
@@ -27,6 +26,9 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 
 dayjs.extend(relativeTime);
 import type { ConnectorMetadata } from '@/lib/integrations/types';
+import { formatDate } from '@/lib/format';
+import { SYNC_STATUS_COLOR } from '@/lib/ui/status-colors';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 interface Connection {
   id: string;
@@ -57,13 +59,6 @@ const CATEGORY_LABELS: Record<string, string> = {
   export: 'Data Export',
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  success: 'green',
-  partial: 'yellow',
-  failed: 'red',
-  running: 'blue',
-  pending: 'gray',
-};
 
 export function IntegrationsClient({ initialConnections, availableConnectors }: Props) {
   const activeConnections = initialConnections.filter((c) => c.isActive);
@@ -73,19 +68,10 @@ export function IntegrationsClient({ initialConnections, availableConnectors }: 
 
   return (
     <Container size="lg" py="xl">
-      <Group justify="space-between" align="flex-start" mb="xl">
-        <div>
-          <Group gap="sm" mb={4}>
-            <ThemeIcon size="lg" color="indigo" variant="light" radius="md">
-              <IconPlug size={20} />
-            </ThemeIcon>
-            <Title order={2}>Integrations</Title>
-          </Group>
-          <Text c="dimmed" size="sm">
-            Connect ByTime to your accounting and payroll systems.
-          </Text>
-        </div>
-      </Group>
+      <PageHeader
+        title="Integrations"
+        description="Connect CadenzPoint to your accounting and payroll systems."
+      />
 
       {/* Active Connections */}
       {activeConnections.length > 0 && (
@@ -96,26 +82,26 @@ export function IntegrationsClient({ initialConnections, availableConnectors }: 
               <Paper key={conn.id} withBorder p="md" radius="md">
                 <Group justify="space-between" mb="sm">
                   <Group gap="xs">
-                    <IconPlugConnected size={18} color="var(--mantine-color-green-6)" />
+                    <IconPlugConnected size={18} color="var(--mantine-color-success-6)" />
                     <Text fw={600} size="sm">{conn.displayName}</Text>
                   </Group>
-                  <Badge color="green" variant="light" size="sm">Connected</Badge>
+                  <Badge color="success" variant="light" size="sm">Connected</Badge>
                 </Group>
                 {conn.externalCompanyName && (
                   <Text size="xs" c="dimmed" mb="xs">{conn.externalCompanyName}</Text>
                 )}
                 <Group gap="xs" mb="sm">
                   {conn.autoSyncOnApproval && (
-                    <Badge size="xs" variant="light" color="blue">Auto-sync</Badge>
+                    <Badge size="xs" variant="light" color="signal">Auto-sync</Badge>
                   )}
                   {conn.lastSyncStatus && (
-                    <Badge size="xs" variant="light" color={STATUS_COLORS[conn.lastSyncStatus] ?? 'gray'}>
+                    <Badge size="xs" variant="light" color={SYNC_STATUS_COLOR[conn.lastSyncStatus] ?? 'gray'}>
                       Last sync: {conn.lastSyncStatus}
                     </Badge>
                   )}
                 </Group>
                 <Text size="xs" c="dimmed">
-                  Connected {dayjs(conn.connectedAt).format('MMM D, YYYY')}
+                  Connected {formatDate(conn.connectedAt)}
                   {conn.lastSyncAt && ` • Last sync ${dayjs(conn.lastSyncAt).fromNow()}`}
                 </Text>
                 {conn.provider === 'quickbooks_online' && (
@@ -170,7 +156,7 @@ export function IntegrationsClient({ initialConnections, availableConnectors }: 
                     <Group justify="space-between" mb="sm">
                       <Text fw={600} size="sm">{connector.name}</Text>
                       {isConnected ? (
-                        <Badge color="green" variant="light" size="sm">Connected</Badge>
+                        <Badge color="success" variant="light" size="sm">Connected</Badge>
                       ) : (
                         <Badge color="gray" variant="light" size="sm">Available</Badge>
                       )}
@@ -257,7 +243,7 @@ export function IntegrationsClient({ initialConnections, availableConnectors }: 
       })}
 
       {availableConnectors.length === 0 && (
-        <Alert color="blue" variant="light">
+        <Alert color="signal" variant="light">
           <Text size="sm">
             No integration connectors are installed yet. Connectors will appear here as they are added to the system.
           </Text>

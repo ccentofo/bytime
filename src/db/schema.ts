@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, timestamp, boolean, pgEnum, uniqueIndex, integer, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, timestamp, boolean, pgEnum, uniqueIndex, integer, index, jsonb } from 'drizzle-orm/pg-core';
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -192,15 +192,71 @@ export const userLaborCategories = pgTable('user_labor_categories', {
 ]);
 
 // ---------------------------------------------------------------------------
+// Work Location Enum (onsite vs telework charge to different codes under the same CLIN)
+// ---------------------------------------------------------------------------
+
+export const workLocationEnum = pgEnum('work_location', ['onsite', 'telework', 'other']);
+
+// ---------------------------------------------------------------------------
+// Cost Classes (QBO "Class" dimension — e.g. "Government Services")
+// ---------------------------------------------------------------------------
+
+export const costClasses = pgTable('cost_classes', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: varchar('name', { length: 255 }).notNull().unique(),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// Charge Codes (first-class DIRECT charge codes — employees pick these, not raw CLINs)
+// ---------------------------------------------------------------------------
+
+export const chargeCodes = pgTable('charge_codes', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  code: varchar('code', { length: 100 }).notNull().unique(),        // e.g. "G0490.ID.IaaS.OY7.SWE3"
+  name: varchar('name', { length: 255 }).notNull(),                 // human label
+  description: text('description'),
+  clinId: uuid('clin_id').notNull().references(() => clins.id, { onDelete: 'cascade' }),
+  slinId: uuid('slin_id').references(() => slins.id, { onDelete: 'set null' }),
+  laborCategoryId: uuid('labor_category_id').references(() => laborCategories.id, { onDelete: 'set null' }),
+  classId: uuid('class_id').references(() => costClasses.id, { onDelete: 'set null' }),
+  workLocation: workLocationEnum('work_location'),                   // nullable
+  billable: boolean('billable').notNull().default(true),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('idx_charge_codes_clin').on(table.clinId),
+]);
+
+// ---------------------------------------------------------------------------
+// User Charge Codes (employee's direct pick-list — which charge codes they may charge to)
+// ---------------------------------------------------------------------------
+
+export const userChargeCodes = pgTable('user_charge_codes', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  chargeCodeId: uuid('charge_code_id').notNull().references(() => chargeCodes.id, { onDelete: 'cascade' }),
+  isActive: boolean('is_active').notNull().default(true),
+  assignedAt: timestamp('assigned_at', { withTimezone: true }).notNull().defaultNow(),
+  assignedBy: uuid('assigned_by').references(() => users.id),
+}, (table) => [
+  uniqueIndex('user_charge_code_unique_idx').on(table.userId, table.chargeCodeId),
+]);
+
+// ---------------------------------------------------------------------------
 // Timesheet Entries (DCAA append-only — NEVER update or delete rows)
 // ---------------------------------------------------------------------------
 
 export const timesheetEntries = pgTable('timesheet_entries', {
   id: uuid('id').defaultRandom().primaryKey(),
   userId: uuid('user_id').notNull().references(() => users.id),
-  clinId: uuid('clin_id').references(() => clins.id), // nullable — null for indirect charge entries
-  slinId: uuid('slin_id').references(() => slins.id), // nullable — SLIN-level entry
+  clinId: uuid('clin_id').references(() => clins.id), // nullable — null for indirect charge entries; DENORMALIZED from charge code for direct entries
+  slinId: uuid('slin_id').references(() => slins.id), // nullable — SLIN-level entry; DENORMALIZED from charge code
   indirectCodeId: uuid('indirect_code_id').references(() => indirectChargeCodes.id), // nullable — set for indirect entries
+  chargeCodeId: uuid('charge_code_id').references(() => chargeCodes.id), // nullable — set for DIRECT entries (new charge-code model)
   entryDate: timestamp('entry_date', { withTimezone: true }).notNull(),
   hours: varchar('hours', { length: 10 }).notNull().default('0'), // stored as string to preserve exact decimal input
   revisionNumber: integer('revision_number').notNull().default(1),
@@ -214,6 +270,7 @@ export const timesheetEntries = pgTable('timesheet_entries', {
   // DO NOT REMOVE — this is critical for page load performance.
   index('idx_entries_user_clin_date_rev').on(table.userId, table.clinId, table.entryDate, table.revisionNumber),
   index('idx_entries_user_indirect_date_rev').on(table.userId, table.indirectCodeId, table.entryDate, table.revisionNumber),
+  index('idx_entries_user_chargecode_date_rev').on(table.userId, table.chargeCodeId, table.entryDate, table.revisionNumber),
 ]);
 
 // ---------------------------------------------------------------------------
@@ -233,6 +290,9 @@ export const timesheetPeriods = pgTable('timesheet_periods', {
   // Period config snapshot — locks the period to the config active when created
   periodType: varchar('period_type', { length: 20 }),        // 'weekly'|'biweekly'|'semimonthly'|'monthly'
   periodNumDays: integer('period_num_days'),                  // number of days in this specific period
+  // Structured snapshot of completeness/total-time warnings captured at submission time.
+  // Advisory only — never blocks submission. Null if the client sent no snapshot.
+  completenessSnapshot: jsonb('completeness_snapshot'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -389,6 +449,10 @@ export const payPeriodConfig = pgTable('pay_period_config', {
   anchorDate: timestamp('anchor_date', { withTimezone: true }).notNull(),
   // For weekly/biweekly: which day of the week starts the period (0=Sun, 1=Mon)
   weekStartDay: integer('week_start_day').notNull().default(1), // Monday
+  // Effective-dating: config applies to all periods whose start >= effective_from.
+  // The row with the greatest effective_from <= periodStart is authoritative.
+  // Existing rows are backfilled to '1900-01-01' so historical periods are unaffected.
+  effectiveFrom: timestamp('effective_from', { withTimezone: true }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

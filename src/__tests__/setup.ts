@@ -2,8 +2,8 @@ import { vi } from 'vitest';
 
 // Mock the database module globally
 // Individual tests can override with specific return values
-vi.mock('@/db', () => ({
-  db: {
+vi.mock('@/db', () => {
+  const mockDb = {
     select: vi.fn().mockReturnThis(),
     insert: vi.fn().mockReturnThis(),
     update: vi.fn().mockReturnThis(),
@@ -20,8 +20,15 @@ vi.mock('@/db', () => ({
     limit: vi.fn().mockReturnThis(),
     offset: vi.fn().mockReturnThis(),
     then: vi.fn().mockResolvedValue([]),
-  },
-}));
+  };
+  // Expose the tenant-aware accessors (getDb/getDbForUrl) alongside the legacy `db`
+  // shape so server-action unit tests resolve a usable client after the control-plane refactor.
+  return {
+    db: mockDb,
+    getDb: vi.fn().mockResolvedValue(mockDb),
+    getDbForUrl: vi.fn().mockReturnValue(mockDb),
+  };
+});
 
 // Mock auth module
 vi.mock('@/auth', () => ({

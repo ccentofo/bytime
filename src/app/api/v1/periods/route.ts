@@ -1,11 +1,12 @@
 import { NextRequest } from 'next/server';
-import { db } from '@/db';
+import { getDb } from '@/db';
 import { timesheetPeriods, users } from '@/db/schema';
 import { eq, and, gte, lt } from 'drizzle-orm';
 import dayjs from 'dayjs';
 import { validateApiKey, apiResponse, apiError } from '@/lib/api-auth';
 
 export async function GET(request: NextRequest) {
+  const db = await getDb();
   const authResult = await validateApiKey(request);
   if (authResult instanceof Response) return authResult;
 

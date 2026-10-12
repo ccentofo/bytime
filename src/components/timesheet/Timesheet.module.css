@@ -1,0 +1,114 @@
+/* ============================================================
+   Fit-to-width timesheet grid
+   grid-template-columns is set inline (depends on numDays)
+   ============================================================ */
+
+.grid {
+  display: grid;
+  width: 100%;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-sm);
+  overflow: hidden; /* clip border-radius */
+  box-sizing: border-box;
+}
+
+/* ---- Shared cell base ---- */
+.cell {
+  box-sizing: border-box;
+  overflow: hidden;
+  border-bottom: 1px solid var(--mantine-color-default-border);
+}
+
+/* ---- Header row ---- */
+.headerCell {
+  composes: cell;
+  background: var(--mantine-color-body);
+  border-bottom: 2px solid var(--mantine-color-default-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 4px;
+  text-align: center;
+}
+
+.headerCellCC {
+  composes: headerCell;
+  justify-content: flex-start;
+  padding: 8px;
+  border-right: 2px solid var(--mantine-color-default-border);
+}
+
+.headerCellTotal {
+  composes: headerCell;
+  border-left: 2px solid var(--mantine-color-default-border);
+}
+
+/* ---- Body rows ---- */
+.bodyCell {
+  composes: cell;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 4px;
+}
+
+.bodyCellCC {
+  composes: bodyCell;
+  justify-content: flex-start;
+  align-items: flex-start;
+  padding: 8px;
+  border-right: 2px solid var(--mantine-color-default-border);
+  background: var(--mantine-color-body);
+}
+
+.bodyCellTotal {
+  composes: bodyCell;
+  border-left: 2px solid var(--mantine-color-default-border);
+}
+
+/* Odd row striping */
+.rowOdd .bodyCell,
+.rowOdd .bodyCellCC,
+.rowOdd .bodyCellTotal {
+  background: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-8));
+}
+
+/* Weekend column shading */
+.weekend {
+  background: light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-7)) !important;
+}
+
+/* ---- Footer row ---- */
+.footerCell {
+  composes: cell;
+  border-top: 2px solid var(--mantine-color-default-border);
+  border-bottom: none;
+  background: var(--mantine-color-body);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 4px;
+  text-align: center;
+}
+
+.footerCellCC {
+  composes: footerCell;
+  justify-content: flex-start;
+  padding: 8px;
+  border-right: 2px solid var(--mantine-color-default-border);
+}
+
+.footerCellTotal {
+  composes: footerCell;
+  border-left: 2px solid var(--mantine-color-default-border);
+}
+
+/* ---- Mobile guard: allow scroll below tablet ---- */
+@media (max-width: 1023px) {
+  .gridWrapper {
+    overflow-x: auto;
+  }
+  .grid {
+    min-width: 700px; /* prevent crushing on phones */
+  }
+}

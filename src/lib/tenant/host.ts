@@ -1,0 +1,18 @@
+/**
+ * Pure tenant-host parsing, shared by the proxy (request entry) and the request-context
+ * resolver. No 'server-only' and no next/* imports so it is unit-testable and importable
+ * anywhere on the server.
+ */
+const ROOT_DOMAIN = process.env.APP_ROOT_DOMAIN ?? 'localhost';
+const RESERVED = new Set(['www', 'app', 'api', 'admin', 'static', 'assets']);
+
+/** Extract the tenant subdomain label from a Host header, or null for apex/reserved. */
+export function tenantFromHost(host: string | null): string | null {
+  if (!host) return null;
+  const hostname = host.split(':')[0]; // strip port
+  if (hostname === ROOT_DOMAIN || hostname === `www.${ROOT_DOMAIN}`) return null;
+  if (!hostname.endsWith(`.${ROOT_DOMAIN}`)) return null; // not a tenant host
+  const label = hostname.slice(0, -1 * `.${ROOT_DOMAIN}`.length);
+  if (!label || RESERVED.has(label) || label.includes('.')) return null;
+  return label;
+}

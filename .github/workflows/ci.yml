@@ -2,7 +2,6 @@ name: CI — Build, Lint, Test
 
 on:
   push:
-    branches: [main, develop]
   pull_request:
     branches: [main, develop]
 
@@ -44,6 +43,9 @@ jobs:
       - name: Unit Tests
         run: npm run test
 
+      - name: Migration safety check
+        run: npm run db:safety
+
   # ─────────────────────────────────────────────────────────────
   # Job 2: Integration Tests (requires PostgreSQL)
   # ─────────────────────────────────────────────────────────────
@@ -51,7 +53,8 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     needs: lint-build-test  # Only run if lint/build/unit pass
-    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    # Runs on every push and PR (not just main) — all multi-tenant, billing, and charge-code
+    # work lands on working branches first, so the integration suite must run there too.
 
     services:
       postgres:
@@ -82,7 +85,7 @@ jobs:
         run: npm ci
 
       - name: Run database migrations
-        run: npx drizzle-kit push
+        run: npm run db:deploy
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
 
