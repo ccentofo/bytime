@@ -13,6 +13,9 @@ jobs:
     name: Deploy to Staging
     runs-on: ubuntu-latest
     if: github.event.inputs.confirm == 'deploy'
+    # Secrets (CONTROL_PLANE_DATABASE_URL, ENCRYPTION_KEY, …) come from the GitHub "staging"
+    # Environment — NOT repo-level secrets — so a staging deploy can never migrate production DBs.
+    environment: staging
 
     steps:
       - name: Checkout code
@@ -31,12 +34,18 @@ jobs:
         run: npm run build
         env:
           AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
-          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
 
-      - name: Run database migrations
-        run: npm run db:deploy
+      - name: Migrate control plane + all tenants
+        run: npm run db:migrate:all
         env:
-          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          CONTROL_PLANE_DATABASE_URL: ${{ secrets.CONTROL_PLANE_DATABASE_URL }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+
+      - name: Verify every database is current
+        run: npm run db:migrate:check
+        env:
+          CONTROL_PLANE_DATABASE_URL: ${{ secrets.CONTROL_PLANE_DATABASE_URL }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
 
       - name: Install Vercel CLI
         run: npm i -g vercel@latest

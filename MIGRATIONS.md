@@ -1,5 +1,10 @@
 # Database Migrations Guide
 
+CadenzPoint is **database-per-tenant**: a control-plane database (`drizzle/control-plane`) holds
+tenant records, and every tenant has its own physical Postgres database running the app schema
+(`drizzle/`). A schema-changing deploy must migrate the control plane **and every tenant database**
+before the new code goes live — see [Production Deployment](#production-deployment) below.
+
 ## Development Workflow
 
 ### Making Schema Changes
@@ -20,6 +25,8 @@
    - The SQL matches your intended changes
    - No unintended DROP or ALTER statements
    - Indexes and foreign keys are correct
+   - It passes `npm run db:safety` (see [The expand/contract rule](#the-expandcontract-rule) — this
+     runs in CI on every push, so check it locally before you push)
 
 4. **Apply the migration locally:**
    ```bash
@@ -42,40 +49,115 @@ npm run db:push
 
 This directly syncs the database without generating migration files. **Never use `push` for changes that will be deployed to staging/production.**
 
+## The expand/contract rule
+
+Migrations run **before** the new application code is live. That means, for the entire window
+between "migration applied" and "new code deployed," **the currently-running (old) code must keep
+working against the migrated schema.** A migration that breaks the old code breaks production for
+every tenant for the whole deploy window — there is no way to "migrate and deploy" atomically across
+one control-plane database plus N tenant databases.
+
+Concretely, this means:
+
+- **Never** ship, in one migration: `DROP TABLE`, `DROP COLUMN`, a column `RENAME`, an `ALTER COLUMN
+  ... TYPE`, or `ALTER COLUMN ... SET NOT NULL` on a column that already has rows. `npm run db:safety`
+  (wired into CI) blocks all of these for any migration added after this rule was introduced.
+- **Do** ship destructive changes as two separate deploys:
+  1. **Expand** — add the new column/table (nullable, or with a default), and update the code to
+     *write* to both the old and new shape while still *reading* the old one. Deploy this first.
+  2. **Backfill** — run a one-off script (or let the expand deploy's write path backfill naturally)
+     to populate the new column for existing rows.
+  3. **Contract** — once the expand deploy has been live for a while and the backfill is confirmed
+     complete, ship a second deploy that switches the code to the new shape and, in a *later* third
+     migration, drops the old column/table.
+- A genuinely safe destructive statement (e.g. dropping a column that was added and never used in
+  the same uncommitted change set) can opt out of the `db:safety` guard with a comment immediately
+  above the statement: `-- migration-safety: allow <reason>`. The reason is printed in CI output —
+  use it to explain *why* it's safe, not just to silence the check.
+
 ## Production Deployment
 
 ### Automated (CI/CD)
 
-Add this step to your deployment pipeline BEFORE starting the application:
+Both deploy workflows (`deploy-prod.yml`, `deploy-staging.yml`) run this before the Vercel deploy
+step, so a failed or incomplete migration aborts the deploy instead of shipping new code against a
+stale schema:
 
 ```bash
-npm run db:deploy
+npm run db:migrate:all      # migrate control plane + every tenant
+npm run db:migrate:check    # verify nothing is left pending; non-zero exit fails the deploy
 ```
 
-This runs all pending migrations in order.
+`npm run db:deploy` (`scripts/migrate.ts`) still exists, but it only migrates a **single** database
+named by `DATABASE_URL` — it predates multi-tenancy. Keep using it for the CI unit/integration test
+database and any other single-DB local work; it is **not** the deploy-time migrator.
 
-### Manual
+### Manual rollout runbook
+
+Run from the repo root with `CONTROL_PLANE_DATABASE_URL` and `ENCRYPTION_KEY` set (the same
+`ENCRYPTION_KEY` the running app uses — it decrypts tenant connection strings read from the control
+plane). Locally, these can live in `.env.local`/`.env`. In CI/deploy they come from **GitHub
+Environment** secrets — the `staging` and `production` Environments each hold their own
+`CONTROL_PLANE_DATABASE_URL` and `ENCRYPTION_KEY` (the deploy jobs declare `environment:`). Never
+store these as repo-level secrets: both workflows would then read the same values, and a staging
+deploy would migrate production databases.
 
 ```bash
-DATABASE_URL=postgresql://user:pass@host:5432/dbname npx drizzle-kit migrate
+# 1. See what's pending, before touching anything.
+npm run db:migrate:check
+
+# 2. Apply. Migrates the control plane first, then every tenant in status
+#    active/suspended/provisioning (never 'deleting'), with bounded concurrency and one
+#    retry-after-5s per database on a connection error (Neon cold starts).
+npm run db:migrate:all
+
+# 3. Confirm nothing is left pending.
+npm run db:migrate:check
+
+# 4. Deploy the new code.
 ```
+
+**Re-running a single failed tenant.** `db:migrate:all` prints a summary table and exits non-zero if
+any tenant failed, but every other tenant that succeeded stays migrated — it doesn't roll anything
+back. To retry just the one that failed (after fixing whatever caused it — usually a transient
+connection issue):
+
+```bash
+npm run db:migrate:all -- --tenant <slug>
+```
+
+**Concurrency.** Tenants migrate `--concurrency 3` at a time by default
+(`npm run db:migrate:all -- --concurrency 5` to change it). Raise it for a large tenant count if your
+Postgres provider can take the connection burst; lower it if you're hitting connection limits.
+
+### Safety net: concurrent migration protection
+
+Both the rollout script and tenant provisioning (`src/lib/tenant/provision.ts`, for brand-new
+signups) migrate through the same `migrateTenantDatabase()` helper
+(`src/lib/tenant/migrate-tenant.ts`), which wraps Drizzle's `migrate()` in a Postgres session
+advisory lock. If a deploy rollout and a signup happen to provision/migrate the same tenant database
+at the same moment, one simply waits for the other's lock instead of racing — Drizzle's own migrator
+takes no lock on its own.
 
 ## Commands Reference
 
 | Command | Purpose | When to Use |
 |---|---|---|
 | `npm run db:generate` | Generate migration SQL from schema changes | After editing `schema.ts` |
-| `npm run db:migrate` | Apply pending migrations | After generating, or on deployment |
+| `npm run db:migrate` | Apply pending migrations (drizzle-kit, local single DB) | After generating, local dev |
 | `npm run db:push` | Directly sync schema (no migration file) | Local dev only, never production |
 | `npm run db:studio` | Open Drizzle Studio GUI | Debugging, data inspection |
-| `npm run db:check` | Verify schema ↔ migration sync | CI checks, pre-deployment |
-| `npm run db:deploy` | Programmatic migration (for CI/CD) | Deployment automation |
+| `npm run db:check` | Verify schema ↔ migration sync (drizzle-kit) | CI checks, pre-deployment |
+| `npm run db:safety` | Block non-backward-compatible SQL in new migrations | CI, before pushing a new migration |
+| `npm run db:deploy` | Migrate the single DB named by `DATABASE_URL` | CI test DB, local single-DB work only |
+| `npm run db:migrate:all` | Migrate the control plane + every tenant DB | Deploy pipeline (prod/staging) |
+| `npm run db:migrate:check` | Report pending-migration counts for every DB, apply nothing | Deploy pipeline verification, rollout rehearsal |
 
 ## Important Rules
 
 1. **Never edit generated migration files** — They are auto-generated and must match the schema snapshots
 2. **Never delete migration files** — They represent the schema history
-3. **Always review generated SQL** — Before committing, ensure no destructive operations
+3. **Always review generated SQL** — Before committing, ensure no destructive operations (and run `npm run db:safety`)
 4. **Commit `drizzle/` directory** — Including `drizzle/meta/` — this is the migration history
 5. **Never use `push` in production** — Always use `generate` + `migrate`
 

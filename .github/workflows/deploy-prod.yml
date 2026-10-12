@@ -13,6 +13,10 @@ jobs:
     name: Deploy to Production
     runs-on: ubuntu-latest
     if: github.event.inputs.confirm == 'deploy-prod'
+    # Secrets (CONTROL_PLANE_DATABASE_URL, ENCRYPTION_KEY, …) come from the GitHub "production"
+    # Environment — NOT repo-level secrets — so they're isolated from staging. Add a required
+    # reviewer on this Environment to gate production deploys behind a manual approval.
+    environment: production
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,11 +28,16 @@ jobs:
         run: npm run build
         env:
           AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
-          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
-      - name: Run database migrations
-        run: npm run db:deploy
+      - name: Migrate control plane + all tenants
+        run: npm run db:migrate:all
         env:
-          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          CONTROL_PLANE_DATABASE_URL: ${{ secrets.CONTROL_PLANE_DATABASE_URL }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+      - name: Verify every database is current
+        run: npm run db:migrate:check
+        env:
+          CONTROL_PLANE_DATABASE_URL: ${{ secrets.CONTROL_PLANE_DATABASE_URL }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
       - name: Install Vercel CLI
         run: npm i -g vercel@latest
       - name: Deploy to Vercel (production)

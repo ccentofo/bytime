@@ -1,14 +1,12 @@
 import 'server-only';
 import { eq } from 'drizzle-orm';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import postgres from 'postgres';
-import { drizzle } from 'drizzle-orm/postgres-js';
 import { controlDb } from '@/db/control-plane';
 import { tenants } from '@/db/control-plane/schema';
 import { getTenantBySlug, createTenantRecord, invalidateTenant } from '@/lib/tenant/registry';
 import { getDbForUrl } from '@/db';
 import * as schema from '@/db/schema';
 import { createNeonDatabase } from './neon';
+import { migrateTenantDatabase } from './migrate-tenant';
 
 const RESERVED_SLUGS = new Set(['www', 'app', 'api', 'admin', 'static', 'assets', 'mail', 'support']);
 
@@ -54,13 +52,9 @@ export async function provisionTenant(input: ProvisionInput): Promise<ProvisionR
     invalidateTenant(slug);
   }
 
-  // 3. Run migrations against the tenant DB (NOT push). Use a dedicated single-conn client.
-  const migrationClient = postgres(dbUrl, { max: 1 });
-  try {
-    await migrate(drizzle(migrationClient), { migrationsFolder: './drizzle' });
-  } finally {
-    await migrationClient.end();
-  }
+  // 3. Run migrations against the tenant DB (NOT push). Lock-protected so this can never race
+  //    a deploy-time rollout (scripts/migrate-all.ts) migrating the same DB concurrently.
+  await migrateTenantDatabase(dbUrl);
 
   // 4. Blank slate: create ONLY the admin user (no password) + prefs. No codes, no contracts.
   const db = getDbForUrl(dbUrl);
