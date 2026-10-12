@@ -1,7 +1,7 @@
 'use server';
 
 import { getDb } from '@/db';
-import { chargeCodes, costClasses, userChargeCodes, userAssignments, clins, contracts, slins, laborCategories } from '@/db/schema';
+import { chargeCodes, costClasses, userChargeCodes, userAssignments, clins, contracts, slins, laborCategories, users } from '@/db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
 
@@ -177,6 +177,35 @@ export async function getUserChargeCodeIds(userId: string): Promise<string[]> {
     .from(userChargeCodes)
     .where(and(eq(userChargeCodes.userId, userId), eq(userChargeCodes.isActive, true)));
   return rows.map((r) => r.chargeCodeId);
+}
+
+/**
+ * Read-only: all user↔charge-code assignments (active and inactive) with joined
+ * display fields, for the admin Assignments table. Mirrors the CLIN-assignment
+ * table's shape (getAssignments in assignments.ts).
+ */
+export async function getChargeCodeAssignments() {
+  const db = await getDb();
+  return db
+    .select({
+      userId: userChargeCodes.userId,
+      userName: users.fullName,
+      chargeCodeId: chargeCodes.id,
+      code: chargeCodes.code,
+      name: chargeCodes.name,
+      clinNumber: clins.clinNumber,
+      contractName: contracts.name,
+      contractNumber: contracts.contractNumber,
+      workLocation: chargeCodes.workLocation,
+      isActive: userChargeCodes.isActive,
+      assignedAt: userChargeCodes.assignedAt,
+    })
+    .from(userChargeCodes)
+    .innerJoin(chargeCodes, eq(userChargeCodes.chargeCodeId, chargeCodes.id))
+    .innerJoin(clins, eq(chargeCodes.clinId, clins.id))
+    .innerJoin(contracts, eq(clins.contractId, contracts.id))
+    .innerJoin(users, eq(userChargeCodes.userId, users.id))
+    .orderBy(users.fullName, contracts.name, clins.clinNumber, chargeCodes.code);
 }
 
 // ---------------------------------------------------------------------------

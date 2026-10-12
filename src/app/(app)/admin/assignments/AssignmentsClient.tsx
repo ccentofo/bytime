@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useMemo, useState, useTransition } from 'react';
 import {
   Button,
   Select,
@@ -8,10 +8,18 @@ import {
   Title,
   Badge,
   Paper,
+  Tabs,
+  Text,
 } from '@mantine/core';
 import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { getClinsByContract } from '@/server/actions/clins';
 import { assignUserToClin, unassignUserFromClin, getAssignments } from '@/server/actions/assignments';
+import {
+  assignChargeCodeToUser,
+  unassignChargeCodeFromUser,
+  assignAllUnderClin,
+  getChargeCodeAssignments,
+} from '@/server/actions/charge-codes';
 import classes from './Assignments.module.css';
 
 type User = {
@@ -63,13 +71,50 @@ type Assignment = {
   slinDescription: string | null;
 };
 
+type ChargeCode = {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  clinId: string;
+  clinNumber: string;
+  slinId: string | null;
+  contractName: string;
+  contractNumber: string;
+  laborCategoryId: string | null;
+  classId: string | null;
+  className: string | null;
+  workLocation: 'onsite' | 'telework' | 'other' | null;
+  billable: boolean;
+  isActive: boolean;
+  createdAt: Date;
+};
+
+type ChargeCodeAssignment = {
+  userId: string;
+  userName: string;
+  chargeCodeId: string;
+  code: string;
+  name: string;
+  clinNumber: string;
+  contractName: string;
+  contractNumber: string;
+  workLocation: 'onsite' | 'telework' | 'other' | null;
+  isActive: boolean;
+  assignedAt: Date;
+};
+
 type Props = {
   initialAssignments: Assignment[];
   users: User[];
   contracts: Contract[];
+  chargeCodes: ChargeCode[];
+  initialChargeCodeAssignments: ChargeCodeAssignment[];
 };
 
-export function AssignmentsClient({ initialAssignments, users, contracts }: Props) {
+const LOCATION_COLORS: Record<string, string> = { onsite: 'blue', telework: 'teal', other: 'gray' };
+
+export function AssignmentsClient({ initialAssignments, users, contracts, chargeCodes, initialChargeCodeAssignments }: Props) {
   const [isPending, startTransition] = useTransition();
   const [assignments, setAssignments] = useState<Assignment[]>(initialAssignments);
 
@@ -78,6 +123,177 @@ export function AssignmentsClient({ initialAssignments, users, contracts }: Prop
   const [selectedContractId, setSelectedContractId] = useState<string | null>(null);
   const [selectedClinId, setSelectedClinId] = useState<string | null>(null);
   const [clinOptions, setClinOptions] = useState<{ value: string; label: string }[]>([]);
+
+  // Charge-code assignment section state
+  const [ccAssignments, setCcAssignments] = useState<ChargeCodeAssignment[]>(initialChargeCodeAssignments);
+  const [ccIsPending, startCcTransition] = useTransition();
+  const [ccUserId, setCcUserId] = useState<string | null>(null);
+  const [ccContractId, setCcContractId] = useState<string | null>(null);
+  const [ccClinId, setCcClinId] = useState<string | null>(null);
+  const [ccChargeCodeId, setCcChargeCodeId] = useState<string | null>(null);
+
+  // CLIN options for the charge-code form, derived from the same contract→CLIN data
+  // already present in `chargeCodes` (avoids a second getClinsByContract round-trip).
+  const ccClinOptionsForContract = ccContractId
+    ? Array.from(
+        new Map(
+          chargeCodes
+            .filter((cc) => cc.contractNumber === contracts.find((c) => c.id === ccContractId)?.contractNumber)
+            .map((cc) => [cc.clinId, { value: cc.clinId, label: cc.clinNumber }])
+        ).values()
+      )
+    : [];
+
+  const ccChargeCodeOptions = ccClinId
+    ? chargeCodes
+        .filter((cc) => cc.clinId === ccClinId && cc.isActive)
+        .map((cc) => ({ value: cc.id, label: `${cc.code} — ${cc.name}` }))
+    : [];
+
+  function handleCcContractChange(contractId: string | null) {
+    setCcContractId(contractId);
+    setCcClinId(null);
+    setCcChargeCodeId(null);
+  }
+
+  function handleCcClinChange(clinId: string | null) {
+    setCcClinId(clinId);
+    setCcChargeCodeId(null);
+  }
+
+  function handleAssignChargeCode() {
+    if (!ccUserId || !ccChargeCodeId) return;
+    startCcTransition(async () => {
+      await assignChargeCodeToUser(ccUserId, ccChargeCodeId);
+      const refreshed = await getChargeCodeAssignments();
+      setCcAssignments(refreshed as ChargeCodeAssignment[]);
+      setCcUserId(null);
+      setCcContractId(null);
+      setCcClinId(null);
+      setCcChargeCodeId(null);
+    });
+  }
+
+  function handleAssignAllUnderClin() {
+    if (!ccUserId || !ccClinId) return;
+    startCcTransition(async () => {
+      await assignAllUnderClin(ccUserId, ccClinId);
+      const refreshed = await getChargeCodeAssignments();
+      setCcAssignments(refreshed as ChargeCodeAssignment[]);
+      setCcUserId(null);
+      setCcContractId(null);
+      setCcClinId(null);
+      setCcChargeCodeId(null);
+    });
+  }
+
+  function handleDeactivateChargeCode(assignment: ChargeCodeAssignment) {
+    startCcTransition(async () => {
+      await unassignChargeCodeFromUser(assignment.userId, assignment.chargeCodeId);
+      const refreshed = await getChargeCodeAssignments();
+      setCcAssignments(refreshed as ChargeCodeAssignment[]);
+    });
+  }
+
+  const ccColumns: MRT_ColumnDef<ChargeCodeAssignment>[] = [
+    { accessorKey: 'userName', header: 'Employee', size: 180 },
+    { accessorKey: 'code', header: 'Code', size: 160 },
+    { accessorKey: 'name', header: 'Name', size: 200 },
+    {
+      id: 'contractClin',
+      header: 'Contract / CLIN',
+      accessorFn: (row) => `${row.contractNumber} / ${row.clinNumber}`,
+      size: 180,
+    },
+    {
+      accessorKey: 'workLocation',
+      header: 'Work Location',
+      size: 130,
+      Cell: ({ cell }) => {
+        const loc = cell.getValue<string | null>();
+        return loc ? <Badge color={LOCATION_COLORS[loc] ?? 'gray'} variant="light">{loc}</Badge> : '—';
+      },
+    },
+    {
+      accessorKey: 'isActive',
+      header: 'Status',
+      filterVariant: 'checkbox',
+      size: 100,
+      Cell: ({ cell }) => (
+        <Badge color={cell.getValue<boolean>() ? 'green' : 'gray'}>
+          {cell.getValue<boolean>() ? 'Active' : 'Inactive'}
+        </Badge>
+      ),
+    },
+  ];
+
+  const ccTable = useMantineReactTable({
+    columns: ccColumns,
+    data: ccAssignments,
+    enableColumnFilters: true,
+    enableRowActions: true,
+    positionActionsColumn: 'last',
+    renderRowActions: ({ row }) => (
+      <Button
+        size="xs"
+        variant="subtle"
+        color={row.original.isActive ? 'red' : 'green'}
+        onClick={() => handleDeactivateChargeCode(row.original)}
+        loading={ccIsPending}
+        disabled={!row.original.isActive}
+      >
+        Deactivate
+      </Button>
+    ),
+    enableColumnActions: false,
+    enableDensityToggle: false,
+    enableFullScreenToggle: false,
+    mantinePaperProps: { style: { width: '100%' } },
+    mantineTableContainerProps: { style: { maxWidth: '100%', overflowX: 'auto' } },
+    layoutMode: 'semantic',
+    mantineTableProps: {
+      highlightOnHover: true,
+      striped: 'odd',
+      withColumnBorders: false,
+    },
+    mantineTableHeadCellProps: {
+      className: classes.tableHeaderCell,
+      style: {
+        fontWeight: 600,
+        fontSize: '0.85rem',
+        padding: '12px 16px',
+      },
+    },
+    mantineTableBodyCellProps: {
+      style: {
+        fontSize: '0.875rem',
+        padding: '12px 16px',
+      },
+    },
+    mantineTopToolbarProps: {
+      style: {
+        padding: '12px 16px',
+      },
+    },
+    displayColumnDefOptions: {
+      'mrt-row-actions': {
+        header: 'Actions',
+        size: 110,
+        mantineTableHeadCellProps: {
+          style: {
+            textAlign: 'center' as const,
+            padding: '12px 16px',
+          },
+        },
+        mantineTableBodyCellProps: {
+          style: {
+            textAlign: 'center' as const,
+            padding: '12px 16px',
+          },
+        },
+      },
+    },
+  });
 
   function handleContractChange(contractId: string | null) {
     setSelectedContractId(contractId);
@@ -117,8 +333,15 @@ export function AssignmentsClient({ initialAssignments, users, contracts }: Prop
     });
   }
 
+  const usersById = useMemo(() => new Map(users.map((u) => [u.id, u])), [users]);
+  const supervisorUsers = useMemo(() => users.filter((u) => u.role === 'supervisor'), [users]);
+  const supervisorAssignments = useMemo(
+    () => assignments.filter((a) => usersById.get(a.userId)?.role === 'supervisor'),
+    [assignments, usersById]
+  );
+
   const columns: MRT_ColumnDef<Assignment>[] = [
-    { accessorKey: 'userName', header: 'Employee', size: 180 },
+    { accessorKey: 'userName', header: 'Supervisor', size: 180 },
     {
       id: 'contract',
       header: 'Contract',
@@ -153,7 +376,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts }: Prop
 
   const table = useMantineReactTable({
     columns,
-    data: assignments,
+    data: supervisorAssignments,
     enableColumnFilters: true,
     enableRowActions: true,
     positionActionsColumn: 'last',
@@ -223,50 +446,134 @@ export function AssignmentsClient({ initialAssignments, users, contracts }: Prop
     <>
       <Title order={2} mb="md">User Assignments</Title>
 
-      {/* Section A: Create Assignment Form */}
-      <Paper withBorder p="md" mb="xl">
-        <Title order={4} mb="sm">Create Assignment</Title>
-        <Group align="flex-end" wrap="wrap">
-          <Select
-            label="User"
-            placeholder="Select employee"
-            data={users.map((u) => ({ value: u.id, label: u.fullName }))}
-            value={selectedUserId}
-            onChange={setSelectedUserId}
-            searchable
-            style={{ minWidth: 200 }}
-          />
-          <Select
-            label="Contract"
-            placeholder="Select contract"
-            data={contracts.map((c) => ({ value: c.id, label: `${c.name} (${c.contractNumber})` }))}
-            value={selectedContractId}
-            onChange={handleContractChange}
-            searchable
-            style={{ minWidth: 260 }}
-          />
-          <Select
-            label="CLIN"
-            placeholder={selectedContractId ? 'Select CLIN' : 'Select a contract first'}
-            data={clinOptions}
-            value={selectedClinId}
-            onChange={setSelectedClinId}
-            disabled={!selectedContractId || clinOptions.length === 0}
-            searchable
-            style={{ minWidth: 220 }}
-          />
-          <Button
-            onClick={handleAssign}
-            loading={isPending}
-            disabled={!selectedUserId || !selectedClinId}
-          >
-            Assign
-          </Button>
-        </Group>
-      </Paper>
+      <Tabs defaultValue="charge-codes">
+        <Tabs.List mb="md">
+          <Tabs.Tab value="charge-codes">Charge Code Access</Tabs.Tab>
+          <Tabs.Tab value="approval-scope">Approval Scope</Tabs.Tab>
+        </Tabs.List>
 
-      {/* Section B: Assignments Table */}
-      <MantineReactTable table={table} />
+        <Tabs.Panel value="charge-codes">
+          <Text size="sm" c="dimmed" mb="md">
+            Authorize which charge codes each employee can charge time to. Assigning a code also
+            grants the underlying CLIN access automatically.
+          </Text>
+
+          {/* Charge Code Assignment Form */}
+          <Paper withBorder p="md" mb="xl">
+            <Title order={4} mb="sm">Assign Charge Code</Title>
+            <Group align="flex-end" wrap="wrap">
+              <Select
+                label="User"
+                placeholder="Select employee"
+                data={users.map((u) => ({ value: u.id, label: u.fullName }))}
+                value={ccUserId}
+                onChange={setCcUserId}
+                searchable
+                style={{ minWidth: 200 }}
+              />
+              <Select
+                label="Contract"
+                placeholder="Select contract"
+                data={contracts.map((c) => ({ value: c.id, label: `${c.name} (${c.contractNumber})` }))}
+                value={ccContractId}
+                onChange={handleCcContractChange}
+                searchable
+                style={{ minWidth: 260 }}
+              />
+              <Select
+                label="CLIN"
+                placeholder={ccContractId ? 'Select CLIN' : 'Select a contract first'}
+                data={ccClinOptionsForContract}
+                value={ccClinId}
+                onChange={handleCcClinChange}
+                disabled={!ccContractId || ccClinOptionsForContract.length === 0}
+                searchable
+                style={{ minWidth: 180 }}
+              />
+              <Select
+                label="Charge Code"
+                placeholder={ccClinId ? 'Select charge code' : 'Select a CLIN first'}
+                data={ccChargeCodeOptions}
+                value={ccChargeCodeId}
+                onChange={setCcChargeCodeId}
+                disabled={!ccClinId || ccChargeCodeOptions.length === 0}
+                searchable
+                style={{ minWidth: 240 }}
+              />
+              <Button
+                onClick={handleAssignChargeCode}
+                loading={ccIsPending}
+                disabled={!ccUserId || !ccChargeCodeId}
+              >
+                Assign Code
+              </Button>
+              <Button
+                variant="default"
+                onClick={handleAssignAllUnderClin}
+                loading={ccIsPending}
+                disabled={!ccUserId || !ccClinId}
+              >
+                Assign all codes under CLIN
+              </Button>
+            </Group>
+          </Paper>
+
+          {/* Charge Code Assignments Table */}
+          <MantineReactTable table={ccTable} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="approval-scope">
+          <Text size="sm" c="dimmed" mb="md">
+            Grant supervisors approval authority over the CLINs they oversee. A supervisor can
+            review any employee who charges to a CLIN they&apos;re assigned to.
+          </Text>
+
+          {/* Assign Supervisor to CLIN Form */}
+          <Paper withBorder p="md" mb="xl">
+            <Title order={4} mb="sm">Assign Supervisor to CLIN</Title>
+            <Group align="flex-end" wrap="wrap">
+              <Select
+                label="Supervisor"
+                placeholder="Select supervisor"
+                data={supervisorUsers.map((u) => ({ value: u.id, label: u.fullName }))}
+                value={selectedUserId}
+                onChange={setSelectedUserId}
+                searchable
+                style={{ minWidth: 200 }}
+              />
+              <Select
+                label="Contract"
+                placeholder="Select contract"
+                data={contracts.map((c) => ({ value: c.id, label: `${c.name} (${c.contractNumber})` }))}
+                value={selectedContractId}
+                onChange={handleContractChange}
+                searchable
+                style={{ minWidth: 260 }}
+              />
+              <Select
+                label="CLIN"
+                placeholder={selectedContractId ? 'Select CLIN' : 'Select a contract first'}
+                data={clinOptions}
+                value={selectedClinId}
+                onChange={setSelectedClinId}
+                disabled={!selectedContractId || clinOptions.length === 0}
+                searchable
+                style={{ minWidth: 220 }}
+              />
+              <Button
+                onClick={handleAssign}
+                loading={isPending}
+                disabled={!selectedUserId || !selectedClinId}
+              >
+                Assign
+              </Button>
+            </Group>
+          </Paper>
+
+          {/* Supervisor Assignments Table */}
+          <MantineReactTable table={table} />
+        </Tabs.Panel>
+      </Tabs>
     </>
   );
 }
