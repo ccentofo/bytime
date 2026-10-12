@@ -57,7 +57,7 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
       if (result.success && result.recoveryCodes) {
         setRecoveryCodes(result.recoveryCodes);
         setStep('recovery');
-        notifications.show({ title: '2FA Enabled', message: 'Two-factor authentication is now active.', color: 'green' });
+        notifications.show({ title: '2FA Enabled', message: 'Two-factor authentication is now active.', color: 'success' });
       } else {
         setError(result.error ?? 'Verification failed.');
         setVerifyCode('');
@@ -72,7 +72,7 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
       if (result.success) {
         setStep('idle');
         setDisablePassword('');
-        notifications.show({ title: '2FA Disabled', message: 'Two-factor authentication has been disabled.', color: 'yellow' });
+        notifications.show({ title: '2FA Disabled', message: 'Two-factor authentication has been disabled.', color: 'warning' });
         window.location.reload();
       } else {
         setError(result.error ?? 'Failed to disable 2FA.');
@@ -91,7 +91,7 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
         <IconShieldCheck size={20} />
         <Title order={4}>Two-Factor Authentication (2FA)</Title>
         {mfaEnabled ? (
-          <Badge color="green" variant="light" ml="auto">Enabled</Badge>
+          <Badge color="success" variant="light" ml="auto">Enabled</Badge>
         ) : (
           <Badge color="gray" variant="light" ml="auto">Disabled</Badge>
         )}
@@ -128,7 +128,7 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
             2FA is active. Recovery codes remaining: <strong>{recoveryCodesRemaining}</strong>
           </Text>
           {recoveryCodesRemaining <= 3 && (
-            <Alert color="yellow" variant="light">
+            <Alert color="warning" variant="light">
               You have {recoveryCodesRemaining} recovery codes left. Consider disabling and re-enabling 2FA to generate new codes.
             </Alert>
           )}
@@ -180,7 +180,7 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
       {/* Recovery codes */}
       {step === 'recovery' && (
         <Stack gap="md">
-          <Alert icon={<IconCheck size={16} />} color="green" variant="light">
+          <Alert icon={<IconCheck size={16} />} color="success" variant="light">
             2FA enabled successfully! Save these recovery codes in a safe place. Each code can only be used once.
           </Alert>
           <SimpleGrid cols={2} spacing="xs">

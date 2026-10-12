@@ -14,12 +14,13 @@ import {
   Paper,
   Divider,
   ActionIcon,
+  Tooltip,
 } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
-import { IconEdit, IconPlus, IconToggleLeft } from '@tabler/icons-react';
+import { IconEdit, IconPlus, IconToggleLeft, IconBan } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
-import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
-import dayjs from 'dayjs';
+import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { useAppTable } from '@/components/table/mrtDefaults';
 import {
   createLaborCategory,
   updateLaborCategory,
@@ -29,7 +30,10 @@ import {
   getUserLaborCategoryAssignments,
 } from '@/server/actions/labor-categories';
 import { getClinsByContract } from '@/server/actions/clins';
-import classes from './LaborCategories.module.css';
+import { formatDate } from '@/lib/format';
+import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 // ---------------------------------------------------------------------------
 // Types (derived from server action return types)
@@ -130,12 +134,6 @@ type Props = {
   assignableLcats: AssignableLcat[];
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  active: 'green',
-  inactive: 'gray',
-  closed: 'red',
-};
-
 const EMPTY_LCAT_FORM: LcatForm = {
   contractId: null,
   clinId: null,
@@ -175,6 +173,8 @@ export function LaborCategoriesClient({
   const [assignLcatId, setAssignLcatId] = useState<string | null>(null);
   const [assignEffectiveDate, setAssignEffectiveDate] = useState<string | null>(null);
   const [assignEndDate, setAssignEndDate] = useState<string | null>(null);
+  const [confirmDeactivateLcat, setConfirmDeactivateLcat] = useState<LaborCategory | null>(null);
+  const [confirmEndAssignment, setConfirmEndAssignment] = useState<UserLcatAssignment | null>(null);
 
   // --- LCAT Modal handlers ---
 
@@ -228,7 +228,7 @@ export function LaborCategoriesClient({
           notifications.show({
             title: 'Labor Category Updated',
             message: `${lcatForm.lcatCode} has been updated.`,
-            color: 'green',
+            color: 'success',
           });
         } else {
           if (!lcatForm.clinId) return;
@@ -242,7 +242,7 @@ export function LaborCategoriesClient({
           notifications.show({
             title: 'Labor Category Created',
             message: `${lcatForm.lcatCode} has been created.`,
-            color: 'green',
+            color: 'success',
           });
         }
 
@@ -269,8 +269,9 @@ export function LaborCategoriesClient({
         notifications.show({
           title: 'Status Updated',
           message: `${lcat.lcatCode} is now ${newStatus}.`,
-          color: newStatus === 'active' ? 'green' : 'gray',
+          color: newStatus === 'active' ? 'success' : 'gray',
         });
+        setConfirmDeactivateLcat(null);
       } catch (error) {
         notifications.show({
           title: 'Error',
@@ -302,7 +303,7 @@ export function LaborCategoriesClient({
         notifications.show({
           title: 'Assignment Created',
           message: 'User has been assigned to the labor category.',
-          color: 'green',
+          color: 'success',
         });
       } catch (error) {
         notifications.show({
@@ -323,8 +324,9 @@ export function LaborCategoriesClient({
         notifications.show({
           title: 'Assignment Ended',
           message: `${assignment.userName}'s assignment to ${assignment.lcatCode} has been ended.`,
-          color: 'orange',
+          color: 'warning',
         });
+        setConfirmEndAssignment(null);
       } catch (error) {
         notifications.show({
           title: 'Error',
@@ -368,90 +370,45 @@ export function LaborCategoriesClient({
     {
       accessorKey: 'status',
       header: 'Status',
-      Cell: ({ cell }) => (
-        <Badge color={STATUS_COLORS[cell.getValue<string>()] ?? 'gray'}>
-          {cell.getValue<string>()}
-        </Badge>
-      ),
+      Cell: ({ cell }) => {
+        const status = cell.getValue<string>() as keyof typeof RECORD_STATUS_COLOR;
+        return <Badge color={RECORD_STATUS_COLOR[status] ?? 'gray'}>{status}</Badge>;
+      },
       size: 110,
     },
   ];
 
-  const lcatTable = useMantineReactTable({
+  const lcatTable = useAppTable({
     columns: lcatColumns,
     data: laborCats,
     enableRowActions: true,
-    positionActionsColumn: 'last',
     renderRowActions: ({ row }) => (
-      <Group gap="xs" wrap="nowrap">
-        <ActionIcon
-          variant="subtle"
-          onClick={() => openEditLcatModal(row.original)}
-          title="Edit"
-        >
-          <IconEdit size={16} />
-        </ActionIcon>
-        <ActionIcon
-          variant="subtle"
-          color={row.original.status === 'active' ? 'gray' : 'green'}
-          onClick={() => handleToggleStatus(row.original)}
-          title={row.original.status === 'active' ? 'Deactivate' : 'Activate'}
-        >
-          <IconToggleLeft size={16} />
-        </ActionIcon>
+      <Group gap="xs" wrap="nowrap" justify="center">
+        <Tooltip label="Edit">
+          <ActionIcon variant="subtle" onClick={() => openEditLcatModal(row.original)} aria-label="Edit labor category">
+            <IconEdit size={16} />
+          </ActionIcon>
+        </Tooltip>
+        <Tooltip label={row.original.status === 'active' ? 'Deactivate' : 'Activate'}>
+          <ActionIcon
+            variant="subtle"
+            color={row.original.status === 'active' ? 'red' : 'success'}
+            onClick={() =>
+              row.original.status === 'active'
+                ? setConfirmDeactivateLcat(row.original)
+                : handleToggleStatus(row.original)
+            }
+            aria-label={row.original.status === 'active' ? 'Deactivate labor category' : 'Activate labor category'}
+          >
+            <IconToggleLeft size={16} />
+          </ActionIcon>
+        </Tooltip>
       </Group>
     ),
-    renderTopToolbarCustomActions: () => (
-      <Button leftSection={<IconPlus size={16} />} onClick={openAddLcatModal}>
-        Add Labor Category
-      </Button>
-    ),
-    enableColumnActions: false,
-    enableDensityToggle: false,
-    enableFullScreenToggle: false,
-    mantinePaperProps: { style: { width: '100%' } },
-    mantineTableContainerProps: { style: { maxWidth: '100%', overflowX: 'auto' } },
-    layoutMode: 'semantic',
-    mantineTableProps: {
-      highlightOnHover: true,
-      striped: 'odd',
-      withColumnBorders: false,
-    },
-    mantineTableHeadCellProps: {
-      className: classes.tableHeaderCell,
-      style: {
-        fontWeight: 600,
-        fontSize: '0.85rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTableBodyCellProps: {
-      style: {
-        fontSize: '0.875rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTopToolbarProps: {
-      style: {
-        padding: '12px 16px',
-      },
-    },
     displayColumnDefOptions: {
       'mrt-row-actions': {
-        header: 'Actions',
-        size: 100,
-        mantineTableHeadCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
-        mantineTableBodyCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
+        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
+        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
       },
     },
   });
@@ -482,80 +439,38 @@ export function LaborCategoriesClient({
     {
       accessorKey: 'effectiveDate',
       header: 'Effective Date',
-      Cell: ({ cell }) => dayjs(cell.getValue<Date>()).format('MMM D, YYYY'),
+      Cell: ({ cell }) => formatDate(cell.getValue<Date>()),
       size: 140,
     },
     {
       accessorKey: 'endDate',
       header: 'End Date',
-      Cell: ({ cell }) => {
-        const val = cell.getValue<Date | null>();
-        return val ? dayjs(val).format('MMM D, YYYY') : '—';
-      },
+      Cell: ({ cell }) => formatDate(cell.getValue<Date | null>()),
       size: 140,
     },
   ];
 
-  const assignmentTable = useMantineReactTable({
+  const assignmentTable = useAppTable({
     columns: assignmentColumns,
     data: assignments,
     enableRowActions: true,
-    positionActionsColumn: 'last',
     renderRowActions: ({ row }) => (
-      <Button
-        size="xs"
-        variant="subtle"
-        color="orange"
-        onClick={() => handleEndAssignment(row.original)}
-        disabled={row.original.endDate !== null}
-        loading={isPending}
-      >
-        {row.original.endDate ? 'Ended' : 'End'}
-      </Button>
+      <Tooltip label={row.original.endDate ? 'Ended' : 'End assignment'}>
+        <ActionIcon
+          variant="subtle"
+          color="warning"
+          onClick={() => setConfirmEndAssignment(row.original)}
+          disabled={row.original.endDate !== null}
+          aria-label="End labor category assignment"
+        >
+          <IconBan size={16} />
+        </ActionIcon>
+      </Tooltip>
     ),
-    enableColumnActions: false,
-    enableDensityToggle: false,
-    enableFullScreenToggle: false,
-    mantineTableProps: {
-      highlightOnHover: true,
-      striped: 'odd',
-      withColumnBorders: false,
-    },
-    mantineTableHeadCellProps: {
-      className: classes.tableHeaderCell,
-      style: {
-        fontWeight: 600,
-        fontSize: '0.85rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTableBodyCellProps: {
-      style: {
-        fontSize: '0.875rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTopToolbarProps: {
-      style: {
-        padding: '12px 16px',
-      },
-    },
     displayColumnDefOptions: {
       'mrt-row-actions': {
-        header: 'Actions',
-        size: 100,
-        mantineTableHeadCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
-        mantineTableBodyCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
+        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
+        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
       },
     },
   });
@@ -563,7 +478,14 @@ export function LaborCategoriesClient({
   return (
     <>
       {/* ---- Section A: Labor Categories ---- */}
-      <Title order={2} mb="md">Labor Categories</Title>
+      <PageHeader
+        title="Labor Categories"
+        actions={
+          <Button leftSection={<IconPlus size={16} />} onClick={openAddLcatModal}>
+            Add Labor Category
+          </Button>
+        }
+      />
       <MantineReactTable table={lcatTable} />
 
       {/* ---- Add/Edit LCAT Modal ---- */}
@@ -652,7 +574,7 @@ export function LaborCategoriesClient({
 
       {/* ---- Section B: User LCAT Assignments ---- */}
       <Divider my="xl" />
-      <Title order={2} mb="md">User Labor Category Assignments</Title>
+      <Title order={4} mb="lg">User Labor Category Assignments</Title>
 
       <Paper withBorder p="md" mb="xl">
         <Title order={4} mb="sm">Create Assignment</Title>
@@ -703,6 +625,30 @@ export function LaborCategoriesClient({
       </Paper>
 
       <MantineReactTable table={assignmentTable} />
+
+      <ConfirmModal
+        opened={!!confirmDeactivateLcat}
+        title="Deactivate labor category?"
+        message={confirmDeactivateLcat ? `This deactivates ${confirmDeactivateLcat.lcatCode} — ${confirmDeactivateLcat.title}.` : ''}
+        confirmLabel="Deactivate"
+        loading={isPending}
+        onConfirm={() => confirmDeactivateLcat && handleToggleStatus(confirmDeactivateLcat)}
+        onCancel={() => setConfirmDeactivateLcat(null)}
+      />
+
+      <ConfirmModal
+        opened={!!confirmEndAssignment}
+        title="End assignment?"
+        message={
+          confirmEndAssignment
+            ? `This ends ${confirmEndAssignment.userName}'s assignment to ${confirmEndAssignment.lcatCode} effective today.`
+            : ''
+        }
+        confirmLabel="End Assignment"
+        loading={isPending}
+        onConfirm={() => confirmEndAssignment && handleEndAssignment(confirmEndAssignment)}
+        onCancel={() => setConfirmEndAssignment(null)}
+      />
     </>
   );
 }

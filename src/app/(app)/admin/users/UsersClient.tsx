@@ -9,19 +9,21 @@ import {
   Select,
   Group,
   Stack,
-  Title,
   Badge,
   Switch,
   ActionIcon,
+  Tooltip,
   Alert,
   Text,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconPlus, IconEdit, IconKey, IconAlertCircle, IconLockOpen } from '@tabler/icons-react';
-import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { useAppTable } from '@/components/table/mrtDefaults';
 import { createUserWithPassword, updateUser, getUsers, unlockUserAccount } from '@/server/actions/users';
 import { adminResetPassword } from '@/server/actions/password';
-import classes from "./Users.module.css";
+import { ROLE_COLOR } from '@/lib/ui/status-colors';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 type User = {
   id: string;
@@ -37,12 +39,6 @@ type User = {
 type Props = {
   initialUsers: User[];
   currentUserId: string;
-};
-
-const ROLE_COLORS: Record<string, string> = {
-  admin: 'red',
-  supervisor: 'blue',
-  employee: 'green',
 };
 
 const ROLE_OPTIONS = [
@@ -117,7 +113,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
           notifications.show({
             title: 'User Updated',
             message: `${form.fullName} has been updated successfully.`,
-            color: 'green',
+            color: 'success',
           });
         } else {
           // Create new user
@@ -138,7 +134,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
           notifications.show({
             title: 'User Created',
             message: `${form.fullName} has been created successfully.`,
-            color: 'green',
+            color: 'success',
           });
         }
 
@@ -170,7 +166,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
       notifications.show({
         title: 'Account Unlocked',
         message: `${user.fullName}'s account has been unlocked. They can now log in.`,
-        color: 'green',
+        color: 'success',
       });
     });
   }
@@ -190,7 +186,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
           notifications.show({
             title: 'Password Reset',
             message: `Password for ${resetTarget.fullName} has been reset.`,
-            color: 'green',
+            color: 'success',
           });
         } else {
           setResetError(result.error ?? 'Failed to reset password.');
@@ -210,7 +206,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
       notifications.show({
         title: newExempt ? 'FLSA Exempt' : 'FLSA Non-Exempt',
         message: `${user.fullName} is now ${newExempt ? 'FLSA Exempt (salaried)' : 'FLSA Non-Exempt (hourly)'}.`,
-        color: newExempt ? 'blue' : 'gray',
+        color: newExempt ? 'signal' : 'gray',
       });
     });
   }
@@ -224,7 +220,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
       notifications.show({
         title: newActive ? 'User Activated' : 'User Deactivated',
         message: `${user.fullName} has been ${newActive ? 'activated' : 'deactivated'}.`,
-        color: newActive ? 'green' : 'yellow',
+        color: newActive ? 'success' : 'warning',
       });
     });
   }
@@ -236,9 +232,9 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
       accessorKey: 'role',
       header: 'Role',
       Cell: ({ cell }) => {
-        const role = cell.getValue<string>();
+        const role = cell.getValue<string>() as keyof typeof ROLE_COLOR;
         return (
-          <Badge color={ROLE_COLORS[role] ?? 'gray'}>
+          <Badge color={ROLE_COLOR[role] ?? 'gray'}>
             {role.charAt(0).toUpperCase() + role.slice(1)}
           </Badge>
         );
@@ -274,97 +270,58 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
     },
   ];
 
-  const table = useMantineReactTable({
+  const table = useAppTable({
     columns,
     data: users,
     enableRowActions: true,
-    positionActionsColumn: 'last',
     renderRowActions: ({ row }) => (
-      <Group gap="xs" wrap="nowrap">
-        <ActionIcon
-          variant="subtle"
-          onClick={() => openEditModal(row.original)}
-          title="Edit User"
-        >
-          <IconEdit size={16} />
-        </ActionIcon>
-        <ActionIcon
-          variant="subtle"
-          color="orange"
-          onClick={() => openResetModal(row.original)}
-          title="Reset Password"
-        >
-          <IconKey size={16} />
-        </ActionIcon>
-        <ActionIcon
-          variant="subtle"
-          color="green"
-          onClick={() => handleUnlockAccount(row.original)}
-          title="Unlock Account"
-          disabled={isPending}
-        >
-          <IconLockOpen size={16} />
-        </ActionIcon>
+      <Group gap="xs" wrap="nowrap" justify="center">
+        <Tooltip label="Edit User">
+          <ActionIcon variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit user">
+            <IconEdit size={16} />
+          </ActionIcon>
+        </Tooltip>
+        <Tooltip label="Reset Password">
+          <ActionIcon
+            variant="subtle"
+            color="warning"
+            onClick={() => openResetModal(row.original)}
+            aria-label="Reset password"
+          >
+            <IconKey size={16} />
+          </ActionIcon>
+        </Tooltip>
+        <Tooltip label="Unlock Account">
+          <ActionIcon
+            variant="subtle"
+            color="success"
+            onClick={() => handleUnlockAccount(row.original)}
+            disabled={isPending}
+            aria-label="Unlock account"
+          >
+            <IconLockOpen size={16} />
+          </ActionIcon>
+        </Tooltip>
       </Group>
     ),
-    renderTopToolbarCustomActions: () => (
-      <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
-        Add User
-      </Button>
-    ),
-    enableColumnActions: false,
-    enableDensityToggle: false,
-    enableFullScreenToggle: false,
-    mantinePaperProps: { style: { width: '100%' } },
-    mantineTableContainerProps: { style: { maxWidth: '100%', overflowX: 'auto' } },
-    layoutMode: 'semantic',
-    mantineTableProps: {
-      highlightOnHover: true,
-      striped: 'odd',
-      withColumnBorders: false,
-    },
-    mantineTableHeadCellProps: {
-      className: classes.tableHeaderCell,
-      style: {
-        fontWeight: 600,
-        fontSize: '0.85rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTableBodyCellProps: {
-      style: {
-        fontSize: '0.875rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTopToolbarProps: {
-      style: {
-        padding: '12px 16px',
-      },
-    },
     displayColumnDefOptions: {
       'mrt-row-actions': {
-        header: 'Actions',
-        size: 120,
-        mantineTableHeadCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
-        mantineTableBodyCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
+        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
+        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
       },
     },
   });
 
   return (
     <>
-      <Title order={2} mb="md">User Management</Title>
+      <PageHeader
+        title="User Management"
+        actions={
+          <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
+            Add User
+          </Button>
+        }
+      />
       <MantineReactTable table={table} />
 
       <Modal
@@ -386,7 +343,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
             required
           />
           {resetError && (
-            <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light">
+            <Alert icon={<IconAlertCircle size={16} />} color="red">
               {resetError}
             </Alert>
           )}
@@ -398,7 +355,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
               onClick={handleResetPassword}
               loading={isPending}
               disabled={!resetPassword || resetPassword.length < 8}
-              color="orange"
+              color="warning"
             >
               Reset Password
             </Button>
@@ -443,7 +400,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
             />
           )}
           {formError && (
-            <Badge color="red" variant="light" size="lg" style={{ whiteSpace: 'normal', height: 'auto', padding: '8px' }}>
+            <Badge color="red" size="lg" style={{ whiteSpace: 'normal', height: 'auto', padding: '8px' }}>
               {formError}
             </Badge>
           )}

@@ -3,12 +3,13 @@
 import { useState, useTransition } from 'react';
 import {
   Container, Title, Text, Paper, Group, Stack, Badge, Button,
-  Alert, ThemeIcon, Divider,
+  Alert, Divider,
 } from '@mantine/core';
-import { IconCreditCard, IconCheck, IconAlertCircle, IconExternalLink } from '@tabler/icons-react';
+import { IconCheck, IconAlertCircle, IconExternalLink } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { startCheckout, openBillingPortal } from '@/server/actions/billing';
 import { PLANS, type PlanKey } from '@/lib/billing/plans';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 interface Props {
   billing: { plan: string; subscriptionStatus: string | null; hasCustomer: boolean };
@@ -16,9 +17,9 @@ interface Props {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  active: 'green',
-  trialing: 'blue',
-  past_due: 'orange',
+  active: 'success',
+  trialing: 'signal',
+  past_due: 'warning',
   canceled: 'red',
   unpaid: 'red',
 };
@@ -56,20 +57,18 @@ export function BillingClient({ billing, checkoutStatus }: Props) {
 
   return (
     <Container size="md" py="xl">
-      <Group gap="sm" mb="xl">
-        <ThemeIcon size="lg" color="blue" variant="light" radius="md">
-          <IconCreditCard size={20} />
-        </ThemeIcon>
-        <Title order={2}>Billing</Title>
-      </Group>
+      <PageHeader
+        title="Billing"
+        description="Manage your CadenzPoint subscription, plan, and payment details."
+      />
 
       {checkoutStatus === 'success' && (
-        <Alert icon={<IconCheck size={16} />} color="green" variant="light" mb="lg">
+        <Alert icon={<IconCheck size={16} />} color="success" variant="light" mb="lg">
           Subscription activated — welcome to {currentPlan.label}!
         </Alert>
       )}
       {checkoutStatus === 'cancelled' && (
-        <Alert icon={<IconAlertCircle size={16} />} color="yellow" variant="light" mb="lg">
+        <Alert icon={<IconAlertCircle size={16} />} color="warning" variant="light" mb="lg">
           Checkout was cancelled. You can subscribe any time below.
         </Alert>
       )}

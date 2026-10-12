@@ -64,7 +64,7 @@ export function SignupForm({ errorParam }: { errorParam?: string }) {
       <Center mih="100vh">
         <Paper withBorder shadow="sm" p={40} radius="md" w="100%" maw={440}>
           <Stack align="center" gap="md">
-            <IconCheck size={48} color="var(--mantine-color-green-6)" />
+            <IconCheck size={48} color="var(--mantine-color-success-6)" />
             <Title order={2} ta="center">Check your email</Title>
             <Text c="dimmed" ta="center" size="sm">
               We sent a confirmation link to <strong>{email}</strong>. Click it to finish creating your workspace.
@@ -80,7 +80,7 @@ export function SignupForm({ errorParam }: { errorParam?: string }) {
     );
   }
 
-  const slugColor = slugStatus === 'available' ? 'green' : slugStatus === 'taken' || slugStatus === 'invalid' ? 'red' : 'gray';
+  const slugColor = slugStatus === 'available' ? 'success' : slugStatus === 'taken' || slugStatus === 'invalid' ? 'red' : 'gray';
   const slugMessage = slugStatus === 'available' ? '✓ Available'
     : slugStatus === 'taken' ? 'Already taken'
     : slugStatus === 'invalid' ? 'Invalid — use letters, numbers, hyphens'

@@ -50,7 +50,7 @@ export function AppHeader({ user, mobileNavOpened, onMobileNavToggle }: AppHeade
             <Menu.Target>
               <UnstyledButton>
                 <Group gap="xs">
-                  <Avatar radius="xl" size="sm" color="blue">
+                  <Avatar radius="xl" size="sm" color="signal">
                     {user.fullName.charAt(0)}
                   </Avatar>
                   <Text size="sm" fw={500}>

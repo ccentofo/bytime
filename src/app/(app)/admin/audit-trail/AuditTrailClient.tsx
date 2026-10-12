@@ -26,7 +26,8 @@ import {
   IconAlertTriangle,
   IconHistory,
 } from '@tabler/icons-react';
-import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { useAppTable } from '@/components/table/mrtDefaults';
 import dayjs from 'dayjs';
 import {
   getAuditEntries,
@@ -37,7 +38,11 @@ import {
   type CellRevisionHistory,
 } from '@/server/actions/audit';
 import { REASON_CODES } from '@/lib/reason-codes';
-import classes from './AuditTrail.module.css';
+import { formatDate, formatDateTime } from '@/lib/format';
+import { PageHeader } from '@/components/ui/PageHeader';
+// Side-effect import only — this module's one remaining rule is a `:global()` dark-mode
+// selector for correction rows; no scoped class name from it is used in this file anymore.
+import './AuditTrail.module.css';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -157,7 +162,7 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
     {
       accessorKey: 'entryDate',
       header: 'Entry Date',
-      Cell: ({ cell }) => dayjs(cell.getValue<Date>()).format('MMM D, YYYY'),
+      Cell: ({ cell }) => formatDate(cell.getValue<Date>()),
     },
     {
       accessorKey: 'hours',
@@ -176,10 +181,10 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
         const rev = cell.getValue<number>();
         return (
           <Group gap={6} wrap="nowrap">
-            <Badge color={rev === 1 ? 'green' : 'orange'} variant="light" size="sm">
+            <Badge color={rev === 1 ? 'success' : 'warning'} size="sm">
               {rev}
             </Badge>
-            <Tooltip label="View revision history" withArrow openDelay={300}>
+            <Tooltip label="View revision history">
               <ActionIcon
                 variant="subtle"
                 color="gray"
@@ -202,8 +207,8 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
         if (!code) return <Text size="sm" c="dimmed">—</Text>;
         const label = REASON_LABEL_MAP[code] ?? code;
         return (
-          <Tooltip label={label} withArrow openDelay={300}>
-            <Badge variant="light" color="gray" size="sm" tt="none" style={{ maxWidth: '100%' }}>
+          <Tooltip label={label}>
+            <Badge color="gray" size="sm" tt="none" style={{ maxWidth: '100%' }}>
               {label}
             </Badge>
           </Tooltip>
@@ -226,7 +231,7 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
     {
       accessorKey: 'createdAt',
       header: 'Entered At',
-      Cell: ({ cell }) => dayjs(cell.getValue<Date>()).format('MMM D, YYYY h:mm A'),
+      Cell: ({ cell }) => formatDateTime(cell.getValue<Date>()),
     },
     {
       accessorKey: 'createdByName',
@@ -238,62 +243,28 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
     },
   ];
 
-  const table = useMantineReactTable({
+  const table = useAppTable({
     columns,
     data: entries,
-    enableColumnActions: false,
-    enableDensityToggle: false,
-    enableFullScreenToggle: false,
     enableGlobalFilter: true,
     // Content-based column widths: semantic layout lets each column size to its data (e.g. the
     // mostly-empty Reason column auto-shrinks) instead of the fixed-pixel grid that column pinning
     // forces. The revision-history trigger now lives in the Rev # cell, so there's no actions column.
-    layoutMode: 'semantic',
     initialState: {
       // Verbose/redundant detail lives in the revision-history drawer; users can re-enable these via
       // the column-visibility toolbar button. Comment = long free-text; Entered By usually == Employee.
       columnVisibility: { comment: false, createdByName: false },
     },
-    // Safety net if a user re-enables every column on a narrow screen: the table gets its own
-    // scrollbar instead of stretching the page.
-    mantinePaperProps: {
-      style: { width: '100%' },
-    },
-    mantineTableContainerProps: {
-      style: { maxWidth: '100%', overflowX: 'auto' },
-    },
-    mantineTableProps: {
-      highlightOnHover: true,
-      striped: 'odd',
-      withColumnBorders: false,
-    },
-    mantineTableHeadCellProps: {
-      className: classes.tableHeaderCell,
-      style: {
-        fontWeight: 600,
-        fontSize: '0.85rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTableBodyCellProps: {
-      style: {
-        fontSize: '0.875rem',
-        padding: '12px 16px',
-      },
-    },
+    // Correction-row highlight: `data-correction` also drives AuditTrail.module.css's dark-mode
+    // text-contrast rule — keep both in sync if this ever changes.
     mantineTableBodyRowProps: ({ row }) => ({
       'data-correction': row.original.revisionNumber > 1 ? 'true' : undefined,
       style: row.original.revisionNumber > 1
         ? {
-            backgroundColor: 'light-dark(var(--mantine-color-orange-0), var(--mantine-color-orange-1))',
+            backgroundColor: 'light-dark(var(--mantine-color-warning-0), var(--mantine-color-warning-1))',
           }
         : undefined,
     }),
-    mantineTopToolbarProps: {
-      style: {
-        padding: '12px 16px',
-      },
-    },
     state: {
       isLoading: isPending && hasSearched,
     },
@@ -302,16 +273,16 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
   return (
     <>
       {/* ---- Section A: Summary Cards ---- */}
-      <Title order={2} mb="md">Audit Trail</Title>
+      <PageHeader title="Audit Trail" />
 
       <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} mb="xl">
         <Paper withBorder p="md" radius="md">
           <Group justify="space-between">
             <div>
               <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Total Entries</Text>
-              <Text size="xl" fw={700}>{summary.totalEntries.toLocaleString()}</Text>
+              <Text size="xl" fw={700}>{summary.totalEntries.toLocaleString('en-US')}</Text>
             </div>
-            <ThemeIcon color="blue" variant="light" size="lg" radius="md">
+            <ThemeIcon color="signal" variant="light" size="lg" radius="md">
               <IconClock size={20} />
             </ThemeIcon>
           </Group>
@@ -320,9 +291,9 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
           <Group justify="space-between">
             <div>
               <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Corrections</Text>
-              <Text size="xl" fw={700}>{summary.totalCorrections.toLocaleString()}</Text>
+              <Text size="xl" fw={700}>{summary.totalCorrections.toLocaleString('en-US')}</Text>
             </div>
-            <ThemeIcon color="orange" variant="light" size="lg" radius="md">
+            <ThemeIcon color="warning" variant="light" size="lg" radius="md">
               <IconEdit size={20} />
             </ThemeIcon>
           </Group>
@@ -331,9 +302,9 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
           <Group justify="space-between">
             <div>
               <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Late Entries</Text>
-              <Text size="xl" fw={700}>{summary.totalLateEntries.toLocaleString()}</Text>
+              <Text size="xl" fw={700}>{summary.totalLateEntries.toLocaleString('en-US')}</Text>
             </div>
-            <ThemeIcon color="yellow" variant="light" size="lg" radius="md">
+            <ThemeIcon color="warning" variant="light" size="lg" radius="md">
               <IconAlertTriangle size={20} />
             </ThemeIcon>
           </Group>
@@ -342,9 +313,9 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
           <Group justify="space-between">
             <div>
               <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Active Users</Text>
-              <Text size="xl" fw={700}>{summary.uniqueUsers.toLocaleString()}</Text>
+              <Text size="xl" fw={700}>{summary.uniqueUsers.toLocaleString('en-US')}</Text>
             </div>
-            <ThemeIcon color="green" variant="light" size="lg" radius="md">
+            <ThemeIcon color="success" variant="light" size="lg" radius="md">
               <IconHistory size={20} />
             </ThemeIcon>
           </Group>
@@ -472,7 +443,7 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
                   <Text size="sm"><strong>Employee:</strong> {revisionHistory.userName}</Text>
                   <Text size="sm"><strong>CLIN:</strong> {revisionHistory.clinNumber}</Text>
                   <Text size="sm"><strong>Contract:</strong> {revisionHistory.contractName}</Text>
-                  <Text size="sm"><strong>Date:</strong> {dayjs(revisionHistory.entryDate).format('MMM D, YYYY')}</Text>
+                  <Text size="sm"><strong>Date:</strong> {formatDate(revisionHistory.entryDate)}</Text>
                 </Group>
               </Paper>
 
@@ -488,7 +459,7 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
                       <ThemeIcon
                         size={28}
                         radius="xl"
-                        color={rev.revisionNumber === 1 ? 'green' : 'orange'}
+                        color={rev.revisionNumber === 1 ? 'success' : 'warning'}
                       >
                         {rev.revisionNumber === 1
                           ? <IconClock size={14} />
@@ -500,8 +471,7 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
                       <Group gap="xs">
                         <Text fw={600} size="sm">Revision {rev.revisionNumber}</Text>
                         <Badge
-                          color={rev.revisionNumber === 1 ? 'green' : 'orange'}
-                          variant="light"
+                          color={rev.revisionNumber === 1 ? 'success' : 'warning'}
                           size="sm"
                         >
                           {rev.hours} hrs

@@ -23,7 +23,7 @@ export default function TimesheetError({
     <Container size="sm" py="xl">
       <Paper shadow="sm" p="xl" radius="md" withBorder>
         <Stack align="center" gap="md">
-          <IconAlertTriangle size={48} color="var(--mantine-color-orange-6)" />
+          <IconAlertTriangle size={48} color="var(--mantine-color-warning-6)" />
           <Title order={3} ta="center">Timesheet Error</Title>
           <Text c="dimmed" ta="center" size="sm">
             {isNetworkError
@@ -32,7 +32,7 @@ export default function TimesheetError({
               ? 'Your session may have expired. Please try again or sign in.'
               : 'An error occurred while loading your timesheet. Your data is safe — please try refreshing.'}
           </Text>
-          <Alert color="blue" variant="light" w="100%">
+          <Alert color="signal" variant="light" w="100%">
             <Text size="xs">
               💡 If you were working offline, your unsaved entries are stored locally
               and will sync when the connection is restored.

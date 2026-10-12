@@ -126,11 +126,11 @@ export function ReasonModal({
           {description}
         </Text>
 
-        {/* Late entry cells (orange badges) */}
-        {renderCellTable(lateEntryCells, 'Late Entries (past dates)', 'orange')}
+        {/* Late entry cells (warning badges) */}
+        {renderCellTable(lateEntryCells, 'Late Entries (past dates)', 'warning')}
 
-        {/* Edited cells (yellow badges) */}
-        {renderCellTable(editedCells, 'Edited Entries (corrections)', 'yellow')}
+        {/* Edited cells (warning badges) */}
+        {renderCellTable(editedCells, 'Edited Entries (corrections)', 'warning')}
 
         <Select
           label="Reason for Change"
@@ -163,7 +163,7 @@ export function ReasonModal({
             onClick={handleConfirm}
             disabled={!canSubmit}
             loading={isSaving}
-            color="blue"
+            color="signal"
           >
             Confirm Save
           </Button>

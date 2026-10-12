@@ -38,7 +38,7 @@ export function BillingWall({ role }: Props) {
   return (
     <Center mih="100vh" p="xl">
       <Stack maw={480} gap="lg" align="center" ta="center">
-        <ThemeIcon size={64} radius="xl" color="orange" variant="light">
+        <ThemeIcon size={64} radius="xl" color="warning" variant="light">
           <IconCreditCard size={32} />
         </ThemeIcon>
 
@@ -62,7 +62,7 @@ export function BillingWall({ role }: Props) {
             Manage billing
           </Button>
         ) : (
-          <Alert icon={<IconAlertCircle size={16} />} color="orange" variant="light" maw={400}>
+          <Alert icon={<IconAlertCircle size={16} />} color="warning" variant="light" maw={400}>
             <Text size="sm">
               Ask your workspace administrator to update billing and restore access.
             </Text>

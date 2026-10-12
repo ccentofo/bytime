@@ -34,6 +34,8 @@ import {
 import { notifications } from '@mantine/notifications';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import { formatDate, formatDateTime } from '@/lib/format';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import {
   fetchQBOEmployeesForMapping,
   fetchQBOCustomersForMapping,
@@ -42,6 +44,7 @@ import {
   triggerQBOSync,
 } from '@/server/actions/qbo';
 import { saveMapping, disconnectIntegration, toggleAutoSync } from '@/server/actions/integrations';
+import { SYNC_STATUS_COLOR } from '@/lib/ui/status-colors';
 
 dayjs.extend(relativeTime);
 
@@ -93,13 +96,6 @@ interface Props {
   currentUserId: string;
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  success: 'green',
-  partial: 'yellow',
-  failed: 'red',
-  running: 'blue',
-  pending: 'gray',
-};
 
 export function QBOConfigClient({
   connection,
@@ -120,6 +116,8 @@ export function QBOConfigClient({
   const [qboCustomers, setQboCustomers] = useState<Array<{ id: string; name: string }>>([]);
   const [qboItems, setQboItems] = useState<Array<{ id: string; name: string }>>([]);
   const [loadingQBO, setLoadingQBO] = useState(false);
+  const [confirmDisconnectOpen, setConfirmDisconnectOpen] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
 
   async function loadQBOEntities() {
     setLoadingQBO(true);
@@ -134,7 +132,7 @@ export function QBOConfigClient({
       setQboVendors(vendors);
       setQboCustomers(customers);
       setQboItems(items);
-      notifications.show({ title: 'QBO data loaded', message: `${employees.length} employees, ${vendors.length} vendors, ${customers.length} customers, ${items.length} service items`, color: 'green' });
+      notifications.show({ title: 'QBO data loaded', message: `${employees.length} employees, ${vendors.length} vendors, ${customers.length} customers, ${items.length} service items`, color: 'success' });
     } catch (error) {
       notifications.show({ title: 'Failed to load QBO data', message: String(error), color: 'red' });
     } finally {
@@ -176,7 +174,7 @@ export function QBOConfigClient({
         return [...prev, newMapping];
       });
 
-      notifications.show({ title: 'Mapping saved', message: `${bytimeName} → ${externalName}`, color: 'green' });
+      notifications.show({ title: 'Mapping saved', message: `${bytimeName} → ${externalName}`, color: 'success' });
     } catch (error) {
       notifications.show({ title: 'Failed to save mapping', message: String(error), color: 'red' });
     }
@@ -198,7 +196,7 @@ export function QBOConfigClient({
         notifications.show({
           title: 'Sync complete',
           message: `Pushed: ${result.result.pushed}, Failed: ${result.result.failed}, Skipped: ${result.result.skipped}`,
-          color: result.result.failed === 0 ? 'green' : 'yellow',
+          color: result.result.failed === 0 ? 'success' : 'warning',
         });
       } catch (error) {
         notifications.show({ title: 'Sync failed', message: String(error), color: 'red' });
@@ -207,12 +205,14 @@ export function QBOConfigClient({
   }
 
   async function handleDisconnect() {
-    if (!confirm('Disconnect QuickBooks Online? This will remove all stored tokens. Mappings and sync logs will be preserved.')) return;
+    setDisconnecting(true);
     try {
       await disconnectIntegration(connection.id);
       window.location.href = '/admin/integrations';
     } catch (error) {
       notifications.show({ title: 'Failed to disconnect', message: String(error), color: 'red' });
+      setDisconnecting(false);
+      setConfirmDisconnectOpen(false);
     }
   }
 
@@ -233,14 +233,14 @@ export function QBOConfigClient({
       <Group justify="space-between" align="flex-start" mb="xl">
         <div>
           <Group gap="sm" mb={4}>
-            <ThemeIcon size="lg" color="green" variant="light" radius="md">
+            <ThemeIcon size="lg" color="success" variant="light" radius="md">
               <IconPlugConnected size={20} />
             </ThemeIcon>
             <Title order={2}>{connection.displayName}</Title>
           </Group>
           <Text c="dimmed" size="sm">
             {connection.externalCompanyName ?? 'QuickBooks Online'}
-            {' • '}Connected {dayjs(connection.connectedAt).format('MMM D, YYYY')}
+            {' • '}Connected {formatDate(connection.connectedAt)}
           </Text>
         </div>
         <Group>
@@ -267,7 +267,7 @@ export function QBOConfigClient({
             variant="subtle"
             color="red"
             size="sm"
-            onClick={handleDisconnect}
+            onClick={() => setConfirmDisconnectOpen(true)}
           >
             Disconnect
           </Button>
@@ -296,7 +296,7 @@ export function QBOConfigClient({
             </div>
           </Group>
           {connection.lastSyncStatus && (
-            <Badge color={STATUS_COLORS[connection.lastSyncStatus] ?? 'gray'} variant="light">
+            <Badge color={SYNC_STATUS_COLOR[connection.lastSyncStatus] ?? 'gray'} variant="light">
               {connection.lastSyncStatus}
             </Badge>
           )}
@@ -304,7 +304,7 @@ export function QBOConfigClient({
       </Paper>
 
       {qboEmployees.length === 0 && (
-        <Alert color="blue" variant="light" mb="xl">
+        <Alert color="signal" variant="light" mb="xl">
           Click <strong>&quot;Load QBO Data&quot;</strong> to fetch employees, customers, and service items from QuickBooks Online for mapping.
         </Alert>
       )}
@@ -411,7 +411,7 @@ export function QBOConfigClient({
                 ) : (
                   syncLogs.map((log) => (
                     <Table.Tr key={log.id}>
-                      <Table.Td>{dayjs(log.createdAt).format('MMM D, YYYY h:mm A')}</Table.Td>
+                      <Table.Td>{formatDateTime(log.createdAt)}</Table.Td>
                       <Table.Td>{log.syncType.replace(/_/g, ' ')}</Table.Td>
                       <Table.Td>
                         <Badge size="xs" variant="light">{log.triggerType}</Badge>
@@ -420,7 +420,7 @@ export function QBOConfigClient({
                       <Table.Td>{log.recordsFailed > 0 ? <Text c="red" size="sm" fw={600}>{log.recordsFailed}</Text> : '0'}</Table.Td>
                       <Table.Td>{log.recordsSkipped}</Table.Td>
                       <Table.Td>
-                        <Badge color={STATUS_COLORS[log.status] ?? 'gray'} variant="light" size="sm">
+                        <Badge color={SYNC_STATUS_COLOR[log.status] ?? 'gray'} variant="light" size="sm">
                           {log.status}
                         </Badge>
                       </Table.Td>
@@ -433,6 +433,16 @@ export function QBOConfigClient({
           </Paper>
         </Tabs.Panel>
       </Tabs>
+
+      <ConfirmModal
+        opened={confirmDisconnectOpen}
+        title="Disconnect QuickBooks Online?"
+        message="This removes all stored tokens. Mappings and sync logs will be preserved."
+        confirmLabel="Disconnect"
+        loading={disconnecting}
+        onConfirm={handleDisconnect}
+        onCancel={() => setConfirmDisconnectOpen(false)}
+      />
     </Container>
   );
 }
@@ -502,7 +512,7 @@ function MappingTable({
                 </Table.Td>
                 <Table.Td>
                   {mapping ? (
-                    <Badge color="green" variant="light" size="sm" leftSection={<IconCheck size={10} />}>
+                    <Badge color="success" variant="light" size="sm" leftSection={<IconCheck size={10} />}>
                       Mapped
                     </Badge>
                   ) : (

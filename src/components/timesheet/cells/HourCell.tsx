@@ -79,7 +79,7 @@ export function HourCell({ chargeCodeId, dayIndex, density = 'comfortable' }: Ho
         width: '100%',
         minHeight,
         backgroundColor: isDirty
-          ? 'light-dark(var(--mantine-color-yellow-0), var(--mantine-color-yellow-9))'
+          ? 'light-dark(var(--mantine-color-warning-0), var(--mantine-color-warning-9))'
           : undefined,
         borderRadius: isDirty ? 2 : undefined,
         cursor: isEditable && !isFutureDate ? 'text' : 'default',
@@ -136,7 +136,7 @@ export function HourCell({ chargeCodeId, dayIndex, density = 'comfortable' }: Ho
         <ActionIcon
           variant="subtle"
           size="xs"
-          color={hasNote ? 'blue' : 'gray'}
+          color={hasNote ? 'signal' : 'gray'}
           style={{ position: 'absolute', top: 0, right: 0 }}
           onClick={handleNoteClick}
           aria-label="Add note"
@@ -153,7 +153,7 @@ export function HourCell({ chargeCodeId, dayIndex, density = 'comfortable' }: Ho
             width: 4,
             height: 4,
             borderRadius: '50%',
-            backgroundColor: 'var(--mantine-color-blue-5)',
+            backgroundColor: 'var(--mantine-color-signal-5)',
           }}
           aria-label="Has note"
         />

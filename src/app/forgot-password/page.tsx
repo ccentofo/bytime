@@ -51,7 +51,7 @@ export default function ForgotPasswordPage() {
 
         {sent ? (
           <Stack align="center" gap="md">
-            <Alert icon={<IconCheck size={16} />} color="green" variant="light">
+            <Alert icon={<IconCheck size={16} />} color="success" variant="light">
               If an account exists with that email, we've sent a password reset link.
               Please check your inbox (and spam folder).
             </Alert>

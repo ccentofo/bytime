@@ -2,7 +2,6 @@
 
 import { useState, useTransition } from 'react';
 import {
-  Title,
   Tabs,
   Stack,
   Group,
@@ -30,6 +29,7 @@ import {
   IconCopy,
 } from '@tabler/icons-react';
 import { parseCSV, type ParsedRow, type ParseResult } from '@/lib/csv-parser';
+import { PageHeader } from '@/components/ui/PageHeader';
 import {
   bulkImportEmployees,
   bulkImportContracts,
@@ -94,7 +94,7 @@ function ImportWizard({
         notifications.show({
           title: 'Import Complete',
           message: `Created: ${result.created}, Skipped: ${result.skipped}, Errors: ${result.errors.length}`,
-          color: result.errors.length > 0 ? 'orange' : 'green',
+          color: result.errors.length > 0 ? 'warning' : 'success',
         });
       } catch (error) {
         notifications.show({
@@ -115,7 +115,7 @@ function ImportWizard({
         <Text fw={600} size="sm" mb={4}>{title}</Text>
         <Text size="sm" c="dimmed">{description}</Text>
         {importOrderNote && (
-          <Alert icon={<IconAlertCircle size={14} />} color="blue" variant="light" mt="xs">
+          <Alert icon={<IconAlertCircle size={14} />} color="signal" variant="light" mt="xs">
             <Text size="xs">{importOrderNote}</Text>
           </Alert>
         )}
@@ -146,7 +146,7 @@ function ImportWizard({
       {parseResult && (
         <>
           <Group gap="sm">
-            <Badge color="green" variant="light">{validCount} valid rows</Badge>
+            <Badge color="success" variant="light">{validCount} valid rows</Badge>
             {errorCount > 0 && <Badge color="red" variant="light">{errorCount} rows with errors</Badge>}
           </Group>
 
@@ -169,7 +169,7 @@ function ImportWizard({
                         <Table.Td>{row.rowIndex}</Table.Td>
                         <Table.Td>
                           {row.isValid ? (
-                            <Badge color="green" size="xs" variant="light">Valid</Badge>
+                            <Badge color="success" size="xs" variant="light">Valid</Badge>
                           ) : (
                             <Badge color="red" size="xs" variant="light" title={row.errors.join(', ')}>
                               Error
@@ -194,7 +194,7 @@ function ImportWizard({
             loading={isPending}
             disabled={validCount === 0}
             leftSection={<IconUpload size={16} />}
-            color="blue"
+            color="signal"
           >
             Import {validCount} Valid Row{validCount !== 1 ? 's' : ''}
           </Button>
@@ -205,7 +205,7 @@ function ImportWizard({
         <Paper withBorder p="md" radius="sm">
           <Text fw={600} size="sm" mb="xs">Import Results</Text>
           <Group gap="sm" mb="xs">
-            <Badge color="green" variant="light">✓ {importResult.created} created</Badge>
+            <Badge color="success" variant="light">✓ {importResult.created} created</Badge>
             <Badge color="gray" variant="light">⟳ {importResult.skipped} skipped</Badge>
             {importResult.errors.length > 0 && (
               <Badge color="red" variant="light">✗ {importResult.errors.length} errors</Badge>
@@ -265,7 +265,7 @@ function EmployeeImportWizard() {
         notifications.show({
           title: 'Employee Import Complete',
           message: `Created: ${result.created}, Skipped: ${result.skipped}`,
-          color: result.errors.length > 0 ? 'orange' : 'green',
+          color: result.errors.length > 0 ? 'warning' : 'success',
         });
       } catch (error) {
         notifications.show({ title: 'Import Failed', message: String(error), color: 'red' });
@@ -310,7 +310,7 @@ function EmployeeImportWizard() {
       {parseResult && (
         <>
           <Group gap="sm">
-            <Badge color="green" variant="light">{validCount} valid rows</Badge>
+            <Badge color="success" variant="light">{validCount} valid rows</Badge>
             {parseResult.errorRows > 0 && <Badge color="red" variant="light">{parseResult.errorRows} rows with errors</Badge>}
           </Group>
 
@@ -330,7 +330,7 @@ function EmployeeImportWizard() {
                       <Table.Td>{row.rowIndex}</Table.Td>
                       <Table.Td>
                         {row.isValid
-                          ? <Badge color="green" size="xs" variant="light">Valid</Badge>
+                          ? <Badge color="success" size="xs" variant="light">Valid</Badge>
                           : <Badge color="red" size="xs" variant="light">Error</Badge>}
                       </Table.Td>
                       {parseResult.headers.map((h) => <Table.Td key={h}>{row.data[h] ?? ''}</Table.Td>)}
@@ -341,7 +341,7 @@ function EmployeeImportWizard() {
             </Paper>
           )}
 
-          <Button onClick={handleImport} loading={isPending} disabled={validCount === 0} leftSection={<IconUpload size={16} />} color="blue">
+          <Button onClick={handleImport} loading={isPending} disabled={validCount === 0} leftSection={<IconUpload size={16} />} color="signal">
             Import {validCount} Employee{validCount !== 1 ? 's' : ''}
           </Button>
         </>
@@ -350,7 +350,7 @@ function EmployeeImportWizard() {
       {importResult && (
         <Paper withBorder p="md" radius="sm">
           <Group gap="sm" mb="xs">
-            <Badge color="green" variant="light">✓ {importResult.created} created</Badge>
+            <Badge color="success" variant="light">✓ {importResult.created} created</Badge>
             <Badge color="gray" variant="light">⟳ {importResult.skipped} skipped</Badge>
             {importResult.errors.length > 0 && <Badge color="red" variant="light">✗ {importResult.errors.length} errors</Badge>}
           </Group>
@@ -371,7 +371,7 @@ function EmployeeImportWizard() {
         closeOnClickOutside={false}
       >
         <Stack>
-          <Alert icon={<IconAlertCircle size={16} />} color="orange" variant="light">
+          <Alert icon={<IconAlertCircle size={16} />} color="warning" variant="light">
             <Text size="sm" fw={600}>These passwords are shown only once.</Text>
             <Text size="sm">Copy or download them now. Users should change their password on first login.</Text>
           </Alert>
@@ -396,7 +396,7 @@ function EmployeeImportWizard() {
           <Group>
             <CopyButton value={passwordCsvContent}>
               {({ copied, copy }) => (
-                <Button leftSection={<IconCopy size={16} />} onClick={copy} variant="light" color={copied ? 'green' : 'blue'}>
+                <Button leftSection={<IconCopy size={16} />} onClick={copy} variant="light" color={copied ? 'success' : 'signal'}>
                   {copied ? 'Copied!' : 'Copy as CSV'}
                 </Button>
               )}
@@ -417,7 +417,7 @@ function EmployeeImportWizard() {
               Download CSV
             </Button>
           </Group>
-          <Button onClick={() => setPasswordModalOpen(false)} color="green">
+          <Button onClick={() => setPasswordModalOpen(false)} color="success">
             I've Saved the Passwords
           </Button>
         </Stack>
@@ -433,8 +433,8 @@ function EmployeeImportWizard() {
 export function ImportClient() {
   return (
     <>
-      <Title order={2} mb="xs">Data Import</Title>
-      <Alert icon={<IconAlertCircle size={16} />} color="blue" variant="light" mb="lg">
+      <PageHeader title="Data Import" />
+      <Alert icon={<IconAlertCircle size={16} />} color="signal" variant="light" mb="lg">
         <Text size="sm" fw={600}>Import Order — follow these steps in order:</Text>
         <Text size="sm">1. Employees → 2. Contracts → 3. CLINs → 4. Labor Categories → 5. Assignments</Text>
       </Alert>

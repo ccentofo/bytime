@@ -58,5 +58,8 @@ export const theme = createTheme({
   // Tabular figures for inputs (hours align as you type — pairs with the .tnum rule in globals.css).
   components: {
     NumberInput: { defaultProps: { style: { fontVariantNumeric: 'tabular-nums' } } },
+    Badge: { defaultProps: { variant: 'light' } },
+    Tooltip: { defaultProps: { withArrow: true, openDelay: 300 } },
+    Modal: { defaultProps: { centered: true, radius: 'md' } },
   },
 });

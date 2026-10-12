@@ -99,7 +99,7 @@ function ResetPasswordForm() {
         </Stack>
       ) : success ? (
         <Stack align="center" gap="md">
-          <Alert icon={<IconCheck size={16} />} color="green" variant="light">
+          <Alert icon={<IconCheck size={16} />} color="success" variant="light">
             Your password has been reset successfully! You can now sign in with your new password.
           </Alert>
           <Button component="a" href="/login" fullWidth>

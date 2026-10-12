@@ -2,6 +2,7 @@ import { Container, Title, Text, Button, Group, Stack, Paper, SimpleGrid, ThemeI
 import { IconClock, IconShieldCheck, IconCloudLock, IconReportAnalytics, IconUsers, IconDeviceFloppy, IconApi, IconMoon } from '@tabler/icons-react';
 import React from 'react';
 import { Logo } from '@/components/brand/Logo';
+import { ROLE_COLOR } from '@/lib/ui/status-colors';
 
 export default function LandingPage() {
   return (
@@ -9,7 +10,7 @@ export default function LandingPage() {
       {/* Hero Section */}
       <Center>
         <Stack align="center" gap="lg" py={60}>
-          <Badge size="lg" variant="light" color="blue">DCAA Compliant</Badge>
+          <Badge size="lg" variant="light" color="signal">DCAA Compliant</Badge>
           <Logo size="xl" />
           <Text size="xl" c="dimmed" ta="center" maw={600}>
             Modern, fault-tolerant timekeeping for Government Contractors.
@@ -39,17 +40,17 @@ export default function LandingPage() {
         </Text>
         <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="md">
           <Paper withBorder p="md" radius="md">
-            <Badge color="red" mb="xs">Admin</Badge>
+            <Badge color={ROLE_COLOR.admin} mb="xs">Admin</Badge>
             <Text size="sm" fw={600}>admin@cadenzpoint.dev</Text>
             <Text size="xs" c="dimmed">Full system access — manage users, contracts, approvals</Text>
           </Paper>
           <Paper withBorder p="md" radius="md">
-            <Badge color="blue" mb="xs">Supervisor</Badge>
+            <Badge color={ROLE_COLOR.supervisor} mb="xs">Supervisor</Badge>
             <Text size="sm" fw={600}>sarah.wilson@cadenzpoint.dev</Text>
             <Text size="xs" c="dimmed">Review and approve employee timesheets</Text>
           </Paper>
           <Paper withBorder p="md" radius="md">
-            <Badge color="green" mb="xs">Employee</Badge>
+            <Badge color={ROLE_COLOR.employee} mb="xs">Employee</Badge>
             <Text size="sm" fw={600}>jane.smith@cadenzpoint.dev</Text>
             <Text size="xs" c="dimmed">Enter time, submit for approval, view dashboard</Text>
           </Paper>

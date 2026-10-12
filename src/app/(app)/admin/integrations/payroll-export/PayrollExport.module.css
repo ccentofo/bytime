@@ -4,5 +4,5 @@
 }
 
 .formatCard:hover {
-  border-color: var(--mantine-color-orange-4);
+  border-color: var(--mantine-color-warning-4);
 }

@@ -12,15 +12,15 @@ import {
   Select,
   Button,
   Alert,
-  ThemeIcon,
   Badge,
 } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
-import { IconSettings, IconAlertCircle, IconCheck, IconClock } from '@tabler/icons-react';
+import { IconAlertCircle, IconCheck, IconClock } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { updatePayPeriodConfig, type ConfigHistoryRow, type UpdatePayPeriodConfigResult } from '@/server/actions/pay-period-config';
 import type { PeriodConfig, PeriodType } from '@/lib/date-utils';
-import dayjs from 'dayjs';
+import { formatDate } from '@/lib/format';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 interface Props {
   initialConfig: PeriodConfig;
@@ -57,7 +57,7 @@ export function SettingsClient({ initialConfig, pendingChange }: Props) {
 
   async function handleSave() {
     if (!anchorDate) {
-      notifications.show({ title: 'Anchor date required', message: 'Please select an anchor date.', color: 'yellow' });
+      notifications.show({ title: 'Anchor date required', message: 'Please select an anchor date.', color: 'warning' });
       return;
     }
 
@@ -71,8 +71,8 @@ export function SettingsClient({ initialConfig, pendingChange }: Props) {
         setScheduledEffectiveFrom(result.effectiveFrom);
         notifications.show({
           title: 'Schedule change saved',
-          message: `Your new ${PERIOD_TYPE_LABELS[periodType]} schedule takes effect ${dayjs(result.effectiveFrom).format('MMM D, YYYY')}. Current and past periods are unchanged.`,
-          color: 'green',
+          message: `Your new ${PERIOD_TYPE_LABELS[periodType]} schedule takes effect ${formatDate(result.effectiveFrom)}. Current and past periods are unchanged.`,
+          color: 'success',
           icon: <IconCheck size={16} />,
           autoClose: 8000,
         });
@@ -86,31 +86,29 @@ export function SettingsClient({ initialConfig, pendingChange }: Props) {
 
   return (
     <Container size="md" py="xl">
-      <Group gap="sm" mb="xl">
-        <ThemeIcon size="lg" color="gray" variant="light" radius="md">
-          <IconSettings size={20} />
-        </ThemeIcon>
-        <Title order={2}>Settings</Title>
-      </Group>
+      <PageHeader
+        title="Settings"
+        description="Workspace-wide configuration for timekeeping."
+      />
 
       <Paper withBorder p="lg" radius="md" mb="xl">
         <Title order={4} mb="md">Pay Period Configuration</Title>
 
         {/* Pending change banner */}
         {scheduledEffectiveFrom && (
-          <Alert icon={<IconClock size={16} />} color="blue" variant="light" mb="lg">
+          <Alert icon={<IconClock size={16} />} color="signal" variant="light" mb="lg">
             <Group gap="xs">
               <Text size="sm">
                 <strong>Scheduled change:</strong> Your new {PERIOD_TYPE_LABELS[periodType] ?? periodType} schedule
-                takes effect <strong>{dayjs(scheduledEffectiveFrom).format('MMM D, YYYY')}</strong>.
+                takes effect <strong>{formatDate(scheduledEffectiveFrom)}</strong>.
                 Current and past periods are unchanged.
               </Text>
-              <Badge color="blue" variant="light" size="sm">Pending</Badge>
+              <Badge color="signal" variant="light" size="sm">Pending</Badge>
             </Group>
           </Alert>
         )}
 
-        <Alert icon={<IconAlertCircle size={16} />} color="yellow" variant="light" mb="lg">
+        <Alert icon={<IconAlertCircle size={16} />} color="warning" variant="light" mb="lg">
           <Text size="sm">
             <strong>Future-effective only.</strong> Changes apply starting at the next period boundary —
             the current period and all historical data are preserved. You cannot set a retroactive schedule.

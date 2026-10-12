@@ -31,10 +31,13 @@ export function AppShellWrapper({ user, setupComplete = true, initialCollapsed =
   const [collapsed, setCollapsed] = useState(initialCollapsed);
 
   // Collapse to an icon rail only on desktop; mobile keeps the burger overlay at full width.
-  // getInitialValueInEffect:false → matchMedia is read synchronously on the first client render
-  // (not deferred to an effect), so `isDesktop` is correct before paint and doesn't cause a flash.
-  // Default `true` keeps SSR/first paint consistent with the cookie-driven width on desktop.
-  const isDesktop = useMediaQuery('(min-width: 48em)', true, { getInitialValueInEffect: false });
+  // `initialValue: true` keeps SSR and the first client render both assuming desktop, so the
+  // cookie-driven rail width matches on hydration (no mismatch) — the installed @mantine/hooks
+  // version drops `initialValue` entirely when `getInitialValueInEffect: false` is passed, which
+  // made the server always compute `false` while a desktop browser's hydration render computed
+  // `true`, a guaranteed hydration-mismatch on the navbar width on every (app) page. A real mobile
+  // device self-corrects via the effect a moment after mount, before the nav is ever opened.
+  const isDesktop = useMediaQuery('(min-width: 48em)', true);
   const railCollapsed = collapsed && !!isDesktop;
 
   const showBanner = user.role === 'admin' && !setupComplete && !bannerDismissed;
@@ -105,7 +108,7 @@ export function AppShellWrapper({ user, setupComplete = true, initialCollapsed =
           {showBanner && (
             <Alert
               icon={<IconRocket size={18} />}
-              color="blue"
+              color="signal"
               variant="light"
               mb="md"
               radius="md"

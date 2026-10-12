@@ -22,14 +22,15 @@ import {
   IconReceipt,
   IconChartBar,
 } from '@tabler/icons-react';
-import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
-import dayjs from 'dayjs';
+import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { useAppTable } from '@/components/table/mrtDefaults';
 import {
   getPeriodCostReport,
   type ContractSummary,
   type PeriodCostEntry,
 } from '@/server/actions/dashboard';
-import classes from './Dashboard.module.css';
+import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 type Props = {
   initialSummaries: ContractSummary[];
@@ -47,8 +48,8 @@ function formatCurrencyString(val: string | null): string {
 
 function getBurnColor(pct: number): string {
   if (pct >= 90) return 'red';
-  if (pct >= 75) return 'yellow';
-  return 'green';
+  if (pct >= 75) return 'warning';
+  return 'success';
 }
 
 export function DashboardClient({ initialSummaries }: Props) {
@@ -92,7 +93,7 @@ export function DashboardClient({ initialSummaries }: Props) {
       accessorKey: 'contractType',
       header: 'Type',
       Cell: ({ cell }) => (
-        <Badge color={cell.getValue<string>() === 'prime' ? 'blue' : 'grape'} variant="light" size="sm">
+        <Badge color={cell.getValue<string>() === 'prime' ? 'signal' : 'gray'} size="sm">
           {cell.getValue<string>() === 'prime' ? 'Prime' : 'Sub'}
         </Badge>
       ),
@@ -131,7 +132,7 @@ export function DashboardClient({ initialSummaries }: Props) {
       },
       Cell: ({ cell }) => {
         const remaining = cell.getValue<number>();
-        const color = remaining < 0 ? 'red' : remaining < 10000 ? 'orange' : 'green';
+        const color = remaining < 0 ? 'red' : remaining < 10000 ? 'warning' : 'success';
         return <Text size="sm" c={color} fw={600}>{formatCurrency(remaining)}</Text>;
       },
       size: 130,
@@ -159,15 +160,14 @@ export function DashboardClient({ initialSummaries }: Props) {
       accessorKey: 'status',
       header: 'Status',
       Cell: ({ cell }) => {
-        const status = cell.getValue<string>();
-        const colors: Record<string, string> = { active: 'green', inactive: 'gray', closed: 'red' };
-        return <Badge color={colors[status] ?? 'gray'} variant="light" size="sm">{status}</Badge>;
+        const status = cell.getValue<string>() as keyof typeof RECORD_STATUS_COLOR;
+        return <Badge color={RECORD_STATUS_COLOR[status] ?? 'gray'} size="sm">{status}</Badge>;
       },
       size: 100,
     },
   ];
 
-  const contractTable = useMantineReactTable({
+  const contractTable = useAppTable({
     columns: contractColumns,
     data: summaries,
     enableExpanding: true,
@@ -204,12 +204,12 @@ export function DashboardClient({ initialSummaries }: Props) {
                       <Table.Td>{clin.totalHours.toFixed(2)}</Table.Td>
                       <Table.Td>{formatCurrency(clin.totalCost)}</Table.Td>
                       <Table.Td>
-                        <Text size="sm" c={remaining < 0 ? 'red' : 'green'} fw={600}>
+                        <Text size="sm" c={remaining < 0 ? 'red' : 'success'} fw={600}>
                           {clin.fundedAmount ? formatCurrency(remaining) : '—'}
                         </Text>
                       </Table.Td>
                       <Table.Td>
-                        <Badge color={clin.status === 'active' ? 'green' : 'gray'} variant="light" size="sm">
+                        <Badge color={clin.status === 'active' ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive} size="sm">
                           {clin.status}
                         </Badge>
                       </Table.Td>
@@ -227,12 +227,12 @@ export function DashboardClient({ initialSummaries }: Props) {
                           <Table.Td><Text size="xs">{slin.totalHours.toFixed(2)}</Text></Table.Td>
                           <Table.Td><Text size="xs">{formatCurrency(slin.totalCost)}</Text></Table.Td>
                           <Table.Td>
-                            <Text size="xs" c={slinRemaining < 0 ? 'red' : 'green'} fw={600}>
+                            <Text size="xs" c={slinRemaining < 0 ? 'red' : 'success'} fw={600}>
                               {slin.fundedAmount ? formatCurrency(slinRemaining) : '—'}
                             </Text>
                           </Table.Td>
                           <Table.Td>
-                            <Badge size="xs" color={slin.status === 'active' ? 'green' : 'gray'} variant="light">
+                            <Badge size="xs" color={slin.status === 'active' ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive}>
                               {slin.status}
                             </Badge>
                           </Table.Td>
@@ -247,36 +247,6 @@ export function DashboardClient({ initialSummaries }: Props) {
           </Table.ScrollContainer>
         </Stack>
       );
-    },
-    enableColumnActions: false,
-    enableDensityToggle: false,
-    enableFullScreenToggle: false,
-    mantinePaperProps: { style: { width: '100%' } },
-    mantineTableContainerProps: { style: { maxWidth: '100%', overflowX: 'auto' } },
-    layoutMode: 'semantic',
-    mantineTableProps: {
-      highlightOnHover: true,
-      striped: 'odd',
-      withColumnBorders: false,
-    },
-    mantineTableHeadCellProps: {
-      className: classes.tableHeaderCell,
-      style: {
-        fontWeight: 600,
-        fontSize: '0.85rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTableBodyCellProps: {
-      style: {
-        fontSize: '0.875rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTopToolbarProps: {
-      style: {
-        padding: '12px 16px',
-      },
     },
   });
 
@@ -323,48 +293,18 @@ export function DashboardClient({ initialSummaries }: Props) {
     },
   ];
 
-  const costTable = useMantineReactTable({
+  const costTable = useAppTable({
     columns: costColumns,
     data: costReport,
-    enableColumnActions: false,
-    enableDensityToggle: false,
-    enableFullScreenToggle: false,
-    mantineTableProps: {
-      highlightOnHover: true,
-      striped: 'odd',
-      withColumnBorders: false,
-    },
-    mantineTableHeadCellProps: {
-      className: classes.tableHeaderCell,
-      style: {
-        fontWeight: 600,
-        fontSize: '0.85rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTableBodyCellProps: {
-      style: {
-        fontSize: '0.875rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTopToolbarProps: {
-      style: {
-        padding: '12px 16px',
-      },
-    },
   });
 
   const reportTotal = costReport.reduce((sum, r) => sum + r.totalCost, 0);
   const reportHours = costReport.reduce((sum, r) => sum + r.totalHours, 0);
 
-  // suppress unused import warning for dayjs
-  void dayjs;
-
   return (
     <>
       {/* ---- Section A: Overview Cards ---- */}
-      <Title order={2} mb="md">Contract Dashboard</Title>
+      <PageHeader title="Contract Dashboard" />
 
       <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} mb="xl">
         <Paper withBorder p="md" radius="md">
@@ -373,7 +313,7 @@ export function DashboardClient({ initialSummaries }: Props) {
               <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Contracts</Text>
               <Text size="xl" fw={700}>{totalContracts}</Text>
             </div>
-            <ThemeIcon color="blue" variant="light" size="lg" radius="md">
+            <ThemeIcon color="signal" variant="light" size="lg" radius="md">
               <IconReportMoney size={20} />
             </ThemeIcon>
           </Group>
@@ -384,7 +324,7 @@ export function DashboardClient({ initialSummaries }: Props) {
               <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Total Funded</Text>
               <Text size="xl" fw={700}>{formatCurrency(totalFunded)}</Text>
             </div>
-            <ThemeIcon color="green" variant="light" size="lg" radius="md">
+            <ThemeIcon color="success" variant="light" size="lg" radius="md">
               <IconCash size={20} />
             </ThemeIcon>
           </Group>
@@ -395,7 +335,7 @@ export function DashboardClient({ initialSummaries }: Props) {
               <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Total Spent</Text>
               <Text size="xl" fw={700}>{formatCurrency(totalSpent)}</Text>
             </div>
-            <ThemeIcon color="orange" variant="light" size="lg" radius="md">
+            <ThemeIcon color="warning" variant="light" size="lg" radius="md">
               <IconReceipt size={20} />
             </ThemeIcon>
           </Group>
@@ -408,7 +348,7 @@ export function DashboardClient({ initialSummaries }: Props) {
                 {formatCurrency(totalRemaining)}
               </Text>
             </div>
-            <ThemeIcon color={totalRemaining < 0 ? 'red' : 'teal'} variant="light" size="lg" radius="md">
+            <ThemeIcon color={totalRemaining < 0 ? 'red' : 'signal'} variant="light" size="lg" radius="md">
               <IconChartBar size={20} />
             </ThemeIcon>
           </Group>
@@ -416,12 +356,12 @@ export function DashboardClient({ initialSummaries }: Props) {
       </SimpleGrid>
 
       {/* ---- Section B: Contract Summary Table ---- */}
-      <Title order={3} mb="sm">Contract Budget Overview</Title>
+      <Title order={4} mb="sm">Contract Budget Overview</Title>
       <MantineReactTable table={contractTable} />
 
       {/* ---- Section C: Period Cost Report ---- */}
       <Divider my="xl" />
-      <Title order={3} mb="sm">Period Cost Report</Title>
+      <Title order={4} mb="sm">Period Cost Report</Title>
 
       <Paper withBorder p="md" mb="xl">
         <Group align="flex-end" wrap="wrap" gap="md">

@@ -2,16 +2,20 @@
 
 import { useState, useTransition } from 'react';
 import {
-  Button, Modal, TextInput, Textarea, Select, Group, Stack, Title,
-  Badge, Switch, ActionIcon, Text,
+  Button, Modal, TextInput, Textarea, Select, Group, Stack,
+  Badge, Switch, ActionIcon, Tooltip,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconPlus, IconEdit, IconBolt } from '@tabler/icons-react';
-import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { IconPlus, IconPencil, IconBan, IconBolt } from '@tabler/icons-react';
+import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { useAppTable } from '@/components/table/mrtDefaults';
 import {
   createChargeCode, updateChargeCode, deactivateChargeCode,
   autobridgeChargeCodesFromClins, createCostClass, listChargeCodes,
 } from '@/server/actions/charge-codes';
+import { RECORD_STATUS_COLOR, WORK_LOCATION_COLOR } from '@/lib/ui/status-colors';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 type ChargeCodeRow = {
   id: string;
@@ -65,7 +69,6 @@ const WORK_LOCATION_OPTIONS = [
   { value: 'other', label: 'Other' },
 ];
 
-const LOCATION_COLORS: Record<string, string> = { onsite: 'blue', telework: 'teal', other: 'gray' };
 
 export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Props) {
   const [codes, setCodes] = useState(initialCodes);
@@ -75,6 +78,7 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
   const [isPending, startTransition] = useTransition();
   const [newClassName, setNewClassName] = useState('');
   const [classList, setClassList] = useState(costClasses);
+  const [confirmTarget, setConfirmTarget] = useState<ChargeCodeRow | null>(null);
 
   async function refreshCodes() {
     const fresh = await listChargeCodes();
@@ -119,7 +123,7 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
             workLocation: (form.workLocation as 'onsite' | 'telework' | 'other') || null,
             billable: form.billable,
           });
-          notifications.show({ title: 'Updated', message: `${form.code} updated.`, color: 'green' });
+          notifications.show({ title: 'Updated', message: `${form.code} updated.`, color: 'success' });
         } else {
           await createChargeCode({
             code: form.code.trim(), name: form.name.trim(),
@@ -128,7 +132,7 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
             workLocation: (form.workLocation as 'onsite' | 'telework' | 'other') || undefined,
             billable: form.billable,
           });
-          notifications.show({ title: 'Created', message: `${form.code} created.`, color: 'green' });
+          notifications.show({ title: 'Created', message: `${form.code} created.`, color: 'success' });
         }
         setModalOpen(false);
         await refreshCodes();
@@ -141,7 +145,8 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
   async function handleDeactivate(id: string, code: string) {
     startTransition(async () => {
       await deactivateChargeCode(id);
-      notifications.show({ title: 'Deactivated', message: `${code} deactivated.`, color: 'orange' });
+      notifications.show({ title: 'Deactivated', message: `${code} deactivated.`, color: 'warning' });
+      setConfirmTarget(null);
       await refreshCodes();
     });
   }
@@ -150,7 +155,7 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
     startTransition(async () => {
       try {
         const result = await autobridgeChargeCodesFromClins();
-        notifications.show({ title: 'Auto-generated', message: `Created ${result.created} charge code(s) from ${result.total} active CLINs.`, color: 'green' });
+        notifications.show({ title: 'Auto-generated', message: `Created ${result.created} charge code(s) from ${result.total} active CLINs.`, color: 'success' });
         await refreshCodes();
       } catch (e) {
         notifications.show({ title: 'Error', message: String(e), color: 'red' });
@@ -166,7 +171,7 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
         setClassList([...classList, { id: created.id, name: created.name }]);
         setForm((f) => ({ ...f, classId: created.id }));
         setNewClassName('');
-        notifications.show({ title: 'Class added', message: created.name, color: 'green' });
+        notifications.show({ title: 'Class added', message: created.name, color: 'success' });
       }
     });
   }
@@ -188,60 +193,77 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
     {
       accessorKey: 'className',
       header: 'Class',
-      Cell: ({ cell }) => cell.getValue() ? <Badge variant="light" color="violet">{cell.getValue<string>()}</Badge> : null,
+      Cell: ({ cell }) => cell.getValue() ? <Badge color="gray">{cell.getValue<string>()}</Badge> : null,
     },
     {
       accessorKey: 'workLocation',
       header: 'Location',
       Cell: ({ cell }) => {
         const loc = cell.getValue<string | null>();
-        return loc ? <Badge color={LOCATION_COLORS[loc] ?? 'gray'} variant="light">{loc}</Badge> : null;
+        return loc ? <Badge color={WORK_LOCATION_COLOR[loc] ?? 'gray'}>{loc}</Badge> : null;
       },
     },
     {
       accessorKey: 'isActive',
       header: 'Active',
-      Cell: ({ cell }) => <Badge color={cell.getValue() ? 'green' : 'gray'} variant="light">{cell.getValue() ? 'Active' : 'Inactive'}</Badge>,
+      Cell: ({ cell }) => {
+        const active = cell.getValue<boolean>();
+        return (
+          <Badge color={active ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive}>
+            {active ? 'Active' : 'Inactive'}
+          </Badge>
+        );
+      },
     },
   ];
 
-  const table = useMantineReactTable({
+  const table = useAppTable({
     columns, data: codes,
-    enableRowActions: true, positionActionsColumn: 'last',
+    enableRowActions: true,
     renderRowActions: ({ row }) => (
-      <Group gap="xs">
-        <ActionIcon variant="subtle" onClick={() => openEdit(row.original)}><IconEdit size={16} /></ActionIcon>
+      <Group gap="xs" justify="center">
+        <Tooltip label="Edit">
+          <ActionIcon variant="subtle" onClick={() => openEdit(row.original)} aria-label="Edit charge code">
+            <IconPencil size={16} />
+          </ActionIcon>
+        </Tooltip>
         {row.original.isActive && (
-          <Button size="xs" variant="subtle" color="red" loading={isPending}
-            onClick={() => handleDeactivate(row.original.id, row.original.code)}>
-            Deactivate
-          </Button>
+          <Tooltip label="Deactivate">
+            <ActionIcon
+              variant="subtle"
+              color="red"
+              onClick={() => setConfirmTarget(row.original)}
+              aria-label="Deactivate charge code"
+            >
+              <IconBan size={16} />
+            </ActionIcon>
+          </Tooltip>
         )}
       </Group>
     ),
-    enableColumnActions: false, enableDensityToggle: false, enableFullScreenToggle: false,
-    layoutMode: 'semantic',
-    mantinePaperProps: { style: { width: '100%' } },
-    mantineTableContainerProps: { style: { maxWidth: '100%', overflowX: 'auto' } },
-    mantineTableProps: { highlightOnHover: true, striped: 'odd', withColumnBorders: false },
-    renderTopToolbarCustomActions: () => (
-      <Group gap="sm">
-        <Button leftSection={<IconPlus size={16} />} onClick={openCreate} size="sm">New Charge Code</Button>
-        <Button leftSection={<IconBolt size={16} />} variant="default" onClick={handleAutobridge} loading={isPending} size="sm">
-          Auto-generate from CLINs
-        </Button>
-      </Group>
-    ),
+    displayColumnDefOptions: {
+      'mrt-row-actions': {
+        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
+        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
+      },
+    },
   });
 
   return (
     <>
-      <Stack gap="md" p="md">
-        <Title order={2}>Charge Codes</Title>
-        <Text c="dimmed" size="sm">
-          Direct charge codes that employees charge to. Each code rolls up to a CLIN → Contract.
-          Use "Auto-generate from CLINs" to create one code per active CLIN, or create custom codes (e.g. Onsite/Telework variants).
-        </Text>
+      <PageHeader
+        title="Charge Codes"
+        description={'Direct charge codes that employees charge to. Each code rolls up to a CLIN → Contract. Use "Auto-generate from CLINs" to create one code per active CLIN, or create custom codes (e.g. Onsite/Telework variants).'}
+        actions={
+          <Group gap="sm">
+            <Button leftSection={<IconPlus size={16} />} onClick={openCreate} size="sm">New Charge Code</Button>
+            <Button leftSection={<IconBolt size={16} />} variant="default" onClick={handleAutobridge} loading={isPending} size="sm">
+              Auto-generate from CLINs
+            </Button>
+          </Group>
+        }
+      />
+      <Stack gap="md">
         <MantineReactTable table={table} />
       </Stack>
 
@@ -286,6 +308,16 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
           </Group>
         </Stack>
       </Modal>
+
+      <ConfirmModal
+        opened={!!confirmTarget}
+        title="Deactivate charge code?"
+        message={confirmTarget ? `This deactivates ${confirmTarget.code} — ${confirmTarget.name}. Existing timesheet history is preserved.` : ''}
+        confirmLabel="Deactivate"
+        loading={isPending}
+        onConfirm={() => confirmTarget && handleDeactivate(confirmTarget.id, confirmTarget.code)}
+        onCancel={() => setConfirmTarget(null)}
+      />
     </>
   );
 }

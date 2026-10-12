@@ -23,7 +23,7 @@ export default function AdminError({
         <Alert
           icon={<IconAlertTriangle size={24} />}
           title={isForbidden ? 'Access Denied' : 'Admin Page Error'}
-          color={isForbidden ? 'orange' : 'red'}
+          color={isForbidden ? 'warning' : 'red'}
           variant="light"
           w="100%"
         >

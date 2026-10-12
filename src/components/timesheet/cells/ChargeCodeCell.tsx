@@ -3,26 +3,12 @@
 import { Badge, Stack, Text, Tooltip } from '@mantine/core';
 import type { ChargeCode } from '@/types/timesheet';
 import type { Density } from '../BiWeeklyTable';
+import { INDIRECT_CATEGORY_COLOR, WORK_LOCATION_COLOR } from '@/lib/ui/status-colors';
 
 interface ChargeCodeCellProps {
   chargeCode: ChargeCode;
   density?: Density;
 }
-
-const CATEGORY_COLORS: Record<string, string> = {
-  overhead: 'blue',
-  ga: 'grape',
-  irad: 'cyan',
-  bp: 'orange',
-  leave: 'green',
-  unallowable: 'red',
-};
-
-const LOCATION_COLORS: Record<string, string> = {
-  onsite: 'blue',
-  telework: 'teal',
-  other: 'gray',
-};
 
 export function ChargeCodeCell({ chargeCode, density = 'comfortable' }: ChargeCodeCellProps) {
   const isDense = density === 'dense';
@@ -53,20 +39,20 @@ export function ChargeCodeCell({ chargeCode, density = 'comfortable' }: ChargeCo
       <Badge
         variant="light"
         size={isDense ? 'xs' : 'sm'}
-        color={chargeCode.isIndirect ? (CATEGORY_COLORS[chargeCode.indirectCategory ?? ''] ?? 'gray') : 'ink'}
+        color={chargeCode.isIndirect ? (INDIRECT_CATEGORY_COLOR[chargeCode.indirectCategory ?? ''] ?? 'gray') : 'ink'}
       >
         {codeLabel}{chargeCode.slinNumber ? ` / ${chargeCode.slinNumber}` : ''}
       </Badge>
 
       {/* Work-location badge for direct codes */}
       {!chargeCode.isIndirect && chargeCode.workLocation && (
-        <Badge size="xs" variant="light" color={LOCATION_COLORS[chargeCode.workLocation] ?? 'gray'}>
+        <Badge size="xs" variant="light" color={WORK_LOCATION_COLOR[chargeCode.workLocation] ?? 'gray'}>
           {chargeCode.workLocation}
         </Badge>
       )}
 
       {chargeCode.isIndirect && chargeCode.indirectCategory && (
-        <Badge size="xs" variant="light" color={CATEGORY_COLORS[chargeCode.indirectCategory] ?? 'gray'}>
+        <Badge size="xs" variant="light" color={INDIRECT_CATEGORY_COLOR[chargeCode.indirectCategory] ?? 'gray'}>
           {chargeCode.indirectCategory.toUpperCase()}
         </Badge>
       )}

@@ -3,6 +3,7 @@ import { Geist, Geist_Mono, Inter } from "next/font/google";
 import "@mantine/core/styles.css";
 import "@mantine/dates/styles.css";
 import "@mantine/notifications/styles.css";
+import "mantine-react-table/styles.css";
 import "./globals.css";
 import { MantineProvider, ColorSchemeScript } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";

@@ -103,7 +103,7 @@ export function LoginForm() {
         {lockoutMessage && (
           <Alert
             icon={<IconLock size={16} />}
-            color="orange"
+            color="warning"
             mb="md"
             variant="light"
             title="Account Locked"

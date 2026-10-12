@@ -173,7 +173,7 @@ export function BiWeeklyTable() {
           );
         })}
         <div className={styles.footerCellTotal} role="cell">
-          <Text fw={900} ta="center" size="sm" c="blue"
+          <Text fw={900} ta="center" size="sm" c="signal"
             style={{ fontVariantNumeric: 'tabular-nums' }}>
             {formatFooterHours(grandTotal, density)}
           </Text>

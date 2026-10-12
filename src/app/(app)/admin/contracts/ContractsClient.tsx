@@ -15,18 +15,22 @@ import {
   Badge,
   Table,
   ActionIcon,
+  Tooltip,
   Box,
 } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
 import { IconEdit, IconList, IconPlus, IconChevronDown, IconChevronRight } from '@tabler/icons-react';
-import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { useAppTable } from '@/components/table/mrtDefaults';
 import {
   createContract,
   updateContract,
 } from '@/server/actions/contracts';
 import { getClinsByContract, createClin, updateClin } from '@/server/actions/clins';
 import { getSlinsByClin, createSlin, updateSlin } from '@/server/actions/slins';
-import classes from "./Contracts.module.css";
+import { formatDate } from '@/lib/format';
+import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 type Contract = {
   id: string;
@@ -78,12 +82,6 @@ type ContractForm = {
 
 type Props = {
   initialContracts: Contract[];
-};
-
-const STATUS_COLORS: Record<string, string> = {
-  active: 'green',
-  inactive: 'gray',
-  closed: 'red',
 };
 
 const EMPTY_FORM: ContractForm = {
@@ -258,18 +256,17 @@ export function ContractsClient({ initialContracts }: Props) {
     {
       accessorKey: 'status',
       header: 'Status',
-      Cell: ({ cell }) => (
-        <Badge color={STATUS_COLORS[cell.getValue<string>()] ?? 'gray'}>
-          {cell.getValue<string>()}
-        </Badge>
-      ),
+      Cell: ({ cell }) => {
+        const status = cell.getValue<string>() as keyof typeof RECORD_STATUS_COLOR;
+        return <Badge color={RECORD_STATUS_COLOR[status] ?? 'gray'}>{status}</Badge>;
+      },
       size: 110,
     },
     {
       accessorKey: 'contractType',
       header: 'Type',
       Cell: ({ cell }) => (
-        <Badge color={cell.getValue<string>() === 'prime' ? 'blue' : 'grape'} variant="light" size="sm">
+        <Badge color={cell.getValue<string>() === 'prime' ? 'signal' : 'gray'} size="sm">
           {cell.getValue<string>() === 'prime' ? 'Prime' : 'Sub'}
         </Badge>
       ),
@@ -289,97 +286,39 @@ export function ContractsClient({ initialContracts }: Props) {
     {
       accessorKey: 'startDate',
       header: 'Start Date',
-      Cell: ({ cell }) => {
-        const val = cell.getValue<Date | null>();
-        return val ? new Date(val).toLocaleDateString() : '—';
-      },
+      Cell: ({ cell }) => formatDate(cell.getValue<Date | null>()),
       size: 120,
     },
     {
       accessorKey: 'endDate',
       header: 'End Date',
-      Cell: ({ cell }) => {
-        const val = cell.getValue<Date | null>();
-        return val ? new Date(val).toLocaleDateString() : '—';
-      },
+      Cell: ({ cell }) => formatDate(cell.getValue<Date | null>()),
       size: 120,
     },
   ];
 
-  const table = useMantineReactTable({
+  const table = useAppTable({
     columns,
     data: contracts,
     enableRowActions: true,
-    positionActionsColumn: 'last',
     renderRowActions: ({ row }) => (
-      <Group gap="xs" wrap="nowrap">
-        <ActionIcon
-          variant="subtle"
-          onClick={() => openEditModal(row.original)}
-          title="Edit"
-        >
-          <IconEdit size={16} />
-        </ActionIcon>
-        <ActionIcon
-          variant="subtle"
-          onClick={() => openClinsDrawer(row.original)}
-          title="Manage CLINs"
-        >
-          <IconList size={16} />
-        </ActionIcon>
+      <Group gap="xs" wrap="nowrap" justify="center">
+        <Tooltip label="Edit">
+          <ActionIcon variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit contract">
+            <IconEdit size={16} />
+          </ActionIcon>
+        </Tooltip>
+        <Tooltip label="Manage CLINs">
+          <ActionIcon variant="subtle" onClick={() => openClinsDrawer(row.original)} aria-label="Manage CLINs">
+            <IconList size={16} />
+          </ActionIcon>
+        </Tooltip>
       </Group>
     ),
-    renderTopToolbarCustomActions: () => (
-      <Button leftSection={<IconPlus size={16} />} onClick={openAddModal}>
-        Add Contract
-      </Button>
-    ),
-    enableColumnActions: false,
-    enableDensityToggle: false,
-    enableFullScreenToggle: false,
-    mantinePaperProps: { style: { width: '100%' } },
-    mantineTableContainerProps: { style: { maxWidth: '100%', overflowX: 'auto' } },
-    layoutMode: 'semantic',
-    mantineTableProps: {
-      highlightOnHover: true,
-      striped: 'odd',
-      withColumnBorders: false,
-    },
-    mantineTableHeadCellProps: {
-      className: classes.tableHeaderCell,
-      style: {
-        fontWeight: 600,
-        fontSize: '0.85rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTableBodyCellProps: {
-      style: {
-        fontSize: '0.875rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTopToolbarProps: {
-      style: {
-        padding: '12px 16px',
-      },
-    },
     displayColumnDefOptions: {
       'mrt-row-actions': {
-        header: 'Actions',
-        size: 100,
-        mantineTableHeadCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
-        mantineTableBodyCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
+        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
+        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
       },
     },
   });
@@ -393,7 +332,14 @@ export function ContractsClient({ initialContracts }: Props) {
 
   return (
     <>
-      <Title order={2} mb="md">Contracts & CLINs</Title>
+      <PageHeader
+        title="Contracts & CLINs"
+        actions={
+          <Button leftSection={<IconPlus size={16} />} onClick={openAddModal}>
+            Add Contract
+          </Button>
+        }
+      />
       <MantineReactTable table={table} />
 
       {/* Add / Edit Contract Modal */}
@@ -537,7 +483,7 @@ export function ContractsClient({ initialContracts }: Props) {
                           {clin.fundedAmount ? `$${parseFloat(clin.fundedAmount).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '—'}
                         </Table.Td>
                         <Table.Td>
-                          <Badge color={STATUS_COLORS[clin.status] ?? 'gray'}>{clin.status}</Badge>
+                          <Badge color={RECORD_STATUS_COLOR[clin.status] ?? 'gray'}>{clin.status}</Badge>
                         </Table.Td>
                         <Table.Td>
                           <Button
@@ -556,7 +502,7 @@ export function ContractsClient({ initialContracts }: Props) {
 
                   {/* SLINs section (collapsible) */}
                   {expandedClinId === clin.id && (
-                    <Box pl="md" pt="xs" pb="sm" style={{ borderLeft: '2px solid var(--mantine-color-blue-3)', marginLeft: 16 }}>
+                    <Box pl="md" pt="xs" pb="sm" style={{ borderLeft: '2px solid var(--mantine-color-signal-3)', marginLeft: 16 }}>
                       <Title order={6} mb="xs" c="dimmed">SLINs for CLIN {clin.clinNumber}</Title>
 
                       {/* Add SLIN form */}
@@ -622,7 +568,7 @@ export function ContractsClient({ initialContracts }: Props) {
                                     : '—'}
                                 </Table.Td>
                                 <Table.Td>
-                                  <Badge size="xs" color={STATUS_COLORS[slin.status] ?? 'gray'}>{slin.status}</Badge>
+                                  <Badge size="xs" color={RECORD_STATUS_COLOR[slin.status] ?? 'gray'}>{slin.status}</Badge>
                                 </Table.Td>
                                 <Table.Td>
                                   <Button

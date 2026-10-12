@@ -33,7 +33,7 @@ export function ColumnHeaderDate({
         <Text
           fw={isToday ? 900 : 600}
           size="xs"
-          c={isToday ? 'blue' : isWeekend ? 'dimmed' : undefined}
+          c={isToday ? 'signal' : isWeekend ? 'dimmed' : undefined}
           td={isToday ? 'underline' : undefined}
           style={{ fontSize: 10 }}
         >
@@ -41,7 +41,7 @@ export function ColumnHeaderDate({
         </Text>
         <Text
           size="xs"
-          c={isToday ? 'blue' : 'dimmed'}
+          c={isToday ? 'signal' : 'dimmed'}
           style={{ fontSize: 10 }}
         >
           {d.date()}
@@ -53,7 +53,7 @@ export function ColumnHeaderDate({
                 width: 6,
                 height: 6,
                 borderRadius: '50%',
-                backgroundColor: 'var(--mantine-color-orange-6)',
+                backgroundColor: 'var(--mantine-color-warning-6)',
                 marginTop: 1,
               }}
               aria-label="Late entry"
@@ -71,7 +71,7 @@ export function ColumnHeaderDate({
       <Text
         fw={isToday ? 900 : 700}
         size="sm"
-        c={isToday ? 'blue' : isWeekend ? 'dimmed' : undefined}
+        c={isToday ? 'signal' : isWeekend ? 'dimmed' : undefined}
         td={isToday ? 'underline' : undefined}
         style={fontSize ? { fontSize } : undefined}
       >
@@ -79,14 +79,14 @@ export function ColumnHeaderDate({
       </Text>
       <Text
         size="xs"
-        c={isToday ? 'blue' : 'dimmed'}
+        c={isToday ? 'signal' : 'dimmed'}
         fs={isPast && !isToday ? 'italic' : undefined}
         style={fontSize ? { fontSize } : undefined}
       >
         {d.format('MMM D')}
       </Text>
       {hasMissingHours && (
-        <Badge size="xs" color="orange" variant="light">
+        <Badge size="xs" color="warning" variant="light">
           Late
         </Badge>
       )}

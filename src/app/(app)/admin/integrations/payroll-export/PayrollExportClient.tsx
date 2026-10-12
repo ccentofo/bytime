@@ -64,7 +64,7 @@ export function PayrollExportClient() {
 
   async function handlePreview() {
     if (!dateRange[0] || !dateRange[1]) {
-      notifications.show({ title: 'Date range required', message: 'Select a start and end date.', color: 'yellow' });
+      notifications.show({ title: 'Date range required', message: 'Select a start and end date.', color: 'warning' });
       return;
     }
 
@@ -78,7 +78,7 @@ export function PayrollExportClient() {
         setTotalEntries(result.totalEntries);
 
         if (result.employees.length === 0) {
-          notifications.show({ title: 'No approved data', message: 'No approved timesheet entries found for this date range.', color: 'yellow' });
+          notifications.show({ title: 'No approved data', message: 'No approved timesheet entries found for this date range.', color: 'warning' });
         }
       } catch (error) {
         notifications.show({ title: 'Preview failed', message: String(error), color: 'red' });
@@ -88,7 +88,7 @@ export function PayrollExportClient() {
 
   async function handleDownload() {
     if (!format || !dateRange[0] || !dateRange[1]) {
-      notifications.show({ title: 'Missing fields', message: 'Select a format and date range.', color: 'yellow' });
+      notifications.show({ title: 'Missing fields', message: 'Select a format and date range.', color: 'warning' });
       return;
     }
 
@@ -114,7 +114,7 @@ export function PayrollExportClient() {
       notifications.show({
         title: 'Export downloaded',
         message: `${result.employeeCount} employees, ${result.totalHours.toFixed(1)} total hours`,
-        color: 'green',
+        color: 'success',
       });
     } catch (error) {
       notifications.show({ title: 'Export failed', message: String(error), color: 'red' });
@@ -138,7 +138,7 @@ export function PayrollExportClient() {
       <Group justify="space-between" align="flex-start" mb="xl">
         <div>
           <Group gap="sm" mb={4}>
-            <ThemeIcon size="lg" color="orange" variant="light" radius="md">
+            <ThemeIcon size="lg" color="warning" variant="light" radius="md">
               <IconFileExport size={20} />
             </ThemeIcon>
             <Title order={2}>Payroll Export</Title>
@@ -175,7 +175,7 @@ export function PayrollExportClient() {
           </Group>
 
           {format && (
-            <Alert color="blue" variant="light">
+            <Alert color="signal" variant="light">
               <Text size="sm">
                 <strong>{FORMAT_OPTIONS.find((f) => f.value === format)?.label}</strong>
                 {' — '}
@@ -226,7 +226,7 @@ export function PayrollExportClient() {
             </Paper>
             <Paper withBorder p="md" radius="md">
               <Text size="xs" c="dimmed">Data Source</Text>
-              <Badge color="green" variant="light" size="lg" mt={4}>Approved Only</Badge>
+              <Badge color="success" variant="light" size="lg" mt={4}>Approved Only</Badge>
             </Paper>
           </SimpleGrid>
 
@@ -266,7 +266,7 @@ export function PayrollExportClient() {
                         <Text size="sm">{emp.regularHours.toFixed(1)}</Text>
                       </Table.Td>
                       <Table.Td style={{ textAlign: 'right' }}>
-                        <Text size="sm" c={emp.overtimeHours > 0 ? 'orange' : undefined} fw={emp.overtimeHours > 0 ? 600 : undefined}>
+                        <Text size="sm" c={emp.overtimeHours > 0 ? 'warning' : undefined} fw={emp.overtimeHours > 0 ? 600 : undefined}>
                           {emp.overtimeHours.toFixed(1)}
                         </Text>
                       </Table.Td>

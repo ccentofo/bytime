@@ -161,7 +161,7 @@ export function SetupWizardClient({ initialStatus }: Props) {
       notifications.show({
         title: 'Indirect codes created',
         message: '9 standard DCAA indirect charge codes have been seeded.',
-        color: 'green',
+        color: 'success',
       });
       refreshStatus();
     } catch (error) {
@@ -187,7 +187,7 @@ export function SetupWizardClient({ initialStatus }: Props) {
       <Container size="md" py="xl">
         <Paper p="xl" radius="md" withBorder>
           <Stack align="center" gap="lg">
-            <ThemeIcon size={80} radius="xl" color="green" variant="light">
+            <ThemeIcon size={80} radius="xl" color="success" variant="light">
               <IconConfetti size={40} />
             </ThemeIcon>
             <Title order={2}>Setup Complete!</Title>
@@ -198,7 +198,7 @@ export function SetupWizardClient({ initialStatus }: Props) {
             </Text>
 
             {!allSixDone && (
-              <Alert color="yellow" variant="light" title="Recommended steps remaining" maw={500}>
+              <Alert color="warning" variant="light" title="Recommended steps remaining" maw={500}>
                 {STEPS.filter((s) => !s.required && status[s.key] === 0).map((s) => (
                   <Text key={s.key} size="sm">
                     • {s.title} — <Anchor href={s.linkHref} size="sm">{s.linkLabel}</Anchor>
@@ -225,11 +225,11 @@ export function SetupWizardClient({ initialStatus }: Props) {
             {STEPS.map((step) => (
               <Paper key={step.key} p="sm" radius="sm" withBorder style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', minHeight: 90 }}>
                 {isStepComplete(step) ? (
-                  <ThemeIcon size="md" color="green" variant="light" radius="xl" mb={6}>
+                  <ThemeIcon size="md" color="success" variant="light" radius="xl" mb={6}>
                     <IconCheck size={14} />
                   </ThemeIcon>
                 ) : (
-                  <Badge size="xs" color="yellow" variant="light" mb={6}>Pending</Badge>
+                  <Badge size="xs" color="warning" variant="light" mb={6}>Pending</Badge>
                 )}
                 <Text size="sm" fw={500} lh={1.2}>{step.title}</Text>
                 <Text size="xs" c="dimmed" mt={4}>
@@ -248,7 +248,7 @@ export function SetupWizardClient({ initialStatus }: Props) {
       <Group justify="space-between" align="flex-start" mb="xl">
         <div>
           <Group gap="sm" mb={4}>
-            <ThemeIcon size="lg" color="blue" variant="light" radius="md">
+            <ThemeIcon size="lg" color="signal" variant="light" radius="md">
               <IconRocket size={20} />
             </ThemeIcon>
             <Title order={2}>Setup Wizard</Title>
@@ -285,14 +285,14 @@ export function SetupWizardClient({ initialStatus }: Props) {
             }
             icon={step.icon}
             completedIcon={<IconCheck size={16} />}
-            color={isStepComplete(step) ? 'green' : undefined}
+            color={isStepComplete(step) ? 'success' : undefined}
             loading={isPending && activeStep === index}
           >
             <Paper p="md" radius="md" withBorder ml="sm" mb="md">
               <Group justify="space-between" mb="sm">
                 <Text fw={600}>{step.title}</Text>
                 <Badge
-                  color={isStepComplete(step) ? 'green' : step.required ? 'red' : 'yellow'}
+                  color={isStepComplete(step) ? 'success' : step.required ? 'red' : 'warning'}
                   variant="light"
                   size="sm"
                 >
@@ -305,13 +305,13 @@ export function SetupWizardClient({ initialStatus }: Props) {
               </Text>
 
               {isStepComplete(step) ? (
-                <Alert color="green" variant="light" mb="sm">
+                <Alert color="success" variant="light" mb="sm">
                   <Text size="sm">
                     ✅ {status[step.key]} {step.entityLabel} created
                   </Text>
                 </Alert>
               ) : (
-                <Alert color={step.required ? 'red' : 'yellow'} variant="light" mb="sm">
+                <Alert color={step.required ? 'red' : 'warning'} variant="light" mb="sm">
                   <Text size="sm">
                     No {step.entityLabel} created yet
                   </Text>

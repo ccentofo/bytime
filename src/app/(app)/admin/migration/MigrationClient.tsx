@@ -3,7 +3,6 @@
 import { useState, useTransition } from 'react';
 import {
   Container,
-  Title,
   Text,
   Paper,
   Group,
@@ -13,7 +12,6 @@ import {
   Table,
   Tabs,
   Alert,
-  ThemeIcon,
   Anchor,
 } from '@mantine/core';
 import {
@@ -33,6 +31,7 @@ import {
   type MigrationEntryRow,
   type MigrationValidationResult,
 } from '@/server/actions/migration';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 export function MigrationClient() {
   const [isPending, startTransition] = useTransition();
@@ -68,7 +67,7 @@ export function MigrationClient() {
         setEntryRows(rows);
         setEntryValidation([]);
         setEntryValidated(false);
-        notifications.show({ title: 'File loaded', message: `${rows.length} rows parsed`, color: 'blue' });
+        notifications.show({ title: 'File loaded', message: `${rows.length} rows parsed`, color: 'signal' });
       },
       error: (error) => {
         notifications.show({ title: 'Parse error', message: error.message, color: 'red' });
@@ -95,7 +94,7 @@ export function MigrationClient() {
         }));
         setPeriodRows(rows);
         setPeriodValidated(false);
-        notifications.show({ title: 'File loaded', message: `${rows.length} rows parsed`, color: 'blue' });
+        notifications.show({ title: 'File loaded', message: `${rows.length} rows parsed`, color: 'signal' });
       },
     });
   }
@@ -112,7 +111,7 @@ export function MigrationClient() {
         notifications.show({
           title: 'Validation complete',
           message: `${valid} valid, ${invalid} with errors`,
-          color: invalid === 0 ? 'green' : 'yellow',
+          color: invalid === 0 ? 'success' : 'warning',
         });
       } catch (error) {
         notifications.show({ title: 'Validation failed', message: String(error), color: 'red' });
@@ -128,7 +127,7 @@ export function MigrationClient() {
         notifications.show({
           title: 'Import complete',
           message: `${result.imported} imported, ${result.skipped} skipped, ${result.errors.length} errors`,
-          color: result.errors.length === 0 ? 'green' : 'yellow',
+          color: result.errors.length === 0 ? 'success' : 'warning',
         });
       } catch (error) {
         notifications.show({ title: 'Import failed', message: String(error), color: 'red' });
@@ -144,7 +143,7 @@ export function MigrationClient() {
         notifications.show({
           title: 'Period import complete',
           message: `${result.imported} imported, ${result.errors.length} errors`,
-          color: result.errors.length === 0 ? 'green' : 'yellow',
+          color: result.errors.length === 0 ? 'success' : 'warning',
         });
       } catch (error) {
         notifications.show({ title: 'Import failed', message: String(error), color: 'red' });
@@ -157,14 +156,12 @@ export function MigrationClient() {
 
   return (
     <Container size="lg" py="xl">
-      <Group gap="sm" mb="xl">
-        <ThemeIcon size="lg" color="violet" variant="light" radius="md">
-          <IconDatabaseImport size={20} />
-        </ThemeIcon>
-        <Title order={2}>Data Migration</Title>
-      </Group>
+      <PageHeader
+        title="Data Migration"
+        description="Import historical data when switching from another timekeeping system."
+      />
 
-      <Alert icon={<IconAlertCircle size={16} />} color="orange" variant="light" mb="xl">
+      <Alert icon={<IconAlertCircle size={16} />} color="warning" variant="light" mb="xl">
         <Text size="sm" fw={600}>Migration imports historical data. This is a one-time operation for switching from another system.</Text>
         <Text size="sm" mt={4}>
           <strong>Required import order:</strong>{' '}
@@ -231,7 +228,7 @@ export function MigrationClient() {
 
             {entryValidated && (
               <Group gap="md">
-                <Badge color="green" variant="light" size="lg">{validCount} valid</Badge>
+                <Badge color="success" variant="light" size="lg">{validCount} valid</Badge>
                 {invalidCount > 0 && <Badge color="red" variant="light" size="lg">{invalidCount} with errors</Badge>}
               </Group>
             )}
@@ -267,7 +264,7 @@ export function MigrationClient() {
                         <Table.Td><Text size="xs">{row.data.hours}</Text></Table.Td>
                         <Table.Td>
                           {row.isValid ? (
-                            <Badge color="green" variant="light" size="sm" leftSection={<IconCheck size={10} />}>Valid</Badge>
+                            <Badge color="success" variant="light" size="sm" leftSection={<IconCheck size={10} />}>Valid</Badge>
                           ) : (
                             <Stack gap={2}>
                               <Badge color="red" variant="light" size="sm" leftSection={<IconX size={10} />}>Error</Badge>
@@ -341,7 +338,7 @@ export function MigrationClient() {
                         <Table.Td><Text size="xs">{row.periodStart}</Text></Table.Td>
                         <Table.Td>
                           <Badge
-                            color={row.status === 'approved' ? 'green' : row.status === 'submitted' ? 'blue' : 'gray'}
+                            color={row.status === 'approved' ? 'success' : row.status === 'submitted' ? 'signal' : 'gray'}
                             variant="light"
                             size="sm"
                           >

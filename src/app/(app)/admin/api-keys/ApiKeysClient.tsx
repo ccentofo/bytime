@@ -8,7 +8,6 @@ import {
   Select,
   Group,
   Stack,
-  Title,
   Badge,
   ActionIcon,
   Alert,
@@ -19,10 +18,13 @@ import {
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconPlus, IconTrash, IconBan, IconCheck, IconCopy, IconKey } from '@tabler/icons-react';
-import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { useAppTable } from '@/components/table/mrtDefaults';
 import { createApiKey, revokeApiKey, deleteApiKey, getApiKeys } from '@/server/actions/api-keys';
-import dayjs from 'dayjs';
-import classes from './ApiKeys.module.css';
+import { formatDate } from '@/lib/format';
+import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 type ApiKey = {
   id: string;
@@ -40,6 +42,8 @@ type Props = {
   currentUserId: string;
 };
 
+type PendingAction = { key: ApiKey; action: 'revoke' | 'delete' };
+
 export function ApiKeysClient({ initialKeys, currentUserId }: Props) {
   const [keys, setKeys] = useState<ApiKey[]>(initialKeys);
   const [isPending, startTransition] = useTransition();
@@ -48,6 +52,7 @@ export function ApiKeysClient({ initialKeys, currentUserId }: Props) {
   const [newKeyValue, setNewKeyValue] = useState('');
   const [form, setForm] = useState({ name: '', permissions: 'read' });
   const [formError, setFormError] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
 
   function handleCreate() {
     startTransition(async () => {
@@ -79,7 +84,8 @@ export function ApiKeysClient({ initialKeys, currentUserId }: Props) {
       await revokeApiKey(key.id);
       const refreshed = await getApiKeys();
       setKeys(refreshed as ApiKey[]);
-      notifications.show({ title: 'Key Revoked', message: `"${key.name}" has been revoked.`, color: 'orange' });
+      notifications.show({ title: 'Key Revoked', message: `"${key.name}" has been revoked.`, color: 'warning' });
+      setPendingAction(null);
     });
   }
 
@@ -89,6 +95,7 @@ export function ApiKeysClient({ initialKeys, currentUserId }: Props) {
       const refreshed = await getApiKeys();
       setKeys(refreshed as ApiKey[]);
       notifications.show({ title: 'Key Deleted', message: `"${key.name}" has been deleted.`, color: 'red' });
+      setPendingAction(null);
     });
   }
 
@@ -104,7 +111,7 @@ export function ApiKeysClient({ initialKeys, currentUserId }: Props) {
       accessorKey: 'permissions',
       header: 'Permissions',
       Cell: ({ cell }) => (
-        <Badge color={cell.getValue<string>() === 'read-write' ? 'orange' : 'blue'} variant="light">
+        <Badge color={cell.getValue<string>() === 'read-write' ? 'warning' : 'signal'}>
           {cell.getValue<string>()}
         </Badge>
       ),
@@ -113,20 +120,20 @@ export function ApiKeysClient({ initialKeys, currentUserId }: Props) {
     {
       accessorKey: 'isActive',
       header: 'Status',
-      Cell: ({ cell }) => (
-        <Badge color={cell.getValue<boolean>() ? 'green' : 'gray'} variant="light">
-          {cell.getValue<boolean>() ? 'Active' : 'Revoked'}
-        </Badge>
-      ),
+      Cell: ({ cell }) => {
+        const active = cell.getValue<boolean>();
+        return (
+          <Badge color={active ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive}>
+            {active ? 'Active' : 'Revoked'}
+          </Badge>
+        );
+      },
       size: 100,
     },
     {
       accessorKey: 'lastUsedAt',
       header: 'Last Used',
-      Cell: ({ cell }) => {
-        const val = cell.getValue<Date | null>();
-        return val ? dayjs(val).format('MMM D, YYYY') : '—';
-      },
+      Cell: ({ cell }) => formatDate(cell.getValue<Date | null>()),
       size: 130,
     },
     {
@@ -134,78 +141,68 @@ export function ApiKeysClient({ initialKeys, currentUserId }: Props) {
       header: 'Expires',
       Cell: ({ cell }) => {
         const val = cell.getValue<Date | null>();
-        return val ? dayjs(val).format('MMM D, YYYY') : 'Never';
+        return val ? formatDate(val) : 'Never';
       },
       size: 120,
     },
     {
       accessorKey: 'createdAt',
       header: 'Created',
-      Cell: ({ cell }) => dayjs(cell.getValue<Date>()).format('MMM D, YYYY'),
+      Cell: ({ cell }) => formatDate(cell.getValue<Date>()),
       size: 120,
     },
   ];
 
-  const table = useMantineReactTable({
+  const table = useAppTable({
     columns,
     data: keys,
     enableRowActions: true,
-    positionActionsColumn: 'last',
     renderRowActions: ({ row }) => (
-      <Group gap="xs" wrap="nowrap">
+      <Group gap="xs" wrap="nowrap" justify="center">
         {row.original.isActive && (
+          <Tooltip label="Revoke">
+            <ActionIcon
+              variant="subtle"
+              color="warning"
+              onClick={() => setPendingAction({ key: row.original, action: 'revoke' })}
+              disabled={isPending}
+              aria-label="Revoke key"
+            >
+              <IconBan size={16} />
+            </ActionIcon>
+          </Tooltip>
+        )}
+        <Tooltip label="Delete">
           <ActionIcon
             variant="subtle"
-            color="orange"
-            onClick={() => handleRevoke(row.original)}
-            title="Revoke Key"
+            color="red"
+            onClick={() => setPendingAction({ key: row.original, action: 'delete' })}
             disabled={isPending}
+            aria-label="Delete key"
           >
-            <IconBan size={16} />
+            <IconTrash size={16} />
           </ActionIcon>
-        )}
-        <ActionIcon
-          variant="subtle"
-          color="red"
-          onClick={() => handleDelete(row.original)}
-          title="Delete Key"
-          disabled={isPending}
-        >
-          <IconTrash size={16} />
-        </ActionIcon>
+        </Tooltip>
       </Group>
     ),
-    renderTopToolbarCustomActions: () => (
-      <Button leftSection={<IconPlus size={16} />} onClick={() => setCreateModalOpen(true)}>
-        Create API Key
-      </Button>
-    ),
-    enableColumnActions: false,
-    enableDensityToggle: false,
-    enableFullScreenToggle: false,
-    mantinePaperProps: { style: { width: '100%' } },
-    mantineTableContainerProps: { style: { maxWidth: '100%', overflowX: 'auto' } },
-    layoutMode: 'semantic',
-    mantineTableProps: { highlightOnHover: true, striped: 'odd', withColumnBorders: false },
-    mantineTableHeadCellProps: {
-      className: classes.tableHeaderCell,
-      style: { fontWeight: 600, fontSize: '0.85rem', padding: '12px 16px' },
-    },
-    mantineTableBodyCellProps: { style: { fontSize: '0.875rem', padding: '12px 16px' } },
-    mantineTopToolbarProps: { style: { padding: '12px 16px' } },
     displayColumnDefOptions: {
       'mrt-row-actions': {
-        header: 'Actions',
-        size: 100,
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const, padding: '12px 16px' } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const, padding: '12px 16px' } },
+        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
+        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
       },
     },
   });
 
   return (
     <>
-      <Title order={2} mb="md">API Keys</Title>
+      <PageHeader
+        title="API Keys"
+        actions={
+          <Button leftSection={<IconPlus size={16} />} onClick={() => setCreateModalOpen(true)}>
+            Create API Key
+          </Button>
+        }
+      />
       <MantineReactTable table={table} />
 
       {/* Create Key Modal */}
@@ -233,7 +230,7 @@ export function ApiKeysClient({ initialKeys, currentUserId }: Props) {
             onChange={(val) => setForm((f) => ({ ...f, permissions: val ?? 'read' }))}
           />
           {formError && (
-            <Alert color="red" variant="light">{formError}</Alert>
+            <Alert color="red">{formError}</Alert>
           )}
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setCreateModalOpen(false)}>Cancel</Button>
@@ -253,7 +250,7 @@ export function ApiKeysClient({ initialKeys, currentUserId }: Props) {
         closeOnClickOutside={false}
       >
         <Stack>
-          <Alert color="orange" variant="light">
+          <Alert color="warning">
             <Text size="sm" fw={600}>This key will only be shown once.</Text>
             <Text size="sm">Copy it now and store it securely. You cannot retrieve it again.</Text>
           </Alert>
@@ -264,18 +261,38 @@ export function ApiKeysClient({ initialKeys, currentUserId }: Props) {
             <CopyButton value={newKeyValue}>
               {({ copied, copy }) => (
                 <Tooltip label={copied ? 'Copied!' : 'Copy'}>
-                  <ActionIcon color={copied ? 'green' : 'blue'} onClick={copy} size="lg">
+                  <ActionIcon color={copied ? 'success' : 'signal'} onClick={copy} size="lg">
                     {copied ? <IconCheck size={18} /> : <IconCopy size={18} />}
                   </ActionIcon>
                 </Tooltip>
               )}
             </CopyButton>
           </Group>
-          <Button onClick={() => { setNewKeyModalOpen(false); setNewKeyValue(''); }} color="green">
+          <Button onClick={() => { setNewKeyModalOpen(false); setNewKeyValue(''); }} color="success">
             I've Copied the Key
           </Button>
         </Stack>
       </Modal>
+
+      <ConfirmModal
+        opened={!!pendingAction}
+        title={pendingAction?.action === 'delete' ? 'Delete API key?' : 'Revoke API key?'}
+        message={
+          pendingAction
+            ? pendingAction.action === 'delete'
+              ? `This permanently deletes "${pendingAction.key.name}". This cannot be undone.`
+              : `This revokes "${pendingAction.key.name}". Requests using it will stop working immediately.`
+            : ''
+        }
+        confirmLabel={pendingAction?.action === 'delete' ? 'Delete' : 'Revoke'}
+        loading={isPending}
+        onConfirm={() => {
+          if (!pendingAction) return;
+          if (pendingAction.action === 'delete') handleDelete(pendingAction.key);
+          else handleRevoke(pendingAction.key);
+        }}
+        onCancel={() => setPendingAction(null)}
+      />
     </>
   );
 }

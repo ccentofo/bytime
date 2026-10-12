@@ -10,8 +10,12 @@ import {
   Paper,
   Tabs,
   Text,
+  ActionIcon,
+  Tooltip,
 } from '@mantine/core';
-import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { IconBan } from '@tabler/icons-react';
+import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { useAppTable } from '@/components/table/mrtDefaults';
 import { getClinsByContract } from '@/server/actions/clins';
 import { assignUserToClin, unassignUserFromClin, getAssignments } from '@/server/actions/assignments';
 import {
@@ -20,7 +24,10 @@ import {
   assignAllUnderClin,
   getChargeCodeAssignments,
 } from '@/server/actions/charge-codes';
-import classes from './Assignments.module.css';
+import { formatDate } from '@/lib/format';
+import { RECORD_STATUS_COLOR, WORK_LOCATION_COLOR } from '@/lib/ui/status-colors';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { PageHeader } from '@/components/ui/PageHeader';
 
 type User = {
   id: string;
@@ -112,8 +119,6 @@ type Props = {
   initialChargeCodeAssignments: ChargeCodeAssignment[];
 };
 
-const LOCATION_COLORS: Record<string, string> = { onsite: 'blue', telework: 'teal', other: 'gray' };
-
 export function AssignmentsClient({ initialAssignments, users, contracts, chargeCodes, initialChargeCodeAssignments }: Props) {
   const [isPending, startTransition] = useTransition();
   const [assignments, setAssignments] = useState<Assignment[]>(initialAssignments);
@@ -123,6 +128,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
   const [selectedContractId, setSelectedContractId] = useState<string | null>(null);
   const [selectedClinId, setSelectedClinId] = useState<string | null>(null);
   const [clinOptions, setClinOptions] = useState<{ value: string; label: string }[]>([]);
+  const [confirmClinTarget, setConfirmClinTarget] = useState<Assignment | null>(null);
 
   // Charge-code assignment section state
   const [ccAssignments, setCcAssignments] = useState<ChargeCodeAssignment[]>(initialChargeCodeAssignments);
@@ -131,6 +137,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
   const [ccContractId, setCcContractId] = useState<string | null>(null);
   const [ccClinId, setCcClinId] = useState<string | null>(null);
   const [ccChargeCodeId, setCcChargeCodeId] = useState<string | null>(null);
+  const [confirmCcTarget, setConfirmCcTarget] = useState<ChargeCodeAssignment | null>(null);
 
   // CLIN options for the charge-code form, derived from the same contract→CLIN data
   // already present in `chargeCodes` (avoids a second getClinsByContract round-trip).
@@ -192,6 +199,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
       await unassignChargeCodeFromUser(assignment.userId, assignment.chargeCodeId);
       const refreshed = await getChargeCodeAssignments();
       setCcAssignments(refreshed as ChargeCodeAssignment[]);
+      setConfirmCcTarget(null);
     });
   }
 
@@ -211,7 +219,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
       size: 130,
       Cell: ({ cell }) => {
         const loc = cell.getValue<string | null>();
-        return loc ? <Badge color={LOCATION_COLORS[loc] ?? 'gray'} variant="light">{loc}</Badge> : '—';
+        return loc ? <Badge color={WORK_LOCATION_COLOR[loc] ?? 'gray'}>{loc}</Badge> : '—';
       },
     },
     {
@@ -219,78 +227,39 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
       header: 'Status',
       filterVariant: 'checkbox',
       size: 100,
-      Cell: ({ cell }) => (
-        <Badge color={cell.getValue<boolean>() ? 'green' : 'gray'}>
-          {cell.getValue<boolean>() ? 'Active' : 'Inactive'}
-        </Badge>
-      ),
+      Cell: ({ cell }) => {
+        const active = cell.getValue<boolean>();
+        return (
+          <Badge color={active ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive}>
+            {active ? 'Active' : 'Inactive'}
+          </Badge>
+        );
+      },
     },
   ];
 
-  const ccTable = useMantineReactTable({
+  const ccTable = useAppTable({
     columns: ccColumns,
     data: ccAssignments,
     enableColumnFilters: true,
     enableRowActions: true,
-    positionActionsColumn: 'last',
     renderRowActions: ({ row }) => (
-      <Button
-        size="xs"
-        variant="subtle"
-        color={row.original.isActive ? 'red' : 'green'}
-        onClick={() => handleDeactivateChargeCode(row.original)}
-        loading={ccIsPending}
-        disabled={!row.original.isActive}
-      >
-        Deactivate
-      </Button>
+      <Tooltip label="Deactivate">
+        <ActionIcon
+          variant="subtle"
+          color="red"
+          onClick={() => setConfirmCcTarget(row.original)}
+          disabled={!row.original.isActive}
+          aria-label="Deactivate charge code assignment"
+        >
+          <IconBan size={16} />
+        </ActionIcon>
+      </Tooltip>
     ),
-    enableColumnActions: false,
-    enableDensityToggle: false,
-    enableFullScreenToggle: false,
-    mantinePaperProps: { style: { width: '100%' } },
-    mantineTableContainerProps: { style: { maxWidth: '100%', overflowX: 'auto' } },
-    layoutMode: 'semantic',
-    mantineTableProps: {
-      highlightOnHover: true,
-      striped: 'odd',
-      withColumnBorders: false,
-    },
-    mantineTableHeadCellProps: {
-      className: classes.tableHeaderCell,
-      style: {
-        fontWeight: 600,
-        fontSize: '0.85rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTableBodyCellProps: {
-      style: {
-        fontSize: '0.875rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTopToolbarProps: {
-      style: {
-        padding: '12px 16px',
-      },
-    },
     displayColumnDefOptions: {
       'mrt-row-actions': {
-        header: 'Actions',
-        size: 110,
-        mantineTableHeadCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
-        mantineTableBodyCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
+        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
+        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
       },
     },
   });
@@ -330,6 +299,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
       await unassignUserFromClin(assignment.userId, assignment.clinId);
       const refreshed = await getAssignments();
       setAssignments(refreshed as Assignment[]);
+      setConfirmClinTarget(null);
     });
   }
 
@@ -359,92 +329,53 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
       accessorKey: 'isActive',
       header: 'Status',
       filterVariant: 'checkbox',
-      Cell: ({ cell }) => (
-        <Badge color={cell.getValue<boolean>() ? 'green' : 'gray'}>
-          {cell.getValue<boolean>() ? 'Active' : 'Inactive'}
-        </Badge>
-      ),
+      Cell: ({ cell }) => {
+        const active = cell.getValue<boolean>();
+        return (
+          <Badge color={active ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive}>
+            {active ? 'Active' : 'Inactive'}
+          </Badge>
+        );
+      },
       size: 100,
     },
     {
       accessorKey: 'assignedAt',
       header: 'Assigned Date',
-      Cell: ({ cell }) => new Date(cell.getValue<Date>()).toLocaleDateString(),
+      Cell: ({ cell }) => formatDate(cell.getValue<Date>()),
       size: 140,
     },
   ];
 
-  const table = useMantineReactTable({
+  const table = useAppTable({
     columns,
     data: supervisorAssignments,
     enableColumnFilters: true,
     enableRowActions: true,
-    positionActionsColumn: 'last',
     renderRowActions: ({ row }) => (
-      <Button
-        size="xs"
-        variant="subtle"
-        color={row.original.isActive ? 'red' : 'green'}
-        onClick={() => handleDeactivate(row.original)}
-        loading={isPending}
-        disabled={!row.original.isActive}
-      >
-        Deactivate
-      </Button>
+      <Tooltip label="Deactivate">
+        <ActionIcon
+          variant="subtle"
+          color="red"
+          onClick={() => setConfirmClinTarget(row.original)}
+          disabled={!row.original.isActive}
+          aria-label="Deactivate supervisor assignment"
+        >
+          <IconBan size={16} />
+        </ActionIcon>
+      </Tooltip>
     ),
-    enableColumnActions: false,
-    enableDensityToggle: false,
-    enableFullScreenToggle: false,
-    mantinePaperProps: { style: { width: '100%' } },
-    mantineTableContainerProps: { style: { maxWidth: '100%', overflowX: 'auto' } },
-    layoutMode: 'semantic',
-    mantineTableProps: {
-      highlightOnHover: true,
-      striped: 'odd',
-      withColumnBorders: false,
-    },
-    mantineTableHeadCellProps: {
-      className: classes.tableHeaderCell,
-      style: {
-        fontWeight: 600,
-        fontSize: '0.85rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTableBodyCellProps: {
-      style: {
-        fontSize: '0.875rem',
-        padding: '12px 16px',
-      },
-    },
-    mantineTopToolbarProps: {
-      style: {
-        padding: '12px 16px',
-      },
-    },
     displayColumnDefOptions: {
       'mrt-row-actions': {
-        header: 'Actions',
-        size: 110,
-        mantineTableHeadCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
-        mantineTableBodyCellProps: {
-          style: {
-            textAlign: 'center' as const,
-            padding: '12px 16px',
-          },
-        },
+        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
+        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
       },
     },
   });
 
   return (
     <>
-      <Title order={2} mb="md">User Assignments</Title>
+      <PageHeader title="User Assignments" />
 
       <Tabs defaultValue="charge-codes">
         <Tabs.List mb="md">
@@ -574,6 +505,34 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
           <MantineReactTable table={table} />
         </Tabs.Panel>
       </Tabs>
+
+      <ConfirmModal
+        opened={!!confirmCcTarget}
+        title="Deactivate charge code assignment?"
+        message={
+          confirmCcTarget
+            ? `This removes ${confirmCcTarget.userName}'s access to ${confirmCcTarget.code} — ${confirmCcTarget.name}.`
+            : ''
+        }
+        confirmLabel="Deactivate"
+        loading={ccIsPending}
+        onConfirm={() => confirmCcTarget && handleDeactivateChargeCode(confirmCcTarget)}
+        onCancel={() => setConfirmCcTarget(null)}
+      />
+
+      <ConfirmModal
+        opened={!!confirmClinTarget}
+        title="Deactivate supervisor assignment?"
+        message={
+          confirmClinTarget
+            ? `This removes ${confirmClinTarget.userName}'s approval scope over CLIN ${confirmClinTarget.clinNumber}.`
+            : ''
+        }
+        confirmLabel="Deactivate"
+        loading={isPending}
+        onConfirm={() => confirmClinTarget && handleDeactivate(confirmClinTarget)}
+        onCancel={() => setConfirmClinTarget(null)}
+      />
     </>
   );
 }
