@@ -1,5 +1,7 @@
 import * as Sentry from '@sentry/nextjs';
 
+// Browser-side Sentry init. Next.js loads this file automatically before the app hydrates
+// (replaces the legacy sentry.client.config.ts convention).
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
 
@@ -12,3 +14,6 @@ Sentry.init({
   // Setting this option to true will print useful information to the console while you're setting up Sentry.
   debug: false,
 });
+
+// Lets Sentry trace client-side navigations.
+export const onRouterTransitionStart = Sentry.captureRouterTransitionStart;

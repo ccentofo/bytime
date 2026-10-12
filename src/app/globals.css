@@ -38,3 +38,10 @@ table th,
 [class*="MRT_"] th {
   font-variant-numeric: tabular-nums;
 }
+
+/* Audit Trail: correction rows (revision > 1) get an orange-1 background via the row's
+   `data-correction` attribute (set in AuditTrailClient). In dark mode, darken their text so it
+   stays readable on that light background. Global by nature, so it lives here, not in a CSS module. */
+[data-mantine-color-scheme='dark'] tr[data-correction='true'] td {
+  color: var(--mantine-color-dark-9);
+}

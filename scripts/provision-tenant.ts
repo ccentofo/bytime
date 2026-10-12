@@ -1,9 +1,20 @@
-import 'dotenv/config';
+/**
+ * Operator fallback: provision a tenant without the public signup flow.
+ *
+ *   npm run provision:tenant -- <slug> <name> <admin-email> <admin-name>
+ *
+ * Runs under Node's `react-server` export condition (see package.json) so the `server-only`
+ * guard in src/lib/tenant/* resolves to its no-op build. Requires the `server-only` package to be
+ * installed as a real dependency. Needs CONTROL_PLANE_DATABASE_URL, ENCRYPTION_KEY (same as the
+ * app), and NEON_API_KEY (+ NEON_REGION_ID) in production.
+ */
+import dotenv from 'dotenv';
+dotenv.config({ path: ['.env.local', '.env'] });
 import { provisionTenant } from '../src/lib/tenant/provision';
 
 const [slug, name, adminEmail, adminName] = process.argv.slice(2);
 if (!slug || !name || !adminEmail || !adminName) {
-  console.error('Usage: tsx scripts/provision-tenant.ts <slug> <name> <admin-email> <admin-name>');
+  console.error('Usage: npm run provision:tenant -- <slug> <name> <admin-email> <admin-name>');
   process.exit(1);
 }
 

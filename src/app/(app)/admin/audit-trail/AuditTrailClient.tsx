@@ -42,7 +42,6 @@ import { formatDate, formatDateTime } from '@/lib/format';
 import { PageHeader } from '@/components/ui/PageHeader';
 // Side-effect import only — this module's one remaining rule is a `:global()` dark-mode
 // selector for correction rows; no scoped class name from it is used in this file anymore.
-import './AuditTrail.module.css';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -255,7 +254,7 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
       // the column-visibility toolbar button. Comment = long free-text; Entered By usually == Employee.
       columnVisibility: { comment: false, createdByName: false },
     },
-    // Correction-row highlight: `data-correction` also drives AuditTrail.module.css's dark-mode
+    // Correction-row highlight: `data-correction` also drives globals.css's dark-mode
     // text-contrast rule — keep both in sync if this ever changes.
     mantineTableBodyRowProps: ({ row }) => ({
       'data-correction': row.original.revisionNumber > 1 ? 'true' : undefined,

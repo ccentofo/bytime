@@ -14,6 +14,7 @@
  *     --base cadenzpoint.com --scheme https --tenants acme,globex,initech
  */
 import 'dotenv/config';
+import { tenantDatabaseName } from '../src/lib/tenant/db-name';
 
 function arg(name: string, def?: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -23,14 +24,16 @@ function arg(name: string, def?: string): string | undefined {
 const APEX = arg('base', 'localhost:3000')!;
 const SCHEME = arg('scheme', 'http')!;
 const TENANTS = arg('tenants', 'acme,globex,initech')!.split(',').map((s) => s.trim()).filter(Boolean);
-const DB_PREFIX = arg('db-prefix', 'tenant_')!;
+// Optional override for non-standard naming; by default use the app's own naming rule.
+const DB_PREFIX = arg('db-prefix');
 const CONCURRENCY = parseInt(arg('concurrency', '50')!, 10);
 const ROUNDS = parseInt(arg('rounds', '40')!, 10);
 const SECRET = process.env.DIAG_SECRET ?? arg('secret', '')!;
 
 if (!SECRET) { console.error('✗ DIAG_SECRET required (env or --secret).'); process.exit(2); }
 
-const expectedDb = (slug: string) => `${DB_PREFIX}${slug}`;
+// Must match how tenants are actually named (src/lib/tenant/db-name.ts): tenant_<slug>, hyphens → underscores.
+const expectedDb = (slug: string) => (DB_PREFIX ? `${DB_PREFIX}${slug}` : tenantDatabaseName(slug));
 const whoami = (slug: string) => `${SCHEME}://${slug}.${APEX}/api/diag/whoami`;
 const apexUrl = `${SCHEME}://${APEX}/api/diag/whoami`;
 

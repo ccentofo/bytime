@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs";
 
 const isDev = process.env.NODE_ENV !== "production";
 
@@ -49,4 +50,15 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// Sentry build integration. Runtime error reporting comes from src/instrumentation.ts and
+// src/instrumentation-client.ts; this wrapper adds release/route metadata and, when credentials are
+// present at build time, uploads source maps so stack traces in Sentry are readable. Without
+// SENTRY_AUTH_TOKEN the build still succeeds and errors are still reported (just minified).
+export default withSentryConfig(nextConfig, {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  sourcemaps: { disable: !process.env.SENTRY_AUTH_TOKEN },
+  telemetry: false,
+  silent: !process.env.CI,
+});

@@ -24,7 +24,7 @@
     "seed:demo": "tsx scripts/seed-demo.ts",
     "demo:local": "bash scripts/setup-local-demo.sh",
     "stress:isolation": "tsx scripts/stress-isolation.ts",
-    "provision:tenant": "tsx scripts/provision-tenant.ts",
+    "provision:tenant": "node --conditions=react-server --import tsx scripts/provision-tenant.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -32,7 +32,6 @@
     "test:all": "vitest run && vitest run --config vitest.config.integration.ts"
   },
   "dependencies": {
-    "stripe": "^17.0.0",
     "@mantine/core": "^9.2.1",
     "@mantine/dates": "^9.2.1",
     "@mantine/hooks": "^9.2.1",
@@ -55,7 +54,9 @@
     "qrcode": "^1.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "resend": "^6.12.3"
+    "resend": "^6.12.3",
+    "server-only": "0.0.1",
+    "stripe": "^17.0.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

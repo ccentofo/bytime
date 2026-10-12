@@ -24,7 +24,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '21'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -50,11 +50,16 @@ jobs:
       - name: Install Vercel CLI
         run: npm i -g vercel@latest
 
-      - name: Deploy to Vercel (staging/preview)
+      # Staging is its OWN Vercel project (VERCEL_PROJECT_ID comes from the "staging" GitHub
+      # Environment), deployed as that project's production deployment. A preview deployment
+      # would get a random *.vercel.app URL, which can't serve tenant subdomains — the
+      # staging domains (staging.cadenzpoint.com + *.staging.cadenzpoint.com) attach only to
+      # the project's production deployment.
+      - name: Deploy to Vercel (staging project)
         run: |
-          vercel pull --yes --environment=preview --token="${{ secrets.VERCEL_TOKEN }}"
-          vercel build --token="${{ secrets.VERCEL_TOKEN }}"
-          vercel deploy --prebuilt --token="${{ secrets.VERCEL_TOKEN }}"
+          vercel pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"
+          vercel build --prod --token="${{ secrets.VERCEL_TOKEN }}"
+          vercel deploy --prebuilt --prod --token="${{ secrets.VERCEL_TOKEN }}"
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}

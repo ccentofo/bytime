@@ -9,13 +9,33 @@ import { migrate } from 'drizzle-orm/postgres-js/migrator';
 // concurrently against the same database. Drizzle's migrator itself takes no lock.
 const MIGRATION_LOCK_KEY = 728_402_113;
 
+/**
+ * Stored tenant/control-plane URLs use Neon's POOLED host (`ep-…-pooler.…`) because that's right for
+ * the serverless app. But that pooler is PgBouncer in transaction mode, where a session-level
+ * advisory lock is NOT held across statements — the migration lock below would silently stop
+ * protecting anything. So migrations always connect to the DIRECT host (same name without
+ * `-pooler`). Non-Neon URLs (local Postgres, CI) have no `-pooler` label and pass through unchanged.
+ */
+export function toDirectConnectionUrl(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  const [firstLabel, ...rest] = parsed.hostname.split('.');
+  if (!firstLabel.endsWith('-pooler')) return url;
+  parsed.hostname = [firstLabel.slice(0, -'-pooler'.length), ...rest].join('.');
+  return parsed.toString();
+}
+
 /** Migrate one tenant DB to the latest schema under a session advisory lock, so a deploy
  *  rollout and a signup provisioning the same DB can never run migrate() concurrently. */
 export async function migrateTenantDatabase(
   url: string,
   opts: { migrationsFolder?: string; connectTimeoutSec?: number } = {},
 ): Promise<void> {
-  const sql = postgres(url, { max: 1, connect_timeout: opts.connectTimeoutSec ?? 30 });
+  const sql = postgres(toDirectConnectionUrl(url), { max: 1, connect_timeout: opts.connectTimeoutSec ?? 30 });
   try {
     await sql`SELECT pg_advisory_lock(${MIGRATION_LOCK_KEY})`;
     try {
@@ -46,7 +66,7 @@ export async function getPendingMigrationCount(
   const journalPath = path.join(migrationsFolder, 'meta', '_journal.json');
   const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8')) as Journal;
 
-  const sql = postgres(url, { max: 1, connect_timeout: 30 });
+  const sql = postgres(toDirectConnectionUrl(url), { max: 1, connect_timeout: 30 });
   try {
     let lastAppliedAt = 0;
     try {
