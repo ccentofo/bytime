@@ -1,11 +1,11 @@
 'use client';
 
-import React, { createContext, useContext, useReducer, useCallback, useMemo } from 'react';
-import dayjs from 'dayjs';
+import React, { createContext, useContext, useReducer, useCallback, useMemo, useEffect } from 'react';
 import type { TimesheetState, TimesheetAction, TimesheetPageData, DirtyCell } from '@/types/timesheet';
-import { navigatePeriod, getNumDaysInPeriod, DEFAULT_PERIOD_CONFIG } from '@/lib/date-utils';
+import { DEFAULT_PERIOD_CONFIG, navigatePeriod, getNumDaysInPeriod } from '@/lib/date-utils';
+import { addDays, isBefore, type CalendarDate } from '@/lib/calendar-date';
 import { getTimesheetEntries, saveTimesheetBatch, getRevisionMap } from '@/server/actions/timesheet';
-import { submitPeriod, getPeriodStatus } from '@/server/actions/periods';
+import { submitPeriod, getPeriodStatus, getWorkspaceContext } from '@/server/actions/periods';
 import { getNeighborPeriod, getEffectiveConfigAt } from '@/server/actions/pay-period-config';
 import { seedOfflineStore, getOfflineEntries, getOfflineRevisions } from '@/lib/offline/offline-store';
 
@@ -51,7 +51,7 @@ function timesheetReducer(
     }
 
     case 'NAVIGATE_PERIOD': {
-      const newPeriodStart = navigatePeriod(state.periodStart, action.direction);
+      const newPeriodStart = navigatePeriod(state.periodStart, action.direction, state.periodConfig);
       const emptyEntries = state.chargeCodes.map((cc) => ({
         chargeCodeId: cc.id,
         hours: [] as number[],
@@ -105,6 +105,10 @@ function timesheetReducer(
       return { ...state, periodStatus: action.status };
     }
 
+    case 'SET_TODAY': {
+      return { ...state, today: action.today };
+    }
+
     default:
       return state;
   }
@@ -122,7 +126,7 @@ interface TimesheetContextValue {
   hasLateEntries: boolean;  // true if any dirty cell is a late first-time entry
   saveAll: (changeReasonCode?: string, comment?: string) => Promise<void>;
   loadPeriod: (direction: 'prev' | 'next') => Promise<void>;
-  loadPeriodByDate: (periodStart: Date) => Promise<void>;
+  loadPeriodByDate: (periodStart: CalendarDate) => Promise<void>;
   discardChanges: () => void;
   submitTimesheet: (comment?: string) => Promise<void>;
 }
@@ -147,7 +151,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
     savedEntries: initialData.entries.map((e) => ({ ...e, hours: [...e.hours] })),
     savedCellRevisions: initialData.revisions ?? {},
     notes: {},
-    periodStart: new Date(initialData.periodStart),
+    periodStart: initialData.periodStart,
     activeNoteCell: null,
     userId: initialData.userId,
     isSaving: false,
@@ -155,6 +159,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
     periodStatus: initialData.periodStatus ?? 'draft',
     flsaExempt: initialData.flsaExempt ?? false,
     periodConfig: initialData.periodConfig ?? DEFAULT_PERIOD_CONFIG,
+    today: initialData.today,
   };
 
   const [state, dispatch] = useReducer(timesheetReducer, initialState);
@@ -162,7 +167,6 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
   // Compute dirty cells by comparing entries to savedEntries
   const dirtyCells = useMemo<DirtyCell[]>(() => {
     const dirty: DirtyCell[] = [];
-    const today = dayjs().startOf('day');
     for (const entry of state.entries) {
       const savedEntry = state.savedEntries.find((se) => se.chargeCodeId === entry.chargeCodeId);
       if (!savedEntry) continue;
@@ -172,10 +176,13 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
         if (current !== saved) {
           const key = `${entry.chargeCodeId}-${i}`;
           const revisionNumber = state.savedCellRevisions[key] ?? 0;
-          const cellDate = dayjs(state.periodStart).add(i, 'day').startOf('day');
+          const cellDate = addDays(state.periodStart, i);
           const isEdit = revisionNumber > 0;
-          // Late entry: first-time entry (no prior revision) on a date that has already passed
-          const isLateEntry = !isEdit && saved === 0 && current > 0 && cellDate.isBefore(today, 'day');
+          // Late entry: first-time entry (no prior revision) on a date that has already passed.
+          // Uses the server-provided `today` (never the browser's clock — a user could spoof it
+          // to dodge the late-entry rule); this is advisory for the UI only, saveTimesheetBatch
+          // re-derives it authoritatively server-side.
+          const isLateEntry = !isEdit && saved === 0 && current > 0 && isBefore(cellDate, state.today);
           dirty.push({
             chargeCodeId: entry.chargeCodeId,
             dayIndex: i,
@@ -187,7 +194,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
       }
     }
     return dirty;
-  }, [state.entries, state.savedEntries, state.savedCellRevisions, state.periodStart]);
+  }, [state.entries, state.savedEntries, state.savedCellRevisions, state.periodStart, state.today]);
 
   // Are any dirty cells edits to previously-saved data?
   const hasEdits = useMemo(() => dirtyCells.some((c) => c.isEdit), [dirtyCells]);
@@ -299,7 +306,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
   );
 
   const loadPeriodByDate = useCallback(
-    async (newPeriodStart: Date) => {
+    async (newPeriodStart: CalendarDate) => {
       // Dispatch a navigate action to show loading state
       dispatch({ type: 'NAVIGATE_PERIOD', direction: 'next' }); // Direction doesn't matter — we override below
 
@@ -375,6 +382,26 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
     },
     [state.userId, state.periodStart]
   );
+
+  // D4: re-ask the server for "today" on focus and every few minutes, so a tab left open
+  // overnight (or across a timezone's midnight) rolls its late/future-date flags over correctly
+  // instead of being stuck on the day the page first loaded.
+  useEffect(() => {
+    const refreshToday = () => {
+      getWorkspaceContext()
+        .then(({ today }) => dispatch({ type: 'SET_TODAY', today }))
+        .catch(() => {
+          // Best-effort — keep the last known "today" if the server is unreachable.
+        });
+    };
+    const onFocus = () => refreshToday();
+    window.addEventListener('focus', onFocus);
+    const interval = setInterval(refreshToday, 5 * 60 * 1000);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      clearInterval(interval);
+    };
+  }, []);
 
   return (
     <TimesheetContext.Provider

@@ -4,19 +4,26 @@ import { getDb } from '@/db';
 import { contracts } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
-import { validateContractNumber, validateRequired, validateStringLength, validateOptionalString, validateOptionalDate, validateMonetaryValue } from '@/lib/validation';
+import { validateContractNumber, validateRequired, validateStringLength, validateOptionalString, validateOptionalCalendarDate, validateMonetaryValue } from '@/lib/validation';
+import type { CalendarDate } from '@/lib/calendar-date';
 
-export async function getContracts() {
+export type Contract = Omit<typeof contracts.$inferSelect, 'startDate' | 'endDate'> & {
+  startDate: CalendarDate | null;
+  endDate: CalendarDate | null;
+};
+
+export async function getContracts(): Promise<Contract[]> {
   await requireAdmin();
   const db = await getDb();
-  return db.select().from(contracts).orderBy(contracts.name);
+  const rows = await db.select().from(contracts).orderBy(contracts.name);
+  return rows as Contract[];
 }
 
-export async function getContractById(id: string) {
+export async function getContractById(id: string): Promise<Contract | null> {
   await requireAdmin();
   const db = await getDb();
   const rows = await db.select().from(contracts).where(eq(contracts.id, id));
-  return rows[0] ?? null;
+  return (rows[0] as Contract) ?? null;
 }
 
 export async function createContract(data: {
@@ -24,8 +31,8 @@ export async function createContract(data: {
   name: string;
   description?: string;
   contractType?: string;
-  startDate?: Date;
-  endDate?: Date;
+  startDate?: CalendarDate;
+  endDate?: CalendarDate;
   fundedValue?: string;
   ceilingValue?: string;
 }) {
@@ -36,8 +43,8 @@ export async function createContract(data: {
     name: validateStringLength(validateRequired(data.name, 'Contract name'), 'Contract name', 1, 255),
     description: validateOptionalString(data.description, 'Description', 2000),
     contractType: data.contractType ?? 'prime',
-    startDate: validateOptionalDate(data.startDate, 'Start date'),
-    endDate: validateOptionalDate(data.endDate, 'End date'),
+    startDate: validateOptionalCalendarDate(data.startDate, 'Start date'),
+    endDate: validateOptionalCalendarDate(data.endDate, 'End date'),
     fundedValue: validateMonetaryValue(data.fundedValue, 'Funded value'),
     ceilingValue: validateMonetaryValue(data.ceilingValue, 'Ceiling value'),
   };
@@ -51,8 +58,8 @@ export async function updateContract(id: string, data: {
   description?: string;
   contractType?: string;
   status?: 'active' | 'inactive' | 'closed';
-  startDate?: Date;
-  endDate?: Date;
+  startDate?: CalendarDate;
+  endDate?: CalendarDate;
   fundedValue?: string;
   ceilingValue?: string;
 }) {
@@ -64,8 +71,8 @@ export async function updateContract(id: string, data: {
   if (data.description !== undefined) validatedData.description = validateOptionalString(data.description, 'Description', 2000);
   if (data.contractType !== undefined) validatedData.contractType = data.contractType;
   if (data.status !== undefined) validatedData.status = data.status;
-  if (data.startDate !== undefined) validatedData.startDate = validateOptionalDate(data.startDate, 'Start date');
-  if (data.endDate !== undefined) validatedData.endDate = validateOptionalDate(data.endDate, 'End date');
+  if (data.startDate !== undefined) validatedData.startDate = validateOptionalCalendarDate(data.startDate, 'Start date');
+  if (data.endDate !== undefined) validatedData.endDate = validateOptionalCalendarDate(data.endDate, 'End date');
   if (data.fundedValue !== undefined) validatedData.fundedValue = validateMonetaryValue(data.fundedValue, 'Funded value');
   if (data.ceilingValue !== undefined) validatedData.ceilingValue = validateMonetaryValue(data.ceilingValue, 'Ceiling value');
   const rows = await db.update(contracts)

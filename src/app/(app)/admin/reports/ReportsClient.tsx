@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Paper,
   Stack,
@@ -21,29 +21,9 @@ import {
 } from '@tabler/icons-react';
 import { DateInput } from '@mantine/dates';
 import { notifications } from '@mantine/notifications';
-import dayjs from 'dayjs';
-import { getNumDaysInPeriod, navigatePeriod, getCurrentPeriodStart } from '@/lib/date-utils';
-import { formatDate, formatShortDate } from '@/lib/format';
+import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { getPeriodOptions, getWorkspaceContext, type PeriodOption } from '@/server/actions/periods';
 import { PageHeader } from '@/components/ui/PageHeader';
-
-// Generate semi-monthly pay period options (current + last 11 = 12 total, ~6 months)
-function generatePeriodOptions(): { value: string; label: string }[] {
-  const options: { value: string; label: string }[] = [];
-  let periodStart = getCurrentPeriodStart();
-
-  for (let i = 0; i < 12; i++) {
-    const start = dayjs(periodStart);
-    const numDays = getNumDaysInPeriod(periodStart);
-    const end = start.add(numDays - 1, 'day');
-    options.push({
-      value: start.format('YYYY-MM-DD'),
-      label: `${formatShortDate(start.toDate())} – ${formatDate(end.toDate())}`,
-    });
-    periodStart = navigatePeriod(periodStart, 'prev');
-  }
-
-  return options;
-}
 
 type FilterOptions = {
   users: Array<{ id: string; fullName: string; email: string }>;
@@ -59,16 +39,26 @@ export function ReportsClient({ filterOptions, role }: Props) {
   const isAdmin = role === 'admin';
   // Timesheet PDF state
   const [pdfUserId, setPdfUserId] = useState<string | null>(null);
-  const [pdfPeriodStart, setPdfPeriodStart] = useState<string>('');
+  const [pdfPeriodStart, setPdfPeriodStart] = useState<CalendarDate | null>(null);
+  const [periodOptions, setPeriodOptions] = useState<PeriodOption[]>([]);
 
   // Cost Report state
-  const [costStartDate, setCostStartDate] = useState<string>('');
-  const [costEndDate, setCostEndDate] = useState<string>('');
+  const [costStartDate, setCostStartDate] = useState<CalendarDate | null>(null);
+  const [costEndDate, setCostEndDate] = useState<CalendarDate | null>(null);
   const [costContractId, setCostContractId] = useState<string | null>(null);
 
   // Employee Summary state
-  const [summaryStartDate, setSummaryStartDate] = useState<string>('');
-  const [summaryEndDate, setSummaryEndDate] = useState<string>('');
+  const [summaryStartDate, setSummaryStartDate] = useState<CalendarDate | null>(null);
+  const [summaryEndDate, setSummaryEndDate] = useState<CalendarDate | null>(null);
+
+  // D4: the client does no schedule math of its own — the pay-period dropdown comes from the
+  // server (getPeriodOptions), so it stays correct across a pay-schedule change instead of
+  // assuming semimonthly for every tenant.
+  useEffect(() => {
+    getWorkspaceContext().then(({ today }) => {
+      getPeriodOptions(today, 11, 0).then((options) => setPeriodOptions([...options].reverse()));
+    });
+  }, []);
 
   function downloadTimesheetPdf() {
     if (!pdfUserId || !pdfPeriodStart) {
@@ -77,7 +67,7 @@ export function ReportsClient({ filterOptions, role }: Props) {
     }
     const params = new URLSearchParams({
       userId: pdfUserId,
-      periodStart: dayjs(pdfPeriodStart).format('YYYY-MM-DD'),
+      periodStart: pdfPeriodStart,
     });
     window.open(`/api/reports/timesheet-pdf?${params.toString()}`, '_blank');
   }
@@ -88,8 +78,8 @@ export function ReportsClient({ filterOptions, role }: Props) {
       return;
     }
     const params = new URLSearchParams({
-      startDate: dayjs(costStartDate).format('YYYY-MM-DD'),
-      endDate: dayjs(costEndDate).format('YYYY-MM-DD'),
+      startDate: costStartDate,
+      endDate: costEndDate,
     });
     if (costContractId) params.set('contractId', costContractId);
     window.open(`/api/reports/cost-report-csv?${params.toString()}`, '_blank');
@@ -101,8 +91,8 @@ export function ReportsClient({ filterOptions, role }: Props) {
       return;
     }
     const params = new URLSearchParams({
-      startDate: dayjs(costStartDate).format('YYYY-MM-DD'),
-      endDate: dayjs(costEndDate).format('YYYY-MM-DD'),
+      startDate: costStartDate,
+      endDate: costEndDate,
     });
     if (costContractId) params.set('contractId', costContractId);
     window.open(`/api/reports/cost-report-xlsx?${params.toString()}`, '_blank');
@@ -115,8 +105,8 @@ export function ReportsClient({ filterOptions, role }: Props) {
     }
     // Uses the same Excel endpoint but with summary format — we can add a format param
     const params = new URLSearchParams({
-      startDate: dayjs(summaryStartDate).format('YYYY-MM-DD'),
-      endDate: dayjs(summaryEndDate).format('YYYY-MM-DD'),
+      startDate: summaryStartDate,
+      endDate: summaryEndDate,
       format: 'summary',
     });
     window.open(`/api/reports/cost-report-xlsx?${params.toString()}`, '_blank');
@@ -151,9 +141,9 @@ export function ReportsClient({ filterOptions, role }: Props) {
             <Select
               label="Pay Period"
               placeholder="Select pay period"
-              data={generatePeriodOptions()}
-              value={pdfPeriodStart || null}
-              onChange={(val) => setPdfPeriodStart(val ?? '')}
+              data={periodOptions.map((o) => ({ value: o.start, label: o.label }))}
+              value={pdfPeriodStart}
+              onChange={(val) => setPdfPeriodStart(val && isCalendarDate(val) ? val : null)}
               searchable
             />
             <Button
@@ -185,15 +175,15 @@ export function ReportsClient({ filterOptions, role }: Props) {
                 <DateInput
                   label="Start Date"
                   placeholder="Select start date"
-                  value={costStartDate ? new Date(costStartDate + 'T00:00:00') : null}
-                  onChange={(date) => setCostStartDate(date ? dayjs(date).format('YYYY-MM-DD') : '')}
+                  value={costStartDate}
+                  onChange={(date) => setCostStartDate(date && isCalendarDate(date) ? date : null)}
                   clearable
                 />
                 <DateInput
                   label="End Date"
                   placeholder="Select end date"
-                  value={costEndDate ? new Date(costEndDate + 'T00:00:00') : null}
-                  onChange={(date) => setCostEndDate(date ? dayjs(date).format('YYYY-MM-DD') : '')}
+                  value={costEndDate}
+                  onChange={(date) => setCostEndDate(date && isCalendarDate(date) ? date : null)}
                   clearable
                 />
               </Group>
@@ -247,15 +237,15 @@ export function ReportsClient({ filterOptions, role }: Props) {
               <DateInput
                 label="Start Date"
                 placeholder="Select start date"
-                value={summaryStartDate ? new Date(summaryStartDate + 'T00:00:00') : null}
-                onChange={(date) => setSummaryStartDate(date ? dayjs(date).format('YYYY-MM-DD') : '')}
+                value={summaryStartDate}
+                onChange={(date) => setSummaryStartDate(date && isCalendarDate(date) ? date : null)}
                 clearable
               />
               <DateInput
                 label="End Date"
                 placeholder="Select end date"
-                value={summaryEndDate ? new Date(summaryEndDate + 'T00:00:00') : null}
-                onChange={(date) => setSummaryEndDate(date ? dayjs(date).format('YYYY-MM-DD') : '')}
+                value={summaryEndDate}
+                onChange={(date) => setSummaryEndDate(date && isCalendarDate(date) ? date : null)}
                 clearable
               />
             </Group>

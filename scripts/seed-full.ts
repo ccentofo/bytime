@@ -27,7 +27,7 @@ import dayjs from 'dayjs';
 
 function uuid() { return crypto.randomUUID(); }
 
-function getNumDays(periodStart: Date): number {
+function getNumDays(periodStart: string): number {
   const d = dayjs(periodStart);
   return d.date() === 1 ? 15 : d.daysInMonth() - 15;
 }
@@ -94,9 +94,9 @@ export async function seedRichData(
   const contractIds = { navair: uuid(), disa: uuid(), army: uuid() };
 
   await db.insert(schema.contracts).values([
-    { id: contractIds.navair, contractNumber: 'W58RGZ-21-C-0001', name: 'NAVAIR Systems Support', description: 'Avionics software development and sustainment', contractType: 'prime', status: 'active', startDate: new Date('2025-01-01'), endDate: new Date('2027-12-31'), fundedValue: '2500000.00', ceilingValue: '3500000.00' },
-    { id: contractIds.disa, contractNumber: 'HC1028-22-C-0015', name: 'DISA Cyber Operations', description: 'Cybersecurity operations and monitoring', contractType: 'prime', status: 'active', startDate: new Date('2025-06-01'), endDate: new Date('2028-05-31'), fundedValue: '1800000.00', ceilingValue: '2200000.00' },
-    { id: contractIds.army, contractNumber: 'W911QX-23-D-0042', name: 'Army IT Support', description: 'IT help desk and network operations', contractType: 'sub', status: 'active', startDate: new Date('2025-10-01'), endDate: new Date('2026-09-30'), fundedValue: '750000.00', ceilingValue: '1000000.00' },
+    { id: contractIds.navair, contractNumber: 'W58RGZ-21-C-0001', name: 'NAVAIR Systems Support', description: 'Avionics software development and sustainment', contractType: 'prime', status: 'active', startDate: '2025-01-01', endDate: '2027-12-31', fundedValue: '2500000.00', ceilingValue: '3500000.00' },
+    { id: contractIds.disa, contractNumber: 'HC1028-22-C-0015', name: 'DISA Cyber Operations', description: 'Cybersecurity operations and monitoring', contractType: 'prime', status: 'active', startDate: '2025-06-01', endDate: '2028-05-31', fundedValue: '1800000.00', ceilingValue: '2200000.00' },
+    { id: contractIds.army, contractNumber: 'W911QX-23-D-0042', name: 'Army IT Support', description: 'IT help desk and network operations', contractType: 'sub', status: 'active', startDate: '2025-10-01', endDate: '2026-09-30', fundedValue: '750000.00', ceilingValue: '1000000.00' },
   ]);
   console.log('    ✓ 3 contracts created');
 
@@ -274,7 +274,7 @@ export async function seedRichData(
     if (lcatId) {
       await db.insert(schema.userLaborCategories).values({
         userId: u.userId, laborCategoryId: lcatId,
-        effectiveDate: new Date('2025-12-01'), assignedBy: userIds.admin,
+        effectiveDate: '2025-12-01', assignedBy: userIds.admin,
       });
     }
   }
@@ -319,11 +319,11 @@ export async function seedRichData(
   ];
 
   // Generate all semi-monthly periods from Dec 1 2025 to current
-  const periods: Date[] = [];
+  const periods: string[] = [];
   let pStart = dayjs('2025-12-01');
   const now = dayjs();
   while (pStart.isBefore(now)) {
-    periods.push(pStart.toDate());
+    periods.push(pStart.format('YYYY-MM-DD'));
     if (pStart.date() === 1) {
       pStart = pStart.date(16);
     } else {
@@ -376,7 +376,7 @@ export async function seedRichData(
           // Log holiday hours to leave code
           await db.insert(schema.timesheetEntries).values({
             userId: emp.id, clinId: null, indirectCodeId: indirectIds['LV-HOL'],
-            entryDate: entryDate.toDate(), hours: '8', revisionNumber: 1, createdBy: emp.id,
+            entryDate: entryDate.format('YYYY-MM-DD'), hours: '8', revisionNumber: 1, createdBy: emp.id,
           });
           entryCount++;
           continue;
@@ -395,7 +395,7 @@ export async function seedRichData(
               chargeCodeId: e.chargeCodeId,  // new charge code id
               clinId: e.clinId,               // denormalized from charge code (preserves CLIN-based queries)
               indirectCodeId: null,
-              entryDate: entryDate.toDate(), hours: hours.toFixed(2),
+              entryDate: entryDate.format('YYYY-MM-DD'), hours: hours.toFixed(2),
               revisionNumber: 1, createdBy: emp.id,
             });
             entryCount++;
@@ -406,7 +406,7 @@ export async function seedRichData(
         if (entryDate.day() === 5 && pi % 2 === 0) {
           await db.insert(schema.timesheetEntries).values({
             userId: emp.id, clinId: null, indirectCodeId: indirectIds['OH-001'],
-            entryDate: entryDate.toDate(), hours: '1.00', revisionNumber: 1, createdBy: emp.id,
+            entryDate: entryDate.format('YYYY-MM-DD'), hours: '1.00', revisionNumber: 1, createdBy: emp.id,
           });
           entryCount++;
         }
@@ -421,7 +421,7 @@ export async function seedRichData(
             chargeCodeId: emp.entries[0].chargeCodeId,
             clinId: emp.entries[0].clinId,
             indirectCodeId: null,
-            entryDate: corrDate.toDate(), hours: '7.50',
+            entryDate: corrDate.format('YYYY-MM-DD'), hours: '7.50',
             revisionNumber: 2, changeReasonCode: 'CORRECTION',
             comment: 'Corrected hours — was on training for part of the day',
             createdBy: emp.id,

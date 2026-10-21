@@ -2,9 +2,11 @@ import { NextRequest } from 'next/server';
 import { getDb } from '@/db';
 import { timesheetEntries, users, clins, contracts, indirectChargeCodes } from '@/db/schema';
 import { eq, and, gte, lt, sql } from 'drizzle-orm';
-import dayjs from 'dayjs';
 import { validateApiKey, apiResponse, apiError } from '@/lib/api-auth';
+import { addDays, isCalendarDate } from '@/lib/calendar-date';
 
+// Date format: `startDate`/`endDate` query params and every `entryDate` in the response are
+// plain 'YYYY-MM-DD' calendar-date strings — never an ISO instant/timestamp.
 export async function GET(request: NextRequest) {
   const db = await getDb();
   const authResult = await validateApiKey(request);
@@ -17,13 +19,13 @@ export async function GET(request: NextRequest) {
   const page = parseInt(searchParams.get('page') ?? '1');
   const pageSize = Math.min(parseInt(searchParams.get('pageSize') ?? '100'), 500);
 
-  if (!startDate || !endDate) {
+  if (!startDate || !endDate || !isCalendarDate(startDate) || !isCalendarDate(endDate)) {
     return apiError('startDate and endDate query parameters are required (YYYY-MM-DD format).');
   }
 
   try {
-    const start = new Date(startDate);
-    const end = dayjs(endDate).add(1, 'day').toDate();
+    const start = startDate;
+    const end = addDays(endDate, 1);
 
     const conditions = [
       gte(timesheetEntries.entryDate, start),

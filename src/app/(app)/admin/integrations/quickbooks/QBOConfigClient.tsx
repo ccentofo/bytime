@@ -34,7 +34,7 @@ import {
 import { notifications } from '@mantine/notifications';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { formatDate, formatDateTime } from '@/lib/format';
+import { formatDateTime } from '@/lib/format';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import {
   fetchQBOEmployeesForMapping,
@@ -45,6 +45,7 @@ import {
 } from '@/server/actions/qbo';
 import { saveMapping, disconnectIntegration, toggleAutoSync } from '@/server/actions/integrations';
 import { SYNC_STATUS_COLOR } from '@/lib/ui/status-colors';
+import type { CalendarDate } from '@/lib/calendar-date';
 
 dayjs.extend(relativeTime);
 
@@ -74,8 +75,8 @@ interface Mapping {
 interface SyncLog {
   id: string;
   syncType: string;
-  periodStart: Date | null;
-  periodEnd: Date | null;
+  periodStart: CalendarDate | null;
+  periodEnd: CalendarDate | null;
   triggerType: string;
   recordsPushed: number;
   recordsFailed: number;
@@ -93,6 +94,7 @@ interface Props {
   bytimeEmployees: Array<{ id: string; fullName: string; email: string }>;
   bytimeContracts: Array<{ id: string; contractNumber: string; name: string }>;
   bytimeClins: Array<{ id: string; clinNumber: string; description: string | null; contractId: string }>;
+  workspaceTimezone: string;
 }
 
 
@@ -103,6 +105,7 @@ export function QBOConfigClient({
   bytimeEmployees,
   bytimeContracts,
   bytimeClins,
+  workspaceTimezone,
 }: Props) {
   const [mappings, setMappings] = useState(initialMappings);
   const [syncLogs] = useState(initialSyncLogs);
@@ -180,8 +183,10 @@ export function QBOConfigClient({
 
   async function handleSync() {
     // Sync last 2 months of approved data
-    const periodStart = dayjs().subtract(2, 'month').startOf('month').toDate();
-    const periodEnd = dayjs().endOf('month').toDate();
+    // Default sync window: a UI convenience suggestion only (not a correctness-sensitive
+    // calendar-day computation), so the browser's local date is fine here.
+    const periodStart = dayjs().subtract(2, 'month').startOf('month').format('YYYY-MM-DD') as CalendarDate;
+    const periodEnd = dayjs().endOf('month').format('YYYY-MM-DD') as CalendarDate;
 
     startTransition(async () => {
       try {
@@ -237,7 +242,7 @@ export function QBOConfigClient({
           </Group>
           <Text c="dimmed" size="sm">
             {connection.externalCompanyName ?? 'QuickBooks Online'}
-            {' • '}Connected {formatDate(connection.connectedAt)}
+            {' • '}Connected {formatDateTime(connection.connectedAt, workspaceTimezone)}
           </Text>
         </div>
         <Group>
@@ -408,7 +413,7 @@ export function QBOConfigClient({
                 ) : (
                   syncLogs.map((log) => (
                     <Table.Tr key={log.id}>
-                      <Table.Td>{formatDateTime(log.createdAt)}</Table.Td>
+                      <Table.Td>{formatDateTime(log.createdAt, workspaceTimezone)}</Table.Td>
                       <Table.Td>{log.syncType.replace(/_/g, ' ')}</Table.Td>
                       <Table.Td>
                         <Badge size="xs" variant="light">{log.triggerType}</Badge>

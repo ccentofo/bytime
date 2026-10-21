@@ -9,7 +9,6 @@ import {
   validateRate,
   validateUUID,
   validateEnum,
-  validateOptionalDate,
   validateContractNumber,
   validateClinNumber,
   validateSlinNumber,

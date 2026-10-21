@@ -29,6 +29,11 @@ export const signups = pgTable('signups', {
   companyName: varchar('company_name', { length: 200 }).notNull(),
   slug: varchar('slug', { length: 63 }).notNull(),
   verifyTokenHash: varchar('verify_token_hash', { length: 64 }).notNull(),
+  // D8: the signer's browser IANA timezone (Intl.DateTimeFormat().resolvedOptions().timeZone),
+  // captured at signup and written into the new tenant's workspace_settings at provisioning.
+  // Nullable/additive: validated before use, falls back to workspace_settings' own column
+  // default if missing or invalid.
+  timezone: varchar('timezone', { length: 100 }),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   consumedAt: timestamp('consumed_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

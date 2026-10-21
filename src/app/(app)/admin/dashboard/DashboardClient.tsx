@@ -29,6 +29,7 @@ import {
   type ContractSummary,
   type PeriodCostEntry,
 } from '@/server/actions/dashboard';
+import { isCalendarDate } from '@/lib/calendar-date';
 import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
 
@@ -70,11 +71,9 @@ export function DashboardClient({ initialSummaries }: Props) {
 
   function handleGenerateReport() {
     if (!reportStartDate || !reportEndDate) return;
+    if (!isCalendarDate(reportStartDate) || !isCalendarDate(reportEndDate)) return;
     startTransition(async () => {
-      const report = await getPeriodCostReport(
-        new Date(reportStartDate),
-        new Date(reportEndDate),
-      );
+      const report = await getPeriodCostReport(reportStartDate, reportEndDate);
       setCostReport(report);
       setHasGeneratedReport(true);
     });

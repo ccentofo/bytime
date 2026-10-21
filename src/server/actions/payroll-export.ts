@@ -9,7 +9,8 @@ import {
   type PayrollFormat,
   type AggregatedEmployeeHours,
 } from '@/lib/integrations/connectors/payroll-export';
-import dayjs from 'dayjs';
+import dayjs from 'dayjs'; // still used for the export filename's INSTANT timestamp — see D5
+import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 
 /**
  * Get available payroll export formats.
@@ -28,8 +29,8 @@ export async function getPayrollFormats() {
  * Used to show a preview table before downloading.
  */
 export async function getPayrollExportPreview(data: {
-  periodStart: Date;
-  periodEnd: Date;
+  periodStart: CalendarDate;
+  periodEnd: CalendarDate;
 }): Promise<{
   employees: Array<{
     employeeName: string;
@@ -46,7 +47,7 @@ export async function getPayrollExportPreview(data: {
 }> {
   await requireAdmin();
 
-  const entries = await getApprovedEntriesForSync(data.periodStart, data.periodEnd);
+  const entries = await getApprovedEntriesForSync(parseCalendarDate(data.periodStart), parseCalendarDate(data.periodEnd));
 
   const aggregated = aggregateEntriesByEmployee(entries, 'YYYY-MM-DD');
 
@@ -71,8 +72,8 @@ export async function getPayrollExportPreview(data: {
  * Returns the CSV content as a string (client handles download).
  */
 export async function generatePayrollExportCSV(data: {
-  periodStart: Date;
-  periodEnd: Date;
+  periodStart: CalendarDate;
+  periodEnd: CalendarDate;
   format: PayrollFormat;
 }): Promise<{
   csvContent: string;
@@ -87,7 +88,7 @@ export async function generatePayrollExportCSV(data: {
     throw new Error(`Unknown payroll format: ${data.format}`);
   }
 
-  const entries = await getApprovedEntriesForSync(data.periodStart, data.periodEnd);
+  const entries = await getApprovedEntriesForSync(parseCalendarDate(data.periodStart), parseCalendarDate(data.periodEnd));
   const aggregated = aggregateEntriesByEmployee(entries, formatConfig.dateFormat);
   const csvContent = generatePayrollCSV(aggregated, formatConfig);
 

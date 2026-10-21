@@ -10,6 +10,7 @@ import { isValidSlug } from '@/lib/tenant/provision';
 import { sendSignupVerifyEmail } from '@/lib/email/send-signup';
 import { slugify } from '@/lib/tenant/slugify';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { isValidTimeZone } from '@/lib/calendar-date';
 
 const VERIFY_EXPIRY_HOURS = 24;
 
@@ -23,6 +24,7 @@ export async function startSignup(input: {
   companyName: string;
   email: string;
   slug?: string;
+  timezone?: string;
 }): Promise<{ success: boolean; error?: string }> {
   // IP-based rate limit: 8 signups per hour per IP to prevent abuse and spam provisioning.
   const h = await headers();
@@ -50,11 +52,16 @@ export async function startSignup(input: {
   // Mint a verification token.
   const rawToken = crypto.randomBytes(32).toString('hex');
   const verifyTokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  // D8: the signer's browser timezone, captured for the new tenant's workspace_settings at
+  // provisioning. Untrusted client input — validated here, stored null (falls back to
+  // workspace_settings' own column default) rather than rejecting the signup over it.
+  const timezone = input.timezone && isValidTimeZone(input.timezone) ? input.timezone : null;
   await controlDb.insert(signups).values({
     email,
     companyName: input.companyName.trim(),
     slug,
     verifyTokenHash,
+    timezone,
     expiresAt: dayjs().add(VERIFY_EXPIRY_HOURS, 'hour').toDate(),
   });
 

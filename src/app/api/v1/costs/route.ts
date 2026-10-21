@@ -1,6 +1,10 @@
 import { NextRequest } from 'next/server';
 import { validateApiKey, apiResponse, apiError } from '@/lib/api-auth';
 import { getDetailedCostReportData } from '@/server/internal/reports';
+import { isCalendarDate, isBefore, diffDays } from '@/lib/calendar-date';
+
+// Date format: `startDate`/`endDate` query params and every `entryDate` in the response are
+// plain 'YYYY-MM-DD' calendar-date strings — never an ISO instant/timestamp.
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -16,15 +20,13 @@ export async function GET(request: NextRequest) {
   if (!startDate || !endDate) {
     return apiError('startDate and endDate are required.');
   }
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+  if (!isCalendarDate(startDate) || !isCalendarDate(endDate)) {
     return apiError('startDate and endDate must be valid dates (YYYY-MM-DD).');
   }
-  if (end < start) {
+  if (isBefore(endDate, startDate)) {
     return apiError('endDate must not be before startDate.');
   }
-  if (end.getTime() - start.getTime() > 366 * 24 * 60 * 60 * 1000) {
+  if (diffDays(startDate, endDate) > 366) {
     return apiError('The date range cannot exceed one year.');
   }
   if (contractId && !UUID_RE.test(contractId)) {
@@ -36,8 +38,8 @@ export async function GET(request: NextRequest) {
     // requests have no session, so requireAdmin() inside getDetailedCostReport() would always
     // reject them. validateApiKey() above is this route's own, equivalent authorization.
     const data = await getDetailedCostReportData(
-      start,
-      end,
+      startDate,
+      endDate,
       contractId ?? undefined
     );
 

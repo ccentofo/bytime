@@ -5,6 +5,8 @@ import { laborCategories, userLaborCategories, users, clins, contracts, slins } 
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
 import { validateRequired, validateStringLength, validateOptionalString, validateRate } from '@/lib/validation';
+import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 
 // ---------------------------------------------------------------------------
 // Labor Category CRUD
@@ -112,10 +114,27 @@ export async function updateLaborCategory(id: string, data: {
 /**
  * Get all user-LCAT assignments with user and LCAT context.
  */
-export async function getUserLaborCategoryAssignments() {
+export interface UserLcatAssignment {
+  id: string;
+  userId: string;
+  laborCategoryId: string;
+  effectiveDate: CalendarDate;
+  endDate: CalendarDate | null;
+  createdAt: Date;
+  userName: string;
+  userEmail: string;
+  lcatCode: string;
+  lcatTitle: string;
+  hourlyRate: string;
+  clinNumber: string;
+  contractName: string;
+  contractNumber: string;
+}
+
+export async function getUserLaborCategoryAssignments(): Promise<UserLcatAssignment[]> {
   await requireAdmin();
   const db = await getDb();
-  return db
+  const rows = await db
     .select({
       id: userLaborCategories.id,
       userId: userLaborCategories.userId,
@@ -138,6 +157,7 @@ export async function getUserLaborCategoryAssignments() {
     .innerJoin(clins, eq(laborCategories.clinId, clins.id))
     .innerJoin(contracts, eq(clins.contractId, contracts.id))
     .orderBy(users.fullName, contracts.name, clins.clinNumber);
+  return rows as UserLcatAssignment[];
 }
 
 /**
@@ -146,8 +166,8 @@ export async function getUserLaborCategoryAssignments() {
 export async function assignUserToLaborCategory(data: {
   userId: string;
   laborCategoryId: string;
-  effectiveDate: Date;
-  endDate?: Date;
+  effectiveDate: CalendarDate;
+  endDate?: CalendarDate;
 }) {
   const actor = await requireAdmin();
   const db = await getDb();
@@ -155,19 +175,20 @@ export async function assignUserToLaborCategory(data: {
   const rows = await db.insert(userLaborCategories).values({
     userId: data.userId,
     laborCategoryId: data.laborCategoryId,
-    effectiveDate: data.effectiveDate,
-    endDate: data.endDate,
+    effectiveDate: parseCalendarDate(data.effectiveDate),
+    endDate: data.endDate ? parseCalendarDate(data.endDate) : undefined,
     assignedBy: actor.id,
   }).returning();
   return rows[0];
 }
 
 /**
- * End a user's labor category assignment by setting the end_date.
+ * End a user's labor category assignment by setting the end_date to the workspace's today.
  */
-export async function endUserLaborCategoryAssignment(id: string, endDate: Date) {
+export async function endUserLaborCategoryAssignment(id: string) {
   const db = await getDb();
   await requireAdmin();
+  const endDate = await getWorkspaceToday();
   const rows = await db.update(userLaborCategories)
     .set({ endDate, updatedAt: new Date() })
     .where(eq(userLaborCategories.id, id))

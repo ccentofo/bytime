@@ -11,8 +11,8 @@ import {
   users,
 } from '@/db/schema';
 import { eq, and, sql, gte, lt } from 'drizzle-orm';
-import dayjs from 'dayjs';
 import { requireAdmin } from '@/lib/session';
+import { addDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 
 // ---------------------------------------------------------------------------
 // Types (UNCHANGED — must match DashboardClient.tsx expectations)
@@ -341,12 +341,13 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
  * on the date the work was performed.
  */
 export async function getPeriodCostReport(
-  startDate: Date,
-  endDate: Date
+  startDate: CalendarDate,
+  endDate: CalendarDate
 ): Promise<PeriodCostEntry[]> {
   await requireAdmin();
   const db = await getDb();
-  const endDateExclusive = dayjs(endDate).add(1, 'day').toDate();
+  const start = parseCalendarDate(startDate);
+  const endDateExclusive = addDays(parseCalendarDate(endDate), 1);
 
   // Single optimized query: aggregate hours and costs by (user, clin, slin, lcat)
   const rows = await db
@@ -388,7 +389,7 @@ export async function getPeriodCostReport(
     )
     .where(
       and(
-        gte(timesheetEntries.entryDate, startDate),
+        gte(timesheetEntries.entryDate, start),
         lt(timesheetEntries.entryDate, endDateExclusive),
         eq(
           timesheetEntries.revisionNumber,

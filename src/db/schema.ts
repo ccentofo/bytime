@@ -1,4 +1,11 @@
-import { pgTable, uuid, varchar, text, timestamp, boolean, pgEnum, uniqueIndex, integer, index, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, timestamp, boolean, pgEnum, uniqueIndex, integer, index, jsonb, date, smallint, check } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+
+// Date columns below use `date(..., { mode: 'string' })` — Drizzle maps these to a plain JS
+// string ('YYYY-MM-DD'), never a JS Date. Callers brand that string as `CalendarDate` (see
+// src/lib/calendar-date.ts) via `parseCalendarDate` at the point it enters application logic;
+// this version of Drizzle (0.45) has no column-level `$type<>()` override to do that in the
+// schema itself.
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -102,8 +109,8 @@ export const contracts = pgTable('contracts', {
   description: text('description'),
   contractType: varchar('contract_type', { length: 20 }).notNull().default('prime'), // 'prime' or 'sub'
   status: statusEnum('status').notNull().default('active'),
-  startDate: timestamp('start_date', { withTimezone: true }),
-  endDate: timestamp('end_date', { withTimezone: true }),
+  startDate: date('start_date', { mode: 'string' }),
+  endDate: date('end_date', { mode: 'string' }),
   fundedValue: varchar('funded_value', { length: 20 }),     // currently obligated/funded amount
   ceilingValue: varchar('ceiling_value', { length: 20 }),   // maximum contract ceiling
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -185,8 +192,8 @@ export const userLaborCategories = pgTable('user_labor_categories', {
   id: uuid('id').defaultRandom().primaryKey(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   laborCategoryId: uuid('labor_category_id').notNull().references(() => laborCategories.id, { onDelete: 'cascade' }),
-  effectiveDate: timestamp('effective_date', { withTimezone: true }).notNull(),
-  endDate: timestamp('end_date', { withTimezone: true }),
+  effectiveDate: date('effective_date', { mode: 'string' }).notNull(),
+  endDate: date('end_date', { mode: 'string' }),
   assignedBy: uuid('assigned_by').references(() => users.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -260,7 +267,7 @@ export const timesheetEntries = pgTable('timesheet_entries', {
   slinId: uuid('slin_id').references(() => slins.id), // nullable — SLIN-level entry; DENORMALIZED from charge code
   indirectCodeId: uuid('indirect_code_id').references(() => indirectChargeCodes.id), // nullable — set for indirect entries
   chargeCodeId: uuid('charge_code_id').references(() => chargeCodes.id), // nullable — set for DIRECT entries (new charge-code model)
-  entryDate: timestamp('entry_date', { withTimezone: true }).notNull(),
+  entryDate: date('entry_date', { mode: 'string' }).notNull(),
   hours: varchar('hours', { length: 10 }).notNull().default('0'), // stored as string to preserve exact decimal input
   revisionNumber: integer('revision_number').notNull().default(1),
   changeReasonCode: varchar('change_reason_code', { length: 50 }),
@@ -274,6 +281,16 @@ export const timesheetEntries = pgTable('timesheet_entries', {
   index('idx_entries_user_clin_date_rev').on(table.userId, table.clinId, table.entryDate, table.revisionNumber),
   index('idx_entries_user_indirect_date_rev').on(table.userId, table.indirectCodeId, table.entryDate, table.revisionNumber),
   index('idx_entries_user_chargecode_date_rev').on(table.userId, table.chargeCodeId, table.entryDate, table.revisionNumber),
+  // feature-plan-calendar-dates.md D2: one cell (user + charge code/indirect code/CLIN + day)
+  // can have only one row per revision number — closes the race where two concurrent saves
+  // both compute the same "next" revision number (one now fails with a unique violation and
+  // the caller retries, instead of silently creating two "revision 2" rows for the same cell).
+  uniqueIndex('entries_user_code_date_rev_unique_idx').on(
+    table.userId,
+    sql`coalesce(${table.chargeCodeId}, ${table.indirectCodeId}, ${table.clinId})`,
+    table.entryDate,
+    table.revisionNumber,
+  ),
 ]);
 
 // ---------------------------------------------------------------------------
@@ -283,7 +300,7 @@ export const timesheetEntries = pgTable('timesheet_entries', {
 export const timesheetPeriods = pgTable('timesheet_periods', {
   id: uuid('id').defaultRandom().primaryKey(),
   userId: uuid('user_id').notNull().references(() => users.id),
-  periodStart: timestamp('period_start', { withTimezone: true }).notNull(),
+  periodStart: date('period_start', { mode: 'string' }).notNull(),
   status: periodStatusEnum('status').notNull().default('draft'),
   submittedAt: timestamp('submitted_at', { withTimezone: true }),
   submittedComment: text('submitted_comment'),
@@ -404,8 +421,8 @@ export const integrationSyncLogs = pgTable('integration_sync_logs', {
   id: uuid('id').defaultRandom().primaryKey(),
   connectionId: uuid('connection_id').notNull().references(() => integrationConnections.id, { onDelete: 'cascade' }),
   syncType: varchar('sync_type', { length: 50 }).notNull(),          // 'timesheet_push', 'invoice_push', 'employee_sync'
-  periodStart: timestamp('period_start', { withTimezone: true }),
-  periodEnd: timestamp('period_end', { withTimezone: true }),
+  periodStart: date('period_start', { mode: 'string' }),
+  periodEnd: date('period_end', { mode: 'string' }),
   triggeredBy: uuid('triggered_by').references(() => users.id),      // null for auto-sync
   triggerType: varchar('trigger_type', { length: 20 }).notNull().default('manual'), // 'manual', 'auto', 'retry'
   recordsPushed: integer('records_pushed').notNull().default(0),
@@ -449,13 +466,26 @@ export const payPeriodTypeEnum = pgEnum('pay_period_type', [
 export const payPeriodConfig = pgTable('pay_period_config', {
   id: uuid('id').defaultRandom().primaryKey(),
   periodType: payPeriodTypeEnum('period_type').notNull().default('semimonthly'),
-  anchorDate: timestamp('anchor_date', { withTimezone: true }).notNull(),
+  anchorDate: date('anchor_date', { mode: 'string' }).notNull(),
   // For weekly/biweekly: which day of the week starts the period (0=Sun, 1=Mon)
   weekStartDay: integer('week_start_day').notNull().default(1), // Monday
   // Effective-dating: config applies to all periods whose start >= effective_from.
   // The row with the greatest effective_from <= periodStart is authoritative.
   // Existing rows are backfilled to '1900-01-01' so historical periods are unaffected.
-  effectiveFrom: timestamp('effective_from', { withTimezone: true }).notNull(),
+  effectiveFrom: date('effective_from', { mode: 'string' }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ---------------------------------------------------------------------------
+// Workspace Settings (feature-plan-calendar-dates.md D2/D8) — single-row table holding the
+// tenant's IANA timezone, the source of truth for "today" everywhere on the server.
+// ---------------------------------------------------------------------------
+
+export const workspaceSettings = pgTable('workspace_settings', {
+  id: smallint('id').primaryKey().default(1),
+  timezone: text('timezone').notNull().default('America/New_York'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  check('workspace_settings_single_row_check', sql`${table.id} = 1`),
+]);

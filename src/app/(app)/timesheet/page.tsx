@@ -8,6 +8,7 @@ import { getPeriodStatus } from '@/server/actions/periods';
 import { getUserByEmail } from '@/server/internal/users';
 import { getEmployeeDashboardData } from '@/server/actions/employee-dashboard';
 import { getCurrentEffectiveConfig, getEffectiveConfigAt } from '@/server/actions/pay-period-config';
+import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,8 +21,9 @@ export default async function TimesheetPage() {
   const userId = session.user.id;
 
   // Use the config currently in effect to determine which period to land on
+  const today = await getWorkspaceToday();
   const landingConfig = await getCurrentEffectiveConfig();
-  const periodStart = getCurrentPeriodStart(landingConfig);
+  const periodStart = getCurrentPeriodStart(today, landingConfig);
 
   // Resolve the config authoritative for this specific period start date
   // (may differ from landingConfig if a schedule change is pending)
@@ -45,6 +47,7 @@ export default async function TimesheetPage() {
     chargeCodes,
     entries,
     periodStart,
+    today,
     revisions,
     periodStatus: periodInfo.status,
     flsaExempt: fullUser?.flsaExempt ?? false,

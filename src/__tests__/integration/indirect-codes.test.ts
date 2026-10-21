@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { getTestDb, createTestUser, createTestIndirectCode, cleanupTestData } from './helpers';
 import * as schema from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import dayjs from 'dayjs';
 
 describe('Indirect Charge Codes', () => {
   let user: any;
@@ -36,7 +35,7 @@ describe('Indirect Charge Codes', () => {
       userId: user.id,
       clinId: null,
       indirectCodeId: indirectCode.id,
-      entryDate: dayjs('2026-05-20').toDate(),
+      entryDate: '2026-05-20',
       hours: '4',
       revisionNumber: 1,
       createdBy: user.id,

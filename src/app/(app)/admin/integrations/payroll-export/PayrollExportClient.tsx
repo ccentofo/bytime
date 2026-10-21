@@ -31,6 +31,7 @@ import {
   getPayrollExportPreview,
   generatePayrollExportCSV,
 } from '@/server/actions/payroll-export';
+import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 
 const FORMAT_OPTIONS = [
   { value: 'adp', label: 'ADP Workforce Now', description: 'Standard ADP payroll import' },
@@ -53,9 +54,11 @@ interface PreviewEmployee {
 
 export function PayrollExportClient() {
   const [format, setFormat] = useState<string | null>('adp');
-  const [dateRange, setDateRange] = useState<[Date | null, Date | null]>([
-    dayjs().startOf('month').toDate(),
-    dayjs().endOf('month').toDate(),
+  // Default range: a UI convenience suggestion only (not a correctness-sensitive calendar-day
+  // computation), so the browser's local date is fine here.
+  const [dateRange, setDateRange] = useState<[CalendarDate | null, CalendarDate | null]>([
+    dayjs().startOf('month').format('YYYY-MM-DD') as CalendarDate,
+    dayjs().endOf('month').format('YYYY-MM-DD') as CalendarDate,
   ]);
   const [preview, setPreview] = useState<PreviewEmployee[] | null>(null);
   const [totalEntries, setTotalEntries] = useState(0);
@@ -167,8 +170,8 @@ export function PayrollExportClient() {
               placeholder="Select period..."
               value={dateRange}
               onChange={(value) => setDateRange([
-                value[0] ? new Date(value[0]) : null,
-                value[1] ? new Date(value[1]) : null,
+                value[0] && isCalendarDate(value[0]) ? value[0] : null,
+                value[1] && isCalendarDate(value[1]) ? value[1] : null,
               ])}
               leftSection={<IconCalendar size={16} />}
             />

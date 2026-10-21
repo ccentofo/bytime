@@ -4,6 +4,7 @@ import { getDb } from '@/db';
 import { timesheetEntries, timesheetPeriods, users, contracts, clins, indirectChargeCodes } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
+import { parseCalendarDate } from '@/lib/calendar-date';
 
 export interface MigrationEntryRow {
   employeeEmail: string;
@@ -145,7 +146,7 @@ export async function importMigrationData(
 
   for (const row of validRows) {
     try {
-      const entryDate = new Date(row.data.entryDate.trim());
+      const entryDate = parseCalendarDate(row.data.entryDate.trim());
       const hours = parseFloat(row.data.hours);
       const createdAt = row.data.createdAt?.trim()
         ? new Date(row.data.createdAt.trim())
@@ -214,7 +215,7 @@ export async function importMigrationPeriods(
 
       await db.insert(timesheetPeriods).values({
         userId,
-        periodStart: new Date(row.periodStart.trim()),
+        periodStart: parseCalendarDate(row.periodStart.trim()),
         status,
         submittedAt: row.submittedAt?.trim() ? new Date(row.submittedAt.trim()) : null,
         submittedComment: null,

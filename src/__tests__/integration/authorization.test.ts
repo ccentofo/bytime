@@ -1,8 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import dayjs from 'dayjs';
 import { and, eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
-import { getPeriodStartForDate } from '@/lib/date-utils';
+import { getPeriodStartForDate, DEFAULT_PERIOD_CONFIG } from '@/lib/date-utils';
+import { addMonths, diffDays, todayIn, type CalendarDate } from '@/lib/calendar-date';
+
+// workspace_settings seeds 'America/New_York' by default (migration 0011); these tests never
+// change it, so fixtures compute "today" the same way the real actions do.
+const todayFixture = (): CalendarDate => todayIn('America/New_York');
 import {
   getTestDb,
   createTestUser,
@@ -117,7 +121,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const db = getTestDb();
     const [period] = await db.insert(schema.timesheetPeriods).values({
       userId: employee.id,
-      periodStart: getPeriodStartForDate(new Date()),
+      periodStart: getPeriodStartForDate(todayFixture(), DEFAULT_PERIOD_CONFIG),
       status: 'submitted',
       submittedAt: new Date(),
     }).returning();
@@ -142,7 +146,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const outOfScopeEmployee = await createTestUser({ role: 'employee' });
     await assignUserToClin(outOfScopeEmployee.id, otherClin.id);
 
-    const periodStart = getPeriodStartForDate(new Date());
+    const periodStart = getPeriodStartForDate(todayFixture(), DEFAULT_PERIOD_CONFIG);
 
     const [inScopePeriod] = await db.insert(schema.timesheetPeriods).values({
       userId: inScopeEmployee.id, periodStart, status: 'submitted', submittedAt: new Date(),
@@ -175,7 +179,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
   it('R2-7. an admin may approve their own period (marked reviewedBy = self); a supervisor still cannot', async () => {
     const db = getTestDb();
     const admin = await createTestUser({ role: 'admin' });
-    const periodStart = getPeriodStartForDate(new Date());
+    const periodStart = getPeriodStartForDate(todayFixture(), DEFAULT_PERIOD_CONFIG);
 
     const [ownPeriod] = await db.insert(schema.timesheetPeriods).values({
       userId: admin.id, periodStart, status: 'submitted', submittedAt: new Date(),
@@ -190,7 +194,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
 
     // A second admin period, rejected by themselves, to prove reject is allowed too.
     const [ownPeriod2] = await db.insert(schema.timesheetPeriods).values({
-      userId: admin.id, periodStart: dayjs(periodStart).subtract(1, 'month').toDate(), status: 'submitted', submittedAt: new Date(),
+      userId: admin.id, periodStart: addMonths(periodStart, -1), status: 'submitted', submittedAt: new Date(),
     }).returning();
     await rejectPeriod({ periodId: ownPeriod2.id, comment: 'self-correction needed' });
     const [rejected] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, ownPeriod2.id));
@@ -261,8 +265,8 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const db = getTestDb();
     await db.insert(schema.userChargeCodes).values({ userId: employee.id, chargeCodeId: chargeCode.id, isActive: true });
 
-    const periodStart = getPeriodStartForDate(new Date());
-    const todayIndex = dayjs().startOf('day').diff(dayjs(periodStart), 'day');
+    const periodStart = getPeriodStartForDate(todayFixture(), DEFAULT_PERIOD_CONFIG);
+    const todayIndex = diffDays(periodStart, todayFixture());
 
     actingAs(asFake(employee));
     await saveTimesheetBatch({
@@ -295,7 +299,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const employeeC = await createTestUser({ role: 'employee' });
     await assignUserToClin(employeeC.id, otherClin.id);
 
-    const periodStart = getPeriodStartForDate(new Date());
+    const periodStart = getPeriodStartForDate(todayFixture(), DEFAULT_PERIOD_CONFIG);
 
     actingAs(asFake(employeeA));
     await expect(getTimesheetForReview(employeeB.id, periodStart)).rejects.toThrow(/not authorized/i);
@@ -322,10 +326,10 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     await assignUserToClin(outOfScopeEmployee.id, otherClin.id);
 
     await db.insert(schema.timesheetEntries).values({
-      userId: inScopeEmployee.id, clinId: scopedClin.id, entryDate: new Date(), hours: '2', revisionNumber: 1, createdBy: inScopeEmployee.id,
+      userId: inScopeEmployee.id, clinId: scopedClin.id, entryDate: todayFixture(), hours: '2', revisionNumber: 1, createdBy: inScopeEmployee.id,
     });
     await db.insert(schema.timesheetEntries).values({
-      userId: outOfScopeEmployee.id, clinId: otherClin.id, entryDate: new Date(), hours: '3', revisionNumber: 1, createdBy: outOfScopeEmployee.id,
+      userId: outOfScopeEmployee.id, clinId: otherClin.id, entryDate: todayFixture(), hours: '3', revisionNumber: 1, createdBy: outOfScopeEmployee.id,
     });
 
     actingAs(asFake(supervisor));
@@ -348,7 +352,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     await assignUserToClin(supervisor.id, clin.id);
 
     await db.insert(schema.timesheetEntries).values({
-      userId: supervisor.id, clinId: clin.id, entryDate: new Date(), hours: '4', revisionNumber: 1, createdBy: supervisor.id,
+      userId: supervisor.id, clinId: clin.id, entryDate: todayFixture(), hours: '4', revisionNumber: 1, createdBy: supervisor.id,
     });
 
     actingAs(asFake(supervisor));

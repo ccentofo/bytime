@@ -3,12 +3,32 @@ import { getDbForUrl } from '@/db';
 import { controlDb } from '@/db/control-plane';
 import { tenants } from '@/db/control-plane/schema';
 import { decrypt } from '@/lib/encryption';
-import { users, timesheetPeriods, notificationPreferences } from '@/db/schema';
-import { eq, and } from 'drizzle-orm';
-import dayjs from 'dayjs';
+import { users, timesheetPeriods, notificationPreferences, workspaceSettings, payPeriodConfig } from '@/db/schema';
+import { eq, and, lte, desc } from 'drizzle-orm';
 import { sendSubmissionDeadlineEmail } from '@/lib/email/send';
-import { getCurrentPeriodStart, getNumDaysInPeriod } from '@/lib/date-utils';
+import { DEFAULT_PERIOD_CONFIG, getCurrentPeriodStart, getLastWeekdayInPeriod, getNumDaysInPeriod, type PeriodConfig, type PeriodType } from '@/lib/date-utils';
 import { checkCronRateLimit } from '@/lib/rate-limit';
+import { addDays, diffDays, formatCalendarDate, isValidTimeZone, todayIn, type CalendarDate } from '@/lib/calendar-date';
+
+const FALLBACK_TIMEZONE = 'America/New_York';
+
+/** Lightweight per-tenant-db equivalent of getEffectiveConfigAt — the real one requires a user
+ * session, which a cron iterating every tenant's own db connection doesn't have. */
+async function getEffectiveConfigAtForDb(db: ReturnType<typeof getDbForUrl>, date: CalendarDate): Promise<PeriodConfig> {
+  const rows = await db
+    .select()
+    .from(payPeriodConfig)
+    .where(lte(payPeriodConfig.effectiveFrom, date))
+    .orderBy(desc(payPeriodConfig.effectiveFrom), desc(payPeriodConfig.createdAt))
+    .limit(1);
+  if (rows.length === 0) return DEFAULT_PERIOD_CONFIG;
+  const row = rows[0];
+  return {
+    periodType: row.periodType as PeriodType,
+    anchorDate: row.anchorDate as CalendarDate,
+    weekStartDay: row.weekStartDay,
+  };
+}
 
 /**
  * Cron endpoint: Send submission deadline reminders.
@@ -33,20 +53,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const today = dayjs().startOf('day');
-  const periodStart = getCurrentPeriodStart();
-  const numDays = getNumDaysInPeriod(periodStart);
-  const periodEnd = dayjs(periodStart).add(numDays - 1, 'day');
-  const daysUntilEnd = periodEnd.diff(today, 'day');
-
-  // Only send reminders 2 days before and on the last day
-  if (daysUntilEnd !== 2 && daysUntilEnd !== 0) {
-    return NextResponse.json({ message: 'Not a reminder day', sent: 0 });
-  }
-
-  const periodLabel = `${dayjs(periodStart).format('MMM D')} – ${periodEnd.format('MMM D, YYYY')}`;
-  const deadlineDate = periodEnd.format('dddd, MMM D, YYYY');
-
   // Load all active tenants from the control plane
   const activeTenants = await controlDb.select().from(tenants).where(eq(tenants.status, 'active'));
 
@@ -54,6 +60,26 @@ export async function GET(request: NextRequest) {
 
   for (const tenant of activeTenants) {
     const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted));
+
+    // D7: "today", the effective pay-period config, and the actual deadline (the last WEEKDAY
+    // of the period — the same rule submitPeriod enforces, not just the period's calendar end,
+    // which can land on a weekend) are all resolved per-tenant, never from a global clock or a
+    // single hard-coded schedule shared by every tenant.
+    const [settingsRow] = await db.select({ timezone: workspaceSettings.timezone }).from(workspaceSettings).limit(1);
+    const timezone = settingsRow?.timezone && isValidTimeZone(settingsRow.timezone) ? settingsRow.timezone : FALLBACK_TIMEZONE;
+    const today = todayIn(timezone);
+    const periodConfig = await getEffectiveConfigAtForDb(db, today);
+    const periodStart = getCurrentPeriodStart(today, periodConfig);
+    const numDays = getNumDaysInPeriod(periodStart, periodConfig);
+    const periodEnd = addDays(periodStart, numDays - 1);
+    const lastWeekday = getLastWeekdayInPeriod(periodStart, periodConfig);
+    const daysUntilDeadline = diffDays(today, lastWeekday);
+
+    // Only send reminders 2 days before and on the deadline itself
+    if (daysUntilDeadline !== 2 && daysUntilDeadline !== 0) continue;
+
+    const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(periodEnd, 'MMM D, YYYY')}`;
+    const deadlineDate = formatCalendarDate(lastWeekday, 'dddd, MMM D, YYYY');
 
     const allEmployees = await db
       .select({ id: users.id, fullName: users.fullName, email: users.email })

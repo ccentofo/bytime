@@ -1,6 +1,6 @@
-import { offlineDb, type OfflineTimesheetEntry, type OfflineChargeCode, type OfflinePeriodMeta } from './db';
+import { offlineDb, type OfflineTimesheetEntry } from './db';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
-import dayjs from 'dayjs';
+import { addDays, diffDays, type CalendarDate } from '@/lib/calendar-date';
 
 // ---------------------------------------------------------------------------
 // Seed / Hydrate from Server Data
@@ -13,13 +13,13 @@ import dayjs from 'dayjs';
  */
 export async function seedOfflineStore(data: {
   userId: string;
-  periodStart: Date;
+  periodStart: CalendarDate;
   chargeCodes: ChargeCode[];
   entries: TimesheetEntry[];
   revisions: Record<string, number>;
   periodStatus: string;
 }) {
-  const periodStartKey = dayjs(data.periodStart).format('YYYY-MM-DD');
+  const periodStartKey = data.periodStart;
 
   // Upsert charge codes
   await offlineDb.chargeCodes.bulkPut(
@@ -45,7 +45,7 @@ export async function seedOfflineStore(data: {
   // Upsert entries (only if not pending local changes)
   for (const entry of data.entries) {
     for (let dayIndex = 0; dayIndex < entry.hours.length; dayIndex++) {
-      const entryDate = dayjs(data.periodStart).add(dayIndex, 'day').format('YYYY-MM-DD');
+      const entryDate = addDays(data.periodStart, dayIndex);
       const revisionKey = `${entry.chargeCodeId}-${dayIndex}`;
       const serverRevision = data.revisions[revisionKey] ?? 0;
 
@@ -82,10 +82,10 @@ export async function seedOfflineStore(data: {
  * Returns data shaped as TimesheetEntry[] to match the existing context interface.
  */
 export async function getOfflineEntries(
-  periodStart: Date,
+  periodStart: CalendarDate,
   chargeCodes: ChargeCode[]
 ): Promise<TimesheetEntry[]> {
-  const periodStartKey = dayjs(periodStart).format('YYYY-MM-DD');
+  const periodStartKey = periodStart;
 
   const allEntries = await offlineDb.entries
     .where('periodStartKey')
@@ -108,7 +108,7 @@ export async function getOfflineEntries(
     const hours: number[] = [];
 
     for (let i = 0; i < numDays; i++) {
-      const dateKey = dayjs(periodStart).add(i, 'day').format('YYYY-MM-DD');
+      const dateKey = addDays(periodStart, i);
       const entry = clinEntries?.get(dateKey);
       hours.push(entry?.hours ?? 0);
     }
@@ -121,9 +121,9 @@ export async function getOfflineEntries(
  * Get revision map from offline store.
  */
 export async function getOfflineRevisions(
-  periodStart: Date
+  periodStart: CalendarDate
 ): Promise<Record<string, number>> {
-  const periodStartKey = dayjs(periodStart).format('YYYY-MM-DD');
+  const periodStartKey = periodStart;
 
   const allEntries = await offlineDb.entries
     .where('periodStartKey')
@@ -132,7 +132,7 @@ export async function getOfflineRevisions(
 
   const revisions: Record<string, number> = {};
   for (const entry of allEntries) {
-    const dayIndex = dayjs(entry.entryDate).diff(dayjs(periodStart), 'day');
+    const dayIndex = diffDays(periodStart, entry.entryDate as CalendarDate);
     const key = `${entry.clinId}-${dayIndex}`;
     revisions[key] = entry.serverRevision;
   }
@@ -168,14 +168,14 @@ export async function saveOfflineEntry(data: {
   indirectCodeId?: string;
   dayIndex: number;
   hours: number;
-  periodStart: Date;
+  periodStart: CalendarDate;
   changeReasonCode?: string;
   comment?: string;
   isEdit: boolean;
   isLateEntry: boolean;
 }) {
-  const entryDate = dayjs(data.periodStart).add(data.dayIndex, 'day').format('YYYY-MM-DD');
-  const periodStartKey = dayjs(data.periodStart).format('YYYY-MM-DD');
+  const entryDate = addDays(data.periodStart, data.dayIndex);
+  const periodStartKey = data.periodStart;
   const entryKey = data.clinId ?? data.indirectCodeId ?? '';
 
   // Update or create the local entry
@@ -230,8 +230,8 @@ export async function getPendingCount(): Promise<number> {
 /**
  * Check if offline store has data for a given period.
  */
-export async function hasOfflineData(periodStart: Date): Promise<boolean> {
-  const periodStartKey = dayjs(periodStart).format('YYYY-MM-DD');
+export async function hasOfflineData(periodStart: CalendarDate): Promise<boolean> {
+  const periodStartKey = periodStart;
   const meta = await offlineDb.periodMeta.get(periodStartKey);
   return meta !== undefined;
 }
@@ -240,8 +240,11 @@ export async function hasOfflineData(periodStart: Date): Promise<boolean> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function getNumDaysForPeriod(periodStart: Date): number {
-  const d = dayjs(periodStart);
-  if (d.date() === 1) return 15;
-  return d.daysInMonth() - 15;
+// TODO(D4/dormant): hard-coded semimonthly (1st/16th) assumption (§0.6) — the offline store is
+// dormant until reactivated against getPeriodOptions for the period's real shape.
+function getNumDaysForPeriod(periodStart: CalendarDate): number {
+  const dom = Number(periodStart.slice(8, 10));
+  if (dom === 1) return 15;
+  const daysInMonth = new Date(Date.UTC(Number(periodStart.slice(0, 4)), Number(periodStart.slice(5, 7)), 0)).getUTCDate();
+  return daysInMonth - 15;
 }

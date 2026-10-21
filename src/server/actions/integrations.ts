@@ -11,6 +11,7 @@ import { eq, desc, and } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { decrypt } from '@/lib/encryption';
 import { getAllConnectorMetadata } from '@/lib/integrations/registry';
+import type { CalendarDate } from '@/lib/calendar-date';
 
 // ---------------------------------------------------------------------------
 // Connection Management
@@ -130,15 +131,21 @@ export async function deleteMapping(mappingId: string) {
 // Sync Logs
 // ---------------------------------------------------------------------------
 
-export async function getSyncLogs(connectionId: string, limit = 20) {
+export type SyncLog = Omit<typeof integrationSyncLogs.$inferSelect, 'periodStart' | 'periodEnd'> & {
+  periodStart: CalendarDate | null;
+  periodEnd: CalendarDate | null;
+};
+
+export async function getSyncLogs(connectionId: string, limit = 20): Promise<SyncLog[]> {
   const db = await getDb();
   await requireAdmin();
-  return db
+  const rows = await db
     .select()
     .from(integrationSyncLogs)
     .where(eq(integrationSyncLogs.connectionId, connectionId))
     .orderBy(desc(integrationSyncLogs.createdAt))
     .limit(limit);
+  return rows as SyncLog[];
 }
 
 export async function getSyncRecords(syncLogId: string) {

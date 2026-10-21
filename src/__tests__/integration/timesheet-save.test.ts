@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { getTestDb, createTestUser, createTestContract, createTestClin, assignUserToClin, cleanupTestData, createTestIndirectCode } from './helpers';
 import * as schema from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
-import dayjs from 'dayjs';
 
 describe('Timesheet Save — DCAA Append-Only', () => {
   let user: any;
@@ -22,7 +21,7 @@ describe('Timesheet Save — DCAA Append-Only', () => {
 
   it('creates a new entry with revision 1 on first save', async () => {
     const db = getTestDb();
-    const entryDate = dayjs('2026-05-20').toDate();
+    const entryDate = '2026-05-20';
 
     await db.insert(schema.timesheetEntries).values({
       userId: user.id,
@@ -46,7 +45,7 @@ describe('Timesheet Save — DCAA Append-Only', () => {
 
   it('preserves old revision when saving a correction (append-only)', async () => {
     const db = getTestDb();
-    const entryDate = dayjs('2026-05-20').toDate();
+    const entryDate = '2026-05-20';
 
     // First save
     await db.insert(schema.timesheetEntries).values({
@@ -93,7 +92,7 @@ describe('Timesheet Save — DCAA Append-Only', () => {
     await db.insert(schema.timesheetEntries).values({
       userId: user.id,
       clinId: clin.id,
-      entryDate: dayjs('2026-05-20').toDate(),
+      entryDate: '2026-05-20',
       hours: '8',
       revisionNumber: 1,
       createdBy: user.id,
@@ -114,7 +113,7 @@ describe('Timesheet Save — DCAA Append-Only', () => {
       userId: user.id,
       clinId: null,
       indirectCodeId: indirectCode.id,
-      entryDate: dayjs('2026-05-20').toDate(),
+      entryDate: '2026-05-20',
       hours: '2',
       revisionNumber: 1,
       createdBy: user.id,

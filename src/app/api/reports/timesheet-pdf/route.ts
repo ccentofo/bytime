@@ -5,7 +5,8 @@ import { TimesheetPdfDocument } from '@/lib/reports/timesheet-pdf';
 import { checkReportRateLimit } from '@/lib/rate-limit';
 import { guardErrorResponse } from '@/lib/http-errors';
 import React from 'react';
-import dayjs from 'dayjs';
+import { isCalendarDate } from '@/lib/calendar-date';
+import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 
 export async function GET(request: NextRequest) {
   const rateLimited = checkReportRateLimit(request);
@@ -15,15 +16,17 @@ export async function GET(request: NextRequest) {
   const userId = searchParams.get('userId');
   const periodStart = searchParams.get('periodStart');
 
-  if (!userId || !periodStart) {
-    return NextResponse.json({ error: 'Missing userId or periodStart' }, { status: 400 });
+  if (!userId || !periodStart || !isCalendarDate(periodStart)) {
+    return NextResponse.json({ error: 'Missing or invalid userId/periodStart (expected YYYY-MM-DD)' }, { status: 400 });
   }
 
   let data;
+  let workspaceTimezone: string;
   try {
-    // Parse with dayjs to avoid timezone offset: new Date('2026-05-16') parses as UTC midnight,
-    // which shifts to May 15 in US timezones. dayjs().startOf('day') ensures local midnight.
-    data = await getTimesheetReportData(userId, dayjs(periodStart).startOf('day').toDate());
+    [data, workspaceTimezone] = await Promise.all([
+      getTimesheetReportData(userId, periodStart),
+      getWorkspaceTimezone(),
+    ]);
   } catch (error) {
     return guardErrorResponse(error);
   }
@@ -31,7 +34,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'No data found' }, { status: 404 });
   }
 
-  const element = React.createElement(TimesheetPdfDocument, { data }) as any;
+  const element = React.createElement(TimesheetPdfDocument, { data, workspaceTimezone }) as any;
   const pdfBuffer = await renderToBuffer(element);
 
   return new NextResponse(new Uint8Array(pdfBuffer), {

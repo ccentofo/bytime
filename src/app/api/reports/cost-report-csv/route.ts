@@ -3,6 +3,7 @@ import { getDetailedCostReport } from '@/server/actions/reports';
 import { generateCsv } from '@/lib/reports/csv-generator';
 import { checkReportRateLimit } from '@/lib/rate-limit';
 import { guardErrorResponse } from '@/lib/http-errors';
+import { isCalendarDate } from '@/lib/calendar-date';
 
 export async function GET(request: NextRequest) {
   const rateLimited = checkReportRateLimit(request);
@@ -13,16 +14,16 @@ export async function GET(request: NextRequest) {
   const endDate = searchParams.get('endDate');
   const contractId = searchParams.get('contractId');
 
-  if (!startDate || !endDate) {
-    return NextResponse.json({ error: 'Missing startDate or endDate' }, { status: 400 });
+  if (!startDate || !endDate || !isCalendarDate(startDate) || !isCalendarDate(endDate)) {
+    return NextResponse.json({ error: 'Missing or invalid startDate/endDate (expected YYYY-MM-DD)' }, { status: 400 });
   }
 
   let data;
   try {
     // Dollar data — admin-only. getDetailedCostReport enforces this via requireAdmin().
     data = await getDetailedCostReport(
-      new Date(startDate),
-      new Date(endDate),
+      startDate,
+      endDate,
       contractId ?? undefined
     );
   } catch (error) {

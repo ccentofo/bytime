@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Modal, Select, Textarea, Button, Group, Stack, Text, Table, Badge } from '@mantine/core';
-import dayjs from 'dayjs';
+import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { REASON_CODES } from '@/lib/reason-codes';
 import type { DirtyCell, ChargeCode } from '@/types/timesheet';
 
@@ -13,7 +13,7 @@ type Props = {
   editedCells: DirtyCell[];
   lateEntryCells: DirtyCell[];
   chargeCodes: ChargeCode[];
-  periodStart: Date;
+  periodStart: CalendarDate;
   isSaving: boolean;
 };
 
@@ -93,11 +93,11 @@ export function ReasonModal({
             <Table.Tbody>
               {cells.map((cell, idx) => {
                 const cc = chargeCodes.find((c) => c.id === cell.chargeCodeId);
-                const date = dayjs(periodStart).add(cell.dayIndex, 'day');
+                const date = addDays(periodStart, cell.dayIndex);
                 return (
                   <Table.Tr key={idx}>
                     <Table.Td>{cc?.clin ?? cell.chargeCodeId} — {cc?.projectName ?? ''}</Table.Td>
-                    <Table.Td>{date.format('MMM D, YYYY')}</Table.Td>
+                    <Table.Td>{formatCalendarDate(date, 'MMM D, YYYY')}</Table.Td>
                     <Table.Td>
                       <Badge color={badgeColor} variant="light">{cell.hours.toFixed(2)}</Badge>
                     </Table.Td>

@@ -24,10 +24,11 @@ import {
   assignAllUnderClin,
   getChargeCodeAssignments,
 } from '@/server/actions/charge-codes';
-import { formatDate } from '@/lib/format';
+import { formatDateTime } from '@/lib/format';
 import { RECORD_STATUS_COLOR, WORK_LOCATION_COLOR } from '@/lib/ui/status-colors';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
+import type { CalendarDate } from '@/lib/calendar-date';
 
 type User = {
   id: string;
@@ -45,8 +46,8 @@ type Contract = {
   name: string;
   description: string | null;
   status: 'active' | 'inactive' | 'closed';
-  startDate: Date | null;
-  endDate: Date | null;
+  startDate: CalendarDate | null;
+  endDate: CalendarDate | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -117,9 +118,10 @@ type Props = {
   contracts: Contract[];
   chargeCodes: ChargeCode[];
   initialChargeCodeAssignments: ChargeCodeAssignment[];
+  workspaceTimezone: string;
 };
 
-export function AssignmentsClient({ initialAssignments, users, contracts, chargeCodes, initialChargeCodeAssignments }: Props) {
+export function AssignmentsClient({ initialAssignments, users, contracts, chargeCodes, initialChargeCodeAssignments, workspaceTimezone }: Props) {
   const [isPending, startTransition] = useTransition();
   const [assignments, setAssignments] = useState<Assignment[]>(initialAssignments);
 
@@ -342,7 +344,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
     {
       accessorKey: 'assignedAt',
       header: 'Assigned Date',
-      Cell: ({ cell }) => formatDate(cell.getValue<Date>()),
+      Cell: ({ cell }) => formatDateTime(cell.getValue<Date>(), workspaceTimezone),
       size: 140,
     },
   ];

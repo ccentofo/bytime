@@ -31,6 +31,7 @@ import { getSlinsByClin, createSlin, updateSlin } from '@/server/actions/slins';
 import { formatDate } from '@/lib/format';
 import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 
 type Contract = {
   id: string;
@@ -39,8 +40,8 @@ type Contract = {
   description: string | null;
   contractType: string;
   status: 'active' | 'inactive' | 'closed';
-  startDate: Date | null;
-  endDate: Date | null;
+  startDate: CalendarDate | null;
+  endDate: CalendarDate | null;
   fundedValue: string | null;
   ceilingValue: string | null;
   createdAt: Date;
@@ -128,8 +129,8 @@ export function ContractsClient({ initialContracts }: Props) {
       name: contract.name,
       description: contract.description ?? '',
       contractType: contract.contractType ?? 'prime',
-      startDate: contract.startDate ? contract.startDate.toISOString().split('T')[0] : null,
-      endDate: contract.endDate ? contract.endDate.toISOString().split('T')[0] : null,
+      startDate: contract.startDate ?? null,
+      endDate: contract.endDate ?? null,
       fundedValue: contract.fundedValue ?? '',
       ceilingValue: contract.ceilingValue ?? '',
     });
@@ -154,8 +155,8 @@ export function ContractsClient({ initialContracts }: Props) {
         name: contractForm.name,
         description: contractForm.description || undefined,
         contractType: contractForm.contractType || 'prime',
-        startDate: contractForm.startDate ? new Date(contractForm.startDate) : undefined,
-        endDate: contractForm.endDate ? new Date(contractForm.endDate) : undefined,
+        startDate: contractForm.startDate && isCalendarDate(contractForm.startDate) ? contractForm.startDate : undefined,
+        endDate: contractForm.endDate && isCalendarDate(contractForm.endDate) ? contractForm.endDate : undefined,
         fundedValue: contractForm.fundedValue || undefined,
         ceilingValue: contractForm.ceilingValue || undefined,
       };
@@ -286,13 +287,13 @@ export function ContractsClient({ initialContracts }: Props) {
     {
       accessorKey: 'startDate',
       header: 'Start Date',
-      Cell: ({ cell }) => formatDate(cell.getValue<Date | null>()),
+      Cell: ({ cell }) => formatDate(cell.getValue<CalendarDate | null>()),
       size: 120,
     },
     {
       accessorKey: 'endDate',
       header: 'End Date',
-      Cell: ({ cell }) => formatDate(cell.getValue<Date | null>()),
+      Cell: ({ cell }) => formatDate(cell.getValue<CalendarDate | null>()),
       size: 120,
     },
   ];

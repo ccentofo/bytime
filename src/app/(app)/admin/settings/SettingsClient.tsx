@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import {
   Container,
   Title,
@@ -17,15 +17,22 @@ import {
 import { DatePickerInput } from '@mantine/dates';
 import { IconAlertCircle, IconCheck, IconClock } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
-import { updatePayPeriodConfig, type ConfigHistoryRow, type UpdatePayPeriodConfigResult } from '@/server/actions/pay-period-config';
+import { updatePayPeriodConfig, getValidScheduleChangeDates, type ConfigHistoryRow, type UpdatePayPeriodConfigResult } from '@/server/actions/pay-period-config';
+import { updateWorkspaceTimezone } from '@/server/actions/workspace-settings';
 import type { PeriodConfig, PeriodType } from '@/lib/date-utils';
 import { formatDate } from '@/lib/format';
+import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { PageHeader } from '@/components/ui/PageHeader';
 
 interface Props {
   initialConfig: PeriodConfig;
   pendingChange: ConfigHistoryRow | null;
+  initialTimezone: string;
 }
+
+const TIMEZONE_OPTIONS = typeof Intl.supportedValuesOf === 'function'
+  ? Intl.supportedValuesOf('timeZone').map((tz) => ({ value: tz, label: tz }))
+  : [];
 
 const PERIOD_TYPE_OPTIONS = [
   { value: 'weekly', label: 'Weekly (7 days, Mon–Sun)' },
@@ -46,18 +53,74 @@ const PERIOD_TYPE_LABELS: Record<string, string> = {
   monthly: 'Monthly',
 };
 
-export function SettingsClient({ initialConfig, pendingChange }: Props) {
+export function SettingsClient({ initialConfig, pendingChange, initialTimezone }: Props) {
   const [periodType, setPeriodType] = useState<PeriodType>(initialConfig.periodType);
-  const [anchorDate, setAnchorDate] = useState<Date | null>(initialConfig.anchorDate);
+  const [anchorDate, setAnchorDate] = useState<CalendarDate | null>(initialConfig.anchorDate);
   const [weekStartDay, setWeekStartDay] = useState<string>(String(initialConfig.weekStartDay));
   const [isPending, startTransition] = useTransition();
-  const [scheduledEffectiveFrom, setScheduledEffectiveFrom] = useState<Date | null>(
+  const [scheduledEffectiveFrom, setScheduledEffectiveFrom] = useState<CalendarDate | null>(
     pendingChange ? pendingChange.effectiveFrom : null
   );
+
+  // §0.9: effective_from must be a boundary common to both the current and the new schedule —
+  // the server computes and offers the valid choices; the client never picks one out of thin air.
+  const [effectiveFromOptions, setEffectiveFromOptions] = useState<CalendarDate[]>([]);
+  const [selectedEffectiveFrom, setSelectedEffectiveFrom] = useState<CalendarDate | null>(null);
+  const [loadingOptions, setLoadingOptions] = useState(false);
+
+  useEffect(() => {
+    if (!anchorDate) {
+      setEffectiveFromOptions([]);
+      setSelectedEffectiveFrom(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingOptions(true);
+    setSelectedEffectiveFrom(null);
+    getValidScheduleChangeDates({ periodType, anchorDate, weekStartDay: parseInt(weekStartDay, 10) })
+      .then((dates) => {
+        if (cancelled) return;
+        setEffectiveFromOptions(dates);
+        setSelectedEffectiveFrom(dates[0] ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setEffectiveFromOptions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingOptions(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [periodType, anchorDate, weekStartDay]);
+
+  const [timezone, setTimezone] = useState<string | null>(initialTimezone);
+  const [isTimezonePending, startTimezoneTransition] = useTransition();
+
+  function handleSaveTimezone() {
+    if (!timezone) return;
+    startTimezoneTransition(async () => {
+      try {
+        await updateWorkspaceTimezone(timezone);
+        notifications.show({
+          title: 'Workspace timezone updated',
+          message: `"Today" and every late/future-date rule now use ${timezone}.`,
+          color: 'success',
+          icon: <IconCheck size={16} />,
+        });
+      } catch (error) {
+        notifications.show({ title: 'Save failed', message: String(error), color: 'red' });
+      }
+    });
+  }
 
   async function handleSave() {
     if (!anchorDate) {
       notifications.show({ title: 'Anchor date required', message: 'Please select an anchor date.', color: 'warning' });
+      return;
+    }
+    if (!selectedEffectiveFrom) {
+      notifications.show({ title: 'Effective date required', message: 'Select when the new schedule takes effect.', color: 'warning' });
       return;
     }
 
@@ -67,6 +130,7 @@ export function SettingsClient({ initialConfig, pendingChange }: Props) {
           periodType,
           anchorDate,
           weekStartDay: parseInt(weekStartDay, 10),
+          effectiveFrom: selectedEffectiveFrom,
         });
         setScheduledEffectiveFrom(result.effectiveFrom);
         notifications.show({
@@ -92,6 +156,28 @@ export function SettingsClient({ initialConfig, pendingChange }: Props) {
       />
 
       <Paper withBorder p="lg" radius="md" mb="xl">
+        <Title order={4} mb="md">Workspace Timezone</Title>
+        <Text size="sm" c="dimmed" mb="sm">
+          Used to determine "today" for late-entry and future-date rules, pay-period boundaries,
+          and timestamps on timesheets, emails, and the audit trail. Changing it affects every
+          employee immediately.
+        </Text>
+        <Group align="flex-end">
+          <Select
+            data={TIMEZONE_OPTIONS}
+            value={timezone}
+            onChange={setTimezone}
+            searchable
+            allowDeselect={false}
+            w={320}
+          />
+          <Button onClick={handleSaveTimezone} loading={isTimezonePending} disabled={timezone === initialTimezone}>
+            Save Timezone
+          </Button>
+        </Group>
+      </Paper>
+
+      <Paper withBorder p="lg" radius="md" mb="xl">
         <Title order={4} mb="md">Pay Period Configuration</Title>
 
         {/* Pending change banner */}
@@ -110,8 +196,9 @@ export function SettingsClient({ initialConfig, pendingChange }: Props) {
 
         <Alert icon={<IconAlertCircle size={16} />} color="warning" variant="light" mb="lg">
           <Text size="sm">
-            <strong>Future-effective only.</strong> Changes apply starting at the next period boundary —
-            the current period and all historical data are preserved. You cannot set a retroactive schedule.
+            <strong>Future-effective only.</strong> Changes apply starting at a future date that's a
+            period boundary under both your current and new schedule — the current period and all
+            historical data are preserved. You cannot set a retroactive schedule.
           </Text>
         </Alert>
 
@@ -140,7 +227,7 @@ export function SettingsClient({ initialConfig, pendingChange }: Props) {
               </Text>
               <DatePickerInput
                 value={anchorDate}
-                onChange={(val) => setAnchorDate(val ? new Date(val) : null)}
+                onChange={(val) => setAnchorDate(val && isCalendarDate(val) ? val : null)}
                 placeholder="Select anchor date..."
                 w={240}
               />
@@ -160,15 +247,33 @@ export function SettingsClient({ initialConfig, pendingChange }: Props) {
             </div>
           )}
 
+          <div>
+            <Text fw={600} size="sm" mb="xs">Effective From</Text>
+            <Text size="xs" c="dimmed" mb="sm">
+              Only dates that are a period boundary under both your current schedule and this new
+              one are offered — this is what keeps every day in exactly one period across the
+              change.
+            </Text>
+            <Select
+              data={effectiveFromOptions.map((d) => ({ value: d, label: formatDate(d) }))}
+              value={selectedEffectiveFrom}
+              onChange={(val) => setSelectedEffectiveFrom(val as CalendarDate | null)}
+              placeholder={loadingOptions ? 'Finding valid dates…' : effectiveFromOptions.length === 0 ? 'No valid date found — try a different anchor' : 'Select effective date...'}
+              disabled={loadingOptions || effectiveFromOptions.length === 0}
+              w={260}
+              allowDeselect={false}
+            />
+          </div>
+
           <Group>
-            <Button onClick={handleSave} loading={isPending}>
+            <Button onClick={handleSave} loading={isPending} disabled={!selectedEffectiveFrom}>
               Save Schedule Change
             </Button>
           </Group>
 
           <Text size="xs" c="dimmed">
-            The change will take effect at the start of the next pay period. You can update this
-            setting again before it takes effect — your most recent save replaces any pending change.
+            You can update this setting again before it takes effect — your most recent save
+            replaces any pending change.
           </Text>
         </Stack>
       </Paper>

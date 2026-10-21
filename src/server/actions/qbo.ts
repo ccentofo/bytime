@@ -9,6 +9,7 @@ import { ensureValidToken, fetchQBOEmployees, fetchQBOCustomers, fetchQBOService
 import { getMappings } from '@/server/actions/integrations';
 import { executeSyncOperation } from '@/lib/integrations/sync-engine';
 import { createCostClass, createChargeCode } from '@/server/actions/charge-codes';
+import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 
 /**
  * Fetch QBO employees for the mapping UI.
@@ -137,15 +138,15 @@ export async function fetchQBOVendorsForMapping(connectionId: string) {
  */
 export async function triggerQBOSync(data: {
   connectionId: string;
-  periodStart: Date;
-  periodEnd: Date;
+  periodStart: CalendarDate;
+  periodEnd: CalendarDate;
 }) {
   const actor = await requireAdmin();
   return executeSyncOperation(
     data.connectionId,
     'timesheet_push',
-    data.periodStart,
-    data.periodEnd,
+    parseCalendarDate(data.periodStart),
+    parseCalendarDate(data.periodEnd),
     actor.id,
     'manual'
   );

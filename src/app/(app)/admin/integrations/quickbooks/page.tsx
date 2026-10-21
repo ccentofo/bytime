@@ -6,6 +6,7 @@ import {
   getBytimeContractsForMapping,
   getBytimeClinsForMapping,
 } from '@/server/actions/qbo';
+import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { QBOConfigClient } from './QBOConfigClient';
 
 export const dynamic = 'force-dynamic';
@@ -38,12 +39,13 @@ export default async function QBOConfigPage({
   }
 
   // Fetch data in parallel
-  const [mappings, syncLogs, bytimeEmployees, bytimeContracts, bytimeClins] = await Promise.all([
+  const [mappings, syncLogs, bytimeEmployees, bytimeContracts, bytimeClins, workspaceTimezone] = await Promise.all([
     getMappings(activeConnectionId),
     getSyncLogs(activeConnectionId),
     getBytimeEmployeesForMapping(),
     getBytimeContractsForMapping(),
     getBytimeClinsForMapping(),
+    getWorkspaceTimezone(),
   ]);
 
   return (
@@ -54,6 +56,7 @@ export default async function QBOConfigPage({
       bytimeEmployees={bytimeEmployees}
       bytimeContracts={bytimeContracts}
       bytimeClins={bytimeClins}
+      workspaceTimezone={workspaceTimezone}
     />
   );
 }

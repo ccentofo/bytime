@@ -3,8 +3,8 @@
 import { getDb } from '@/db';
 import { timesheetEntries, users, clins, contracts, slins, userAssignments } from '@/db/schema';
 import { eq, and, gte, lt, desc, sql, inArray } from 'drizzle-orm';
-import dayjs from 'dayjs';
 import { requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
+import { addDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -21,7 +21,7 @@ export interface AuditEntry {
   contractName: string;
   contractNumber: string;
   slinNumber: string | null;
-  entryDate: Date;
+  entryDate: CalendarDate;
   hours: string;
   revisionNumber: number;
   changeReasonCode: string | null;
@@ -35,8 +35,8 @@ export interface AuditFilters {
   userId?: string;
   contractId?: string;
   clinId?: string;
-  startDate?: Date;
-  endDate?: Date;
+  startDate?: CalendarDate;
+  endDate?: CalendarDate;
   reasonCode?: string;
   revisionsOnly?: boolean; // if true, only show entries where revision_number > 1
 }
@@ -49,7 +49,7 @@ export interface CellRevisionHistory {
   contractName: string;
   indirectCodeId?: string | null;
   indirectCode?: string | null;
-  entryDate: Date;
+  entryDate: CalendarDate;
   revisions: Array<{
     id: string;
     hours: string;
@@ -90,11 +90,11 @@ export async function getAuditEntries(filters: AuditFilters): Promise<AuditEntry
     conditions.push(eq(timesheetEntries.clinId, filters.clinId));
   }
   if (filters.startDate) {
-    conditions.push(gte(timesheetEntries.entryDate, filters.startDate));
+    conditions.push(gte(timesheetEntries.entryDate, parseCalendarDate(filters.startDate)));
   }
   if (filters.endDate) {
     // endDate is inclusive, so add 1 day for lt comparison
-    conditions.push(lt(timesheetEntries.entryDate, dayjs(filters.endDate).add(1, 'day').toDate()));
+    conditions.push(lt(timesheetEntries.entryDate, addDays(parseCalendarDate(filters.endDate), 1)));
   }
   if (filters.reasonCode) {
     conditions.push(eq(timesheetEntries.changeReasonCode, filters.reasonCode));
@@ -136,7 +136,7 @@ export async function getAuditEntries(filters: AuditFilters): Promise<AuditEntry
     .orderBy(desc(timesheetEntries.createdAt))
     .limit(500);
 
-  return rows;
+  return rows as AuditEntry[];
 }
 
 /**
@@ -146,15 +146,14 @@ export async function getAuditEntries(filters: AuditFilters): Promise<AuditEntry
 export async function getCellRevisionHistory(
   userId: string,
   clinId: string | null,
-  entryDate: Date,
+  entryDate: CalendarDate,
   indirectCodeId?: string | null
 ): Promise<CellRevisionHistory | null> {
   const actor = await requireApprover();
   await assertCanAccessEmployee(actor, userId);
 
   const db = await getDb();
-  const entryStart = dayjs(entryDate).startOf('day').toDate();
-  const entryEnd = dayjs(entryDate).add(1, 'day').startOf('day').toDate();
+  const day = parseCalendarDate(entryDate);
 
   const rows = await db
     .select({
@@ -173,8 +172,7 @@ export async function getCellRevisionHistory(
         clinId
           ? eq(timesheetEntries.clinId, clinId)
           : eq(timesheetEntries.indirectCodeId, indirectCodeId!),
-        gte(timesheetEntries.entryDate, entryStart),
-        lt(timesheetEntries.entryDate, entryEnd),
+        eq(timesheetEntries.entryDate, day),
       )
     )
     .orderBy(timesheetEntries.revisionNumber);
@@ -236,7 +234,7 @@ export async function getCellRevisionHistory(
     contractName,
     indirectCodeId: indirectCodeId ?? null,
     indirectCode,
-    entryDate: entryStart,
+    entryDate: day,
     revisions: rows,
   };
 }

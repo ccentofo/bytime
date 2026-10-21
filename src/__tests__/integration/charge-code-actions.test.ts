@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import dayjs from 'dayjs';
 import { eq, and } from 'drizzle-orm';
 import * as schema from '@/db/schema';
-import { getPeriodStartForDate } from '@/lib/date-utils';
+import { getPeriodStartForDate, DEFAULT_PERIOD_CONFIG } from '@/lib/date-utils';
+import { diffDays, todayIn, type CalendarDate } from '@/lib/calendar-date';
 import {
   getTestDb,
   createTestUser,
@@ -92,7 +92,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
   let contract: Awaited<ReturnType<typeof createTestContract>>;
   let clin: Awaited<ReturnType<typeof createTestClin>>;
   let chargeCode: Awaited<ReturnType<typeof createTestChargeCode>>;
-  let periodStart: Date;
+  let periodStart: CalendarDate;
   let todayIndex: number;
 
   beforeEach(async () => {
@@ -106,8 +106,10 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
     actingAs(admin);
 
-    periodStart = getPeriodStartForDate(new Date());
-    todayIndex = dayjs().startOf('day').diff(dayjs(periodStart), 'day');
+    // workspace_settings seeds 'America/New_York' by default (migration 0011); this suite never
+    // changes it, so fixtures compute "today" the same way the real actions do.
+    periodStart = getPeriodStartForDate(todayIn('America/New_York'), DEFAULT_PERIOD_CONFIG);
+    todayIndex = diffDays(periodStart, todayIn('America/New_York'));
   });
 
   afterEach(async () => {

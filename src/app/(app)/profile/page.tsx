@@ -2,6 +2,7 @@ import { auth } from '@/auth';
 import { redirect } from 'next/navigation';
 import { getPasswordInfo } from '@/server/actions/password';
 import { getMFAStatus } from '@/server/actions/mfa';
+import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { ProfileClient } from './ProfileClient';
 
 export const dynamic = 'force-dynamic';
@@ -14,9 +15,10 @@ export default async function ProfilePage() {
   const email = session.user.email ?? '';
   const role = (session.user as any).role ?? 'employee';
 
-  const [passwordInfo, mfaStatus] = await Promise.all([
+  const [passwordInfo, mfaStatus, workspaceTimezone] = await Promise.all([
     getPasswordInfo(),
     getMFAStatus(),
+    getWorkspaceTimezone(),
   ]);
 
   return (
@@ -26,6 +28,7 @@ export default async function ProfilePage() {
       role={role}
       passwordInfo={passwordInfo}
       mfaStatus={mfaStatus}
+      workspaceTimezone={workspaceTimezone}
     />
   );
 }

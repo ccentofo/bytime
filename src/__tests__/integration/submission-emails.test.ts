@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as schema from '@/db/schema';
+import type { CalendarDate } from '@/lib/calendar-date';
 import {
   getTestDb,
   createTestUser,
@@ -97,7 +98,7 @@ describe('Submission notifications are scoped (R2-10)', () => {
     const optedOutAdmin = await createTestUser({ role: 'admin' });
     await db.insert(schema.notificationPreferences).values({ userId: optedOutAdmin.id, emailOnSubmit: false });
 
-    const periodStart = new Date('2020-01-01');
+    const periodStart = '2020-01-01' as CalendarDate;
     await db.insert(schema.timesheetEntries).values({
       userId: employee.id,
       clinId: scopedClin.id,
@@ -128,7 +129,7 @@ describe('Submission notifications are scoped (R2-10)', () => {
     const submittingAdmin = await createTestUser({ role: 'admin' });
     const otherAdmin = await createTestUser({ role: 'admin' });
 
-    const periodStart = new Date('2020-01-01');
+    const periodStart = '2020-01-01' as CalendarDate;
     await db.insert(schema.timesheetEntries).values({
       userId: submittingAdmin.id, clinId: clin.id, entryDate: periodStart, hours: '8', revisionNumber: 1, createdBy: submittingAdmin.id,
     });

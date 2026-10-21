@@ -1,9 +1,9 @@
 import 'server-only';
 import { getDb } from '@/db';
-import { timesheetPeriods, payPeriodConfig } from '@/db/schema';
-import { eq, and, gt, gte, lt, desc, inArray } from 'drizzle-orm';
-import dayjs from 'dayjs';
-import { getNumDaysInPeriod, getPeriodStartForDate, type PeriodConfig, type PeriodType } from '@/lib/date-utils';
+import { timesheetPeriods } from '@/db/schema';
+import { eq, and, gte, lte, inArray } from 'drizzle-orm';
+import { getNumDaysInPeriod, getPeriodStartForDate, type PeriodConfig } from '@/lib/date-utils';
+import { addDays, compare, isBefore, isAfter, type CalendarDate } from '@/lib/calendar-date';
 import { getEffectiveConfigAt } from '@/server/actions/pay-period-config';
 
 export type PeriodStatus = 'draft' | 'submitted' | 'approved' | 'rejected';
@@ -27,17 +27,15 @@ export interface PeriodInfo {
  * validated the actor owns the entry) and by the self-only getPeriodStatus() action in
  * src/server/actions/periods.ts.
  */
-export async function getPeriodStatusFor(userId: string, periodStart: Date): Promise<PeriodInfo> {
+export async function getPeriodStatusFor(userId: string, periodStart: CalendarDate): Promise<PeriodInfo> {
   const db = await getDb();
-  const [dayFrom, dayTo] = calendarDayWindow(periodStart);
   const rows = await db
     .select()
     .from(timesheetPeriods)
     .where(
       and(
         eq(timesheetPeriods.userId, userId),
-        gte(timesheetPeriods.periodStart, dayFrom),
-        lt(timesheetPeriods.periodStart, dayTo),
+        eq(timesheetPeriods.periodStart, periodStart),
       )
     );
 
@@ -68,43 +66,27 @@ export async function getPeriodStatusFor(userId: string, periodStart: Date): Pro
 }
 
 /**
- * The calendar day a stored period/entry timestamp represents. Period starts reach the server
- * as "midnight" in whichever timezone computed them (browser-local from the period picker,
- * server-local from page load), so the same calendar day can arrive as different instants.
- * Rounding to the nearest midnight maps any of those back to one day for offsets under 12h.
- */
-export function calendarDay(date: Date): dayjs.Dayjs {
-  return dayjs(date).add(12, 'hour').startOf('day');
-}
-
-/** The [from, to) instant range whose timestamps all map to `date`'s calendarDay. */
-export function calendarDayWindow(date: Date): [Date, Date] {
-  const day = calendarDay(date);
-  return [day.subtract(12, 'hour').toDate(), day.add(12, 'hour').toDate()];
-}
-
-/**
- * Throws if ANY of `entryDates` falls on a calendar day inside one of the user's submitted or
- * approved periods. This is the period-lock check for every timesheet write.
+ * Throws if ANY of `entryDates` falls on a day inside one of the user's submitted or approved
+ * periods. This is the period-lock check for every timesheet write.
  *
- * It deliberately does not look the period up by the caller's periodStart: an exact-timestamp
- * lookup can be sidestepped by sending the same day at a different time (no row matches, so it
- * reads as an editable draft). Overlap by calendar day can't be.
+ * It deliberately does not look the period up by the caller's periodStart: a caller could send
+ * an entryDate that lands in a DIFFERENT (locked) period than the one it claims. Checking every
+ * entry date against every nearby locked period closes that gap regardless of what periodStart
+ * the caller claims.
  *
  * `numDaysFor` resolves a period's length for rows that predate the period_num_days snapshot.
  */
 export async function assertEntryDatesEditable(
   userId: string,
-  entryDates: Date[],
-  numDaysFor: (periodStart: Date) => Promise<number>,
+  entryDates: CalendarDate[],
+  numDaysFor: (periodStart: CalendarDate) => Promise<number>,
 ): Promise<void> {
   if (entryDates.length === 0) return;
-  const days = entryDates.map(calendarDay);
-  const minDay = days.reduce((a, b) => (b.isBefore(a) ? b : a));
-  const maxDay = days.reduce((a, b) => (b.isAfter(a) ? b : a));
+  const minDay = entryDates.reduce((a, b) => (isBefore(b, a) ? b : a));
+  const maxDay = entryDates.reduce((a, b) => (isAfter(b, a) ? b : a));
 
-  // No period is longer than a month, so a 45-day lookback covers any period that could
-  // contain minDay; the +36h upper bound covers a period starting on maxDay at any offset.
+  // No period is longer than a month (31 days): a period that could contain minDay starts no
+  // earlier than 31 days before it; a period starting exactly on maxDay must also be checked.
   const db = await getDb();
   const rows = await db
     .select({ periodStart: timesheetPeriods.periodStart, status: timesheetPeriods.status, periodNumDays: timesheetPeriods.periodNumDays })
@@ -113,16 +95,16 @@ export async function assertEntryDatesEditable(
       and(
         eq(timesheetPeriods.userId, userId),
         inArray(timesheetPeriods.status, ['submitted', 'approved']),
-        gte(timesheetPeriods.periodStart, minDay.subtract(45, 'day').toDate()),
-        lt(timesheetPeriods.periodStart, maxDay.add(36, 'hour').toDate()),
+        gte(timesheetPeriods.periodStart, addDays(minDay, -31)),
+        lte(timesheetPeriods.periodStart, maxDay),
       )
     );
 
   for (const row of rows) {
-    const start = calendarDay(row.periodStart);
-    const numDays = row.periodNumDays ?? (await numDaysFor(start.toDate()));
-    const end = start.add(numDays, 'day');
-    const hit = days.find((d) => !d.isBefore(start, 'day') && d.isBefore(end, 'day'));
+    const start = row.periodStart as CalendarDate;
+    const numDays = row.periodNumDays ?? (await numDaysFor(start));
+    const end = addDays(start, numDays - 1);
+    const hit = entryDates.find((d) => !isBefore(d, start) && !isAfter(d, end));
     if (hit) {
       throw new Error(
         `Cannot modify a ${row.status} timesheet. This period has been certified and is locked. ` +
@@ -137,33 +119,15 @@ export async function assertEntryDatesEditable(
  * belongs to and its length in days.
  *
  * A period start is valid under a pay-period config if snapping it to that config's schedule
- * returns the same day, and the config is in effect at some point during the period. Two
- * configs are candidates: the one in effect AT the start, and any that takes effect within
- * the next month. The second case is the first period of a new schedule, which the timesheet
- * navigation (getNeighborPeriod) snaps under the new config even when it begins a few days
- * before the new config's effective date.
+ * returns the same day. Just the config in effect AT the start is checked — D8's
+ * updatePayPeriodConfig only allows a schedule change on a boundary common to both the old and
+ * new schedules (§0.9), so there's no longer a "first period of the new schedule that actually
+ * started under the old one" to special-case; every day belongs to exactly one period.
  */
-export async function resolvePeriod(periodStart: Date): Promise<{ config: PeriodConfig; numDays: number }> {
-  const db = await getDb();
-  const startDay = calendarDay(periodStart);
-  const candidates: PeriodConfig[] = [await getEffectiveConfigAt(periodStart)];
-  const upcoming = await db
-    .select()
-    .from(payPeriodConfig)
-    .where(and(gt(payPeriodConfig.effectiveFrom, periodStart), lt(payPeriodConfig.effectiveFrom, startDay.add(32, 'day').toDate())))
-    .orderBy(payPeriodConfig.effectiveFrom, desc(payPeriodConfig.createdAt));
-  for (const row of upcoming) {
-    const config: PeriodConfig = { periodType: row.periodType as PeriodType, anchorDate: row.anchorDate, weekStartDay: row.weekStartDay };
-    // Only counts if the new config takes effect before this period would end under it.
-    if (dayjs(row.effectiveFrom).isBefore(startDay.add(getNumDaysInPeriod(startDay.toDate(), config), 'day'))) {
-      candidates.push(config);
-    }
-  }
-
-  for (const config of candidates) {
-    if (calendarDay(getPeriodStartForDate(startDay.toDate(), config)).isSame(startDay, 'day')) {
-      return { config, numDays: getNumDaysInPeriod(startDay.toDate(), config) };
-    }
+export async function resolvePeriod(periodStart: CalendarDate): Promise<{ config: PeriodConfig; numDays: number }> {
+  const config = await getEffectiveConfigAt(periodStart);
+  if (compare(getPeriodStartForDate(periodStart, config), periodStart) === 0) {
+    return { config, numDays: getNumDaysInPeriod(periodStart, config) };
   }
   throw new Error('Invalid period start date.');
 }

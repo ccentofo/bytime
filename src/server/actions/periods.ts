@@ -4,23 +4,90 @@ import { getDb } from '@/db';
 import { timesheetPeriods, users, timesheetEntries } from '@/db/schema';
 import { eq, and, inArray, gte, lt, sql } from 'drizzle-orm';
 import { requireSession, requireApprover, requireApproverFresh, getEmployeeScope, assertCanAccessEmployee, AuthorizationError } from '@/lib/session';
-import { getPeriodStatusFor, resolvePeriod, calendarDayWindow, type PeriodInfo, type PeriodStatus } from '@/server/internal/periods';
+import { getPeriodStatusFor, resolvePeriod, type PeriodInfo, type PeriodStatus } from '@/server/internal/periods';
 import { getSupervisorScopeInfo, getSupervisedEmployeeIds } from '@/server/internal/supervisor-scope';
+import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { sendTimesheetSubmittedEmail, sendTimesheetApprovedEmail, sendTimesheetRejectedEmail } from '@/lib/email/send';
 import { isNotificationEnabled } from '@/server/internal/notifications';
-import dayjs from 'dayjs';
-import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
-import { getNumDaysInPeriod, getLastWeekdayInPeriod } from '@/lib/date-utils';
-
-dayjs.extend(isSameOrAfter);
+import { getLastWeekdayInPeriod, getNumDaysInPeriod, getPeriodStartForDate, navigatePeriod } from '@/lib/date-utils';
+import { getEffectiveConfigAt } from '@/server/actions/pay-period-config';
+import { addDays, formatInstant, isBefore, formatCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 
 /**
  * Get the period status for the session user and a given period start date.
  * Returns draft if no record exists yet.
  */
-export async function getPeriodStatus(periodStart: Date): Promise<PeriodInfo> {
+export async function getPeriodStatus(periodStart: CalendarDate): Promise<PeriodInfo> {
   const actor = await requireSession();
-  return getPeriodStatusFor(actor.id, periodStart);
+  return getPeriodStatusFor(actor.id, parseCalendarDate(periodStart));
+}
+
+/** Resolve a period's day count from its own stored snapshot, falling back to its config. */
+async function resolvePeriodNumDays(periodStart: CalendarDate, periodNumDays: number | null): Promise<number> {
+  if (periodNumDays != null) return periodNumDays;
+  return getNumDaysInPeriod(periodStart, await getEffectiveConfigAt(periodStart));
+}
+
+/**
+ * The workspace's "today" and IANA timezone, for the client. D4: the client does no clock math
+ * of its own — every late/future-date flag and period landing decision derives from this,
+ * refreshed periodically so a tab left open overnight rolls over correctly.
+ */
+export async function getWorkspaceContext(): Promise<{ today: CalendarDate; timezone: string }> {
+  await requireSession();
+  const timezone = await getWorkspaceTimezone();
+  return { today: await getWorkspaceToday(), timezone };
+}
+
+export interface PeriodOption {
+  start: CalendarDate;
+  numDays: number;
+  label: string;
+}
+
+/**
+ * List period options around a given day — `before` periods back, `after` periods forward,
+ * plus the period containing `aroundDay` itself. Each is resolved under ITS OWN effective
+ * config (via the same two-sided snap as getNeighborPeriod), so the list is correct across a
+ * pay-schedule change instead of assuming every period shares one schedule. D4: the client uses
+ * this instead of computing period boundaries itself (fixes the selector's history across
+ * schedule changes and the hard-coded semimonthly reports dropdown).
+ */
+export async function getPeriodOptions(aroundDay: CalendarDate, before: number, after: number): Promise<PeriodOption[]> {
+  await requireSession();
+  const day = parseCalendarDate(aroundDay);
+
+  const centerConfig = await getEffectiveConfigAt(day);
+  const centerStart = getPeriodStartForDate(day, centerConfig);
+
+  const toOption = (start: CalendarDate, config: Awaited<ReturnType<typeof getEffectiveConfigAt>>): PeriodOption => {
+    const numDays = getNumDaysInPeriod(start, config);
+    const end = addDays(start, numDays - 1);
+    return { start, numDays, label: `${formatCalendarDate(start, 'MMM D')} – ${formatCalendarDate(end, 'MMM D, YYYY')}` };
+  };
+
+  const options: PeriodOption[] = [toOption(centerStart, centerConfig)];
+
+  let cursor = centerStart;
+  for (let i = 0; i < before; i++) {
+    const config = await getEffectiveConfigAt(cursor);
+    const probe = navigatePeriod(cursor, 'prev', config);
+    const neighborConfig = await getEffectiveConfigAt(probe);
+    cursor = getPeriodStartForDate(probe, neighborConfig);
+    options.unshift(toOption(cursor, neighborConfig));
+  }
+
+  cursor = centerStart;
+  for (let i = 0; i < after; i++) {
+    const config = await getEffectiveConfigAt(cursor);
+    const probe = navigatePeriod(cursor, 'next', config);
+    const neighborConfig = await getEffectiveConfigAt(probe);
+    cursor = getPeriodStartForDate(probe, neighborConfig);
+    options.push(toOption(cursor, neighborConfig));
+  }
+
+  return options;
 }
 
 /**
@@ -28,9 +95,10 @@ export async function getPeriodStatus(periodStart: Date): Promise<PeriodInfo> {
  * scope includes the submitter, never the submitter, each only if they opted in (emailOnSubmit).
  * Called on both the first submission and a re-submission. Sends are fire-and-forget.
  */
-async function notifyReviewersOfSubmission(userId: string, periodStart: Date, numDays: number): Promise<void> {
-  const periodEnd = dayjs(periodStart).add(numDays - 1, 'day');
-  const periodLabel = `${dayjs(periodStart).format('MMM D')} – ${periodEnd.format('MMM D, YYYY')}`;
+async function notifyReviewersOfSubmission(userId: string, periodStart: CalendarDate, numDays: number): Promise<void> {
+  const periodEnd = addDays(periodStart, numDays - 1);
+  const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(periodEnd, 'MMM D, YYYY')}`;
+  const submittedAt = formatInstant(new Date(), await getWorkspaceTimezone(), 'MMM D, YYYY h:mm A');
   const db = await getDb();
 
   const [employee] = await db
@@ -70,7 +138,7 @@ async function notifyReviewersOfSubmission(userId: string, periodStart: Date, nu
         employeeName: employee.fullName,
         employeeEmail: employee.email,
         periodLabel,
-        submittedAt: dayjs().format('MMM D, YYYY h:mm A'),
+        submittedAt,
       }); // No await — fire-and-forget
     }
   }
@@ -82,35 +150,37 @@ async function notifyReviewersOfSubmission(userId: string, periodStart: Date, nu
  * Creates the period record if it doesn't exist, or updates status to 'submitted'.
  */
 export async function submitPeriod(data: {
-  periodStart: Date;
+  periodStart: CalendarDate;
   comment?: string;
   completeness?: unknown; // structured warnings snapshot from the client (advisory)
 }): Promise<PeriodInfo> {
   const actor = await requireSession();
   const userId = actor.id;
   const db = await getDb();
+  const periodStart = parseCalendarDate(data.periodStart);
 
   // Must be a real period start (same rule as saveTimesheetBatch), so a submission can't
   // certify — and lock — an arbitrary date range. Also resolves the config this period
   // belongs to (the new one, for the first period of a schedule change).
-  const { config: periodConfig, numDays } = await resolvePeriod(data.periodStart);
+  const { config: periodConfig, numDays } = await resolvePeriod(periodStart);
 
-  // Server-side validation: cannot submit before the last WEEKDAY of the period
-  const lastWeekday = getLastWeekdayInPeriod(data.periodStart, periodConfig);
-  const periodEndDate = dayjs(lastWeekday);
-  if (!dayjs().isSameOrAfter(periodEndDate, 'day')) {
-    throw new Error(`Cannot submit before the last day of the pay period (${periodEndDate.format('MMM D, YYYY')}).`);
+  // Server-side validation: cannot submit before the last WEEKDAY of the period, per the
+  // WORKSPACE's today (never the browser's — a user could spoof their clock to submit early).
+  const lastWeekday = getLastWeekdayInPeriod(periodStart, periodConfig);
+  const today = await getWorkspaceToday();
+  if (isBefore(today, lastWeekday)) {
+    throw new Error(`Cannot submit before the last day of the pay period (${formatCalendarDate(lastWeekday, 'MMM D, YYYY')}).`);
   }
 
   // Server-side validation: cannot submit a completely empty timesheet
-  const periodEndExclusive = dayjs(data.periodStart).add(numDays, 'day').toDate();
+  const periodEndExclusive = addDays(periodStart, numDays);
   const entryCount = await db
     .select({ count: sql<number>`COUNT(*)` })
     .from(timesheetEntries)
     .where(
       and(
         eq(timesheetEntries.userId, userId),
-        gte(timesheetEntries.entryDate, data.periodStart),
+        gte(timesheetEntries.entryDate, periodStart),
         lt(timesheetEntries.entryDate, periodEndExclusive),
       )
     );
@@ -119,17 +189,15 @@ export async function submitPeriod(data: {
     throw new Error('Cannot submit an empty timesheet. Please enter your hours before submitting.');
   }
 
-  // Match by calendar day, not exact timestamp, so a re-submission sent at a different time of
-  // day finds the existing row instead of creating a second one for the same period.
-  const [dayFrom, dayTo] = calendarDayWindow(data.periodStart);
+  // periodStart is now an exact calendar day (a `date` column) — an exact match finds a
+  // resubmission regardless of what time of day it's sent, with no window needed.
   const existing = await db
     .select()
     .from(timesheetPeriods)
     .where(
       and(
         eq(timesheetPeriods.userId, userId),
-        gte(timesheetPeriods.periodStart, dayFrom),
-        lt(timesheetPeriods.periodStart, dayTo),
+        eq(timesheetPeriods.periodStart, periodStart),
       )
     );
 
@@ -140,7 +208,7 @@ export async function submitPeriod(data: {
 
     const rows = await db.insert(timesheetPeriods).values({
       userId,
-      periodStart: data.periodStart,
+      periodStart,
       status: 'submitted',
       submittedAt: new Date(),
       submittedComment: data.comment,
@@ -150,7 +218,7 @@ export async function submitPeriod(data: {
     }).returning();
 
     // The submission is already committed; a notification failure must not report it as failed.
-    await notifyReviewersOfSubmission(userId, data.periodStart, snapshotNumDays).catch((err) => console.error('Submission notification failed:', err));
+    await notifyReviewersOfSubmission(userId, periodStart, snapshotNumDays).catch((err) => console.error('Submission notification failed:', err));
 
     return {
       id: rows[0].id,
@@ -196,7 +264,7 @@ export async function submitPeriod(data: {
   };
 
   // The submission is already committed; a notification failure must not report it as failed.
-  await notifyReviewersOfSubmission(userId, data.periodStart, numDays).catch((err) => console.error('Submission notification failed:', err));
+  await notifyReviewersOfSubmission(userId, periodStart, numDays).catch((err) => console.error('Submission notification failed:', err));
 
   return result;
 }
@@ -258,15 +326,17 @@ export async function approvePeriod(data: {
   if (employee) {
     const enabled = await isNotificationEnabled(period.userId, 'emailOnApprove');
     if (enabled) {
-      const periodEnd = dayjs(period.periodStart).add((period.periodNumDays ?? getNumDaysInPeriod(period.periodStart)) - 1, 'day');
-      const periodLabel = `${dayjs(period.periodStart).format('MMM D')} – ${periodEnd.format('MMM D, YYYY')}`;
+      const periodStart = period.periodStart as CalendarDate;
+      const numDays = await resolvePeriodNumDays(periodStart, period.periodNumDays);
+      const periodEnd = addDays(periodStart, numDays - 1);
+      const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(periodEnd, 'MMM D, YYYY')}`;
 
       sendTimesheetApprovedEmail({
         employeeEmail: employee.email,
         employeeName: employee.fullName,
         periodLabel,
         approvedBy: actor.fullName,
-        approvedAt: dayjs().format('MMM D, YYYY h:mm A'),
+        approvedAt: formatInstant(new Date(), await getWorkspaceTimezone(), 'MMM D, YYYY h:mm A'),
       }); // No await — fire-and-forget
     }
   }
@@ -328,15 +398,17 @@ export async function rejectPeriod(data: {
   if (employee) {
     const enabled = await isNotificationEnabled(period.userId, 'emailOnReject');
     if (enabled) {
-      const periodEnd = dayjs(period.periodStart).add((period.periodNumDays ?? getNumDaysInPeriod(period.periodStart)) - 1, 'day');
-      const periodLabel = `${dayjs(period.periodStart).format('MMM D')} – ${periodEnd.format('MMM D, YYYY')}`;
+      const periodStart = period.periodStart as CalendarDate;
+      const numDays = await resolvePeriodNumDays(periodStart, period.periodNumDays);
+      const periodEnd = addDays(periodStart, numDays - 1);
+      const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(periodEnd, 'MMM D, YYYY')}`;
 
       sendTimesheetRejectedEmail({
         employeeEmail: employee.email,
         employeeName: employee.fullName,
         periodLabel,
         rejectedBy: actor.fullName,
-        rejectedAt: dayjs().format('MMM D, YYYY h:mm A'),
+        rejectedAt: formatInstant(new Date(), await getWorkspaceTimezone(), 'MMM D, YYYY h:mm A'),
         rejectionComment: data.comment,
       }); // No await — fire-and-forget
     }
@@ -351,7 +423,8 @@ export async function getScopedPeriods(): Promise<Array<{
   userId: string;
   userName: string;
   userEmail: string;
-  periodStart: Date;
+  periodStart: CalendarDate;
+  periodNumDays: number;
   status: PeriodStatus;
   submittedAt: Date | null;
   reviewedAt: Date | null;
@@ -371,6 +444,7 @@ export async function getScopedPeriods(): Promise<Array<{
       userName: users.fullName,
       userEmail: users.email,
       periodStart: timesheetPeriods.periodStart,
+      periodNumDays: timesheetPeriods.periodNumDays,
       status: timesheetPeriods.status,
       submittedAt: timesheetPeriods.submittedAt,
       reviewedAt: timesheetPeriods.reviewedAt,
@@ -382,7 +456,17 @@ export async function getScopedPeriods(): Promise<Array<{
     .where(whereClause)
     .orderBy(timesheetPeriods.submittedAt);
 
-  return rows;
+  const resolvedRows = await Promise.all(
+    rows.map(async (row) => ({
+      ...row,
+      periodNumDays: await resolvePeriodNumDays(row.periodStart as CalendarDate, row.periodNumDays),
+    }))
+  );
+
+  return resolvedRows as Array<{
+    id: string; userId: string; userName: string; userEmail: string; periodStart: CalendarDate;
+    periodNumDays: number; status: PeriodStatus; submittedAt: Date | null; reviewedAt: Date | null; reviewedBy: string | null;
+  }>;
 }
 
 /**
@@ -393,7 +477,7 @@ export async function getScopedPendingApprovals(): Promise<Array<{
   userId: string;
   userName: string;
   userEmail: string;
-  periodStart: Date;
+  periodStart: CalendarDate;
   status: PeriodStatus;
   submittedAt: Date | null;
 }>> {
@@ -422,7 +506,10 @@ export async function getScopedPendingApprovals(): Promise<Array<{
     .where(whereClause)
     .orderBy(timesheetPeriods.submittedAt);
 
-  return rows;
+  return rows as Array<{
+    id: string; userId: string; userName: string; userEmail: string; periodStart: CalendarDate;
+    status: PeriodStatus; submittedAt: Date | null;
+  }>;
 }
 
 /**

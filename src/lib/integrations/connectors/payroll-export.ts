@@ -3,7 +3,8 @@ import type {
   ConnectorMetadata,
   TimesheetSyncEntry,
 } from '../types';
-import dayjs from 'dayjs';
+import dayjs from 'dayjs'; // only used for the export filename's INSTANT timestamp — see below
+import { max, min, formatCalendarDate } from '@/lib/calendar-date';
 
 // ---------------------------------------------------------------------------
 // Connector Metadata
@@ -167,9 +168,9 @@ export function aggregateEntriesByEmployee(
     const overtimeHours = Math.max(0, totalHours - regularHoursThreshold);
 
     // Find period boundaries from entries
-    const dates = empEntries.map((e) => dayjs(e.entryDate));
-    const minDate = dates.reduce((min, d) => d.isBefore(min) ? d : min, dates[0]);
-    const maxDate = dates.reduce((max, d) => d.isAfter(max) ? d : max, dates[0]);
+    const dates = empEntries.map((e) => e.entryDate);
+    const minDate = min(...dates);
+    const maxDate = max(...dates);
 
     aggregated.push({
       employeeName: empEntries[0].employeeName,
@@ -179,8 +180,8 @@ export function aggregateEntriesByEmployee(
       overtimeHours: Math.round(overtimeHours * 100) / 100,
       billableHours: Math.round(billableHours * 100) / 100,
       nonBillableHours: Math.round(nonBillableHours * 100) / 100,
-      periodStart: minDate.format(dateFormat),
-      periodEnd: maxDate.format(dateFormat),
+      periodStart: formatCalendarDate(minDate, dateFormat),
+      periodEnd: formatCalendarDate(maxDate, dateFormat),
       entries: empEntries,
     });
   }

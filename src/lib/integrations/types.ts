@@ -2,6 +2,7 @@
  * Shared types for the Integration Hub connector framework.
  * Each connector (QBO, Gusto, etc.) implements the IntegrationConnector interface.
  */
+import type { CalendarDate } from '@/lib/calendar-date';
 
 export interface ConnectorMetadata {
   id: string;                        // 'quickbooks_online', 'gusto', etc.
@@ -115,7 +116,7 @@ export interface TimesheetSyncEntry {
   userId: string;
   employeeName: string;
   employeeEmail: string;
-  entryDate: Date;
+  entryDate: CalendarDate;
   hours: number;
   chargeCodeId: string;          // CLIN ID or indirect code ID
   chargeCodeLabel: string;       // "NAVAIR / 0001" or "OH-001"
@@ -124,6 +125,6 @@ export interface TimesheetSyncEntry {
   clinNumber?: string;
   indirectCode?: string;
   isBillable: boolean;           // true for direct, false for indirect
-  periodStart: Date;
+  periodStart: CalendarDate;
   approvedAt: Date | null;
 }

@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { ActionIcon, NumberInput, Text } from '@mantine/core';
 import { IconNote } from '@tabler/icons-react';
 import { useTimesheet } from '@/components/timesheet/TimesheetContext';
-import dayjs from 'dayjs';
+import { addDays, isAfter } from '@/lib/calendar-date';
 import type { Density } from '../BiWeeklyTable';
 
 interface HourCellProps {
@@ -38,8 +38,9 @@ export function HourCell({ chargeCodeId, dayIndex, density = 'comfortable' }: Ho
   const savedValue = savedEntry ? ((savedEntry.hours ?? [])[dayIndex] ?? 0) : 0;
   const isDirty = value !== savedValue;
 
-  const cellDate = dayjs(state.periodStart).add(dayIndex, 'day');
-  const isFutureDate = cellDate.isAfter(dayjs(), 'day');
+  const cellDate = addDays(state.periodStart, dayIndex);
+  // Uses the server's state.today (never the browser's clock) — the server remains authoritative.
+  const isFutureDate = isAfter(cellDate, state.today);
 
   const noteKey = `${chargeCodeId}-${dayIndex}`;
   const hasNote = Boolean(state.notes[noteKey]);

@@ -17,11 +17,10 @@ import { IconCheck, IconX, IconEye, IconAlertCircle } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
-import dayjs from 'dayjs';
 import { approvePeriod, rejectPeriod, getScopedPeriods } from '@/server/actions/periods';
 import { getTimesheetForReview } from '@/server/actions/timesheet';
-import { getNumDaysInPeriod } from '@/lib/date-utils';
-import { formatDate, formatDateTime, formatShortDate } from '@/lib/format';
+import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { formatDateTime } from '@/lib/format';
 import { PERIOD_STATUS_COLOR, ROLE_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
@@ -31,7 +30,8 @@ type Period = {
   userId: string;
   userName: string;
   userEmail: string;
-  periodStart: Date;
+  periodStart: CalendarDate;
+  periodNumDays: number;
   status: string;
   submittedAt: Date | null;
   reviewedAt: Date | null;
@@ -49,9 +49,10 @@ type Props = {
   currentUserId: string;
   userRole: string;
   scopeInfo: ScopeInfo;
+  workspaceTimezone: string;
 };
 
-export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scopeInfo }: Props) {
+export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scopeInfo, workspaceTimezone }: Props) {
   const [periods, setPeriods] = useState(initialPeriods);
   const [isPending, startTransition] = useTransition();
 
@@ -161,11 +162,10 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     {
       accessorKey: 'periodStart',
       header: 'Pay Period',
-      Cell: ({ cell }) => {
-        const start = dayjs(cell.getValue<Date>());
-        const numDays = getNumDaysInPeriod(start.toDate());
-        const end = start.add(numDays - 1, 'day');
-        return `${formatShortDate(start.toDate())} – ${formatDate(end.toDate())}`;
+      Cell: ({ row }) => {
+        const start = row.original.periodStart;
+        const end = addDays(start, row.original.periodNumDays - 1);
+        return `${formatCalendarDate(start, 'MMM D')} – ${formatCalendarDate(end, 'MMM D, YYYY')}`;
       },
       size: 200,
     },
@@ -191,7 +191,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     {
       accessorKey: 'submittedAt',
       header: 'Submitted',
-      Cell: ({ cell }) => formatDateTime(cell.getValue<Date | null>()),
+      Cell: ({ cell }) => formatDateTime(cell.getValue<Date | null>(), workspaceTimezone),
       size: 180,
     },
   ];
@@ -226,8 +226,8 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
   // Build review table content
   let reviewContent = null;
   if (reviewData && selectedPeriod) {
-    const numDays = getNumDaysInPeriod(selectedPeriod.periodStart);
-    const start = dayjs(selectedPeriod.periodStart);
+    const numDays = selectedPeriod.periodNumDays;
+    const start = selectedPeriod.periodStart;
 
     reviewContent = (
       <Stack mt="md">
@@ -239,7 +239,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
               <Table.Th>Charge Code</Table.Th>
               {Array.from({ length: numDays }, (_, i) => (
                 <Table.Th key={i} style={{ textAlign: 'center', fontSize: 11 }}>
-                  {start.add(i, 'day').format('M/D')}
+                  {formatCalendarDate(addDays(start, i), 'M/D')}
                 </Table.Th>
               ))}
               <Table.Th style={{ textAlign: 'center' }}>Total</Table.Th>
