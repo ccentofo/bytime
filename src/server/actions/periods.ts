@@ -14,8 +14,6 @@ import { getNumDaysInPeriod, getLastWeekdayInPeriod } from '@/lib/date-utils';
 
 dayjs.extend(isSameOrAfter);
 
-export type { PeriodStatus, PeriodInfo };
-
 /**
  * Get the period status for the session user and a given period start date.
  * Returns draft if no record exists yet.

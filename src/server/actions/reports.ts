@@ -19,8 +19,6 @@ import { getNumDaysInPeriod } from '@/lib/date-utils';
 import { requireSession, requireAdmin, requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
 import { getDetailedCostReportData, type CostReportEntry } from '@/server/internal/reports';
 
-export type { CostReportEntry };
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------

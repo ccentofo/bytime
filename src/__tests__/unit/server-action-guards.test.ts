@@ -281,7 +281,10 @@ describe('Server action guard coverage', () => {
     // The scanner only understands `export async function`. Any other export form would be a
     // public endpoint that none of the checks above ever look at.
     it(`${file}: every export is an \`export async function\` the scanner can check`, () => {
-      const otherExports = source.match(/export\s+(?:const|let|var|function|default|class)\b[^\n]*/g) ?? [];
+      // Also bans re-exports (`export { x }`, `export type { T }`): Turbopack's server-action
+      // transform registers a re-exported TYPE as an action and the build fails. Consumers
+      // should `import type` from the module that declares it.
+      const otherExports = source.match(/export\s+(?:const|let|var|function|default|class|type\s*\{|\{|\*)[^\n]*/g) ?? [];
       expect(otherExports, `${file} has export(s) the guard scanner can't parse: ${otherExports.join(' | ')}`).toEqual([]);
     });
   }

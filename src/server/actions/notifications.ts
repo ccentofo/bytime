@@ -10,8 +10,6 @@ import {
   type NotificationPrefs,
 } from '@/server/internal/notifications';
 
-export type { NotificationPrefs };
-
 /** Get the session user's own notification preferences. */
 export async function getNotificationPreferences(): Promise<NotificationPrefs> {
   const actor = await requireSession();

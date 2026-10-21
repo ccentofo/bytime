@@ -13,7 +13,8 @@ import {
 } from '@mantine/core';
 import { IconBell, IconCheck } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
-import { updateNotificationPreferences, type NotificationPrefs } from '@/server/actions/notifications';
+import { updateNotificationPreferences } from '@/server/actions/notifications';
+import type { NotificationPrefs } from '@/server/internal/notifications';
 import { PageHeader } from '@/components/ui/PageHeader';
 
 type Props = {

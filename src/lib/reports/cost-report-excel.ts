@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
-import type { CostReportEntry, EmployeeSummaryEntry } from '@/server/actions/reports';
+import type { EmployeeSummaryEntry } from '@/server/actions/reports';
+import type { CostReportEntry } from '@/server/internal/reports';
 
 /**
  * Generate an Excel workbook with detailed cost report data.
