@@ -34,7 +34,13 @@ type NeonCreateProjectResponse = {
  *  - Waits for the returned operations to finish before returning, as Neon requires before the
  *    first connection (the caller immediately connects to run migrations).
  */
-export async function createNeonDatabase(slug: string): Promise<string> {
+export interface CreatedTenantDatabase {
+  dbUrl: string;
+  /** T7: persisted so deletion doesn't have to guess the project name. Null for local dev (no Neon project). */
+  neonProjectId: string | null;
+}
+
+export async function createNeonDatabase(slug: string): Promise<CreatedTenantDatabase> {
   const apiKey = process.env.NEON_API_KEY;
   if (!apiKey) {
     // Dev-only fallback: without a Neon key, create a local Postgres database so the full
@@ -82,7 +88,7 @@ export async function createNeonDatabase(slug: string): Promise<string> {
 
   await waitForNeonOperations(projectId, (data.operations ?? []).map((op) => op.id), headers);
 
-  return withHost(details.connection_uri, poolerHost);
+  return { dbUrl: withHost(details.connection_uri, poolerHost), neonProjectId: projectId };
 }
 
 /** Poll each operation until it finishes. `failed` with a `retry_at` is still being retried by Neon. */
@@ -132,7 +138,7 @@ function withHost(connectionUri: string, host: string): string {
  * CONTROL_PLANE_DATABASE_URL, else a local default. The slug is already validated by
  * provisionTenant (isValidSlug), so the derived identifier is safe to interpolate.
  */
-async function createLocalDevDatabase(slug: string): Promise<string> {
+async function createLocalDevDatabase(slug: string): Promise<CreatedTenantDatabase> {
   const adminUrl =
     process.env.DEV_TENANT_ADMIN_DATABASE_URL ??
     process.env.CONTROL_PLANE_DATABASE_URL ??
@@ -158,5 +164,77 @@ async function createLocalDevDatabase(slug: string): Promise<string> {
   // Build the tenant URL by swapping the database name on the admin connection.
   const u = new URL(adminUrl);
   u.pathname = `/${dbName}`;
-  return u.toString();
+  return { dbUrl: u.toString(), neonProjectId: null };
+}
+
+/**
+ * T7: DEV-ONLY counterpart to deleteNeonProject — drops the local tenant_<slug> database.
+ * Mirrors createLocalDevDatabase's admin-connection resolution exactly.
+ */
+export async function dropLocalDevDatabase(slug: string): Promise<void> {
+  const adminUrl =
+    process.env.DEV_TENANT_ADMIN_DATABASE_URL ??
+    process.env.CONTROL_PLANE_DATABASE_URL ??
+    'postgresql://bytime:bytime_dev@localhost:5432/bytime';
+  const dbName = tenantDatabaseName(slug);
+
+  const admin = postgres(adminUrl, { max: 1 });
+  try {
+    // Terminate other connections first — DROP DATABASE fails while any session is attached
+    // (the app's own pooled client for this tenant, if still warm in this process).
+    await admin.unsafe(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${dbName}' AND pid <> pg_backend_pid()`,
+    );
+    await admin.unsafe(`DROP DATABASE IF EXISTS ${dbName}`);
+    console.log(`[tenant:delete] dropped local database ${dbName}`);
+  } finally {
+    await admin.end();
+  }
+}
+
+/**
+ * T7.4: DELETE /projects/{project_id} (Neon API v2). Returns 200 on success; treat a 404 as
+ * already-deleted (idempotent). Per api-docs.neon.tech/reference/deleteproject (confirmed Oct
+ * 2026): success is 200 with a ProjectResponse body; other outcomes use a generic GeneralError
+ * response without a documented specific status for "already deleted" — 404 is this function's
+ * own defensive choice for that case, consistent with the blueprint's "treat 404 as already
+ * deleted," not something Neon's reference explicitly promises.
+ *
+ * A deleted project is recoverable for 7 days via POST /projects/{project_id}/recover (per
+ * neon.com/docs/manage/projects, confirmed Oct 2026) — after that, deletion is permanent.
+ */
+export async function deleteNeonProject(projectId: string): Promise<{ alreadyDeleted: boolean }> {
+  const apiKey = process.env.NEON_API_KEY;
+  if (!apiKey) throw new Error('NEON_API_KEY is not set — cannot delete a Neon project.');
+
+  const res = await fetch(`${NEON_API_BASE}/projects/${projectId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+  });
+
+  if (res.status === 404) return { alreadyDeleted: true };
+  if (!res.ok) {
+    throw new Error(`Neon project deletion failed for ${projectId}: ${res.status} ${await res.text()}`);
+  }
+  return { alreadyDeleted: false };
+}
+
+/**
+ * T7: look up an existing project by its CadenzPoint name (`cadenzpoint-<slug>`), for backfilling
+ * `neon_project_id` on tenants created before it was persisted at provisioning time. Uses the
+ * `search` query param (partial match on name or id, per api-docs.neon.tech/reference/listprojects)
+ * and then exact-matches the name client-side, since `search` is substring, not exact.
+ */
+export async function findNeonProjectIdByName(name: string): Promise<string | null> {
+  const apiKey = process.env.NEON_API_KEY;
+  if (!apiKey) throw new Error('NEON_API_KEY is not set — cannot look up Neon projects.');
+
+  const res = await fetch(`${NEON_API_BASE}/projects?search=${encodeURIComponent(name)}`, {
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+  });
+  if (!res.ok) throw new Error(`Neon project lookup failed: ${res.status} ${await res.text()}`);
+
+  const data = (await res.json()) as { projects?: Array<{ id: string; name: string }> };
+  const match = (data.projects ?? []).find((p) => p.name === name);
+  return match?.id ?? null;
 }

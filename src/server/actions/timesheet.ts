@@ -1,6 +1,6 @@
 'use server';
 
-import { getDb } from '@/db';
+import { getDb, getDbForWrite } from '@/db';
 import { timesheetEntries, userAssignments, clins, contracts, slins, indirectChargeCodes, chargeCodes, userChargeCodes, costClasses, timesheetPeriods } from '@/db/schema';
 import { eq, and, gte, lt, desc, sql } from 'drizzle-orm';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
@@ -196,7 +196,7 @@ export async function saveTimesheetBatch(data: {
 }): Promise<Record<string, number>> {
   const actor = await requireSession();
   const userId = actor.id;
-  const db = await getDb();
+  const db = await getDbForWrite();
   const start = parseCalendarDate(data.periodStart);
   const today = await getWorkspaceToday();
   const newRevisions: Record<string, number> = {};

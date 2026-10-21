@@ -45,7 +45,9 @@ export async function GET(request: NextRequest) {
 
   for (const tenant of activeTenants) {
     try {
-      const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted));
+      // T7: dbUrlEncrypted is only null for a tombstoned ('deleted') tenant; this query is
+      // filtered to status='active', which a deleted tenant never has.
+      const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted!));
 
       // D7: "today" and the weekend skip are evaluated per-tenant, in THAT tenant's workspace
       // timezone — never the cron process's own (UTC) clock, which would call it Saturday for a

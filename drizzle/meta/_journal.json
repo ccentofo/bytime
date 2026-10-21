@@ -85,6 +85,13 @@
       "when": 1792590968997,
       "tag": "0011_solid_gideon",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792605911362,
+      "tag": "0012_lame_edwin_jarvis",
+      "breakpoints": true
     }
   ]
 }

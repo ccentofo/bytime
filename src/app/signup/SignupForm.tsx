@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import {
-  Center, Stack, Paper, Title, TextInput, Button, Alert, Text, Anchor, Badge,
+  Center, Stack, Paper, Title, TextInput, Button, Alert, Text, Anchor, Badge, Checkbox,
 } from '@mantine/core';
 import { IconAlertCircle, IconCheck } from '@tabler/icons-react';
 import { Logo } from '@/components/brand/Logo';
@@ -15,6 +15,7 @@ export function SignupForm({ errorParam }: { errorParam?: string }) {
   const [slug, setSlug] = useState('');
   const [slugEdited, setSlugEdited] = useState(false);
   const [slugStatus, setSlugStatus] = useState<'idle' | 'checking' | 'available' | 'taken' | 'invalid'>('idle');
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState(errorParam ?? '');
@@ -53,7 +54,7 @@ export function SignupForm({ errorParam }: { errorParam?: string }) {
     // D8: capture the signer's browser timezone so the new tenant's workspace starts configured
     // for the right zone instead of the generic default. Best-effort — undefined if unsupported.
     const timezone = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined;
-    const result = await startSignup({ companyName, email, slug: slug || undefined, timezone });
+    const result = await startSignup({ companyName, email, slug: slug || undefined, timezone, termsAccepted });
     setLoading(false);
     if (result.success) {
       setSuccess(true);
@@ -141,7 +142,27 @@ export function SignupForm({ errorParam }: { errorParam?: string }) {
                 disabled={loading}
               />
 
-              <Button type="submit" fullWidth size="md" loading={loading} disabled={slugStatus === 'taken' || slugStatus === 'invalid'}>
+              <Checkbox
+                checked={termsAccepted}
+                onChange={(e) => setTermsAccepted(e.currentTarget.checked)}
+                disabled={loading}
+                label={
+                  <Text size="sm">
+                    By creating a workspace you agree to the{' '}
+                    <Anchor href="/terms" target="_blank" size="sm">Terms of Service</Anchor>
+                    {' '}and{' '}
+                    <Anchor href="/privacy" target="_blank" size="sm">Privacy Policy</Anchor>.
+                  </Text>
+                }
+              />
+
+              <Button
+                type="submit"
+                fullWidth
+                size="md"
+                loading={loading}
+                disabled={slugStatus === 'taken' || slugStatus === 'invalid' || !termsAccepted}
+              >
                 Create workspace
               </Button>
             </Stack>

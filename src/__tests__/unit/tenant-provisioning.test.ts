@@ -84,7 +84,7 @@ describe('createNeonDatabase (Neon API mocked)', () => {
 
     const promise = createNeonDatabase('acme');
     await vi.runAllTimersAsync();
-    const url = await promise;
+    const { dbUrl: url, neonProjectId } = await promise;
 
     const [createUrl, createInit] = fetchMock.mock.calls[0];
     expect(createUrl).toBe('https://console.neon.tech/api/v2/projects');
@@ -97,6 +97,7 @@ describe('createNeonDatabase (Neon API mocked)', () => {
     expect(fetchMock.mock.calls[1][0]).toBe('https://console.neon.tech/api/v2/projects/proj-1/operations/op-1');
     expect(fetchMock).toHaveBeenCalledTimes(3);
 
+    expect(neonProjectId).toBe('proj-1');
     expect(new URL(url).hostname).toBe(POOLER_HOST);
     expect(url).toContain('/tenant_acme');
     expect(url).toContain('sslmode=require');
@@ -129,7 +130,8 @@ describe('createNeonDatabase (Neon API mocked)', () => {
 
     const promise = createNeonDatabase('acme');
     await vi.runAllTimersAsync();
-    await expect(promise).resolves.toContain(POOLER_HOST);
+    const { dbUrl } = await promise;
+    expect(dbUrl).toContain(POOLER_HOST);
   });
 
   it('fails clearly when the response lacks a pooler host', async () => {

@@ -25,6 +25,12 @@ const ACTIONS_DIR = path.resolve(__dirname, '../../server/actions');
 const GUARD_PATTERN = /\b(requireSession|requireAdmin|requireApprover|requireAdminFresh|requireApproverFresh|getTenantForBilling)\s*\(/;
 const IDENTITY_PARAM_PATTERN = /\b(adminUserId|reviewedBy|createdByUserId|assignedBy)\s*(\?)?\s*:/;
 const DB_QUERY_PATTERN = /\b(db|tx)\.(select|insert|update|delete|execute|transaction|query)\b/;
+// §3.2 write gate: a DB write (insert/update/delete, direct or inside a transaction) must run
+// against a client obtained from getDbForWrite() — the only accessor that enforces 'full' mode —
+// unless the function is a security function on the getDbForAuth() allowlist below.
+const DB_WRITE_PATTERN = /\b(db|tx)\.(insert|update|delete)\s*\(/;
+const WRITE_GATE_PATTERN = /\bgetDbForWrite\s*\(/;
+const AUTH_GATE_PATTERN = /\bgetDbForAuth\s*\(/;
 // R2-6: start of a DB write's payload — `.values(` or `.set(`. Its argument must never be a
 // caller-supplied parameter, whole or spread, or the caller can set columns the form never offered.
 const DB_WRITE_CALL_PATTERN = /\.(values|set)\s*\(/g;
@@ -66,6 +72,36 @@ const PUBLIC_ACTIONS: Record<string, { names: string[]; reason: string }> = {
     reason:
       'Pre-login lockout banner: the client calls this before any authentication has ' +
       'happened, so there is no session yet. Read-only, keyed by email, no sensitive data.',
+  },
+};
+
+/**
+ * §3.2: security functions that write auth/account credentials (password, MFA, notification
+ * preferences) and must keep working in `read_only` and `billing_only` mode, not just `full` —
+ * otherwise a suspended tenant's admin could be locked out of fixing their own billing issue, or
+ * a user on an expired trial could never change a compromised password. These call getDbForAuth()
+ * (rejects only `closed`) instead of getDbForWrite() (rejects anything but `full`). None of them
+ * touch customer/business data (timesheets, contracts, charge codes, etc).
+ */
+const WRITE_GATE_AUTH_ALLOWLIST: Record<string, { names: string[]; reason: string }> = {
+  'password.ts': {
+    names: ['changePassword', 'adminResetPassword'],
+    reason: 'Credential-only write (password hash + session version). Must keep working for a ' +
+      'suspended tenant\'s admin managing accounts, and for any user changing a compromised password.',
+  },
+  'password-reset.ts': {
+    names: ['requestPasswordReset', 'resetPassword'],
+    reason: 'Unauthenticated forgot-password flow; must not be blocked by workspace mode — a ' +
+      'locked-out user still needs to be able to reset their password.',
+  },
+  'mfa.ts': {
+    names: ['completeMFASetup', 'disableMFA'],
+    reason: 'Credential-only write (TOTP secret / recovery codes). Same rationale as password.ts.',
+  },
+  'notifications.ts': {
+    names: ['updateNotificationPreferences'],
+    reason: 'D5: users keep their normal role-scoped capabilities in read_only/billing_only. ' +
+      'Not business/customer data, so it is allowlisted rather than blocked by the write gate.',
   },
 };
 
@@ -278,6 +314,25 @@ describe('Server action guard coverage', () => {
       ).toEqual([]);
     });
 
+    // §3.2: a DB write must go through getDbForWrite() ('full' mode only), unless the function is
+    // a documented security function allowed to use getDbForAuth() instead (rejects only 'closed').
+    it(`${file}: every DB write uses the write gate (getDbForWrite), except allowlisted security functions`, () => {
+      const authAllowlist = WRITE_GATE_AUTH_ALLOWLIST[file]?.names ?? [];
+      const offenders = fns
+        .filter((fn) => DB_WRITE_PATTERN.test(fn.bodyText))
+        .filter((fn) => {
+          if (WRITE_GATE_PATTERN.test(fn.bodyText)) return false;
+          if (authAllowlist.includes(fn.name) && AUTH_GATE_PATTERN.test(fn.bodyText)) return false;
+          return true;
+        })
+        .map((fn) => fn.name);
+
+      expect(
+        offenders,
+        `${file} has exported action(s) with a DB write that doesn't call getDbForWrite() (or getDbForAuth() with a WRITE_GATE_AUTH_ALLOWLIST entry): ${offenders.join(', ')}`
+      ).toEqual([]);
+    });
+
     // The scanner only understands `export async function`. Any other export form would be a
     // public endpoint that none of the checks above ever look at.
     it(`${file}: every export is an \`export async function\` the scanner can check`, () => {
@@ -313,5 +368,29 @@ describe('Server action guard coverage', () => {
       }
     }
     expect(staleEntries, `Stale PUBLIC_ACTIONS entries: ${staleEntries.join(', ')}`).toEqual([]);
+  });
+
+  it('WRITE_GATE_AUTH_ALLOWLIST has no stale entries (file/name must still exist, be exported, write, and call getDbForAuth)', () => {
+    const staleEntries: string[] = [];
+    for (const [file, { names }] of Object.entries(WRITE_GATE_AUTH_ALLOWLIST)) {
+      const fullPath = path.join(ACTIONS_DIR, file);
+      if (!fs.existsSync(fullPath)) {
+        staleEntries.push(`${file} (file does not exist)`);
+        continue;
+      }
+      const source = stripComments(fs.readFileSync(fullPath, 'utf-8'));
+      const fnsByName = new Map(parseExportedFunctions(source).map((fn) => [fn.name, fn]));
+      for (const name of names) {
+        const fn = fnsByName.get(name);
+        if (!fn) {
+          staleEntries.push(`${file}: ${name} (not exported)`);
+        } else if (!DB_WRITE_PATTERN.test(fn.bodyText)) {
+          staleEntries.push(`${file}: ${name} (no longer performs a DB write — remove from allowlist)`);
+        } else if (!AUTH_GATE_PATTERN.test(fn.bodyText)) {
+          staleEntries.push(`${file}: ${name} (no longer calls getDbForAuth — remove from allowlist)`);
+        }
+      }
+    }
+    expect(staleEntries, `Stale WRITE_GATE_AUTH_ALLOWLIST entries: ${staleEntries.join(', ')}`).toEqual([]);
   });
 });

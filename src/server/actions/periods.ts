@@ -1,7 +1,7 @@
 'use server';
 
-import { getDb } from '@/db';
-import { timesheetPeriods, users, timesheetEntries } from '@/db/schema';
+import { getDb, getDbForWrite } from '@/db';
+import { timesheetPeriods, users, timesheetEntries, periodEvents } from '@/db/schema';
 import { eq, and, inArray, gte, lt, sql } from 'drizzle-orm';
 import { requireSession, requireApprover, requireApproverFresh, getEmployeeScope, assertCanAccessEmployee, AuthorizationError } from '@/lib/session';
 import { getPeriodStatusFor, resolvePeriod, type PeriodInfo, type PeriodStatus } from '@/server/internal/periods';
@@ -156,7 +156,7 @@ export async function submitPeriod(data: {
 }): Promise<PeriodInfo> {
   const actor = await requireSession();
   const userId = actor.id;
-  const db = await getDb();
+  const db = await getDbForWrite();
   const periodStart = parseCalendarDate(data.periodStart);
 
   // Must be a real period start (same rule as saveTimesheetBatch), so a submission can't
@@ -206,16 +206,24 @@ export async function submitPeriod(data: {
     // (full config stored as audit record; periodConfig already resolved above)
     const snapshotNumDays = numDays;
 
-    const rows = await db.insert(timesheetPeriods).values({
-      userId,
-      periodStart,
-      status: 'submitted',
-      submittedAt: new Date(),
-      submittedComment: data.comment,
-      periodType: periodConfig.periodType,
-      periodNumDays: snapshotNumDays,
-      completenessSnapshot: data.completeness ?? null,
-    }).returning();
+    const rows = await db.transaction(async (tx) => {
+      const inserted = await tx.insert(timesheetPeriods).values({
+        userId,
+        periodStart,
+        status: 'submitted',
+        submittedAt: new Date(),
+        submittedComment: data.comment,
+        periodType: periodConfig.periodType,
+        periodNumDays: snapshotNumDays,
+        completenessSnapshot: data.completeness ?? null,
+      }).returning();
+      // T8/R11: append-only approval history, written in the same transaction as the period change.
+      await tx.insert(periodEvents).values({
+        periodId: inserted[0].id, userId, event: 'submitted', actorId: userId,
+        comment: data.comment ?? null, completenessSnapshot: data.completeness ?? null,
+      });
+      return inserted;
+    });
 
     // The submission is already committed; a notification failure must not report it as failed.
     await notifyReviewersOfSubmission(userId, periodStart, snapshotNumDays).catch((err) => console.error('Submission notification failed:', err));
@@ -238,19 +246,27 @@ export async function submitPeriod(data: {
     throw new Error(`Cannot submit period with status "${row.status}". Only draft or rejected periods can be submitted.`);
   }
 
-  const rows = await db.update(timesheetPeriods)
-    .set({
-      status: 'submitted',
-      submittedAt: new Date(),
-      submittedComment: data.comment,
-      reviewedAt: null,
-      reviewedBy: null,
-      reviewComment: null,
-      completenessSnapshot: data.completeness ?? null,
-      updatedAt: new Date(),
-    })
-    .where(eq(timesheetPeriods.id, row.id))
-    .returning();
+  const rows = await db.transaction(async (tx) => {
+    const updated = await tx.update(timesheetPeriods)
+      .set({
+        status: 'submitted',
+        submittedAt: new Date(),
+        submittedComment: data.comment,
+        reviewedAt: null,
+        reviewedBy: null,
+        reviewComment: null,
+        completenessSnapshot: data.completeness ?? null,
+        updatedAt: new Date(),
+      })
+      .where(eq(timesheetPeriods.id, row.id))
+      .returning();
+    // T8/R11: append-only approval history, written in the same transaction as the period change.
+    await tx.insert(periodEvents).values({
+      periodId: row.id, userId, event: 'submitted', actorId: userId,
+      comment: data.comment ?? null, completenessSnapshot: data.completeness ?? null,
+    });
+    return updated;
+  });
 
   const result = {
     id: rows[0].id,
@@ -278,7 +294,7 @@ export async function approvePeriod(data: {
   comment?: string;
 }): Promise<void> {
   const actor = await requireApproverFresh();
-  const db = await getDb();
+  const db = await getDbForWrite();
   const existing = await db
     .select()
     .from(timesheetPeriods)
@@ -307,15 +323,22 @@ export async function approvePeriod(data: {
     throw new Error(`Cannot approve period with status "${period.status}". Only submitted periods can be approved.`);
   }
 
-  await db.update(timesheetPeriods)
-    .set({
-      status: 'approved',
-      reviewedAt: new Date(),
-      reviewedBy: actor.id,
-      reviewComment: data.comment ?? null,
-      updatedAt: new Date(),
-    })
-    .where(eq(timesheetPeriods.id, data.periodId));
+  await db.transaction(async (tx) => {
+    await tx.update(timesheetPeriods)
+      .set({
+        status: 'approved',
+        reviewedAt: new Date(),
+        reviewedBy: actor.id,
+        reviewComment: data.comment ?? null,
+        updatedAt: new Date(),
+      })
+      .where(eq(timesheetPeriods.id, data.periodId));
+    // T8/R11: append-only approval history, written in the same transaction as the period change.
+    await tx.insert(periodEvents).values({
+      periodId: data.periodId, userId: period.userId, event: 'approved', actorId: actor.id,
+      comment: data.comment ?? null, completenessSnapshot: period.completenessSnapshot ?? null,
+    });
+  });
 
   // Fire-and-forget: notify employee via email
   const [employee] = await db
@@ -352,7 +375,7 @@ export async function rejectPeriod(data: {
   comment: string; // Required for rejections
 }): Promise<void> {
   const actor = await requireApproverFresh();
-  const db = await getDb();
+  const db = await getDbForWrite();
   const existing = await db
     .select()
     .from(timesheetPeriods)
@@ -379,15 +402,22 @@ export async function rejectPeriod(data: {
     throw new Error(`Cannot reject period with status "${period.status}". Only submitted periods can be rejected.`);
   }
 
-  await db.update(timesheetPeriods)
-    .set({
-      status: 'rejected',
-      reviewedAt: new Date(),
-      reviewedBy: actor.id,
-      reviewComment: data.comment,
-      updatedAt: new Date(),
-    })
-    .where(eq(timesheetPeriods.id, data.periodId));
+  await db.transaction(async (tx) => {
+    await tx.update(timesheetPeriods)
+      .set({
+        status: 'rejected',
+        reviewedAt: new Date(),
+        reviewedBy: actor.id,
+        reviewComment: data.comment,
+        updatedAt: new Date(),
+      })
+      .where(eq(timesheetPeriods.id, data.periodId));
+    // T8/R11: append-only approval history, written in the same transaction as the period change.
+    await tx.insert(periodEvents).values({
+      periodId: data.periodId, userId: period.userId, event: 'rejected', actorId: actor.id,
+      comment: data.comment, completenessSnapshot: period.completenessSnapshot ?? null,
+    });
+  });
 
   // Fire-and-forget: notify employee via email
   const [employee] = await db

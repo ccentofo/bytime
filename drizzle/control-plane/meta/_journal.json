@@ -22,6 +22,20 @@
       "when": 1792594685260,
       "tag": "0002_perfect_jack_power",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792602011099,
+      "tag": "0003_clumsy_bloodstorm",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792605651347,
+      "tag": "0004_exotic_colonel_america",
+      "breakpoints": true
     }
   ]
 }

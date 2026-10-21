@@ -42,23 +42,37 @@ export function getDbForUrl(connectionString: string): TenantDb {
 }
 
 /**
- * Resolve a Drizzle client for the CURRENT request's tenant, tolerating suspended tenants.
- * For pre-billing-wall checks only: the login/auth path, and session.ts's requireAdminFresh/
- * requireApproverFresh (a suspended tenant's admin must still be able to authenticate and to
- * have their role freshly re-verified so they can reach the billing wall and pay — a role
- * check reads the same users.role/isActive columns login already reads, no business data).
- * Do NOT use this for business-data queries; use getDb() there.
+ * Resolve a Drizzle client for the CURRENT request's tenant, tolerating every access mode
+ * EXCEPT `closed`. For pre-billing-wall / security-function checks only: the login/auth path,
+ * session.ts's requireAdminFresh/requireApproverFresh, and (feature-plan-terms-compliance.md
+ * T3) the write-gate allowlist's security functions — password change/reset, MFA setup,
+ * notification preferences. These must keep working in `read_only` and `billing_only` (a
+ * suspended tenant's admin must still be able to authenticate, reach billing, and pay; a
+ * read-only tenant's users must still be able to manage their own account). Do NOT use this
+ * for business-data queries; use getDb() (reads) or getDbForWrite() (writes) there.
  */
 export async function getDbForAuth(): Promise<TenantDb> {
   const { getTenantSlug } = await import('@/lib/tenant/context');
   const { getTenantBySlug } = await import('@/lib/tenant/registry');
+  const { getTenantAccess } = await import('@/lib/tenant/lifecycle');
   const slug = await getTenantSlug();
   if (!slug) throw new Error('No tenant in request context.');
   const tenant = await getTenantBySlug(slug);
   if (!tenant) throw new Error(`Unknown workspace: ${slug}`);
-  // Allow active and suspended — login must work so the admin can reach billing
-  if (tenant.status === 'deleting' || tenant.status === 'provisioning') {
+  if (getTenantAccess(tenant, new Date()) === 'closed') {
     throw new Error('This workspace is not available.');
   }
+  return clientFor(tenant.dbUrl);
+}
+
+/**
+ * Resolve the Drizzle client for the CURRENT request's tenant, for a WRITE. §3.2: every
+ * mutating server action must obtain its client from here, never getDb() — throws
+ * WorkspaceReadOnlyError unless the access mode is `full`. Enforced by
+ * src/__tests__/unit/server-action-guards.test.ts (the write-gate rule).
+ */
+export async function getDbForWrite(): Promise<TenantDb> {
+  const { getTenantForWrite } = await import('@/lib/tenant/context');
+  const tenant = await getTenantForWrite();
   return clientFor(tenant.dbUrl);
 }

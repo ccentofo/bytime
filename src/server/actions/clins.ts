@@ -1,6 +1,6 @@
 'use server';
 
-import { getDb } from '@/db';
+import { getDb, getDbForWrite } from '@/db';
 import { clins } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
@@ -18,7 +18,7 @@ export async function createClin(data: {
   description?: string;
   fundedAmount?: string;
 }) {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdmin();
   const validatedData = {
     contractId: data.contractId,
@@ -36,7 +36,7 @@ export async function updateClin(id: string, data: {
   fundedAmount?: string;
   status?: 'active' | 'inactive' | 'closed';
 }) {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdmin();
   const validatedData: Record<string, unknown> = { updatedAt: new Date() };
   if (data.clinNumber !== undefined) validatedData.clinNumber = validateClinNumber(data.clinNumber);

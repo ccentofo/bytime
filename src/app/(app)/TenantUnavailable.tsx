@@ -1,7 +1,7 @@
 import { Center, Stack, Title, Text, Anchor } from '@mantine/core';
 import type { TenantState } from '@/lib/tenant/context';
 
-type Reason = Exclude<TenantState['kind'], 'active'>;
+type Reason = Exclude<TenantState['kind'], 'full' | 'read_only' | 'billing_only'>;
 
 const COPY: Record<Reason, { title: string; body: string }> = {
   none: {
@@ -12,15 +12,12 @@ const COPY: Record<Reason, { title: string; body: string }> = {
     title: 'Workspace not found',
     body: 'This workspace doesn’t exist. Double-check the address, or contact your administrator.',
   },
-  suspended: {
-    title: 'Workspace suspended',
-    body: 'Access is paused due to a billing issue. An administrator can restore access from billing settings.',
-    // TODO (billing blueprint): link directly to the Stripe customer portal, and exempt
-    // /admin/billing from the suspension gate so admins can self-serve a fix.
-  },
-  deleting: {
+  // feature-plan-terms-compliance.md §3.1: covers deleting/deleted status AND a workspace past
+  // its deletion window but not yet actually deleted (D4: deletion is founder-run, so there's a
+  // real gap between "scheduled" and "gone") — all of it reads as "closed" to the user.
+  closed: {
     title: 'Workspace closed',
-    body: 'This workspace is being removed and is no longer available.',
+    body: 'This workspace is no longer available.',
   },
   provisioning: {
     title: 'Setting up your workspace',
@@ -32,7 +29,7 @@ const COPY: Record<Reason, { title: string; body: string }> = {
   },
 };
 
-/** Clean, themed screen shown by the (app) layout when the tenant is not active. */
+/** Clean, themed screen shown by the (app) layout when the tenant isn't in a usable access mode. */
 export function TenantUnavailable({ reason }: { reason: Reason }) {
   const copy = COPY[reason] ?? COPY.unknown;
   return (
@@ -41,7 +38,7 @@ export function TenantUnavailable({ reason }: { reason: Reason }) {
         <Title order={2}>{copy.title}</Title>
         <Text c="dimmed">{copy.body}</Text>
         <Text size="sm" c="dimmed">
-          Need help? Contact <Anchor href="mailto:support@example.com">support</Anchor>.
+          Need help? Contact <Anchor href="mailto:support@cadenzpoint.com">support</Anchor>.
         </Text>
       </Stack>
     </Center>

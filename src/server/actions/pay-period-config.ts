@@ -1,6 +1,6 @@
 'use server';
 
-import { getDb } from '@/db';
+import { getDb, getDbForWrite } from '@/db';
 import { payPeriodConfig, payPeriodTypeEnum, timesheetEntries, timesheetPeriods } from '@/db/schema';
 import { requireAdmin, requireAdminFresh, requireSession } from '@/lib/session';
 import type { PeriodConfig, PeriodType } from '@/lib/date-utils';
@@ -246,7 +246,7 @@ export async function updatePayPeriodConfig(data: {
   weekStartDay: number;
   effectiveFrom: CalendarDate | null;
 }): Promise<UpdatePayPeriodConfigResult> {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdminFresh();
   const candidateConfig = parseScheduleInput(data);
   const problem = anchorProblem(candidateConfig);

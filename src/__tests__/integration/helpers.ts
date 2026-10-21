@@ -1,5 +1,5 @@
 import * as schema from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 
 type TestDb = ReturnType<typeof import('drizzle-orm/postgres-js').drizzle>;
@@ -99,8 +99,15 @@ export async function createTestChargeCode(clinId: string, overrides: Partial<ty
 
 export async function cleanupTestData() {
   const db = getTestDb();
-  // Delete in reverse FK order
-  await db.delete(schema.timesheetEntries);
+  // T8: timesheet_entries and period_events are append-only (a trigger raises on UPDATE/DELETE).
+  // `SET LOCAL` only applies for the lifetime of a transaction, so the bypass and the deletes
+  // that need it must run inside the same one. period_events is also deleted here, before
+  // timesheet_periods, since it has a FK to timesheet_periods.id.
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`SET LOCAL cadenzpoint.allow_entry_delete = 'on'`);
+    await tx.delete(schema.periodEvents);
+    await tx.delete(schema.timesheetEntries);
+  });
   await db.delete(schema.timesheetPeriods);
   await db.delete(schema.userChargeCodes);
   await db.delete(schema.chargeCodes);

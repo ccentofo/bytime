@@ -1,5 +1,6 @@
 import 'server-only';
 import { eq } from 'drizzle-orm';
+import dayjs from 'dayjs';
 import { controlDb } from '@/db/control-plane';
 import { tenants } from '@/db/control-plane/schema';
 import { getTenantBySlug, createTenantRecord, invalidateTenant } from '@/lib/tenant/registry';
@@ -8,6 +9,7 @@ import * as schema from '@/db/schema';
 import { createNeonDatabase } from './neon';
 import { migrateTenantDatabase } from './migrate-tenant';
 import { canonicalTimeZone } from '@/lib/calendar-date';
+import { TRIAL_DAYS } from './lifecycle-config';
 
 const RESERVED_SLUGS = new Set(['www', 'app', 'api', 'admin', 'static', 'assets', 'mail', 'support']);
 
@@ -25,6 +27,9 @@ export type ProvisionInput = {
   /** D8: the signer's browser IANA timezone, captured at signup. Validated; falls back to
    * workspace_settings' own column default (America/New_York) if missing or invalid. */
   timezone?: string;
+  /** T9/R12: copied from the signups row — the Terms version the signer accepted, and when. */
+  termsVersion?: string;
+  termsAcceptedAt?: Date;
   /** Override DB creation (tests / self-hosted). Defaults to Neon. */
   createDatabase?: (slug: string) => Promise<string>;
 };
@@ -48,11 +53,17 @@ export async function provisionTenant(input: ProvisionInput): Promise<ProvisionR
   let dbUrl: string;
   if (existing) {
     dbUrl = existing.dbUrl; // resume — reuse the recorded (decrypted) URL
-  } else {
-    const create = input.createDatabase ?? createNeonDatabase;
-    dbUrl = await create(slug);
+  } else if (input.createDatabase) {
+    dbUrl = await input.createDatabase(slug); // test / self-hosted override — no Neon project
     // 2. Register immediately (status 'provisioning') so a crash is resumable.
     await createTenantRecord({ slug, name: input.name, dbUrl, plan: input.plan });
+    invalidateTenant(slug);
+  } else {
+    const created = await createNeonDatabase(slug);
+    dbUrl = created.dbUrl;
+    // 2. Register immediately (status 'provisioning') so a crash is resumable. T7: persist the
+    // Neon project id now so deletion never has to guess it from the project name.
+    await createTenantRecord({ slug, name: input.name, dbUrl, plan: input.plan, neonProjectId: created.neonProjectId });
     invalidateTenant(slug);
   }
 
@@ -85,8 +96,21 @@ export async function provisionTenant(input: ProvisionInput): Promise<ProvisionR
       .onConflictDoUpdate({ target: schema.workspaceSettings.id, set: { timezone, updatedAt: new Date() } });
   }
 
-  // 5. Activate.
-  await controlDb.update(tenants).set({ status: 'active', updatedAt: new Date() }).where(eq(tenants.slug, slug));
+  // 5. Activate. T4: a brand-new trial tenant gets trial_ends_at here — resuming a crashed
+  // provision must not reset it, so only set it when it isn't already there.
+  const plan = input.plan ?? existing?.plan ?? 'trial';
+  await controlDb.update(tenants).set({
+    status: 'active',
+    updatedAt: new Date(),
+    signupEmail: email,
+    ...(plan === 'trial' && !existing?.trialEndsAt
+      ? { trialEndsAt: dayjs().add(TRIAL_DAYS, 'day').toDate() }
+      : {}),
+    // T9/R12: copied from the signups row; omitted (not set to null) when absent, so a resumed
+    // provision never clears an already-recorded acceptance.
+    ...(input.termsVersion ? { termsVersion: input.termsVersion } : {}),
+    ...(input.termsAcceptedAt ? { termsAcceptedAt: input.termsAcceptedAt } : {}),
+  }).where(eq(tenants.slug, slug));
   invalidateTenant(slug);
 
   return { slug, adminUserId: admin.id };

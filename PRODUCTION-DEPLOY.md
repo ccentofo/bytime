@@ -113,7 +113,25 @@ production tenant**; after that it becomes a multi-deploy migration.
 ## Phase 1d — Terms compliance (BLOCKING for paid launch)
 
 `feature-plan-terms-compliance.md`: trial expiry, billing grace/suspension, full export with every
-revision, workspace deletion. Its §0 decisions come from the business side first. Build after 1c.
+revision, workspace deletion. Its §0 decisions come from the business side first (answered — see
+`src/lib/tenant/lifecycle-config.ts`). Build after 1c.
+
+**T1 backfill**: immediately after `db:migrate:all` applies the T1 control-plane migration in each
+environment, run `npm run backfill:trial-dates` (reads `CONTROL_PLANE_DATABASE_URL` from the
+environment) so every pre-existing trial tenant gets a `trial_ends_at`. Idempotent — safe to re-run.
+Use `--check` first to preview with no changes applied.
+
+**T4 cron**: `/api/cron/tenant-lifecycle` (added to `vercel.json`, runs daily) sends trial/billing/
+deletion notices and applies due state changes. Set `OPS_ALERT_EMAIL` (new env var, see 6.4) so the
+founder digest has somewhere to go — without it, the cron still runs but the digest is silently
+skipped. Founder tooling: `npm run tenant:admin -- show <slug>` / `extend-trial <slug> <days> --yes`
+/ `end-trial <slug> --yes`.
+
+**T7 backfill**: after `db:migrate:cp` applies the T7 control-plane migration, run
+`npm run backfill:neon-project-ids` (reads `CONTROL_PLANE_DATABASE_URL` and `NEON_API_KEY`) so
+every pre-existing tenant gets its `neon_project_id` recorded — `npm run tenant:delete` needs it to
+know which Neon project to delete. Idempotent; `--check` previews with no changes. See
+`TENANT-DELETION.md` for the deletion runbook itself.
 
 ---
 
@@ -235,6 +253,7 @@ values and production gets production values):
 | `ENCRYPTION_KEY` | staging (Phase 4) | prod (Phase 4) |
 | `AUTH_SECRET` | staging | prod |
 | `CRON_SECRET` | staging | prod |
+| `OPS_ALERT_EMAIL` | your staging-watching inbox (optional) | the founder inbox for the deletion/failure digest (T4) |
 | `NEXT_PUBLIC_APP_URL` | `https://staging.cadenzpoint.com` | `https://cadenzpoint.com` |
 | `APP_ROOT_DOMAIN` | `staging.cadenzpoint.com` | `cadenzpoint.com` |
 | `NEXT_PUBLIC_APP_ROOT_DOMAIN` | `staging.cadenzpoint.com` | `cadenzpoint.com` |
@@ -322,9 +341,10 @@ monthly prices. Copy each **price ID** (`price_…`) into `STRIPE_PRICE_STARTER`
 **9.2** **Developers → Webhooks → Add endpoint**:
 - URL: `https://staging.cadenzpoint.com/api/stripe/webhook` (test) /
   `https://cadenzpoint.com/api/stripe/webhook` (live)
-- Events — select exactly these four (the ones the app handles):
-  `customer.subscription.created`, `customer.subscription.updated`,
-  `customer.subscription.deleted`, `invoice.payment_failed`
+- Events — select exactly these six (the ones the app handles, feature-plan-terms-compliance.md
+  T5): `customer.subscription.created`, `customer.subscription.updated`,
+  `customer.subscription.deleted`, `invoice.payment_failed`, `checkout.session.completed`,
+  `customer.updated`
 - Copy the endpoint's **Signing secret** → `STRIPE_WEBHOOK_SECRET`.
 
 **9.3** **Settings → Billing → Customer portal** → enable it, allow cancel and plan switching
@@ -455,7 +475,7 @@ company or the first customer). Complete the verification email and password set
 Vercel project and redeploy (re-run 13.1). Re-check the console afterward.
 
 **13.5** Confirm crons are scheduled: production Vercel project → **Settings → Cron Jobs** shows
-the two jobs from `vercel.json`. (Crons only run on production deployments.)
+the three jobs from `vercel.json`. (Crons only run on production deployments.)
 
 **13.6** Run the smoke test against production:
 ```bash

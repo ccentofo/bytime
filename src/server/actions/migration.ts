@@ -2,7 +2,7 @@
 
 import { isUniqueViolation } from '@/lib/db-errors';
 import { resolvePeriod } from '@/server/internal/periods';
-import { getDb } from '@/db';
+import { getDb, getDbForWrite } from '@/db';
 import { timesheetEntries, timesheetPeriods, users, contracts, clins, indirectChargeCodes } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
@@ -137,7 +137,7 @@ export async function validateMigrationData(
 export async function importMigrationData(
   rows: MigrationEntryRow[]
 ): Promise<MigrationResult> {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdminFresh();
 
   // Re-validate to get resolved IDs
@@ -197,7 +197,7 @@ export async function importMigrationPeriods(
     reviewComment: string;
   }>
 ): Promise<MigrationResult> {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdminFresh();
 
   const allUsers = await db.select({ id: users.id, email: users.email }).from(users);

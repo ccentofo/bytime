@@ -1,6 +1,6 @@
 'use server';
 
-import { getDb } from '@/db';
+import { getDb, getDbForAuth } from '@/db';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireSession } from '@/lib/session';
@@ -42,7 +42,7 @@ export async function completeMFASetup(data: {
   code: string;
 }): Promise<{ success: boolean; recoveryCodes?: string[]; error?: string }> {
   const actor = await requireSession();
-  const db = await getDb();
+  const db = await getDbForAuth();
 
   // Verify the code against the pending secret
   const isValid = verifyTOTPCode(data.pendingSecret, data.code);
@@ -75,7 +75,7 @@ export async function completeMFASetup(data: {
  */
 export async function disableMFA(currentPassword: string): Promise<{ success: boolean; error?: string }> {
   const actor = await requireSession();
-  const db = await getDb();
+  const db = await getDbForAuth();
 
   const [user] = await db
     .select({ passwordHash: users.passwordHash })
