@@ -151,7 +151,14 @@ export async function assignUserToLaborCategory(data: {
 }) {
   const actor = await requireAdmin();
   const db = await getDb();
-  const rows = await db.insert(userLaborCategories).values({ ...data, assignedBy: actor.id }).returning();
+  // R2-6: explicit allowlist — never spread the caller's object into .values().
+  const rows = await db.insert(userLaborCategories).values({
+    userId: data.userId,
+    laborCategoryId: data.laborCategoryId,
+    effectiveDate: data.effectiveDate,
+    endDate: data.endDate,
+    assignedBy: actor.id,
+  }).returning();
   return rows[0];
 }
 

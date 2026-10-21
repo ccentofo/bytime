@@ -1,5 +1,8 @@
 import { auth } from '@/auth';
 import { redirect } from 'next/navigation';
+import { getDbForAuth } from '@/db';
+import { users } from '@/db/schema';
+import { eq } from 'drizzle-orm';
 import { getSupervisedEmployeeIds } from '@/server/internal/supervisor-scope';
 
 export type SessionUser = {
@@ -10,12 +13,42 @@ export type SessionUser = {
 };
 
 /**
+ * R2-12: a typed error for every guard failure, so callers (guardErrorResponse, route
+ * handlers) can branch on `instanceof AuthorizationError` + `.kind` instead of matching a
+ * message-string prefix — which a change to any guard's wording could silently break.
+ */
+export class AuthorizationError extends Error {
+  readonly kind: 'unauthenticated' | 'forbidden';
+
+  constructor(kind: 'unauthenticated' | 'forbidden', message: string) {
+    super(message);
+    this.name = 'AuthorizationError';
+    this.kind = kind;
+  }
+}
+
+/**
  * Resolve the current session user, or null if no session exists.
  * Identity comes ONLY from here — never from a caller-supplied parameter.
  */
 export async function getSessionUser(): Promise<SessionUser | null> {
   const session = await auth();
   if (!session?.user) return null;
+
+  // R2-1 defense in depth: the jwt callback already invalidates a session whose tenantSlug
+  // doesn't match the request's tenant, but re-check here too in case that callback is ever
+  // bypassed (e.g. a future NextAuth change, a cached token). No DB query needed.
+  const tokenTenantSlug = (session.user as any).tenantSlug as string | undefined;
+  try {
+    const { getTenantSlug } = await import('@/lib/tenant/context');
+    const requestSlug = await getTenantSlug();
+    if (!tokenTenantSlug || tokenTenantSlug !== requestSlug) {
+      return null;
+    }
+  } catch {
+    // getTenantSlug() throws on a host / x-tenant-slug mismatch (tampering) — fail closed.
+    return null;
+  }
 
   return {
     id: session.user.id as string,
@@ -29,7 +62,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
 export async function requireSession(): Promise<SessionUser> {
   const user = await getSessionUser();
   if (!user) {
-    throw new Error('Unauthorized: No active session');
+    throw new AuthorizationError('unauthenticated', 'Unauthorized: No active session');
   }
   return user;
 }
@@ -38,7 +71,7 @@ export async function requireSession(): Promise<SessionUser> {
 export async function requireAdmin(): Promise<SessionUser> {
   const user = await requireSession();
   if (user.role !== 'admin') {
-    throw new Error('Forbidden: Admin role required');
+    throw new AuthorizationError('forbidden', 'Forbidden: Admin role required');
   }
   return user;
 }
@@ -47,18 +80,57 @@ export async function requireAdmin(): Promise<SessionUser> {
 export async function requireApprover(): Promise<SessionUser> {
   const user = await requireSession();
   if (user.role !== 'admin' && user.role !== 'supervisor') {
-    throw new Error('Forbidden: Approver role required');
+    throw new AuthorizationError('forbidden', 'Forbidden: Approver role required');
   }
   return user;
 }
 
 /**
+ * R2-8: re-checks role and active status directly against the tenant DB, bypassing the JWT's
+ * cached role (refreshed at most every 60s, and fails OPEN on DB error — see auth.ts's jwt
+ * callback). Use this for sensitive, hard-to-undo actions where a demoted or deactivated admin
+ * must be denied immediately. Fails CLOSED: any DB error here denies access (no catch).
+ *
+ * Uses getDbForAuth() (tolerates a suspended tenant), not the strict getDb() — some of this
+ * guard's callers (billing.ts's startCheckout/openBillingPortal) must keep working for a
+ * suspended tenant's admin so they can reach the billing wall and pay. A role/active check
+ * reads only users.role/isActive, the same columns the login path already reads for a
+ * suspended tenant — it is not a business-data query.
+ */
+async function assertFreshRole(user: SessionUser, allowedRoles: SessionUser['role'][]): Promise<void> {
+  const db = await getDbForAuth();
+  const [row] = await db.select({ role: users.role, isActive: users.isActive }).from(users).where(eq(users.id, user.id));
+  if (!row || !row.isActive || !allowedRoles.includes(row.role)) {
+    throw new AuthorizationError('forbidden', 'Forbidden: Your access has changed — please sign in again.');
+  }
+}
+
+/** Admin only, with a fresh DB check (see assertFreshRole). Use for sensitive admin actions. */
+export async function requireAdminFresh(): Promise<SessionUser> {
+  const user = await requireAdmin();
+  await assertFreshRole(user, ['admin']);
+  return user;
+}
+
+/** Admin or supervisor, with a fresh DB check (see assertFreshRole). Use for sensitive approver actions. */
+export async function requireApproverFresh(): Promise<SessionUser> {
+  const user = await requireApprover();
+  await assertFreshRole(user, ['admin', 'supervisor']);
+  return user;
+}
+
+/**
  * Employee ids the actor may see in approver contexts: 'all' for admins, scoped ids (employees
- * sharing an active CLIN assignment with the actor) for supervisors, empty for employees.
+ * sharing an active CLIN assignment with the actor, PLUS the supervisor themselves — R2-12:
+ * their own audit entries/reports should be visible here too, consistent with
+ * assertCanAccessEmployee's self-access rule) for supervisors, empty for employees.
  */
 export async function getEmployeeScope(actor: SessionUser): Promise<'all' | string[]> {
   if (actor.role === 'admin') return 'all';
-  if (actor.role === 'supervisor') return getSupervisedEmployeeIds(actor.id, actor.role);
+  if (actor.role === 'supervisor') {
+    const scope = await getSupervisedEmployeeIds(actor.id, actor.role);
+    return scope.includes(actor.id) ? scope : [...scope, actor.id];
+  }
   return [];
 }
 
@@ -73,7 +145,7 @@ export async function assertCanAccessEmployee(actor: SessionUser, employeeId: st
     const scope = await getSupervisedEmployeeIds(actor.id, actor.role);
     if (scope === 'all' || scope.includes(employeeId)) return;
   }
-  throw new Error('Forbidden: You are not authorized to access this employee\'s data.');
+  throw new AuthorizationError('forbidden', 'Forbidden: You are not authorized to access this employee\'s data.');
 }
 
 /**

@@ -52,9 +52,11 @@ type FilterOptions = {
 
 type Props = {
   filterOptions: FilterOptions;
+  role: 'admin' | 'supervisor' | 'employee';
 };
 
-export function ReportsClient({ filterOptions }: Props) {
+export function ReportsClient({ filterOptions, role }: Props) {
+  const isAdmin = role === 'admin';
   // Timesheet PDF state
   const [pdfUserId, setPdfUserId] = useState<string | null>(null);
   const [pdfPeriodStart, setPdfPeriodStart] = useState<string>('');
@@ -165,64 +167,66 @@ export function ReportsClient({ filterOptions }: Props) {
           </Stack>
         </Paper>
 
-        {/* --- Cost Report (CSV/Excel) --- */}
-        <Paper withBorder p="lg" radius="md">
-          <Group mb="md">
-            <ThemeIcon color="success" variant="light" size="lg" radius="md">
-              <IconReportAnalytics size={20} />
-            </ThemeIcon>
-            <div>
-              <Text fw={600}>Detailed Cost Report</Text>
-              <Text size="xs" c="dimmed">Hours × rates by employee, CLIN, and LCAT</Text>
-            </div>
-          </Group>
+        {/* --- Detailed Cost Report (CSV/Excel) — admin-only: dollar data --- */}
+        {isAdmin && (
+          <Paper withBorder p="lg" radius="md">
+            <Group mb="md">
+              <ThemeIcon color="success" variant="light" size="lg" radius="md">
+                <IconReportAnalytics size={20} />
+              </ThemeIcon>
+              <div>
+                <Text fw={600}>Detailed Cost Report</Text>
+                <Text size="xs" c="dimmed">Hours × rates by employee, CLIN, and LCAT</Text>
+              </div>
+            </Group>
 
-          <Stack gap="sm">
-            <Group grow>
-              <DateInput
-                label="Start Date"
-                placeholder="Select start date"
-                value={costStartDate ? new Date(costStartDate + 'T00:00:00') : null}
-                onChange={(date) => setCostStartDate(date ? dayjs(date).format('YYYY-MM-DD') : '')}
+            <Stack gap="sm">
+              <Group grow>
+                <DateInput
+                  label="Start Date"
+                  placeholder="Select start date"
+                  value={costStartDate ? new Date(costStartDate + 'T00:00:00') : null}
+                  onChange={(date) => setCostStartDate(date ? dayjs(date).format('YYYY-MM-DD') : '')}
+                  clearable
+                />
+                <DateInput
+                  label="End Date"
+                  placeholder="Select end date"
+                  value={costEndDate ? new Date(costEndDate + 'T00:00:00') : null}
+                  onChange={(date) => setCostEndDate(date ? dayjs(date).format('YYYY-MM-DD') : '')}
+                  clearable
+                />
+              </Group>
+              <Select
+                label="Contract (optional)"
+                placeholder="All contracts"
+                data={filterOptions.contracts.map((c) => ({ value: c.id, label: `${c.name} (${c.contractNumber})` }))}
+                value={costContractId}
+                onChange={setCostContractId}
                 clearable
+                searchable
               />
-              <DateInput
-                label="End Date"
-                placeholder="Select end date"
-                value={costEndDate ? new Date(costEndDate + 'T00:00:00') : null}
-                onChange={(date) => setCostEndDate(date ? dayjs(date).format('YYYY-MM-DD') : '')}
-                clearable
-              />
-            </Group>
-            <Select
-              label="Contract (optional)"
-              placeholder="All contracts"
-              data={filterOptions.contracts.map((c) => ({ value: c.id, label: `${c.name} (${c.contractNumber})` }))}
-              value={costContractId}
-              onChange={setCostContractId}
-              clearable
-              searchable
-            />
-            <Group>
-              <Button
-                leftSection={<IconFileTypeCsv size={16} />}
-                onClick={downloadCostCsv}
-                disabled={!costStartDate || !costEndDate}
-                variant="default"
-              >
-                Download CSV
-              </Button>
-              <Button
-                leftSection={<IconFileSpreadsheet size={16} />}
-                onClick={downloadCostExcel}
-                disabled={!costStartDate || !costEndDate}
-                color="success"
-              >
-                Download Excel
-              </Button>
-            </Group>
-          </Stack>
-        </Paper>
+              <Group>
+                <Button
+                  leftSection={<IconFileTypeCsv size={16} />}
+                  onClick={downloadCostCsv}
+                  disabled={!costStartDate || !costEndDate}
+                  variant="default"
+                >
+                  Download CSV
+                </Button>
+                <Button
+                  leftSection={<IconFileSpreadsheet size={16} />}
+                  onClick={downloadCostExcel}
+                  disabled={!costStartDate || !costEndDate}
+                  color="success"
+                >
+                  Download Excel
+                </Button>
+              </Group>
+            </Stack>
+          </Paper>
+        )}
 
         {/* --- Employee Summary --- */}
         <Paper withBorder p="lg" radius="md">
@@ -232,7 +236,9 @@ export function ReportsClient({ filterOptions }: Props) {
             </ThemeIcon>
             <div>
               <Text fw={600}>Employee Summary Report</Text>
-              <Text size="xs" c="dimmed">Aggregated hours & cost by employee per contract/CLIN</Text>
+              <Text size="xs" c="dimmed">
+                {isAdmin ? 'Aggregated hours & cost by employee per contract/CLIN' : 'Aggregated hours by employee per contract/CLIN'}
+              </Text>
             </div>
           </Group>
 

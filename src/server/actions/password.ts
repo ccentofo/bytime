@@ -4,7 +4,7 @@ import { getDb } from '@/db';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
-import { requireSession, requireAdmin } from '@/lib/session';
+import { requireSession, requireAdminFresh } from '@/lib/session';
 
 // ---------------------------------------------------------------------------
 // Password Validation
@@ -101,7 +101,7 @@ export async function adminResetPassword(data: {
   targetUserId: string;
   newPassword: string;
 }): Promise<{ success: boolean; error?: string }> {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDb();
   // Validate new password
   const validationError = validatePassword(data.newPassword);

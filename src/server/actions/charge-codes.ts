@@ -95,8 +95,22 @@ export async function updateChargeCode(id: string, data: {
 }) {
   await requireAdmin();
   const db = await getDb();
+  // R2-6: explicit allowlist — never spread the caller's object into .set(). `isActive` in
+  // particular is a real column not in this form's type; deactivation has its own action
+  // (deactivateChargeCode) and must not be settable through this one.
+  const updateData: Record<string, unknown> = { updatedAt: new Date() };
+  if (data.code !== undefined) updateData.code = data.code;
+  if (data.name !== undefined) updateData.name = data.name;
+  if (data.description !== undefined) updateData.description = data.description;
+  if (data.clinId !== undefined) updateData.clinId = data.clinId;
+  if (data.slinId !== undefined) updateData.slinId = data.slinId;
+  if (data.laborCategoryId !== undefined) updateData.laborCategoryId = data.laborCategoryId;
+  if (data.classId !== undefined) updateData.classId = data.classId;
+  if (data.workLocation !== undefined) updateData.workLocation = data.workLocation;
+  if (data.billable !== undefined) updateData.billable = data.billable;
+
   const [row] = await db.update(chargeCodes)
-    .set({ ...data, updatedAt: new Date() })
+    .set(updateData)
     .where(eq(chargeCodes.id, id))
     .returning();
   return row;

@@ -46,6 +46,33 @@ export function verifyTOTPCode(secret: string, code: string): boolean {
   }
 }
 
+const TOTP_PERIOD_SECONDS = 30;
+
+/**
+ * Verify a 6-digit TOTP code and return the ABSOLUTE time-step it matched (or null if invalid).
+ * R2-12 (TOTP replay protection): sign-in stores the last accepted step on the user and rejects
+ * a code whose step is <= the stored one — otherwise the same code is valid for its whole
+ * ~30-60s window and can be reused by anyone who captures it (e.g. shoulder-surfing, a proxy log).
+ */
+export function getTOTPStep(secret: string, code: string): number | null {
+  try {
+    const totp = new OTPAuth.TOTP({
+      issuer: APP_NAME,
+      algorithm: 'SHA1',
+      digits: 6,
+      period: TOTP_PERIOD_SECONDS,
+      secret: OTPAuth.Secret.fromBase32(secret),
+    });
+
+    const delta = totp.validate({ token: code.replace(/\s/g, ''), window: 1 });
+    if (delta === null) return null;
+    const currentStep = Math.floor(Date.now() / 1000 / TOTP_PERIOD_SECONDS);
+    return currentStep + delta;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Generate 10 one-time recovery codes (8 alphanumeric characters each).
  */

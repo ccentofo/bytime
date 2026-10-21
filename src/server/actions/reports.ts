@@ -16,6 +16,9 @@ import { eq, and, gte, lt, desc, sql, inArray } from 'drizzle-orm';
 import dayjs from 'dayjs';
 import { getNumDaysInPeriod } from '@/lib/date-utils';
 import { requireSession, requireAdmin, requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
+import { getDetailedCostReportData, type CostReportEntry } from '@/server/internal/reports';
+
+export type { CostReportEntry };
 
 // ---------------------------------------------------------------------------
 // Types
@@ -46,28 +49,13 @@ export interface TimesheetReportData {
   grandTotal: number;
 }
 
-export interface CostReportEntry {
-  employeeName: string;
-  employeeEmail: string;
-  contractName: string;
-  contractNumber: string;
-  clinNumber: string;
-  slinNumber: string | null;
-  lcatCode: string;
-  lcatTitle: string;
-  hourlyRate: number;
-  totalHours: number;
-  totalCost: number;
-  entryDate: string; // YYYY-MM-DD
-}
-
 export interface EmployeeSummaryEntry {
   employeeName: string;
   contractName: string;
   contractNumber: string;
   clinNumber: string;
   totalHours: number;
-  totalCost: number;
+  totalCost?: number; // R2-5: omitted entirely (not 0) for non-admins — dollar data is admin-only
   flsaExempt: boolean;
 }
 
@@ -110,14 +98,19 @@ export async function getTimesheetReportData(
 
   const period = periodRows[0];
 
-  // Get approved-by name if applicable
+  // Get approved-by name if applicable. R2-7: an admin may approve/reject their own period —
+  // show "Self-approved" rather than their own name, so self-approval stays visibly auditable.
   let approvedByName: string | null = null;
   if (period?.reviewedBy) {
-    const [reviewer] = await db
-      .select({ fullName: users.fullName })
-      .from(users)
-      .where(eq(users.id, period.reviewedBy));
-    approvedByName = reviewer?.fullName ?? null;
+    if (period.reviewedBy === userId) {
+      approvedByName = 'Self-approved';
+    } else {
+      const [reviewer] = await db
+        .select({ fullName: users.fullName })
+        .from(users)
+        .where(eq(users.id, period.reviewedBy));
+      approvedByName = reviewer?.fullName ?? null;
+    }
   }
 
   // Get user's charge codes
@@ -236,84 +229,7 @@ export async function getDetailedCostReport(
   contractId?: string
 ): Promise<CostReportEntry[]> {
   await requireAdmin();
-  const db = await getDb();
-  const endDateExclusive = dayjs(endDate).add(1, 'day').toDate();
-
-  const conditions = [
-    gte(timesheetEntries.entryDate, startDate),
-    lt(timesheetEntries.entryDate, endDateExclusive),
-    eq(
-      timesheetEntries.revisionNumber,
-      sql`(
-        SELECT MAX(te2.revision_number)
-        FROM timesheet_entries te2
-        WHERE te2.user_id = ${timesheetEntries.userId}
-          AND te2.clin_id = ${timesheetEntries.clinId}
-          AND te2.entry_date = ${timesheetEntries.entryDate}
-      )`
-    ),
-  ];
-
-  if (contractId) {
-    conditions.push(eq(contracts.id, contractId));
-  }
-
-  const rows = await db
-    .select({
-      employeeName: users.fullName,
-      employeeEmail: users.email,
-      contractName: contracts.name,
-      contractNumber: contracts.contractNumber,
-      clinNumber: clins.clinNumber,
-      slinNumber: slins.slinNumber,
-      entryDate: timesheetEntries.entryDate,
-      hours: timesheetEntries.hours,
-      lcatCode: laborCategories.lcatCode,
-      lcatTitle: laborCategories.title,
-      hourlyRate: laborCategories.hourlyRate,
-    })
-    .from(timesheetEntries)
-    .innerJoin(users, eq(timesheetEntries.userId, users.id))
-    .innerJoin(clins, eq(timesheetEntries.clinId, clins.id))
-    .innerJoin(contracts, eq(clins.contractId, contracts.id))
-    .leftJoin(slins, eq(timesheetEntries.slinId, slins.id))
-    .leftJoin(
-      userLaborCategories,
-      and(
-        eq(userLaborCategories.userId, timesheetEntries.userId),
-        sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-        sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} > ${timesheetEntries.entryDate})`,
-      )
-    )
-    .leftJoin(
-      laborCategories,
-      and(
-        eq(laborCategories.id, userLaborCategories.laborCategoryId),
-        eq(laborCategories.clinId, timesheetEntries.clinId),
-        eq(laborCategories.status, 'active'),
-      )
-    )
-    .where(and(...conditions))
-    .orderBy(contracts.name, clins.clinNumber, users.fullName, timesheetEntries.entryDate);
-
-  return rows.map((row) => {
-    const hours = parseFloat(row.hours) || 0;
-    const rate = parseFloat(row.hourlyRate ?? '0') || 0;
-    return {
-      employeeName: row.employeeName,
-      employeeEmail: row.employeeEmail,
-      contractName: row.contractName,
-      contractNumber: row.contractNumber,
-      clinNumber: row.clinNumber,
-      slinNumber: row.slinNumber,
-      lcatCode: row.lcatCode ?? '—',
-      lcatTitle: row.lcatTitle ?? 'No LCAT',
-      hourlyRate: rate,
-      totalHours: Math.round(hours * 100) / 100,
-      totalCost: Math.round(hours * rate * 100) / 100,
-      entryDate: dayjs(row.entryDate).format('YYYY-MM-DD'),
-    };
-  });
+  return getDetailedCostReportData(startDate, endDate, contractId);
 }
 
 // ---------------------------------------------------------------------------
@@ -396,8 +312,9 @@ export async function getEmployeeSummaryReport(
     contractNumber: row.contractNumber,
     clinNumber: row.clinNumber,
     totalHours: Math.round(Number(row.totalHours) * 100) / 100,
-    // Hours only for supervisors — dollar figures are admin-only.
-    totalCost: isAdmin ? Math.round(Number(row.totalCost) * 100) / 100 : 0,
+    // R2-5: the totalCost KEY is absent entirely for supervisors — dollar figures are
+    // admin-only — not present-but-zero, which previously rendered a fake "$0" column.
+    ...(isAdmin ? { totalCost: Math.round(Number(row.totalCost) * 100) / 100 } : {}),
     flsaExempt: row.flsaExempt,
   }));
 }

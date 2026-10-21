@@ -3,7 +3,7 @@
 import { getDb } from '@/db';
 import { apiKeys } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import crypto from 'crypto';
 
 /**
@@ -15,7 +15,7 @@ export async function createApiKey(data: {
   permissions?: 'read' | 'read-write';
   expiresAt?: Date;
 }): Promise<{ id: string; key: string; prefix: string }> {
-  const actor = await requireAdmin();
+  const actor = await requireAdminFresh();
   const db = await getDb();
 
   // Generate a random API key: "byt_" + 32 random hex chars
@@ -66,7 +66,7 @@ export async function getApiKeys() {
  */
 export async function revokeApiKey(id: string): Promise<void> {
   const db = await getDb();
-  await requireAdmin();
+  await requireAdminFresh();
   await db.update(apiKeys)
     .set({ isActive: false, updatedAt: new Date() })
     .where(eq(apiKeys.id, id));
@@ -77,6 +77,6 @@ export async function revokeApiKey(id: string): Promise<void> {
  */
 export async function deleteApiKey(id: string): Promise<void> {
   const db = await getDb();
-  await requireAdmin();
+  await requireAdminFresh();
   await db.delete(apiKeys).where(eq(apiKeys.id, id));
 }

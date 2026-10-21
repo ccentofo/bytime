@@ -87,10 +87,14 @@ export async function generateCostReportExcel(
 
 /**
  * Generate an Excel workbook with employee summary data.
+ *
+ * R2-5: `includeCost` controls whether the Total Cost column exists at all — supervisors never
+ * see dollar figures, so for them this must be an hours-only sheet, not a cost column of zeros.
  */
 export async function generateEmployeeSummaryExcel(
   data: EmployeeSummaryEntry[],
-  dateRange: string
+  dateRange: string,
+  includeCost: boolean
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'CadenzPoint';
@@ -99,12 +103,14 @@ export async function generateEmployeeSummaryExcel(
   const sheet = workbook.addWorksheet('Employee Summary');
 
   // Title
-  sheet.mergeCells('A1:F1');
+  sheet.mergeCells(includeCost ? 'A1:F1' : 'A1:E1');
   sheet.getCell('A1').value = `Employee Summary Report — ${dateRange}`;
   sheet.getCell('A1').font = { bold: true, size: 14 };
 
   // Headers
-  const headers = ['Employee', 'Contract', 'Contract #', 'CLIN', 'Total Hours', 'Total Cost ($)'];
+  const headers = includeCost
+    ? ['Employee', 'Contract', 'Contract #', 'CLIN', 'Total Hours', 'Total Cost ($)']
+    : ['Employee', 'Contract', 'Contract #', 'CLIN', 'Total Hours'];
   const headerRow = sheet.addRow(headers);
   headerRow.font = { bold: true };
   headerRow.fill = {
@@ -115,33 +121,34 @@ export async function generateEmployeeSummaryExcel(
 
   // Data
   for (const entry of data) {
-    sheet.addRow([
+    const row: Array<string | number> = [
       entry.employeeName,
       entry.contractName,
       entry.contractNumber,
       entry.clinNumber,
       entry.totalHours,
-      entry.totalCost,
-    ]);
+    ];
+    if (includeCost) row.push(entry.totalCost ?? 0);
+    sheet.addRow(row);
   }
 
   // Totals
   const totalHours = data.reduce((sum, e) => sum + e.totalHours, 0);
-  const totalCost = data.reduce((sum, e) => sum + e.totalCost, 0);
-  const totalsRow = sheet.addRow([
-    'TOTALS', '', '', '',
-    Math.round(totalHours * 100) / 100,
-    Math.round(totalCost * 100) / 100,
-  ]);
+  const totalsRowValues: Array<string | number> = ['TOTALS', '', '', '', Math.round(totalHours * 100) / 100];
+  if (includeCost) {
+    const totalCost = data.reduce((sum, e) => sum + (e.totalCost ?? 0), 0);
+    totalsRowValues.push(Math.round(totalCost * 100) / 100);
+  }
+  const totalsRow = sheet.addRow(totalsRowValues);
   totalsRow.font = { bold: true };
 
   // Widths
-  sheet.columns = [
-    { width: 22 }, { width: 28 }, { width: 18 }, { width: 12 }, { width: 14 }, { width: 16 },
-  ];
+  sheet.columns = includeCost
+    ? [{ width: 22 }, { width: 28 }, { width: 18 }, { width: 12 }, { width: 14 }, { width: 16 }]
+    : [{ width: 22 }, { width: 28 }, { width: 18 }, { width: 12 }, { width: 14 }];
 
   sheet.getColumn(5).numFmt = '#,##0.00';
-  sheet.getColumn(6).numFmt = '$#,##0.00';
+  if (includeCost) sheet.getColumn(6).numFmt = '$#,##0.00';
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);

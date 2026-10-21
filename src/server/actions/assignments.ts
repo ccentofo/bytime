@@ -63,9 +63,16 @@ export async function assignUserToClin(data: {
 }) {
   const actor = await requireAdmin();
   const db = await getDb();
+  // R2-6: explicit allowlist — isActive/assignedAt/assignedBy are real columns on this table
+  // that spreading the caller's object wholesale would otherwise expose to forgery.
   const rows = await db
     .insert(userAssignments)
-    .values({ ...data, assignedBy: actor.id })
+    .values({
+      userId: data.userId,
+      clinId: data.clinId,
+      slinId: data.slinId ?? null,
+      assignedBy: actor.id,
+    })
     .onConflictDoUpdate({
       target: [userAssignments.userId, userAssignments.clinId],
       set: { isActive: true, assignedAt: new Date(), slinId: data.slinId ?? null },

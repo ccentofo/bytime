@@ -119,7 +119,13 @@ async function syncPendingEntries(): Promise<boolean> {
       return true;
     }
 
-    // Group by periodStart for batch saving
+    // Group by periodStart for batch saving.
+    // This hardcodes semi-monthly period math and doesn't account for other period types
+    // (weekly/biweekly/monthly) configured via pay-period-config.ts — but nothing ever queues
+    // offline entries today (saveOfflineEntry has no callers), so this path is dormant. If it's
+    // ever built out, saveTimesheetBatch's server-side period-start/dayIndex validation (R2-2)
+    // now rejects a mismatched or out-of-range batch rather than silently writing into the
+    // wrong period, so getting this grouping wrong here would fail loudly, not corrupt data.
     const byPeriod = new Map<string, typeof pending>();
     for (const item of pending) {
       // Determine period start from entry date

@@ -119,6 +119,28 @@ describe('MFA sign-in flow and suspended-workspace sign-in (F10)', () => {
     expect(result?.id).toBe(user.id);
   });
 
+  // R2-12 ---------------------------------------------------------------
+  it('rejects a reused TOTP code — the same code cannot sign in twice, even within its own window', async () => {
+    const db = getTestDb();
+    const bcrypt = (await import('bcryptjs')).default;
+    const hash = await bcrypt.hash(PASSWORD, 4);
+    const secret = 'JBSWY3DPEHPK3PXP';
+    const email = `mfa-replay-${Date.now()}@bytime.dev`;
+    await db.insert(schema.users).values({
+      email, fullName: 'MFA User', role: 'employee', passwordHash: hash, isActive: true,
+      totpEnabled: true, totpSecret: encrypt(secret),
+    });
+
+    const code = currentTotpCode(secret);
+    const first = await authorizeCredentials({ email, password: PASSWORD, mfaCode: code });
+    expect(first?.email).toBe(email);
+
+    // Same code, immediately replayed — still within its validity window, but must be rejected.
+    await expect(
+      authorizeCredentials({ email, password: PASSWORD, mfaCode: code })
+    ).rejects.toMatchObject({ code: 'mfa_invalid' });
+  });
+
   it('9d. a recovery code signs in and is consumed — a second use of the same code fails', async () => {
     const db = getTestDb();
     const bcrypt = (await import('bcryptjs')).default;

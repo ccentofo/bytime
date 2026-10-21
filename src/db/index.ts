@@ -43,8 +43,11 @@ export function getDbForUrl(connectionString: string): TenantDb {
 
 /**
  * Resolve a Drizzle client for the CURRENT request's tenant, tolerating suspended tenants.
- * ONLY for the login/auth path — suspended admins must be able to authenticate so they can
- * reach the billing wall and pay. Do NOT use this in data paths; use getDb() there.
+ * For pre-billing-wall checks only: the login/auth path, and session.ts's requireAdminFresh/
+ * requireApproverFresh (a suspended tenant's admin must still be able to authenticate and to
+ * have their role freshly re-verified so they can reach the billing wall and pay — a role
+ * check reads the same users.role/isActive columns login already reads, no business data).
+ * Do NOT use this for business-data queries; use getDb() there.
  */
 export async function getDbForAuth(): Promise<TenantDb> {
   const { getTenantSlug } = await import('@/lib/tenant/context');

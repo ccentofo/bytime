@@ -2,8 +2,9 @@
 
 import { getDb } from '@/db';
 import { users, contracts, clins, slins, laborCategories, userAssignments } from '@/db/schema';
-import { eq, and } from 'drizzle-orm';
-import { requireAdmin } from '@/lib/session';
+import { eq, and, inArray } from 'drizzle-orm';
+import { requireAdminFresh } from '@/lib/session';
+import { assertSeatsAvailable } from '@/server/internal/seats';
 import bcrypt from 'bcryptjs';
 
 // ---------------------------------------------------------------------------
@@ -26,7 +27,21 @@ export interface ImportResult {
 
 export async function bulkImportEmployees(rows: EmployeeImportRow[]): Promise<ImportResult> {
   const db = await getDb();
-  await requireAdmin();
+  await requireAdminFresh();
+
+  // R2-11: count genuinely NEW rows (excluding ones matching an existing user by email) and
+  // reject the WHOLE batch up front if it would exceed the plan's seat limit. Previously only
+  // single-user creation paths (createUser/createUserWithPassword) checked this, so a bulk
+  // import could blow straight past the limit in one request.
+  const incomingEmails = rows.map((row) => row.email.toLowerCase().trim());
+  const existingRows = incomingEmails.length > 0
+    ? await db.select({ email: users.email }).from(users).where(inArray(users.email, incomingEmails))
+    : [];
+  const existingEmails = new Set(existingRows.map((r) => r.email));
+  const newRowCount = incomingEmails.filter((email) => !existingEmails.has(email)).length;
+  if (newRowCount > 0) {
+    await assertSeatsAvailable(newRowCount);
+  }
 
   const result: ImportResult = { created: 0, skipped: 0, errors: [], generatedPasswords: [] };
 
@@ -86,7 +101,7 @@ export interface ContractImportRow {
 
 export async function bulkImportContracts(rows: ContractImportRow[]): Promise<ImportResult> {
   const db = await getDb();
-  await requireAdmin();
+  await requireAdminFresh();
 
   const result: ImportResult = { created: 0, skipped: 0, errors: [] };
 
@@ -135,7 +150,7 @@ export interface ClinImportRow {
 
 export async function bulkImportClins(rows: ClinImportRow[]): Promise<ImportResult> {
   const db = await getDb();
-  await requireAdmin();
+  await requireAdminFresh();
 
   const result: ImportResult = { created: 0, skipped: 0, errors: [] };
 
@@ -184,7 +199,7 @@ export interface LcatImportRow {
 
 export async function bulkImportLaborCategories(rows: LcatImportRow[]): Promise<ImportResult> {
   const db = await getDb();
-  await requireAdmin();
+  await requireAdminFresh();
 
   const result: ImportResult = { created: 0, skipped: 0, errors: [] };
 
@@ -238,7 +253,7 @@ export interface AssignmentImportRow {
 
 export async function bulkImportAssignments(rows: AssignmentImportRow[]): Promise<ImportResult> {
   const db = await getDb();
-  await requireAdmin();
+  await requireAdminFresh();
 
   const result: ImportResult = { created: 0, skipped: 0, errors: [] };
 

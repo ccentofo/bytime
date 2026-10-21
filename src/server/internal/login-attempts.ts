@@ -1,7 +1,6 @@
 import 'server-only';
 import { getDbForAuth } from '@/db';
 import { loginAttempts } from '@/db/schema';
-import { checkLockout } from '@/server/actions/login-attempts';
 
 /**
  * Record a failed login attempt.
@@ -52,12 +51,4 @@ export async function unlockAccount(email: string): Promise<void> {
     email: normalizedEmail,
     successful: true,
   });
-}
-
-/**
- * Get the number of recent failed attempts for display purposes.
- */
-export async function getFailedAttemptCount(email: string): Promise<number> {
-  const lockoutInfo = await checkLockout(email);
-  return lockoutInfo?.failedAttempts ?? 0;
 }

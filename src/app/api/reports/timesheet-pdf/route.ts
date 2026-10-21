@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
     // which shifts to May 15 in US timezones. dayjs().startOf('day') ensures local midnight.
     data = await getTimesheetReportData(userId, dayjs(periodStart).startOf('day').toDate());
   } catch (error) {
-    return guardErrorResponse(error) ?? NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return guardErrorResponse(error);
   }
   if (!data) {
     return NextResponse.json({ error: 'No data found' }, { status: 404 });

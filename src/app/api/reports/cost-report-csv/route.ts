@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
       contractId ?? undefined
     );
   } catch (error) {
-    return guardErrorResponse(error) ?? NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return guardErrorResponse(error);
   }
 
   const csv = generateCsv(data, [

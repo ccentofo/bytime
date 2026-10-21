@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { validateApiKey, apiResponse, apiError } from '@/lib/api-auth';
-import { getDetailedCostReport } from '@/server/actions/reports';
+import { getDetailedCostReportData } from '@/server/internal/reports';
 
 export async function GET(request: NextRequest) {
   const authResult = await validateApiKey(request);
@@ -16,7 +16,10 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const data = await getDetailedCostReport(
+    // R2-4: call the internal query directly, not the admin-only server action — API key
+    // requests have no session, so requireAdmin() inside getDetailedCostReport() would always
+    // reject them. validateApiKey() above is this route's own, equivalent authorization.
+    const data = await getDetailedCostReportData(
       new Date(startDate),
       new Date(endDate),
       contractId ?? undefined

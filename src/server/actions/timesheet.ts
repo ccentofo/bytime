@@ -4,11 +4,12 @@ import { getDb } from '@/db';
 import { timesheetEntries, userAssignments, clins, contracts, slins, indirectChargeCodes, chargeCodes, userChargeCodes, costClasses } from '@/db/schema';
 import { eq, and, gte, lt, desc, sql } from 'drizzle-orm';
 import dayjs from 'dayjs';
-import { getNumDaysInPeriod } from '@/lib/date-utils';
+import { getNumDaysInPeriod, getPeriodStartForDate } from '@/lib/date-utils';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
 import { validateUUID, validateHours } from '@/lib/validation';
 import { requireSession, assertCanAccessEmployee } from '@/lib/session';
 import { getPeriodStatusFor } from '@/server/internal/periods';
+import { getEffectiveConfigAt } from '@/server/actions/pay-period-config';
 
 /**
  * Validate that a user has an active assignment to a specific charge code.
@@ -79,89 +80,9 @@ async function assertPeriodEditable(userId: string, periodStart: Date): Promise<
  */
 export async function getChargeCodesForUser(): Promise<ChargeCode[]> {
   const actor = await requireSession();
-  const userId = actor.id;
-  const db = await getDb();
-
-  // Direct charge codes from user_charge_codes
-  const directRows = await db
-    .select({
-      id: chargeCodes.id,                // chargeCodeId — the row identity
-      code: chargeCodes.code,
-      name: chargeCodes.name,
-      description: chargeCodes.description,
-      clinId: chargeCodes.clinId,
-      clinNumber: clins.clinNumber,
-      slinId: chargeCodes.slinId,
-      slinNumber: slins.slinNumber,
-      contractName: contracts.name,
-      contractNumber: contracts.contractNumber,
-      workLocation: chargeCodes.workLocation,
-      billable: chargeCodes.billable,
-      className: costClasses.name,
-    })
-    .from(userChargeCodes)
-    .innerJoin(chargeCodes, eq(userChargeCodes.chargeCodeId, chargeCodes.id))
-    .innerJoin(clins, eq(chargeCodes.clinId, clins.id))
-    .innerJoin(contracts, eq(clins.contractId, contracts.id))
-    .leftJoin(slins, eq(chargeCodes.slinId, slins.id))
-    .leftJoin(costClasses, eq(chargeCodes.classId, costClasses.id))
-    .where(
-      and(
-        eq(userChargeCodes.userId, userId),
-        eq(userChargeCodes.isActive, true),
-        eq(chargeCodes.isActive, true),
-        eq(clins.status, 'active'),
-        eq(contracts.status, 'active'),
-      )
-    )
-    .orderBy(contracts.name, clins.clinNumber, chargeCodes.code);
-
-  const directCodes: ChargeCode[] = directRows.map((r) => ({
-    id: r.id,                            // chargeCodeId as the row identity
-    projectName: r.contractName,
-    clin: r.code,                        // show the charge code string (not just CLIN number)
-    description: r.name,                 // human label of the charge code
-    clinId: r.clinId,                    // underlying CLIN for denormalization + supervisor scope
-    clinNumber: r.clinNumber,
-    slinId: r.slinId ?? undefined,
-    slinNumber: r.slinNumber ?? undefined,
-    workLocation: r.workLocation ?? null,
-    billable: r.billable,
-    className: r.className ?? undefined,
-    isIndirect: false,
-  }));
-
-  // Indirect charge codes (unchanged — available to all)
-  const indirectRows = await db
-    .select()
-    .from(indirectChargeCodes)
-    .where(
-      and(
-        eq(indirectChargeCodes.isActive, true),
-        eq(indirectChargeCodes.availableToAll, true),
-      )
-    )
-    .orderBy(indirectChargeCodes.category, indirectChargeCodes.code);
-
-  const CATEGORY_LABELS: Record<string, string> = {
-    overhead: 'Overhead',
-    ga: 'G&A',
-    irad: 'IR&D',
-    bp: 'Bid & Proposal',
-    leave: 'Leave',
-    unallowable: 'Unallowable',
-  };
-
-  const indirectCodes: ChargeCode[] = indirectRows.map((r) => ({
-    id: r.id,
-    projectName: CATEGORY_LABELS[r.category] ?? r.category,
-    clin: r.code,
-    description: r.description ?? r.name,
-    isIndirect: true,
-    indirectCategory: r.category,
-  }));
-
-  return [...directCodes, ...indirectCodes];
+  // R2-12: delegates to the same query the approver-review path uses (getChargeCodesForEmployee)
+  // instead of duplicating it — one query to keep correct, not two.
+  return getChargeCodesForEmployee(actor.id);
 }
 
 /**
@@ -174,50 +95,8 @@ export async function getTimesheetEntries(
   chargeCodes_param: ChargeCode[]
 ): Promise<TimesheetEntry[]> {
   const actor = await requireSession();
-  const userId = actor.id;
-  const db = await getDb();
-  const numDays = getNumDaysInPeriod(periodStart);
-  const start = dayjs(periodStart);
-  const endDate = start.add(numDays, 'day');
-
-  const rows = await db
-    .select({
-      chargeCodeId: timesheetEntries.chargeCodeId,
-      clinId: timesheetEntries.clinId,
-      indirectCodeId: timesheetEntries.indirectCodeId,
-      entryDate: timesheetEntries.entryDate,
-      hours: timesheetEntries.hours,
-      revisionNumber: timesheetEntries.revisionNumber,
-    })
-    .from(timesheetEntries)
-    .where(
-      and(
-        eq(timesheetEntries.userId, userId),
-        gte(timesheetEntries.entryDate, start.toDate()),
-        lt(timesheetEntries.entryDate, endDate.toDate()),
-      )
-    )
-    .orderBy(timesheetEntries.chargeCodeId, timesheetEntries.entryDate, desc(timesheetEntries.revisionNumber));
-
-  // Key: chargeCodeId for direct entries (new model), clinId as fallback (legacy entries), indirectCodeId for indirect
-  const latestHours = new Map<string, number>();
-  for (const row of rows) {
-    const dayIndex = dayjs(row.entryDate).diff(start, 'day');
-    const entryId = row.chargeCodeId ?? row.clinId ?? row.indirectCodeId ?? '';
-    const key = `${entryId}-${dayIndex}`;
-    if (!latestHours.has(key)) {
-      latestHours.set(key, parseFloat(row.hours));
-    }
-  }
-
-  return chargeCodes_param.map((cc) => {
-    const hours: number[] = [];
-    for (let i = 0; i < numDays; i++) {
-      const key = `${cc.id}-${i}`;
-      hours.push(latestHours.get(key) ?? 0);
-    }
-    return { chargeCodeId: cc.id, hours };
-  });
+  // R2-12: delegates to getTimesheetEntriesForEmployee rather than duplicating its query.
+  return getTimesheetEntriesForEmployee(actor.id, periodStart, chargeCodes_param);
 }
 
 /**
@@ -290,6 +169,23 @@ export async function saveTimesheetBatch(data: {
   const start = dayjs(data.periodStart);
   const today = dayjs().startOf('day');
   const newRevisions: Record<string, number> = {};
+
+  // R2-2: period-lock integrity. `periodStart` must be a REAL period boundary — otherwise
+  // getPeriodStatusFor finds no row and treats it as an editable draft — and every cell's
+  // dayIndex must land strictly inside THAT period. Without this, a dayIndex outside
+  // [0, numDays) computes an entryDate in an ADJACENT period whose own lock status was never
+  // checked (assertPeriodEditable below only checks the period named by periodStart).
+  const periodConfig = await getEffectiveConfigAt(data.periodStart);
+  const canonicalPeriodStart = dayjs(getPeriodStartForDate(data.periodStart, periodConfig)).startOf('day');
+  if (!dayjs(data.periodStart).startOf('day').isSame(canonicalPeriodStart, 'day')) {
+    throw new Error('Invalid period start date.');
+  }
+  const numDays = getNumDaysInPeriod(data.periodStart, periodConfig);
+  for (const cell of data.cells) {
+    if (!Number.isInteger(cell.dayIndex) || cell.dayIndex < 0 || cell.dayIndex >= numDays) {
+      throw new Error(`Invalid day index ${cell.dayIndex} for this pay period.`);
+    }
+  }
 
   await assertPeriodEditable(userId, data.periodStart);
 

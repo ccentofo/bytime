@@ -8,7 +8,7 @@ import {
   integrationSyncRecords,
 } from '@/db/schema';
 import { eq, desc, and } from 'drizzle-orm';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { encrypt, decrypt } from '@/lib/encryption';
 import { getAllConnectorMetadata } from '@/lib/integrations/registry';
 
@@ -46,7 +46,7 @@ export async function createConnection(data: {
   scopes?: string;
 }) {
   const db = await getDb();
-  const actor = await requireAdmin();
+  const actor = await requireAdminFresh();
 
   const values: Record<string, unknown> = {
     provider: data.provider,
@@ -71,7 +71,7 @@ export async function createConnection(data: {
 
 export async function disconnectIntegration(connectionId: string) {
   const db = await getDb();
-  await requireAdmin();
+  await requireAdminFresh();
   await db.update(integrationConnections)
     .set({
       isActive: false,

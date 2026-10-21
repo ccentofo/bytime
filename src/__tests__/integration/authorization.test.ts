@@ -25,7 +25,16 @@ vi.mock('@/db', async (importOriginal) => ({
   getDb: async () => getTestDb(),
 }));
 
-type FakeSessionUser = { id: string; role: string; email: string; fullName: string };
+// R2-1: getSessionUser() now checks session.user.tenantSlug against the request's tenant
+// (getTenantSlug()). Keep them matching here by default so existing tests exercise
+// authorization, not the tenant-binding check — case 1e below is the one exception.
+const tenantState = vi.hoisted(() => ({ requestSlug: 'test-tenant' }));
+
+vi.mock('@/lib/tenant/context', () => ({
+  getTenantSlug: async () => tenantState.requestSlug,
+}));
+
+type FakeSessionUser = { id: string; role: string; email: string; fullName: string; tenantSlug?: string };
 
 const sessionState = vi.hoisted(() => ({
   user: null as null | FakeSessionUser,
@@ -40,6 +49,7 @@ vi.mock('@/auth', () => ({
             email: sessionState.user.email,
             fullName: sessionState.user.fullName,
             role: sessionState.user.role,
+            tenantSlug: sessionState.user.tenantSlug ?? tenantState.requestSlug,
           },
         }
       : null,
@@ -80,12 +90,22 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
 
   afterEach(async () => {
     sessionState.user = null;
+    tenantState.requestSlug = 'test-tenant';
     await cleanupTestData();
   });
 
   // 1. ---------------------------------------------------------------------
   it('1. unauthenticated caller is rejected', async () => {
     actingAs(null);
+    await expect(getUsers()).rejects.toThrow(/Unauthorized/);
+  });
+
+  // R2-1e. -------------------------------------------------------------------
+  it('R2-1e. a session minted for tenant A is rejected on a request resolved to tenant B', async () => {
+    const admin = await createTestUser({ role: 'admin' });
+    actingAs({ ...asFake(admin), tenantSlug: 'tenant-a' });
+    tenantState.requestSlug = 'tenant-b';
+
     await expect(getUsers()).rejects.toThrow(/Unauthorized/);
   });
 
@@ -138,11 +158,40 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const [approved] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, inScopePeriod.id));
     expect(approved.status).toBe('approved');
 
+    // R2-12: out-of-scope and self-approval (for non-admins) both mask as "Period not found" —
+    // an out-of-scope period must look exactly like a missing one, not disclose that it exists.
     await expect(rejectPeriod({ periodId: outOfScopePeriod.id, comment: 'nope' }))
-      .rejects.toThrow(/not authorized/i);
+      .rejects.toThrow(/Period not found/);
 
     await expect(approvePeriod({ periodId: ownPeriod.id }))
-      .rejects.toThrow(/cannot approve your own timesheet/i);
+      .rejects.toThrow(/Period not found/);
+  });
+
+  // R2-7. -------------------------------------------------------------------
+  it('R2-7. an admin may approve their own period (marked reviewedBy = self); a supervisor still cannot', async () => {
+    const db = getTestDb();
+    const admin = await createTestUser({ role: 'admin' });
+    const periodStart = getPeriodStartForDate(new Date());
+
+    const [ownPeriod] = await db.insert(schema.timesheetPeriods).values({
+      userId: admin.id, periodStart, status: 'submitted', submittedAt: new Date(),
+    }).returning();
+
+    actingAs(asFake(admin));
+    await approvePeriod({ periodId: ownPeriod.id });
+
+    const [approved] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, ownPeriod.id));
+    expect(approved.status).toBe('approved');
+    expect(approved.reviewedBy).toBe(admin.id); // self-approved — reviewedBy === the period's own userId
+
+    // A second admin period, rejected by themselves, to prove reject is allowed too.
+    const [ownPeriod2] = await db.insert(schema.timesheetPeriods).values({
+      userId: admin.id, periodStart: dayjs(periodStart).subtract(1, 'month').toDate(), status: 'submitted', submittedAt: new Date(),
+    }).returning();
+    await rejectPeriod({ periodId: ownPeriod2.id, comment: 'self-correction needed' });
+    const [rejected] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, ownPeriod2.id));
+    expect(rejected.status).toBe('rejected');
+    expect(rejected.reviewedBy).toBe(admin.id);
   });
 
   // 4. ---------------------------------------------------------------------
@@ -218,7 +267,6 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
 
   // 7. ---------------------------------------------------------------------
   it('7. employee A cannot read employee B\'s timesheet; a supervisor can only read in-scope employees', async () => {
-    const db = getTestDb();
     const contract = await createTestContract();
     const scopedClin = await createTestClin(contract.id);
     const otherClin = await createTestClin(contract.id);
@@ -250,8 +298,6 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const contract = await createTestContract();
     const scopedClin = await createTestClin(contract.id);
     const otherClin = await createTestClin(contract.id);
-    const scopedCode = await createTestChargeCode(scopedClin.id);
-    const otherCode = await createTestChargeCode(otherClin.id);
 
     const supervisor = await createTestUser({ role: 'supervisor' });
     await assignUserToClin(supervisor.id, scopedClin.id);
@@ -276,6 +322,24 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     actingAs(asFake(admin));
     const all = await getAuditEntries({});
     expect(all.map((e) => e.userId).sort()).toEqual([inScopeEmployee.id, outOfScopeEmployee.id].sort());
+  });
+
+  // R2-12. ------------------------------------------------------------------
+  it('R2-12. getEmployeeScope (and so getAuditEntries) includes the supervisor\'s own entries, consistent with assertCanAccessEmployee', async () => {
+    const db = getTestDb();
+    const contract = await createTestContract();
+    const clin = await createTestClin(contract.id);
+
+    const supervisor = await createTestUser({ role: 'supervisor' });
+    await assignUserToClin(supervisor.id, clin.id);
+
+    await db.insert(schema.timesheetEntries).values({
+      userId: supervisor.id, clinId: clin.id, entryDate: new Date(), hours: '4', revisionNumber: 1, createdBy: supervisor.id,
+    });
+
+    actingAs(asFake(supervisor));
+    const scoped = await getAuditEntries({});
+    expect(scoped.map((e) => e.userId)).toContain(supervisor.id);
   });
 
   // 12. --------------------------------------------------------------------

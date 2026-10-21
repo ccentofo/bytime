@@ -3,9 +3,9 @@
 import { getDb } from '@/db';
 import { timesheetPeriods, users, timesheetEntries } from '@/db/schema';
 import { eq, and, inArray, gte, lt, sql } from 'drizzle-orm';
-import { requireSession, requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
+import { requireSession, requireApprover, requireApproverFresh, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
 import { getPeriodStatusFor, type PeriodInfo, type PeriodStatus } from '@/server/internal/periods';
-import { getSupervisorScopeInfo } from '@/server/internal/supervisor-scope';
+import { getSupervisorScopeInfo, getSupervisedEmployeeIds } from '@/server/internal/supervisor-scope';
 import { sendTimesheetSubmittedEmail, sendTimesheetApprovedEmail, sendTimesheetRejectedEmail } from '@/lib/email/send';
 import { isNotificationEnabled } from '@/server/internal/notifications';
 import dayjs from 'dayjs';
@@ -145,17 +145,28 @@ export async function submitPeriod(data: {
     .from(users)
     .where(eq(users.id, userId));
 
-  const supervisors = await db
+  // R2-10: only ACTIVE reviewers, and only supervisors whose scope actually includes this
+  // submitter (sharing an active CLIN assignment) — previously every supervisor in the tenant
+  // was notified regardless of scope or active status, leaking who's submitting to people with
+  // no business reason to know.
+  const allSupervisors = await db
     .select({ id: users.id, fullName: users.fullName, email: users.email })
     .from(users)
-    .where(eq(users.role, 'supervisor'));
+    .where(and(eq(users.role, 'supervisor'), eq(users.isActive, true)));
+
+  const inScopeSupervisors: typeof allSupervisors = [];
+  for (const supervisor of allSupervisors) {
+    const scope = await getSupervisedEmployeeIds(supervisor.id, 'supervisor');
+    if (scope.includes(userId)) inScopeSupervisors.push(supervisor);
+  }
 
   const admins = await db
     .select({ id: users.id, fullName: users.fullName, email: users.email })
     .from(users)
-    .where(eq(users.role, 'admin'));
+    .where(and(eq(users.role, 'admin'), eq(users.isActive, true)));
 
-  const reviewers = [...supervisors, ...admins];
+  // Never notify the submitter about their own submission (e.g. an admin's own timesheet).
+  const reviewers = [...inScopeSupervisors, ...admins].filter((r) => r.id !== userId);
 
   for (const reviewer of reviewers) {
     const enabled = await isNotificationEnabled(reviewer.id, 'emailOnSubmit');
@@ -176,13 +187,13 @@ export async function submitPeriod(data: {
 
 /**
  * Approve a timesheet period. Approver only, and only for an employee in scope.
- * An actor may never approve their own period (admins included).
+ * Admins may approve their own period (§0); supervisors and employees may not.
  */
 export async function approvePeriod(data: {
   periodId: string;
   comment?: string;
 }): Promise<void> {
-  const actor = await requireApprover();
+  const actor = await requireApproverFresh();
   const db = await getDb();
   const existing = await db
     .select()
@@ -191,14 +202,25 @@ export async function approvePeriod(data: {
 
   if (existing.length === 0) throw new Error('Period not found');
   const period = existing[0];
+
+  // R2-7 (§0, locked product decision): admins may approve their own timesheet; supervisors
+  // and employees still may not.
+  if (period.userId === actor.id && actor.role !== 'admin') {
+    throw new Error('Period not found');
+  }
+
+  // R2-12: scope check immediately after loading the period, before anything about its status
+  // is disclosed — an out-of-scope period must look exactly like a missing one. (For a self
+  // approval this trivially passes: assertCanAccessEmployee always allows actor.id === employeeId.)
+  try {
+    await assertCanAccessEmployee(actor, period.userId);
+  } catch {
+    throw new Error('Period not found');
+  }
+
   if (period.status !== 'submitted') {
     throw new Error(`Cannot approve period with status "${period.status}". Only submitted periods can be approved.`);
   }
-
-  if (period.userId === actor.id) {
-    throw new Error('Forbidden: You cannot approve your own timesheet.');
-  }
-  await assertCanAccessEmployee(actor, period.userId);
 
   await db.update(timesheetPeriods)
     .set({
@@ -235,14 +257,14 @@ export async function approvePeriod(data: {
 
 /**
  * Reject a timesheet period. Approver only, and only for an employee in scope.
- * Returns the period to 'draft' status so the employee can re-edit.
- * An actor may never reject their own period (admins included).
+ * Sets status to 'rejected' so the employee can re-edit and resubmit.
+ * Admins may reject their own period (§0); supervisors and employees may not.
  */
 export async function rejectPeriod(data: {
   periodId: string;
   comment: string; // Required for rejections
 }): Promise<void> {
-  const actor = await requireApprover();
+  const actor = await requireApproverFresh();
   const db = await getDb();
   const existing = await db
     .select()
@@ -251,14 +273,24 @@ export async function rejectPeriod(data: {
 
   if (existing.length === 0) throw new Error('Period not found');
   const period = existing[0];
+
+  // R2-7 (§0, locked product decision): admins may reject their own timesheet; supervisors
+  // and employees still may not.
+  if (period.userId === actor.id && actor.role !== 'admin') {
+    throw new Error('Period not found');
+  }
+
+  // R2-12: scope check immediately after loading the period, before anything about its status
+  // is disclosed — an out-of-scope period must look exactly like a missing one.
+  try {
+    await assertCanAccessEmployee(actor, period.userId);
+  } catch {
+    throw new Error('Period not found');
+  }
+
   if (period.status !== 'submitted') {
     throw new Error(`Cannot reject period with status "${period.status}". Only submitted periods can be rejected.`);
   }
-
-  if (period.userId === actor.id) {
-    throw new Error('Forbidden: You cannot reject your own timesheet.');
-  }
-  await assertCanAccessEmployee(actor, period.userId);
 
   await db.update(timesheetPeriods)
     .set({
@@ -306,6 +338,7 @@ export async function getScopedPeriods(): Promise<Array<{
   status: PeriodStatus;
   submittedAt: Date | null;
   reviewedAt: Date | null;
+  reviewedBy: string | null;
 }>> {
   const actor = await requireApprover();
   const scope = await getEmployeeScope(actor);
@@ -324,6 +357,8 @@ export async function getScopedPeriods(): Promise<Array<{
       status: timesheetPeriods.status,
       submittedAt: timesheetPeriods.submittedAt,
       reviewedAt: timesheetPeriods.reviewedAt,
+      // R2-7: exposed so the UI can render "Self-approved" when reviewedBy === userId.
+      reviewedBy: timesheetPeriods.reviewedBy,
     })
     .from(timesheetPeriods)
     .innerJoin(users, eq(timesheetPeriods.userId, users.id))

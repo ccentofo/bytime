@@ -3,6 +3,7 @@ import { getDetailedCostReport, getEmployeeSummaryReport } from '@/server/action
 import { generateCostReportExcel, generateEmployeeSummaryExcel } from '@/lib/reports/cost-report-excel';
 import { checkReportRateLimit } from '@/lib/rate-limit';
 import { guardErrorResponse } from '@/lib/http-errors';
+import { getSessionUser } from '@/lib/session';
 
 export async function GET(request: NextRequest) {
   const rateLimited = checkReportRateLimit(request);
@@ -23,12 +24,15 @@ export async function GET(request: NextRequest) {
 
   try {
     if (format === 'summary') {
-      // Hours + cost summary — approver-scoped (getEmployeeSummaryReport redacts cost for supervisors).
+      // Hours + cost summary — approver-scoped (getEmployeeSummaryReport omits cost for supervisors).
       const data = await getEmployeeSummaryReport(
         new Date(startDate),
         new Date(endDate)
       );
-      buffer = await generateEmployeeSummaryExcel(data, dateRange);
+      // R2-5: the Excel sheet itself must not have a cost column for supervisors — this is a
+      // presentation check only; the data is already scoped by the guarded action above.
+      const sessionUser = await getSessionUser();
+      buffer = await generateEmployeeSummaryExcel(data, dateRange, sessionUser?.role === 'admin');
     } else {
       // Detailed cost report — dollar data, admin-only (enforced by requireAdmin()).
       const data = await getDetailedCostReport(
@@ -39,7 +43,7 @@ export async function GET(request: NextRequest) {
       buffer = await generateCostReportExcel(data, 'Cost Report', dateRange);
     }
   } catch (error) {
-    return guardErrorResponse(error) ?? NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return guardErrorResponse(error);
   }
 
   return new NextResponse(new Uint8Array(buffer), {

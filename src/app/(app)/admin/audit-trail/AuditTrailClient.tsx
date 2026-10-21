@@ -28,6 +28,7 @@ import {
 } from '@tabler/icons-react';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
+import { notifications } from '@mantine/notifications';
 import dayjs from 'dayjs';
 import {
   getAuditEntries,
@@ -112,25 +113,35 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
     setClinOptions([]);
     if (!contractId) return;
     startTransition(async () => {
-      const fetchedClins = await getClinsForFilter(contractId);
-      setClinOptions(fetchedClins);
+      try {
+        const fetchedClins = await getClinsForFilter(contractId);
+        setClinOptions(fetchedClins);
+      } catch (error) {
+        notifications.show({ title: 'Failed to load CLINs', message: String(error), color: 'red' });
+      }
     });
   }
 
   function handleSearch() {
     startTransition(async () => {
-      const filters: AuditFilters = {};
-      if (filterUserId) filters.userId = filterUserId;
-      if (filterContractId) filters.contractId = filterContractId;
-      if (filterClinId) filters.clinId = filterClinId;
-      if (filterStartDate) filters.startDate = new Date(filterStartDate);
-      if (filterEndDate) filters.endDate = new Date(filterEndDate);
-      if (filterReasonCode) filters.reasonCode = filterReasonCode;
-      if (filterRevisionsOnly) filters.revisionsOnly = true;
+      try {
+        const filters: AuditFilters = {};
+        if (filterUserId) filters.userId = filterUserId;
+        if (filterContractId) filters.contractId = filterContractId;
+        if (filterClinId) filters.clinId = filterClinId;
+        if (filterStartDate) filters.startDate = new Date(filterStartDate);
+        if (filterEndDate) filters.endDate = new Date(filterEndDate);
+        if (filterReasonCode) filters.reasonCode = filterReasonCode;
+        if (filterRevisionsOnly) filters.revisionsOnly = true;
 
-      const results = await getAuditEntries(filters);
-      setEntries(results);
-      setHasSearched(true);
+        const results = await getAuditEntries(filters);
+        setEntries(results);
+        setHasSearched(true);
+      } catch (error) {
+        // R2-12: don't crash to the error page on a search failure — show an inline
+        // notification instead, leaving any previous results in place.
+        notifications.show({ title: 'Search failed', message: String(error), color: 'red' });
+      }
     });
   }
 
@@ -138,13 +149,18 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
     setDrawerOpen(true);
     setRevisionHistory(null);
     startTransition(async () => {
-      const history = await getCellRevisionHistory(
-        entry.userId,
-        entry.clinId,
-        entry.entryDate,
-        entry.indirectCodeId ?? null,
-      );
-      setRevisionHistory(history);
+      try {
+        const history = await getCellRevisionHistory(
+          entry.userId,
+          entry.clinId,
+          entry.entryDate,
+          entry.indirectCodeId ?? null,
+        );
+        setRevisionHistory(history);
+      } catch (error) {
+        notifications.show({ title: 'Failed to load revision history', message: String(error), color: 'red' });
+        setDrawerOpen(false);
+      }
     });
   }
 

@@ -25,6 +25,15 @@ vi.mock('@/db', async (importOriginal) => ({
   getDb: async () => getTestDb(),
 }));
 
+// R2-1: getSessionUser() now checks session.user.tenantSlug against the request's tenant
+// (getTenantSlug()). Keep them matching here so existing tests exercise authorization, not
+// the tenant-binding check — that check gets its own dedicated test files.
+const tenantState = vi.hoisted(() => ({ requestSlug: 'test-tenant' }));
+
+vi.mock('@/lib/tenant/context', () => ({
+  getTenantSlug: async () => tenantState.requestSlug,
+}));
+
 type FakeSessionUser = { id: string; role: string; email: string; fullName: string };
 
 const sessionState = vi.hoisted(() => ({
@@ -40,6 +49,7 @@ vi.mock('@/auth', () => ({
             email: sessionState.user.email,
             fullName: sessionState.user.fullName,
             role: sessionState.user.role,
+            tenantSlug: tenantState.requestSlug,
           },
         }
       : null,

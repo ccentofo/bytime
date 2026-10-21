@@ -21,8 +21,23 @@ import path from 'path';
 
 const ACTIONS_DIR = path.resolve(__dirname, '../../server/actions');
 
-const GUARD_PATTERN = /\b(requireSession|requireAdmin|requireApprover|getTenantForBilling)\s*\(/;
+const GUARD_PATTERN = /\b(requireSession|requireAdmin|requireApprover|requireAdminFresh|requireApproverFresh|getTenantForBilling)\s*\(/;
 const IDENTITY_PARAM_PATTERN = /\b(adminUserId|reviewedBy|createdByUserId|assignedBy)\s*(\?)?\s*:/;
+const DB_QUERY_PATTERN = /\b(db|tx)\.(select|insert|update|delete)\s*\(/;
+// R2-6: the exact pattern from the blueprint's own §3 verification grep — a caller-supplied
+// object spread directly into a DB write lets the caller set columns the form never offered.
+const UNSAFE_SPREAD_PATTERN = /\.\.\.(data|prefs|input)\b/g;
+
+/**
+ * R2-12: strip comments before matching, so a comment that happens to mention a guard name or
+ * a banned identity parameter can't fool these checks into thinking real code is present.
+ * Doesn't special-case comment-like text inside string/template literals — none of the guard
+ * calls, DB queries, or spreads this file looks for occur inside this codebase's string
+ * literals, so that's an acceptable simplification.
+ */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+}
 
 /**
  * Explicit allowlist of exported server actions that intentionally run without
@@ -138,7 +153,8 @@ describe('Server action guard coverage', () => {
   expect(files.length).toBeGreaterThan(0);
 
   for (const file of files) {
-    const source = fs.readFileSync(path.join(ACTIONS_DIR, file), 'utf-8');
+    const rawSource = fs.readFileSync(path.join(ACTIONS_DIR, file), 'utf-8');
+    const source = stripComments(rawSource);
     const fns = parseExportedFunctions(source);
     const allowlist = PUBLIC_ACTIONS[file]?.names ?? [];
 
@@ -161,6 +177,34 @@ describe('Server action guard coverage', () => {
       expect(
         offenders,
         `${file} has exported action(s) accepting an identity parameter (adminUserId/reviewedBy/createdByUserId/assignedBy) instead of deriving it from the session: ${offenders.join(', ')}`
+      ).toEqual([]);
+    });
+
+    // R2-12: a guard call appearing anywhere in the body isn't enough — it must run BEFORE the
+    // first DB query, or data can already have been read/written by the time it fires.
+    it(`${file}: the guard call (when present) runs before the first DB query`, () => {
+      const offenders = fns
+        .filter((fn) => {
+          if (allowlist.includes(fn.name)) return false;
+          const guardMatch = GUARD_PATTERN.exec(fn.bodyText);
+          const queryMatch = DB_QUERY_PATTERN.exec(fn.bodyText);
+          return Boolean(guardMatch && queryMatch && queryMatch.index < guardMatch.index);
+        })
+        .map((fn) => fn.name);
+
+      expect(
+        offenders,
+        `${file} has exported action(s) where a DB query runs before the guard check: ${offenders.join(', ')}`
+      ).toEqual([]);
+    });
+
+    // R2-6: a caller-supplied object spread directly into a DB write lets the caller set
+    // columns the form never intended to expose (role, passwordHash, isActive, userId, ...).
+    it(`${file}: no DB write spreads a raw caller-supplied object`, () => {
+      const matches = source.match(UNSAFE_SPREAD_PATTERN) ?? [];
+      expect(
+        matches,
+        `${file} spreads a caller-supplied object (...data/...prefs/...input) directly into a DB write — build an explicit allowlist instead: ${matches.join(', ')}`
       ).toEqual([]);
     });
   }

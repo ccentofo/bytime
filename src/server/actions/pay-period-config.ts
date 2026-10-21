@@ -2,7 +2,7 @@
 
 import { getDb } from '@/db';
 import { payPeriodConfig } from '@/db/schema';
-import { requireAdmin, requireSession } from '@/lib/session';
+import { requireAdmin, requireAdminFresh, requireSession } from '@/lib/session';
 import type { PeriodConfig, PeriodType } from '@/lib/date-utils';
 import { DEFAULT_PERIOD_CONFIG, getCurrentPeriodStart, navigatePeriod, getNumDaysInPeriod, getPeriodStartForDate } from '@/lib/date-utils';
 import { eq, lte, desc, gt } from 'drizzle-orm';
@@ -173,7 +173,7 @@ export async function updatePayPeriodConfig(data: {
   weekStartDay: number;
 }): Promise<UpdatePayPeriodConfigResult> {
   const db = await getDb();
-  await requireAdmin();
+  await requireAdminFresh();
 
   // Compute the next period boundary under the CURRENT effective config
   const currentConfig = await getCurrentEffectiveConfig();
