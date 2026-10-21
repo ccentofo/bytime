@@ -91,7 +91,9 @@ which webpack's CSS Modules rejects (Turbopack tolerated it). The rule moved to 
 
 A review found critical authorization gaps (account takeover via password reset, self-approval of
 timesheets, supervisor-to-admin escalation, MFA not enforced). Implement
-`feature-plan-security-hardening.md` before any real customer data goes in. The staging rehearsal
+`feature-plan-security-hardening.md` (round 1, done) **and**
+`feature-plan-security-hardening-round2.md` (cross-tenant session replay, period-lock bypass, data
+exposure, OAuth) before any real customer data goes in. The staging rehearsal
 (Phase 12) can use your own test data, but run it on the hardened code so it tests what you'll ship.
 
 ---
