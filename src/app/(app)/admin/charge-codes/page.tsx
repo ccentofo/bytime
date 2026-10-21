@@ -1,5 +1,4 @@
-import { auth } from '@/auth';
-import { redirect } from 'next/navigation';
+import { requirePageRole } from '@/lib/session';
 import { listChargeCodes, listCostClasses } from '@/server/actions/charge-codes';
 import { ChargeCodesClient } from './ChargeCodesClient';
 import { getDb } from '@/db';
@@ -9,10 +8,7 @@ import { eq, and } from 'drizzle-orm';
 export const dynamic = 'force-dynamic';
 
 export default async function ChargeCodesPage() {
-  const session = await auth();
-  if (!session?.user) redirect('/login');
-  const role = (session.user as any).role;
-  if (role !== 'admin') redirect('/timesheet');
+  await requirePageRole('admin');
 
   const db = await getDb();
   const [codes, costClassList, contractList] = await Promise.all([

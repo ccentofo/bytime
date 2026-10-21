@@ -25,6 +25,9 @@ export const users = pgTable('users', {
   totpSecret: text('totp_secret'),                    // Encrypted TOTP secret (null = 2FA disabled)
   totpEnabled: boolean('totp_enabled').notNull().default(false),
   totpRecoveryCodes: text('totp_recovery_codes'),     // Encrypted JSON array of hashed recovery codes
+  // R2-12: last accepted TOTP time-step (30s window), so a code can never be replayed even
+  // within its own validity window. Nullable — no value yet means no code has been accepted.
+  totpLastUsedStep: integer('totp_last_used_step'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

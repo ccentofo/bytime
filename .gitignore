@@ -43,3 +43,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 bytime.sql
+
+# Business/legal working docs (operating agreement, drafts) — never commit to the product repo
+business/

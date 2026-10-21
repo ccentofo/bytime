@@ -12,6 +12,7 @@ const INDIRECT_CATEGORIES = ['overhead', 'ga', 'irad', 'bp', 'leave', 'unallowab
  * Get all indirect charge codes.
  */
 export async function getIndirectChargeCodes() {
+  await requireAdmin();
   const db = await getDb();
   return db.select().from(indirectChargeCodes).orderBy(indirectChargeCodes.category, indirectChargeCodes.code);
 }
@@ -20,6 +21,7 @@ export async function getIndirectChargeCodes() {
  * Get active indirect charge codes available to all employees.
  */
 export async function getActiveIndirectCodes() {
+  await requireAdmin();
   const db = await getDb();
   return db
     .select()

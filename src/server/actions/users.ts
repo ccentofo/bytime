@@ -3,39 +3,24 @@
 import { getDb } from '@/db';
 import { users } from '@/db/schema';
 import bcrypt from 'bcryptjs';
-import { count, eq } from 'drizzle-orm';
-import { requireAdmin } from '@/lib/session';
+import { eq, and, ne, sql } from 'drizzle-orm';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
+import { unlockAccount } from '@/server/internal/login-attempts';
+import { SAFE_USER_COLUMNS } from '@/server/internal/users';
+import { assertSeatsAvailable } from '@/server/internal/seats';
 import { validateEmail, validateRequired, validateStringLength, validateEnum } from '@/lib/validation';
-import { getTenantOrThrow } from '@/lib/tenant/context';
-import { PLANS, type PlanKey } from '@/lib/billing/plans';
 
 async function assertSeatAvailable(): Promise<void> {
-  const db = await getDb();
-  const tenant = await getTenantOrThrow();
-  const limit = PLANS[(tenant.plan as PlanKey)]?.seatLimit ?? PLANS.trial.seatLimit;
-  if (limit == null) return; // unlimited (enterprise)
-  const [result] = await db
-    .select({ value: count() })
-    .from(users)
-    .where(eq(users.isActive, true));
-  if (Number(result.value) >= limit) {
-    throw new Error(
-      `Your ${PLANS[tenant.plan as PlanKey]?.label ?? 'current'} plan allows ${limit} active users. Upgrade in Billing to add more.`
-    );
-  }
+  await assertSeatsAvailable(1);
 }
 
 const USER_ROLES = ['admin', 'supervisor', 'employee'] as const;
 
+/** List every user. Admin only — includes roles and active state, used to drive user management. */
 export async function getUsers() {
+  await requireAdmin();
   const db = await getDb();
-  return db.select().from(users).orderBy(users.fullName);
-}
-
-export async function getUserByEmail(email: string) {
-  const db = await getDb();
-  const rows = await db.select().from(users).where(eq(users.email, email));
-  return rows[0] ?? null;
+  return db.select(SAFE_USER_COLUMNS).from(users).orderBy(users.fullName);
 }
 
 export async function createUser(data: {
@@ -44,26 +29,32 @@ export async function createUser(data: {
   role?: 'admin' | 'supervisor' | 'employee';
 }) {
   const db = await getDb();
-  await requireAdmin();
+  await requireAdminFresh();
   await assertSeatAvailable();
   const validatedData = {
     email: validateEmail(data.email),
     fullName: validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255),
     role: data.role ? validateEnum(data.role, 'Role', USER_ROLES) : 'employee' as const,
   };
-  const rows = await db.insert(users).values(validatedData).returning();
+  const rows = await db.insert(users).values(validatedData).returning(SAFE_USER_COLUMNS);
   return rows[0];
 }
 
 export async function unlockUserAccount(email: string): Promise<void> {
   await requireAdmin();
-  const { unlockAccount } = await import('@/server/actions/login-attempts');
   await unlockAccount(email);
 }
 
+/**
+ * Seed demo users with a known default password. Development/demo convenience only —
+ * refuses outright in production so a known-password account can never be created there (F12).
+ */
 export async function seedUsers() {
-  const db = await getDb();
   await requireAdmin();
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('seedUsers is disabled in production.');
+  }
+  const db = await getDb();
   // Hash the default dev password for all seed users
   const defaultPassword = 'Password123!';
   const hash = await bcrypt.hash(defaultPassword, 12);
@@ -78,15 +69,15 @@ export async function seedUsers() {
   // Upsert: update password_hash for existing users, insert new ones
   const results = [];
   for (const user of seedData) {
-    const existing = await db.select().from(users).where(eq(users.email, user.email));
+    const existing = await db.select({ id: users.id }).from(users).where(eq(users.email, user.email));
     if (existing.length > 0) {
       const updated = await db.update(users)
         .set({ passwordHash: user.passwordHash })
         .where(eq(users.email, user.email))
-        .returning();
+        .returning(SAFE_USER_COLUMNS);
       results.push(updated[0]);
     } else {
-      const inserted = await db.insert(users).values(user).returning();
+      const inserted = await db.insert(users).values(user).returning(SAFE_USER_COLUMNS);
       results.push(inserted[0]);
     }
   }
@@ -94,6 +85,18 @@ export async function seedUsers() {
   return results;
 }
 
+/**
+ * Update a user's profile fields. Admin only, with a fresh DB role/active check (R2-8): a
+ * demoted or deactivated admin must be denied immediately, not up to 60s later via a cached JWT.
+ *
+ * R2-6: the write set is built from an explicit allowlist — the request body is never spread
+ * into `.set()`, so a caller cannot smuggle in passwordHash, totpEnabled, sessionVersion, or any
+ * other column by sending extra JSON fields the TypeScript signature doesn't allow for.
+ *
+ * The last-active-admin check and the update run in one transaction with the relevant admin
+ * rows locked (`FOR UPDATE`), so two concurrent requests can't both see "there's another admin
+ * left" and both succeed in removing the last one.
+ */
 export async function updateUser(id: string, data: {
   fullName?: string;
   email?: string;
@@ -101,33 +104,93 @@ export async function updateUser(id: string, data: {
   isActive?: boolean;
   flsaExempt?: boolean;
 }) {
+  const actor = await requireAdminFresh();
   const db = await getDb();
-  await requireAdmin();
-  // Determine if this change should invalidate existing sessions
-  const shouldInvalidateSession = data.role !== undefined || data.isActive !== undefined;
 
-  const updateData: Record<string, unknown> = {
-    ...data,
-    updatedAt: new Date(),
-  };
+  // Server-action arguments are untrusted JSON. The last-admin and self-deactivation checks
+  // below key on `isActive === false`, and Postgres would happily coerce "false" or 0 to false,
+  // so anything that isn't a real boolean is rejected up front.
+  if (data.isActive !== undefined && typeof data.isActive !== 'boolean') {
+    throw new Error('Active status must be true or false.');
+  }
+  if (data.flsaExempt !== undefined && typeof data.flsaExempt !== 'boolean') {
+    throw new Error('FLSA exempt must be true or false.');
+  }
 
-  if (shouldInvalidateSession) {
-    // Increment sessionVersion to force re-authentication
-    const [currentUser] = await db
-      .select({ sessionVersion: users.sessionVersion })
-      .from(users)
-      .where(eq(users.id, id));
-
-    if (currentUser) {
-      updateData.sessionVersion = currentUser.sessionVersion + 1;
+  // An admin cannot change their own role or deactivate themselves.
+  if (actor.id === id) {
+    if (data.role !== undefined && data.role !== actor.role) {
+      throw new Error('Forbidden: You cannot change your own role.');
+    }
+    if (data.isActive === false) {
+      throw new Error('Forbidden: You cannot deactivate your own account.');
     }
   }
 
-  const rows = await db.update(users)
-    .set(updateData)
-    .where(eq(users.id, id))
-    .returning();
-  return rows[0];
+  const updateData: Record<string, unknown> = { updatedAt: new Date() };
+  if (data.fullName !== undefined) {
+    updateData.fullName = validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255);
+  }
+  if (data.email !== undefined) {
+    updateData.email = validateEmail(data.email);
+  }
+  if (data.role !== undefined) {
+    updateData.role = validateEnum(data.role, 'Role', USER_ROLES);
+  }
+  if (data.isActive !== undefined) {
+    updateData.isActive = data.isActive;
+  }
+  if (data.flsaExempt !== undefined) {
+    updateData.flsaExempt = data.flsaExempt;
+  }
+
+  const shouldInvalidateSession = data.role !== undefined || data.isActive !== undefined;
+  const demotingRole = data.role !== undefined && data.role !== 'admin';
+  const deactivating = data.isActive === false;
+  const activating = data.isActive === true;
+
+  const result = await db.transaction(async (tx) => {
+    if (activating) {
+      // Reactivating a user takes a seat, same as creating one (R2-11).
+      const [target] = await tx.select({ isActive: users.isActive }).from(users).where(eq(users.id, id)).for('update');
+      if (target && !target.isActive) await assertSeatsAvailable(1, tx);
+    }
+
+    if (demotingRole || deactivating) {
+      const [target] = await tx
+        .select({ role: users.role, isActive: users.isActive })
+        .from(users)
+        .where(eq(users.id, id))
+        .for('update');
+
+      if (target?.role === 'admin' && target.isActive) {
+        // Lock the OTHER active admin rows too, so a concurrent transaction demoting one of
+        // THEM has to wait for this one to finish before it can (correctly) see the new count.
+        const otherActiveAdmins = await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(and(eq(users.role, 'admin'), eq(users.isActive, true), ne(users.id, id)))
+          .for('update');
+        if (otherActiveAdmins.length === 0) {
+          throw new Error(
+            demotingRole
+              ? 'Forbidden: Cannot change the role of the last active admin.'
+              : 'Forbidden: Cannot deactivate the last active admin.'
+          );
+        }
+      }
+    }
+
+    if (shouldInvalidateSession) {
+      // Increment in SQL so two concurrent edits can't both write the same bumped value.
+      updateData.sessionVersion = sql`${users.sessionVersion} + 1`;
+    }
+
+    const rows = await tx.update(users).set(updateData).where(eq(users.id, id)).returning(SAFE_USER_COLUMNS);
+    return rows[0];
+  });
+
+  return result;
 }
 
 export async function createUserWithPassword(data: {
@@ -137,7 +200,7 @@ export async function createUserWithPassword(data: {
   password: string;
 }) {
   const db = await getDb();
-  await requireAdmin();
+  await requireAdminFresh();
   await assertSeatAvailable();
   const validatedEmail = validateEmail(data.email);
   const validatedName = validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255);
@@ -148,6 +211,6 @@ export async function createUserWithPassword(data: {
     fullName: validatedName,
     role: validatedRole,
     passwordHash: hash,
-  }).returning();
+  }).returning(SAFE_USER_COLUMNS);
   return rows[0];
 }

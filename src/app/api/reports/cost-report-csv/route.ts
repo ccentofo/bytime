@@ -1,22 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/auth';
 import { getDetailedCostReport } from '@/server/actions/reports';
 import { generateCsv } from '@/lib/reports/csv-generator';
 import { checkReportRateLimit } from '@/lib/rate-limit';
+import { guardErrorResponse } from '@/lib/http-errors';
 
 export async function GET(request: NextRequest) {
   const rateLimited = checkReportRateLimit(request);
   if (rateLimited) return rateLimited;
-
-  const session = await auth();
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const role = (session.user as any).role;
-  if (role !== 'admin' && role !== 'supervisor') {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
 
   const { searchParams } = new URL(request.url);
   const startDate = searchParams.get('startDate');
@@ -27,11 +17,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Missing startDate or endDate' }, { status: 400 });
   }
 
-  const data = await getDetailedCostReport(
-    new Date(startDate),
-    new Date(endDate),
-    contractId ?? undefined
-  );
+  let data;
+  try {
+    // Dollar data — admin-only. getDetailedCostReport enforces this via requireAdmin().
+    data = await getDetailedCostReport(
+      new Date(startDate),
+      new Date(endDate),
+      contractId ?? undefined
+    );
+  } catch (error) {
+    return guardErrorResponse(error);
+  }
 
   const csv = generateCsv(data, [
     { key: 'employeeName', header: 'Employee' },

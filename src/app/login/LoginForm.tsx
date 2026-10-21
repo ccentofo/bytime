@@ -8,12 +8,13 @@ import {
   Paper,
   TextInput,
   PasswordInput,
+  PinInput,
   Button,
   Alert,
   Text,
   Anchor,
 } from '@mantine/core';
-import { IconAlertCircle, IconLock } from '@tabler/icons-react';
+import { IconAlertCircle, IconLock, IconShieldCheck } from '@tabler/icons-react';
 import { signIn } from 'next-auth/react';
 import { checkLockout } from '@/server/actions/login-attempts';
 import { Logo } from '@/components/brand/Logo';
@@ -27,6 +28,13 @@ export function LoginForm() {
   const [loading, setLoading] = useState(false);
   const [failedCount, setFailedCount] = useState(0);
 
+  // MFA step — revealed in place once the server signals a code is required. No session exists
+  // until this also passes: the first signIn() call never creates one when totpEnabled is true.
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaCode, setMfaCode] = useState('');
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
+  const [recoveryCode, setRecoveryCode] = useState('');
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
@@ -35,6 +43,13 @@ export function LoginForm() {
     if (!email.trim() || !password) {
       setError('Please enter both email and password.');
       return;
+    }
+    if (mfaRequired) {
+      const code = useRecoveryCode ? recoveryCode.trim() : mfaCode.trim();
+      if (!code) {
+        setError('Please enter your authentication code.');
+        return;
+      }
     }
 
     // Show loading IMMEDIATELY — before any async calls
@@ -53,10 +68,22 @@ export function LoginForm() {
     const result = await signIn('credentials', {
       email: email.toLowerCase().trim(),
       password,
+      mfaCode: mfaRequired ? (useRecoveryCode ? recoveryCode.trim() : mfaCode.trim()) : undefined,
       redirect: false,
     });
 
     setLoading(false);
+
+    if (result?.code === 'mfa_required') {
+      setMfaRequired(true);
+      return;
+    }
+
+    if (result?.code === 'mfa_invalid') {
+      setError('Invalid code. Please try again.');
+      setMfaCode('');
+      return;
+    }
 
     if (result?.error) {
       // Check updated lockout status after this failure
@@ -80,13 +107,8 @@ export function LoginForm() {
       return;
     }
 
-    // Check if 2FA is required — redirect to MFA page
-    const session = await import('next-auth/react').then((m) => m.getSession());
-    if ((session?.user as any)?.totpEnabled) {
-      router.push(`/login/mfa?userId=${session?.user?.id}&email=${encodeURIComponent(session?.user?.email ?? '')}`);
-    } else {
-      router.push('/timesheet');
-    }
+    // Success — a session now exists (MFA, if enabled, already passed).
+    router.push('/timesheet');
     router.refresh();
   }
 
@@ -133,7 +155,7 @@ export function LoginForm() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="email"
-              disabled={Boolean(lockoutMessage)}
+              disabled={Boolean(lockoutMessage) || mfaRequired}
             />
             <PasswordInput
               label="Password"
@@ -142,18 +164,58 @@ export function LoginForm() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
-              disabled={Boolean(lockoutMessage)}
+              disabled={Boolean(lockoutMessage) || mfaRequired}
             />
-            <Anchor href="/forgot-password" size="sm" ta="right">
-              Forgot password?
-            </Anchor>
+            {!mfaRequired && (
+              <Anchor href="/forgot-password" size="sm" ta="right">
+                Forgot password?
+              </Anchor>
+            )}
+
+            {mfaRequired && (
+              <Stack gap="xs" align={useRecoveryCode ? 'stretch' : 'center'}>
+                <Text size="sm" fw={600} ta="center">
+                  {useRecoveryCode
+                    ? 'Enter one of your recovery codes'
+                    : 'Enter the 6-digit code from your authenticator app'}
+                </Text>
+                {!useRecoveryCode ? (
+                  <PinInput
+                    length={6}
+                    type="number"
+                    value={mfaCode}
+                    onChange={setMfaCode}
+                    autoFocus
+                    size="lg"
+                    disabled={Boolean(lockoutMessage)}
+                  />
+                ) : (
+                  <TextInput
+                    placeholder="Enter 8-character recovery code"
+                    value={recoveryCode}
+                    onChange={(e) => setRecoveryCode(e.target.value.toUpperCase())}
+                    autoFocus
+                    maxLength={8}
+                    disabled={Boolean(lockoutMessage)}
+                  />
+                )}
+                <Anchor
+                  size="sm"
+                  onClick={() => { setUseRecoveryCode((v) => !v); setError(''); setMfaCode(''); setRecoveryCode(''); }}
+                >
+                  {useRecoveryCode ? 'Use authenticator app instead' : 'Use a recovery code instead'}
+                </Anchor>
+              </Stack>
+            )}
+
             <Button
               type="submit"
               fullWidth
               loading={loading}
               disabled={Boolean(lockoutMessage)}
+              leftSection={mfaRequired ? <IconShieldCheck size={16} /> : undefined}
             >
-              Sign In
+              {mfaRequired ? 'Verify' : 'Sign In'}
             </Button>
           </Stack>
         </form>

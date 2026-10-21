@@ -7,11 +7,13 @@ import { requireAdmin } from '@/lib/session';
 import { validateContractNumber, validateRequired, validateStringLength, validateOptionalString, validateOptionalDate, validateMonetaryValue } from '@/lib/validation';
 
 export async function getContracts() {
+  await requireAdmin();
   const db = await getDb();
   return db.select().from(contracts).orderBy(contracts.name);
 }
 
 export async function getContractById(id: string) {
+  await requireAdmin();
   const db = await getDb();
   const rows = await db.select().from(contracts).where(eq(contracts.id, id));
   return rows[0] ?? null;

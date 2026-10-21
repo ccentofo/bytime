@@ -22,7 +22,6 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { MFASetup } from './MFASetup';
 
 type Props = {
-  userId: string;
   fullName: string;
   email: string;
   role: string;
@@ -36,7 +35,7 @@ type Props = {
   };
 };
 
-export function ProfileClient({ userId, fullName, email, role, passwordInfo, mfaStatus }: Props) {
+export function ProfileClient({ fullName, email, role, passwordInfo, mfaStatus }: Props) {
   const [isPending, startTransition] = useTransition();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -68,7 +67,6 @@ export function ProfileClient({ userId, fullName, email, role, passwordInfo, mfa
 
     startTransition(async () => {
       const result = await changePassword({
-        userId,
         currentPassword,
         newPassword,
       });

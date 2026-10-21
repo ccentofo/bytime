@@ -93,7 +93,6 @@ interface Props {
   bytimeEmployees: Array<{ id: string; fullName: string; email: string }>;
   bytimeContracts: Array<{ id: string; contractNumber: string; name: string }>;
   bytimeClins: Array<{ id: string; clinNumber: string; description: string | null; contractId: string }>;
-  currentUserId: string;
 }
 
 
@@ -104,7 +103,6 @@ export function QBOConfigClient({
   bytimeEmployees,
   bytimeContracts,
   bytimeClins,
-  currentUserId,
 }: Props) {
   const [mappings, setMappings] = useState(initialMappings);
   const [syncLogs] = useState(initialSyncLogs);
@@ -191,7 +189,6 @@ export function QBOConfigClient({
           connectionId: connection.id,
           periodStart,
           periodEnd,
-          triggeredBy: currentUserId,
         });
         notifications.show({
           title: 'Sync complete',

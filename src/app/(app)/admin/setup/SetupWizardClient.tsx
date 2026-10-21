@@ -29,7 +29,8 @@ import {
   IconRefresh,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
-import { getSetupStatus, type SetupStatus } from '@/server/actions/setup';
+import { getSetupStatus } from '@/server/actions/setup';
+import type { SetupStatus } from '@/server/internal/setup';
 import { seedIndirectCodes } from '@/server/actions/indirect-codes';
 import classes from './Setup.module.css';
 

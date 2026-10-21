@@ -3,7 +3,7 @@
 import { getDb } from '@/db';
 import { timesheetEntries, timesheetPeriods, users, contracts, clins, indirectChargeCodes } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
 
 export interface MigrationEntryRow {
   employeeEmail: string;
@@ -135,7 +135,7 @@ export async function importMigrationData(
   rows: MigrationEntryRow[]
 ): Promise<MigrationResult> {
   const db = await getDb();
-  await requireAdmin();
+  await requireAdminFresh();
 
   // Re-validate to get resolved IDs
   const validated = await validateMigrationData(rows);
@@ -188,7 +188,7 @@ export async function importMigrationPeriods(
   }>
 ): Promise<MigrationResult> {
   const db = await getDb();
-  await requireAdmin();
+  await requireAdminFresh();
 
   const allUsers = await db.select({ id: users.id, email: users.email }).from(users);
   const userMap = new Map(allUsers.map((u) => [u.email.toLowerCase(), u.id]));

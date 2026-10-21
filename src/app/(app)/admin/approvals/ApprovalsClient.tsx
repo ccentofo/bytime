@@ -19,7 +19,6 @@ import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import dayjs from 'dayjs';
 import { approvePeriod, rejectPeriod, getScopedPeriods } from '@/server/actions/periods';
-import { getSupervisedEmployeeIds } from '@/server/actions/supervisor-scope';
 import { getTimesheetForReview } from '@/server/actions/timesheet';
 import { getNumDaysInPeriod } from '@/lib/date-utils';
 import { formatDate, formatDateTime, formatShortDate } from '@/lib/format';
@@ -36,6 +35,7 @@ type Period = {
   status: string;
   submittedAt: Date | null;
   reviewedAt: Date | null;
+  reviewedBy: string | null;
 };
 
 type ScopeInfo = {
@@ -72,10 +72,23 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     setRejectComment('');
     setApproveComment('');
     setActionError(null);
+    setReviewData(null);
 
     startTransition(async () => {
-      const data = await getTimesheetForReview(period.userId, period.periodStart);
-      setReviewData(data);
+      try {
+        const data = await getTimesheetForReview(period.userId, period.periodStart);
+        setReviewData(data);
+      } catch (error) {
+        // R2-12: don't crash to the error page on a load failure (e.g. a scope change
+        // mid-session) — show an inline notification and close the drawer instead.
+        notifications.show({
+          title: 'Failed to load timesheet',
+          message: String(error),
+          color: 'red',
+          icon: <IconX size={16} />,
+        });
+        setDrawerOpen(false);
+      }
     });
   }
 
@@ -86,11 +99,9 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         setActionError(null);
         await approvePeriod({
           periodId: selectedPeriod.id,
-          reviewedBy: currentUserId,
           comment: approveComment.trim() || undefined,
         });
-        const scopedIds = await getSupervisedEmployeeIds(currentUserId, userRole);
-        const refreshed = await getScopedPeriods(scopedIds);
+        const refreshed = await getScopedPeriods();
         setPeriods(refreshed);
         setDrawerOpen(false);
         notifications.show({
@@ -118,11 +129,9 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         setActionError(null);
         await rejectPeriod({
           periodId: selectedPeriod.id,
-          reviewedBy: currentUserId,
           comment: rejectComment.trim(),
         });
-        const scopedIds = await getSupervisedEmployeeIds(currentUserId, userRole);
-        const refreshed = await getScopedPeriods(scopedIds);
+        const refreshed = await getScopedPeriods();
         setPeriods(refreshed);
         setDrawerOpen(false);
         notifications.show({
@@ -163,15 +172,21 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     {
       accessorKey: 'status',
       header: 'Status',
-      Cell: ({ cell }) => {
+      Cell: ({ row, cell }) => {
         const status = cell.getValue<string>() as keyof typeof PERIOD_STATUS_COLOR;
+        const isSelfApproved = row.original.reviewedBy === row.original.userId;
         return (
-          <Badge color={PERIOD_STATUS_COLOR[status] ?? 'gray'}>
-            {status.charAt(0).toUpperCase() + status.slice(1)}
-          </Badge>
+          <Group gap={4} wrap="nowrap">
+            <Badge color={PERIOD_STATUS_COLOR[status] ?? 'gray'}>
+              {status.charAt(0).toUpperCase() + status.slice(1)}
+            </Badge>
+            {isSelfApproved && (status === 'approved' || status === 'rejected') && (
+              <Badge color="gray" variant="light" size="sm">{status === 'approved' ? 'Self-approved' : 'Self-rejected'}</Badge>
+            )}
+          </Group>
         );
       },
-      size: 130,
+      size: 200,
     },
     {
       accessorKey: 'submittedAt',
@@ -319,6 +334,9 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
                 <Badge color={PERIOD_STATUS_COLOR[selectedPeriod.status as keyof typeof PERIOD_STATUS_COLOR] ?? 'gray'}>
                   {selectedPeriod.status}
                 </Badge>
+                {selectedPeriod.reviewedBy === selectedPeriod.userId && (selectedPeriod.status === 'approved' || selectedPeriod.status === 'rejected') && (
+                  <Badge color="gray" variant="light">{selectedPeriod.status === 'approved' ? 'Self-approved' : 'Self-rejected'}</Badge>
+                )}
               </Group>
             </Paper>
           )}
@@ -335,46 +353,68 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
             </Alert>
           )}
 
-          {selectedPeriod?.status === 'submitted' && (
-            <>
-              <Textarea
-                label="Approval Comment (optional)"
-                placeholder="Any feedback for the employee..."
-                value={approveComment}
-                onChange={(e) => setApproveComment(e.currentTarget.value)}
-                style={{ maxWidth: 500 }}
-              />
+          {(() => {
+            if (selectedPeriod?.status !== 'submitted') return null;
+            const isOwnPeriod = selectedPeriod.userId === currentUserId;
+            // §0 (R2-7): admins may approve/reject their own period; supervisors and employees
+            // may not — the server enforces this too, this only controls what's offered in the UI.
+            const canReview = !isOwnPeriod || userRole === 'admin';
 
-              <Textarea
-                label="Rejection Comment (required if rejecting)"
-                placeholder="Explain what needs to be corrected..."
-                value={rejectComment}
-                onChange={(e) => setRejectComment(e.currentTarget.value)}
-                style={{ maxWidth: 500 }}
-              />
+            if (!canReview) {
+              return (
+                <Alert icon={<IconAlertCircle size={16} />} color="warning">
+                  You cannot approve or reject your own timesheet. Another admin or supervisor must review it.
+                </Alert>
+              );
+            }
 
-              <Group justify="flex-end" mt="md">
-                <Button
-                  color="red"
-                  variant="light"
-                  leftSection={<IconX size={16} />}
-                  onClick={handleReject}
-                  disabled={!rejectComment.trim()}
-                  loading={isPending}
-                >
-                  Reject
-                </Button>
-                <Button
-                  color="success"
-                  leftSection={<IconCheck size={16} />}
-                  onClick={handleApprove}
-                  loading={isPending}
-                >
-                  Approve
-                </Button>
-              </Group>
-            </>
-          )}
+            return (
+              <>
+                {isOwnPeriod && (
+                  <Alert icon={<IconAlertCircle size={16} />} color="signal">
+                    This is your own timesheet. As an admin, you may approve or reject it — the
+                    decision will be visibly marked &quot;Self-approved&quot;.
+                  </Alert>
+                )}
+                <Textarea
+                  label="Approval Comment (optional)"
+                  placeholder="Any feedback for the employee..."
+                  value={approveComment}
+                  onChange={(e) => setApproveComment(e.currentTarget.value)}
+                  style={{ maxWidth: 500 }}
+                />
+
+                <Textarea
+                  label="Rejection Comment (required if rejecting)"
+                  placeholder="Explain what needs to be corrected..."
+                  value={rejectComment}
+                  onChange={(e) => setRejectComment(e.currentTarget.value)}
+                  style={{ maxWidth: 500 }}
+                />
+
+                <Group justify="flex-end" mt="md">
+                  <Button
+                    color="red"
+                    variant="light"
+                    leftSection={<IconX size={16} />}
+                    onClick={handleReject}
+                    disabled={!rejectComment.trim()}
+                    loading={isPending}
+                  >
+                    {isOwnPeriod ? 'Reject (Self)' : 'Reject'}
+                  </Button>
+                  <Button
+                    color="success"
+                    leftSection={<IconCheck size={16} />}
+                    onClick={handleApprove}
+                    loading={isPending}
+                  >
+                    {isOwnPeriod ? 'Approve (Self)' : 'Approve'}
+                  </Button>
+                </Group>
+              </>
+            );
+          })()}
         </Stack>
       </Drawer>
     </>

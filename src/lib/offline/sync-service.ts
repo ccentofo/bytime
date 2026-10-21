@@ -37,25 +37,25 @@ export function onSyncStatusChange(callback: SyncStatusCallback) {
  * Start the background sync service.
  * Checks for pending entries at regular intervals and syncs when online.
  */
-export function startSyncService(userId: string) {
+export function startSyncService() {
   if (syncTimer) return; // Already running
 
   syncTimer = setInterval(() => {
     if (navigator.onLine && !isSyncing) {
-      syncPendingEntries(userId);
+      syncPendingEntries();
     }
   }, SYNC_INTERVAL_MS);
 
   // Also sync when coming back online
   window.addEventListener('online', () => {
     if (!isSyncing) {
-      syncPendingEntries(userId);
+      syncPendingEntries();
     }
   });
 
   // Initial sync attempt
   if (navigator.onLine) {
-    syncPendingEntries(userId);
+    syncPendingEntries();
   }
 
   // Update status on offline/online events
@@ -76,16 +76,16 @@ export function stopSyncService() {
 /**
  * Manually trigger a sync (e.g., when user clicks "Save").
  */
-export async function triggerSync(userId: string): Promise<boolean> {
+export async function triggerSync(): Promise<boolean> {
   if (!navigator.onLine) return false;
-  return syncPendingEntries(userId);
+  return syncPendingEntries();
 }
 
 // ---------------------------------------------------------------------------
 // Core Sync Logic
 // ---------------------------------------------------------------------------
 
-async function syncPendingEntries(userId: string): Promise<boolean> {
+async function syncPendingEntries(): Promise<boolean> {
   if (isSyncing) return false;
   isSyncing = true;
   notifyStatus();
@@ -119,7 +119,13 @@ async function syncPendingEntries(userId: string): Promise<boolean> {
       return true;
     }
 
-    // Group by periodStart for batch saving
+    // Group by periodStart for batch saving.
+    // This hardcodes semi-monthly period math and doesn't account for other period types
+    // (weekly/biweekly/monthly) configured via pay-period-config.ts — but nothing ever queues
+    // offline entries today (saveOfflineEntry has no callers), so this path is dormant. If it's
+    // ever built out, saveTimesheetBatch's server-side period-start/dayIndex validation (R2-2)
+    // now rejects a mismatched or out-of-range batch rather than silently writing into the
+    // wrong period, so getting this grouping wrong here would fail loudly, not corrupt data.
     const byPeriod = new Map<string, typeof pending>();
     for (const item of pending) {
       // Determine period start from entry date
@@ -144,7 +150,6 @@ async function syncPendingEntries(userId: string): Promise<boolean> {
 
       try {
         const newRevisions = await saveTimesheetBatch({
-          userId,
           periodStart,
           cells: items.map((item) => {
             const dayIndex = dayjs(item.entryDate).diff(dayjs(periodStartStr), 'day');

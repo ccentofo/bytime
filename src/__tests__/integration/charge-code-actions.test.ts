@@ -14,8 +14,10 @@ import {
 } from './helpers';
 
 // ---------------------------------------------------------------------------
-// Harness: mock only the I/O edges (tenant DB resolution, session). Everything
-// else — the server actions under test — runs for real against the test DB.
+// Harness: mock only the I/O edges (tenant DB resolution, the Auth.js session).
+// @/lib/session is NOT mocked — the real guards (requireSession/requireAdmin/
+// assertCanAccessEmployee) run for real against the mocked @/auth session, so a
+// regression in who's allowed to do what shows up here instead of being hidden.
 // ---------------------------------------------------------------------------
 
 vi.mock('@/db', async (importOriginal) => ({
@@ -23,24 +25,34 @@ vi.mock('@/db', async (importOriginal) => ({
   getDb: async () => getTestDb(),
 }));
 
-const sessionState = vi.hoisted(() => ({
-  user: null as null | { id: string; role: string; email: string; fullName: string },
+// R2-1: getSessionUser() now checks session.user.tenantSlug against the request's tenant
+// (getTenantSlug()). Keep them matching here so existing tests exercise authorization, not
+// the tenant-binding check — that check gets its own dedicated test files.
+const tenantState = vi.hoisted(() => ({ requestSlug: 'test-tenant' }));
+
+vi.mock('@/lib/tenant/context', () => ({
+  getTenantSlug: async () => tenantState.requestSlug,
 }));
 
-// Mirrors src/lib/session.ts exactly: requireAdmin allows BOTH admin and supervisor roles.
-vi.mock('@/lib/session', () => ({
-  getSessionUser: async () => sessionState.user,
-  requireSession: async () => {
-    if (!sessionState.user) throw new Error('Unauthorized: No active session');
-    return sessionState.user;
-  },
-  requireAdmin: async () => {
-    if (!sessionState.user) throw new Error('Unauthorized: No active session');
-    if (sessionState.user.role !== 'admin' && sessionState.user.role !== 'supervisor') {
-      throw new Error('Forbidden: Admin or Supervisor role required');
-    }
-    return sessionState.user;
-  },
+type FakeSessionUser = { id: string; role: string; email: string; fullName: string };
+
+const sessionState = vi.hoisted(() => ({
+  user: null as null | FakeSessionUser,
+}));
+
+vi.mock('@/auth', () => ({
+  auth: async () =>
+    sessionState.user
+      ? {
+          user: {
+            id: sessionState.user.id,
+            email: sessionState.user.email,
+            fullName: sessionState.user.fullName,
+            role: sessionState.user.role,
+            tenantSlug: tenantState.requestSlug,
+          },
+        }
+      : null,
 }));
 
 // No outbound email. List every export explicitly — do NOT use a catch-all Proxy here: a Proxy
@@ -68,10 +80,14 @@ import {
   getTimesheetEntries,
   getRevisionMap,
 } from '@/server/actions/timesheet';
-import { getSupervisedEmployeeIds } from '@/server/actions/supervisor-scope';
+import { getSupervisedEmployeeIds } from '@/server/internal/supervisor-scope';
+
+function actingAs(user: { id: string; role: string; email: string; fullName: string }) {
+  sessionState.user = { id: user.id, role: user.role, email: user.email, fullName: user.fullName };
+}
 
 describe('Charge-code server actions — real end-to-end behavior', () => {
-  let adminId: string;
+  let admin: Awaited<ReturnType<typeof createTestUser>>;
   let employee: Awaited<ReturnType<typeof createTestUser>>;
   let contract: Awaited<ReturnType<typeof createTestContract>>;
   let clin: Awaited<ReturnType<typeof createTestClin>>;
@@ -82,14 +98,13 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
   beforeEach(async () => {
     await cleanupTestData();
 
-    const admin = await createTestUser({ role: 'admin' });
-    adminId = admin.id;
-    sessionState.user = { id: admin.id, role: 'admin', email: admin.email, fullName: admin.fullName };
-
+    admin = await createTestUser({ role: 'admin' });
     employee = await createTestUser({ role: 'employee' });
     contract = await createTestContract();
     clin = await createTestClin(contract.id);
     chargeCode = await createTestChargeCode(clin.id);
+
+    actingAs(admin);
 
     periodStart = getPeriodStartForDate(new Date());
     todayIndex = dayjs().startOf('day').diff(dayjs(periodStart), 'day');
@@ -102,10 +117,10 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
   // -------------------------------------------------------------------------
   it('denormalizes clinId/slinId onto the entry when saving by chargeCodeId', async () => {
-    await assignChargeCodeToUser(employee.id, chargeCode.id, adminId);
+    await assignChargeCodeToUser(employee.id, chargeCode.id);
 
+    actingAs(employee);
     await saveTimesheetBatch({
-      userId: employee.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
     });
@@ -121,16 +136,15 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
   // -------------------------------------------------------------------------
   it('is append-only: editing a cell inserts revision 2 and leaves revision 1 untouched', async () => {
-    await assignChargeCodeToUser(employee.id, chargeCode.id, adminId);
+    await assignChargeCodeToUser(employee.id, chargeCode.id);
 
+    actingAs(employee);
     await saveTimesheetBatch({
-      userId: employee.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
     });
 
     await saveTimesheetBatch({
-      userId: employee.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 6, isEdit: true, isLateEntry: false }],
       changeReasonCode: 'CORRECTION',
@@ -152,17 +166,16 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
   // -------------------------------------------------------------------------
   it('rejects an edit with no reason code', async () => {
-    await assignChargeCodeToUser(employee.id, chargeCode.id, adminId);
+    await assignChargeCodeToUser(employee.id, chargeCode.id);
 
+    actingAs(employee);
     await saveTimesheetBatch({
-      userId: employee.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
     });
 
     await expect(
       saveTimesheetBatch({
-        userId: employee.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 6, isEdit: true, isLateEntry: false }],
       })
@@ -172,11 +185,11 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
   // -------------------------------------------------------------------------
   it('tracks two charge codes on the same CLIN, same day, independently', async () => {
     const otherCode = await createTestChargeCode(clin.id, { workLocation: 'telework' });
-    await assignChargeCodeToUser(employee.id, chargeCode.id, adminId);
-    await assignChargeCodeToUser(employee.id, otherCode.id, adminId);
+    await assignChargeCodeToUser(employee.id, chargeCode.id);
+    await assignChargeCodeToUser(employee.id, otherCode.id);
 
+    actingAs(employee);
     await saveTimesheetBatch({
-      userId: employee.id,
       periodStart,
       cells: [
         { chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 5, isEdit: false, isLateEntry: false },
@@ -184,8 +197,8 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
       ],
     });
 
-    const codes = await getChargeCodesForUser(employee.id);
-    const entries = await getTimesheetEntries(employee.id, periodStart, codes);
+    const codes = await getChargeCodesForUser();
+    const entries = await getTimesheetEntries(periodStart, codes);
 
     const forFirst = entries.find((e) => e.chargeCodeId === chargeCode.id);
     const forSecond = entries.find((e) => e.chargeCodeId === otherCode.id);
@@ -195,26 +208,29 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
   // -------------------------------------------------------------------------
   it('enforces RBAC: unassigned user cannot save, and re-saving after unassignment fails again', async () => {
+    actingAs(employee);
     await expect(
       saveTimesheetBatch({
-        userId: employee.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
       })
     ).rejects.toThrow(/Unauthorized/);
 
-    await assignChargeCodeToUser(employee.id, chargeCode.id, adminId);
+    actingAs(admin);
+    await assignChargeCodeToUser(employee.id, chargeCode.id);
+
+    actingAs(employee);
     await saveTimesheetBatch({
-      userId: employee.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
     });
 
+    actingAs(admin);
     await unassignChargeCodeFromUser(employee.id, chargeCode.id);
 
+    actingAs(employee);
     await expect(
       saveTimesheetBatch({
-        userId: employee.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex - 1, hours: 4, isEdit: false, isLateEntry: false }],
       })
@@ -225,21 +241,21 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
   it('assignChargeCodeToUser syncs an active user_assignments row, idempotently, and re-activates it', async () => {
     const db = getTestDb();
 
-    await assignChargeCodeToUser(employee.id, chargeCode.id, adminId);
+    await assignChargeCodeToUser(employee.id, chargeCode.id);
     let [assignment] = await db.select().from(schema.userAssignments)
       .where(and(eq(schema.userAssignments.userId, employee.id), eq(schema.userAssignments.clinId, clin.id)));
     expect(assignment).toBeDefined();
     expect(assignment.isActive).toBe(true);
 
     // Idempotent — calling again doesn't create a second row.
-    await assignChargeCodeToUser(employee.id, chargeCode.id, adminId);
+    await assignChargeCodeToUser(employee.id, chargeCode.id);
     const rows = await db.select().from(schema.userAssignments)
       .where(and(eq(schema.userAssignments.userId, employee.id), eq(schema.userAssignments.clinId, clin.id)));
     expect(rows).toHaveLength(1);
 
     // Re-activates a previously deactivated assignment.
     await db.update(schema.userAssignments).set({ isActive: false }).where(eq(schema.userAssignments.id, assignment.id));
-    await assignChargeCodeToUser(employee.id, chargeCode.id, adminId);
+    await assignChargeCodeToUser(employee.id, chargeCode.id);
     [assignment] = await db.select().from(schema.userAssignments)
       .where(and(eq(schema.userAssignments.userId, employee.id), eq(schema.userAssignments.clinId, clin.id)));
     expect(assignment.isActive).toBe(true);
@@ -251,7 +267,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
     const db = getTestDb();
     await db.insert(schema.userAssignments).values({ userId: supervisor.id, clinId: clin.id, isActive: true });
 
-    await assignChargeCodeToUser(employee.id, chargeCode.id, adminId);
+    await assignChargeCodeToUser(employee.id, chargeCode.id);
 
     const supervised = await getSupervisedEmployeeIds(supervisor.id, 'supervisor');
     expect(supervised).toContain(employee.id);
@@ -259,7 +275,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
   // -------------------------------------------------------------------------
   it('blocks any save once the period has been submitted', async () => {
-    await assignChargeCodeToUser(employee.id, chargeCode.id, adminId);
+    await assignChargeCodeToUser(employee.id, chargeCode.id);
     const db = getTestDb();
     await db.insert(schema.timesheetPeriods).values({
       userId: employee.id,
@@ -268,9 +284,9 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
       submittedAt: new Date(),
     });
 
+    actingAs(employee);
     await expect(
       saveTimesheetBatch({
-        userId: employee.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
       })
@@ -279,11 +295,11 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
   // -------------------------------------------------------------------------
   it('rejects a save for a future date', async () => {
-    await assignChargeCodeToUser(employee.id, chargeCode.id, adminId);
+    await assignChargeCodeToUser(employee.id, chargeCode.id);
 
+    actingAs(employee);
     await expect(
       saveTimesheetBatch({
-        userId: employee.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex + 1, hours: 8, isEdit: false, isLateEntry: false }],
       })
@@ -294,8 +310,8 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
   it('leaves the indirect-code path unchanged: indirectCodeId set, chargeCodeId null', async () => {
     const indirect = await createTestIndirectCode();
 
+    actingAs(employee);
     await saveTimesheetBatch({
-      userId: employee.id,
       periodStart,
       cells: [{ indirectCodeId: indirect.id, dayIndex: todayIndex, hours: 2, isEdit: false, isLateEntry: false }],
     });
@@ -310,9 +326,10 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
   // -------------------------------------------------------------------------
   it('getRevisionMap keys direct cells by chargeCodeId', async () => {
-    await assignChargeCodeToUser(employee.id, chargeCode.id, adminId);
+    await assignChargeCodeToUser(employee.id, chargeCode.id);
+
+    actingAs(employee);
     await saveTimesheetBatch({
-      userId: employee.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
     });
@@ -320,7 +337,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
     // Wide enough to cover todayIndex regardless of period type/length (max is 16 days,
     // semimonthly) or where in the period "today" falls when the suite runs.
     const numDays = 31;
-    const map = await getRevisionMap(employee.id, periodStart, numDays);
+    const map = await getRevisionMap(periodStart, numDays);
     expect(map[`${chargeCode.id}-${todayIndex}`]).toBe(1);
   });
 
@@ -343,10 +360,13 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
   });
 
   it('deactivateChargeCode soft-deletes: the row remains but drops out of getChargeCodesForUser', async () => {
-    await assignChargeCodeToUser(employee.id, chargeCode.id, adminId);
-    const before = await getChargeCodesForUser(employee.id);
+    await assignChargeCodeToUser(employee.id, chargeCode.id);
+
+    actingAs(employee);
+    const before = await getChargeCodesForUser();
     expect(before.some((c) => c.id === chargeCode.id)).toBe(true);
 
+    actingAs(admin);
     await deactivateChargeCode(chargeCode.id);
 
     const db = getTestDb();
@@ -354,7 +374,8 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
     expect(row).toBeDefined();
     expect(row.isActive).toBe(false);
 
-    const after = await getChargeCodesForUser(employee.id);
+    actingAs(employee);
+    const after = await getChargeCodesForUser();
     expect(after.some((c) => c.id === chargeCode.id)).toBe(false);
   });
 });

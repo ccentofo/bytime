@@ -1,15 +1,11 @@
-import { auth } from '@/auth';
-import { redirect } from 'next/navigation';
+import { requirePageRole } from '@/lib/session';
 import { getSetupStatus } from '@/server/actions/setup';
 import { SetupWizardClient } from './SetupWizardClient';
 
 export const dynamic = 'force-dynamic';
 
 export default async function SetupPage() {
-  const session = await auth();
-  if (!session?.user) redirect('/login');
-  const role = (session.user as any).role;
-  if (role !== 'admin') redirect('/timesheet');
+  await requirePageRole('admin');
 
   const setupStatus = await getSetupStatus();
 

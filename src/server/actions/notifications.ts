@@ -1,86 +1,67 @@
 'use server';
 
 import { getDb } from '@/db';
-import { notificationPreferences, users } from '@/db/schema';
+import { notificationPreferences } from '@/db/schema';
 import { eq } from 'drizzle-orm';
+import { requireSession } from '@/lib/session';
+import {
+  getNotificationPreferencesFor,
+  DEFAULT_NOTIFICATION_PREFS,
+  type NotificationPrefs,
+} from '@/server/internal/notifications';
 
-// ---------------------------------------------------------------------------
-// Notification Preferences CRUD
-// ---------------------------------------------------------------------------
-
-export type NotificationPrefs = {
-  emailOnSubmit: boolean;
-  emailOnApprove: boolean;
-  emailOnReject: boolean;
-  emailDailyReminder: boolean;
-  emailDeadlineReminder: boolean;
-};
-
-const DEFAULT_PREFS: NotificationPrefs = {
-  emailOnSubmit: true,
-  emailOnApprove: true,
-  emailOnReject: true,
-  emailDailyReminder: true,
-  emailDeadlineReminder: true,
-};
-
-/**
- * Get notification preferences for a user.
- * Returns defaults if no record exists.
- */
-export async function getNotificationPreferences(userId: string): Promise<NotificationPrefs> {
-  const db = await getDb();
-  const rows = await db
-    .select()
-    .from(notificationPreferences)
-    .where(eq(notificationPreferences.userId, userId));
-
-  if (rows.length === 0) return { ...DEFAULT_PREFS };
-
-  const row = rows[0];
-  return {
-    emailOnSubmit: row.emailOnSubmit,
-    emailOnApprove: row.emailOnApprove,
-    emailOnReject: row.emailOnReject,
-    emailDailyReminder: row.emailDailyReminder,
-    emailDeadlineReminder: row.emailDeadlineReminder,
-  };
+/** Get the session user's own notification preferences. */
+export async function getNotificationPreferences(): Promise<NotificationPrefs> {
+  const actor = await requireSession();
+  return getNotificationPreferencesFor(actor.id);
 }
 
+const NOTIFICATION_PREF_KEYS = [
+  'emailOnSubmit',
+  'emailOnApprove',
+  'emailOnReject',
+  'emailDailyReminder',
+  'emailDeadlineReminder',
+] as const satisfies readonly (keyof NotificationPrefs)[];
+
 /**
- * Update notification preferences for a user.
- * Creates the record if it doesn't exist (upsert).
+ * Update the session user's own notification preferences (upsert).
+ *
+ * R2-6: builds the write from an explicit allowlist of the five boolean preference keys,
+ * each required to be a real boolean, with `userId` always `actor.id` — the caller-supplied preferences
+ * object is never spread wholesale into the write. Previously it was spread after `userId:
+ * actor.id`, so a caller sending an extra `userId` field in the request body could create or
+ * retarget another user's notification row.
  */
 export async function updateNotificationPreferences(
-  userId: string,
   prefs: Partial<NotificationPrefs>
 ): Promise<void> {
+  const actor = await requireSession();
   const db = await getDb();
+
+  const allowedUpdates: Partial<NotificationPrefs> = {};
+  for (const key of NOTIFICATION_PREF_KEYS) {
+    if (prefs[key] !== undefined) {
+      // A real boolean only: Boolean("false") would be true.
+      if (typeof prefs[key] !== 'boolean') throw new Error(`Invalid value for ${key}.`);
+      allowedUpdates[key] = prefs[key];
+    }
+  }
+
   const existing = await db
-    .select()
+    .select({ userId: notificationPreferences.userId })
     .from(notificationPreferences)
-    .where(eq(notificationPreferences.userId, userId));
+    .where(eq(notificationPreferences.userId, actor.id));
 
   if (existing.length === 0) {
     await db.insert(notificationPreferences).values({
-      userId,
-      ...DEFAULT_PREFS,
-      ...prefs,
+      ...DEFAULT_NOTIFICATION_PREFS,
+      ...allowedUpdates,
+      userId: actor.id,
     });
   } else {
     await db.update(notificationPreferences)
-      .set({ ...prefs, updatedAt: new Date() })
-      .where(eq(notificationPreferences.userId, userId));
+      .set({ ...allowedUpdates, updatedAt: new Date() })
+      .where(eq(notificationPreferences.userId, actor.id));
   }
-}
-
-/**
- * Check if a user has a specific notification enabled.
- */
-export async function isNotificationEnabled(
-  userId: string,
-  notificationType: keyof NotificationPrefs
-): Promise<boolean> {
-  const prefs = await getNotificationPreferences(userId);
-  return prefs[notificationType];
 }

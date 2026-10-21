@@ -1,8 +1,7 @@
-'use server';
-
+import 'server-only';
 import { getDb } from '@/db';
-import { userAssignments, users } from '@/db/schema';
-import { eq, and, sql, inArray } from 'drizzle-orm';
+import { userAssignments } from '@/db/schema';
+import { eq, and, inArray } from 'drizzle-orm';
 
 /**
  * Get the list of employee IDs that a supervisor is authorized to review.
@@ -14,6 +13,9 @@ import { eq, and, sql, inArray } from 'drizzle-orm';
  * 3. Returning the unique set of those user IDs (excluding the supervisor themselves)
  *
  * Admin users bypass this entirely — they can review all employees.
+ *
+ * INTERNAL — not a server action. Call via src/lib/session.ts's getEmployeeScope() /
+ * assertCanAccessEmployee(), which resolve the actor from the session first.
  */
 export async function getSupervisedEmployeeIds(
   supervisorId: string,
@@ -61,6 +63,9 @@ export async function getSupervisedEmployeeIds(
 /**
  * Get the contracts shared between a supervisor and their supervised employees.
  * Used for displaying scope context in the UI.
+ *
+ * INTERNAL — not a server action. Exposed to the client via getMyScopeInfo() in
+ * src/server/actions/periods.ts, which calls this for the SESSION user only.
  */
 export async function getSupervisorScopeInfo(supervisorId: string): Promise<{
   assignedContractCount: number;

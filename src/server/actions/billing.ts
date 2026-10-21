@@ -1,6 +1,6 @@
 'use server';
 
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { getTenantForBilling } from '@/lib/tenant/context';
 import { stripe } from '@/lib/billing/stripe';
 import { PLANS, type PlanKey } from '@/lib/billing/plans';
@@ -18,7 +18,7 @@ function tenantBaseUrl(slug: string): string {
 }
 
 export async function startCheckout(plan: PlanKey): Promise<{ url: string }> {
-  await requireAdmin();
+  await requireAdminFresh();
   const tenant = await getTenantForBilling();
   const priceId = PLANS[plan].priceId;
   if (!priceId) throw new Error('That plan is not purchasable.');
@@ -50,7 +50,7 @@ export async function startCheckout(plan: PlanKey): Promise<{ url: string }> {
 }
 
 export async function openBillingPortal(): Promise<{ url: string }> {
-  await requireAdmin();
+  await requireAdminFresh();
   const tenant = await getTenantForBilling();
   const [row] = await controlDb.select().from(tenants).where(eq(tenants.slug, tenant.slug)).limit(1);
   if (!row?.stripeCustomerId) throw new Error('No billing account yet — subscribe first.');

@@ -13,15 +13,15 @@ import {
 } from '@mantine/core';
 import { IconBell, IconCheck } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
-import { updateNotificationPreferences, type NotificationPrefs } from '@/server/actions/notifications';
+import { updateNotificationPreferences } from '@/server/actions/notifications';
+import type { NotificationPrefs } from '@/server/internal/notifications';
 import { PageHeader } from '@/components/ui/PageHeader';
 
 type Props = {
-  userId: string;
   initialPrefs: NotificationPrefs;
 };
 
-export function NotificationsClient({ userId, initialPrefs }: Props) {
+export function NotificationsClient({ initialPrefs }: Props) {
   const [isPending, startTransition] = useTransition();
   const [prefs, setPrefs] = useState<NotificationPrefs>(initialPrefs);
 
@@ -30,7 +30,7 @@ export function NotificationsClient({ userId, initialPrefs }: Props) {
     setPrefs(updated);
 
     startTransition(async () => {
-      await updateNotificationPreferences(userId, { [key]: value });
+      await updateNotificationPreferences({ [key]: value });
       notifications.show({
         title: 'Preferences Saved',
         message: 'Your notification settings have been updated.',

@@ -111,7 +111,7 @@ export function getPeriodEndDate(periodStart: Date, config: PeriodConfig = DEFAU
 /**
  * Returns the period start date that contains the given arbitrary date.
  * Generalizes getCurrentPeriodStart to work on any date (not just "now").
- * Used by saveTimesheetEntry which receives an entryDate, not a periodStart.
+ * Used to validate that a client-supplied periodStart is a real period boundary (R2-2).
  */
 export function getPeriodStartForDate(date: Date, config: PeriodConfig = DEFAULT_PERIOD_CONFIG): Date {
   const d = dayjs(date).startOf('day');

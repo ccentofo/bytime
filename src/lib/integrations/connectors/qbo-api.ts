@@ -33,7 +33,7 @@ function getClientCredentials() {
 /**
  * Build the QBO OAuth authorization URL.
  */
-export function getQBOAuthUrl(state?: string): string {
+export function getQBOAuthUrl(state: string): string {
   const { clientId } = getClientCredentials();
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
   const redirectUri = `${appUrl}/api/integrations/callback/quickbooks_online`;
@@ -43,7 +43,7 @@ export function getQBOAuthUrl(state?: string): string {
     redirect_uri: redirectUri,
     response_type: 'code',
     scope: 'com.intuit.quickbooks.accounting',
-    state: state ?? 'bytime_qbo_connect',
+    state, // signed, single-use (see src/lib/integrations/oauth-state.ts)
   });
 
   return `${QBO_AUTH_URL}?${params.toString()}`;

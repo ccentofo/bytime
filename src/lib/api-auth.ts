@@ -1,5 +1,5 @@
 import { getDb } from '@/db';
-import { apiKeys } from '@/db/schema';
+import { apiKeys, users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import crypto from 'crypto';
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit';
@@ -55,6 +55,9 @@ export async function validateApiKey(request: Request): Promise<ApiKeyInfo | Res
   // Hash the provided key and look it up
   const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
 
+  // R2-12: join the creator's CURRENT role/active status — a key created by an admin who has
+  // since been demoted or deactivated must stop working immediately, not keep the access level
+  // they had at creation time.
   const rows = await db
     .select({
       id: apiKeys.id,
@@ -63,8 +66,11 @@ export async function validateApiKey(request: Request): Promise<ApiKeyInfo | Res
       createdByUserId: apiKeys.createdByUserId,
       isActive: apiKeys.isActive,
       expiresAt: apiKeys.expiresAt,
+      creatorRole: users.role,
+      creatorIsActive: users.isActive,
     })
     .from(apiKeys)
+    .innerJoin(users, eq(apiKeys.createdByUserId, users.id))
     .where(eq(apiKeys.keyHash, keyHash))
     .limit(1);
 
@@ -87,6 +93,13 @@ export async function validateApiKey(request: Request): Promise<ApiKeyInfo | Res
   if (key.expiresAt && new Date(key.expiresAt) < new Date()) {
     return new Response(
       JSON.stringify({ error: 'API key has expired.' }),
+      { status: 403, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+
+  if (!key.creatorIsActive || key.creatorRole !== 'admin') {
+    return new Response(
+      JSON.stringify({ error: 'This API key\'s creator is no longer an active admin.' }),
       { status: 403, headers: { 'Content-Type': 'application/json' } }
     );
   }

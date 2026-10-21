@@ -9,8 +9,7 @@ export default async function NotificationsPage() {
   const session = await auth();
   if (!session?.user) redirect('/login');
 
-  const userId = session.user.id!;
-  const prefs = await getNotificationPreferences(userId);
+  const prefs = await getNotificationPreferences();
 
-  return <NotificationsClient userId={userId} initialPrefs={prefs} />;
+  return <NotificationsClient initialPrefs={prefs} />;
 }

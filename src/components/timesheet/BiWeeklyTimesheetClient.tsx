@@ -65,7 +65,7 @@ export function BiWeeklyTimesheetClient({ initialData }: Props) {
 
     // Start background sync — also wrapped to prevent IndexedDB crashes
     try {
-      startSyncService(initialData.userId);
+      startSyncService();
     } catch {
       // Sync service unavailable — app continues without background sync
     }

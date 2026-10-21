@@ -7,6 +7,7 @@ import dayjs from 'dayjs';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 import { getNumDaysInPeriod, getCurrentPeriodStart } from '@/lib/date-utils';
 import { getPayPeriodConfig } from '@/server/actions/pay-period-config';
+import { requireSession } from '@/lib/session';
 
 dayjs.extend(isSameOrAfter);
 
@@ -44,7 +45,9 @@ export interface EmployeeDashboardData {
 // Dashboard Query
 // ---------------------------------------------------------------------------
 
-export async function getEmployeeDashboardData(userId: string): Promise<EmployeeDashboardData> {
+export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData> {
+  const actor = await requireSession();
+  const userId = actor.id;
   const db = await getDb();
   const periodConfig = await getPayPeriodConfig();
   const periodStart = getCurrentPeriodStart(periodConfig);

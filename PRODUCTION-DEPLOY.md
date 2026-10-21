@@ -6,6 +6,28 @@ worked**. Don't skip ahead: later steps depend on values you collect earlier.
 > `DEPLOY-DEMO.md` is the older *free-tier demo* guide. This file supersedes it for a real
 > production launch: separate staging + production, paid plans, live billing, gated deploys.
 
+### Already ran the demo guide? Turn the demo into STAGING
+
+If you followed `DEPLOY-DEMO.md` (a Vercel project on a `*.vercel.app` URL plus one Neon project
+holding `cadenzpoint_control` and `tenant_acme` / `tenant_globex` / `tenant_initech`), **don't
+delete it — reuse it as staging**:
+
+| Guide step | What to do instead with the demo |
+|---|---|
+| Phase 5 (Neon) — **staging** half | Keep the demo's Neon project as the staging control plane. Its existing `tenant_*` databases already match the naming rule, so they double as stress-test tenants in 12.7. Check its region (project **Settings**); if it isn't `aws-us-east-1`, staging still works, just slower. |
+| Phase 6.1 (staging Vercel project) | Don't create a new one: rename the demo project to `cadenzpoint-staging` (**Settings → General → Project Name**). |
+| Phase 6.3 / 6.4 | Apply them to the renamed project: set region `iad1`, then **update** its env vars to the staging values in the 6.4 table (notably `APP_ROOT_DOMAIN` / `NEXT_PUBLIC_APP_ROOT_DOMAIN` = `staging.cadenzpoint.com`, `NEXT_PUBLIC_APP_URL` = `https://staging.cadenzpoint.com`, `EMAIL_FROM` on `cadenzpoint.com`, `NEON_API_KEY` + `NEON_REGION_ID`, Stripe **test** keys). Keep its existing `ENCRYPTION_KEY`: the demo tenants' connection strings were encrypted with it. |
+| Phase 7.2 | Attach `staging.cadenzpoint.com` and `*.staging.cadenzpoint.com` to this project. |
+| Production (Phases 5, 6.2, 7.1, onward) | Build fresh: a new Neon production control plane and a new `cadenzpoint` Vercel project. |
+
+Two things to know:
+- **Your domain currently forwards elsewhere.** If `cadenzpoint.com` redirects to a registrar
+  forwarding/parking host, DNS was never pointed at Vercel. Phase 7.3 (switch nameservers to
+  Vercel) replaces that forward, which is intended.
+- **The demo stops auto-deploying on `git push`** once `vercel.json`'s `git.deploymentEnabled: false`
+  reaches the branch Vercel watches. That's deliberate: from then on, staging updates go through the
+  **Deploy to Staging** workflow, which needs the Phase 11 GitHub Environment secrets.
+
 ---
 
 ## How a production deploy works (read once)
@@ -62,6 +84,17 @@ What changed, for reference:
 
 **Bonus fix found while verifying the build:** `AuditTrail.module.css` contained only a global selector,
 which webpack's CSS Modules rejects (Turbopack tolerated it). The rule moved to `globals.css`.
+
+---
+
+## Phase 1b — Security hardening (BLOCKING for production)
+
+A review found critical authorization gaps (account takeover via password reset, self-approval of
+timesheets, supervisor-to-admin escalation, MFA not enforced). Implement
+`feature-plan-security-hardening.md` (round 1, done) **and**
+`feature-plan-security-hardening-round2.md` (cross-tenant session replay, period-lock bypass, data
+exposure, OAuth) before any real customer data goes in. The staging rehearsal
+(Phase 12) can use your own test data, but run it on the hardened code so it tests what you'll ship.
 
 ---
 

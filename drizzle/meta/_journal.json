@@ -71,6 +71,13 @@
       "when": 1781703325499,
       "tag": "0009_dry_tempest",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792544952879,
+      "tag": "0010_low_the_enforcers",
+      "breakpoints": true
     }
   ]
 }

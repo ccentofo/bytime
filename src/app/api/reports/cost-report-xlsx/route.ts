@@ -1,22 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/auth';
 import { getDetailedCostReport, getEmployeeSummaryReport } from '@/server/actions/reports';
 import { generateCostReportExcel, generateEmployeeSummaryExcel } from '@/lib/reports/cost-report-excel';
 import { checkReportRateLimit } from '@/lib/rate-limit';
+import { guardErrorResponse } from '@/lib/http-errors';
+import { getSessionUser } from '@/lib/session';
 
 export async function GET(request: NextRequest) {
   const rateLimited = checkReportRateLimit(request);
   if (rateLimited) return rateLimited;
-
-  const session = await auth();
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const role = (session.user as any).role;
-  if (role !== 'admin' && role !== 'supervisor') {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
 
   const { searchParams } = new URL(request.url);
   const startDate = searchParams.get('startDate');
@@ -31,19 +22,28 @@ export async function GET(request: NextRequest) {
   const dateRange = `${startDate} to ${endDate}`;
   let buffer: Buffer;
 
-  if (format === 'summary') {
-    const data = await getEmployeeSummaryReport(
-      new Date(startDate),
-      new Date(endDate)
-    );
-    buffer = await generateEmployeeSummaryExcel(data, dateRange);
-  } else {
-    const data = await getDetailedCostReport(
-      new Date(startDate),
-      new Date(endDate),
-      contractId ?? undefined
-    );
-    buffer = await generateCostReportExcel(data, 'Cost Report', dateRange);
+  try {
+    if (format === 'summary') {
+      // Hours + cost summary — approver-scoped (getEmployeeSummaryReport omits cost for supervisors).
+      const data = await getEmployeeSummaryReport(
+        new Date(startDate),
+        new Date(endDate)
+      );
+      // R2-5: the Excel sheet itself must not have a cost column for supervisors — this is a
+      // presentation check only; the data is already scoped by the guarded action above.
+      const sessionUser = await getSessionUser();
+      buffer = await generateEmployeeSummaryExcel(data, dateRange, sessionUser?.role === 'admin');
+    } else {
+      // Detailed cost report — dollar data, admin-only (enforced by requireAdmin()).
+      const data = await getDetailedCostReport(
+        new Date(startDate),
+        new Date(endDate),
+        contractId ?? undefined
+      );
+      buffer = await generateCostReportExcel(data, 'Cost Report', dateRange);
+    }
+  } catch (error) {
+    return guardErrorResponse(error);
   }
 
   return new NextResponse(new Uint8Array(buffer), {

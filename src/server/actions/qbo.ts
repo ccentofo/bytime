@@ -5,18 +5,10 @@ import { integrationConnections, users, contracts, clins, integrationEntityMappi
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
 import { decrypt } from '@/lib/encryption';
-import { ensureValidToken, getQBOAuthUrl, fetchQBOEmployees, fetchQBOCustomers, fetchQBOServiceItems, fetchQBOVendors, fetchQBOClasses } from '@/lib/integrations/connectors/qbo-api';
+import { ensureValidToken, fetchQBOEmployees, fetchQBOCustomers, fetchQBOServiceItems, fetchQBOVendors, fetchQBOClasses } from '@/lib/integrations/connectors/qbo-api';
 import { getMappings } from '@/server/actions/integrations';
 import { executeSyncOperation } from '@/lib/integrations/sync-engine';
 import { createCostClass, createChargeCode } from '@/server/actions/charge-codes';
-
-/**
- * Get the QBO OAuth authorization URL for initiating the connection.
- */
-export async function getQBOConnectUrl(): Promise<string> {
-  await requireAdmin();
-  return getQBOAuthUrl();
-}
 
 /**
  * Fetch QBO employees for the mapping UI.
@@ -147,15 +139,14 @@ export async function triggerQBOSync(data: {
   connectionId: string;
   periodStart: Date;
   periodEnd: Date;
-  triggeredBy: string;
 }) {
-  await requireAdmin();
+  const actor = await requireAdmin();
   return executeSyncOperation(
     data.connectionId,
     'timesheet_push',
     data.periodStart,
     data.periodEnd,
-    data.triggeredBy,
+    actor.id,
     'manual'
   );
 }

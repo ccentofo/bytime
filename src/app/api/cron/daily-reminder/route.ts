@@ -26,6 +26,9 @@ export async function GET(request: NextRequest) {
   // Authorization: Bearer (Vercel native crons).
   const cronSecret = request.headers.get('x-cron-secret')
     ?? request.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
+  if (process.env.NODE_ENV === 'production' && !process.env.CRON_SECRET) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   if (process.env.CRON_SECRET && cronSecret !== process.env.CRON_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }

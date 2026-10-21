@@ -10,19 +10,17 @@ export default async function ProfilePage() {
   const session = await auth();
   if (!session?.user) redirect('/login');
 
-  const userId = session.user.id!;
   const fullName = (session.user as any).fullName ?? session.user.name ?? '';
   const email = session.user.email ?? '';
   const role = (session.user as any).role ?? 'employee';
 
   const [passwordInfo, mfaStatus] = await Promise.all([
-    getPasswordInfo(userId),
+    getPasswordInfo(),
     getMFAStatus(),
   ]);
 
   return (
     <ProfileClient
-      userId={userId}
       fullName={fullName}
       email={email}
       role={role}

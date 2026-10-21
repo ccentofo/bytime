@@ -85,7 +85,6 @@ interface Props {
   mappings: Mapping[];
   syncLogs: SyncLog[];
   bytimeEmployees: Array<{ id: string; fullName: string; email: string }>;
-  currentUserId: string;
 }
 
 
@@ -94,7 +93,6 @@ export function GustoConfigClient({
   mappings: initialMappings,
   syncLogs: initialSyncLogs,
   bytimeEmployees,
-  currentUserId,
 }: Props) {
   const [mappings, setMappings] = useState(initialMappings);
   const [syncLogs] = useState(initialSyncLogs);
@@ -195,7 +193,6 @@ export function GustoConfigClient({
           connectionId: connection.id,
           periodStart,
           periodEnd,
-          triggeredBy: currentUserId,
         });
         notifications.show({
           title: 'Sync complete',
