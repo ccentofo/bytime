@@ -12,12 +12,11 @@ import crypto from 'crypto';
  */
 export async function createApiKey(data: {
   name: string;
-  createdByUserId: string;
   permissions?: 'read' | 'read-write';
   expiresAt?: Date;
 }): Promise<{ id: string; key: string; prefix: string }> {
+  const actor = await requireAdmin();
   const db = await getDb();
-  await requireAdmin();
 
   // Generate a random API key: "byt_" + 32 random hex chars
   const randomBytes = crypto.randomBytes(24);
@@ -32,7 +31,7 @@ export async function createApiKey(data: {
     name: data.name,
     keyHash,
     keyPrefix: prefix,
-    createdByUserId: data.createdByUserId,
+    createdByUserId: actor.id,
     permissions: data.permissions ?? 'read',
     expiresAt: data.expiresAt ?? null,
   }).returning();

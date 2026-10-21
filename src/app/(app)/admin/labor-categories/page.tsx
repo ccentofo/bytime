@@ -2,8 +2,13 @@ import { getAllLaborCategories, getUserLaborCategoryAssignments, getAssignableLa
 import { getContracts } from '@/server/actions/contracts';
 import { getUsers } from '@/server/actions/users';
 import { LaborCategoriesClient } from './LaborCategoriesClient';
+import { requirePageRole } from '@/lib/session';
+
+export const dynamic = 'force-dynamic';
 
 export default async function LaborCategoriesPage() {
+  await requirePageRole('admin');
+
   const [laborCats, assignments, contracts, users, assignableLcats] = await Promise.all([
     getAllLaborCategories(),
     getUserLaborCategoryAssignments(),

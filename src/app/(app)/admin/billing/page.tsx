@@ -1,5 +1,4 @@
-import { auth } from '@/auth';
-import { redirect } from 'next/navigation';
+import { requirePageRole } from '@/lib/session';
 import { getTenantBillingInfo } from '@/server/actions/billing';
 import { BillingClient } from './BillingClient';
 
@@ -10,10 +9,7 @@ export default async function BillingPage({
 }: {
   searchParams: Promise<{ status?: string }>;
 }) {
-  const session = await auth();
-  if (!session?.user) redirect('/login');
-  const role = (session.user as any).role;
-  if (role !== 'admin') redirect('/timesheet');
+  await requirePageRole('admin');
 
   const { status } = await searchParams;
   const billing = await getTenantBillingInfo();

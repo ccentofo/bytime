@@ -3,8 +3,7 @@
 import { getDb } from '@/db';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { auth } from '@/auth';
-import { redirect } from 'next/navigation';
+import { requireSession } from '@/lib/session';
 import bcrypt from 'bcryptjs';
 import { encrypt, decrypt } from '@/lib/encryption';
 import {
@@ -12,11 +11,12 @@ import {
   verifyTOTPCode,
   generateRecoveryCodes,
   hashRecoveryCode,
-  verifyRecoveryCode,
 } from '@/lib/totp';
 
 // ---------------------------------------------------------------------------
-// MFA Setup
+// MFA Setup — all self-only. MFA login verification itself lives in auth.ts's
+// authorize() (see the blueprint's "MFA inside sign-in" change) — there is no
+// separate verifyMFALogin action anymore; no session exists until it passes.
 // ---------------------------------------------------------------------------
 
 /**
@@ -28,10 +28,8 @@ export async function initMFASetup(): Promise<{
   secret: string;
   uri: string;
 }> {
-  const session = await auth();
-  if (!session?.user?.email) redirect('/login');
-
-  return generateTOTPSecret(session.user.email);
+  const actor = await requireSession();
+  return generateTOTPSecret(actor.email);
 }
 
 /**
@@ -43,9 +41,8 @@ export async function completeMFASetup(data: {
   pendingSecret: string;
   code: string;
 }): Promise<{ success: boolean; recoveryCodes?: string[]; error?: string }> {
+  const actor = await requireSession();
   const db = await getDb();
-  const session = await auth();
-  if (!session?.user?.id) redirect('/login');
 
   // Verify the code against the pending secret
   const isValid = verifyTOTPCode(data.pendingSecret, data.code);
@@ -68,7 +65,7 @@ export async function completeMFASetup(data: {
       totpRecoveryCodes: encryptedRecoveryCodes,
       updatedAt: new Date(),
     })
-    .where(eq(users.id, session.user.id));
+    .where(eq(users.id, actor.id));
 
   return { success: true, recoveryCodes: plainCodes };
 }
@@ -77,14 +74,13 @@ export async function completeMFASetup(data: {
  * Disable MFA — requires current password confirmation.
  */
 export async function disableMFA(currentPassword: string): Promise<{ success: boolean; error?: string }> {
+  const actor = await requireSession();
   const db = await getDb();
-  const session = await auth();
-  if (!session?.user?.id) redirect('/login');
 
   const [user] = await db
     .select({ passwordHash: users.passwordHash })
     .from(users)
-    .where(eq(users.id, session.user.id));
+    .where(eq(users.id, actor.id));
 
   if (!user?.passwordHash) {
     return { success: false, error: 'No password set on this account.' };
@@ -102,85 +98,22 @@ export async function disableMFA(currentPassword: string): Promise<{ success: bo
       totpRecoveryCodes: null,
       updatedAt: new Date(),
     })
-    .where(eq(users.id, session.user.id));
-
-  return { success: true };
-}
-
-// ---------------------------------------------------------------------------
-// MFA Login Verification
-// ---------------------------------------------------------------------------
-
-/**
- * Verify a TOTP code or recovery code during the login flow.
- * Called from the /login/mfa page after successful password auth.
- */
-export async function verifyMFALogin(data: {
-  userId: string;
-  code: string;
-  isRecoveryCode?: boolean;
-}): Promise<{ success: boolean; error?: string }> {
-  const db = await getDb();
-  const [user] = await db
-    .select({
-      totpSecret: users.totpSecret,
-      totpEnabled: users.totpEnabled,
-      totpRecoveryCodes: users.totpRecoveryCodes,
-    })
-    .from(users)
-    .where(eq(users.id, data.userId));
-
-  if (!user?.totpEnabled || !user.totpSecret) {
-    return { success: false, error: '2FA is not enabled for this account.' };
-  }
-
-  const secret = decrypt(user.totpSecret);
-
-  if (data.isRecoveryCode) {
-    // Verify recovery code
-    if (!user.totpRecoveryCodes) {
-      return { success: false, error: 'No recovery codes available.' };
-    }
-
-    const hashedCodes: string[] = JSON.parse(decrypt(user.totpRecoveryCodes));
-    const matchIndex = verifyRecoveryCode(data.code, hashedCodes);
-
-    if (matchIndex === -1) {
-      return { success: false, error: 'Invalid recovery code.' };
-    }
-
-    // Consume the used recovery code
-    hashedCodes.splice(matchIndex, 1);
-    const updatedEncrypted = encrypt(JSON.stringify(hashedCodes));
-
-    await db.update(users)
-      .set({ totpRecoveryCodes: updatedEncrypted, updatedAt: new Date() })
-      .where(eq(users.id, data.userId));
-
-    return { success: true };
-  }
-
-  // Verify TOTP code
-  const isValid = verifyTOTPCode(secret, data.code);
-  if (!isValid) {
-    return { success: false, error: 'Invalid code. Please try again.' };
-  }
+    .where(eq(users.id, actor.id));
 
   return { success: true };
 }
 
 /**
- * Get MFA status for the current user.
+ * Get MFA status for the session user.
  */
 export async function getMFAStatus(): Promise<{ enabled: boolean; recoveryCodesRemaining: number }> {
+  const actor = await requireSession();
   const db = await getDb();
-  const session = await auth();
-  if (!session?.user?.id) return { enabled: false, recoveryCodesRemaining: 0 };
 
   const [user] = await db
     .select({ totpEnabled: users.totpEnabled, totpRecoveryCodes: users.totpRecoveryCodes })
     .from(users)
-    .where(eq(users.id, session.user.id));
+    .where(eq(users.id, actor.id));
 
   if (!user?.totpEnabled) return { enabled: false, recoveryCodesRemaining: 0 };
 

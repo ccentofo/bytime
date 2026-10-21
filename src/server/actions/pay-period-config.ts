@@ -2,7 +2,7 @@
 
 import { getDb } from '@/db';
 import { payPeriodConfig } from '@/db/schema';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireSession } from '@/lib/session';
 import type { PeriodConfig, PeriodType } from '@/lib/date-utils';
 import { DEFAULT_PERIOD_CONFIG, getCurrentPeriodStart, navigatePeriod, getNumDaysInPeriod, getPeriodStartForDate } from '@/lib/date-utils';
 import { eq, lte, desc, gt } from 'drizzle-orm';
@@ -18,6 +18,7 @@ import dayjs from 'dayjs';
  * This is the single source of truth for "which schedule applies at date D."
  */
 export async function getEffectiveConfigAt(date: Date): Promise<PeriodConfig> {
+  await requireSession();
   const db = await getDb();
   const rows = await db
     .select()
@@ -41,6 +42,7 @@ export async function getEffectiveConfigAt(date: Date): Promise<PeriodConfig> {
  * Kept as a named export for clarity; callers that want "current" should use this.
  */
 export async function getCurrentEffectiveConfig(): Promise<PeriodConfig> {
+  await requireSession();
   return getEffectiveConfigAt(new Date());
 }
 
@@ -48,6 +50,7 @@ export async function getCurrentEffectiveConfig(): Promise<PeriodConfig> {
  * Backward-compatible alias — existing callers that want the current-time config.
  */
 export async function getPayPeriodConfig(): Promise<PeriodConfig> {
+  await requireSession();
   return getCurrentEffectiveConfig();
 }
 
@@ -66,6 +69,7 @@ export async function getNeighborPeriod(
   currentPeriodStart: Date,
   direction: 'prev' | 'next'
 ): Promise<{ periodStart: Date; periodConfig: PeriodConfig; numDays: number }> {
+  await requireSession();
   // Step 1: resolve the config at the current period to step correctly
   const currentConfig = await getEffectiveConfigAt(currentPeriodStart);
 
@@ -100,6 +104,7 @@ export type ConfigHistoryRow = {
 
 /** Return all config rows newest-first. */
 export async function getConfigHistory(): Promise<ConfigHistoryRow[]> {
+  await requireAdmin();
   const db = await getDb();
   const rows = await db
     .select()
@@ -121,6 +126,7 @@ export async function getConfigHistory(): Promise<ConfigHistoryRow[]> {
  * A row is "pending" if its effective_from is in the future relative to now.
  */
 export async function getPendingConfigChange(): Promise<ConfigHistoryRow | null> {
+  await requireAdmin();
   const db = await getDb();
   const now = new Date();
   const rows = await db

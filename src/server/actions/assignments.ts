@@ -6,6 +6,7 @@ import { eq, and } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
 
 export async function getAssignments() {
+  await requireAdmin();
   const db = await getDb();
   return db
     .select({
@@ -33,6 +34,7 @@ export async function getAssignments() {
 }
 
 export async function getAssignmentsForUser(userId: string) {
+  await requireAdmin();
   const db = await getDb();
   return db
     .select({
@@ -58,13 +60,12 @@ export async function assignUserToClin(data: {
   userId: string;
   clinId: string;
   slinId?: string;
-  assignedBy?: string;
 }) {
-  await requireAdmin();
+  const actor = await requireAdmin();
   const db = await getDb();
   const rows = await db
     .insert(userAssignments)
-    .values(data)
+    .values({ ...data, assignedBy: actor.id })
     .onConflictDoUpdate({
       target: [userAssignments.userId, userAssignments.clinId],
       set: { isActive: true, assignedAt: new Date(), slinId: data.slinId ?? null },

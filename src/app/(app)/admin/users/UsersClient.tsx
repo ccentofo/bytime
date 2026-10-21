@@ -179,7 +179,6 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
         const result = await adminResetPassword({
           targetUserId: resetTarget.id,
           newPassword: resetPassword,
-          adminUserId: currentUserId,
         });
         if (result.success) {
           setResetModalOpen(false);
@@ -199,29 +198,37 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
 
   function handleToggleFlsaExempt(user: User) {
     startTransition(async () => {
-      const newExempt = !user.flsaExempt;
-      await updateUser(user.id, { flsaExempt: newExempt });
-      const refreshed = await getUsers();
-      setUsers(refreshed as User[]);
-      notifications.show({
-        title: newExempt ? 'FLSA Exempt' : 'FLSA Non-Exempt',
-        message: `${user.fullName} is now ${newExempt ? 'FLSA Exempt (salaried)' : 'FLSA Non-Exempt (hourly)'}.`,
-        color: newExempt ? 'signal' : 'gray',
-      });
+      try {
+        const newExempt = !user.flsaExempt;
+        await updateUser(user.id, { flsaExempt: newExempt });
+        const refreshed = await getUsers();
+        setUsers(refreshed as User[]);
+        notifications.show({
+          title: newExempt ? 'FLSA Exempt' : 'FLSA Non-Exempt',
+          message: `${user.fullName} is now ${newExempt ? 'FLSA Exempt (salaried)' : 'FLSA Non-Exempt (hourly)'}.`,
+          color: newExempt ? 'signal' : 'gray',
+        });
+      } catch (error) {
+        notifications.show({ title: 'Action Failed', message: String(error), color: 'red' });
+      }
     });
   }
 
   function handleToggleActive(user: User) {
     startTransition(async () => {
-      const newActive = !user.isActive;
-      await updateUser(user.id, { isActive: newActive });
-      const refreshed = await getUsers();
-      setUsers(refreshed as User[]);
-      notifications.show({
-        title: newActive ? 'User Activated' : 'User Deactivated',
-        message: `${user.fullName} has been ${newActive ? 'activated' : 'deactivated'}.`,
-        color: newActive ? 'success' : 'warning',
-      });
+      try {
+        const newActive = !user.isActive;
+        await updateUser(user.id, { isActive: newActive });
+        const refreshed = await getUsers();
+        setUsers(refreshed as User[]);
+        notifications.show({
+          title: newActive ? 'User Activated' : 'User Deactivated',
+          message: `${user.fullName} has been ${newActive ? 'activated' : 'deactivated'}.`,
+          color: newActive ? 'success' : 'warning',
+        });
+      } catch (error) {
+        notifications.show({ title: 'Action Failed', message: String(error), color: 'red' });
+      }
     });
   }
 
@@ -245,12 +252,14 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
       accessorKey: 'isActive',
       header: 'Active',
       Cell: ({ row }) => (
-        <Switch
-          checked={row.original.isActive}
-          onChange={() => handleToggleActive(row.original)}
-          disabled={isPending}
-          size="sm"
-        />
+        <Tooltip label={row.original.id === currentUserId ? "You can't deactivate your own account" : undefined} disabled={row.original.id !== currentUserId}>
+          <Switch
+            checked={row.original.isActive}
+            onChange={() => handleToggleActive(row.original)}
+            disabled={isPending || row.original.id === currentUserId}
+            size="sm"
+          />
+        </Tooltip>
       ),
       size: 90,
     },
@@ -385,9 +394,11 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
           />
           <Select
             label="Role"
+            description={editingUser?.id === currentUserId ? "You can't change your own role" : undefined}
             data={ROLE_OPTIONS}
             value={form.role}
             onChange={(val) => setForm((f) => ({ ...f, role: val ?? 'employee' }))}
+            disabled={editingUser?.id === currentUserId}
             required
           />
           {!editingUser && (

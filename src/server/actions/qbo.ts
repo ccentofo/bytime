@@ -147,15 +147,14 @@ export async function triggerQBOSync(data: {
   connectionId: string;
   periodStart: Date;
   periodEnd: Date;
-  triggeredBy: string;
 }) {
-  await requireAdmin();
+  const actor = await requireAdmin();
   return executeSyncOperation(
     data.connectionId,
     'timesheet_push',
     data.periodStart,
     data.periodEnd,
-    data.triggeredBy,
+    actor.id,
     'manual'
   );
 }

@@ -2,7 +2,7 @@ import { auth } from '@/auth';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { AppShellWrapper } from './AppShellWrapper';
-import { getSetupStatusInternal } from '@/server/actions/setup';
+import { getSetupStatusInternal } from '@/server/internal/setup';
 import { getTenantState } from '@/lib/tenant/context';
 import { TenantUnavailable } from './TenantUnavailable';
 import { BillingWall } from './BillingWall';

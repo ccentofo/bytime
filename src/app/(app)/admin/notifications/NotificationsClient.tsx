@@ -17,11 +17,10 @@ import { updateNotificationPreferences, type NotificationPrefs } from '@/server/
 import { PageHeader } from '@/components/ui/PageHeader';
 
 type Props = {
-  userId: string;
   initialPrefs: NotificationPrefs;
 };
 
-export function NotificationsClient({ userId, initialPrefs }: Props) {
+export function NotificationsClient({ initialPrefs }: Props) {
   const [isPending, startTransition] = useTransition();
   const [prefs, setPrefs] = useState<NotificationPrefs>(initialPrefs);
 
@@ -30,7 +29,7 @@ export function NotificationsClient({ userId, initialPrefs }: Props) {
     setPrefs(updated);
 
     startTransition(async () => {
-      await updateNotificationPreferences(userId, { [key]: value });
+      await updateNotificationPreferences({ [key]: value });
       notifications.show({
         title: 'Preferences Saved',
         message: 'Your notification settings have been updated.',

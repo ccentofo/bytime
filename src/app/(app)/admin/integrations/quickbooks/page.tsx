@@ -1,5 +1,5 @@
-import { auth } from '@/auth';
 import { redirect } from 'next/navigation';
+import { requirePageRole } from '@/lib/session';
 import { getConnections, getMappings, getSyncLogs } from '@/server/actions/integrations';
 import {
   getBytimeEmployeesForMapping,
@@ -15,10 +15,7 @@ export default async function QBOConfigPage({
 }: {
   searchParams: Promise<{ connectionId?: string }>;
 }) {
-  const session = await auth();
-  if (!session?.user) redirect('/login');
-  const role = (session.user as any).role;
-  if (role !== 'admin') redirect('/timesheet');
+  await requirePageRole('admin');
 
   const { connectionId } = await searchParams;
 
@@ -57,7 +54,6 @@ export default async function QBOConfigPage({
       bytimeEmployees={bytimeEmployees}
       bytimeContracts={bytimeContracts}
       bytimeClins={bytimeClins}
-      currentUserId={session.user.id!}
     />
   );
 }

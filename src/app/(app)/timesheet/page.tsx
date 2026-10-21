@@ -5,7 +5,7 @@ import { getCurrentPeriodStart, getNumDaysInPeriod } from '@/lib/date-utils';
 import { BiWeeklyTimesheetClient } from '@/components/timesheet/BiWeeklyTimesheetClient';
 import type { TimesheetPageData } from '@/types/timesheet';
 import { getPeriodStatus } from '@/server/actions/periods';
-import { getUserByEmail } from '@/server/actions/users';
+import { getUserByEmail } from '@/server/internal/users';
 import { getEmployeeDashboardData } from '@/server/actions/employee-dashboard';
 import { getCurrentEffectiveConfig, getEffectiveConfigAt } from '@/server/actions/pay-period-config';
 
@@ -30,15 +30,15 @@ export default async function TimesheetPage() {
 
   // Fetch ALL independent data in parallel (single await)
   const [chargeCodes, revisions, periodInfo, fullUser, dashboardData] = await Promise.all([
-    getChargeCodesForUser(userId),
-    getRevisionMap(userId, periodStart, numDays),
-    getPeriodStatus(userId, periodStart),
+    getChargeCodesForUser(),
+    getRevisionMap(periodStart, numDays),
+    getPeriodStatus(periodStart),
     getUserByEmail(session.user.email!),
-    getEmployeeDashboardData(userId),
+    getEmployeeDashboardData(),
   ]);
 
   // Only this depends on chargeCodes — runs after the parallel batch
-  const entries = await getTimesheetEntries(userId, periodStart, chargeCodes);
+  const entries = await getTimesheetEntries(periodStart, chargeCodes);
 
   const pageData: TimesheetPageData = {
     userId,

@@ -201,7 +201,6 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
         dispatch({ type: 'SET_SAVING', isSaving: true });
 
         const newRevisions = await saveTimesheetBatch({
-          userId: state.userId,
           periodStart: state.periodStart,
           cells: dirtyCells.map((c) => {
             const chargeCode = state.chargeCodes.find((cc) => cc.id === c.chargeCodeId);
@@ -249,9 +248,9 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
 
         // Parallel fetch — all 3 queries at once instead of sequential
         const [entries, revisions, periodInfo] = await Promise.all([
-          getTimesheetEntries(state.userId, newPeriodStart, state.chargeCodes),
-          getRevisionMap(state.userId, newPeriodStart, numDays),
-          getPeriodStatus(state.userId, newPeriodStart),
+          getTimesheetEntries(newPeriodStart, state.chargeCodes),
+          getRevisionMap(newPeriodStart, numDays),
+          getPeriodStatus(newPeriodStart),
         ]);
 
         // Fire-and-forget offline seeding — wrapped in try/catch to prevent IndexedDB errors from crashing the app
@@ -311,9 +310,9 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
 
       try {
         const [entries, revisions, periodInfo] = await Promise.all([
-          getTimesheetEntries(state.userId, newPeriodStart, state.chargeCodes),
-          getRevisionMap(state.userId, newPeriodStart, numDays),
-          getPeriodStatus(state.userId, newPeriodStart),
+          getTimesheetEntries(newPeriodStart, state.chargeCodes),
+          getRevisionMap(newPeriodStart, numDays),
+          getPeriodStatus(newPeriodStart),
         ]);
 
         // Fire-and-forget offline seeding — wrapped in try/catch to prevent IndexedDB errors from crashing the app
@@ -363,7 +362,6 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
       try {
         dispatch({ type: 'SET_SAVING', isSaving: true });
         await submitPeriod({
-          userId: state.userId,
           periodStart: state.periodStart,
           comment,
         });

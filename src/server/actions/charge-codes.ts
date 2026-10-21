@@ -10,6 +10,7 @@ import { requireAdmin } from '@/lib/session';
 // ---------------------------------------------------------------------------
 
 export async function listCostClasses() {
+  await requireAdmin();
   const db = await getDb();
   return db.select().from(costClasses).where(eq(costClasses.isActive, true)).orderBy(costClasses.name);
 }
@@ -26,6 +27,7 @@ export async function createCostClass(name: string) {
 // ---------------------------------------------------------------------------
 
 export async function listChargeCodes() {
+  await requireAdmin();
   const db = await getDb();
   return db
     .select({
@@ -118,8 +120,8 @@ export async function deactivateChargeCode(id: string) {
  * ALSO upserts the user_assignments row for the code's CLIN so supervisor
  * approval routing and LCAT rates remain intact.
  */
-export async function assignChargeCodeToUser(userId: string, chargeCodeId: string, assignedBy?: string) {
-  await requireAdmin();
+export async function assignChargeCodeToUser(userId: string, chargeCodeId: string) {
+  const actor = await requireAdmin();
   const db = await getDb();
 
   // Look up the charge code's CLIN (needed for user_assignments sync)
@@ -129,16 +131,16 @@ export async function assignChargeCodeToUser(userId: string, chargeCodeId: strin
 
   // Upsert user_charge_codes
   await db.insert(userChargeCodes).values({
-    userId, chargeCodeId, isActive: true, assignedBy: assignedBy ?? null,
+    userId, chargeCodeId, isActive: true, assignedBy: actor.id,
   }).onConflictDoUpdate({
     target: [userChargeCodes.userId, userChargeCodes.chargeCodeId],
-    set: { isActive: true, assignedBy: assignedBy ?? null },
+    set: { isActive: true, assignedBy: actor.id },
   });
 
   // CRITICAL: also ensure the user has a user_assignments row for the CLIN
   // so supervisor scope and LCAT lookups work correctly.
   await db.insert(userAssignments).values({
-    userId, clinId: cc.clinId, slinId: cc.slinId ?? null, isActive: true, assignedBy: assignedBy ?? null,
+    userId, clinId: cc.clinId, slinId: cc.slinId ?? null, isActive: true, assignedBy: actor.id,
   }).onConflictDoUpdate({
     target: [userAssignments.userId, userAssignments.clinId],
     set: { isActive: true },
@@ -158,7 +160,7 @@ export async function unassignChargeCodeFromUser(userId: string, chargeCodeId: s
  * Assign ALL active charge codes under a specific CLIN to a user.
  * Convenience for onboarding: "assign all codes under this CLIN."
  */
-export async function assignAllUnderClin(userId: string, clinId: string, assignedBy?: string) {
+export async function assignAllUnderClin(userId: string, clinId: string) {
   await requireAdmin();
   const db = await getDb();
   const codes = await db.select({ id: chargeCodes.id })
@@ -166,12 +168,13 @@ export async function assignAllUnderClin(userId: string, clinId: string, assigne
     .where(and(eq(chargeCodes.clinId, clinId), eq(chargeCodes.isActive, true)));
 
   for (const code of codes) {
-    await assignChargeCodeToUser(userId, code.id, assignedBy);
+    await assignChargeCodeToUser(userId, code.id);
   }
   return { assigned: codes.length };
 }
 
 export async function getUserChargeCodeIds(userId: string): Promise<string[]> {
+  await requireAdmin();
   const db = await getDb();
   const rows = await db.select({ chargeCodeId: userChargeCodes.chargeCodeId })
     .from(userChargeCodes)
@@ -185,6 +188,7 @@ export async function getUserChargeCodeIds(userId: string): Promise<string[]> {
  * table's shape (getAssignments in assignments.ts).
  */
 export async function getChargeCodeAssignments() {
+  await requireAdmin();
   const db = await getDb();
   return db
     .select({

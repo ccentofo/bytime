@@ -1,11 +1,108 @@
 import NextAuth from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
+import { CredentialsSignin } from '@auth/core/errors';
 import bcrypt from 'bcryptjs';
-import { checkLockout, recordFailedAttempt, recordSuccessfulLogin } from '@/server/actions/login-attempts';
+import { checkLockout } from '@/server/actions/login-attempts';
+import { recordFailedAttempt, recordSuccessfulLogin } from '@/server/internal/login-attempts';
 import { getDbForUrl, getDbForAuth } from '@/db';
 import { getTenantBySlug } from '@/lib/tenant/registry';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
+import { decrypt, encrypt } from '@/lib/encryption';
+import { verifyTOTPCode, verifyRecoveryCode } from '@/lib/totp';
+
+/** Thrown from authorize() when the account has MFA enabled and no code was submitted yet.
+ *  No session is issued — the client re-submits with mfaCode once the user enters one. */
+class MFARequiredSignin extends CredentialsSignin {
+  code = 'mfa_required';
+}
+
+/** Thrown from authorize() when an MFA code (TOTP or recovery) was submitted but is invalid. */
+class MFAInvalidSignin extends CredentialsSignin {
+  code = 'mfa_invalid';
+}
+
+/**
+ * Credentials provider authorize logic, extracted to a standalone function so it can be
+ * exercised directly in integration tests without driving the full NextAuth request stack.
+ * Behavior is unchanged from when this lived inline in the Credentials provider config.
+ */
+export async function authorizeCredentials(credentials: Record<string, unknown> | undefined) {
+  if (!credentials?.email || !credentials?.password) return null;
+
+  const email = (credentials.email as string).toLowerCase().trim();
+  const password = credentials.password as string;
+  const mfaCode = (credentials.mfaCode as string | undefined)?.trim();
+
+  // Check if the account is locked out
+  const lockoutInfo = await checkLockout(email);
+  if (lockoutInfo?.isLocked) {
+    return null;
+  }
+
+  // Use suspended-tolerant DB resolver so suspended admins can still log in
+  // and reach the billing wall. getDb() stays strict everywhere else.
+  let user: typeof users.$inferSelect | null = null;
+  try {
+    const db = await getDbForAuth();
+    const rows = await db.select().from(users).where(eq(users.email, email));
+    user = rows[0] ?? null;
+  } catch {
+    // Workspace not found / deleting / other error — treat as bad credentials
+    await recordFailedAttempt(email);
+    return null;
+  }
+  if (!user || !user.passwordHash || !user.isActive) {
+    await recordFailedAttempt(email);
+    return null;
+  }
+
+  const isValid = await bcrypt.compare(password, user.passwordHash);
+  if (!isValid) {
+    await recordFailedAttempt(email);
+    return null;
+  }
+
+  // MFA gate — no session is issued until both factors pass.
+  if (user.totpEnabled) {
+    if (!mfaCode) {
+      throw new MFARequiredSignin();
+    }
+
+    let mfaValid = false;
+    if (user.totpSecret) {
+      mfaValid = verifyTOTPCode(decrypt(user.totpSecret), mfaCode);
+    }
+
+    if (!mfaValid && user.totpRecoveryCodes) {
+      const hashedCodes: string[] = JSON.parse(decrypt(user.totpRecoveryCodes));
+      const matchIndex = verifyRecoveryCode(mfaCode, hashedCodes);
+      if (matchIndex !== -1) {
+        mfaValid = true;
+        // Consume the used recovery code — single use.
+        hashedCodes.splice(matchIndex, 1);
+        const db = await getDbForAuth();
+        await db.update(users)
+          .set({ totpRecoveryCodes: encrypt(JSON.stringify(hashedCodes)), updatedAt: new Date() })
+          .where(eq(users.id, user.id));
+      }
+    }
+
+    if (!mfaValid) {
+      await recordFailedAttempt(email); // counts toward lockout, same as a bad password
+      throw new MFAInvalidSignin();
+    }
+  }
+
+  await recordSuccessfulLogin(email);
+
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.fullName,
+    role: user.role,
+  };
+}
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   providers: [
@@ -14,54 +111,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       credentials: {
         email: { label: 'Email', type: 'email' },
         password: { label: 'Password', type: 'password' },
+        mfaCode: { label: 'Authentication code', type: 'text' },
       },
-      async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) return null;
-
-        const email = (credentials.email as string).toLowerCase().trim();
-        const password = credentials.password as string;
-
-        // Check if the account is locked out
-        const lockoutInfo = await checkLockout(email);
-        if (lockoutInfo?.isLocked) {
-          return null;
-        }
-
-        // Use suspended-tolerant DB resolver so suspended admins can still log in
-        // and reach the billing wall. getDb() stays strict everywhere else.
-        let user: typeof users.$inferSelect | null = null;
-        try {
-          const db = await getDbForAuth();
-          const rows = await db.select().from(users).where(eq(users.email, email));
-          user = rows[0] ?? null;
-        } catch {
-          // Workspace not found / deleting / other error — treat as bad credentials
-          await recordFailedAttempt(email);
-          return null;
-        }
-        if (!user || !user.passwordHash || !user.isActive) {
-          await recordFailedAttempt(email);
-          return null;
-        }
-
-        const isValid = await bcrypt.compare(password, user.passwordHash);
-        if (!isValid) {
-          await recordFailedAttempt(email);
-          return null;
-        }
-
-        await recordSuccessfulLogin(email);
-
-        // Check if 2FA is enabled — if so, signal the client to redirect to MFA page
-        // We return the user with a mfaPending flag; the LoginForm handles the redirect
-        return {
-          id: user.id,
-          email: user.email,
-          name: user.fullName,
-          role: user.role,
-          totpEnabled: user.totpEnabled ?? false,
-        };
-      },
+      authorize: authorizeCredentials,
     }),
   ],
   session: {
@@ -78,7 +130,6 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.id = user.id;
         token.role = (user as any).role;
         token.fullName = (user as any).name;
-        token.totpEnabled = (user as any).totpEnabled ?? false;
 
         // Bind this session to the tenant it logged into.
         try {

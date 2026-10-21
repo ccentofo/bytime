@@ -1,9 +1,10 @@
 'use server';
 
 import { getDb } from '@/db';
-import { timesheetEntries, users, clins, contracts, slins } from '@/db/schema';
-import { eq, and, gte, lt, desc, sql } from 'drizzle-orm';
+import { timesheetEntries, users, clins, contracts, slins, userAssignments } from '@/db/schema';
+import { eq, and, gte, lt, desc, sql, inArray } from 'drizzle-orm';
 import dayjs from 'dayjs';
+import { requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -61,7 +62,8 @@ export interface CellRevisionHistory {
 }
 
 // ---------------------------------------------------------------------------
-// Audit Queries
+// Audit Queries — approver only (admin: unrestricted; supervisor: scoped to
+// employees sharing an active CLIN assignment with them, per getEmployeeScope).
 // ---------------------------------------------------------------------------
 
 /**
@@ -70,14 +72,17 @@ export interface CellRevisionHistory {
  * Limits to 500 rows to prevent overwhelming the UI.
  */
 export async function getAuditEntries(filters: AuditFilters): Promise<AuditEntry[]> {
+  const actor = await requireApprover();
+  const scope = await getEmployeeScope(actor);
+  if (scope !== 'all' && scope.length === 0) return [];
+
   const db = await getDb();
-  // We need to alias the 'users' table for the createdBy join
-  // Drizzle doesn't support table aliases easily, so we'll do two queries
-  // or use a raw subselect. For simplicity, we'll join to users for the
-  // entry owner and do a subquery for createdBy name.
 
   const conditions = [];
 
+  if (scope !== 'all') {
+    conditions.push(inArray(timesheetEntries.userId, scope));
+  }
   if (filters.userId) {
     conditions.push(eq(timesheetEntries.userId, filters.userId));
   }
@@ -97,14 +102,11 @@ export async function getAuditEntries(filters: AuditFilters): Promise<AuditEntry
   if (filters.revisionsOnly) {
     conditions.push(gte(timesheetEntries.revisionNumber, 2));
   }
+  if (filters.contractId) {
+    conditions.push(eq(contracts.id, filters.contractId));
+  }
 
-  // Build the where clause
-  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-
-  // If contractId filter is set, we need to filter by CLIN's contract
-  // We'll handle this in the join condition
-
-  let query = db
+  const rows = await db
     .select({
       id: timesheetEntries.id,
       userId: timesheetEntries.userId,
@@ -129,20 +131,8 @@ export async function getAuditEntries(filters: AuditFilters): Promise<AuditEntry
     .innerJoin(users, eq(timesheetEntries.userId, users.id))
     .innerJoin(clins, eq(timesheetEntries.clinId, clins.id))
     .innerJoin(contracts, eq(clins.contractId, contracts.id))
-    .leftJoin(slins, eq(timesheetEntries.slinId, slins.id));
-
-  // Add contract filter if provided
-  if (filters.contractId) {
-    conditions.push(eq(contracts.id, filters.contractId));
-  }
-
-  const finalWhere = conditions.length > 0 ? and(...conditions) : undefined;
-
-  // suppress unused variable warning
-  void whereClause;
-
-  const rows = await query
-    .where(finalWhere)
+    .leftJoin(slins, eq(timesheetEntries.slinId, slins.id))
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(timesheetEntries.createdAt))
     .limit(500);
 
@@ -159,6 +149,9 @@ export async function getCellRevisionHistory(
   entryDate: Date,
   indirectCodeId?: string | null
 ): Promise<CellRevisionHistory | null> {
+  const actor = await requireApprover();
+  await assertCanAccessEmployee(actor, userId);
+
   const db = await getDb();
   const entryStart = dayjs(entryDate).startOf('day').toDate();
   const entryEnd = dayjs(entryDate).add(1, 'day').startOf('day').toDate();
@@ -249,8 +242,7 @@ export async function getCellRevisionHistory(
 }
 
 /**
- * Get summary statistics for the audit trail.
- * Returns counts of total entries, corrections, late entries, etc.
+ * Get summary statistics for the audit trail, scoped to the approver's employees.
  */
 export async function getAuditSummary(): Promise<{
   totalEntries: number;
@@ -258,7 +250,15 @@ export async function getAuditSummary(): Promise<{
   totalLateEntries: number;
   uniqueUsers: number;
 }> {
+  const actor = await requireApprover();
+  const scope = await getEmployeeScope(actor);
+  if (scope !== 'all' && scope.length === 0) {
+    return { totalEntries: 0, totalCorrections: 0, totalLateEntries: 0, uniqueUsers: 0 };
+  }
+
   const db = await getDb();
+  const whereClause = scope === 'all' ? undefined : inArray(timesheetEntries.userId, scope);
+
   // Single query with FILTER clauses — replaces 4 sequential COUNT queries
   const [result] = await db
     .select({
@@ -267,7 +267,8 @@ export async function getAuditSummary(): Promise<{
       totalLateEntries: sql<number>`COUNT(*) FILTER (WHERE ${timesheetEntries.changeReasonCode} = 'LATE_ENTRY')`,
       uniqueUsers: sql<number>`COUNT(DISTINCT ${timesheetEntries.userId})`,
     })
-    .from(timesheetEntries);
+    .from(timesheetEntries)
+    .where(whereClause);
 
   return {
     totalEntries: result.totalEntries,
@@ -278,49 +279,84 @@ export async function getAuditSummary(): Promise<{
 }
 
 /**
- * Get all contracts (for filter dropdown).
- * Re-exported here to avoid importing from contracts.ts in the client.
+ * Get contracts for the filter dropdown. Admins see every contract; supervisors see only
+ * contracts touched by a CLIN they themselves are assigned to (the same basis their scope
+ * is derived from).
  */
 export async function getContractsForFilter() {
+  const actor = await requireApprover();
   const db = await getDb();
-  return db
-    .select({
-      id: contracts.id,
-      name: contracts.name,
-      contractNumber: contracts.contractNumber,
-    })
-    .from(contracts)
+
+  if (actor.role === 'admin') {
+    return db
+      .select({ id: contracts.id, name: contracts.name, contractNumber: contracts.contractNumber })
+      .from(contracts)
+      .orderBy(contracts.name);
+  }
+
+  const rows = await db
+    .selectDistinct({ id: contracts.id, name: contracts.name, contractNumber: contracts.contractNumber })
+    .from(userAssignments)
+    .innerJoin(clins, eq(userAssignments.clinId, clins.id))
+    .innerJoin(contracts, eq(clins.contractId, contracts.id))
+    .where(and(eq(userAssignments.userId, actor.id), eq(userAssignments.isActive, true)))
     .orderBy(contracts.name);
+
+  return rows;
 }
 
 /**
- * Get all CLINs for a specific contract (for filter dropdown cascade).
+ * Get all CLINs for a specific contract (for filter dropdown cascade). Admins see every CLIN
+ * under the contract; supervisors see only the ones they themselves are assigned to.
  */
 export async function getClinsForFilter(contractId: string) {
+  const actor = await requireApprover();
   const db = await getDb();
-  return db
-    .select({
-      id: clins.id,
-      clinNumber: clins.clinNumber,
-      description: clins.description,
-    })
-    .from(clins)
-    .where(eq(clins.contractId, contractId))
+
+  if (actor.role === 'admin') {
+    return db
+      .select({ id: clins.id, clinNumber: clins.clinNumber, description: clins.description })
+      .from(clins)
+      .where(eq(clins.contractId, contractId))
+      .orderBy(clins.clinNumber);
+  }
+
+  const rows = await db
+    .selectDistinct({ id: clins.id, clinNumber: clins.clinNumber, description: clins.description })
+    .from(userAssignments)
+    .innerJoin(clins, eq(userAssignments.clinId, clins.id))
+    .where(
+      and(
+        eq(userAssignments.userId, actor.id),
+        eq(userAssignments.isActive, true),
+        eq(clins.contractId, contractId),
+      )
+    )
     .orderBy(clins.clinNumber);
+
+  return rows;
 }
 
 /**
- * Get all users (for filter dropdown).
- * Re-exported here to keep the audit page self-contained.
+ * Get users for the filter dropdown, scoped to the approver's employees.
  */
 export async function getUsersForFilter() {
+  const actor = await requireApprover();
+  const scope = await getEmployeeScope(actor);
   const db = await getDb();
+
+  if (scope === 'all') {
+    return db
+      .select({ id: users.id, fullName: users.fullName, email: users.email })
+      .from(users)
+      .orderBy(users.fullName);
+  }
+
+  if (scope.length === 0) return [];
+
   return db
-    .select({
-      id: users.id,
-      fullName: users.fullName,
-      email: users.email,
-    })
+    .select({ id: users.id, fullName: users.fullName, email: users.email })
     .from(users)
+    .where(inArray(users.id, scope))
     .orderBy(users.fullName);
 }

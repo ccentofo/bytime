@@ -19,7 +19,6 @@ import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import dayjs from 'dayjs';
 import { approvePeriod, rejectPeriod, getScopedPeriods } from '@/server/actions/periods';
-import { getSupervisedEmployeeIds } from '@/server/actions/supervisor-scope';
 import { getTimesheetForReview } from '@/server/actions/timesheet';
 import { getNumDaysInPeriod } from '@/lib/date-utils';
 import { formatDate, formatDateTime, formatShortDate } from '@/lib/format';
@@ -86,11 +85,9 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         setActionError(null);
         await approvePeriod({
           periodId: selectedPeriod.id,
-          reviewedBy: currentUserId,
           comment: approveComment.trim() || undefined,
         });
-        const scopedIds = await getSupervisedEmployeeIds(currentUserId, userRole);
-        const refreshed = await getScopedPeriods(scopedIds);
+        const refreshed = await getScopedPeriods();
         setPeriods(refreshed);
         setDrawerOpen(false);
         notifications.show({
@@ -118,11 +115,9 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         setActionError(null);
         await rejectPeriod({
           periodId: selectedPeriod.id,
-          reviewedBy: currentUserId,
           comment: rejectComment.trim(),
         });
-        const scopedIds = await getSupervisedEmployeeIds(currentUserId, userRole);
-        const refreshed = await getScopedPeriods(scopedIds);
+        const refreshed = await getScopedPeriods();
         setPeriods(refreshed);
         setDrawerOpen(false);
         notifications.show({
@@ -335,7 +330,13 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
             </Alert>
           )}
 
-          {selectedPeriod?.status === 'submitted' && (
+          {selectedPeriod?.status === 'submitted' && selectedPeriod.userId === currentUserId && (
+            <Alert icon={<IconAlertCircle size={16} />} color="warning">
+              You cannot approve or reject your own timesheet. Another admin or supervisor must review it.
+            </Alert>
+          )}
+
+          {selectedPeriod?.status === 'submitted' && selectedPeriod.userId !== currentUserId && (
             <>
               <Textarea
                 label="Approval Comment (optional)"

@@ -37,25 +37,25 @@ export function onSyncStatusChange(callback: SyncStatusCallback) {
  * Start the background sync service.
  * Checks for pending entries at regular intervals and syncs when online.
  */
-export function startSyncService(userId: string) {
+export function startSyncService() {
   if (syncTimer) return; // Already running
 
   syncTimer = setInterval(() => {
     if (navigator.onLine && !isSyncing) {
-      syncPendingEntries(userId);
+      syncPendingEntries();
     }
   }, SYNC_INTERVAL_MS);
 
   // Also sync when coming back online
   window.addEventListener('online', () => {
     if (!isSyncing) {
-      syncPendingEntries(userId);
+      syncPendingEntries();
     }
   });
 
   // Initial sync attempt
   if (navigator.onLine) {
-    syncPendingEntries(userId);
+    syncPendingEntries();
   }
 
   // Update status on offline/online events
@@ -76,16 +76,16 @@ export function stopSyncService() {
 /**
  * Manually trigger a sync (e.g., when user clicks "Save").
  */
-export async function triggerSync(userId: string): Promise<boolean> {
+export async function triggerSync(): Promise<boolean> {
   if (!navigator.onLine) return false;
-  return syncPendingEntries(userId);
+  return syncPendingEntries();
 }
 
 // ---------------------------------------------------------------------------
 // Core Sync Logic
 // ---------------------------------------------------------------------------
 
-async function syncPendingEntries(userId: string): Promise<boolean> {
+async function syncPendingEntries(): Promise<boolean> {
   if (isSyncing) return false;
   isSyncing = true;
   notifyStatus();
@@ -144,7 +144,6 @@ async function syncPendingEntries(userId: string): Promise<boolean> {
 
       try {
         const newRevisions = await saveTimesheetBatch({
-          userId,
           periodStart,
           cells: items.map((item) => {
             const dayIndex = dayjs(item.entryDate).diff(dayjs(periodStartStr), 'day');

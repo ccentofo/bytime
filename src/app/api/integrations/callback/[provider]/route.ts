@@ -52,7 +52,6 @@ export async function GET(
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       tokenExpiresAt: new Date(Date.now() + tokens.expiresIn * 1000),
-      connectedBy: session.user.id,
     });
 
     return NextResponse.redirect(

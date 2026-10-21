@@ -1,20 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { renderToBuffer } from '@react-pdf/renderer';
-import { auth } from '@/auth';
 import { getTimesheetReportData } from '@/server/actions/reports';
 import { TimesheetPdfDocument } from '@/lib/reports/timesheet-pdf';
 import { checkReportRateLimit } from '@/lib/rate-limit';
+import { guardErrorResponse } from '@/lib/http-errors';
 import React from 'react';
 import dayjs from 'dayjs';
 
 export async function GET(request: NextRequest) {
   const rateLimited = checkReportRateLimit(request);
   if (rateLimited) return rateLimited;
-
-  const session = await auth();
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
 
   const { searchParams } = new URL(request.url);
   const userId = searchParams.get('userId');
@@ -24,9 +19,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Missing userId or periodStart' }, { status: 400 });
   }
 
-  // Parse with dayjs to avoid timezone offset: new Date('2026-05-16') parses as UTC midnight,
-  // which shifts to May 15 in US timezones. dayjs().startOf('day') ensures local midnight.
-  const data = await getTimesheetReportData(userId, dayjs(periodStart).startOf('day').toDate());
+  let data;
+  try {
+    // Parse with dayjs to avoid timezone offset: new Date('2026-05-16') parses as UTC midnight,
+    // which shifts to May 15 in US timezones. dayjs().startOf('day') ensures local midnight.
+    data = await getTimesheetReportData(userId, dayjs(periodStart).startOf('day').toDate());
+  } catch (error) {
+    return guardErrorResponse(error) ?? NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   if (!data) {
     return NextResponse.json({ error: 'No data found' }, { status: 404 });
   }

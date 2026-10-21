@@ -4,6 +4,7 @@ import { getDb } from '@/db';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
+import { requireSession, requireAdmin } from '@/lib/session';
 
 // ---------------------------------------------------------------------------
 // Password Validation
@@ -27,14 +28,13 @@ function validatePassword(password: string): string | null {
 // ---------------------------------------------------------------------------
 
 /**
- * Change the current user's password.
- * Requires the current password for verification.
+ * Change the session user's own password. Requires the current password for verification.
  */
 export async function changePassword(data: {
-  userId: string;
   currentPassword: string;
   newPassword: string;
 }): Promise<{ success: boolean; error?: string }> {
+  const actor = await requireSession();
   const db = await getDb();
   // Validate new password
   const validationError = validatePassword(data.newPassword);
@@ -46,7 +46,7 @@ export async function changePassword(data: {
   const [user] = await db
     .select({ id: users.id, passwordHash: users.passwordHash })
     .from(users)
-    .where(eq(users.id, data.userId));
+    .where(eq(users.id, actor.id));
 
   if (!user) {
     return { success: false, error: 'User not found.' };
@@ -75,7 +75,7 @@ export async function changePassword(data: {
   const [currentUser] = await db
     .select({ sessionVersion: users.sessionVersion })
     .from(users)
-    .where(eq(users.id, data.userId));
+    .where(eq(users.id, actor.id));
 
   await db.update(users)
     .set({
@@ -84,7 +84,7 @@ export async function changePassword(data: {
       updatedAt: new Date(),
       sessionVersion: (currentUser?.sessionVersion ?? 1) + 1,
     })
-    .where(eq(users.id, data.userId));
+    .where(eq(users.id, actor.id));
 
   return { success: true };
 }
@@ -94,14 +94,14 @@ export async function changePassword(data: {
 // ---------------------------------------------------------------------------
 
 /**
- * Reset a user's password (admin action).
- * Does NOT require the current password — only admins can call this.
+ * Reset a user's password (admin action). Does NOT require the current password.
+ * Bumps the target's sessionVersion so their existing sessions end immediately.
  */
 export async function adminResetPassword(data: {
   targetUserId: string;
   newPassword: string;
-  adminUserId: string;
 }): Promise<{ success: boolean; error?: string }> {
+  await requireAdmin();
   const db = await getDb();
   // Validate new password
   const validationError = validatePassword(data.newPassword);
@@ -109,19 +109,9 @@ export async function adminResetPassword(data: {
     return { success: false, error: validationError };
   }
 
-  // Verify the admin exists and has the right role
-  const [admin] = await db
-    .select({ role: users.role })
-    .from(users)
-    .where(eq(users.id, data.adminUserId));
-
-  if (!admin || (admin.role !== 'admin' && admin.role !== 'supervisor')) {
-    return { success: false, error: 'Unauthorized: Only admins can reset passwords.' };
-  }
-
   // Verify target user exists
   const [target] = await db
-    .select({ id: users.id })
+    .select({ id: users.id, sessionVersion: users.sessionVersion })
     .from(users)
     .where(eq(users.id, data.targetUserId));
 
@@ -132,18 +122,12 @@ export async function adminResetPassword(data: {
   // Hash and save new password + increment session version (invalidates all existing sessions)
   const newHash = await bcrypt.hash(data.newPassword, 12);
 
-  // Get current session version
-  const [targetUser] = await db
-    .select({ sessionVersion: users.sessionVersion })
-    .from(users)
-    .where(eq(users.id, data.targetUserId));
-
   await db.update(users)
     .set({
       passwordHash: newHash,
       passwordChangedAt: new Date(),
       updatedAt: new Date(),
-      sessionVersion: (targetUser?.sessionVersion ?? 1) + 1,
+      sessionVersion: (target.sessionVersion ?? 1) + 1,
     })
     .where(eq(users.id, data.targetUserId));
 
@@ -155,12 +139,13 @@ export async function adminResetPassword(data: {
 // ---------------------------------------------------------------------------
 
 /**
- * Get password metadata for a user (last changed date).
+ * Get password metadata for the session user (last changed date).
  */
-export async function getPasswordInfo(userId: string): Promise<{
+export async function getPasswordInfo(): Promise<{
   hasPassword: boolean;
   lastChangedAt: Date | null;
 }> {
+  const actor = await requireSession();
   const db = await getDb();
   const [user] = await db
     .select({
@@ -168,7 +153,7 @@ export async function getPasswordInfo(userId: string): Promise<{
       passwordChangedAt: users.passwordChangedAt,
     })
     .from(users)
-    .where(eq(users.id, userId));
+    .where(eq(users.id, actor.id));
 
   return {
     hasPassword: Boolean(user?.passwordHash),

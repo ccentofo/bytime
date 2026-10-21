@@ -1,6 +1,6 @@
 'use server';
 
-import { getDb } from '@/db';
+import { getDbForAuth } from '@/db';
 import { loginAttempts } from '@/db/schema';
 import { eq, and, gte, desc } from 'drizzle-orm';
 import dayjs from 'dayjs';
@@ -12,13 +12,13 @@ import dayjs from 'dayjs';
 const MAX_FAILED_ATTEMPTS = 5;         // Lock after 5 consecutive failures
 const LOCKOUT_DURATION_MINUTES = 15;   // Lock for 15 minutes
 
-// ---------------------------------------------------------------------------
-// Login Attempt Tracking
-// ---------------------------------------------------------------------------
-
 /**
  * Check if an email is currently locked out due to too many failed attempts.
  * Returns lockout info if locked, null if not locked.
+ *
+ * PUBLIC — intentionally callable without a session: it's the pre-login lockout banner, and the
+ * client needs it before any authentication has happened. Read-only. Uses getDbForAuth so a
+ * suspended tenant's admin can still see an accurate lockout state while trying to sign in (F10).
  */
 export async function checkLockout(email: string): Promise<{
   isLocked: boolean;
@@ -26,7 +26,7 @@ export async function checkLockout(email: string): Promise<{
   lockoutExpiresAt: Date | null;
   minutesRemaining: number;
 } | null> {
-  const db = await getDb();
+  const db = await getDbForAuth();
   const normalizedEmail = email.toLowerCase().trim();
   const windowStart = dayjs().subtract(LOCKOUT_DURATION_MINUTES, 'minute').toDate();
 
@@ -89,61 +89,4 @@ export async function checkLockout(email: string): Promise<{
     lockoutExpiresAt: null,
     minutesRemaining: 0,
   };
-}
-
-/**
- * Record a failed login attempt.
- */
-export async function recordFailedAttempt(
-  email: string,
-  ipAddress?: string
-): Promise<void> {
-  const db = await getDb();
-  const normalizedEmail = email.toLowerCase().trim();
-
-  await db.insert(loginAttempts).values({
-    email: normalizedEmail,
-    ipAddress: ipAddress ?? null,
-    successful: false,
-  });
-}
-
-/**
- * Record a successful login (resets the failure counter).
- */
-export async function recordSuccessfulLogin(
-  email: string,
-  ipAddress?: string
-): Promise<void> {
-  const db = await getDb();
-  const normalizedEmail = email.toLowerCase().trim();
-
-  await db.insert(loginAttempts).values({
-    email: normalizedEmail,
-    ipAddress: ipAddress ?? null,
-    successful: true,
-  });
-}
-
-/**
- * Clear all login attempts for an email (admin unlock).
- * This inserts a successful login record, which resets the counter.
- */
-export async function unlockAccount(email: string): Promise<void> {
-  const db = await getDb();
-  const normalizedEmail = email.toLowerCase().trim();
-
-  // Insert a "successful" record to reset the counter
-  await db.insert(loginAttempts).values({
-    email: normalizedEmail,
-    successful: true,
-  });
-}
-
-/**
- * Get the number of recent failed attempts for display purposes.
- */
-export async function getFailedAttemptCount(email: string): Promise<number> {
-  const lockoutInfo = await checkLockout(email);
-  return lockoutInfo?.failedAttempts ?? 0;
 }

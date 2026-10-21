@@ -39,12 +39,11 @@ type ApiKey = {
 
 type Props = {
   initialKeys: ApiKey[];
-  currentUserId: string;
-};
+  };
 
 type PendingAction = { key: ApiKey; action: 'revoke' | 'delete' };
 
-export function ApiKeysClient({ initialKeys, currentUserId }: Props) {
+export function ApiKeysClient({ initialKeys }: Props) {
   const [keys, setKeys] = useState<ApiKey[]>(initialKeys);
   const [isPending, startTransition] = useTransition();
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -64,7 +63,6 @@ export function ApiKeysClient({ initialKeys, currentUserId }: Props) {
         }
         const result = await createApiKey({
           name: form.name.trim(),
-          createdByUserId: currentUserId,
           permissions: form.permissions as 'read' | 'read-write',
         });
         setNewKeyValue(result.key);

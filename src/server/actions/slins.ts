@@ -7,6 +7,7 @@ import { requireAdmin } from '@/lib/session';
 import { validateSlinNumber, validateOptionalString, validateMonetaryValue } from '@/lib/validation';
 
 export async function getSlinsByClin(clinId: string) {
+  await requireAdmin();
   const db = await getDb();
   return db.select().from(slins).where(eq(slins.clinId, clinId)).orderBy(slins.slinNumber);
 }

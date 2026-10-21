@@ -3,8 +3,9 @@
 import { getDb } from '@/db';
 import { users } from '@/db/schema';
 import bcrypt from 'bcryptjs';
-import { count, eq } from 'drizzle-orm';
+import { count, eq, and, ne } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
+import { unlockAccount } from '@/server/internal/login-attempts';
 import { validateEmail, validateRequired, validateStringLength, validateEnum } from '@/lib/validation';
 import { getTenantOrThrow } from '@/lib/tenant/context';
 import { PLANS, type PlanKey } from '@/lib/billing/plans';
@@ -27,15 +28,11 @@ async function assertSeatAvailable(): Promise<void> {
 
 const USER_ROLES = ['admin', 'supervisor', 'employee'] as const;
 
+/** List every user. Admin only — includes roles and active state, used to drive user management. */
 export async function getUsers() {
+  await requireAdmin();
   const db = await getDb();
   return db.select().from(users).orderBy(users.fullName);
-}
-
-export async function getUserByEmail(email: string) {
-  const db = await getDb();
-  const rows = await db.select().from(users).where(eq(users.email, email));
-  return rows[0] ?? null;
 }
 
 export async function createUser(data: {
@@ -57,13 +54,19 @@ export async function createUser(data: {
 
 export async function unlockUserAccount(email: string): Promise<void> {
   await requireAdmin();
-  const { unlockAccount } = await import('@/server/actions/login-attempts');
   await unlockAccount(email);
 }
 
+/**
+ * Seed demo users with a known default password. Development/demo convenience only —
+ * refuses outright in production so a known-password account can never be created there (F12).
+ */
 export async function seedUsers() {
-  const db = await getDb();
   await requireAdmin();
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('seedUsers is disabled in production.');
+  }
+  const db = await getDb();
   // Hash the default dev password for all seed users
   const defaultPassword = 'Password123!';
   const hash = await bcrypt.hash(defaultPassword, 12);
@@ -101,8 +104,39 @@ export async function updateUser(id: string, data: {
   isActive?: boolean;
   flsaExempt?: boolean;
 }) {
+  const actor = await requireAdmin();
   const db = await getDb();
-  await requireAdmin();
+
+  // An admin cannot change their own role or deactivate themselves.
+  if (actor.id === id) {
+    if (data.role !== undefined && data.role !== actor.role) {
+      throw new Error('Forbidden: You cannot change your own role.');
+    }
+    if (data.isActive === false) {
+      throw new Error('Forbidden: You cannot deactivate your own account.');
+    }
+  }
+
+  // Nobody can demote or deactivate the last active admin.
+  const demotingRole = data.role !== undefined && data.role !== 'admin';
+  const deactivating = data.isActive === false;
+  if (demotingRole || deactivating) {
+    const [target] = await db.select({ role: users.role, isActive: users.isActive }).from(users).where(eq(users.id, id));
+    if (target?.role === 'admin' && target.isActive) {
+      const [{ value: activeAdminCount }] = await db
+        .select({ value: count() })
+        .from(users)
+        .where(and(eq(users.role, 'admin'), eq(users.isActive, true), ne(users.id, id)));
+      if (Number(activeAdminCount) === 0) {
+        throw new Error(
+          demotingRole
+            ? 'Forbidden: Cannot change the role of the last active admin.'
+            : 'Forbidden: Cannot deactivate the last active admin.'
+        );
+      }
+    }
+  }
+
   // Determine if this change should invalidate existing sessions
   const shouldInvalidateSession = data.role !== undefined || data.isActive !== undefined;
 

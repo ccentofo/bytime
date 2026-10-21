@@ -3,9 +3,11 @@
 import { getDb } from '@/db';
 import { timesheetPeriods, users, timesheetEntries } from '@/db/schema';
 import { eq, and, inArray, gte, lt, sql } from 'drizzle-orm';
-import { getSupervisedEmployeeIds } from '@/server/actions/supervisor-scope';
+import { requireSession, requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
+import { getPeriodStatusFor, type PeriodInfo, type PeriodStatus } from '@/server/internal/periods';
+import { getSupervisorScopeInfo } from '@/server/internal/supervisor-scope';
 import { sendTimesheetSubmittedEmail, sendTimesheetApprovedEmail, sendTimesheetRejectedEmail } from '@/lib/email/send';
-import { isNotificationEnabled } from '@/server/actions/notifications';
+import { isNotificationEnabled } from '@/server/internal/notifications';
 import dayjs from 'dayjs';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 import { getNumDaysInPeriod, getLastWeekdayInPeriod } from '@/lib/date-utils';
@@ -13,71 +15,28 @@ import { getEffectiveConfigAt } from '@/server/actions/pay-period-config';
 
 dayjs.extend(isSameOrAfter);
 
-export type PeriodStatus = 'draft' | 'submitted' | 'approved' | 'rejected';
-
-export interface PeriodInfo {
-  id: string | null;
-  status: PeriodStatus;
-  submittedAt: Date | null;
-  reviewedAt: Date | null;
-  reviewedBy: string | null;
-  reviewComment: string | null;
-  periodType: string | null;
-  periodNumDays: number | null;
-}
+export type { PeriodStatus, PeriodInfo };
 
 /**
- * Get the period status for a specific user and period start date.
+ * Get the period status for the session user and a given period start date.
  * Returns draft if no record exists yet.
  */
-export async function getPeriodStatus(userId: string, periodStart: Date): Promise<PeriodInfo> {
-  const db = await getDb();
-  const rows = await db
-    .select()
-    .from(timesheetPeriods)
-    .where(
-      and(
-        eq(timesheetPeriods.userId, userId),
-        eq(timesheetPeriods.periodStart, periodStart),
-      )
-    );
-
-  if (rows.length === 0) {
-    return {
-      id: null,
-      status: 'draft',
-      submittedAt: null,
-      reviewedAt: null,
-      reviewedBy: null,
-      reviewComment: null,
-      periodType: null,
-      periodNumDays: null,
-    };
-  }
-
-  const row = rows[0];
-  return {
-    id: row.id,
-    status: row.status,
-    submittedAt: row.submittedAt,
-    reviewedAt: row.reviewedAt,
-    reviewedBy: row.reviewedBy,
-    reviewComment: row.reviewComment,
-    periodType: row.periodType ?? null,
-    periodNumDays: row.periodNumDays ?? null,
-  };
+export async function getPeriodStatus(periodStart: Date): Promise<PeriodInfo> {
+  const actor = await requireSession();
+  return getPeriodStatusFor(actor.id, periodStart);
 }
 
 /**
- * Submit a timesheet period (employee certification).
+ * Submit a timesheet period (employee certification) for the session user.
  * Creates the period record if it doesn't exist, or updates status to 'submitted'.
  */
 export async function submitPeriod(data: {
-  userId: string;
   periodStart: Date;
   comment?: string;
   completeness?: unknown; // structured warnings snapshot from the client (advisory)
 }): Promise<PeriodInfo> {
+  const actor = await requireSession();
+  const userId = actor.id;
   const db = await getDb();
 
   // Resolve the config that was in effect for this specific period
@@ -98,7 +57,7 @@ export async function submitPeriod(data: {
     .from(timesheetEntries)
     .where(
       and(
-        eq(timesheetEntries.userId, data.userId),
+        eq(timesheetEntries.userId, userId),
         gte(timesheetEntries.entryDate, data.periodStart),
         lt(timesheetEntries.entryDate, periodEndExclusive),
       )
@@ -113,7 +72,7 @@ export async function submitPeriod(data: {
     .from(timesheetPeriods)
     .where(
       and(
-        eq(timesheetPeriods.userId, data.userId),
+        eq(timesheetPeriods.userId, userId),
         eq(timesheetPeriods.periodStart, data.periodStart),
       )
     );
@@ -124,7 +83,7 @@ export async function submitPeriod(data: {
     const snapshotNumDays = getNumDaysInPeriod(data.periodStart, periodConfig);
 
     const rows = await db.insert(timesheetPeriods).values({
-      userId: data.userId,
+      userId,
       periodStart: data.periodStart,
       status: 'submitted',
       submittedAt: new Date(),
@@ -184,7 +143,7 @@ export async function submitPeriod(data: {
   const [employee] = await db
     .select({ fullName: users.fullName, email: users.email })
     .from(users)
-    .where(eq(users.id, data.userId));
+    .where(eq(users.id, userId));
 
   const supervisors = await db
     .select({ id: users.id, fullName: users.fullName, email: users.email })
@@ -216,13 +175,14 @@ export async function submitPeriod(data: {
 }
 
 /**
- * Approve a timesheet period (supervisor action).
+ * Approve a timesheet period. Approver only, and only for an employee in scope.
+ * An actor may never approve their own period (admins included).
  */
 export async function approvePeriod(data: {
   periodId: string;
-  reviewedBy: string;
   comment?: string;
 }): Promise<void> {
+  const actor = await requireApprover();
   const db = await getDb();
   const existing = await db
     .select()
@@ -230,40 +190,31 @@ export async function approvePeriod(data: {
     .where(eq(timesheetPeriods.id, data.periodId));
 
   if (existing.length === 0) throw new Error('Period not found');
-  if (existing[0].status !== 'submitted') {
-    throw new Error(`Cannot approve period with status "${existing[0].status}". Only submitted periods can be approved.`);
+  const period = existing[0];
+  if (period.status !== 'submitted') {
+    throw new Error(`Cannot approve period with status "${period.status}". Only submitted periods can be approved.`);
   }
 
-  // Verify the reviewer has scope over this employee
-  const reviewerRole = await getReviewerRole(data.reviewedBy);
-  if (reviewerRole !== 'admin') {
-    const scopedIds = await getSupervisedEmployeeIds(data.reviewedBy, reviewerRole);
-    if (scopedIds !== 'all' && !scopedIds.includes(existing[0].userId)) {
-      throw new Error('Unauthorized: You are not authorized to approve this employee\'s timesheet. You do not share any CLIN assignments.');
-    }
+  if (period.userId === actor.id) {
+    throw new Error('Forbidden: You cannot approve your own timesheet.');
   }
+  await assertCanAccessEmployee(actor, period.userId);
 
   await db.update(timesheetPeriods)
     .set({
       status: 'approved',
       reviewedAt: new Date(),
-      reviewedBy: data.reviewedBy,
+      reviewedBy: actor.id,
       reviewComment: data.comment ?? null,
       updatedAt: new Date(),
     })
     .where(eq(timesheetPeriods.id, data.periodId));
 
   // Fire-and-forget: notify employee via email
-  const period = existing[0];
   const [employee] = await db
     .select({ fullName: users.fullName, email: users.email })
     .from(users)
     .where(eq(users.id, period.userId));
-
-  const [reviewer] = await db
-    .select({ fullName: users.fullName })
-    .from(users)
-    .where(eq(users.id, data.reviewedBy));
 
   if (employee) {
     const enabled = await isNotificationEnabled(period.userId, 'emailOnApprove');
@@ -275,7 +226,7 @@ export async function approvePeriod(data: {
         employeeEmail: employee.email,
         employeeName: employee.fullName,
         periodLabel,
-        approvedBy: reviewer?.fullName ?? 'Supervisor',
+        approvedBy: actor.fullName,
         approvedAt: dayjs().format('MMM D, YYYY h:mm A'),
       }); // No await — fire-and-forget
     }
@@ -283,14 +234,15 @@ export async function approvePeriod(data: {
 }
 
 /**
- * Reject a timesheet period (supervisor action).
+ * Reject a timesheet period. Approver only, and only for an employee in scope.
  * Returns the period to 'draft' status so the employee can re-edit.
+ * An actor may never reject their own period (admins included).
  */
 export async function rejectPeriod(data: {
   periodId: string;
-  reviewedBy: string;
   comment: string; // Required for rejections
 }): Promise<void> {
+  const actor = await requireApprover();
   const db = await getDb();
   const existing = await db
     .select()
@@ -298,40 +250,31 @@ export async function rejectPeriod(data: {
     .where(eq(timesheetPeriods.id, data.periodId));
 
   if (existing.length === 0) throw new Error('Period not found');
-  if (existing[0].status !== 'submitted') {
-    throw new Error(`Cannot reject period with status "${existing[0].status}". Only submitted periods can be rejected.`);
+  const period = existing[0];
+  if (period.status !== 'submitted') {
+    throw new Error(`Cannot reject period with status "${period.status}". Only submitted periods can be rejected.`);
   }
 
-  // Verify the reviewer has scope over this employee
-  const reviewerRole = await getReviewerRole(data.reviewedBy);
-  if (reviewerRole !== 'admin') {
-    const scopedIds = await getSupervisedEmployeeIds(data.reviewedBy, reviewerRole);
-    if (scopedIds !== 'all' && !scopedIds.includes(existing[0].userId)) {
-      throw new Error('Unauthorized: You are not authorized to reject this employee\'s timesheet. You do not share any CLIN assignments.');
-    }
+  if (period.userId === actor.id) {
+    throw new Error('Forbidden: You cannot reject your own timesheet.');
   }
+  await assertCanAccessEmployee(actor, period.userId);
 
   await db.update(timesheetPeriods)
     .set({
       status: 'rejected',
       reviewedAt: new Date(),
-      reviewedBy: data.reviewedBy,
+      reviewedBy: actor.id,
       reviewComment: data.comment,
       updatedAt: new Date(),
     })
     .where(eq(timesheetPeriods.id, data.periodId));
 
   // Fire-and-forget: notify employee via email
-  const period = existing[0];
   const [employee] = await db
     .select({ fullName: users.fullName, email: users.email })
     .from(users)
     .where(eq(users.id, period.userId));
-
-  const [reviewer] = await db
-    .select({ fullName: users.fullName })
-    .from(users)
-    .where(eq(users.id, data.reviewedBy));
 
   if (employee) {
     const enabled = await isNotificationEnabled(period.userId, 'emailOnReject');
@@ -343,7 +286,7 @@ export async function rejectPeriod(data: {
         employeeEmail: employee.email,
         employeeName: employee.fullName,
         periodLabel,
-        rejectedBy: reviewer?.fullName ?? 'Supervisor',
+        rejectedBy: actor.fullName,
         rejectedAt: dayjs().format('MMM D, YYYY h:mm A'),
         rejectionComment: data.comment,
       }); // No await — fire-and-forget
@@ -352,45 +295,9 @@ export async function rejectPeriod(data: {
 }
 
 /**
- * Get all submitted timesheets pending review (for supervisors/admins).
+ * Get all timesheet periods, scoped to the approver's employees (or all, for admins).
  */
-export async function getPendingApprovals(): Promise<Array<{
-  id: string;
-  userId: string;
-  userName: string;
-  userEmail: string;
-  periodStart: Date;
-  status: PeriodStatus;
-  submittedAt: Date | null;
-}>> {
-  const db = await getDb();
-  const rows = await db
-    .select({
-      id: timesheetPeriods.id,
-      userId: timesheetPeriods.userId,
-      userName: users.fullName,
-      userEmail: users.email,
-      periodStart: timesheetPeriods.periodStart,
-      status: timesheetPeriods.status,
-      submittedAt: timesheetPeriods.submittedAt,
-    })
-    .from(timesheetPeriods)
-    .innerJoin(users, eq(timesheetPeriods.userId, users.id))
-    .where(eq(timesheetPeriods.status, 'submitted'))
-    .orderBy(timesheetPeriods.submittedAt);
-
-  return rows;
-}
-
-/**
- * Get all timesheet periods that a supervisor is authorized to review.
- * Filters based on contract-based scope (shared CLIN assignments).
- *
- * @param scopedEmployeeIds - Array of employee IDs the supervisor can review, or 'all' for admins
- */
-export async function getScopedPeriods(
-  scopedEmployeeIds: string[] | 'all'
-): Promise<Array<{
+export async function getScopedPeriods(): Promise<Array<{
   id: string;
   userId: string;
   userName: string;
@@ -400,15 +307,12 @@ export async function getScopedPeriods(
   submittedAt: Date | null;
   reviewedAt: Date | null;
 }>> {
+  const actor = await requireApprover();
+  const scope = await getEmployeeScope(actor);
   const db = await getDb();
-  if (scopedEmployeeIds === 'all') {
-    // Admin — return all periods (existing behavior)
-    return getAllPeriods();
-  }
 
-  if (scopedEmployeeIds.length === 0) {
-    return []; // Supervisor has no employees in scope
-  }
+  const whereClause = scope === 'all' ? undefined : inArray(timesheetPeriods.userId, scope);
+  if (scope !== 'all' && scope.length === 0) return [];
 
   const rows = await db
     .select({
@@ -423,18 +327,16 @@ export async function getScopedPeriods(
     })
     .from(timesheetPeriods)
     .innerJoin(users, eq(timesheetPeriods.userId, users.id))
-    .where(inArray(timesheetPeriods.userId, scopedEmployeeIds))
+    .where(whereClause)
     .orderBy(timesheetPeriods.submittedAt);
 
   return rows;
 }
 
 /**
- * Get pending approvals scoped to a supervisor's employees.
+ * Get pending (submitted) approvals, scoped to the approver's employees (or all, for admins).
  */
-export async function getScopedPendingApprovals(
-  scopedEmployeeIds: string[] | 'all'
-): Promise<Array<{
+export async function getScopedPendingApprovals(): Promise<Array<{
   id: string;
   userId: string;
   userName: string;
@@ -443,14 +345,15 @@ export async function getScopedPendingApprovals(
   status: PeriodStatus;
   submittedAt: Date | null;
 }>> {
+  const actor = await requireApprover();
+  const scope = await getEmployeeScope(actor);
   const db = await getDb();
-  if (scopedEmployeeIds === 'all') {
-    return getPendingApprovals();
-  }
 
-  if (scopedEmployeeIds.length === 0) {
-    return [];
-  }
+  if (scope !== 'all' && scope.length === 0) return [];
+
+  const whereClause = scope === 'all'
+    ? eq(timesheetPeriods.status, 'submitted')
+    : and(eq(timesheetPeriods.status, 'submitted'), inArray(timesheetPeriods.userId, scope));
 
   const rows = await db
     .select({
@@ -464,54 +367,22 @@ export async function getScopedPendingApprovals(
     })
     .from(timesheetPeriods)
     .innerJoin(users, eq(timesheetPeriods.userId, users.id))
-    .where(
-      and(
-        eq(timesheetPeriods.status, 'submitted'),
-        inArray(timesheetPeriods.userId, scopedEmployeeIds),
-      )
-    )
+    .where(whereClause)
     .orderBy(timesheetPeriods.submittedAt);
 
   return rows;
 }
 
 /**
- * Get all timesheet periods for a supervisor to review (all statuses).
+ * Get the session user's own approval-scope info (contract/CLIN/employee counts), for the
+ * Approvals page banner. Supervisors only — admins have no "scope" to summarize.
  */
-async function getReviewerRole(userId: string): Promise<string> {
-  const db = await getDb();
-  const [user] = await db
-    .select({ role: users.role })
-    .from(users)
-    .where(eq(users.id, userId));
-  return user?.role ?? 'employee';
-}
-
-export async function getAllPeriods(): Promise<Array<{
-  id: string;
-  userId: string;
-  userName: string;
-  userEmail: string;
-  periodStart: Date;
-  status: PeriodStatus;
-  submittedAt: Date | null;
-  reviewedAt: Date | null;
-}>> {
-  const db = await getDb();
-  const rows = await db
-    .select({
-      id: timesheetPeriods.id,
-      userId: timesheetPeriods.userId,
-      userName: users.fullName,
-      userEmail: users.email,
-      periodStart: timesheetPeriods.periodStart,
-      status: timesheetPeriods.status,
-      submittedAt: timesheetPeriods.submittedAt,
-      reviewedAt: timesheetPeriods.reviewedAt,
-    })
-    .from(timesheetPeriods)
-    .innerJoin(users, eq(timesheetPeriods.userId, users.id))
-    .orderBy(timesheetPeriods.submittedAt);
-
-  return rows;
+export async function getMyScopeInfo(): Promise<{
+  assignedContractCount: number;
+  assignedClinCount: number;
+  supervisedEmployeeCount: number;
+} | null> {
+  const actor = await requireApprover();
+  if (actor.role !== 'supervisor') return null;
+  return getSupervisorScopeInfo(actor.id);
 }

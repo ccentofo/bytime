@@ -44,10 +44,9 @@ export async function createConnection(data: {
   refreshToken?: string;
   tokenExpiresAt?: Date;
   scopes?: string;
-  connectedBy: string;
 }) {
   const db = await getDb();
-  await requireAdmin();
+  const actor = await requireAdmin();
 
   const values: Record<string, unknown> = {
     provider: data.provider,
@@ -55,7 +54,7 @@ export async function createConnection(data: {
     externalCompanyId: data.externalCompanyId,
     externalCompanyName: data.externalCompanyName,
     scopes: data.scopes,
-    connectedBy: data.connectedBy,
+    connectedBy: actor.id,
     tokenExpiresAt: data.tokenExpiresAt,
   };
 
@@ -68,25 +67,6 @@ export async function createConnection(data: {
 
   const rows = await db.insert(integrationConnections).values(values as any).returning();
   return rows[0];
-}
-
-export async function updateConnectionTokens(
-  connectionId: string,
-  tokens: {
-    accessToken: string;
-    refreshToken: string;
-    expiresIn: number;
-  }
-) {
-  const db = await getDb();
-  await db.update(integrationConnections)
-    .set({
-      accessTokenEncrypted: encrypt(tokens.accessToken),
-      refreshTokenEncrypted: encrypt(tokens.refreshToken),
-      tokenExpiresAt: new Date(Date.now() + tokens.expiresIn * 1000),
-      updatedAt: new Date(),
-    })
-    .where(eq(integrationConnections.id, connectionId));
 }
 
 export async function disconnectIntegration(connectionId: string) {

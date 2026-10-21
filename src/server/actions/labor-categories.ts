@@ -14,6 +14,7 @@ import { validateRequired, validateStringLength, validateOptionalString, validat
  * Get all labor categories for a specific CLIN.
  */
 export async function getLaborCategoriesByClin(clinId: string) {
+  await requireAdmin();
   const db = await getDb();
   return db
     .select()
@@ -27,6 +28,7 @@ export async function getLaborCategoriesByClin(clinId: string) {
  * Used for the main Labor Categories admin page.
  */
 export async function getAllLaborCategories() {
+  await requireAdmin();
   const db = await getDb();
   return db
     .select({
@@ -111,6 +113,7 @@ export async function updateLaborCategory(id: string, data: {
  * Get all user-LCAT assignments with user and LCAT context.
  */
 export async function getUserLaborCategoryAssignments() {
+  await requireAdmin();
   const db = await getDb();
   return db
     .select({
@@ -145,11 +148,10 @@ export async function assignUserToLaborCategory(data: {
   laborCategoryId: string;
   effectiveDate: Date;
   endDate?: Date;
-  assignedBy?: string;
 }) {
+  const actor = await requireAdmin();
   const db = await getDb();
-  await requireAdmin();
-  const rows = await db.insert(userLaborCategories).values(data).returning();
+  const rows = await db.insert(userLaborCategories).values({ ...data, assignedBy: actor.id }).returning();
   return rows[0];
 }
 
@@ -171,6 +173,7 @@ export async function endUserLaborCategoryAssignment(id: string, endDate: Date) 
  * Returns a flat list with contract/CLIN/SLIN context for dropdown population.
  */
 export async function getAssignableLaborCategories() {
+  await requireAdmin();
   const db = await getDb();
   return db
     .select({

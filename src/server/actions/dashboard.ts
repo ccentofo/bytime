@@ -12,6 +12,7 @@ import {
 } from '@/db/schema';
 import { eq, and, sql, gte, lt } from 'drizzle-orm';
 import dayjs from 'dayjs';
+import { requireAdmin } from '@/lib/session';
 
 // ---------------------------------------------------------------------------
 // Types (UNCHANGED — must match DashboardClient.tsx expectations)
@@ -83,6 +84,7 @@ export interface PeriodCostEntry {
  * were worked (CAS 418 compliance).
  */
 export async function getContractSummaries(): Promise<ContractSummary[]> {
+  await requireAdmin();
   const db = await getDb();
   // All 7 queries run in parallel — zero dependencies between them
   const [allContracts, allClins, allSlins, hoursData, costData, slinHoursData, slinCostData] = await Promise.all([
@@ -342,6 +344,7 @@ export async function getPeriodCostReport(
   startDate: Date,
   endDate: Date
 ): Promise<PeriodCostEntry[]> {
+  await requireAdmin();
   const db = await getDb();
   const endDateExclusive = dayjs(endDate).add(1, 'day').toDate();
 
