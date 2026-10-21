@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateContractNumber, validateMonetaryValue, validateOptionalDate } from '@/lib/validation';
+import { validateContractNumber, validateMonetaryValue, validateOptionalCalendarDate } from '@/lib/validation';
 
 describe('Contract Validation', () => {
   it('validates contract number format', () => {
@@ -15,9 +15,9 @@ describe('Contract Validation', () => {
   });
 
   it('validates dates', () => {
-    const date = validateOptionalDate('2026-01-01', 'Start');
-    expect(date).toBeInstanceOf(Date);
-    expect(validateOptionalDate(null, 'Start')).toBeUndefined();
-    expect(() => validateOptionalDate('not-a-date', 'Start')).toThrow('not a valid date');
+    const date = validateOptionalCalendarDate('2026-01-01', 'Start');
+    expect(date).toBe('2026-01-01');
+    expect(validateOptionalCalendarDate(null, 'Start')).toBeUndefined();
+    expect(() => validateOptionalCalendarDate('not-a-date', 'Start')).toThrow('not a valid date');
   });
 });

@@ -78,6 +78,13 @@
       "when": 1792544952879,
       "tag": "0010_low_the_enforcers",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792590968997,
+      "tag": "0011_solid_gideon",
+      "breakpoints": true
     }
   ]
 }

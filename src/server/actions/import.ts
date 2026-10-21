@@ -7,6 +7,7 @@ import { requireAdminFresh } from '@/lib/session';
 import { assertSeatsAvailable } from '@/server/internal/seats';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
+import { parseCalendarDate } from '@/lib/calendar-date';
 
 // ---------------------------------------------------------------------------
 // Bulk Employee Import
@@ -122,14 +123,16 @@ export async function bulkImportContracts(rows: ContractImportRow[]): Promise<Im
         continue;
       }
 
+      const trimmedStart = row.startDate?.trim();
+      const trimmedEnd = row.endDate?.trim();
       await db.insert(contracts).values({
         contractNumber: row.contractNumber.trim(),
         name: row.name.trim(),
         contractType: row.type?.toLowerCase() === 'sub' ? 'sub' : 'prime',
         fundedValue: row.fundedValue?.trim() || undefined,
         ceilingValue: row.ceilingValue?.trim() || undefined,
-        startDate: row.startDate ? new Date(row.startDate) : undefined,
-        endDate: row.endDate ? new Date(row.endDate) : undefined,
+        startDate: trimmedStart ? parseCalendarDate(trimmedStart) : undefined,
+        endDate: trimmedEnd ? parseCalendarDate(trimmedEnd) : undefined,
         status: 'active',
       });
 

@@ -1,11 +1,13 @@
 'use server';
 
+import { getDefaultSyncWindow } from '@/server/internal/workspace-settings';
 import { getDb } from '@/db';
 import { integrationConnections, users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
 import { ensureValidGustoToken, fetchGustoEmployees } from '@/lib/integrations/connectors/gusto-api';
 import { executeSyncOperation } from '@/lib/integrations/sync-engine';
+import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 
 /**
  * Fetch Gusto employees for the mapping UI.
@@ -43,15 +45,19 @@ export async function getBytimeEmployeesForGustoMapping() {
  */
 export async function triggerGustoSync(data: {
   connectionId: string;
-  periodStart: Date;
-  periodEnd: Date;
+  /** Omit both to use the default window, computed in the workspace's calendar. */
+  periodStart?: CalendarDate;
+  periodEnd?: CalendarDate;
 }) {
   const actor = await requireAdmin();
+  const window = data.periodStart && data.periodEnd
+    ? { periodStart: parseCalendarDate(data.periodStart), periodEnd: parseCalendarDate(data.periodEnd) }
+    : await getDefaultSyncWindow();
   return executeSyncOperation(
     data.connectionId,
     'timesheet_push',
-    data.periodStart,
-    data.periodEnd,
+    window.periodStart,
+    window.periodEnd,
     actor.id,
     'manual'
   );

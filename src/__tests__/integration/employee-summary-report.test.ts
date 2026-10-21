@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as schema from '@/db/schema';
+import type { CalendarDate } from '@/lib/calendar-date';
 import {
   getTestDb,
   createTestUser,
@@ -74,7 +75,7 @@ describe('getEmployeeSummaryReport cost visibility (R2-5)', () => {
     await db.insert(schema.timesheetEntries).values({
       userId: employee.id,
       clinId: clin.id,
-      entryDate: new Date(),
+      entryDate: '2026-01-01',
       hours: '8',
       revisionNumber: 1,
       createdBy: employee.id,
@@ -88,7 +89,7 @@ describe('getEmployeeSummaryReport cost visibility (R2-5)', () => {
 
   it('omits totalCost for a supervisor (not present, not zero)', async () => {
     actingAs(supervisor);
-    const rows = await getEmployeeSummaryReport(new Date('2000-01-01'), new Date('2100-01-01'));
+    const rows = await getEmployeeSummaryReport('2000-01-01' as CalendarDate, '2100-01-01' as CalendarDate);
     expect(rows.length).toBeGreaterThan(0);
     for (const row of rows) {
       expect(Object.prototype.hasOwnProperty.call(row, 'totalCost')).toBe(false);
@@ -97,7 +98,7 @@ describe('getEmployeeSummaryReport cost visibility (R2-5)', () => {
 
   it('includes totalCost for an admin', async () => {
     actingAs(admin);
-    const rows = await getEmployeeSummaryReport(new Date('2000-01-01'), new Date('2100-01-01'));
+    const rows = await getEmployeeSummaryReport('2000-01-01' as CalendarDate, '2100-01-01' as CalendarDate);
     expect(rows.length).toBeGreaterThan(0);
     for (const row of rows) {
       expect(Object.prototype.hasOwnProperty.call(row, 'totalCost')).toBe(true);

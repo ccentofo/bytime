@@ -11,8 +11,8 @@ import {
   users,
 } from '@/db/schema';
 import { eq, and, sql, gte, lt } from 'drizzle-orm';
-import dayjs from 'dayjs';
 import { requireAdmin } from '@/lib/session';
+import { addDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 
 // ---------------------------------------------------------------------------
 // Types (UNCHANGED — must match DashboardClient.tsx expectations)
@@ -113,7 +113,7 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
               SELECT MAX(te2.revision_number)
               FROM timesheet_entries te2
               WHERE te2.user_id = ${timesheetEntries.userId}
-                AND te2.clin_id = ${timesheetEntries.clinId}
+                AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                 AND te2.entry_date = ${timesheetEntries.entryDate}
             )`
           ),
@@ -136,7 +136,7 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
         and(
           eq(userLaborCategories.userId, timesheetEntries.userId),
           sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-          sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} > ${timesheetEntries.entryDate})`,
+          sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} >= ${timesheetEntries.entryDate})`,
         )
       )
       .innerJoin(
@@ -156,7 +156,7 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
               SELECT MAX(te2.revision_number)
               FROM timesheet_entries te2
               WHERE te2.user_id = ${timesheetEntries.userId}
-                AND te2.clin_id = ${timesheetEntries.clinId}
+                AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                 AND te2.entry_date = ${timesheetEntries.entryDate}
             )`
           ),
@@ -180,7 +180,7 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
               SELECT MAX(te2.revision_number)
               FROM timesheet_entries te2
               WHERE te2.user_id = ${timesheetEntries.userId}
-                AND te2.clin_id = ${timesheetEntries.clinId}
+                AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                 AND te2.entry_date = ${timesheetEntries.entryDate}
             )`
           )
@@ -203,7 +203,7 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
         and(
           eq(userLaborCategories.userId, timesheetEntries.userId),
           sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-          sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} > ${timesheetEntries.entryDate})`,
+          sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} >= ${timesheetEntries.entryDate})`,
         )
       )
       .innerJoin(
@@ -223,7 +223,7 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
               SELECT MAX(te2.revision_number)
               FROM timesheet_entries te2
               WHERE te2.user_id = ${timesheetEntries.userId}
-                AND te2.clin_id = ${timesheetEntries.clinId}
+                AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                 AND te2.entry_date = ${timesheetEntries.entryDate}
             )`
           )
@@ -341,12 +341,13 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
  * on the date the work was performed.
  */
 export async function getPeriodCostReport(
-  startDate: Date,
-  endDate: Date
+  startDate: CalendarDate,
+  endDate: CalendarDate
 ): Promise<PeriodCostEntry[]> {
   await requireAdmin();
   const db = await getDb();
-  const endDateExclusive = dayjs(endDate).add(1, 'day').toDate();
+  const start = parseCalendarDate(startDate);
+  const endDateExclusive = addDays(parseCalendarDate(endDate), 1);
 
   // Single optimized query: aggregate hours and costs by (user, clin, slin, lcat)
   const rows = await db
@@ -375,7 +376,7 @@ export async function getPeriodCostReport(
       and(
         eq(userLaborCategories.userId, timesheetEntries.userId),
         sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-        sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} > ${timesheetEntries.entryDate})`,
+        sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} >= ${timesheetEntries.entryDate})`,
       )
     )
     .leftJoin(
@@ -388,7 +389,7 @@ export async function getPeriodCostReport(
     )
     .where(
       and(
-        gte(timesheetEntries.entryDate, startDate),
+        gte(timesheetEntries.entryDate, start),
         lt(timesheetEntries.entryDate, endDateExclusive),
         eq(
           timesheetEntries.revisionNumber,
@@ -396,7 +397,7 @@ export async function getPeriodCostReport(
             SELECT MAX(te2.revision_number)
             FROM timesheet_entries te2
             WHERE te2.user_id = ${timesheetEntries.userId}
-              AND te2.clin_id = ${timesheetEntries.clinId}
+              AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
               AND te2.entry_date = ${timesheetEntries.entryDate}
           )`
         ),

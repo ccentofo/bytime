@@ -7,12 +7,8 @@ import { useTimesheet } from '@/components/timesheet/TimesheetContext';
 import { useState, useMemo } from 'react';
 import { ReasonModal } from '@/components/timesheet/ReasonModal';
 import { SubmitModal } from '@/components/timesheet/SubmitModal';
-import dayjs from 'dayjs';
-import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
-import { getNumDaysInPeriod, getLastWeekdayInPeriod } from '@/lib/date-utils';
+import { addDays, dayOfWeek, formatCalendarDate, isAfter, isBefore, type CalendarDate } from '@/lib/calendar-date';
 import { PERIOD_STATUS_COLOR } from '@/lib/ui/status-colors';
-
-dayjs.extend(isSameOrAfter);
 
 const STATUS_BADGES: Record<string, { color: string; label: string }> = {
   draft: { color: PERIOD_STATUS_COLOR.draft, label: 'Draft' },
@@ -31,15 +27,15 @@ export function TimesheetToolbar() {
   const isEditable = periodStatus === 'draft' || periodStatus === 'rejected';
 
   // Build period label for the submit modal
-  const start = dayjs(periodStart);
-  const numDays = getNumDaysInPeriod(periodStart, state.periodConfig);
-  const end = start.add(numDays - 1, 'day');
-  const periodLabel = `${start.format('MMM D')} – ${end.format('MMM D, YYYY')}`;
+  const numDays = state.numDays; // server-resolved
+  const end = addDays(periodStart, numDays - 1);
+  const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(end, 'MMM D, YYYY')}`;
 
-  // Submit only available on or after the last WEEKDAY of the pay period
-  const lastWeekday = getLastWeekdayInPeriod(periodStart, state.periodConfig);
-  const periodEndDate = dayjs(lastWeekday);
-  const isPeriodComplete = dayjs().isSameOrAfter(periodEndDate, 'day');
+  // Submit only available on or after the last WEEKDAY of the pay period, per the WORKSPACE's
+  // today (state.today — server-resolved, never the browser's clock).
+  let lastWeekday = end;
+  while (dayOfWeek(lastWeekday) === 0 || dayOfWeek(lastWeekday) === 6) lastWeekday = addDays(lastWeekday, -1);
+  const isPeriodComplete = !isBefore(state.today, lastWeekday);
   const canSubmit = isEditable && dirtyCount === 0 && isPeriodComplete
     && state.entries.some((e) => e.hours.some((h) => h > 0));
 
@@ -67,15 +63,15 @@ export function TimesheetToolbar() {
 
     // Group by week (Sun-Sat) and calculate compensated vs uncompensated
     const weeklyTotals: { weekLabel: string; total: number; compensated: number; uncompensated: number }[] = [];
-    let currentWeekStart: dayjs.Dayjs | null = null;
+    let currentWeekStart: CalendarDate | null = null;
     let currentWeekHours = 0;
     let currentWeekLabel = '';
 
     for (let i = 0; i < numDaysInPeriod; i++) {
-      const date = dayjs(state.periodStart).add(i, 'day');
-      const weekStart = date.startOf('week');
+      const date = addDays(state.periodStart, i);
+      const weekStart = addDays(date, -dayOfWeek(date));
 
-      if (!currentWeekStart || !weekStart.isSame(currentWeekStart, 'day')) {
+      if (!currentWeekStart || weekStart !== currentWeekStart) {
         if (currentWeekStart !== null) {
           weeklyTotals.push({
             weekLabel: currentWeekLabel,
@@ -86,7 +82,7 @@ export function TimesheetToolbar() {
         }
         currentWeekStart = weekStart;
         currentWeekHours = 0;
-        currentWeekLabel = `Week of ${date.format('MMM D')}`;
+        currentWeekLabel = `Week of ${formatCalendarDate(date, 'MMM D')}`;
       }
       currentWeekHours += dailyTotals[i];
     }
@@ -126,16 +122,17 @@ export function TimesheetToolbar() {
       dailyTotals.push(Math.round(dayTotal * 100) / 100);
     }
 
-    // Check for missing workdays (weekdays with 0 hours)
+    // Check for missing workdays (weekdays with 0 hours). "Past or today" uses the server's
+    // state.today — never the browser's clock.
     const missingDays: string[] = [];
     for (let i = 0; i < numDaysInPeriod; i++) {
-      const date = dayjs(state.periodStart).add(i, 'day');
-      const dow = date.day(); // 0=Sun, 6=Sat
+      const date = addDays(state.periodStart, i);
+      const dow = dayOfWeek(date); // 0=Sun, 6=Sat
       const isWeekday = dow >= 1 && dow <= 5;
-      const isPastOrToday = date.isBefore(dayjs(), 'day') || date.isSame(dayjs(), 'day');
+      const isPastOrToday = !isAfter(date, state.today);
 
       if (isWeekday && isPastOrToday && dailyTotals[i] === 0) {
-        missingDays.push(date.format('ddd MMM D'));
+        missingDays.push(formatCalendarDate(date, 'ddd MMM D'));
       }
     }
 
@@ -148,9 +145,9 @@ export function TimesheetToolbar() {
     // Check for excessive hours on any single day (> 16 hours)
     for (let i = 0; i < numDaysInPeriod; i++) {
       if (dailyTotals[i] > 16) {
-        const date = dayjs(state.periodStart).add(i, 'day');
+        const date = addDays(state.periodStart, i);
         warnings.push(
-          `${dailyTotals[i].toFixed(2)} hours recorded on ${date.format('ddd MMM D')} — please verify this is correct`
+          `${dailyTotals[i].toFixed(2)} hours recorded on ${formatCalendarDate(date, 'ddd MMM D')} — please verify this is correct`
         );
       }
     }
@@ -160,7 +157,7 @@ export function TimesheetToolbar() {
 
     // Check for very low total hours (less than 50% of expected workdays × 8)
     const workdayCount = Array.from({ length: numDaysInPeriod }, (_, i) => {
-      const dow = dayjs(state.periodStart).add(i, 'day').day();
+      const dow = dayOfWeek(addDays(state.periodStart, i));
       return dow >= 1 && dow <= 5 ? 1 : 0;
     }).reduce((a: number, b: number) => a + b, 0);
 
@@ -172,7 +169,7 @@ export function TimesheetToolbar() {
     }
 
     return warnings;
-  }, [state.entries, state.periodStart]);
+  }, [state.entries, state.periodStart, state.today]);
 
   async function handleSave() {
     if (dirtyCount === 0) return;
@@ -280,14 +277,14 @@ export function TimesheetToolbar() {
                 variant="default"
                 leftSection={<IconArrowBack size={16} />}
                 onClick={handleDiscard}
-                disabled={dirtyCount === 0}
+                disabled={dirtyCount === 0 || state.isLoadingPeriod}
               >
                 Discard Changes
               </Button>
               <Button
                 leftSection={<IconDeviceFloppy size={16} />}
                 onClick={handleSave}
-                disabled={dirtyCount === 0}
+                disabled={dirtyCount === 0 || state.isLoadingPeriod}
                 loading={state.isSaving}
               >
                 Save
@@ -297,14 +294,14 @@ export function TimesheetToolbar() {
                   color="success"
                   leftSection={<IconSend size={16} />}
                   onClick={() => setSubmitModalOpen(true)}
-                  disabled={!canSubmit}
-                  title={!isPeriodComplete ? `Submit available on ${periodEndDate.format('MMM D, YYYY')}` : undefined}
+                  disabled={!canSubmit || state.isLoadingPeriod}
+                  title={!isPeriodComplete ? `Submit available on ${formatCalendarDate(lastWeekday, 'MMM D, YYYY')}` : undefined}
                 >
                   Submit
                 </Button>
                 {!isPeriodComplete && isEditable && dirtyCount === 0 && (
                   <Text size="xs" c="dimmed" ta="center" mt={4}>
-                    Available {periodEndDate.format('MMM D')}
+                    Available {formatCalendarDate(lastWeekday, 'MMM D')}
                   </Text>
                 )}
               </div>

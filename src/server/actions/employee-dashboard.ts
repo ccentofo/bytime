@@ -3,13 +3,21 @@
 import { getDb } from '@/db';
 import { timesheetEntries, timesheetPeriods } from '@/db/schema';
 import { eq, and, gte, lt, desc, sql } from 'drizzle-orm';
-import dayjs from 'dayjs';
-import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
-import { getNumDaysInPeriod, getCurrentPeriodStart } from '@/lib/date-utils';
-import { getPayPeriodConfig } from '@/server/actions/pay-period-config';
+import { getCurrentPeriodStart, getLastWeekdayInPeriod } from '@/lib/date-utils';
+import { getCurrentEffectiveConfig } from '@/server/actions/pay-period-config';
+import { resolvePeriod } from '@/server/internal/periods';
+import { existingPeriodLength } from '@/server/internal/pay-period-config';
+import { getWorkspaceToday, getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { requireSession } from '@/lib/session';
-
-dayjs.extend(isSameOrAfter);
+import {
+  addDays,
+  calendarDayOf,
+  dayOfWeek,
+  formatCalendarDate,
+  isAfter,
+  isBefore,
+  type CalendarDate,
+} from '@/lib/calendar-date';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -17,8 +25,8 @@ dayjs.extend(isSameOrAfter);
 
 export interface EmployeeDashboardData {
   currentPeriod: {
-    periodStart: Date;
-    periodEnd: Date;
+    periodStart: CalendarDate;
+    periodEnd: CalendarDate;
     periodLabel: string;
     status: string;
     submittedAt: Date | null;
@@ -32,12 +40,16 @@ export interface EmployeeDashboardData {
     canSubmitToday: boolean;
   };
   recentPeriods: Array<{
-    periodStart: Date;
+    periodStart: CalendarDate;
     periodLabel: string;
     status: string;
     totalHours: number;
     submittedAt: Date | null;
     reviewedAt: Date | null;
+    /** `submittedAt` / `reviewedAt` as a day label in the workspace timezone (formatted on the
+     *  server so server render and browser hydration agree). */
+    submittedLabel: string | null;
+    reviewedLabel: string | null;
   }>;
 }
 
@@ -49,11 +61,15 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
   const actor = await requireSession();
   const userId = actor.id;
   const db = await getDb();
-  const periodConfig = await getPayPeriodConfig();
-  const periodStart = getCurrentPeriodStart(periodConfig);
-  const numDays = getNumDaysInPeriod(periodStart, periodConfig);
-  const periodEnd = dayjs(periodStart).add(numDays - 1, 'day');
-  const periodLabel = `${dayjs(periodStart).format('MMM D')} – ${periodEnd.format('MMM D, YYYY')}`;
+  const today = await getWorkspaceToday();
+  const landingConfig = await getCurrentEffectiveConfig();
+  const periodStart = getCurrentPeriodStart(today, landingConfig);
+  // D3/§0.6: resolve this period's REAL config/length (handles a pending schedule change),
+  // never the landing config assumed by default.
+  const { config: periodConfig, numDays } = await resolvePeriod(periodStart);
+  const periodEnd = addDays(periodStart, numDays - 1);
+  const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(periodEnd, 'MMM D, YYYY')}`;
+  const periodEndExclusive = addDays(periodStart, numDays);
 
   // Parallel fetch: current period status + hours + recent periods
   const [periodRows, hoursResult, recentRows] = await Promise.all([
@@ -76,14 +92,14 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
         and(
           eq(timesheetEntries.userId, userId),
           gte(timesheetEntries.entryDate, periodStart),
-          lt(timesheetEntries.entryDate, dayjs(periodStart).add(numDays, 'day').toDate()),
+          lt(timesheetEntries.entryDate, periodEndExclusive),
           eq(
             timesheetEntries.revisionNumber,
             sql`(
               SELECT MAX(te2.revision_number)
               FROM timesheet_entries te2
               WHERE te2.user_id = ${timesheetEntries.userId}
-                AND COALESCE(te2.clin_id, te2.indirect_code_id) = COALESCE(${timesheetEntries.clinId}, ${timesheetEntries.indirectCodeId})
+                AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                 AND te2.entry_date = ${timesheetEntries.entryDate}
             )`
           ),
@@ -95,6 +111,7 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
         status: timesheetPeriods.status,
         submittedAt: timesheetPeriods.submittedAt,
         reviewedAt: timesheetPeriods.reviewedAt,
+        periodNumDays: timesheetPeriods.periodNumDays,
       })
       .from(timesheetPeriods)
       .where(eq(timesheetPeriods.userId, userId))
@@ -107,13 +124,12 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
   // Count expected workdays (Mon-Fri) up to today
   let expectedWorkdays = 0;
   let daysRemaining = 0;
-  const today = dayjs();
   for (let i = 0; i < numDays; i++) {
-    const date = dayjs(periodStart).add(i, 'day');
-    const dow = date.day();
+    const date = addDays(periodStart, i);
+    const dow = dayOfWeek(date);
     const isWeekday = dow >= 1 && dow <= 5;
     if (isWeekday) {
-      if (date.isAfter(today, 'day')) {
+      if (isAfter(date, today)) {
         daysRemaining++;
       } else {
         expectedWorkdays++;
@@ -121,26 +137,36 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
     }
   }
 
-  const canSubmitToday = dayjs().isSameOrAfter(periodEnd, 'day');
+  // Mirrors submitPeriod's actual gate (lastWeekday, not periodEnd) so the dashboard never
+  // claims a submission is allowed when the server would reject it.
+  const lastWeekday = getLastWeekdayInPeriod(periodStart, periodConfig);
+  const canSubmitToday = !isBefore(today, lastWeekday);
 
   // Build recent periods with hours
-  const recentPeriods = recentRows.map((rp) => {
-    const rpNumDays = getNumDaysInPeriod(rp.periodStart);
-    const rpEnd = dayjs(rp.periodStart).add(rpNumDays - 1, 'day');
+  const timeZone = await getWorkspaceTimezone();
+  const recentNumDays = await Promise.all(
+    recentRows.map((rp) => existingPeriodLength(db, rp.periodStart as CalendarDate, rp.periodNumDays))
+  );
+  const recentPeriods = recentRows.map((rp, i) => {
+    const rpStart = rp.periodStart as CalendarDate;
+    const rpNumDays = recentNumDays[i];
+    const rpEnd = addDays(rpStart, rpNumDays - 1);
     return {
-      periodStart: rp.periodStart,
-      periodLabel: `${dayjs(rp.periodStart).format('MMM D')} – ${rpEnd.format('MMM D, YYYY')}`,
+      periodStart: rpStart,
+      periodLabel: `${formatCalendarDate(rpStart, 'MMM D')} – ${formatCalendarDate(rpEnd, 'MMM D, YYYY')}`,
       status: rp.status,
       totalHours: 0, // Will be populated below
       submittedAt: rp.submittedAt,
       reviewedAt: rp.reviewedAt,
+      submittedLabel: rp.submittedAt ? formatCalendarDate(calendarDayOf(rp.submittedAt, timeZone), 'MMM D') : null,
+      reviewedLabel: rp.reviewedAt ? formatCalendarDate(calendarDayOf(rp.reviewedAt, timeZone), 'MMM D') : null,
     };
   });
 
   // Parallel fetch: get hours for all recent periods concurrently
   const recentHoursResults = await Promise.all(
-    recentPeriods.map((rp) => {
-      const rpNumDays = getNumDaysInPeriod(rp.periodStart);
+    recentPeriods.map((rp, i) => {
+      const endExclusive = addDays(rp.periodStart, recentNumDays[i]);
       return db
         .select({
           total: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
@@ -150,14 +176,14 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
           and(
             eq(timesheetEntries.userId, userId),
             gte(timesheetEntries.entryDate, rp.periodStart),
-            lt(timesheetEntries.entryDate, dayjs(rp.periodStart).add(rpNumDays, 'day').toDate()),
+            lt(timesheetEntries.entryDate, endExclusive),
             eq(
               timesheetEntries.revisionNumber,
               sql`(
                 SELECT MAX(te2.revision_number)
                 FROM timesheet_entries te2
                 WHERE te2.user_id = ${timesheetEntries.userId}
-                  AND COALESCE(te2.clin_id, te2.indirect_code_id) = COALESCE(${timesheetEntries.clinId}, ${timesheetEntries.indirectCodeId})
+                  AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                   AND te2.entry_date = ${timesheetEntries.entryDate}
               )`
             ),
@@ -174,7 +200,7 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
   return {
     currentPeriod: {
       periodStart,
-      periodEnd: periodEnd.toDate(),
+      periodEnd,
       periodLabel,
       status: period?.status ?? 'draft',
       submittedAt: period?.submittedAt ?? null,
@@ -184,7 +210,7 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
       expectedWorkdays,
       daysWithEntries: Number(hoursResult[0]?.distinctDays ?? 0),
       daysRemaining,
-      submissionDeadline: periodEnd.format('MMM D, YYYY'),
+      submissionDeadline: formatCalendarDate(lastWeekday, 'MMM D, YYYY'),
       canSubmitToday,
     },
     recentPeriods,

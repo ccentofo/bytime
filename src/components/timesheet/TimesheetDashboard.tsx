@@ -20,7 +20,6 @@ import {
   IconAlertCircle,
   IconHistory,
 } from '@tabler/icons-react';
-import dayjs from 'dayjs';
 import type { EmployeeDashboardData } from '@/server/actions/employee-dashboard';
 import { PERIOD_STATUS_COLOR } from '@/lib/ui/status-colors';
 
@@ -165,10 +164,10 @@ export function TimesheetDashboard({ data }: Props) {
                   </Table.Td>
                    <Table.Td>{(rp.totalHours ?? 0).toFixed(1)}</Table.Td>
                   <Table.Td>
-                    {rp.submittedAt ? dayjs(rp.submittedAt).format('MMM D') : '—'}
+                    {rp.submittedLabel ?? '—'}
                   </Table.Td>
                   <Table.Td>
-                    {rp.reviewedAt ? dayjs(rp.reviewedAt).format('MMM D') : '—'}
+                    {rp.reviewedLabel ?? '—'}
                   </Table.Td>
                 </Table.Tr>
               ))}

@@ -2,13 +2,12 @@
 
 import { useMemo, useRef, useState, useEffect } from 'react';
 import { Text } from '@mantine/core';
-import dayjs from 'dayjs';
 import { useTimesheet } from '@/components/timesheet/TimesheetContext';
 import { ChargeCodeCell } from '@/components/timesheet/cells/ChargeCodeCell';
 import { HourCell } from '@/components/timesheet/cells/HourCell';
 import { TotalHoursCell } from '@/components/timesheet/cells/TotalHoursCell';
 import { ColumnHeaderDate } from '@/components/timesheet/cells/ColumnHeaderDate';
-import { getNumDaysInPeriod } from '@/lib/date-utils';
+import { addDays, dayOfWeek, isBefore } from '@/lib/calendar-date';
 import styles from './Timesheet.module.css';
 
 export type Density = 'comfortable' | 'compact' | 'dense';
@@ -33,8 +32,8 @@ function formatFooterHours(value: number, density: Density): string {
 
 export function BiWeeklyTable() {
   const { state } = useTimesheet();
-  const { chargeCodes, entries, periodStart } = state;
-  const numDays = getNumDaysInPeriod(periodStart, state.periodConfig);
+  const { chargeCodes, entries, periodStart, today } = state;
+  const numDays = state.numDays; // server-resolved
 
   // Measure container width for density calculation
   const containerRef = useRef<HTMLDivElement>(null);
@@ -70,15 +69,15 @@ export function BiWeeklyTable() {
       totals[i] = dayTotal;
 
       if (hasChargeCodes) {
-        const date = dayjs(periodStart).add(i, 'day');
-        const dow = date.day();
+        const date = addDays(periodStart, i);
+        const dow = dayOfWeek(date);
         const isWeekday = dow >= 1 && dow <= 5;
-        const isPast = date.isBefore(dayjs(), 'day');
+        const isPast = isBefore(date, today);
         missing[i] = isWeekday && isPast && dayTotal === 0;
       }
     }
     return { dailyTotals: totals, dailyHasMissing: missing };
-  }, [entries, numDays, periodStart, chargeCodes.length]);
+  }, [entries, numDays, periodStart, chargeCodes.length, today]);
 
   const grandTotal = useMemo(
     () => entries.reduce((sum, e) => sum + (e.hours ?? []).reduce((a, b) => a + (b ?? 0), 0), 0),
@@ -101,8 +100,8 @@ export function BiWeeklyTable() {
           <Text fw={700} size="sm">Charge Code</Text>
         </div>
         {Array.from({ length: numDays }, (_, i) => {
-          const date = dayjs(periodStart).add(i, 'day').toDate();
-          const isWeekend = dayjs(date).day() === 0 || dayjs(date).day() === 6;
+          const date = addDays(periodStart, i);
+          const isWeekend = dayOfWeek(date) === 0 || dayOfWeek(date) === 6;
           return (
             <div
               key={`hdr-${i}`}
@@ -111,6 +110,7 @@ export function BiWeeklyTable() {
             >
               <ColumnHeaderDate
                 date={date}
+                today={today}
                 dayIndex={i}
                 hasMissingHours={dailyHasMissing[i]}
                 density={density}
@@ -133,8 +133,8 @@ export function BiWeeklyTable() {
             </div>,
             // Day cells
             ...Array.from({ length: numDays }, (_, i) => {
-              const isWeekend = dayjs(periodStart).add(i, 'day').day() === 0
-                || dayjs(periodStart).add(i, 'day').day() === 6;
+              const isWeekend = dayOfWeek(addDays(periodStart, i)) === 0
+                || dayOfWeek(addDays(periodStart, i)) === 6;
               return (
                 <div
                   key={`cell-${cc.id}-${i}`}
@@ -157,8 +157,8 @@ export function BiWeeklyTable() {
           <Text fw={700} size="sm">Daily Totals</Text>
         </div>
         {Array.from({ length: numDays }, (_, i) => {
-          const isWeekend = dayjs(periodStart).add(i, 'day').day() === 0
-            || dayjs(periodStart).add(i, 'day').day() === 6;
+          const isWeekend = dayOfWeek(addDays(periodStart, i)) === 0
+            || dayOfWeek(addDays(periodStart, i)) === 6;
           return (
             <div
               key={`ftr-${i}`}

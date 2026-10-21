@@ -2,9 +2,11 @@ import { NextRequest } from 'next/server';
 import { getDb } from '@/db';
 import { timesheetPeriods, users } from '@/db/schema';
 import { eq, and, gte, lt } from 'drizzle-orm';
-import dayjs from 'dayjs';
 import { validateApiKey, apiResponse, apiError } from '@/lib/api-auth';
+import { addDays, isCalendarDate } from '@/lib/calendar-date';
 
+// Date format: `startDate`/`endDate` query params and every `periodStart` in the response are
+// plain 'YYYY-MM-DD' calendar-date strings — never an ISO instant/timestamp.
 export async function GET(request: NextRequest) {
   const db = await getDb();
   const authResult = await validateApiKey(request);
@@ -15,14 +17,21 @@ export async function GET(request: NextRequest) {
   const endDate = searchParams.get('endDate');
   const status = searchParams.get('status');
 
+  if (startDate && !isCalendarDate(startDate)) {
+    return apiError('startDate must be a valid date (YYYY-MM-DD).');
+  }
+  if (endDate && !isCalendarDate(endDate)) {
+    return apiError('endDate must be a valid date (YYYY-MM-DD).');
+  }
+
   try {
     const conditions = [];
 
-    if (startDate) {
-      conditions.push(gte(timesheetPeriods.periodStart, new Date(startDate)));
+    if (startDate && isCalendarDate(startDate)) {
+      conditions.push(gte(timesheetPeriods.periodStart, startDate));
     }
-    if (endDate) {
-      conditions.push(lt(timesheetPeriods.periodStart, dayjs(endDate).add(1, 'day').toDate()));
+    if (endDate && isCalendarDate(endDate)) {
+      conditions.push(lt(timesheetPeriods.periodStart, addDays(endDate, 1)));
     }
     if (status) {
       conditions.push(eq(timesheetPeriods.status, status as any));

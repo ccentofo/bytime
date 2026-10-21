@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { ActionIcon, NumberInput, Text } from '@mantine/core';
 import { IconNote } from '@tabler/icons-react';
 import { useTimesheet } from '@/components/timesheet/TimesheetContext';
-import dayjs from 'dayjs';
+import { addDays, isAfter } from '@/lib/calendar-date';
 import type { Density } from '../BiWeeklyTable';
 
 interface HourCellProps {
@@ -26,7 +26,9 @@ function formatHours(value: number, density: Density): string {
 
 export function HourCell({ chargeCodeId, dayIndex, density = 'comfortable' }: HourCellProps) {
   const { state, dispatch } = useTimesheet();
-  const isEditable = state.periodStatus === 'draft' || state.periodStatus === 'rejected';
+  // Read-only while another period is loading: typing into the outgoing grid would save it
+  // against whichever period ends up on screen.
+  const isEditable = (state.periodStatus === 'draft' || state.periodStatus === 'rejected') && !state.isLoadingPeriod;
   const [isEditing, setIsEditing] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [localValue, setLocalValue] = useState<number | string>(0);
@@ -38,8 +40,9 @@ export function HourCell({ chargeCodeId, dayIndex, density = 'comfortable' }: Ho
   const savedValue = savedEntry ? ((savedEntry.hours ?? [])[dayIndex] ?? 0) : 0;
   const isDirty = value !== savedValue;
 
-  const cellDate = dayjs(state.periodStart).add(dayIndex, 'day');
-  const isFutureDate = cellDate.isAfter(dayjs(), 'day');
+  const cellDate = addDays(state.periodStart, dayIndex);
+  // Uses the server's state.today (never the browser's clock) — the server remains authoritative.
+  const isFutureDate = isAfter(cellDate, state.today);
 
   const noteKey = `${chargeCodeId}-${dayIndex}`;
   const hasNote = Boolean(state.notes[noteKey]);

@@ -34,6 +34,7 @@ import { formatDate } from '@/lib/format';
 import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 
 // ---------------------------------------------------------------------------
 // Types (derived from server action return types)
@@ -61,8 +62,8 @@ type UserLcatAssignment = {
   id: string;
   userId: string;
   laborCategoryId: string;
-  effectiveDate: Date;
-  endDate: Date | null;
+  effectiveDate: CalendarDate;
+  endDate: CalendarDate | null;
   createdAt: Date;
   userName: string;
   userEmail: string;
@@ -91,8 +92,8 @@ type Contract = {
   name: string;
   description: string | null;
   status: 'active' | 'inactive' | 'closed';
-  startDate: Date | null;
-  endDate: Date | null;
+  startDate: CalendarDate | null;
+  endDate: CalendarDate | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -288,14 +289,16 @@ export function LaborCategoriesClient({
     if (!assignUserId || !assignLcatId || !assignEffectiveDate) return;
     startTransition(async () => {
       try {
+        if (!isCalendarDate(assignEffectiveDate)) return;
+        const endDate: CalendarDate | undefined = assignEndDate && isCalendarDate(assignEndDate) ? assignEndDate : undefined;
         await assignUserToLaborCategory({
           userId: assignUserId,
           laborCategoryId: assignLcatId,
-          effectiveDate: new Date(assignEffectiveDate),
-          endDate: assignEndDate ? new Date(assignEndDate) : undefined,
+          effectiveDate: assignEffectiveDate,
+          endDate,
         });
         const refreshed = await getUserLaborCategoryAssignments();
-        setAssignments(refreshed as UserLcatAssignment[]);
+        setAssignments(refreshed);
         setAssignUserId(null);
         setAssignLcatId(null);
         setAssignEffectiveDate(null);
@@ -318,9 +321,9 @@ export function LaborCategoriesClient({
   function handleEndAssignment(assignment: UserLcatAssignment) {
     startTransition(async () => {
       try {
-        await endUserLaborCategoryAssignment(assignment.id, new Date());
+        await endUserLaborCategoryAssignment(assignment.id);
         const refreshed = await getUserLaborCategoryAssignments();
-        setAssignments(refreshed as UserLcatAssignment[]);
+        setAssignments(refreshed);
         notifications.show({
           title: 'Assignment Ended',
           message: `${assignment.userName}'s assignment to ${assignment.lcatCode} has been ended.`,
@@ -439,13 +442,13 @@ export function LaborCategoriesClient({
     {
       accessorKey: 'effectiveDate',
       header: 'Effective Date',
-      Cell: ({ cell }) => formatDate(cell.getValue<Date>()),
+      Cell: ({ cell }) => formatDate(cell.getValue<CalendarDate>()),
       size: 140,
     },
     {
       accessorKey: 'endDate',
       header: 'End Date',
-      Cell: ({ cell }) => formatDate(cell.getValue<Date | null>()),
+      Cell: ({ cell }) => formatDate(cell.getValue<CalendarDate | null>()),
       size: 140,
     },
   ];

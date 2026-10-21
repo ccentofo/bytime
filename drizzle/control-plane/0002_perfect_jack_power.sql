@@ -1,0 +1,1 @@
+ALTER TABLE "signups" ADD COLUMN "timezone" varchar(100);

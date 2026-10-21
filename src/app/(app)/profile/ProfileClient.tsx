@@ -33,9 +33,10 @@ type Props = {
     enabled: boolean;
     recoveryCodesRemaining: number;
   };
+  workspaceTimezone: string;
 };
 
-export function ProfileClient({ fullName, email, role, passwordInfo, mfaStatus }: Props) {
+export function ProfileClient({ fullName, email, role, passwordInfo, mfaStatus, workspaceTimezone }: Props) {
   const [isPending, startTransition] = useTransition();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -115,7 +116,7 @@ export function ProfileClient({ fullName, email, role, passwordInfo, mfaStatus }
 
         {passwordInfo.lastChangedAt && (
           <Text size="xs" c="dimmed" mb="md">
-            Last changed: {formatDateTime(passwordInfo.lastChangedAt)}
+            Last changed: {formatDateTime(passwordInfo.lastChangedAt, workspaceTimezone)}
           </Text>
         )}
 

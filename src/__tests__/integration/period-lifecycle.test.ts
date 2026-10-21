@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { getTestDb, createTestUser, cleanupTestData } from './helpers';
 import * as schema from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import dayjs from 'dayjs';
 
 describe('Period Lifecycle — Submit/Approve/Reject', () => {
   let employee: any;
@@ -20,7 +19,7 @@ describe('Period Lifecycle — Submit/Approve/Reject', () => {
 
   it('creates a period in draft status', async () => {
     const db = getTestDb();
-    const periodStart = dayjs('2026-05-01').toDate();
+    const periodStart = '2026-05-01';
 
     const [period] = await db.insert(schema.timesheetPeriods).values({
       userId: employee.id,
@@ -34,7 +33,7 @@ describe('Period Lifecycle — Submit/Approve/Reject', () => {
 
   it('transitions from draft to submitted', async () => {
     const db = getTestDb();
-    const periodStart = dayjs('2026-05-01').toDate();
+    const periodStart = '2026-05-01';
 
     const [period] = await db.insert(schema.timesheetPeriods).values({
       userId: employee.id,
@@ -53,7 +52,7 @@ describe('Period Lifecycle — Submit/Approve/Reject', () => {
 
   it('transitions from submitted to approved with reviewer', async () => {
     const db = getTestDb();
-    const periodStart = dayjs('2026-05-01').toDate();
+    const periodStart = '2026-05-01';
 
     const [period] = await db.insert(schema.timesheetPeriods).values({
       userId: employee.id,
@@ -79,7 +78,7 @@ describe('Period Lifecycle — Submit/Approve/Reject', () => {
 
   it('transitions from submitted to rejected', async () => {
     const db = getTestDb();
-    const periodStart = dayjs('2026-05-01').toDate();
+    const periodStart = '2026-05-01';
 
     const [period] = await db.insert(schema.timesheetPeriods).values({
       userId: employee.id,
@@ -104,7 +103,7 @@ describe('Period Lifecycle — Submit/Approve/Reject', () => {
 
   it('enforces unique constraint on (userId, periodStart)', async () => {
     const db = getTestDb();
-    const periodStart = dayjs('2026-05-01').toDate();
+    const periodStart = '2026-05-01';
 
     await db.insert(schema.timesheetPeriods).values({
       userId: employee.id,

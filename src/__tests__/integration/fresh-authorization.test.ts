@@ -95,7 +95,7 @@ describe('Fresh authorization for sensitive actions (R2-8)', () => {
     const demoted = await createTestUser({ role: 'supervisor' }); // DB truth: supervisor now, not admin
     const [period] = await db.insert(schema.timesheetPeriods).values({
       userId: demoted.id,
-      periodStart: new Date('2026-01-01'),
+      periodStart: '2026-01-01',
       status: 'submitted',
       submittedAt: new Date(),
     }).returning();

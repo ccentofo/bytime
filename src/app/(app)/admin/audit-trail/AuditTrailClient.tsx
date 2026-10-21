@@ -29,7 +29,7 @@ import {
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import { notifications } from '@mantine/notifications';
-import dayjs from 'dayjs';
+import { formatInstant, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import {
   getAuditEntries,
   getCellRevisionHistory,
@@ -77,6 +77,7 @@ type Props = {
   initialSummary: AuditSummary;
   contracts: ContractOption[];
   users: UserOption[];
+  workspaceTimezone: string;
 };
 
 // Map reason codes to human-readable labels
@@ -85,7 +86,7 @@ for (const rc of REASON_CODES) {
   REASON_LABEL_MAP[rc.value] = rc.label;
 }
 
-export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
+export function AuditTrailClient({ initialSummary, contracts, users, workspaceTimezone }: Props) {
   const [isPending, startTransition] = useTransition();
   const [summary] = useState<AuditSummary>(initialSummary);
   const [entries, setEntries] = useState<AuditEntry[]>([]);
@@ -129,8 +130,8 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
         if (filterUserId) filters.userId = filterUserId;
         if (filterContractId) filters.contractId = filterContractId;
         if (filterClinId) filters.clinId = filterClinId;
-        if (filterStartDate) filters.startDate = new Date(filterStartDate);
-        if (filterEndDate) filters.endDate = new Date(filterEndDate);
+        if (filterStartDate && isCalendarDate(filterStartDate)) filters.startDate = filterStartDate;
+        if (filterEndDate && isCalendarDate(filterEndDate)) filters.endDate = filterEndDate;
         if (filterReasonCode) filters.reasonCode = filterReasonCode;
         if (filterRevisionsOnly) filters.revisionsOnly = true;
 
@@ -177,7 +178,7 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
     {
       accessorKey: 'entryDate',
       header: 'Entry Date',
-      Cell: ({ cell }) => formatDate(cell.getValue<Date>()),
+      Cell: ({ cell }) => formatDate(cell.getValue<CalendarDate>()),
     },
     {
       accessorKey: 'hours',
@@ -246,7 +247,7 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
     {
       accessorKey: 'createdAt',
       header: 'Entered At',
-      Cell: ({ cell }) => formatDateTime(cell.getValue<Date>()),
+      Cell: ({ cell }) => formatDateTime(cell.getValue<Date>(), workspaceTimezone),
     },
     {
       accessorKey: 'createdByName',
@@ -506,7 +507,7 @@ export function AuditTrailClient({ initialSummary, contracts, users }: Props) {
                         </Text>
                       )}
                       <Text size="xs" c="dimmed">
-                        Entered at {dayjs(rev.createdAt).format('MMM D, YYYY h:mm:ss A')}
+                        Entered at {formatInstant(rev.createdAt, workspaceTimezone, 'MMM D, YYYY h:mm:ss A')}
                         {rev.createdByName ? ` by ${rev.createdByName}` : ''}
                       </Text>
                     </Stack>

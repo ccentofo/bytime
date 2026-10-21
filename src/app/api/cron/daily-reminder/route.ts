@@ -3,11 +3,13 @@ import { getDbForUrl } from '@/db';
 import { controlDb } from '@/db/control-plane';
 import { tenants } from '@/db/control-plane/schema';
 import { decrypt } from '@/lib/encryption';
-import { users, timesheetEntries, notificationPreferences } from '@/db/schema';
-import { eq, and, gte, lt } from 'drizzle-orm';
-import dayjs from 'dayjs';
+import { users, timesheetEntries, notificationPreferences, workspaceSettings } from '@/db/schema';
+import { eq, and } from 'drizzle-orm';
 import { sendDailyReminderEmail } from '@/lib/email/send';
 import { checkCronRateLimit } from '@/lib/rate-limit';
+import { dayOfWeek, formatCalendarDate, isValidTimeZone, todayIn } from '@/lib/calendar-date';
+
+const FALLBACK_TIMEZONE = 'America/New_York';
 
 /**
  * Cron endpoint: Send daily time entry reminders.
@@ -33,62 +35,65 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const today = dayjs().startOf('day');
-  const tomorrow = today.add(1, 'day');
-
-  // Skip weekends
-  const dow = today.day();
-  if (dow === 0 || dow === 6) {
-    return NextResponse.json({ message: 'Weekend — no reminders sent', sent: 0 });
-  }
-
   // Load all active tenants from the control plane
   const activeTenants = await controlDb.select().from(tenants).where(eq(tenants.status, 'active'));
 
   let totalSent = 0;
 
+  // One unreachable or unmigrated tenant must not stop reminders for every tenant after it.
+  const failedTenants: string[] = [];
+
   for (const tenant of activeTenants) {
-    const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted));
+    try {
+      const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted));
 
-    // Get all active employees for this tenant
-    const allEmployees = await db
-      .select({ id: users.id, fullName: users.fullName, email: users.email })
-      .from(users)
-      .where(and(eq(users.isActive, true), eq(users.role, 'employee')));
+      // D7: "today" and the weekend skip are evaluated per-tenant, in THAT tenant's workspace
+      // timezone — never the cron process's own (UTC) clock, which would call it Saturday for a
+      // tenant where it's already Monday morning, or vice versa.
+      const [settingsRow] = await db.select({ timezone: workspaceSettings.timezone }).from(workspaceSettings).limit(1);
+      const timezone = settingsRow?.timezone && isValidTimeZone(settingsRow.timezone) ? settingsRow.timezone : FALLBACK_TIMEZONE;
+      const today = todayIn(timezone);
+      const dow = dayOfWeek(today);
+      if (dow === 0 || dow === 6) continue;
 
-    // Find who has entered time today
-    const entriesForToday = await db
-      .select({ userId: timesheetEntries.userId })
-      .from(timesheetEntries)
-      .where(
-        and(
-          gte(timesheetEntries.entryDate, today.toDate()),
-          lt(timesheetEntries.entryDate, tomorrow.toDate()),
-        )
-      );
+      // Get all active employees for this tenant
+      const allEmployees = await db
+        .select({ id: users.id, fullName: users.fullName, email: users.email })
+        .from(users)
+        .where(and(eq(users.isActive, true), eq(users.role, 'employee')));
 
-    const usersWithEntries = new Set(entriesForToday.map((e) => e.userId));
+      // Find who has entered time today
+      const entriesForToday = await db
+        .select({ userId: timesheetEntries.userId })
+        .from(timesheetEntries)
+        .where(eq(timesheetEntries.entryDate, today));
 
-    for (const emp of allEmployees) {
-      if (usersWithEntries.has(emp.id)) continue;
+      const usersWithEntries = new Set(entriesForToday.map((e) => e.userId));
 
-      const prefs = await db
-        .select({ enabled: notificationPreferences.emailDailyReminder })
-        .from(notificationPreferences)
-        .where(eq(notificationPreferences.userId, emp.id));
+      for (const emp of allEmployees) {
+        if (usersWithEntries.has(emp.id)) continue;
 
-      const enabled = prefs.length === 0 ? true : prefs[0].enabled;
+        const prefs = await db
+          .select({ enabled: notificationPreferences.emailDailyReminder })
+          .from(notificationPreferences)
+          .where(eq(notificationPreferences.userId, emp.id));
 
-      if (enabled) {
-        await sendDailyReminderEmail({
-          employeeEmail: emp.email,
-          employeeName: emp.fullName,
-          todayDate: today.format('dddd, MMM D, YYYY'),
-        });
-        totalSent++;
+        const enabled = prefs.length === 0 ? true : prefs[0].enabled;
+
+        if (enabled) {
+          await sendDailyReminderEmail({
+            employeeEmail: emp.email,
+            employeeName: emp.fullName,
+            todayDate: formatCalendarDate(today, 'dddd, MMM D, YYYY'),
+          });
+          totalSent++;
+        }
       }
+    } catch (err) {
+      failedTenants.push(tenant.slug);
+      console.error(`Cron: tenant ${tenant.slug} failed:`, err);
     }
   }
 
-  return NextResponse.json({ message: 'Daily reminders sent', sent: totalSent });
+  return NextResponse.json({ message: 'Daily reminders sent', sent: totalSent, failedTenants });
 }

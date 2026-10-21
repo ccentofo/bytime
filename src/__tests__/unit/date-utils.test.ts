@@ -1,237 +1,203 @@
-import { describe, it, expect, vi } from 'vitest';
-import { getNumDaysInPeriod, getCurrentPeriodStart, navigatePeriod, type PeriodConfig } from '@/lib/date-utils';
-import dayjs from 'dayjs';
+import { describe, it, expect } from 'vitest';
+import {
+  getNumDaysInPeriod,
+  getCurrentPeriodStart,
+  getPeriodStartForDate,
+  navigatePeriod,
+  getPeriodEndDate,
+  getLastWeekdayInPeriod,
+  DEFAULT_PERIOD_CONFIG,
+  type PeriodConfig,
+} from '@/lib/date-utils';
+import type { CalendarDate } from '@/lib/calendar-date';
+
+const d = (s: string) => s as CalendarDate;
+
+const semimonthlyConfig: PeriodConfig = { periodType: 'semimonthly', anchorDate: d('2026-01-01'), weekStartDay: 1 };
+const weeklyConfig: PeriodConfig = { periodType: 'weekly', anchorDate: d('2026-01-05'), weekStartDay: 1 };
+const biweeklyConfig: PeriodConfig = { periodType: 'biweekly', anchorDate: d('2026-01-05'), weekStartDay: 1 };
+const monthlyConfig: PeriodConfig = { periodType: 'monthly', anchorDate: d('2026-01-01'), weekStartDay: 1 };
 
 describe('getNumDaysInPeriod', () => {
-  it('returns 15 for 1st of month', () => {
-    // Use dayjs to create dates to avoid timezone issues with new Date('YYYY-MM-DD')
-    expect(getNumDaysInPeriod(dayjs('2026-01-01').toDate())).toBe(15);
-    expect(getNumDaysInPeriod(dayjs('2026-06-01').toDate())).toBe(15);
+  it('semimonthly: 15 days from the 1st', () => {
+    expect(getNumDaysInPeriod(d('2026-01-01'), semimonthlyConfig)).toBe(15);
+    expect(getNumDaysInPeriod(d('2026-06-01'), semimonthlyConfig)).toBe(15);
   });
-  it('returns correct days for 16th of month', () => {
-    expect(getNumDaysInPeriod(dayjs('2026-01-16').toDate())).toBe(16); // Jan has 31 days
-    expect(getNumDaysInPeriod(dayjs('2026-02-16').toDate())).toBe(13); // Feb has 28 days (2026 is not leap)
-    expect(getNumDaysInPeriod(dayjs('2026-04-16').toDate())).toBe(15); // Apr has 30 days
+
+  it('semimonthly: remaining days of the month from the 16th', () => {
+    expect(getNumDaysInPeriod(d('2026-01-16'), semimonthlyConfig)).toBe(16); // Jan has 31 days
+    expect(getNumDaysInPeriod(d('2026-02-16'), semimonthlyConfig)).toBe(13); // Feb has 28 days (2026 not a leap year)
+    expect(getNumDaysInPeriod(d('2026-04-16'), semimonthlyConfig)).toBe(15); // Apr has 30 days
+    expect(getNumDaysInPeriod(d('2024-02-16'), semimonthlyConfig)).toBe(14); // leap year Feb has 29 days
+  });
+
+  it('weekly period is always 7 days', () => {
+    expect(getNumDaysInPeriod(d('2026-06-01'), weeklyConfig)).toBe(7);
+    expect(getNumDaysInPeriod(d('2026-06-08'), weeklyConfig)).toBe(7);
+  });
+
+  it('biweekly period is always 14 days', () => {
+    expect(getNumDaysInPeriod(d('2026-06-01'), biweeklyConfig)).toBe(14);
+  });
+
+  it('monthly period matches calendar month days', () => {
+    expect(getNumDaysInPeriod(d('2026-01-01'), monthlyConfig)).toBe(31);
+    expect(getNumDaysInPeriod(d('2026-02-01'), monthlyConfig)).toBe(28);
+    expect(getNumDaysInPeriod(d('2024-02-01'), monthlyConfig)).toBe(29);
+    expect(getNumDaysInPeriod(d('2026-04-01'), monthlyConfig)).toBe(30);
+  });
+});
+
+describe('getPeriodStartForDate', () => {
+  it('semimonthly snaps to the 1st or the 16th', () => {
+    expect(getPeriodStartForDate(d('2026-05-10'), semimonthlyConfig)).toBe('2026-05-01');
+    expect(getPeriodStartForDate(d('2026-05-20'), semimonthlyConfig)).toBe('2026-05-16');
+    expect(getPeriodStartForDate(d('2026-05-01'), semimonthlyConfig)).toBe('2026-05-01');
+    expect(getPeriodStartForDate(d('2026-05-16'), semimonthlyConfig)).toBe('2026-05-16');
+  });
+
+  it('weekly snaps to the configured week-start day', () => {
+    // 2026-06-03 is a Wednesday; weekStartDay=1 (Monday) → most recent Monday is 2026-06-01.
+    expect(getPeriodStartForDate(d('2026-06-03'), weeklyConfig)).toBe('2026-06-01');
+  });
+
+  it('biweekly computes an EXACT period start from the anchor — never a Sunday off-by-one', () => {
+    // Anchor 2026-01-05 (Monday). 2026-06-01 is 147 days after the anchor; 147/14 = 10.5,
+    // floor(10.5) = 10 periods elapsed → period start = anchor + 140 days = 2026-05-25 (Monday).
+    const result = getPeriodStartForDate(d('2026-06-01'), biweeklyConfig);
+    expect(result).toBe('2026-05-25');
+    // Exact assertion, not a range check: must land ON the anchor's weekday.
+    expect(getPeriodStartForDate(d('2026-01-05'), biweeklyConfig)).toBe('2026-01-05');
+    expect(getPeriodStartForDate(d('2026-01-18'), biweeklyConfig)).toBe('2026-01-05');
+    expect(getPeriodStartForDate(d('2026-01-19'), biweeklyConfig)).toBe('2026-01-19');
+  });
+
+  it('monthly snaps to the 1st', () => {
+    expect(getPeriodStartForDate(d('2026-06-15'), monthlyConfig)).toBe('2026-06-01');
+  });
+});
+
+describe('getCurrentPeriodStart (today passed explicitly)', () => {
+  it('semimonthly: 1st when today is in the first half', () => {
+    expect(getCurrentPeriodStart(d('2026-05-10'), semimonthlyConfig)).toBe('2026-05-01');
+  });
+
+  it('semimonthly: 16th when today is in the second half', () => {
+    expect(getCurrentPeriodStart(d('2026-05-20'), semimonthlyConfig)).toBe('2026-05-16');
+  });
+
+  it('weekly returns the most recent configured week-start day', () => {
+    expect(getCurrentPeriodStart(d('2026-06-03'), weeklyConfig)).toBe('2026-06-01');
+  });
+
+  it('monthly returns the 1st of the current month', () => {
+    expect(getCurrentPeriodStart(d('2026-06-15'), monthlyConfig)).toBe('2026-06-01');
+  });
+
+  it('biweekly computes an exact date from the anchor', () => {
+    expect(getCurrentPeriodStart(d('2026-06-01'), biweeklyConfig)).toBe('2026-05-25');
   });
 });
 
 describe('navigatePeriod', () => {
-  it('navigates forward from 1st to 16th', () => {
-    const result = navigatePeriod(dayjs('2026-05-01').toDate(), 'next');
-    const d = dayjs(result);
-    expect(d.date()).toBe(16);
-    expect(d.month()).toBe(4); // May (0-indexed)
-  });
-  it('navigates forward from 16th to next month 1st', () => {
-    const result = navigatePeriod(dayjs('2026-05-16').toDate(), 'next');
-    const d = dayjs(result);
-    expect(d.date()).toBe(1);
-    expect(d.month()).toBe(5); // June
-  });
-  it('navigates backward from 16th to 1st', () => {
-    const result = navigatePeriod(dayjs('2026-05-16').toDate(), 'prev');
-    const d = dayjs(result);
-    expect(d.date()).toBe(1);
-    expect(d.month()).toBe(4); // May
-  });
-  it('navigates backward from 1st to previous month 16th', () => {
-    const result = navigatePeriod(dayjs('2026-05-01').toDate(), 'prev');
-    const d = dayjs(result);
-    expect(d.date()).toBe(16);
-    expect(d.month()).toBe(3); // April
-  });
-});
-
-describe('getCurrentPeriodStart', () => {
-  it('returns 1st when today is in first half', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-05-10'));
-    const result = getCurrentPeriodStart();
-    expect(dayjs(result).date()).toBe(1);
-    vi.useRealTimers();
-  });
-  it('returns 16th when today is in second half', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-05-20'));
-    const result = getCurrentPeriodStart();
-    expect(dayjs(result).date()).toBe(16);
-    vi.useRealTimers();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Configurable Period Tests
-// ---------------------------------------------------------------------------
-
-const weeklyConfig: PeriodConfig = { periodType: 'weekly', anchorDate: new Date('2026-01-05'), weekStartDay: 1 };
-const biweeklyConfig: PeriodConfig = { periodType: 'biweekly', anchorDate: new Date('2026-01-05'), weekStartDay: 1 };
-const monthlyConfig: PeriodConfig = { periodType: 'monthly', anchorDate: new Date('2026-01-01'), weekStartDay: 1 };
-
-describe('getNumDaysInPeriod — configurable', () => {
-  it('weekly period is always 7 days', () => {
-    expect(getNumDaysInPeriod(dayjs('2026-06-01').toDate(), weeklyConfig)).toBe(7);
-    expect(getNumDaysInPeriod(dayjs('2026-06-08').toDate(), weeklyConfig)).toBe(7);
+  it('semimonthly: 1st → 16th → next month 1st', () => {
+    expect(navigatePeriod(d('2026-05-01'), 'next', semimonthlyConfig)).toBe('2026-05-16');
+    expect(navigatePeriod(d('2026-05-16'), 'next', semimonthlyConfig)).toBe('2026-06-01');
   });
 
-  it('biweekly period is always 14 days', () => {
-    expect(getNumDaysInPeriod(dayjs('2026-06-01').toDate(), biweeklyConfig)).toBe(14);
+  it('semimonthly: backward from 16th to 1st, and from 1st to previous month 16th', () => {
+    expect(navigatePeriod(d('2026-05-16'), 'prev', semimonthlyConfig)).toBe('2026-05-01');
+    expect(navigatePeriod(d('2026-05-01'), 'prev', semimonthlyConfig)).toBe('2026-04-16');
   });
 
-  it('monthly period matches calendar month days', () => {
-    expect(getNumDaysInPeriod(dayjs('2026-01-01').toDate(), monthlyConfig)).toBe(31);
-    expect(getNumDaysInPeriod(dayjs('2026-02-01').toDate(), monthlyConfig)).toBe(28);
-    expect(getNumDaysInPeriod(dayjs('2026-04-01').toDate(), monthlyConfig)).toBe(30);
-    expect(getNumDaysInPeriod(dayjs('2026-06-01').toDate(), monthlyConfig)).toBe(30);
-  });
-
-  it('semimonthly still works with default config', () => {
-    // No config passed — should use semi-monthly default
-    expect(getNumDaysInPeriod(dayjs('2026-06-01').toDate())).toBe(15);
-    expect(getNumDaysInPeriod(dayjs('2026-06-16').toDate())).toBe(15);
-  });
-});
-
-describe('navigatePeriod — configurable', () => {
   it('weekly navigates by 7 days', () => {
-    const next = navigatePeriod(dayjs('2026-06-01').toDate(), 'next', weeklyConfig);
-    expect(dayjs(next).format('YYYY-MM-DD')).toBe('2026-06-08');
-
-    const prev = navigatePeriod(dayjs('2026-06-08').toDate(), 'prev', weeklyConfig);
-    expect(dayjs(prev).format('YYYY-MM-DD')).toBe('2026-06-01');
+    expect(navigatePeriod(d('2026-06-01'), 'next', weeklyConfig)).toBe('2026-06-08');
+    expect(navigatePeriod(d('2026-06-08'), 'prev', weeklyConfig)).toBe('2026-06-01');
   });
 
-  it('biweekly navigates by 14 days', () => {
-    const next = navigatePeriod(dayjs('2026-06-01').toDate(), 'next', biweeklyConfig);
-    expect(dayjs(next).format('YYYY-MM-DD')).toBe('2026-06-15');
-
-    const prev = navigatePeriod(dayjs('2026-06-15').toDate(), 'prev', biweeklyConfig);
-    expect(dayjs(prev).format('YYYY-MM-DD')).toBe('2026-06-01');
+  it('biweekly navigates by exactly 14 days', () => {
+    expect(navigatePeriod(d('2026-06-01'), 'next', biweeklyConfig)).toBe('2026-06-15');
+    expect(navigatePeriod(d('2026-06-15'), 'prev', biweeklyConfig)).toBe('2026-06-01');
   });
 
-  it('monthly navigates by calendar month', () => {
-    const next = navigatePeriod(dayjs('2026-06-01').toDate(), 'next', monthlyConfig);
-    expect(dayjs(next).format('YYYY-MM-DD')).toBe('2026-07-01');
-
-    const prev = navigatePeriod(dayjs('2026-06-01').toDate(), 'prev', monthlyConfig);
-    expect(dayjs(prev).format('YYYY-MM-DD')).toBe('2026-05-01');
-  });
-
-  it('semimonthly navigation unchanged with default config', () => {
-    const next = navigatePeriod(dayjs('2026-06-01').toDate(), 'next');
-    expect(dayjs(next).date()).toBe(16);
-
-    const prev = navigatePeriod(dayjs('2026-06-16').toDate(), 'prev');
-    expect(dayjs(prev).date()).toBe(1);
+  it('monthly navigates by calendar month, year boundary included', () => {
+    expect(navigatePeriod(d('2026-06-01'), 'next', monthlyConfig)).toBe('2026-07-01');
+    expect(navigatePeriod(d('2026-06-01'), 'prev', monthlyConfig)).toBe('2026-05-01');
+    expect(navigatePeriod(d('2026-12-01'), 'next', monthlyConfig)).toBe('2027-01-01');
   });
 });
 
-describe('getCurrentPeriodStart — configurable', () => {
-  it('weekly returns most recent Monday', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-03')); // Wednesday
-    const result = getCurrentPeriodStart(weeklyConfig);
-    expect(dayjs(result).day()).toBe(1); // Monday
-    expect(dayjs(result).format('YYYY-MM-DD')).toBe('2026-06-01');
-    vi.useRealTimers();
+describe('getPeriodEndDate', () => {
+  it('semimonthly', () => {
+    expect(getPeriodEndDate(d('2026-01-01'), semimonthlyConfig)).toBe('2026-01-15');
+    expect(getPeriodEndDate(d('2026-01-16'), semimonthlyConfig)).toBe('2026-01-31');
   });
 
-  it('monthly returns 1st of current month', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-15'));
-    const result = getCurrentPeriodStart(monthlyConfig);
-    expect(dayjs(result).date()).toBe(1);
-    expect(dayjs(result).month()).toBe(5); // June
-    vi.useRealTimers();
+  it('weekly', () => {
+    expect(getPeriodEndDate(d('2026-06-01'), weeklyConfig)).toBe('2026-06-07');
   });
 
-  it('biweekly calculates from anchor date', () => {
-    vi.useFakeTimers();
-    // Anchor is 2026-01-05 (Monday). Periods repeat every 14 days.
-    vi.setSystemTime(new Date('2026-06-01'));
-    const result = getCurrentPeriodStart(biweeklyConfig);
-    const d = dayjs(result);
-    // The result should be before or on the current date
-    expect(d.isBefore(dayjs('2026-06-02'))).toBe(true);
-    // And the period should contain the current date (result + 14 days > current)
-    expect(d.add(14, 'day').isAfter(dayjs('2026-06-01'))).toBe(true);
-    vi.useRealTimers();
+  it('monthly, leap year', () => {
+    expect(getPeriodEndDate(d('2024-02-01'), monthlyConfig)).toBe('2024-02-29');
+  });
+});
+
+describe('getLastWeekdayInPeriod', () => {
+  it('walks back from the period end to the nearest weekday', () => {
+    // 2026-01-01 .. 2026-01-15 (semimonthly), Jan 15 2026 is a Thursday — already a weekday.
+    expect(getLastWeekdayInPeriod(d('2026-01-01'), semimonthlyConfig)).toBe('2026-01-15');
+  });
+
+  it('skips back over a weekend', () => {
+    // Jan 16 .. Jan 31 2026; Jan 31 2026 is a Saturday → last weekday is Fri Jan 30.
+    expect(getLastWeekdayInPeriod(d('2026-01-16'), semimonthlyConfig)).toBe('2026-01-30');
   });
 });
 
 // ---------------------------------------------------------------------------
-// Period Config Snapshot Tests — DCAA Compliance
+// Period Config Snapshot Tests — DCAA Compliance (rewritten to CalendarDate strings)
 // ---------------------------------------------------------------------------
 
 describe('period config snapshot — DCAA integrity', () => {
-  const semimonthlyConfig: PeriodConfig = { periodType: 'semimonthly', anchorDate: new Date('2026-01-01'), weekStartDay: 1 };
-
   it('historical semi-monthly period maintains 15-day boundary regardless of current config', () => {
-    // A period created under semi-monthly should always be 15 days
-    // even if the "current" config is bi-weekly
-    const historicalPeriodStart = dayjs('2026-05-01').toDate();
-
-    // Under original semi-monthly config: 15 days
+    const historicalPeriodStart = d('2026-05-01');
     const originalDays = getNumDaysInPeriod(historicalPeriodStart, semimonthlyConfig);
     expect(originalDays).toBe(15);
-
-    // Under new bi-weekly config: would be 14 days
     const newConfigDays = getNumDaysInPeriod(historicalPeriodStart, biweeklyConfig);
     expect(newConfigDays).toBe(14);
-
-    // These MUST be different — proving the config matters
     expect(originalDays).not.toBe(newConfigDays);
   });
 
   it('stored period config overrides global config for navigation', () => {
-    // Historical period: semi-monthly starting Jun 1
-    const storedConfig = semimonthlyConfig;
-    const periodStart = dayjs('2026-06-01').toDate();
-
-    // Navigate next with stored config → Jun 16
-    const nextWithStored = navigatePeriod(periodStart, 'next', storedConfig);
-    expect(dayjs(nextWithStored).date()).toBe(16);
-
-    // Navigate next with bi-weekly config → Jun 15
+    const periodStart = d('2026-06-01');
+    const nextWithStored = navigatePeriod(periodStart, 'next', semimonthlyConfig);
+    expect(nextWithStored).toBe('2026-06-16');
     const nextWithNew = navigatePeriod(periodStart, 'next', biweeklyConfig);
-    expect(dayjs(nextWithNew).format('YYYY-MM-DD')).toBe('2026-06-15');
-
-    // They should be different dates
-    expect(dayjs(nextWithStored).format('YYYY-MM-DD')).not.toBe(dayjs(nextWithNew).format('YYYY-MM-DD'));
+    expect(nextWithNew).toBe('2026-06-15');
+    expect(nextWithStored).not.toBe(nextWithNew);
   });
 
   it('period boundary is deterministic from stored config', () => {
-    // Simulates: period was created as semi-monthly, stored periodType='semimonthly', periodNumDays=15
-    const storedPeriodType = 'semimonthly';
+    const storedPeriodType = 'semimonthly' as const;
     const storedNumDays = 15;
-    const periodStart = dayjs('2026-05-01').toDate();
-
-    // Reconstruct config from stored values
+    const periodStart = d('2026-05-01');
     const reconstructedConfig: PeriodConfig = {
       periodType: storedPeriodType,
-      anchorDate: new Date('2026-01-01'),
+      anchorDate: d('2026-01-01'),
       weekStartDay: 1,
     };
-
-    // Should produce the same day count
     expect(getNumDaysInPeriod(periodStart, reconstructedConfig)).toBe(storedNumDays);
   });
 
   it('approved period under bi-weekly stays 14 days after config change to monthly', () => {
-    const biweeklyStart = dayjs('2026-06-08').toDate();
-
-    // Under bi-weekly: always 14 days
+    const biweeklyStart = d('2026-06-08');
     expect(getNumDaysInPeriod(biweeklyStart, biweeklyConfig)).toBe(14);
-
-    // Under monthly: would be 30 days (June)
-    expect(getNumDaysInPeriod(dayjs('2026-06-01').toDate(), monthlyConfig)).toBe(30);
-
-    // The stored bi-weekly config must be used, not the current monthly
-    const storedConfig: PeriodConfig = { periodType: 'biweekly', anchorDate: new Date('2026-01-05'), weekStartDay: 1 };
+    expect(getNumDaysInPeriod(d('2026-06-01'), monthlyConfig)).toBe(30);
+    const storedConfig: PeriodConfig = { periodType: 'biweekly', anchorDate: d('2026-01-05'), weekStartDay: 1 };
     expect(getNumDaysInPeriod(biweeklyStart, storedConfig)).toBe(14);
   });
 
-  it('DEFAULT_PERIOD_CONFIG is semimonthly for backward compatibility', async () => {
-    const { DEFAULT_PERIOD_CONFIG: defaultConfig } = await import('@/lib/date-utils');
-    expect(defaultConfig.periodType).toBe('semimonthly');
+  it('DEFAULT_PERIOD_CONFIG is semimonthly (used only as the no-config-row fallback, never a parameter default)', () => {
+    expect(DEFAULT_PERIOD_CONFIG.periodType).toBe('semimonthly');
   });
 });

@@ -29,6 +29,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.config.integration.ts",
+    "test:tz": "TZ=UTC vitest run && TZ=America/Los_Angeles vitest run && TZ=Pacific/Auckland vitest run",
     "test:all": "vitest run && vitest run --config vitest.config.integration.ts"
   },
   "dependencies": {

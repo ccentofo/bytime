@@ -7,6 +7,7 @@ import { getDbForUrl } from '@/db';
 import * as schema from '@/db/schema';
 import { createNeonDatabase } from './neon';
 import { migrateTenantDatabase } from './migrate-tenant';
+import { canonicalTimeZone } from '@/lib/calendar-date';
 
 const RESERVED_SLUGS = new Set(['www', 'app', 'api', 'admin', 'static', 'assets', 'mail', 'support']);
 
@@ -21,6 +22,9 @@ export type ProvisionInput = {
   adminEmail: string;
   adminName: string;
   plan?: string;
+  /** D8: the signer's browser IANA timezone, captured at signup. Validated; falls back to
+   * workspace_settings' own column default (America/New_York) if missing or invalid. */
+  timezone?: string;
   /** Override DB creation (tests / self-hosted). Defaults to Neon. */
   createDatabase?: (slug: string) => Promise<string>;
 };
@@ -70,6 +74,15 @@ export async function provisionTenant(input: ProvisionInput): Promise<ProvisionR
       // passwordHash intentionally omitted — set via the invite flow (signup blueprint).
     }).returning({ id: schema.users.id });
     await db.insert(schema.notificationPreferences).values({ userId: admin.id });
+  }
+
+  // D8: seed workspace_settings with the signer's captured timezone (validated; the column's
+  // own default covers a missing/invalid value). Migration 0011 seeds this row too, so this is
+  // an upsert, not a bare insert — safe to re-run on a resumed provision.
+  const timezone = canonicalTimeZone(input.timezone) ?? undefined;
+  if (timezone) {
+    await db.insert(schema.workspaceSettings).values({ id: 1, timezone })
+      .onConflictDoUpdate({ target: schema.workspaceSettings.id, set: { timezone, updatedAt: new Date() } });
   }
 
   // 5. Activate.

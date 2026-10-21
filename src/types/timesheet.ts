@@ -1,4 +1,5 @@
 import type { PeriodConfig } from '@/lib/date-utils';
+import type { CalendarDate } from '@/lib/calendar-date';
 
 export interface ChargeCode {
   id: string;             // chargeCodeId for DIRECT codes; indirectChargeCodes.id for indirect
@@ -40,7 +41,8 @@ export interface TimesheetState {
   savedEntries: TimesheetEntry[];      // last-saved snapshot (from DB)
   savedCellRevisions: Record<string, number>; // key="clinId-dayIndex", value=max revision number
   notes: Record<string, NoteData>;     // key = "chargeCodeId-dayIndex"
-  periodStart: Date;
+  periodStart: CalendarDate;
+  numDays: number; // the period's length, resolved by the server (never computed client-side)
   activeNoteCell: { chargeCodeId: string; dayIndex: number } | null;
   userId: string;
   isSaving: boolean;
@@ -48,6 +50,7 @@ export interface TimesheetState {
   periodStatus: PeriodStatus; // current period's approval status
   flsaExempt: boolean; // true if user is FLSA exempt (salaried)
   periodConfig: PeriodConfig; // pay period configuration
+  today: CalendarDate; // workspace "today" (server-resolved, never the browser's clock)
 }
 
 export type TimesheetAction =
@@ -55,12 +58,14 @@ export type TimesheetAction =
   | { type: 'SET_NOTE'; chargeCodeId: string; dayIndex: number; note: NoteData }
   | { type: 'OPEN_NOTE_MODAL'; chargeCodeId: string; dayIndex: number }
   | { type: 'CLOSE_NOTE_MODAL' }
-  | { type: 'NAVIGATE_PERIOD'; direction: 'prev' | 'next' }
-  | { type: 'SET_PERIOD_DATA'; periodStart: Date; entries: TimesheetEntry[]; revisions: Record<string, number>; periodStatus?: PeriodStatus; periodConfig?: PeriodConfig }
+  | { type: 'BEGIN_PERIOD_LOAD' }
+  | { type: 'PERIOD_LOAD_FAILED' }
+  | { type: 'SET_PERIOD_DATA'; periodStart: CalendarDate; numDays: number; entries: TimesheetEntry[]; revisions: Record<string, number>; periodStatus: PeriodStatus; periodConfig: PeriodConfig }
   | { type: 'SET_SAVING'; isSaving: boolean }
-  | { type: 'MARK_SAVED'; entries: TimesheetEntry[]; revisions: Record<string, number> }
+  | { type: 'MARK_SAVED'; periodStart: CalendarDate; entries: TimesheetEntry[]; revisions: Record<string, number> }
   | { type: 'DISCARD_CHANGES' }
-  | { type: 'SET_PERIOD_STATUS'; status: PeriodStatus };
+  | { type: 'SET_PERIOD_STATUS'; status: PeriodStatus }
+  | { type: 'SET_TODAY'; today: CalendarDate };
 
 // Represents a single dirty cell to save
 export interface DirtyCell {
@@ -78,10 +83,12 @@ export interface TimesheetPageData {
   userId: string;
   chargeCodes: ChargeCode[];
   entries: TimesheetEntry[];
-  periodStart: Date;
+  periodStart: CalendarDate;
+  numDays: number;
+  today: CalendarDate;
   revisions?: Record<string, number>;
   periodStatus?: PeriodStatus;
   flsaExempt?: boolean;
   dashboardData?: EmployeeDashboardData;
-  periodConfig?: PeriodConfig;
+  periodConfig: PeriodConfig;
 }

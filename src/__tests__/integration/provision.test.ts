@@ -82,6 +82,52 @@ describe.skipIf(!cpReady)('provisionTenant', () => {
     expect(user.passwordHash).toBeNull(); // dormant until invite flow
   });
 
+  // D8: signup captures the browser timezone, which provisionTenant writes into the new
+  // tenant's workspace_settings row (seeded by migration 0011, then updated here).
+  it('seeds workspace_settings with the captured timezone', async () => {
+    await provisionTenant({
+      slug: 'test-tz',
+      name: 'TZ Corp',
+      adminEmail: 'admin@tz.com',
+      adminName: 'Admin',
+      timezone: 'America/Los_Angeles',
+      createDatabase: fakeCreateDatabase,
+    });
+
+    const db = getDbForUrl(TEST_DB_URL);
+    const [settings] = await db.select().from(schema.workspaceSettings);
+    expect(settings.timezone).toBe('America/Los_Angeles');
+  });
+
+  it('falls back to the column default when no timezone is captured', async () => {
+    await provisionTenant({
+      slug: 'test-tz-default',
+      name: 'Default TZ Corp',
+      adminEmail: 'admin@tzdefault.com',
+      adminName: 'Admin',
+      createDatabase: fakeCreateDatabase,
+    });
+
+    const db = getDbForUrl(TEST_DB_URL);
+    const [settings] = await db.select().from(schema.workspaceSettings);
+    expect(settings.timezone).toBe('America/New_York');
+  });
+
+  it('ignores an invalid captured timezone and keeps the column default', async () => {
+    await provisionTenant({
+      slug: 'test-tz-invalid',
+      name: 'Invalid TZ Corp',
+      adminEmail: 'admin@tzinvalid.com',
+      adminName: 'Admin',
+      timezone: 'Not/A_Real_Zone',
+      createDatabase: fakeCreateDatabase,
+    });
+
+    const db = getDbForUrl(TEST_DB_URL);
+    const [settings] = await db.select().from(schema.workspaceSettings);
+    expect(settings.timezone).toBe('America/New_York');
+  });
+
   it('blank slate — zero indirect codes and zero contracts', async () => {
     await provisionTenant({
       slug: 'test-blank',

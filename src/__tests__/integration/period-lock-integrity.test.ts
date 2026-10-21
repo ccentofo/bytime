@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import dayjs from 'dayjs';
 import { eq, and } from 'drizzle-orm';
 import * as schema from '@/db/schema';
-import { getPeriodStartForDate, getNumDaysInPeriod, navigatePeriod } from '@/lib/date-utils';
+import { getPeriodStartForDate, getNumDaysInPeriod, navigatePeriod, DEFAULT_PERIOD_CONFIG } from '@/lib/date-utils';
+import { addDays, diffDays, parseCalendarDate, todayIn, type CalendarDate } from '@/lib/calendar-date';
 import {
   getTestDb,
   createTestUser,
@@ -24,6 +24,8 @@ import {
 vi.mock('@/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/db')>()),
   getDb: async () => getTestDb(),
+  // requireAdminFresh (updatePayPeriodConfig) re-reads the role through getDbForAuth.
+  getDbForAuth: async () => getTestDb(),
 }));
 
 const tenantState = vi.hoisted(() => ({ requestSlug: 'test-tenant' }));
@@ -55,6 +57,8 @@ vi.mock('@/auth', () => ({
 
 import { saveTimesheetBatch } from '@/server/actions/timesheet';
 import { resolvePeriod } from '@/server/internal/periods';
+import { updatePayPeriodConfig, getValidScheduleChangeDates, getNeighborPeriod } from '@/server/actions/pay-period-config';
+import { getPeriodOptions } from '@/server/actions/periods';
 
 function actingAs(user: Awaited<ReturnType<typeof createTestUser>>) {
   sessionState.user = { id: user.id, role: user.role, email: user.email, fullName: user.fullName };
@@ -63,7 +67,7 @@ function actingAs(user: Awaited<ReturnType<typeof createTestUser>>) {
 describe('Period-lock integrity (R2-2)', () => {
   let employee: Awaited<ReturnType<typeof createTestUser>>;
   let chargeCode: Awaited<ReturnType<typeof createTestChargeCode>>;
-  let periodStart: Date;
+  let periodStart: CalendarDate;
   let numDays: number;
 
   beforeEach(async () => {
@@ -76,8 +80,10 @@ describe('Period-lock integrity (R2-2)', () => {
     chargeCode = await createTestChargeCode(clin.id);
     await db.insert(schema.userChargeCodes).values({ userId: employee.id, chargeCodeId: chargeCode.id, isActive: true });
 
-    periodStart = getPeriodStartForDate(new Date());
-    numDays = getNumDaysInPeriod(periodStart);
+    // workspace_settings seeds 'America/New_York' by default (migration 0011); this suite never
+    // changes it, so fixtures compute "today" the same way the real actions do.
+    periodStart = getPeriodStartForDate(todayIn('America/New_York'), DEFAULT_PERIOD_CONFIG);
+    numDays = getNumDaysInPeriod(periodStart, DEFAULT_PERIOD_CONFIG);
     actingAs(employee);
   });
 
@@ -114,7 +120,7 @@ describe('Period-lock integrity (R2-2)', () => {
   });
 
   it('rejects a periodStart that is not a real period boundary', async () => {
-    const bogusPeriodStart = dayjs(periodStart).add(3, 'day').toDate(); // mid-period, not a boundary
+    const bogusPeriodStart = addDays(periodStart, 3); // mid-period, not a boundary
     await expect(
       saveTimesheetBatch({
         periodStart: bogusPeriodStart,
@@ -125,7 +131,7 @@ describe('Period-lock integrity (R2-2)', () => {
 
   it('rejects writing into an approved prior period via a neighboring draft period (dayIndex underflow)', async () => {
     const db = getTestDb();
-    const previousPeriodStart = navigatePeriod(periodStart, 'prev');
+    const previousPeriodStart = navigatePeriod(periodStart, 'prev', DEFAULT_PERIOD_CONFIG);
     await db.insert(schema.timesheetPeriods).values({
       userId: employee.id,
       periodStart: previousPeriodStart,
@@ -150,25 +156,29 @@ describe('Period-lock integrity (R2-2)', () => {
     expect(rows).toHaveLength(0);
   });
 
-  it('rejects writing into an approved period by sending its start at a different time of day', async () => {
+  // The two tests formerly here ("sending its start at a different time of day" / "stored at a
+  // browser-local midnight") exercised §0 problem 7 (exact-instant matches on a `timestamptz`
+  // periodStart missing a same-day row stored under a different timezone's midnight). That bug
+  // class is now structurally impossible: `timesheet_periods.periodStart` is a `date` column
+  // holding a plain 'YYYY-MM-DD' CalendarDate with no time-of-day component to disagree about —
+  // there is no "+1 second" or "+4 hours" value that TypeScript (or Postgres) will even accept.
+  // This test covers the resulting invariant: an exact calendar-day match always finds the row.
+  it('finds and locks an approved period by its exact calendar-day periodStart, with no timezone ambiguity possible', async () => {
     const db = getTestDb();
-    const previousPeriodStart = navigatePeriod(periodStart, 'prev');
+    const previousPeriodStart = navigatePeriod(periodStart, 'prev', DEFAULT_PERIOD_CONFIG);
     await db.insert(schema.timesheetPeriods).values({
       userId: employee.id,
       periodStart: previousPeriodStart,
       status: 'approved',
       submittedAt: new Date(),
       reviewedAt: new Date(),
-      periodNumDays: getNumDaysInPeriod(previousPeriodStart),
+      periodNumDays: getNumDaysInPeriod(previousPeriodStart, DEFAULT_PERIOD_CONFIG),
     });
 
-    // Same calendar day, one second later: an exact-timestamp lookup finds no row and treats
-    // the period as an editable draft.
-    const offByOneSecond = dayjs(previousPeriodStart).add(1, 'second').toDate();
     await expect(
       saveTimesheetBatch({
-        periodStart: offByOneSecond,
-        cells: [{ chargeCodeId: chargeCode.id, dayIndex: 0, hours: 4, isEdit: false, isLateEntry: true }],
+        periodStart: previousPeriodStart,
+        cells: [{ chargeCodeId: chargeCode.id, dayIndex: 2, hours: 4, isEdit: false, isLateEntry: true }],
         changeReasonCode: 'LATE_ENTRY',
       })
     ).rejects.toThrow(/locked/i);
@@ -177,54 +187,162 @@ describe('Period-lock integrity (R2-2)', () => {
     expect(rows).toHaveLength(0);
   });
 
-  it('rejects writing into an approved period whose row was stored at a browser-local midnight', async () => {
-    const db = getTestDb();
-    const previousPeriodStart = navigatePeriod(periodStart, 'prev');
-    // The period picker computes midnight in the browser's timezone, e.g. 04:00Z for New York.
-    await db.insert(schema.timesheetPeriods).values({
-      userId: employee.id,
-      periodStart: dayjs(previousPeriodStart).add(4, 'hour').toDate(),
-      status: 'approved',
-      submittedAt: new Date(),
-      reviewedAt: new Date(),
-      periodNumDays: getNumDaysInPeriod(previousPeriodStart),
+  // D8 §0.9: a schedule change is only accepted on a boundary common to BOTH the old and new
+  // schedule, so there is no more "first period of the new schedule that actually started under
+  // the old one" to special-case (that used to let one day belong to two periods at once).
+  describe('schedule changes only land on a common boundary (§0.9)', () => {
+    let admin: Awaited<ReturnType<typeof createTestUser>>;
+
+    beforeEach(async () => {
+      admin = await createTestUser({ role: 'admin' });
+      // Fake only the clock: faking every timer can stall the Postgres driver.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(Date.UTC(2026, 0, 15, 12, 0, 0))); // 2026-01-15, mid-period noon UTC
     });
 
-    await expect(
-      saveTimesheetBatch({
-        periodStart: previousPeriodStart, // server midnight
-        cells: [{ chargeCodeId: chargeCode.id, dayIndex: 2, hours: 4, isEdit: false, isLateEntry: true }],
-        changeReasonCode: 'LATE_ENTRY',
-      })
-    ).rejects.toThrow(/locked/i);
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('rejects an effective_from that is not a boundary of both schedules', async () => {
+      actingAs(admin);
+      // A biweekly schedule anchored on a date whose 14-day cycle does NOT line up with the
+      // proposed effective_from — i.e. effective_from is a semimonthly boundary (the current
+      // default schedule) but not a boundary of this new biweekly schedule.
+      await expect(
+        updatePayPeriodConfig({
+          periodType: 'biweekly',
+          anchorDate: '2025-01-06' as CalendarDate, // a Monday
+          weekStartDay: 1,
+          effectiveFrom: '2026-03-01' as CalendarDate, // semimonthly boundary, not a Jan-6-anchored biweekly one
+        })
+      ).rejects.toThrow(/boundary under both/i);
+    });
+
+    it('getValidScheduleChangeDates only offers dates valid under both schedules, and updatePayPeriodConfig accepts one', async () => {
+      actingAs(admin);
+      const validDates = await getValidScheduleChangeDates({
+        periodType: 'biweekly',
+        anchorDate: '2025-01-06' as CalendarDate,
+        weekStartDay: 1,
+      });
+      expect(validDates.problem).toBeNull();
+      expect(validDates.dates.length).toBeGreaterThan(0);
+
+      const chosen = validDates.dates[0];
+      const result = await updatePayPeriodConfig({
+        periodType: 'biweekly',
+        anchorDate: '2025-01-06' as CalendarDate,
+        weekStartDay: 1,
+        effectiveFrom: chosen,
+      });
+      expect(result.effectiveFrom).toBe(chosen);
+
+      // No gap, no overlap: the day before effective_from resolves under the OLD (semimonthly)
+      // schedule, and effective_from itself resolves under the NEW (biweekly) schedule — both
+      // as their own clean period start, with no special-casing required.
+      const dayBefore = addDays(parseCalendarDate(chosen), -1);
+      const beforeResolved = await resolvePeriod(getPeriodStartForDate(dayBefore, DEFAULT_PERIOD_CONFIG));
+      expect(beforeResolved.config.periodType).toBe(DEFAULT_PERIOD_CONFIG.periodType);
+
+      const afterResolved = await resolvePeriod(chosen);
+      expect(afterResolved.config.periodType).toBe('biweekly');
+      expect(afterResolved.numDays).toBe(14);
+    });
+
+    it('rejects a weekly/biweekly anchor that does not fall on the selected week start day', async () => {
+      actingAs(admin);
+      await expect(
+        updatePayPeriodConfig({
+          periodType: 'biweekly',
+          anchorDate: '2025-01-07' as CalendarDate, // a Tuesday
+          weekStartDay: 1, // Monday
+          effectiveFrom: '2026-02-16' as CalendarDate,
+        })
+      ).rejects.toThrow(/week start day/i);
+    });
+
+    it('rejects an unknown period type or week start day', async () => {
+      actingAs(admin);
+      await expect(updatePayPeriodConfig({
+        periodType: 'fortnightly' as never, anchorDate: '2026-01-05' as CalendarDate, weekStartDay: 1, effectiveFrom: '2026-02-16' as CalendarDate,
+      })).rejects.toThrow(/Period type must be one of/);
+      await expect(updatePayPeriodConfig({
+        periodType: 'weekly', anchorDate: '2026-01-05' as CalendarDate, weekStartDay: 9, effectiveFrom: '2026-02-16' as CalendarDate,
+      })).rejects.toThrow(/Week start day/);
+    });
+
+    it('a workspace with no timesheets can apply a schedule immediately; once timesheets exist it cannot', async () => {
+      actingAs(admin);
+      const sundayWeekly = { periodType: 'weekly' as const, anchorDate: '2026-01-04' as CalendarDate, weekStartDay: 0 };
+
+      const before = await getValidScheduleChangeDates(sundayWeekly);
+      expect(before.immediate).toBe(true);
+      expect(await updatePayPeriodConfig({ ...sundayWeekly, effectiveFrom: null })).toEqual({ effectiveFrom: null });
+      const applied = await resolvePeriod('2026-01-11' as CalendarDate);
+      expect(applied.config.periodType).toBe('weekly');
+      expect(applied.numDays).toBe(7);
+
+      // Now there is timesheet data: changes must be scheduled for a future common boundary.
+      await getTestDb().insert(schema.timesheetEntries).values({
+        userId: employee.id, chargeCodeId: chargeCode.id, entryDate: '2026-01-12', hours: '8', revisionNumber: 1, createdBy: employee.id,
+      });
+      const after = await getValidScheduleChangeDates(sundayWeekly);
+      expect(after.immediate).toBe(false);
+      await expect(updatePayPeriodConfig({ ...sundayWeekly, effectiveFrom: null }))
+        .rejects.toThrow(/must start on a future date/);
+    });
+
+    it('explains a change that can never be scheduled instead of offering nothing silently', async () => {
+      actingAs(admin);
+      const db = getTestDb();
+      await db.insert(schema.payPeriodConfig).values({
+        periodType: 'weekly', anchorDate: '2026-01-05', weekStartDay: 1, effectiveFrom: '1900-01-01',
+      });
+      await db.insert(schema.timesheetEntries).values({
+        userId: employee.id, chargeCodeId: chargeCode.id, entryDate: '2026-01-12', hours: '8', revisionNumber: 1, createdBy: employee.id,
+      });
+      // Monday weeks → Sunday weeks: no day is a period start under both, ever.
+      const options = await getValidScheduleChangeDates({ periodType: 'weekly', anchorDate: '2026-01-04' as CalendarDate, weekStartDay: 0 });
+      expect(options.immediate).toBe(false);
+      expect(options.dates).toEqual([]);
+      expect(options.problem).toMatch(/no date in the next two years/i);
+    });
   });
 
-  it('accepts the first period of a new pay schedule that starts before the change takes effect', async () => {
-    const db = getTestDb();
-    // Biweekly from Mon Jan 6 2025, effective Sat Nov 1 2025. The timesheet navigation snaps
-    // the first new period to Mon Oct 27 2025 (it contains Nov 1), while the config in effect
-    // AT Oct 27 is still the old semi-monthly one, whose period started Oct 16.
-    const [newConfig] = await db.insert(schema.payPeriodConfig).values({
-      periodType: 'biweekly',
-      anchorDate: new Date(2025, 0, 6),
-      weekStartDay: 1,
-      effectiveFrom: new Date(2025, 10, 1),
-    }).returning();
-    try {
-      const { config, numDays: length } = await resolvePeriod(new Date(2025, 9, 27));
-      expect(config.periodType).toBe('biweekly');
-      expect(length).toBe(14);
-      // The old schedule's own boundary is still valid, and a mid-period date is not.
-      expect((await resolvePeriod(new Date(2025, 9, 16))).config.periodType).toBe('semimonthly');
-      await expect(resolvePeriod(new Date(2025, 9, 28))).rejects.toThrow(/Invalid period start/i);
-    } finally {
-      await db.delete(schema.payPeriodConfig).where(eq(schema.payPeriodConfig.id, newConfig.id));
-    }
+  // Stepping by "one period of the current schedule" skipped periods when moving back from a
+  // longer schedule into a shorter one (semimonthly Nov 16 − 1 period = Nov 1 → weekly Oct 26,
+  // hiding the Nov 2 and Nov 9 weeks).
+  describe('period navigation across a schedule change', () => {
+    beforeEach(async () => {
+      const db = getTestDb();
+      await db.insert(schema.payPeriodConfig).values([
+        { periodType: 'weekly', anchorDate: '2026-01-05', weekStartDay: 1, effectiveFrom: '1900-01-01' },
+        { periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1, effectiveFrom: '2026-11-16' },
+      ]);
+    });
+
+    it('the prev arrow from the first new period lands on the last old one, and next comes back', async () => {
+      const prev = await getNeighborPeriod('2026-11-16' as CalendarDate, 'prev');
+      expect(prev).toMatchObject({ periodStart: '2026-11-09', numDays: 7 });
+      const next = await getNeighborPeriod('2026-11-09' as CalendarDate, 'next');
+      expect(next).toMatchObject({ periodStart: '2026-11-16', numDays: 15 });
+    });
+
+    it('the period list includes every period across the change', async () => {
+      const options = await getPeriodOptions('2026-11-16' as CalendarDate, 3, 1);
+      expect(options.map((o) => o.start)).toEqual(['2026-10-26', '2026-11-02', '2026-11-09', '2026-11-16', '2026-12-01']);
+    });
+
+    it('caps how many periods one call may build', async () => {
+      await expect(getPeriodOptions('2026-11-16' as CalendarDate, 61, 0)).rejects.toThrow(/0 to 60/);
+      await expect(getPeriodOptions('2026-11-16' as CalendarDate, 0, 1e9)).rejects.toThrow(/0 to 60/);
+    });
   });
 
   it('a normal, in-bounds save still succeeds', async () => {
     // Today's cell: neither late nor an edit, so no reason code is needed.
-    const todayIndex = dayjs().startOf('day').diff(dayjs(periodStart).startOf('day'), 'day');
+    const todayIndex = diffDays(periodStart, todayIn('America/New_York'));
     const result = await saveTimesheetBatch({
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 6, isEdit: false, isLateEntry: false }],

@@ -5,7 +5,7 @@ import {
 } from './helpers';
 import * as schema from '@/db/schema';
 import { eq, and, sql } from 'drizzle-orm';
-import dayjs from 'dayjs';
+import { isBefore, todayIn, type CalendarDate } from '@/lib/calendar-date';
 
 // These tests verify the period-lock and late-entry enforcement logic by
 // exercising the DB state directly (same pattern as timesheet-save.test.ts).
@@ -15,7 +15,7 @@ import dayjs from 'dayjs';
 describe('Write-Path Enforcement — Period Lock & Late Entry', () => {
   let user: any;
   let clin: any;
-  const periodStart = dayjs('2026-05-01').startOf('day').toDate();
+  const periodStart: CalendarDate = '2026-05-01' as CalendarDate;
 
   beforeEach(async () => {
     await cleanupTestData();
@@ -68,7 +68,7 @@ describe('Write-Path Enforcement — Period Lock & Late Entry', () => {
 
   it('first revision on a past date is correctly identified as late (priorRevision === 0)', async () => {
     const db = getTestDb();
-    const pastDate = dayjs('2026-05-01').toDate(); // well in the past
+    const pastDate: CalendarDate = '2026-05-01' as CalendarDate; // well in the past
 
     // No existing revisions — priorRevision should be 0
     const [{ maxRev }] = await db
@@ -81,7 +81,7 @@ describe('Write-Path Enforcement — Period Lock & Late Entry', () => {
       ));
 
     const priorRevision = maxRev ?? 0;
-    const serverIsLate = priorRevision === 0 && dayjs(pastDate).isBefore(dayjs().startOf('day'), 'day');
+    const serverIsLate = priorRevision === 0 && isBefore(pastDate, todayIn('America/New_York'));
 
     expect(priorRevision).toBe(0);
     expect(serverIsLate).toBe(true); // server must require a reason code
@@ -89,7 +89,7 @@ describe('Write-Path Enforcement — Period Lock & Late Entry', () => {
 
   it('second revision on any date is correctly identified as an edit (priorRevision > 0)', async () => {
     const db = getTestDb();
-    const entryDate = dayjs('2026-05-01').toDate();
+    const entryDate: CalendarDate = '2026-05-01' as CalendarDate;
 
     // Seed revision 1
     await db.insert(schema.timesheetEntries).values({

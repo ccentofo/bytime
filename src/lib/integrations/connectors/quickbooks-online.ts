@@ -19,7 +19,7 @@ import {
 } from './qbo-api';
 import { getDb } from '@/db';
 import { integrationSyncRecords } from '@/db/schema';
-import dayjs from 'dayjs';
+import { formatCalendarDate } from '@/lib/calendar-date';
 
 // ---------------------------------------------------------------------------
 // Connector Metadata
@@ -151,8 +151,8 @@ export const quickbooksOnlineConnector: IntegrationConnector = {
       const minutes = totalMinutes % 60;
 
       timeActivities.push({
-        entryId: `${entry.userId}-${entry.chargeCodeId}-${dayjs(entry.entryDate).format('YYYY-MM-DD')}`,
-        date: dayjs(entry.entryDate).format('YYYY-MM-DD'),
+        entryId: `${entry.userId}-${entry.chargeCodeId}-${entry.entryDate}`,
+        date: entry.entryDate,
         nameOf: isVendor ? 'Vendor' : 'Employee',
         employeeRef: isVendor ? undefined : qboEmployeeId,
         vendorRef: isVendor ? qboVendorId : undefined,
@@ -161,7 +161,7 @@ export const quickbooksOnlineConnector: IntegrationConnector = {
         hours,
         minutes,
         isBillable: entry.isBillable,
-        description: `${entry.chargeCodeLabel} — ${dayjs(entry.entryDate).format('MMM D, YYYY')}`,
+        description: `${entry.chargeCodeLabel} — ${formatCalendarDate(entry.entryDate, 'MMM D, YYYY')}`,
       });
     }
 

@@ -21,7 +21,7 @@ import { IconPlus, IconTrash, IconBan, IconCheck, IconCopy, IconKey } from '@tab
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import { createApiKey, revokeApiKey, deleteApiKey, getApiKeys } from '@/server/actions/api-keys';
-import { formatDate } from '@/lib/format';
+import { formatDateTime } from '@/lib/format';
 import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -39,11 +39,12 @@ type ApiKey = {
 
 type Props = {
   initialKeys: ApiKey[];
+  workspaceTimezone: string;
   };
 
 type PendingAction = { key: ApiKey; action: 'revoke' | 'delete' };
 
-export function ApiKeysClient({ initialKeys }: Props) {
+export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
   const [keys, setKeys] = useState<ApiKey[]>(initialKeys);
   const [isPending, startTransition] = useTransition();
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -131,7 +132,7 @@ export function ApiKeysClient({ initialKeys }: Props) {
     {
       accessorKey: 'lastUsedAt',
       header: 'Last Used',
-      Cell: ({ cell }) => formatDate(cell.getValue<Date | null>()),
+      Cell: ({ cell }) => formatDateTime(cell.getValue<Date | null>(), workspaceTimezone),
       size: 130,
     },
     {
@@ -139,14 +140,14 @@ export function ApiKeysClient({ initialKeys }: Props) {
       header: 'Expires',
       Cell: ({ cell }) => {
         const val = cell.getValue<Date | null>();
-        return val ? formatDate(val) : 'Never';
+        return val ? formatDateTime(val, workspaceTimezone) : 'Never';
       },
       size: 120,
     },
     {
       accessorKey: 'createdAt',
       header: 'Created',
-      Cell: ({ cell }) => formatDate(cell.getValue<Date>()),
+      Cell: ({ cell }) => formatDateTime(cell.getValue<Date>(), workspaceTimezone),
       size: 120,
     },
   ];

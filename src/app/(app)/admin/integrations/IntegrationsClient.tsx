@@ -26,7 +26,7 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 
 dayjs.extend(relativeTime);
 import type { ConnectorMetadata } from '@/lib/integrations/types';
-import { formatDate } from '@/lib/format';
+import { formatDateTime } from '@/lib/format';
 import { SYNC_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
 
@@ -45,6 +45,7 @@ interface Connection {
 interface Props {
   initialConnections: Connection[];
   availableConnectors: ConnectorMetadata[];
+  workspaceTimezone: string;
 }
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
@@ -60,7 +61,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 
-export function IntegrationsClient({ initialConnections, availableConnectors }: Props) {
+export function IntegrationsClient({ initialConnections, availableConnectors, workspaceTimezone }: Props) {
   const activeConnections = initialConnections.filter((c) => c.isActive);
 
   // Group connectors by category
@@ -101,7 +102,7 @@ export function IntegrationsClient({ initialConnections, availableConnectors }: 
                   )}
                 </Group>
                 <Text size="xs" c="dimmed">
-                  Connected {formatDate(conn.connectedAt)}
+                  Connected {formatDateTime(conn.connectedAt, workspaceTimezone)}
                   {conn.lastSyncAt && ` • Last sync ${dayjs(conn.lastSyncAt).fromNow()}`}
                 </Text>
                 {conn.provider === 'quickbooks_online' && (

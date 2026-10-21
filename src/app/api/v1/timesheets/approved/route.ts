@@ -2,9 +2,12 @@ import { NextRequest } from 'next/server';
 import { getDb } from '@/db';
 import { timesheetEntries, timesheetPeriods, users, clins, contracts, indirectChargeCodes } from '@/db/schema';
 import { eq, and, gte, lt, sql } from 'drizzle-orm';
-import dayjs from 'dayjs';
 import { validateApiKey, apiResponse, apiError } from '@/lib/api-auth';
+import { addDays, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { existingPeriodLength } from '@/server/internal/pay-period-config';
 
+// Date format: `startDate`/`endDate` query params and every `periodStart`/`entryDate` in the
+// response are plain 'YYYY-MM-DD' calendar-date strings — never an ISO instant/timestamp.
 export async function GET(request: NextRequest) {
   const db = await getDb();
   const authResult = await validateApiKey(request);
@@ -14,19 +17,20 @@ export async function GET(request: NextRequest) {
   const startDate = searchParams.get('startDate');
   const endDate = searchParams.get('endDate');
 
-  if (!startDate || !endDate) {
-    return apiError('startDate and endDate are required.');
+  if (!startDate || !endDate || !isCalendarDate(startDate) || !isCalendarDate(endDate)) {
+    return apiError('startDate and endDate are required (YYYY-MM-DD).');
   }
 
   try {
-    const start = new Date(startDate);
-    const end = dayjs(endDate).add(1, 'day').toDate();
+    const start = startDate;
+    const end = addDays(endDate, 1);
 
     // Get approved periods in the date range
     const approvedPeriods = await db
       .select({
         userId: timesheetPeriods.userId,
         periodStart: timesheetPeriods.periodStart,
+        periodNumDays: timesheetPeriods.periodNumDays,
         approvedAt: timesheetPeriods.reviewedAt,
       })
       .from(timesheetPeriods)
@@ -41,6 +45,13 @@ export async function GET(request: NextRequest) {
     // For each approved period, get the latest-revision entries
     const results = [];
     for (const period of approvedPeriods) {
+      // D3/§0.6: bound the window to this period's REAL length — the original query had no
+      // upper bound at all here, so it silently pulled every later period's entries too.
+      const pStart = period.periodStart as CalendarDate;
+      // Session-free and non-throwing: API-key callers have no session, and a stored period must
+      // stay readable even if it doesn't line up with today's schedule.
+      const numDays = await existingPeriodLength(db, pStart, period.periodNumDays);
+      const pEndExclusive = addDays(pStart, numDays);
       const entries = await db
         .select({
           userId: timesheetEntries.userId,
@@ -59,14 +70,15 @@ export async function GET(request: NextRequest) {
         .where(
           and(
             eq(timesheetEntries.userId, period.userId),
-            gte(timesheetEntries.entryDate, period.periodStart),
+            gte(timesheetEntries.entryDate, pStart),
+            lt(timesheetEntries.entryDate, pEndExclusive),
             eq(
               timesheetEntries.revisionNumber,
               sql`(
                 SELECT MAX(te2.revision_number)
                 FROM timesheet_entries te2
                 WHERE te2.user_id = ${timesheetEntries.userId}
-                  AND COALESCE(te2.clin_id, te2.indirect_code_id) = COALESCE(${timesheetEntries.clinId}, ${timesheetEntries.indirectCodeId})
+                  AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                   AND te2.entry_date = ${timesheetEntries.entryDate}
               )`
             ),

@@ -36,9 +36,10 @@ import {
   triggerGustoSync,
 } from '@/server/actions/gusto';
 import { saveMapping, disconnectIntegration } from '@/server/actions/integrations';
-import { formatDate, formatDateTime } from '@/lib/format';
+import { formatDateTime } from '@/lib/format';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { SYNC_STATUS_COLOR } from '@/lib/ui/status-colors';
+import type { CalendarDate } from '@/lib/calendar-date';
 
 dayjs.extend(relativeTime);
 
@@ -68,8 +69,8 @@ interface Mapping {
 interface SyncLog {
   id: string;
   syncType: string;
-  periodStart: Date | null;
-  periodEnd: Date | null;
+  periodStart: CalendarDate | null;
+  periodEnd: CalendarDate | null;
   triggerType: string;
   recordsPushed: number;
   recordsFailed: number;
@@ -85,6 +86,7 @@ interface Props {
   mappings: Mapping[];
   syncLogs: SyncLog[];
   bytimeEmployees: Array<{ id: string; fullName: string; email: string }>;
+  workspaceTimezone: string;
 }
 
 
@@ -93,6 +95,7 @@ export function GustoConfigClient({
   mappings: initialMappings,
   syncLogs: initialSyncLogs,
   bytimeEmployees,
+  workspaceTimezone,
 }: Props) {
   const [mappings, setMappings] = useState(initialMappings);
   const [syncLogs] = useState(initialSyncLogs);
@@ -184,15 +187,12 @@ export function GustoConfigClient({
   }
 
   async function handleSync() {
-    const periodStart = dayjs().subtract(2, 'month').startOf('month').toDate();
-    const periodEnd = dayjs().endOf('month').toDate();
-
+    // Default window (two months back through this month) is computed on the server in the
+    // workspace's calendar, not from this browser's clock.
     startTransition(async () => {
       try {
         const result = await triggerGustoSync({
           connectionId: connection.id,
-          periodStart,
-          periodEnd,
         });
         notifications.show({
           title: 'Sync complete',
@@ -238,7 +238,7 @@ export function GustoConfigClient({
           </Group>
           <Text c="dimmed" size="sm">
             {connection.externalCompanyName ?? 'Gusto'}
-            {' • '}Connected {formatDate(connection.connectedAt)}
+            {' • '}Connected {formatDateTime(connection.connectedAt, workspaceTimezone)}
           </Text>
         </div>
         <Group>
@@ -381,7 +381,7 @@ export function GustoConfigClient({
                 ) : (
                   syncLogs.map((log) => (
                     <Table.Tr key={log.id}>
-                      <Table.Td>{formatDateTime(log.createdAt)}</Table.Td>
+                      <Table.Td>{formatDateTime(log.createdAt, workspaceTimezone)}</Table.Td>
                       <Table.Td><Badge size="xs" variant="light">{log.triggerType}</Badge></Table.Td>
                       <Table.Td>{log.recordsPushed}</Table.Td>
                       <Table.Td>{log.recordsFailed > 0 ? <Text c="red" size="sm" fw={600}>{log.recordsFailed}</Text> : '0'}</Table.Td>

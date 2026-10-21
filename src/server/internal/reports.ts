@@ -10,7 +10,7 @@ import {
   userLaborCategories,
 } from '@/db/schema';
 import { eq, and, gte, lt, sql } from 'drizzle-orm';
-import dayjs from 'dayjs';
+import { addDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 
 export interface CostReportEntry {
   employeeName: string;
@@ -36,15 +36,16 @@ export interface CostReportEntry {
  * which is exactly why this was split out (R2-4).
  */
 export async function getDetailedCostReportData(
-  startDate: Date,
-  endDate: Date,
+  startDate: CalendarDate,
+  endDate: CalendarDate,
   contractId?: string
 ): Promise<CostReportEntry[]> {
   const db = await getDb();
-  const endDateExclusive = dayjs(endDate).add(1, 'day').toDate();
+  const start = parseCalendarDate(startDate);
+  const endDateExclusive = addDays(parseCalendarDate(endDate), 1);
 
   const conditions = [
-    gte(timesheetEntries.entryDate, startDate),
+    gte(timesheetEntries.entryDate, start),
     lt(timesheetEntries.entryDate, endDateExclusive),
     eq(
       timesheetEntries.revisionNumber,
@@ -52,7 +53,7 @@ export async function getDetailedCostReportData(
         SELECT MAX(te2.revision_number)
         FROM timesheet_entries te2
         WHERE te2.user_id = ${timesheetEntries.userId}
-          AND te2.clin_id = ${timesheetEntries.clinId}
+          AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
           AND te2.entry_date = ${timesheetEntries.entryDate}
       )`
     ),
@@ -86,7 +87,7 @@ export async function getDetailedCostReportData(
       and(
         eq(userLaborCategories.userId, timesheetEntries.userId),
         sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-        sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} > ${timesheetEntries.entryDate})`,
+        sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} >= ${timesheetEntries.entryDate})`,
       )
     )
     .leftJoin(
@@ -115,7 +116,7 @@ export async function getDetailedCostReportData(
       hourlyRate: rate,
       totalHours: Math.round(hours * 100) / 100,
       totalCost: Math.round(hours * rate * 100) / 100,
-      entryDate: dayjs(row.entryDate).format('YYYY-MM-DD'),
+      entryDate: row.entryDate,
     };
   });
 }

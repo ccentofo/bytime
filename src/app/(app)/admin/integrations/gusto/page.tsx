@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { requirePageRole } from '@/lib/session';
 import { getConnections, getMappings, getSyncLogs } from '@/server/actions/integrations';
 import { getBytimeEmployeesForGustoMapping } from '@/server/actions/gusto';
+import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { GustoConfigClient } from './GustoConfigClient';
 
 export const dynamic = 'force-dynamic';
@@ -31,10 +32,11 @@ export default async function GustoConfigPage({
     redirect('/admin/integrations');
   }
 
-  const [mappings, syncLogs, bytimeEmployees] = await Promise.all([
+  const [mappings, syncLogs, bytimeEmployees, workspaceTimezone] = await Promise.all([
     getMappings(activeConnectionId),
     getSyncLogs(activeConnectionId),
     getBytimeEmployeesForGustoMapping(),
+    getWorkspaceTimezone(),
   ]);
 
   return (
@@ -43,6 +45,7 @@ export default async function GustoConfigPage({
       mappings={mappings}
       syncLogs={syncLogs}
       bytimeEmployees={bytimeEmployees}
+      workspaceTimezone={workspaceTimezone}
     />
   );
 }

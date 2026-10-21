@@ -1,12 +1,11 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { ActionIcon, Group, Text, Title, Select, Button } from '@mantine/core';
 import { IconChevronLeft, IconChevronRight, IconCalendarEvent } from '@tabler/icons-react';
-import dayjs from 'dayjs';
 import { useTimesheet } from '@/components/timesheet/TimesheetContext';
-import { getNumDaysInPeriod, getLastWeekdayInPeriod, navigatePeriod, getCurrentPeriodStart } from '@/lib/date-utils';
-import type { PeriodConfig } from '@/lib/date-utils';
-import { useMemo } from 'react';
+import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { getPeriodOptions, type PeriodOption } from '@/server/actions/periods';
 
 const PERIOD_TYPE_LABELS: Record<string, string> = {
   weekly: 'Weekly',
@@ -15,54 +14,49 @@ const PERIOD_TYPE_LABELS: Record<string, string> = {
   monthly: 'Monthly',
 };
 
-// Generate period options for the dropdown (current + 23 previous = 24 total, ~12 months)
-function generatePeriodOptions(config: PeriodConfig): { value: string; label: string }[] {
-  const options: { value: string; label: string }[] = [];
-  let periodStart = getCurrentPeriodStart(config);
-
-  for (let i = 0; i < 24; i++) {
-    const start = dayjs(periodStart);
-    const lastWeekday = getLastWeekdayInPeriod(periodStart, config);
-    const numDays = getNumDaysInPeriod(periodStart, config);
-    const end = start.add(numDays - 1, 'day');
-
-    options.push({
-      value: start.format('YYYY-MM-DD'),
-      label: `Ending ${dayjs(lastWeekday).format('MMM D, YYYY')}`,
-    });
-    periodStart = navigatePeriod(periodStart, 'prev', config);
-  }
-
-  return options;
-}
-
 export function PayPeriodSelector() {
   const { state, loadPeriod, loadPeriodByDate } = useTimesheet();
-  const { periodStart } = state;
-  const config = state.periodConfig;
+  const { periodStart, periodConfig: config, today, numDays } = state;
+  // No navigation while a period is loading or a save is in flight.
+  const navBusy = state.isLoadingPeriod || state.isSaving;
+  const end = addDays(periodStart, numDays - 1);
+  const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(end, 'MMM D, YYYY')}`;
 
-  const start = dayjs(periodStart);
-  const numDays = getNumDaysInPeriod(periodStart, config);
-  const end = start.add(numDays - 1, 'day');
-  const periodLabel = `${start.format('MMM D')} – ${end.format('MMM D, YYYY')}`;
+  // D4: period options and "what is the current period" come from the server
+  // (getPeriodOptions) — the client does no schedule math of its own, so the dropdown's
+  // history stays correct across a pay-schedule change instead of assuming one schedule
+  // applied to every past period.
+  const [periodOptions, setPeriodOptions] = useState<PeriodOption[]>([]);
+  const [currentPeriodStart, setCurrentPeriodStart] = useState<CalendarDate | null>(null);
 
-  const periodOptions = useMemo(() => generatePeriodOptions(config), [config]);
-  const currentPeriodStart = useMemo(() => getCurrentPeriodStart(config), [config]);
-  const isCurrentPeriod = dayjs(periodStart).isSame(dayjs(currentPeriodStart), 'day');
+  useEffect(() => {
+    let cancelled = false;
+    getPeriodOptions(today, 23, 0)
+      .then((options) => {
+        if (cancelled) return;
+        setPeriodOptions(options);
+        setCurrentPeriodStart(options[options.length - 1]?.start ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setPeriodOptions([]); // the arrows still work; the list just stays empty
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [today]);
 
-  const selectedValue = dayjs(periodStart).format('YYYY-MM-DD');
+  const isCurrentPeriod = currentPeriodStart !== null && periodStart === currentPeriodStart;
   const periodTypeLabel = PERIOD_TYPE_LABELS[config.periodType] ?? 'Semi-Monthly';
 
   function handlePeriodSelect(value: string | null) {
     if (!value) return;
-    const newStart = dayjs(value).startOf('day').toDate();
-    if (!dayjs(newStart).isSame(dayjs(periodStart), 'day')) {
-      loadPeriodByDate(newStart);
+    if (value !== periodStart) {
+      loadPeriodByDate(value as CalendarDate);
     }
   }
 
   function handleCurrentClick() {
-    if (!isCurrentPeriod) {
+    if (currentPeriodStart && !isCurrentPeriod) {
       loadPeriodByDate(currentPeriodStart);
     }
   }
@@ -75,7 +69,7 @@ export function PayPeriodSelector() {
           size="lg"
           onClick={() => loadPeriod('prev')}
           aria-label="Previous pay period"
-          disabled={state.isLoadingPeriod}
+          disabled={navBusy}
         >
           <IconChevronLeft size={20} />
         </ActionIcon>
@@ -90,7 +84,7 @@ export function PayPeriodSelector() {
           size="lg"
           onClick={() => loadPeriod('next')}
           aria-label="Next pay period"
-          disabled={state.isLoadingPeriod}
+          disabled={navBusy}
         >
           <IconChevronRight size={20} />
         </ActionIcon>
@@ -99,20 +93,20 @@ export function PayPeriodSelector() {
       <Group gap="sm">
         <Select
           placeholder="Jump to period..."
-          data={periodOptions}
-          value={selectedValue}
+          data={periodOptions.map((o) => ({ value: o.start, label: o.label }))}
+          value={periodStart}
           onChange={handlePeriodSelect}
           searchable
           size="sm"
           style={{ width: 220 }}
-          disabled={state.isLoadingPeriod}
+          disabled={navBusy}
         />
         <Button
           variant="light"
           size="sm"
           leftSection={<IconCalendarEvent size={16} />}
           onClick={handleCurrentClick}
-          disabled={isCurrentPeriod || state.isLoadingPeriod}
+          disabled={isCurrentPeriod || currentPeriodStart === null || navBusy}
         >
           Current
         </Button>

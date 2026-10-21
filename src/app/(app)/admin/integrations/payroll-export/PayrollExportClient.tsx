@@ -26,11 +26,11 @@ import {
   IconCalendar,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
-import dayjs from 'dayjs';
 import {
   getPayrollExportPreview,
   generatePayrollExportCSV,
 } from '@/server/actions/payroll-export';
+import { daysInMonth, isCalendarDate, startOfMonth, withDayOfMonth, type CalendarDate } from '@/lib/calendar-date';
 
 const FORMAT_OPTIONS = [
   { value: 'adp', label: 'ADP Workforce Now', description: 'Standard ADP payroll import' },
@@ -51,11 +51,12 @@ interface PreviewEmployee {
   periodEnd: string;
 }
 
-export function PayrollExportClient() {
+export function PayrollExportClient({ today }: { today: CalendarDate }) {
   const [format, setFormat] = useState<string | null>('adp');
-  const [dateRange, setDateRange] = useState<[Date | null, Date | null]>([
-    dayjs().startOf('month').toDate(),
-    dayjs().endOf('month').toDate(),
+  // Default range: this month in the workspace's calendar (server-provided today).
+  const [dateRange, setDateRange] = useState<[CalendarDate | null, CalendarDate | null]>([
+    startOfMonth(today),
+    withDayOfMonth(today, daysInMonth(today)),
   ]);
   const [preview, setPreview] = useState<PreviewEmployee[] | null>(null);
   const [totalEntries, setTotalEntries] = useState(0);
@@ -167,8 +168,8 @@ export function PayrollExportClient() {
               placeholder="Select period..."
               value={dateRange}
               onChange={(value) => setDateRange([
-                value[0] ? new Date(value[0]) : null,
-                value[1] ? new Date(value[1]) : null,
+                value[0] && isCalendarDate(value[0]) ? value[0] : null,
+                value[1] && isCalendarDate(value[1]) ? value[1] : null,
               ])}
               leftSection={<IconCalendar size={16} />}
             />

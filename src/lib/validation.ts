@@ -4,6 +4,8 @@
  * Used as guards at the top of server action mutation functions.
  */
 
+import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+
 // ---------------------------------------------------------------------------
 // String Validators
 // ---------------------------------------------------------------------------
@@ -135,13 +137,12 @@ export function validateEnum<T extends string>(value: unknown, fieldName: string
 // Date Validator
 // ---------------------------------------------------------------------------
 
-export function validateOptionalDate(value: unknown, fieldName: string): Date | undefined {
+export function validateOptionalCalendarDate(value: unknown, fieldName: string): CalendarDate | undefined {
   if (value === null || value === undefined) return undefined;
-  const date = new Date(value as string | number | Date);
-  if (isNaN(date.getTime())) {
+  if (!isCalendarDate(value)) {
     throw new Error(`${fieldName} is not a valid date.`);
   }
-  return date;
+  return value;
 }
 
 // ---------------------------------------------------------------------------

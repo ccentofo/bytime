@@ -1,15 +1,20 @@
 'use server';
 
 import { getDb } from '@/db';
-import { timesheetEntries, userAssignments, clins, contracts, slins, indirectChargeCodes, chargeCodes, userChargeCodes, costClasses } from '@/db/schema';
+import { timesheetEntries, userAssignments, clins, contracts, slins, indirectChargeCodes, chargeCodes, userChargeCodes, costClasses, timesheetPeriods } from '@/db/schema';
 import { eq, and, gte, lt, desc, sql } from 'drizzle-orm';
-import dayjs from 'dayjs';
-import { getNumDaysInPeriod } from '@/lib/date-utils';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
 import { validateUUID, validateHours } from '@/lib/validation';
 import { requireSession, assertCanAccessEmployee } from '@/lib/session';
+import { isUniqueViolation } from '@/lib/db-errors';
 import { assertEntryDatesEditable, resolvePeriod } from '@/server/internal/periods';
+import { configAt, existingPeriodLength } from '@/server/internal/pay-period-config';
+import { getPeriodStatusFor, type PeriodStatus } from '@/server/internal/periods';
+import type { PeriodConfig } from '@/lib/date-utils';
 import { getEffectiveConfigAt } from '@/server/actions/pay-period-config';
+import { getWorkspaceToday } from '@/server/internal/workspace-settings';
+import { getNumDaysInPeriod } from '@/lib/date-utils';
+import { addDays, diffDays, isAfter, isBefore, formatCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 
 /**
  * Validate that a user has an active assignment to a specific charge code.
@@ -76,27 +81,68 @@ export async function getChargeCodesForUser(): Promise<ChargeCode[]> {
  * Returns the LATEST revision for each (chargeCodeId/indirectCodeId, entryDate) pair.
  */
 export async function getTimesheetEntries(
-  periodStart: Date,
+  periodStart: CalendarDate,
   chargeCodes_param: ChargeCode[]
 ): Promise<TimesheetEntry[]> {
   const actor = await requireSession();
   // R2-12: delegates to getTimesheetEntriesForEmployee rather than duplicating its query.
-  return getTimesheetEntriesForEmployee(actor.id, periodStart, chargeCodes_param);
+  return getTimesheetEntriesForEmployee(actor.id, parseCalendarDate(periodStart), chargeCodes_param);
 }
 
 /**
  * Get revision numbers for all cells in a period, for the session user.
  * Keys by chargeCodeId for direct entries, clinId as fallback, indirectCodeId for indirect.
+ * The period's length is resolved on the server (snapshot or schedule), never taken from the client.
  */
-export async function getRevisionMap(
-  periodStart: Date,
-  numDays: number
-): Promise<Record<string, number>> {
+export async function getRevisionMap(periodStart: CalendarDate): Promise<Record<string, number>> {
   const actor = await requireSession();
-  const userId = actor.id;
+  const start = parseCalendarDate(periodStart);
+  return revisionMapFor(actor.id, start, await periodLengthFor(actor.id, start));
+}
+
+/**
+ * Everything the timesheet screen needs for one period, resolved on the server in one call:
+ * its length and schedule, the session user's entries and revision numbers, and its status.
+ * The client does no schedule math; it renders exactly this.
+ */
+export async function getTimesheetPeriod(periodStart: CalendarDate): Promise<{
+  periodStart: CalendarDate;
+  numDays: number;
+  periodConfig: PeriodConfig;
+  entries: TimesheetEntry[];
+  revisions: Record<string, number>;
+  periodStatus: PeriodStatus;
+}> {
+  const actor = await requireSession();
+  const start = parseCalendarDate(periodStart);
   const db = await getDb();
-  const start = dayjs(periodStart);
-  const endDate = start.add(numDays, 'day');
+  const [numDays, periodConfig, chargeCodes, periodInfo] = await Promise.all([
+    periodLengthFor(actor.id, start),
+    configAt(db, start),
+    getChargeCodesForEmployee(actor.id),
+    getPeriodStatusFor(actor.id, start),
+  ]);
+  const [entries, revisions] = await Promise.all([
+    getTimesheetEntriesForEmployee(actor.id, start, chargeCodes),
+    revisionMapFor(actor.id, start, numDays),
+  ]);
+  return { periodStart: start, numDays, periodConfig, entries, revisions, periodStatus: periodInfo.status };
+}
+
+/** This employee's length for the period at `start`: their stored snapshot, else the schedule. */
+async function periodLengthFor(userId: string, start: CalendarDate): Promise<number> {
+  const db = await getDb();
+  const [periodRow] = await db
+    .select({ periodNumDays: timesheetPeriods.periodNumDays })
+    .from(timesheetPeriods)
+    .where(and(eq(timesheetPeriods.userId, userId), eq(timesheetPeriods.periodStart, start)))
+    .limit(1);
+  return existingPeriodLength(db, start, periodRow?.periodNumDays);
+}
+
+async function revisionMapFor(userId: string, start: CalendarDate, numDays: number): Promise<Record<string, number>> {
+  const db = await getDb();
+  const endDateExclusive = addDays(start, numDays);
 
   const rows = await db
     .select({
@@ -110,15 +156,15 @@ export async function getRevisionMap(
     .where(
       and(
         eq(timesheetEntries.userId, userId),
-        gte(timesheetEntries.entryDate, start.toDate()),
-        lt(timesheetEntries.entryDate, endDate.toDate()),
+        gte(timesheetEntries.entryDate, start),
+        lt(timesheetEntries.entryDate, endDateExclusive),
       )
     )
     .groupBy(timesheetEntries.chargeCodeId, timesheetEntries.clinId, timesheetEntries.indirectCodeId, timesheetEntries.entryDate);
 
   const revisionMap: Record<string, number> = {};
   for (const row of rows) {
-    const dayIndex = dayjs(row.entryDate).diff(start, 'day');
+    const dayIndex = diffDays(start, row.entryDate as CalendarDate);
     const entryId = row.chargeCodeId ?? row.clinId ?? row.indirectCodeId ?? '';
     const key = `${entryId}-${dayIndex}`;
     revisionMap[key] = row.maxRevision;
@@ -132,7 +178,7 @@ export async function getRevisionMap(
  * Preserves all write-path guards: period-lock, late-entry, reason-code enforcement.
  */
 export async function saveTimesheetBatch(data: {
-  periodStart: Date;
+  periodStart: CalendarDate;
   cells: Array<{
     chargeCodeId?: string;  // set for direct entries (new charge-code model)
     clinId?: string;        // DEPRECATED: set for legacy direct entries (backward compat)
@@ -151,15 +197,15 @@ export async function saveTimesheetBatch(data: {
   const actor = await requireSession();
   const userId = actor.id;
   const db = await getDb();
-  const start = dayjs(data.periodStart);
-  const today = dayjs().startOf('day');
+  const start = parseCalendarDate(data.periodStart);
+  const today = await getWorkspaceToday();
   const newRevisions: Record<string, number> = {};
 
-  // R2-2: period-lock integrity. `periodStart` must be a real period boundary and every
+  // R2-2 / D3: period-lock integrity. `periodStart` must be a real period boundary and every
   // dayIndex must land inside that period; then every entry DATE is checked against the user's
-  // locked periods by calendar day (assertEntryDatesEditable), so neither an out-of-range
-  // dayIndex nor a periodStart sent at an odd time of day can reach a certified period.
-  const { numDays } = await resolvePeriod(data.periodStart);
+  // locked periods (assertEntryDatesEditable), so neither an out-of-range dayIndex nor a
+  // periodStart from a stale period can reach a certified period.
+  const { numDays } = await resolvePeriod(start);
   for (const cell of data.cells) {
     if (!Number.isInteger(cell.dayIndex) || cell.dayIndex < 0 || cell.dayIndex >= numDays) {
       throw new Error(`Invalid day index ${cell.dayIndex} for this pay period.`);
@@ -168,12 +214,22 @@ export async function saveTimesheetBatch(data: {
 
   await assertEntryDatesEditable(
     userId,
-    data.cells.map((cell) => start.add(cell.dayIndex, 'day').toDate()),
+    data.cells.map((cell) => addDays(start, cell.dayIndex)),
     async (periodStart) => getNumDaysInPeriod(periodStart, await getEffectiveConfigAt(periodStart)),
   );
 
   validateUUID(userId, 'User ID');
   for (const cell of data.cells) {
+    // A cell is exactly ONE kind of code. A cell naming several would skip the charge-code
+    // assignment check (the indirect branch below returns early) while still storing the
+    // caller's charge code / CLIN, i.e. booking hours to a contract the user isn't assigned to.
+    const kinds = [cell.chargeCodeId, cell.clinId, cell.indirectCodeId].filter(Boolean).length;
+    if (kinds !== 1) {
+      throw new Error('Each timesheet cell must reference exactly one charge code, CLIN, or indirect code.');
+    }
+    if (cell.slinId && !cell.clinId) {
+      throw new Error('A SLIN can only be given with a legacy CLIN entry.');
+    }
     validateHours(cell.hours, 'Hours');
     if (cell.chargeCodeId) validateUUID(cell.chargeCodeId, 'Charge Code ID');
     if (cell.clinId) validateUUID(cell.clinId, 'CLIN ID');
@@ -181,17 +237,34 @@ export async function saveTimesheetBatch(data: {
   }
 
   for (const cell of data.cells) {
-    const entryDate = start.add(cell.dayIndex, 'day');
-    if (entryDate.isAfter(today, 'day')) {
-      throw new Error(`Cannot save hours for future date: ${entryDate.format('MMM D, YYYY')}`);
+    const entryDate = addDays(start, cell.dayIndex);
+    if (isAfter(entryDate, today)) {
+      throw new Error(`Cannot save hours for future date: ${formatCalendarDate(entryDate, 'MMM D, YYYY')}`);
     }
   }
 
   // Validate assignments and resolve denormalized clinId/slinId for direct entries
   const chargeCodeCache = new Map<string, { clinId: string; slinId: string | null }>();
 
+  const checkedIndirectCodes = new Set<string>();
   for (const cell of data.cells) {
-    if (cell.indirectCodeId) continue; // indirect — no assignment check needed
+    if (cell.indirectCodeId) {
+      // Indirect codes need no assignment, but must exist and be open to everyone — the same
+      // filter getChargeCodesForUser uses to offer them.
+      if (!checkedIndirectCodes.has(cell.indirectCodeId)) {
+        const [code] = await db.select({ id: indirectChargeCodes.id })
+          .from(indirectChargeCodes)
+          .where(and(
+            eq(indirectChargeCodes.id, cell.indirectCodeId),
+            eq(indirectChargeCodes.isActive, true),
+            eq(indirectChargeCodes.availableToAll, true),
+          ))
+          .limit(1);
+        if (!code) throw new Error(`Indirect code ${cell.indirectCodeId} is not available.`);
+        checkedIndirectCodes.add(cell.indirectCodeId);
+      }
+      continue;
+    }
 
     if (cell.chargeCodeId) {
       // New charge-code model: validate user_charge_codes assignment
@@ -207,6 +280,11 @@ export async function saveTimesheetBatch(data: {
     } else if (cell.clinId) {
       // Legacy CLIN-based path (backward compat)
       await validateClinAssignment(userId, cell.clinId);
+      if (cell.slinId) {
+        const [slin] = await db.select({ id: slins.id }).from(slins)
+          .where(and(eq(slins.id, cell.slinId), eq(slins.clinId, cell.clinId))).limit(1);
+        if (!slin) throw new Error(`SLIN ${cell.slinId} does not belong to CLIN ${cell.clinId}.`);
+      }
     }
   }
 
@@ -214,7 +292,7 @@ export async function saveTimesheetBatch(data: {
   if (!data.skipConflictCheck) {
     for (const cell of data.cells) {
       if (cell.expectedRevision === undefined) continue;
-      const entryDate = start.add(cell.dayIndex, 'day').toDate();
+      const entryDate = addDays(start, cell.dayIndex);
       const entryId = cell.chargeCodeId ?? cell.clinId ?? cell.indirectCodeId;
       if (!entryId) continue;
 
@@ -231,22 +309,22 @@ export async function saveTimesheetBatch(data: {
 
       const dbRevision = currentRevision[0]?.maxRevision ?? 0;
       if (dbRevision !== cell.expectedRevision) {
-        const dateLabel = dayjs(entryDate).format('MMM D, YYYY');
         throw new Error(
-          `Conflict detected: The entry for ${dateLabel} was modified by another session (expected revision ${cell.expectedRevision}, but server has revision ${dbRevision}). Please refresh your timesheet and re-enter your changes.`
+          `Conflict detected: The entry for ${formatCalendarDate(entryDate, 'MMM D, YYYY')} was modified by another session (expected revision ${cell.expectedRevision}, but server has revision ${dbRevision}). Please refresh your timesheet and re-enter your changes.`
         );
       }
     }
   }
 
   for (const cell of data.cells) {
-    const entryDate = start.add(cell.dayIndex, 'day').toDate();
+    const entryDate = addDays(start, cell.dayIndex);
     const entryKey = cell.chargeCodeId ?? cell.clinId ?? cell.indirectCodeId ?? '';
 
     // Resolve denormalized ids for direct entries
     const resolved = cell.chargeCodeId ? chargeCodeCache.get(cell.chargeCodeId) : null;
-    const effectiveClinId = resolved?.clinId ?? cell.clinId ?? null;
-    const effectiveSlinId = resolved?.slinId ?? cell.slinId ?? null;
+    // Charge-code cells take CLIN/SLIN only from the charge code itself, never from the caller.
+    const effectiveClinId = cell.chargeCodeId ? resolved!.clinId : (cell.clinId ?? null);
+    const effectiveSlinId = cell.chargeCodeId ? resolved!.slinId : (cell.slinId ?? null);
 
     const whereClause = cell.chargeCodeId
       ? and(eq(timesheetEntries.userId, userId), eq(timesheetEntries.chargeCodeId, cell.chargeCodeId), eq(timesheetEntries.entryDate, entryDate))
@@ -263,13 +341,13 @@ export async function saveTimesheetBatch(data: {
     const nextRevision = priorRevision + 1;
 
     const serverIsEdit = priorRevision > 0;
-    const serverIsLate = priorRevision === 0 && dayjs(entryDate).isBefore(today, 'day');
+    const serverIsLate = priorRevision === 0 && isBefore(entryDate, today);
     const requiresReason = serverIsEdit || serverIsLate;
 
     if (requiresReason) {
       const code = (data.changeReasonCode ?? '').trim();
       if (!code) {
-        const label = dayjs(entryDate).format('MMM D, YYYY');
+        const label = formatCalendarDate(entryDate, 'MMM D, YYYY');
         throw new Error(
           serverIsLate
             ? `A reason code is required for the late entry on ${label}.`
@@ -281,19 +359,32 @@ export async function saveTimesheetBatch(data: {
       if (!valid) throw new Error(`Invalid change reason code: ${code}`);
     }
 
-    await db.insert(timesheetEntries).values({
-      userId,
-      chargeCodeId: cell.chargeCodeId ?? null,          // new charge code id
-      clinId: effectiveClinId,                           // DENORMALIZED from charge code (preserves CLIN-based queries)
-      slinId: effectiveSlinId,
-      indirectCodeId: cell.indirectCodeId ?? null,
-      entryDate,
-      hours: cell.hours.toString(),
-      revisionNumber: nextRevision,
-      changeReasonCode: requiresReason ? (data.changeReasonCode ?? undefined) : undefined,
-      comment: requiresReason ? (data.comment ?? undefined) : undefined,
-      createdBy: userId,
-    });
+    // The new unique index (user, code, day, revision) can reject a genuine race — two
+    // concurrent saves both reading the same priorRevision and trying to insert the same
+    // nextRevision. Surface that as the existing conflict message rather than a raw DB error.
+    try {
+      await db.insert(timesheetEntries).values({
+        userId,
+        chargeCodeId: cell.chargeCodeId ?? null,          // new charge code id
+        clinId: effectiveClinId,                           // DENORMALIZED from charge code (preserves CLIN-based queries)
+        slinId: effectiveSlinId,
+        indirectCodeId: cell.indirectCodeId ?? null,
+        entryDate,
+        hours: cell.hours.toString(),
+        revisionNumber: nextRevision,
+        changeReasonCode: requiresReason ? (data.changeReasonCode ?? undefined) : undefined,
+        comment: requiresReason ? (data.comment ?? undefined) : undefined,
+        createdBy: userId,
+      });
+    } catch (err) {
+      // Another save inserted this cell's next revision between our read and our insert.
+      if (isUniqueViolation(err, 'entries_user_code_date_rev_unique_idx')) {
+        throw new Error(
+          `Conflict detected: The entry for ${formatCalendarDate(entryDate, 'MMM D, YYYY')} was modified by another session. Please refresh your timesheet and re-enter your changes.`
+        );
+      }
+      throw err;
+    }
 
     const key = `${entryKey}-${cell.dayIndex}`;
     newRevisions[key] = nextRevision;
@@ -307,12 +398,12 @@ export async function saveTimesheetBatch(data: {
  */
 export async function getTimesheetForReview(
   employeeId: string,
-  periodStart: Date
+  periodStart: CalendarDate
 ): Promise<{ chargeCodes: ChargeCode[]; entries: TimesheetEntry[] }> {
   const actor = await requireSession();
   await assertCanAccessEmployee(actor, employeeId);
   const codes = await getChargeCodesForEmployee(employeeId);
-  const entries = await getTimesheetEntriesForEmployee(employeeId, periodStart, codes);
+  const entries = await getTimesheetEntriesForEmployee(employeeId, parseCalendarDate(periodStart), codes);
   return { chargeCodes: codes, entries };
 }
 
@@ -408,13 +499,14 @@ async function getChargeCodesForEmployee(userId: string): Promise<ChargeCode[]> 
 
 async function getTimesheetEntriesForEmployee(
   userId: string,
-  periodStart: Date,
+  periodStart: CalendarDate,
   chargeCodes_param: ChargeCode[]
 ): Promise<TimesheetEntry[]> {
   const db = await getDb();
-  const numDays = getNumDaysInPeriod(periodStart);
-  const start = dayjs(periodStart);
-  const endDate = start.add(numDays, 'day');
+  // D3/§0.6: the period's REAL length (this employee's snapshot, else the schedule). Non-throwing:
+  // reading must work for any stored period, including imported history.
+  const numDays = await periodLengthFor(userId, periodStart);
+  const endDateExclusive = addDays(periodStart, numDays);
 
   const rows = await db
     .select({
@@ -429,15 +521,15 @@ async function getTimesheetEntriesForEmployee(
     .where(
       and(
         eq(timesheetEntries.userId, userId),
-        gte(timesheetEntries.entryDate, start.toDate()),
-        lt(timesheetEntries.entryDate, endDate.toDate()),
+        gte(timesheetEntries.entryDate, periodStart),
+        lt(timesheetEntries.entryDate, endDateExclusive),
       )
     )
     .orderBy(timesheetEntries.chargeCodeId, timesheetEntries.entryDate, desc(timesheetEntries.revisionNumber));
 
   const latestHours = new Map<string, number>();
   for (const row of rows) {
-    const dayIndex = dayjs(row.entryDate).diff(start, 'day');
+    const dayIndex = diffDays(periodStart, row.entryDate as CalendarDate);
     const entryId = row.chargeCodeId ?? row.clinId ?? row.indirectCodeId ?? '';
     const key = `${entryId}-${dayIndex}`;
     if (!latestHours.has(key)) {

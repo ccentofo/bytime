@@ -64,6 +64,35 @@ describe('/api/v1/costs (R2-4)', () => {
     expect(Array.isArray(body.data)).toBe(true);
   });
 
+  // D6: public API v1 date fields are plain 'YYYY-MM-DD' calendar-date strings, never a
+  // Date/ISO-instant — documents the contract and catches a regression back to the old model.
+  it('returns entryDate as a YYYY-MM-DD string, not an ISO instant', async () => {
+    const db = getTestDb();
+    const contract = await createTestContract();
+    const clin = await createTestClin(contract.id);
+    const employee = await createTestUser({ role: 'employee' });
+
+    await db.insert(schema.timesheetEntries).values({
+      userId: employee.id,
+      clinId: clin.id,
+      entryDate: '2026-01-15',
+      hours: '8',
+      revisionNumber: 1,
+      createdBy: employee.id,
+    });
+
+    const request = new Request(
+      'http://localhost:3000/api/v1/costs?startDate=2026-01-01&endDate=2026-01-31',
+      { headers: { Authorization: `Bearer ${rawKey}`, 'x-forwarded-for': '203.0.113.24' } }
+    );
+    const response = await GET(request as any);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].entryDate).toBe('2026-01-15');
+    expect(body.data[0].entryDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
   it('returns 401 for a missing Authorization header', async () => {
     const request = new Request(
       'http://localhost:3000/api/v1/costs?startDate=2026-01-01&endDate=2026-01-31',

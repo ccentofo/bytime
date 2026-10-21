@@ -17,9 +17,10 @@ import {
   indirectChargeCodes,
 } from '@/db/schema';
 import { eq, and, gte, lt, sql } from 'drizzle-orm';
-import dayjs from 'dayjs';
 import { decrypt } from '@/lib/encryption';
 import { getConnector } from './registry';
+import { existingPeriodLength } from '@/server/internal/pay-period-config';
+import { addDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import type { SyncContext, TimesheetSyncEntry, SyncResult } from './types';
 
 /**
@@ -27,24 +28,26 @@ import type { SyncContext, TimesheetSyncEntry, SyncResult } from './types';
  * Only returns entries from approved periods (DCAA requirement).
  */
 export async function getApprovedEntriesForSync(
-  periodStart: Date,
-  periodEnd: Date
+  periodStart: CalendarDate,
+  periodEnd: CalendarDate
 ): Promise<TimesheetSyncEntry[]> {
   const db = await getDb();
-  const endExclusive = dayjs(periodEnd).add(1, 'day').toDate();
+  const start = parseCalendarDate(periodStart);
+  const endExclusive = addDays(parseCalendarDate(periodEnd), 1);
 
   // Get approved periods in the range
   const approvedPeriods = await db
     .select({
       userId: timesheetPeriods.userId,
       periodStart: timesheetPeriods.periodStart,
+      periodNumDays: timesheetPeriods.periodNumDays,
       approvedAt: timesheetPeriods.reviewedAt,
     })
     .from(timesheetPeriods)
     .where(
       and(
         eq(timesheetPeriods.status, 'approved'),
-        gte(timesheetPeriods.periodStart, periodStart),
+        gte(timesheetPeriods.periodStart, start),
         lt(timesheetPeriods.periodStart, endExclusive),
       )
     );
@@ -54,8 +57,12 @@ export async function getApprovedEntriesForSync(
   const entries: TimesheetSyncEntry[] = [];
 
   for (const period of approvedPeriods) {
-    const numDays = dayjs(period.periodStart).date() === 1 ? 15 : dayjs(period.periodStart).daysInMonth() - 15;
-    const pEnd = dayjs(period.periodStart).add(numDays, 'day').toDate();
+    const pStart = period.periodStart as CalendarDate;
+    // D3/D6 §0.6: this period's REAL length from its effective config, never a hard-coded
+    // semimonthly (1st/16th) assumption — a weekly or biweekly tenant would otherwise have its
+    // sync window silently truncated or overrun.
+    const numDays = await existingPeriodLength(db, pStart, period.periodNumDays);
+    const pEndExclusive = addDays(pStart, numDays);
 
     const rows = await db
       .select({
@@ -81,15 +88,15 @@ export async function getApprovedEntriesForSync(
       .where(
         and(
           eq(timesheetEntries.userId, period.userId),
-          gte(timesheetEntries.entryDate, period.periodStart),
-          lt(timesheetEntries.entryDate, pEnd),
+          gte(timesheetEntries.entryDate, pStart),
+          lt(timesheetEntries.entryDate, pEndExclusive),
           eq(
             timesheetEntries.revisionNumber,
             sql`(
               SELECT MAX(te2.revision_number)
               FROM timesheet_entries te2
               WHERE te2.user_id = ${timesheetEntries.userId}
-                AND COALESCE(te2.clin_id, te2.indirect_code_id) = COALESCE(${timesheetEntries.clinId}, ${timesheetEntries.indirectCodeId})
+                AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                 AND te2.entry_date = ${timesheetEntries.entryDate}
             )`
           ),
@@ -104,7 +111,7 @@ export async function getApprovedEntriesForSync(
         userId: row.userId,
         employeeName: row.employeeName,
         employeeEmail: row.employeeEmail,
-        entryDate: row.entryDate,
+        entryDate: row.entryDate as CalendarDate,
         hours,
         chargeCodeId: row.clinId ?? row.indirectCodeId ?? '',
         chargeCodeLabel: row.clinId
@@ -115,7 +122,7 @@ export async function getApprovedEntriesForSync(
         clinNumber: row.clinNumber ?? undefined,
         indirectCode: row.indirectCode ?? undefined,
         isBillable: row.clinId !== null,
-        periodStart: period.periodStart,
+        periodStart: pStart,
         approvedAt: period.approvedAt,
       });
     }
@@ -131,8 +138,8 @@ export async function getApprovedEntriesForSync(
 export async function executeSyncOperation(
   connectionId: string,
   syncType: string,
-  periodStart: Date,
-  periodEnd: Date,
+  periodStart: CalendarDate,
+  periodEnd: CalendarDate,
   triggeredBy: string | null,
   triggerType: 'manual' | 'auto' | 'retry' = 'manual'
 ): Promise<{ syncLogId: string; result: SyncResult }> {

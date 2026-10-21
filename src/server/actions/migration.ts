@@ -1,9 +1,12 @@
 'use server';
 
+import { isUniqueViolation } from '@/lib/db-errors';
+import { resolvePeriod } from '@/server/internal/periods';
 import { getDb } from '@/db';
 import { timesheetEntries, timesheetPeriods, users, contracts, clins, indirectChargeCodes } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
+import { parseCalendarDate } from '@/lib/calendar-date';
 
 export interface MigrationEntryRow {
   employeeEmail: string;
@@ -145,7 +148,7 @@ export async function importMigrationData(
 
   for (const row of validRows) {
     try {
-      const entryDate = new Date(row.data.entryDate.trim());
+      const entryDate = parseCalendarDate(row.data.entryDate.trim());
       const hours = parseFloat(row.data.hours);
       const createdAt = row.data.createdAt?.trim()
         ? new Date(row.data.createdAt.trim())
@@ -166,7 +169,14 @@ export async function importMigrationData(
 
       result.imported++;
     } catch (error) {
-      result.errors.push({ row: row.rowIndex, message: String(error) });
+      result.errors.push({
+        row: row.rowIndex,
+        // Never surface raw SQL (it includes every parameter) to the admin.
+        message: isUniqueViolation(error, 'entries_user_code_date_rev_unique_idx')
+          ? `An entry for this employee, code and date (${row.data.entryDate}) already exists.`
+          : 'Could not import this row.',
+      });
+      if (!isUniqueViolation(error)) console.error('Migration import row failed:', error);
     }
   }
 
@@ -212,9 +222,25 @@ export async function importMigrationPeriods(
         ? row.status.toLowerCase() as 'draft' | 'submitted' | 'approved' | 'rejected'
         : 'draft';
 
+      // Must be a real period of this workspace's pay schedule, and is stored with its length
+      // snapshot like every other period, so later readers never have to re-derive it.
+      const periodStart = parseCalendarDate(row.periodStart.trim());
+      let resolved: Awaited<ReturnType<typeof resolvePeriod>>;
+      try {
+        resolved = await resolvePeriod(periodStart);
+      } catch {
+        result.errors.push({
+          row: i + 1,
+          message: `${row.periodStart} is not a period start under this workspace's pay schedule. Set the pay schedule in Settings before importing periods.`,
+        });
+        continue;
+      }
+
       await db.insert(timesheetPeriods).values({
         userId,
-        periodStart: new Date(row.periodStart.trim()),
+        periodStart,
+        periodType: resolved.config.periodType,
+        periodNumDays: resolved.numDays,
         status,
         submittedAt: row.submittedAt?.trim() ? new Date(row.submittedAt.trim()) : null,
         submittedComment: null,
@@ -225,7 +251,8 @@ export async function importMigrationPeriods(
 
       result.imported++;
     } catch (error) {
-      result.errors.push({ row: i + 1, message: String(error) });
+      console.error('Migration period import row failed:', error);
+      result.errors.push({ row: i + 1, message: 'Could not import this row.' });
     }
   }
 

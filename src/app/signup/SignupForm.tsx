@@ -50,7 +50,10 @@ export function SignupForm({ errorParam }: { errorParam?: string }) {
     e.preventDefault();
     setError('');
     setLoading(true);
-    const result = await startSignup({ companyName, email, slug: slug || undefined });
+    // D8: capture the signer's browser timezone so the new tenant's workspace starts configured
+    // for the right zone instead of the generic default. Best-effort — undefined if unsupported.
+    const timezone = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined;
+    const result = await startSignup({ companyName, email, slug: slug || undefined, timezone });
     setLoading(false);
     if (result.success) {
       setSuccess(true);

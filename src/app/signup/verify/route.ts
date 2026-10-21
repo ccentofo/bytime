@@ -131,6 +131,7 @@ export async function POST(req: NextRequest) {
     name: row.companyName,
     adminEmail: email,
     adminName: email.split('@')[0],
+    timezone: row.timezone ?? undefined,
   });
 
   // Mark signup consumed — happens AFTER provisioning so a crash before here allows retry

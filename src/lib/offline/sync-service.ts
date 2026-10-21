@@ -1,6 +1,7 @@
 import { offlineDb } from './db';
 import { saveTimesheetBatch } from '@/server/actions/timesheet';
 import dayjs from 'dayjs';
+import type { CalendarDate } from '@/lib/calendar-date';
 
 // ---------------------------------------------------------------------------
 // Sync Configuration
@@ -141,8 +142,11 @@ async function syncPendingEntries(): Promise<boolean> {
     }
 
     // Sync each period batch
+    // TODO(D4): periodStart above is still derived from a hard-coded semimonthly (1st/16th)
+    // assumption (§0.6) — the offline store is dormant until D4 wires it to the server's real
+    // period boundaries (getPeriodOptions), so this stays a known gap rather than a live bug.
     for (const [periodStartStr, items] of byPeriod.entries()) {
-      const periodStart = dayjs(periodStartStr).toDate();
+      const periodStart = periodStartStr as CalendarDate;
 
       // Determine if we need a reason code (any edits or late entries?)
       const hasEditsOrLate = items.some((i) => i.isEdit || i.isLateEntry);
