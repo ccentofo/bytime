@@ -4,7 +4,7 @@ import { timesheetPeriods } from '@/db/schema';
 import { eq, and, gte, lte, inArray } from 'drizzle-orm';
 import { getNumDaysInPeriod, getPeriodStartForDate, type PeriodConfig } from '@/lib/date-utils';
 import { addDays, compare, isBefore, isAfter, type CalendarDate } from '@/lib/calendar-date';
-import { getEffectiveConfigAt } from '@/server/actions/pay-period-config';
+import { configAt } from '@/server/internal/pay-period-config';
 
 export type PeriodStatus = 'draft' | 'submitted' | 'approved' | 'rejected';
 
@@ -125,7 +125,8 @@ export async function assertEntryDatesEditable(
  * started under the old one" to special-case; every day belongs to exactly one period.
  */
 export async function resolvePeriod(periodStart: CalendarDate): Promise<{ config: PeriodConfig; numDays: number }> {
-  const config = await getEffectiveConfigAt(periodStart);
+  // Session-free lookup: API-key routes and crons call this too, and they have no user session.
+  const config = await configAt(await getDb(), periodStart);
   if (compare(getPeriodStartForDate(periodStart, config), periodStart) === 0) {
     return { config, numDays: getNumDaysInPeriod(periodStart, config) };
   }

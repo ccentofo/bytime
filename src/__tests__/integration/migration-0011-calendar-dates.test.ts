@@ -1,120 +1,76 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import fs from 'fs';
+import path from 'path';
 import postgres from 'postgres';
 
 // ---------------------------------------------------------------------------
-// feature-plan-calendar-dates.md D2 — migration 0011 core SQL logic.
+// feature-plan-calendar-dates.md D2 — runs the REAL drizzle/0011 migration file.
 //
-// Exercises the exact UTC+12h conversion, duplicate-period guard, and revision
-// renumbering logic from drizzle/0011_solid_gideon.sql against an ISOLATED
-// Postgres schema built with minimal, FK-free versions of just the two tables
-// those statements touch (timesheet_periods, timesheet_entries). This is
-// deliberate, not a shortcut: running the actual migration file requires the
-// database to be at the pre-0011 schema version, but every other integration
-// test's shared setup (setup-db.ts) migrates straight through to the latest
-// migration before any test runs — there's no supported way to "rewind" one
-// shared test database to an intermediate schema version without either a
-// second disposable database or hand-rolled migration-state surgery. Testing
-// the same SQL expressions against a reduced, isolated schema gives equivalent
-// coverage of the logic that matters (the rounding formula, the duplicate
-// check, the window-function renumbering) without either of those.
+// The shared test database is already migrated to the latest version, so each case builds a
+// scratch Postgres schema, replays the real migrations 0000–0010 into it (unqualified names
+// resolve to it via search_path; the few explicit "public". qualifiers are rewritten), seeds
+// rows the way the pre-0011 app wrote them, then applies the real 0011 file. Editing the
+// migration's conversions, guards, or renumbering changes what these tests observe.
 // ---------------------------------------------------------------------------
 
 const TEST_DB_URL = process.env.TEST_DATABASE_URL
   ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime_test';
-
-let sql: ReturnType<typeof postgres>;
+const DRIZZLE_DIR = path.resolve(__dirname, '../../../drizzle');
 const SCHEMA = 'migration_0011_test';
 
-async function resetSchema() {
+type Journal = { entries: Array<{ idx: number; tag: string }> };
+const journal: Journal = JSON.parse(fs.readFileSync(path.join(DRIZZLE_DIR, 'meta/_journal.json'), 'utf8'));
+
+function migrationChunks(idx: number): string[] {
+  const entry = journal.entries.find((e) => e.idx === idx);
+  if (!entry) throw new Error(`No migration with idx ${idx}`);
+  const raw = fs.readFileSync(path.join(DRIZZLE_DIR, `${entry.tag}.sql`), 'utf8');
+  return raw
+    .split('--> statement-breakpoint')
+    .map((chunk) => chunk.replaceAll('"public".', `"${SCHEMA}".`).trim())
+    .filter(Boolean);
+}
+
+let sql: ReturnType<typeof postgres>;
+
+/** Fresh scratch schema at the pre-0011 version (0000–0010 applied). */
+async function schemaAtVersion10() {
   await sql.unsafe(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
   await sql.unsafe(`CREATE SCHEMA ${SCHEMA}`);
-  await sql.unsafe(`
-    CREATE TABLE ${SCHEMA}.timesheet_periods (
-      id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-      user_id uuid NOT NULL,
-      period_start timestamp with time zone NOT NULL,
-      status text NOT NULL DEFAULT 'draft'
-    );
-    CREATE TABLE ${SCHEMA}.timesheet_entries (
-      id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-      user_id uuid NOT NULL,
-      clin_id uuid,
-      indirect_code_id uuid,
-      charge_code_id uuid,
-      entry_date timestamp with time zone NOT NULL,
-      revision_number integer NOT NULL DEFAULT 1,
-      created_at timestamp with time zone NOT NULL DEFAULT now()
-    );
-  `);
+  await sql.unsafe(`SET search_path TO ${SCHEMA}`);
+  for (let idx = 0; idx <= 10; idx++) {
+    for (const chunk of migrationChunks(idx)) await sql.unsafe(chunk);
+  }
 }
 
-/** The exact renumbering statement from drizzle/0011_solid_gideon.sql, schema-qualified. */
-async function runRevisionRenumbering() {
-  await sql.unsafe(`
-    WITH ranked AS (
-      SELECT
-        id,
-        ROW_NUMBER() OVER (
-          PARTITION BY
-            user_id,
-            COALESCE(charge_code_id, indirect_code_id, clin_id),
-            ((entry_date AT TIME ZONE 'UTC') + interval '12 hours')::date
-          ORDER BY created_at, revision_number, id
-        ) AS new_revision_number
-      FROM ${SCHEMA}.timesheet_entries
-    )
-    UPDATE ${SCHEMA}.timesheet_entries
-    SET revision_number = ranked.new_revision_number
-    FROM ranked
-    WHERE ${SCHEMA}.timesheet_entries.id = ranked.id
-      AND ${SCHEMA}.timesheet_entries.revision_number IS DISTINCT FROM ranked.new_revision_number;
-  `);
+/** Applies the real 0011 file in one transaction, like Drizzle's migrator does. */
+async function applyMigration11() {
+  await sql.begin(async (tx) => {
+    await tx.unsafe(`SET LOCAL search_path TO ${SCHEMA}`);
+    for (const chunk of migrationChunks(11)) await tx.unsafe(chunk);
+  });
 }
 
-/** The exact duplicate-period guard from drizzle/0011_solid_gideon.sql, schema-qualified. */
-async function runDuplicatePeriodGuard(): Promise<void> {
-  await sql.unsafe(`
-    DO $$
-    DECLARE
-      conflict_summary text;
-    BEGIN
-      SELECT string_agg(
-        format('user_id=%s day=%s (%s colliding periods)', user_id, day, cnt),
-        '; '
-      )
-      INTO conflict_summary
-      FROM (
-        SELECT
-          user_id,
-          ((period_start AT TIME ZONE 'UTC') + interval '12 hours')::date AS day,
-          COUNT(*) AS cnt
-        FROM ${SCHEMA}.timesheet_periods
-        GROUP BY user_id, ((period_start AT TIME ZONE 'UTC') + interval '12 hours')::date
-        HAVING COUNT(*) > 1
-      ) AS dupes;
-
-      IF conflict_summary IS NOT NULL THEN
-        RAISE EXCEPTION 'duplicate timesheet_periods rows collide on the same calendar day after UTC+12h conversion — %', conflict_summary;
-      END IF;
-    END $$;
-  `);
+async function columnType(table: string, column: string): Promise<string> {
+  const [row] = await sql`
+    SELECT data_type FROM information_schema.columns
+    WHERE table_schema = ${SCHEMA} AND table_name = ${table} AND column_name = ${column}`;
+  return row?.data_type;
 }
 
-async function runTypeChange(table: string, column: string) {
-  await sql.unsafe(`
-    ALTER TABLE ${SCHEMA}.${table}
-    ALTER COLUMN ${column} SET DATA TYPE date
-    USING ((${column} AT TIME ZONE 'UTC') + interval '12 hours')::date;
-  `);
+/** Minimal reference rows the seeded entries point at. */
+async function seedReferences() {
+  const [user] = await sql`INSERT INTO users (email, full_name) VALUES ('m@example.com', 'Migration User') RETURNING id`;
+  const [contract] = await sql`INSERT INTO contracts (contract_number, name) VALUES ('C-1', 'Contract') RETURNING id`;
+  const [clin] = await sql`INSERT INTO clins (contract_id, clin_number) VALUES (${contract.id}, '0001') RETURNING id`;
+  const [code] = await sql`INSERT INTO charge_codes (code, name, clin_id) VALUES ('CC-1', 'Code', ${clin.id}) RETURNING id`;
+  const [indirect] = await sql`INSERT INTO indirect_charge_codes (code, name, category) VALUES ('PTO', 'Leave', 'leave') RETURNING id`;
+  return { userId: user.id as string, clinId: clin.id as string, chargeCodeId: code.id as string, indirectId: indirect.id as string };
 }
 
-const USER_A = '11111111-1111-1111-1111-111111111111';
-const CODE_A = '22222222-2222-2222-2222-222222222222';
-
-describe('Migration 0011 core SQL logic (calendar-dates D2)', () => {
+describe.skipIf(!TEST_DB_URL)('migration 0011 (real file): calendar-date conversion', () => {
   beforeAll(async () => {
-    sql = postgres(TEST_DB_URL, { max: 1 });
-    await sql.unsafe(`CREATE EXTENSION IF NOT EXISTS pgcrypto`); // gen_random_uuid()
+    sql = postgres(TEST_DB_URL, { max: 1, onnotice: () => {} });
   });
 
   afterAll(async () => {
@@ -122,121 +78,102 @@ describe('Migration 0011 core SQL logic (calendar-dates D2)', () => {
     await sql.end();
   });
 
-  it('converts all three historical midnight conventions to the SAME correct calendar day', async () => {
-    await resetSchema();
+  it('converts every stored convention to the intended calendar day and repairs split revision chains', async () => {
+    await schemaAtVersion10();
+    const ref = await seedReferences();
 
-    // Three ways "Nov 1" has been stored: UTC midnight, US-Eastern midnight before DST ended
-    // (UTC-4, so 04:00Z), and US-Eastern midnight after DST ended (UTC-5, so 05:00Z).
-    await sql.unsafe(`
-      INSERT INTO ${SCHEMA}.timesheet_entries (user_id, charge_code_id, entry_date, revision_number)
-      VALUES
-        ('${USER_A}', '${CODE_A}', '2026-11-01T00:00:00Z', 1),
-        ('${USER_A}', '${CODE_A}', '2026-11-02T04:00:00Z', 1),
-        ('${USER_A}', '${CODE_A}', '2026-11-03T05:00:00Z', 1);
-    `);
+    // Periods saved by the server (UTC midnight), a US browser (04:00Z), and post-DST (05:00Z).
+    await sql`INSERT INTO timesheet_periods (user_id, period_start, status) VALUES
+      (${ref.userId}, '2026-10-01T00:00:00Z', 'approved'),
+      (${ref.userId}, '2026-10-16T04:00:00Z', 'submitted'),
+      (${ref.userId}, '2026-11-16T05:00:00Z', 'draft')`;
 
-    await runTypeChange('timesheet_entries', 'entry_date');
+    // One charge-code cell (with its denormalized clin_id) saved under two conventions: two
+    // "revision 1" rows for the same day. The 04:00Z save is the later one.
+    await sql`INSERT INTO timesheet_entries (user_id, charge_code_id, clin_id, entry_date, hours, revision_number, created_at) VALUES
+      (${ref.userId}, ${ref.chargeCodeId}, ${ref.clinId}, '2026-10-05T00:00:00Z', '8', 1, '2026-10-05T15:00:00Z'),
+      (${ref.userId}, ${ref.chargeCodeId}, ${ref.clinId}, '2026-10-05T04:00:00Z', '6', 1, '2026-10-05T18:00:00Z')`;
+    // A legacy CLIN-only row and an indirect row on the same day: different cells, untouched.
+    await sql`INSERT INTO timesheet_entries (user_id, clin_id, entry_date, hours, revision_number) VALUES
+      (${ref.userId}, ${ref.clinId}, '2026-10-05T04:00:00Z', '1', 1)`;
+    await sql`INSERT INTO timesheet_entries (user_id, indirect_code_id, entry_date, hours, revision_number) VALUES
+      (${ref.userId}, ${ref.indirectId}, '2026-10-05T00:00:00Z', '2', 1)`;
 
-    const rows = await sql.unsafe(`SELECT entry_date::text FROM ${SCHEMA}.timesheet_entries ORDER BY entry_date`);
-    expect(rows.map((r: any) => r.entry_date)).toEqual(['2026-11-01', '2026-11-02', '2026-11-03']);
+    // Labor-category assignments: one ended with "End assignment" (a real now() instant), one
+    // ended with a date-picker value (exact UTC midnight, which excluded that day).
+    const [lcat] = await sql`INSERT INTO labor_categories (clin_id, lcat_code, title) VALUES (${ref.clinId}, 'SWE3', 'Engineer') RETURNING id`;
+    await sql`INSERT INTO user_labor_categories (user_id, labor_category_id, effective_date, end_date) VALUES
+      (${ref.userId}, ${lcat.id}, '2026-01-01T00:00:00Z', '2026-10-21T22:30:00Z'),
+      (${ref.userId}, ${lcat.id}, '2026-11-01T00:00:00Z', '2026-12-01T00:00:00Z')`;
+
+    // A sync log whose end is end-of-October in a US browser (early Nov 1 in UTC).
+    const [conn] = await sql`INSERT INTO integration_connections (provider, display_name, connected_by) VALUES ('quickbooks_online', 'QBO', ${ref.userId}) RETURNING id`;
+    await sql`INSERT INTO integration_sync_logs (connection_id, sync_type, period_start, period_end) VALUES
+      (${conn.id}, 'timesheet_push', '2026-08-01T04:00:00Z', '2026-11-01T03:59:59.999Z')`;
+
+    await sql`INSERT INTO pay_period_config (period_type, anchor_date, week_start_day, effective_from) VALUES
+      ('semimonthly', '2026-01-01T00:00:00Z', 1, '1900-01-01T00:00:00Z')`;
+
+    const entriesBefore = await sql`SELECT count(*)::int AS n FROM timesheet_entries`;
+
+    await applyMigration11();
+
+    for (const [table, column] of [
+      ['timesheet_periods', 'period_start'], ['timesheet_entries', 'entry_date'],
+      ['pay_period_config', 'anchor_date'], ['pay_period_config', 'effective_from'],
+      ['contracts', 'start_date'], ['contracts', 'end_date'],
+      ['user_labor_categories', 'effective_date'], ['user_labor_categories', 'end_date'],
+      ['integration_sync_logs', 'period_start'], ['integration_sync_logs', 'period_end'],
+    ]) {
+      expect(await columnType(table, column), `${table}.${column}`).toBe('date');
+    }
+
+    const periods = await sql`SELECT period_start::text AS d FROM timesheet_periods ORDER BY period_start`;
+    expect(periods.map((p) => p.d)).toEqual(['2026-10-01', '2026-10-16', '2026-11-16']);
+
+    // No row lost; the split chain is one chain ordered by created_at (the later save is rev 2).
+    const entriesAfter = await sql`SELECT count(*)::int AS n FROM timesheet_entries`;
+    expect(entriesAfter[0].n).toBe(entriesBefore[0].n);
+    const chain = await sql`
+      SELECT entry_date::text AS d, hours, revision_number AS rev FROM timesheet_entries
+      WHERE charge_code_id = ${ref.chargeCodeId} ORDER BY revision_number`;
+    expect(chain.map((r) => [r.d, r.hours, r.rev])).toEqual([['2026-10-05', '8', 1], ['2026-10-05', '6', 2]]);
+    const others = await sql`
+      SELECT revision_number AS rev FROM timesheet_entries WHERE charge_code_id IS NULL ORDER BY hours`;
+    expect(others.map((r) => r.rev)).toEqual([1, 1]);
+
+    // Labor-category end dates become the INCLUSIVE last day.
+    const lcatEnds = await sql`SELECT end_date::text AS d FROM user_labor_categories ORDER BY effective_date`;
+    expect(lcatEnds.map((r) => r.d)).toEqual(['2026-10-21', '2026-11-30']);
+
+    const [sync] = await sql`SELECT period_start::text AS s, period_end::text AS e FROM integration_sync_logs`;
+    expect([sync.s, sync.e]).toEqual(['2026-08-01', '2026-10-31']);
+
+    const [config] = await sql`SELECT effective_from::text AS d FROM pay_period_config`;
+    expect(config.d).toBe('1900-01-01');
+
+    const [settings] = await sql`SELECT timezone FROM workspace_settings`;
+    expect(settings.timezone).toBe('America/New_York');
+
+    // The new per-cell revision uniqueness is in force.
+    await expect(sql`INSERT INTO timesheet_entries (user_id, charge_code_id, clin_id, entry_date, hours, revision_number)
+      VALUES (${ref.userId}, ${ref.chargeCodeId}, ${ref.clinId}, '2026-10-05', '9', 2)`).rejects.toMatchObject({ code: '23505' });
   });
 
-  it('renumbers a same-day duplicate revision chain without losing any row', async () => {
-    await resetSchema();
+  it('fails closed, changing nothing, when two periods collapse onto one calendar day', async () => {
+    await schemaAtVersion10();
+    const ref = await seedReferences();
+    await sql`INSERT INTO timesheet_periods (user_id, period_start, status) VALUES
+      (${ref.userId}, '2026-10-01T00:00:00Z', 'submitted'),
+      (${ref.userId}, '2026-10-01T04:00:00Z', 'draft')`;
 
-    // The bug: the same cell saved as revision 1 under TWO conventions for what is really one
-    // calendar day (Nov 1), plus a legitimate, already-correct revision 2 created afterward.
-    await sql.unsafe(`
-      INSERT INTO ${SCHEMA}.timesheet_entries (user_id, charge_code_id, entry_date, revision_number, created_at)
-      VALUES
-        ('${USER_A}', '${CODE_A}', '2026-11-01T00:00:00Z', 1, '2026-11-01T10:00:00Z'),
-        ('${USER_A}', '${CODE_A}', '2026-11-01T04:00:00Z', 1, '2026-11-01T12:00:00Z'),
-        ('${USER_A}', '${CODE_A}', '2026-11-01T04:00:00Z', 2, '2026-11-01T14:00:00Z');
-    `);
+    await expect(applyMigration11()).rejects.toThrow(/duplicate timesheet_periods rows collide/);
 
-    const beforeCount = await sql.unsafe(`SELECT COUNT(*)::int AS n FROM ${SCHEMA}.timesheet_entries`);
-    expect(beforeCount[0].n).toBe(3);
-
-    await runRevisionRenumbering();
-    await runTypeChange('timesheet_entries', 'entry_date');
-
-    const afterCount = await sql.unsafe(`SELECT COUNT(*)::int AS n FROM ${SCHEMA}.timesheet_entries`);
-    expect(afterCount[0].n).toBe(3); // no row lost
-
-    const rows = await sql.unsafe(`
-      SELECT revision_number, entry_date::text FROM ${SCHEMA}.timesheet_entries ORDER BY revision_number
-    `);
-    expect(rows.map((r: any) => r.revision_number)).toEqual([1, 2, 3]);
-    expect(rows.every((r: any) => r.entry_date === '2026-11-01')).toBe(true);
-
-    // The new unique index target — (user, code, day, revision) — would now accept all three
-    // rows without a conflict, which is exactly the point: distinct revision numbers per day.
-    const distinctRevisions = new Set(rows.map((r: any) => r.revision_number));
-    expect(distinctRevisions.size).toBe(3);
-  });
-
-  it('leaves an already-correct revision chain unchanged (renumbering is a no-op for clean data)', async () => {
-    await resetSchema();
-
-    await sql.unsafe(`
-      INSERT INTO ${SCHEMA}.timesheet_entries (user_id, charge_code_id, entry_date, revision_number, created_at)
-      VALUES
-        ('${USER_A}', '${CODE_A}', '2026-11-01T00:00:00Z', 1, '2026-11-01T10:00:00Z'),
-        ('${USER_A}', '${CODE_A}', '2026-11-01T00:00:00Z', 2, '2026-11-01T12:00:00Z');
-    `);
-
-    await runRevisionRenumbering();
-
-    const rows = await sql.unsafe(`
-      SELECT revision_number FROM ${SCHEMA}.timesheet_entries ORDER BY revision_number
-    `);
-    expect(rows.map((r: any) => r.revision_number)).toEqual([1, 2]);
-  });
-
-  it('fails closed on a same-day duplicate PERIOD instead of silently merging or picking one', async () => {
-    await resetSchema();
-
-    // Two periods for the same user that both round to Nov 1 under the +12h conversion.
-    await sql.unsafe(`
-      INSERT INTO ${SCHEMA}.timesheet_periods (user_id, period_start, status)
-      VALUES
-        ('${USER_A}', '2026-11-01T00:00:00Z', 'draft'),
-        ('${USER_A}', '2026-11-01T04:00:00Z', 'submitted');
-    `);
-
-    await expect(runDuplicatePeriodGuard()).rejects.toThrow(/duplicate timesheet_periods rows collide/i);
-
-    // Fail-closed: the type change must not be attempted / must not have silently succeeded.
-    const rows = await sql.unsafe(`SELECT COUNT(*)::int AS n FROM ${SCHEMA}.timesheet_periods`);
-    expect(rows[0].n).toBe(2); // both rows still present, untouched
-  });
-
-  it('does not false-positive on two periods for the same user on genuinely different days', async () => {
-    await resetSchema();
-
-    await sql.unsafe(`
-      INSERT INTO ${SCHEMA}.timesheet_periods (user_id, period_start, status)
-      VALUES
-        ('${USER_A}', '2026-11-01T00:00:00Z', 'draft'),
-        ('${USER_A}', '2026-11-16T00:00:00Z', 'draft');
-    `);
-
-    await expect(runDuplicatePeriodGuard()).resolves.toBeUndefined();
-    await runTypeChange('timesheet_periods', 'period_start');
-
-    const rows = await sql.unsafe(`SELECT period_start::text FROM ${SCHEMA}.timesheet_periods ORDER BY period_start`);
-    expect(rows.map((r: any) => r.period_start)).toEqual(['2026-11-01', '2026-11-16']);
-  });
-
-  it('keeps the 1900-01-01 effective_from sentinel working', async () => {
-    await resetSchema();
-    await sql.unsafe(`ALTER TABLE ${SCHEMA}.timesheet_periods ADD COLUMN effective_from timestamp with time zone`);
-    await sql.unsafe(`
-      INSERT INTO ${SCHEMA}.timesheet_periods (user_id, period_start, effective_from)
-      VALUES ('${USER_A}', '2026-11-01T00:00:00Z', '1900-01-01T00:00:00Z');
-    `);
-    await runTypeChange('timesheet_periods', 'effective_from');
-    const rows = await sql.unsafe(`SELECT effective_from::text FROM ${SCHEMA}.timesheet_periods`);
-    expect(rows[0].effective_from).toBe('1900-01-01');
+    // The whole migration rolled back: still the old column type, and no new table.
+    expect(await columnType('timesheet_periods', 'period_start')).toBe('timestamp with time zone');
+    const [settingsTable] = await sql`
+      SELECT count(*)::int AS n FROM information_schema.tables
+      WHERE table_schema = ${SCHEMA} AND table_name = 'workspace_settings'`;
+    expect(settingsTable.n).toBe(0);
   });
 });

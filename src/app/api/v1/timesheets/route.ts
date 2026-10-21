@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
           SELECT MAX(te2.revision_number)
           FROM timesheet_entries te2
           WHERE te2.user_id = ${timesheetEntries.userId}
-            AND COALESCE(te2.clin_id, te2.indirect_code_id) = COALESCE(${timesheetEntries.clinId}, ${timesheetEntries.indirectCodeId})
+            AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
             AND te2.entry_date = ${timesheetEntries.entryDate}
         )`
       ),

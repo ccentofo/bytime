@@ -1,13 +1,18 @@
 'use server';
 
 import { getDb } from '@/db';
-import { payPeriodConfig } from '@/db/schema';
+import { payPeriodConfig, payPeriodTypeEnum, timesheetEntries, timesheetPeriods } from '@/db/schema';
 import { requireAdmin, requireAdminFresh, requireSession } from '@/lib/session';
 import type { PeriodConfig, PeriodType } from '@/lib/date-utils';
-import { DEFAULT_PERIOD_CONFIG, navigatePeriod, getNumDaysInPeriod, getPeriodStartForDate } from '@/lib/date-utils';
+import { getPeriodStartForDate } from '@/lib/date-utils';
 import { parseCalendarDate, isAfter, addDays, compare, dayOfWeek, type CalendarDate } from '@/lib/calendar-date';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
-import { eq, lte, desc, gt } from 'drizzle-orm';
+import { validateEnum } from '@/lib/validation';
+
+/** effective_from for the first schedule row (matches the migration-0008 backfill sentinel). */
+const SCHEDULE_HISTORY_START = '1900-01-01' as CalendarDate;
+import { configAt, loadScheduleResolver } from '@/server/internal/pay-period-config';
+import { eq, desc, gt } from 'drizzle-orm';
 
 // ---------------------------------------------------------------------------
 // Resolution layer
@@ -20,23 +25,7 @@ import { eq, lte, desc, gt } from 'drizzle-orm';
  */
 export async function getEffectiveConfigAt(date: CalendarDate): Promise<PeriodConfig> {
   await requireSession();
-  const day = parseCalendarDate(date);
-  const db = await getDb();
-  const rows = await db
-    .select()
-    .from(payPeriodConfig)
-    .where(lte(payPeriodConfig.effectiveFrom, day))
-    .orderBy(desc(payPeriodConfig.effectiveFrom), desc(payPeriodConfig.createdAt))
-    .limit(1);
-
-  if (rows.length === 0) return DEFAULT_PERIOD_CONFIG;
-
-  const row = rows[0];
-  return {
-    periodType: row.periodType as PeriodType,
-    anchorDate: row.anchorDate as CalendarDate,
-    weekStartDay: row.weekStartDay,
-  };
+  return configAt(await getDb(), parseCalendarDate(date));
 }
 
 /**
@@ -73,24 +62,10 @@ export async function getNeighborPeriod(
 ): Promise<{ periodStart: CalendarDate; periodConfig: PeriodConfig; numDays: number }> {
   await requireSession();
   const start = parseCalendarDate(currentPeriodStart);
-
-  // Step 1: resolve the config at the current period to step correctly
-  const currentConfig = await getEffectiveConfigAt(start);
-
-  // Step 2: step one period in the requested direction → probe date in the neighbor
-  const probeDate = navigatePeriod(start, direction, currentConfig);
-
-  // Step 3: resolve the config effective at the probe date
-  const neighborConfig = await getEffectiveConfigAt(probeDate);
-
-  // Step 4: snap the probe date to the period start under the neighbor's config
-  const neighborPeriodStart = getPeriodStartForDate(probeDate, neighborConfig);
-
-  return {
-    periodStart: neighborPeriodStart,
-    periodConfig: neighborConfig,
-    numDays: getNumDaysInPeriod(neighborPeriodStart, neighborConfig),
-  };
+  if (direction !== 'prev' && direction !== 'next') throw new Error('Invalid direction.');
+  const schedule = await loadScheduleResolver(await getDb());
+  const neighbor = schedule.neighbor(start, direction);
+  return { periodStart: neighbor.start, periodConfig: neighbor.config, numDays: neighbor.numDays };
 }
 
 // ---------------------------------------------------------------------------
@@ -157,16 +132,31 @@ export async function getPendingConfigChange(): Promise<ConfigHistoryRow | null>
 // ---------------------------------------------------------------------------
 
 export type UpdatePayPeriodConfigResult = {
-  effectiveFrom: CalendarDate;
+  /** When the new schedule applies. `null` = immediately (workspace had no timesheet data). */
+  effectiveFrom: CalendarDate | null;
 };
 
-/** A weekly/biweekly anchor that doesn't fall on its own weekStartDay would make
- * getPeriodStartForDate's boundary computation inconsistent with the configured week start. */
-function assertAnchorMatchesWeekStartDay(config: { periodType: PeriodType; anchorDate: CalendarDate; weekStartDay: number }): void {
-  if (config.periodType !== 'weekly' && config.periodType !== 'biweekly') return;
-  if (dayOfWeek(config.anchorDate) !== config.weekStartDay) {
-    throw new Error('Anchor date must fall on the selected week start day.');
+const PERIOD_TYPES = payPeriodTypeEnum.enumValues;
+
+/** Validate and normalize the untrusted schedule fields every write/preview receives. */
+function parseScheduleInput(input: { periodType: unknown; anchorDate: unknown; weekStartDay: unknown }): PeriodConfig {
+  const periodType = validateEnum(input.periodType, 'Period type', PERIOD_TYPES);
+  const weekStartDay = input.weekStartDay;
+  if (!Number.isInteger(weekStartDay) || (weekStartDay as number) < 0 || (weekStartDay as number) > 6) {
+    throw new Error('Week start day must be an integer from 0 (Sunday) to 6 (Saturday).');
   }
+  const anchorDate = parseCalendarDate(input.anchorDate as string);
+  return { periodType, anchorDate, weekStartDay: weekStartDay as number };
+}
+
+/** A weekly/biweekly anchor that doesn't fall on its own weekStartDay would make
+ * getPeriodStartForDate's boundary computation inconsistent with the configured week start.
+ * Returns the problem as a message (null when fine). */
+function anchorProblem(config: PeriodConfig): string | null {
+  if (config.periodType !== 'weekly' && config.periodType !== 'biweekly') return null;
+  return dayOfWeek(config.anchorDate) !== config.weekStartDay
+    ? 'The anchor date must fall on the selected week start day.'
+    : null;
 }
 
 /**
@@ -183,32 +173,60 @@ function isCommonBoundary(day: CalendarDate, configA: PeriodConfig, configB: Per
 const SCHEDULE_CHANGE_SEARCH_HORIZON_DAYS = 730; // 2 years — generous for even rare common boundaries
 
 /**
- * List upcoming dates that are valid `effective_from` choices for a proposed new schedule: a
- * period boundary under BOTH the schedule in effect today and the proposed new one. The UI
- * offers these as the only choices — there is no other way to avoid §0.9's overlap bug.
+ * True when no timesheet has been entered or submitted yet. Then there are no periods to keep
+ * consistent, so a new schedule may replace the old one outright, effective immediately. This is
+ * how a new workspace sets its schedule without waiting for a common boundary, which for some
+ * changes (e.g. a different week start day) never comes.
+ */
+async function workspaceHasNoTimesheetData(db: Awaited<ReturnType<typeof getDb>>): Promise<boolean> {
+  const [entry] = await db.select({ id: timesheetEntries.id }).from(timesheetEntries).limit(1);
+  if (entry) return false;
+  const [period] = await db.select({ id: timesheetPeriods.id }).from(timesheetPeriods).limit(1);
+  return !period;
+}
+
+export type ScheduleChangeOptions = {
+  /** The change can apply immediately (no timesheet data exists yet). */
+  immediate: boolean;
+  /** Upcoming valid `effective_from` dates (boundaries common to both schedules). */
+  dates: CalendarDate[];
+  /** Why the proposed schedule is invalid, if it is. */
+  problem: string | null;
+};
+
+/**
+ * What a proposed schedule change can be scheduled for. The UI offers exactly these choices.
  */
 export async function getValidScheduleChangeDates(
   newConfig: { periodType: PeriodType; anchorDate: CalendarDate; weekStartDay: number },
   count = 5
-): Promise<CalendarDate[]> {
+): Promise<ScheduleChangeOptions> {
   await requireAdmin();
-  const anchorDate = parseCalendarDate(newConfig.anchorDate);
-  const candidateConfig: PeriodConfig = { periodType: newConfig.periodType, anchorDate, weekStartDay: newConfig.weekStartDay };
-  assertAnchorMatchesWeekStartDay(candidateConfig);
+  const candidateConfig = parseScheduleInput(newConfig);
+  const problem = anchorProblem(candidateConfig);
+  if (problem) return { immediate: false, dates: [], problem };
+  const limit = Math.min(Math.max(Number.isInteger(count) ? count : 5, 1), 10);
+
+  const db = await getDb();
+  const immediate = await workspaceHasNoTimesheetData(db);
 
   const today = await getWorkspaceToday();
-  const currentConfig = await getCurrentEffectiveConfig();
+  const currentConfig = await configAt(db, today);
   const horizon = addDays(today, SCHEDULE_CHANGE_SEARCH_HORIZON_DAYS);
 
-  const results: CalendarDate[] = [];
+  const dates: CalendarDate[] = [];
   let probe = addDays(today, 1);
-  while (results.length < count && compare(probe, horizon) <= 0) {
-    if (isCommonBoundary(probe, currentConfig, candidateConfig)) {
-      results.push(probe);
-    }
+  while (dates.length < limit && compare(probe, horizon) <= 0) {
+    if (isCommonBoundary(probe, currentConfig, candidateConfig)) dates.push(probe);
     probe = addDays(probe, 1);
   }
-  return results;
+  return {
+    immediate,
+    dates,
+    problem: !immediate && dates.length === 0
+      ? 'There is no date in the next two years when both your current and the new schedule start a period, so this change can\'t be scheduled. Contact support@cadenzpoint.com if you need it.'
+      : null,
+  };
 }
 
 /**
@@ -219,44 +237,55 @@ export async function getValidScheduleChangeDates(
  * §0.9: `effectiveFrom` is only accepted if it's a period boundary under BOTH the current and
  * the new schedule (see getValidScheduleChangeDates) — otherwise some day would belong to two
  * periods (the old schedule's straddling period and the new schedule's first period) or none.
- * Also rejects a weekly/biweekly anchor that doesn't fall on the selected week start day, and
- * any attempt to set effective_from in the past or current period (future-effective only).
+ * Exception: `effectiveFrom: null` applies the schedule immediately, replacing the history,
+ * and is only allowed while the workspace has no timesheet data at all.
  */
 export async function updatePayPeriodConfig(data: {
   periodType: PeriodType;
   anchorDate: CalendarDate;
   weekStartDay: number;
-  effectiveFrom: CalendarDate;
+  effectiveFrom: CalendarDate | null;
 }): Promise<UpdatePayPeriodConfigResult> {
   const db = await getDb();
   await requireAdminFresh();
-  const anchorDate = parseCalendarDate(data.anchorDate);
-  const effectiveFrom = parseCalendarDate(data.effectiveFrom);
-  const candidateConfig: PeriodConfig = { periodType: data.periodType, anchorDate, weekStartDay: data.weekStartDay };
-  assertAnchorMatchesWeekStartDay(candidateConfig);
+  const candidateConfig = parseScheduleInput(data);
+  const problem = anchorProblem(candidateConfig);
+  if (problem) throw new Error(problem);
 
+  const values = {
+    periodType: candidateConfig.periodType,
+    anchorDate: candidateConfig.anchorDate,
+    weekStartDay: candidateConfig.weekStartDay,
+  };
+
+  if (data.effectiveFrom === null) {
+    if (!(await workspaceHasNoTimesheetData(db))) {
+      throw new Error('Timesheets already exist, so a schedule change must start on a future date.');
+    }
+    // No periods exist to keep consistent: the new schedule becomes the whole history.
+    await db.transaction(async (tx) => {
+      await tx.delete(payPeriodConfig);
+      await tx.insert(payPeriodConfig).values({ ...values, effectiveFrom: SCHEDULE_HISTORY_START });
+    });
+    return { effectiveFrom: null };
+  }
+
+  const effectiveFrom = parseCalendarDate(data.effectiveFrom);
   const today = await getWorkspaceToday();
   if (!isAfter(effectiveFrom, today)) {
     throw new Error('Cannot set effective_from to a past or current period. Changes are future-effective only.');
   }
 
-  const currentConfig = await getCurrentEffectiveConfig();
+  const currentConfig = await configAt(db, today);
   if (!isCommonBoundary(effectiveFrom, currentConfig, candidateConfig)) {
     throw new Error('effective_from must be a period boundary under both the current and new schedules — use getValidScheduleChangeDates for valid choices.');
   }
 
-  // If a pending (future) row exists, delete it so we replace it
-  const pending = await getPendingConfigChange();
-  if (pending) {
-    await db.delete(payPeriodConfig).where(eq(payPeriodConfig.id, pending.id));
-  }
-
-  // Insert the new history row
-  await db.insert(payPeriodConfig).values({
-    periodType: data.periodType,
-    anchorDate,
-    weekStartDay: data.weekStartDay,
-    effectiveFrom,
+  // Replace any pending (future) row and insert the new one atomically, so a failed insert
+  // can't leave the pending change deleted.
+  await db.transaction(async (tx) => {
+    await tx.delete(payPeriodConfig).where(gt(payPeriodConfig.effectiveFrom, today));
+    await tx.insert(payPeriodConfig).values({ ...values, effectiveFrom });
   });
 
   return { effectiveFrom };

@@ -26,7 +26,9 @@ function formatHours(value: number, density: Density): string {
 
 export function HourCell({ chargeCodeId, dayIndex, density = 'comfortable' }: HourCellProps) {
   const { state, dispatch } = useTimesheet();
-  const isEditable = state.periodStatus === 'draft' || state.periodStatus === 'rejected';
+  // Read-only while another period is loading: typing into the outgoing grid would save it
+  // against whichever period ends up on screen.
+  const isEditable = (state.periodStatus === 'draft' || state.periodStatus === 'rejected') && !state.isLoadingPeriod;
   const [isEditing, setIsEditing] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [localValue, setLocalValue] = useState<number | string>(0);

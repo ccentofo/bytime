@@ -20,7 +20,10 @@ import {
   isValidTimeZone,
   formatCalendarDate,
   formatInstant,
+  canonicalTimeZone,
+  calendarDayOf,
 } from '@/lib/calendar-date';
+import { isUniqueViolation } from '@/lib/db-errors';
 
 const d = (s: string) => s as CalendarDate;
 
@@ -213,5 +216,44 @@ describe('formatInstant', () => {
     const nyFormatted = formatInstant(instant, 'America/New_York', 'h:mm A');
     const aucklandFormatted = formatInstant(instant, 'Pacific/Auckland', 'h:mm A');
     expect(nyFormatted).not.toBe(aucklandFormatted);
+  });
+});
+
+describe('canonicalTimeZone / calendarDayOf', () => {
+  it('returns the canonical IANA name for region zones and UTC', () => {
+    expect(canonicalTimeZone('America/New_York')).toBe('America/New_York');
+    expect(canonicalTimeZone('america/new_york')).toBe('America/New_York');
+    expect(canonicalTimeZone('UTC')).toBe('UTC');
+    expect(canonicalTimeZone('US/Eastern')).toBe('America/New_York');
+  });
+
+  it('rejects abbreviations, raw offsets, non-strings, and garbage', () => {
+    for (const bad of ['EST', 'PST', '+05:00', 'EST5EDT', 'Etc/GMT+5', '', 'Not/AZone', undefined, null, 42, ['UTC']]) {
+      expect(canonicalTimeZone(bad), String(bad)).toBeNull();
+      expect(isValidTimeZone(bad), String(bad)).toBe(false);
+    }
+  });
+
+  it('calendarDayOf gives the day an instant falls on in a timezone', () => {
+    const instant = new Date('2026-11-02T03:30:00Z'); // 10:30pm Nov 1 in New York (EST)
+    expect(calendarDayOf(instant, 'America/New_York')).toBe('2026-11-01');
+    expect(calendarDayOf(instant, 'UTC')).toBe('2026-11-02');
+  });
+});
+
+describe('isUniqueViolation', () => {
+  it('reads the SQLSTATE from the driver error Drizzle wraps in .cause', () => {
+    const wrapped = Object.assign(new Error('Failed query: insert … params: unique'), {
+      cause: { code: '23505', constraint_name: 'entries_user_code_date_rev_unique_idx' },
+    });
+    expect(isUniqueViolation(wrapped)).toBe(true);
+    expect(isUniqueViolation(wrapped, 'entries_user_code_date_rev_unique_idx')).toBe(true);
+    expect(isUniqueViolation(wrapped, 'some_other_idx')).toBe(false);
+  });
+
+  it('never matches on message text', () => {
+    expect(isUniqueViolation(new Error('duplicate key value violates unique constraint'))).toBe(false);
+    expect(isUniqueViolation(Object.assign(new Error('x'), { cause: { code: '23503' } }))).toBe(false);
+    expect(isUniqueViolation(null)).toBe(false);
   });
 });

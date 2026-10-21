@@ -50,6 +50,23 @@ END $$;
 -- identical to the old ones (a no-op). No row is deleted or merged — only the numbering is
 -- repaired, which is what makes "two colliding revision-1 rows" become "revision 1, revision 2"
 -- in creation order, exactly as if they had been saved under one consistent day all along.
+DO $$
+DECLARE
+  conflict_summary text;
+BEGIN
+  SELECT string_agg(format('user_id=%s labor_category_id=%s day=%s', user_id, labor_category_id, day), '; ')
+  INTO conflict_summary
+  FROM (
+    SELECT user_id, labor_category_id, ((effective_date AT TIME ZONE 'UTC') + interval '12 hours')::date AS day
+    FROM user_labor_categories
+    GROUP BY user_id, labor_category_id, ((effective_date AT TIME ZONE 'UTC') + interval '12 hours')::date
+    HAVING COUNT(*) > 1
+  ) AS dupes;
+  IF conflict_summary IS NOT NULL THEN
+    RAISE EXCEPTION 'feature-plan-calendar-dates.md D2: user_labor_categories rows collide on the same effective day after conversion (user_lcat_effective_unique_idx would fail) — %. Re-seed local demo/dev data, or resolve manually.', conflict_summary;
+  END IF;
+END $$;
+--> statement-breakpoint
 WITH ranked AS (
   SELECT
     id,
@@ -95,13 +112,19 @@ ALTER TABLE "contracts" ALTER COLUMN "end_date" SET DATA TYPE date USING (("end_
 ALTER TABLE "user_labor_categories" ALTER COLUMN "effective_date" SET DATA TYPE date USING (("effective_date" AT TIME ZONE 'UTC') + interval '12 hours')::date;
 --> statement-breakpoint
 -- migration-safety: allow pre-launch type change to calendar date; no production tenants (feature-plan-calendar-dates.md §2)
-ALTER TABLE "user_labor_categories" ALTER COLUMN "end_date" SET DATA TYPE date USING (("end_date" AT TIME ZONE 'UTC') + interval '12 hours')::date;
+-- end_date becomes the INCLUSIVE last day of the assignment (readers now use end_date >= entry_date).
+-- Old values were real instants ("End assignment" stored now()), compared as end > entry midnight:
+-- a non-midnight instant counted its own day, so its UTC date is the last day; an exact UTC
+-- midnight (date-picker value) excluded that day, so the last day is the day before.
+ALTER TABLE "user_labor_categories" ALTER COLUMN "end_date" SET DATA TYPE date USING (CASE WHEN ("end_date" AT TIME ZONE 'UTC')::time = time '00:00' THEN ("end_date" AT TIME ZONE 'UTC')::date - 1 ELSE ("end_date" AT TIME ZONE 'UTC')::date END);
 --> statement-breakpoint
 -- migration-safety: allow pre-launch type change to calendar date; no production tenants (feature-plan-calendar-dates.md §2)
 ALTER TABLE "integration_sync_logs" ALTER COLUMN "period_start" SET DATA TYPE date USING (("period_start" AT TIME ZONE 'UTC') + interval '12 hours')::date;
 --> statement-breakpoint
 -- migration-safety: allow pre-launch type change to calendar date; no production tenants (feature-plan-calendar-dates.md §2)
-ALTER TABLE "integration_sync_logs" ALTER COLUMN "period_end" SET DATA TYPE date USING (("period_end" AT TIME ZONE 'UTC') + interval '12 hours')::date;
+-- period_end was always an end-of-month instant (23:59:59.999 in the admin's browser), which can
+-- fall early the NEXT day in UTC; subtracting 12 hours recovers the intended last day.
+ALTER TABLE "integration_sync_logs" ALTER COLUMN "period_end" SET DATA TYPE date USING (("period_end" AT TIME ZONE 'UTC') - interval '12 hours')::date;
 --> statement-breakpoint
 -- feature-plan-calendar-dates.md D2, step 4: uniqueness the CalendarDate model now makes
 -- possible. timesheet_periods' existing (user_id, period_start) unique index ("user_period_unique_idx")

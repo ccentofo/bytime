@@ -183,7 +183,8 @@ export async function assignUserToLaborCategory(data: {
 }
 
 /**
- * End a user's labor category assignment by setting the end_date to the workspace's today.
+ * End a user's labor category assignment: end_date (the INCLUSIVE last day) becomes the
+ * workspace's today, so hours already entered today still count toward this labor category.
  */
 export async function endUserLaborCategoryAssignment(id: string) {
   const db = await getDb();

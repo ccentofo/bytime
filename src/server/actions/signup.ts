@@ -10,7 +10,7 @@ import { isValidSlug } from '@/lib/tenant/provision';
 import { sendSignupVerifyEmail } from '@/lib/email/send-signup';
 import { slugify } from '@/lib/tenant/slugify';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { isValidTimeZone } from '@/lib/calendar-date';
+import { canonicalTimeZone } from '@/lib/calendar-date';
 
 const VERIFY_EXPIRY_HOURS = 24;
 
@@ -55,7 +55,7 @@ export async function startSignup(input: {
   // D8: the signer's browser timezone, captured for the new tenant's workspace_settings at
   // provisioning. Untrusted client input — validated here, stored null (falls back to
   // workspace_settings' own column default) rather than rejecting the signup over it.
-  const timezone = input.timezone && isValidTimeZone(input.timezone) ? input.timezone : null;
+  const timezone = canonicalTimeZone(input.timezone);
   await controlDb.insert(signups).values({
     email,
     companyName: input.companyName.trim(),

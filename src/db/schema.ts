@@ -193,7 +193,7 @@ export const userLaborCategories = pgTable('user_labor_categories', {
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   laborCategoryId: uuid('labor_category_id').notNull().references(() => laborCategories.id, { onDelete: 'cascade' }),
   effectiveDate: date('effective_date', { mode: 'string' }).notNull(),
-  endDate: date('end_date', { mode: 'string' }),
+  endDate: date('end_date', { mode: 'string' }), // INCLUSIVE last day (readers use end_date >= entry_date); null = open-ended
   assignedBy: uuid('assigned_by').references(() => users.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { ActionIcon, Group, Text, Title, Select, Button } from '@mantine/core';
 import { IconChevronLeft, IconChevronRight, IconCalendarEvent } from '@tabler/icons-react';
 import { useTimesheet } from '@/components/timesheet/TimesheetContext';
-import { getNumDaysInPeriod } from '@/lib/date-utils';
 import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { getPeriodOptions, type PeriodOption } from '@/server/actions/periods';
 
@@ -17,9 +16,9 @@ const PERIOD_TYPE_LABELS: Record<string, string> = {
 
 export function PayPeriodSelector() {
   const { state, loadPeriod, loadPeriodByDate } = useTimesheet();
-  const { periodStart, periodConfig: config, today } = state;
-
-  const numDays = getNumDaysInPeriod(periodStart, config);
+  const { periodStart, periodConfig: config, today, numDays } = state;
+  // No navigation while a period is loading or a save is in flight.
+  const navBusy = state.isLoadingPeriod || state.isSaving;
   const end = addDays(periodStart, numDays - 1);
   const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(end, 'MMM D, YYYY')}`;
 
@@ -32,11 +31,15 @@ export function PayPeriodSelector() {
 
   useEffect(() => {
     let cancelled = false;
-    getPeriodOptions(today, 23, 0).then((options) => {
-      if (cancelled) return;
-      setPeriodOptions(options);
-      setCurrentPeriodStart(options[options.length - 1]?.start ?? today);
-    });
+    getPeriodOptions(today, 23, 0)
+      .then((options) => {
+        if (cancelled) return;
+        setPeriodOptions(options);
+        setCurrentPeriodStart(options[options.length - 1]?.start ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setPeriodOptions([]); // the arrows still work; the list just stays empty
+      });
     return () => {
       cancelled = true;
     };
@@ -66,7 +69,7 @@ export function PayPeriodSelector() {
           size="lg"
           onClick={() => loadPeriod('prev')}
           aria-label="Previous pay period"
-          disabled={state.isLoadingPeriod}
+          disabled={navBusy}
         >
           <IconChevronLeft size={20} />
         </ActionIcon>
@@ -81,7 +84,7 @@ export function PayPeriodSelector() {
           size="lg"
           onClick={() => loadPeriod('next')}
           aria-label="Next pay period"
-          disabled={state.isLoadingPeriod}
+          disabled={navBusy}
         >
           <IconChevronRight size={20} />
         </ActionIcon>
@@ -96,14 +99,14 @@ export function PayPeriodSelector() {
           searchable
           size="sm"
           style={{ width: 220 }}
-          disabled={state.isLoadingPeriod}
+          disabled={navBusy}
         />
         <Button
           variant="light"
           size="sm"
           leftSection={<IconCalendarEvent size={16} />}
           onClick={handleCurrentClick}
-          disabled={isCurrentPeriod || state.isLoadingPeriod}
+          disabled={isCurrentPeriod || currentPeriodStart === null || navBusy}
         >
           Current
         </Button>

@@ -55,9 +55,13 @@ export function ReportsClient({ filterOptions, role }: Props) {
   // server (getPeriodOptions), so it stays correct across a pay-schedule change instead of
   // assuming semimonthly for every tenant.
   useEffect(() => {
-    getWorkspaceContext().then(({ today }) => {
-      getPeriodOptions(today, 11, 0).then((options) => setPeriodOptions([...options].reverse()));
-    });
+    getWorkspaceContext()
+      .then(({ today }) => getPeriodOptions(today, 11, 0))
+      .then((options) => setPeriodOptions([...options].reverse()))
+      .catch((error) => {
+        console.error('Failed to load pay periods:', error);
+        notifications.show({ title: 'Could not load pay periods', message: 'Reload the page to try again.', color: 'red' });
+      });
   }, []);
 
   function downloadTimesheetPdf() {

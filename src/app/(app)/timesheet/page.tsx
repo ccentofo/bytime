@@ -1,13 +1,12 @@
 import { auth } from '@/auth';
 import { redirect } from 'next/navigation';
-import { getChargeCodesForUser, getTimesheetEntries, getRevisionMap } from '@/server/actions/timesheet';
-import { getCurrentPeriodStart, getNumDaysInPeriod } from '@/lib/date-utils';
+import { getChargeCodesForUser, getTimesheetPeriod } from '@/server/actions/timesheet';
+import { getCurrentPeriodStart } from '@/lib/date-utils';
 import { BiWeeklyTimesheetClient } from '@/components/timesheet/BiWeeklyTimesheetClient';
 import type { TimesheetPageData } from '@/types/timesheet';
-import { getPeriodStatus } from '@/server/actions/periods';
 import { getUserByEmail } from '@/server/internal/users';
 import { getEmployeeDashboardData } from '@/server/actions/employee-dashboard';
-import { getCurrentEffectiveConfig, getEffectiveConfigAt } from '@/server/actions/pay-period-config';
+import { getCurrentEffectiveConfig } from '@/server/actions/pay-period-config';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 
 export const dynamic = 'force-dynamic';
@@ -20,39 +19,31 @@ export default async function TimesheetPage() {
 
   const userId = session.user.id;
 
-  // Use the config currently in effect to determine which period to land on
+  // Land on the period containing the workspace's today, under the schedule in effect today.
   const today = await getWorkspaceToday();
-  const landingConfig = await getCurrentEffectiveConfig();
-  const periodStart = getCurrentPeriodStart(today, landingConfig);
+  const periodStart = getCurrentPeriodStart(today, await getCurrentEffectiveConfig());
 
-  // Resolve the config authoritative for this specific period start date
-  // (may differ from landingConfig if a schedule change is pending)
-  const periodConfig = await getEffectiveConfigAt(periodStart);
-  const numDays = getNumDaysInPeriod(periodStart, periodConfig);
-
-  // Fetch ALL independent data in parallel (single await)
-  const [chargeCodes, revisions, periodInfo, fullUser, dashboardData] = await Promise.all([
+  // Fetch ALL independent data in parallel (single await). getTimesheetPeriod resolves the
+  // period's length and schedule on the server, the same way navigation does.
+  const [chargeCodes, period, fullUser, dashboardData] = await Promise.all([
     getChargeCodesForUser(),
-    getRevisionMap(periodStart, numDays),
-    getPeriodStatus(periodStart),
+    getTimesheetPeriod(periodStart),
     getUserByEmail(session.user.email!),
     getEmployeeDashboardData(),
   ]);
 
-  // Only this depends on chargeCodes — runs after the parallel batch
-  const entries = await getTimesheetEntries(periodStart, chargeCodes);
-
   const pageData: TimesheetPageData = {
     userId,
     chargeCodes,
-    entries,
-    periodStart,
+    entries: period.entries,
+    periodStart: period.periodStart,
+    numDays: period.numDays,
     today,
-    revisions,
-    periodStatus: periodInfo.status,
+    revisions: period.revisions,
+    periodStatus: period.periodStatus,
     flsaExempt: fullUser?.flsaExempt ?? false,
     dashboardData,
-    periodConfig,
+    periodConfig: period.periodConfig,
   };
 
   return <BiWeeklyTimesheetClient initialData={pageData} />;

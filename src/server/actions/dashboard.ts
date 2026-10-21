@@ -113,7 +113,7 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
               SELECT MAX(te2.revision_number)
               FROM timesheet_entries te2
               WHERE te2.user_id = ${timesheetEntries.userId}
-                AND te2.clin_id = ${timesheetEntries.clinId}
+                AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                 AND te2.entry_date = ${timesheetEntries.entryDate}
             )`
           ),
@@ -136,7 +136,7 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
         and(
           eq(userLaborCategories.userId, timesheetEntries.userId),
           sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-          sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} > ${timesheetEntries.entryDate})`,
+          sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} >= ${timesheetEntries.entryDate})`,
         )
       )
       .innerJoin(
@@ -156,7 +156,7 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
               SELECT MAX(te2.revision_number)
               FROM timesheet_entries te2
               WHERE te2.user_id = ${timesheetEntries.userId}
-                AND te2.clin_id = ${timesheetEntries.clinId}
+                AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                 AND te2.entry_date = ${timesheetEntries.entryDate}
             )`
           ),
@@ -180,7 +180,7 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
               SELECT MAX(te2.revision_number)
               FROM timesheet_entries te2
               WHERE te2.user_id = ${timesheetEntries.userId}
-                AND te2.clin_id = ${timesheetEntries.clinId}
+                AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                 AND te2.entry_date = ${timesheetEntries.entryDate}
             )`
           )
@@ -203,7 +203,7 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
         and(
           eq(userLaborCategories.userId, timesheetEntries.userId),
           sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-          sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} > ${timesheetEntries.entryDate})`,
+          sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} >= ${timesheetEntries.entryDate})`,
         )
       )
       .innerJoin(
@@ -223,7 +223,7 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
               SELECT MAX(te2.revision_number)
               FROM timesheet_entries te2
               WHERE te2.user_id = ${timesheetEntries.userId}
-                AND te2.clin_id = ${timesheetEntries.clinId}
+                AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                 AND te2.entry_date = ${timesheetEntries.entryDate}
             )`
           )
@@ -376,7 +376,7 @@ export async function getPeriodCostReport(
       and(
         eq(userLaborCategories.userId, timesheetEntries.userId),
         sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-        sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} > ${timesheetEntries.entryDate})`,
+        sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} >= ${timesheetEntries.entryDate})`,
       )
     )
     .leftJoin(
@@ -397,7 +397,7 @@ export async function getPeriodCostReport(
             SELECT MAX(te2.revision_number)
             FROM timesheet_entries te2
             WHERE te2.user_id = ${timesheetEntries.userId}
-              AND te2.clin_id = ${timesheetEntries.clinId}
+              AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
               AND te2.entry_date = ${timesheetEntries.entryDate}
           )`
         ),

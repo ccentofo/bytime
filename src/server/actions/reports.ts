@@ -13,7 +13,7 @@ import {
   userAssignments,
 } from '@/db/schema';
 import { eq, and, gte, lt, sql, inArray } from 'drizzle-orm';
-import { resolvePeriod } from '@/server/internal/periods';
+import { existingPeriodLength } from '@/server/internal/pay-period-config';
 import { requireSession, requireAdmin, requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
 import { getDetailedCostReportData, type CostReportEntry } from '@/server/internal/reports';
 import { addDays, diffDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -94,7 +94,7 @@ export async function getTimesheetReportData(
   const period = periodRows[0];
   // D3/§0.6: period length from its own snapshot if it has one, else its REAL effective
   // config — never an assumed default.
-  const numDays = period?.periodNumDays ?? (await resolvePeriod(start)).numDays;
+  const numDays = await existingPeriodLength(db, start, period?.periodNumDays);
   const periodEnd = addDays(start, numDays - 1);
 
   // Get approved-by name if applicable. R2-7: an admin may approve/reject their own period —
@@ -157,7 +157,7 @@ export async function getTimesheetReportData(
             SELECT MAX(te2.revision_number)
             FROM timesheet_entries te2
             WHERE te2.user_id = ${timesheetEntries.userId}
-              AND te2.clin_id = ${timesheetEntries.clinId}
+              AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
               AND te2.entry_date = ${timesheetEntries.entryDate}
           )`
         ),
@@ -277,7 +277,7 @@ export async function getEmployeeSummaryReport(
       and(
         eq(userLaborCategories.userId, timesheetEntries.userId),
         sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-        sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} > ${timesheetEntries.entryDate})`,
+        sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} >= ${timesheetEntries.entryDate})`,
       )
     )
     .leftJoin(
@@ -298,7 +298,7 @@ export async function getEmployeeSummaryReport(
             SELECT MAX(te2.revision_number)
             FROM timesheet_entries te2
             WHERE te2.user_id = ${timesheetEntries.userId}
-              AND te2.clin_id = ${timesheetEntries.clinId}
+              AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
               AND te2.entry_date = ${timesheetEntries.entryDate}
           )`
         ),

@@ -339,7 +339,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
     // Wide enough to cover todayIndex regardless of period type/length (max is 16 days,
     // semimonthly) or where in the period "today" falls when the suite runs.
     const numDays = 31;
-    const map = await getRevisionMap(periodStart, numDays);
+    const map = await getRevisionMap(periodStart);
     expect(map[`${chargeCode.id}-${todayIndex}`]).toBe(1);
   });
 

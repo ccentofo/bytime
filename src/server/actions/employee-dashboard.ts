@@ -6,10 +6,12 @@ import { eq, and, gte, lt, desc, sql } from 'drizzle-orm';
 import { getCurrentPeriodStart, getLastWeekdayInPeriod } from '@/lib/date-utils';
 import { getCurrentEffectiveConfig } from '@/server/actions/pay-period-config';
 import { resolvePeriod } from '@/server/internal/periods';
-import { getWorkspaceToday } from '@/server/internal/workspace-settings';
+import { existingPeriodLength } from '@/server/internal/pay-period-config';
+import { getWorkspaceToday, getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { requireSession } from '@/lib/session';
 import {
   addDays,
+  calendarDayOf,
   dayOfWeek,
   formatCalendarDate,
   isAfter,
@@ -44,6 +46,10 @@ export interface EmployeeDashboardData {
     totalHours: number;
     submittedAt: Date | null;
     reviewedAt: Date | null;
+    /** `submittedAt` / `reviewedAt` as a day label in the workspace timezone (formatted on the
+     *  server so server render and browser hydration agree). */
+    submittedLabel: string | null;
+    reviewedLabel: string | null;
   }>;
 }
 
@@ -93,7 +99,7 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
               SELECT MAX(te2.revision_number)
               FROM timesheet_entries te2
               WHERE te2.user_id = ${timesheetEntries.userId}
-                AND COALESCE(te2.clin_id, te2.indirect_code_id) = COALESCE(${timesheetEntries.clinId}, ${timesheetEntries.indirectCodeId})
+                AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                 AND te2.entry_date = ${timesheetEntries.entryDate}
             )`
           ),
@@ -137,8 +143,9 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
   const canSubmitToday = !isBefore(today, lastWeekday);
 
   // Build recent periods with hours
+  const timeZone = await getWorkspaceTimezone();
   const recentNumDays = await Promise.all(
-    recentRows.map((rp) => rp.periodNumDays ?? resolvePeriod(rp.periodStart as CalendarDate).then((r) => r.numDays))
+    recentRows.map((rp) => existingPeriodLength(db, rp.periodStart as CalendarDate, rp.periodNumDays))
   );
   const recentPeriods = recentRows.map((rp, i) => {
     const rpStart = rp.periodStart as CalendarDate;
@@ -151,6 +158,8 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
       totalHours: 0, // Will be populated below
       submittedAt: rp.submittedAt,
       reviewedAt: rp.reviewedAt,
+      submittedLabel: rp.submittedAt ? formatCalendarDate(calendarDayOf(rp.submittedAt, timeZone), 'MMM D') : null,
+      reviewedLabel: rp.reviewedAt ? formatCalendarDate(calendarDayOf(rp.reviewedAt, timeZone), 'MMM D') : null,
     };
   });
 
@@ -174,7 +183,7 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
                 SELECT MAX(te2.revision_number)
                 FROM timesheet_entries te2
                 WHERE te2.user_id = ${timesheetEntries.userId}
-                  AND COALESCE(te2.clin_id, te2.indirect_code_id) = COALESCE(${timesheetEntries.clinId}, ${timesheetEntries.indirectCodeId})
+                  AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                   AND te2.entry_date = ${timesheetEntries.entryDate}
               )`
             ),

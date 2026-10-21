@@ -187,17 +187,12 @@ export function GustoConfigClient({
   }
 
   async function handleSync() {
-    // Default sync window: a UI convenience suggestion only (not a correctness-sensitive
-    // calendar-day computation), so the browser's local date is fine here.
-    const periodStart = dayjs().subtract(2, 'month').startOf('month').format('YYYY-MM-DD') as CalendarDate;
-    const periodEnd = dayjs().endOf('month').format('YYYY-MM-DD') as CalendarDate;
-
+    // Default window (two months back through this month) is computed on the server in the
+    // workspace's calendar, not from this browser's clock.
     startTransition(async () => {
       try {
         const result = await triggerGustoSync({
           connectionId: connection.id,
-          periodStart,
-          periodEnd,
         });
         notifications.show({
           title: 'Sync complete',

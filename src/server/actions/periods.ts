@@ -7,10 +7,10 @@ import { requireSession, requireApprover, requireApproverFresh, getEmployeeScope
 import { getPeriodStatusFor, resolvePeriod, type PeriodInfo, type PeriodStatus } from '@/server/internal/periods';
 import { getSupervisorScopeInfo, getSupervisedEmployeeIds } from '@/server/internal/supervisor-scope';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
+import { existingPeriodLength, loadScheduleResolver } from '@/server/internal/pay-period-config';
 import { sendTimesheetSubmittedEmail, sendTimesheetApprovedEmail, sendTimesheetRejectedEmail } from '@/lib/email/send';
 import { isNotificationEnabled } from '@/server/internal/notifications';
-import { getLastWeekdayInPeriod, getNumDaysInPeriod, getPeriodStartForDate, navigatePeriod } from '@/lib/date-utils';
-import { getEffectiveConfigAt } from '@/server/actions/pay-period-config';
+import { getLastWeekdayInPeriod } from '@/lib/date-utils';
 import { addDays, formatInstant, isBefore, formatCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 
@@ -25,8 +25,7 @@ export async function getPeriodStatus(periodStart: CalendarDate): Promise<Period
 
 /** Resolve a period's day count from its own stored snapshot, falling back to its config. */
 async function resolvePeriodNumDays(periodStart: CalendarDate, periodNumDays: number | null): Promise<number> {
-  if (periodNumDays != null) return periodNumDays;
-  return getNumDaysInPeriod(periodStart, await getEffectiveConfigAt(periodStart));
+  return existingPeriodLength(await getDb(), periodStart, periodNumDays);
 }
 
 /**
@@ -54,37 +53,38 @@ export interface PeriodOption {
  * this instead of computing period boundaries itself (fixes the selector's history across
  * schedule changes and the hard-coded semimonthly reports dropdown).
  */
+const MAX_PERIOD_OPTIONS_EACH_WAY = 60;
+
 export async function getPeriodOptions(aroundDay: CalendarDate, before: number, after: number): Promise<PeriodOption[]> {
   await requireSession();
   const day = parseCalendarDate(aroundDay);
-
-  const centerConfig = await getEffectiveConfigAt(day);
-  const centerStart = getPeriodStartForDate(day, centerConfig);
-
-  const toOption = (start: CalendarDate, config: Awaited<ReturnType<typeof getEffectiveConfigAt>>): PeriodOption => {
-    const numDays = getNumDaysInPeriod(start, config);
-    const end = addDays(start, numDays - 1);
-    return { start, numDays, label: `${formatCalendarDate(start, 'MMM D')} – ${formatCalendarDate(end, 'MMM D, YYYY')}` };
-  };
-
-  const options: PeriodOption[] = [toOption(centerStart, centerConfig)];
-
-  let cursor = centerStart;
-  for (let i = 0; i < before; i++) {
-    const config = await getEffectiveConfigAt(cursor);
-    const probe = navigatePeriod(cursor, 'prev', config);
-    const neighborConfig = await getEffectiveConfigAt(probe);
-    cursor = getPeriodStartForDate(probe, neighborConfig);
-    options.unshift(toOption(cursor, neighborConfig));
+  // Bounded: this is a public endpoint, and each step is work on the server.
+  for (const [name, n] of [['before', before], ['after', after]] as const) {
+    if (!Number.isInteger(n) || n < 0 || n > MAX_PERIOD_OPTIONS_EACH_WAY) {
+      throw new Error(`${name} must be an integer from 0 to ${MAX_PERIOD_OPTIONS_EACH_WAY}.`);
+    }
   }
 
-  cursor = centerStart;
+  // One query for the whole schedule history, then everything resolves in memory.
+  const schedule = await loadScheduleResolver(await getDb());
+  const toOption = (p: { start: CalendarDate; numDays: number }): PeriodOption => ({
+    start: p.start,
+    numDays: p.numDays,
+    label: `${formatCalendarDate(p.start, 'MMM D')} – ${formatCalendarDate(addDays(p.start, p.numDays - 1), 'MMM D, YYYY')}`,
+  });
+
+  const center = schedule.periodContaining(day);
+  const options: PeriodOption[] = [toOption(center)];
+
+  let cursor = center;
+  for (let i = 0; i < before; i++) {
+    cursor = schedule.neighbor(cursor.start, 'prev');
+    options.unshift(toOption(cursor));
+  }
+  cursor = center;
   for (let i = 0; i < after; i++) {
-    const config = await getEffectiveConfigAt(cursor);
-    const probe = navigatePeriod(cursor, 'next', config);
-    const neighborConfig = await getEffectiveConfigAt(probe);
-    cursor = getPeriodStartForDate(probe, neighborConfig);
-    options.push(toOption(cursor, neighborConfig));
+    cursor = schedule.neighbor(cursor.start, 'next');
+    options.push(toOption(cursor));
   }
 
   return options;

@@ -7,7 +7,6 @@ import { ChargeCodeCell } from '@/components/timesheet/cells/ChargeCodeCell';
 import { HourCell } from '@/components/timesheet/cells/HourCell';
 import { TotalHoursCell } from '@/components/timesheet/cells/TotalHoursCell';
 import { ColumnHeaderDate } from '@/components/timesheet/cells/ColumnHeaderDate';
-import { getNumDaysInPeriod } from '@/lib/date-utils';
 import { addDays, dayOfWeek, isBefore } from '@/lib/calendar-date';
 import styles from './Timesheet.module.css';
 
@@ -34,7 +33,7 @@ function formatFooterHours(value: number, density: Density): string {
 export function BiWeeklyTable() {
   const { state } = useTimesheet();
   const { chargeCodes, entries, periodStart, today } = state;
-  const numDays = getNumDaysInPeriod(periodStart, state.periodConfig);
+  const numDays = state.numDays; // server-resolved
 
   // Measure container width for density calculation
   const containerRef = useRef<HTMLDivElement>(null);

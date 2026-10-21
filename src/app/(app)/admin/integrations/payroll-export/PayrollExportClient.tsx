@@ -26,12 +26,11 @@ import {
   IconCalendar,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
-import dayjs from 'dayjs';
 import {
   getPayrollExportPreview,
   generatePayrollExportCSV,
 } from '@/server/actions/payroll-export';
-import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { daysInMonth, isCalendarDate, startOfMonth, withDayOfMonth, type CalendarDate } from '@/lib/calendar-date';
 
 const FORMAT_OPTIONS = [
   { value: 'adp', label: 'ADP Workforce Now', description: 'Standard ADP payroll import' },
@@ -52,13 +51,12 @@ interface PreviewEmployee {
   periodEnd: string;
 }
 
-export function PayrollExportClient() {
+export function PayrollExportClient({ today }: { today: CalendarDate }) {
   const [format, setFormat] = useState<string | null>('adp');
-  // Default range: a UI convenience suggestion only (not a correctness-sensitive calendar-day
-  // computation), so the browser's local date is fine here.
+  // Default range: this month in the workspace's calendar (server-provided today).
   const [dateRange, setDateRange] = useState<[CalendarDate | null, CalendarDate | null]>([
-    dayjs().startOf('month').format('YYYY-MM-DD') as CalendarDate,
-    dayjs().endOf('month').format('YYYY-MM-DD') as CalendarDate,
+    startOfMonth(today),
+    withDayOfMonth(today, daysInMonth(today)),
   ]);
   const [preview, setPreview] = useState<PreviewEmployee[] | null>(null);
   const [totalEntries, setTotalEntries] = useState(0);

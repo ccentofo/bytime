@@ -127,13 +127,29 @@ export function min(...dates: CalendarDate[]): CalendarDate {
 // Timezone-aware "today" and formatting
 // ---------------------------------------------------------------------------
 
-export function isValidTimeZone(tz: string): boolean {
+/**
+ * The canonical IANA name for `tz` (e.g. `america/new_york` → `America/New_York`), or null if it
+ * isn't a region-style IANA zone. Rejects non-strings (Intl would coerce `['UTC']` to a string),
+ * abbreviations (`EST`), and raw offsets (`+05:00`): they're ambiguous or ignore DST.
+ */
+export function canonicalTimeZone(tz: unknown): string | null {
+  if (typeof tz !== 'string' || tz.length === 0 || tz.length > 64) return null;
+  // Judge the INPUT, not just Intl's result: ICU silently maps abbreviations to some region
+  // (e.g. "EST" → America/Panama, which has no daylight saving time), and Etc/GMT±N zones have
+  // inverted signs. Only Region/City names and UTC are accepted.
+  const isUtc = /^(?:Etc\/)?UTC$/i.test(tz);
+  if (!isUtc && (!/^[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+)+$/.test(tz) || /^Etc\//i.test(tz))) return null;
+  let canonical: string;
   try {
-    new Intl.DateTimeFormat(undefined, { timeZone: tz });
-    return true;
+    canonical = new Intl.DateTimeFormat('en-US', { timeZone: tz }).resolvedOptions().timeZone;
   } catch {
-    return false;
+    return null;
   }
+  return canonical === 'UTC' || /^[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+)+$/.test(canonical) ? canonical : null;
+}
+
+export function isValidTimeZone(tz: unknown): boolean {
+  return canonicalTimeZone(tz) !== null;
 }
 
 /**
@@ -147,6 +163,11 @@ export function todayIn(timeZone: string): CalendarDate {
 /** Formats a CalendarDate via UTC — never via a local Date, which would risk an off-by-one. */
 export function formatCalendarDate(d: CalendarDate, pattern: string): string {
   return toUtc(d).format(pattern);
+}
+
+/** The calendar day an instant falls on in the given IANA timezone. */
+export function calendarDayOf(date: Date, timeZone: string): CalendarDate {
+  return dayjs(date).tz(timeZone).format('YYYY-MM-DD') as CalendarDate;
 }
 
 /**

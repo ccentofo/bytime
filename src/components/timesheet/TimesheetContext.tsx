@@ -1,13 +1,13 @@
 'use client';
 
-import React, { createContext, useContext, useReducer, useCallback, useMemo, useEffect } from 'react';
+import React, { createContext, useContext, useReducer, useCallback, useMemo, useEffect, useRef } from 'react';
+import { notifications } from '@mantine/notifications';
 import type { TimesheetState, TimesheetAction, TimesheetPageData, DirtyCell } from '@/types/timesheet';
-import { DEFAULT_PERIOD_CONFIG, navigatePeriod, getNumDaysInPeriod } from '@/lib/date-utils';
 import { addDays, isBefore, type CalendarDate } from '@/lib/calendar-date';
-import { getTimesheetEntries, saveTimesheetBatch, getRevisionMap } from '@/server/actions/timesheet';
-import { submitPeriod, getPeriodStatus, getWorkspaceContext } from '@/server/actions/periods';
-import { getNeighborPeriod, getEffectiveConfigAt } from '@/server/actions/pay-period-config';
-import { seedOfflineStore, getOfflineEntries, getOfflineRevisions } from '@/lib/offline/offline-store';
+import { saveTimesheetBatch, getTimesheetPeriod } from '@/server/actions/timesheet';
+import { submitPeriod, getWorkspaceContext } from '@/server/actions/periods';
+import { getNeighborPeriod } from '@/server/actions/pay-period-config';
+import { seedOfflineStore } from '@/lib/offline/offline-store';
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -50,33 +50,27 @@ function timesheetReducer(
       return { ...state, activeNoteCell: null };
     }
 
-    case 'NAVIGATE_PERIOD': {
-      const newPeriodStart = navigatePeriod(state.periodStart, action.direction, state.periodConfig);
-      const emptyEntries = state.chargeCodes.map((cc) => ({
-        chargeCodeId: cc.id,
-        hours: [] as number[],
-      }));
-      return {
-        ...state,
-        periodStart: newPeriodStart,
-        entries: emptyEntries,
-        savedEntries: emptyEntries,
-        savedCellRevisions: {},
-        notes: {},
-        periodStatus: 'draft',
-        isLoadingPeriod: true,
-      };
+    case 'BEGIN_PERIOD_LOAD': {
+      // Keep showing the current period (read-only while loading) until the server returns the
+      // new one. The client never guesses the next period itself.
+      return { ...state, isLoadingPeriod: true };
+    }
+
+    case 'PERIOD_LOAD_FAILED': {
+      return { ...state, isLoadingPeriod: false };
     }
 
     case 'SET_PERIOD_DATA': {
       return {
         ...state,
         periodStart: action.periodStart,
+        numDays: action.numDays,
         entries: action.entries,
         savedEntries: action.entries.map((e) => ({ ...e, hours: [...e.hours] })),
         savedCellRevisions: action.revisions,
-        periodStatus: action.periodStatus ?? state.periodStatus,
-        periodConfig: action.periodConfig ?? state.periodConfig,
+        notes: {},
+        periodStatus: action.periodStatus,
+        periodConfig: action.periodConfig,
         isLoadingPeriod: false,
       };
     }
@@ -86,6 +80,9 @@ function timesheetReducer(
     }
 
     case 'MARK_SAVED': {
+      // A save that finishes after the user moved to another period must not touch that
+      // period's baseline: revision keys (`code-dayIndex`) don't say which period they're for.
+      if (action.periodStart !== state.periodStart) return { ...state, isSaving: false };
       return {
         ...state,
         savedEntries: action.entries.map((e) => ({ ...e, hours: [...e.hours] })),
@@ -152,13 +149,14 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
     savedCellRevisions: initialData.revisions ?? {},
     notes: {},
     periodStart: initialData.periodStart,
+    numDays: initialData.numDays,
     activeNoteCell: null,
     userId: initialData.userId,
     isSaving: false,
     isLoadingPeriod: false,
     periodStatus: initialData.periodStatus ?? 'draft',
     flsaExempt: initialData.flsaExempt ?? false,
-    periodConfig: initialData.periodConfig ?? DEFAULT_PERIOD_CONFIG,
+    periodConfig: initialData.periodConfig,
     today: initialData.today,
   };
 
@@ -231,6 +229,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
         // After successful save, update saved snapshot
         dispatch({
           type: 'MARK_SAVED',
+          periodStart: state.periodStart,
           entries: state.entries,
           revisions: newRevisions,
         });
@@ -240,124 +239,60 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
         throw error; // Re-throw so the UI can show error notification
       }
     },
-    [dirtyCells, state.userId, state.periodStart, state.entries]
+    [dirtyCells, state.periodStart, state.entries, state.chargeCodes, state.savedCellRevisions]
   );
 
-  const loadPeriod = useCallback(
-    async (direction: 'prev' | 'next') => {
-      dispatch({ type: 'NAVIGATE_PERIOD', direction });
+  // Each load gets a sequence number; a response that arrives after a newer load started is
+  // dropped, so out-of-order responses can never show (or save against) the wrong period.
+  const loadSeq = useRef(0);
 
+  const showPeriod = useCallback(
+    async (resolveStart: () => Promise<CalendarDate>) => {
+      const seq = ++loadSeq.current;
+      dispatch({ type: 'BEGIN_PERIOD_LOAD' });
       try {
-        // Server resolves the neighbor period start + the config effective there,
-        // handling schedule changes correctly (two-sided snap).
-        const neighbor = await getNeighborPeriod(state.periodStart, direction);
-        const { periodStart: newPeriodStart, periodConfig: neighborConfig, numDays } = neighbor;
-
-        // Parallel fetch — all 3 queries at once instead of sequential
-        const [entries, revisions, periodInfo] = await Promise.all([
-          getTimesheetEntries(newPeriodStart, state.chargeCodes),
-          getRevisionMap(newPeriodStart, numDays),
-          getPeriodStatus(newPeriodStart),
-        ]);
+        const period = await getTimesheetPeriod(await resolveStart());
+        if (seq !== loadSeq.current) return;
 
         // Fire-and-forget offline seeding — wrapped in try/catch to prevent IndexedDB errors from crashing the app
         try {
           seedOfflineStore({
             userId: state.userId,
-            periodStart: newPeriodStart,
+            periodStart: period.periodStart,
             chargeCodes: state.chargeCodes,
-            entries,
-            revisions,
-            periodStatus: periodInfo.status,
+            entries: period.entries,
+            revisions: period.revisions,
+            periodStatus: period.periodStatus,
           });
         } catch {
           // IndexedDB unavailable or corrupted — app continues without offline support
         }
 
-        dispatch({
-          type: 'SET_PERIOD_DATA',
-          periodStart: newPeriodStart,
-          entries,
-          revisions,
-          periodStatus: periodInfo.status,
-          periodConfig: neighborConfig,
-        });
+        dispatch({ type: 'SET_PERIOD_DATA', ...period });
       } catch (error) {
-        console.warn('Server unavailable, loading from offline store:', error);
-
-        // Fall back to offline store using current config as best-effort
-        const { periodStart: newPeriodStart } = await getNeighborPeriod(state.periodStart, direction).catch(() => ({
-          periodStart: state.periodStart,
-          periodConfig: state.periodConfig,
-          numDays: getNumDaysInPeriod(state.periodStart, state.periodConfig),
-        }));
-        const offlineEntries = await getOfflineEntries(newPeriodStart, state.chargeCodes);
-        const offlineRevisions = await getOfflineRevisions(newPeriodStart);
-
-        dispatch({
-          type: 'SET_PERIOD_DATA',
-          periodStart: newPeriodStart,
-          entries: offlineEntries,
-          revisions: offlineRevisions,
-        });
-      }
-    },
-    [state.periodStart, state.userId, state.chargeCodes, state.periodConfig]
-  );
-
-  const loadPeriodByDate = useCallback(
-    async (newPeriodStart: CalendarDate) => {
-      // Dispatch a navigate action to show loading state
-      dispatch({ type: 'NAVIGATE_PERIOD', direction: 'next' }); // Direction doesn't matter — we override below
-
-      // Resolve the schedule effective at the TARGET period (not the one we're leaving),
-      // so jumping across a pay-schedule change renders the correct period shape.
-      const periodConfig = await getEffectiveConfigAt(newPeriodStart);
-      const numDays = getNumDaysInPeriod(newPeriodStart, periodConfig);
-
-      try {
-        const [entries, revisions, periodInfo] = await Promise.all([
-          getTimesheetEntries(newPeriodStart, state.chargeCodes),
-          getRevisionMap(newPeriodStart, numDays),
-          getPeriodStatus(newPeriodStart),
-        ]);
-
-        // Fire-and-forget offline seeding — wrapped in try/catch to prevent IndexedDB errors from crashing the app
-        try {
-          seedOfflineStore({
-            userId: state.userId,
-            periodStart: newPeriodStart,
-            chargeCodes: state.chargeCodes,
-            entries,
-            revisions,
-            periodStatus: periodInfo.status,
-          });
-        } catch {
-          // IndexedDB unavailable or corrupted — app continues without offline support
-        }
-
-        dispatch({
-          type: 'SET_PERIOD_DATA',
-          periodStart: newPeriodStart,
-          entries,
-          revisions,
-          periodStatus: periodInfo.status,
-          periodConfig,
-        });
-      } catch (error) {
-        console.warn('Server unavailable, loading from offline store:', error);
-        const offlineEntries = await getOfflineEntries(newPeriodStart, state.chargeCodes);
-        const offlineRevisions = await getOfflineRevisions(newPeriodStart);
-        dispatch({
-          type: 'SET_PERIOD_DATA',
-          periodStart: newPeriodStart,
-          entries: offlineEntries,
-          revisions: offlineRevisions,
-          periodConfig,
+        if (seq !== loadSeq.current) return;
+        // Stay on the current period rather than showing cached data of unknown freshness.
+        console.error('Failed to load pay period:', error);
+        dispatch({ type: 'PERIOD_LOAD_FAILED' });
+        notifications.show({
+          title: 'Could not load that pay period',
+          message: 'Check your connection and try again.',
+          color: 'red',
         });
       }
     },
     [state.userId, state.chargeCodes]
+  );
+
+  const loadPeriod = useCallback(
+    (direction: 'prev' | 'next') =>
+      showPeriod(async () => (await getNeighborPeriod(state.periodStart, direction)).periodStart),
+    [showPeriod, state.periodStart]
+  );
+
+  const loadPeriodByDate = useCallback(
+    (periodStart: CalendarDate) => showPeriod(async () => periodStart),
+    [showPeriod]
   );
 
   const discardChanges = useCallback(() => {
@@ -380,7 +315,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
         dispatch({ type: 'SET_SAVING', isSaving: false });
       }
     },
-    [state.userId, state.periodStart]
+    [state.periodStart]
   );
 
   // D4: re-ask the server for "today" on focus and every few minutes, so a tab left open

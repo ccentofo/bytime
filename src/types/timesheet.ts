@@ -42,6 +42,7 @@ export interface TimesheetState {
   savedCellRevisions: Record<string, number>; // key="clinId-dayIndex", value=max revision number
   notes: Record<string, NoteData>;     // key = "chargeCodeId-dayIndex"
   periodStart: CalendarDate;
+  numDays: number; // the period's length, resolved by the server (never computed client-side)
   activeNoteCell: { chargeCodeId: string; dayIndex: number } | null;
   userId: string;
   isSaving: boolean;
@@ -57,10 +58,11 @@ export type TimesheetAction =
   | { type: 'SET_NOTE'; chargeCodeId: string; dayIndex: number; note: NoteData }
   | { type: 'OPEN_NOTE_MODAL'; chargeCodeId: string; dayIndex: number }
   | { type: 'CLOSE_NOTE_MODAL' }
-  | { type: 'NAVIGATE_PERIOD'; direction: 'prev' | 'next' }
-  | { type: 'SET_PERIOD_DATA'; periodStart: CalendarDate; entries: TimesheetEntry[]; revisions: Record<string, number>; periodStatus?: PeriodStatus; periodConfig?: PeriodConfig }
+  | { type: 'BEGIN_PERIOD_LOAD' }
+  | { type: 'PERIOD_LOAD_FAILED' }
+  | { type: 'SET_PERIOD_DATA'; periodStart: CalendarDate; numDays: number; entries: TimesheetEntry[]; revisions: Record<string, number>; periodStatus: PeriodStatus; periodConfig: PeriodConfig }
   | { type: 'SET_SAVING'; isSaving: boolean }
-  | { type: 'MARK_SAVED'; entries: TimesheetEntry[]; revisions: Record<string, number> }
+  | { type: 'MARK_SAVED'; periodStart: CalendarDate; entries: TimesheetEntry[]; revisions: Record<string, number> }
   | { type: 'DISCARD_CHANGES' }
   | { type: 'SET_PERIOD_STATUS'; status: PeriodStatus }
   | { type: 'SET_TODAY'; today: CalendarDate };
@@ -82,10 +84,11 @@ export interface TimesheetPageData {
   chargeCodes: ChargeCode[];
   entries: TimesheetEntry[];
   periodStart: CalendarDate;
+  numDays: number;
   today: CalendarDate;
   revisions?: Record<string, number>;
   periodStatus?: PeriodStatus;
   flsaExempt?: boolean;
   dashboardData?: EmployeeDashboardData;
-  periodConfig?: PeriodConfig;
+  periodConfig: PeriodConfig;
 }

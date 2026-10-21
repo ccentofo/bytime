@@ -24,6 +24,8 @@ import {
 vi.mock('@/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/db')>()),
   getDb: async () => getTestDb(),
+  // requireAdminFresh (updatePayPeriodConfig) re-reads the role through getDbForAuth.
+  getDbForAuth: async () => getTestDb(),
 }));
 
 const tenantState = vi.hoisted(() => ({ requestSlug: 'test-tenant' }));
@@ -55,7 +57,8 @@ vi.mock('@/auth', () => ({
 
 import { saveTimesheetBatch } from '@/server/actions/timesheet';
 import { resolvePeriod } from '@/server/internal/periods';
-import { updatePayPeriodConfig, getValidScheduleChangeDates } from '@/server/actions/pay-period-config';
+import { updatePayPeriodConfig, getValidScheduleChangeDates, getNeighborPeriod } from '@/server/actions/pay-period-config';
+import { getPeriodOptions } from '@/server/actions/periods';
 
 function actingAs(user: Awaited<ReturnType<typeof createTestUser>>) {
   sessionState.user = { id: user.id, role: user.role, email: user.email, fullName: user.fullName };
@@ -192,7 +195,8 @@ describe('Period-lock integrity (R2-2)', () => {
 
     beforeEach(async () => {
       admin = await createTestUser({ role: 'admin' });
-      vi.useFakeTimers();
+      // Fake only the clock: faking every timer can stall the Postgres driver.
+      vi.useFakeTimers({ toFake: ['Date'] });
       vi.setSystemTime(new Date(Date.UTC(2026, 0, 15, 12, 0, 0))); // 2026-01-15, mid-period noon UTC
     });
 
@@ -222,9 +226,10 @@ describe('Period-lock integrity (R2-2)', () => {
         anchorDate: '2025-01-06' as CalendarDate,
         weekStartDay: 1,
       });
-      expect(validDates.length).toBeGreaterThan(0);
+      expect(validDates.problem).toBeNull();
+      expect(validDates.dates.length).toBeGreaterThan(0);
 
-      const chosen = validDates[0];
+      const chosen = validDates.dates[0];
       const result = await updatePayPeriodConfig({
         periodType: 'biweekly',
         anchorDate: '2025-01-06' as CalendarDate,
@@ -255,6 +260,83 @@ describe('Period-lock integrity (R2-2)', () => {
           effectiveFrom: '2026-02-16' as CalendarDate,
         })
       ).rejects.toThrow(/week start day/i);
+    });
+
+    it('rejects an unknown period type or week start day', async () => {
+      actingAs(admin);
+      await expect(updatePayPeriodConfig({
+        periodType: 'fortnightly' as never, anchorDate: '2026-01-05' as CalendarDate, weekStartDay: 1, effectiveFrom: '2026-02-16' as CalendarDate,
+      })).rejects.toThrow(/Period type must be one of/);
+      await expect(updatePayPeriodConfig({
+        periodType: 'weekly', anchorDate: '2026-01-05' as CalendarDate, weekStartDay: 9, effectiveFrom: '2026-02-16' as CalendarDate,
+      })).rejects.toThrow(/Week start day/);
+    });
+
+    it('a workspace with no timesheets can apply a schedule immediately; once timesheets exist it cannot', async () => {
+      actingAs(admin);
+      const sundayWeekly = { periodType: 'weekly' as const, anchorDate: '2026-01-04' as CalendarDate, weekStartDay: 0 };
+
+      const before = await getValidScheduleChangeDates(sundayWeekly);
+      expect(before.immediate).toBe(true);
+      expect(await updatePayPeriodConfig({ ...sundayWeekly, effectiveFrom: null })).toEqual({ effectiveFrom: null });
+      const applied = await resolvePeriod('2026-01-11' as CalendarDate);
+      expect(applied.config.periodType).toBe('weekly');
+      expect(applied.numDays).toBe(7);
+
+      // Now there is timesheet data: changes must be scheduled for a future common boundary.
+      await getTestDb().insert(schema.timesheetEntries).values({
+        userId: employee.id, chargeCodeId: chargeCode.id, entryDate: '2026-01-12', hours: '8', revisionNumber: 1, createdBy: employee.id,
+      });
+      const after = await getValidScheduleChangeDates(sundayWeekly);
+      expect(after.immediate).toBe(false);
+      await expect(updatePayPeriodConfig({ ...sundayWeekly, effectiveFrom: null }))
+        .rejects.toThrow(/must start on a future date/);
+    });
+
+    it('explains a change that can never be scheduled instead of offering nothing silently', async () => {
+      actingAs(admin);
+      const db = getTestDb();
+      await db.insert(schema.payPeriodConfig).values({
+        periodType: 'weekly', anchorDate: '2026-01-05', weekStartDay: 1, effectiveFrom: '1900-01-01',
+      });
+      await db.insert(schema.timesheetEntries).values({
+        userId: employee.id, chargeCodeId: chargeCode.id, entryDate: '2026-01-12', hours: '8', revisionNumber: 1, createdBy: employee.id,
+      });
+      // Monday weeks → Sunday weeks: no day is a period start under both, ever.
+      const options = await getValidScheduleChangeDates({ periodType: 'weekly', anchorDate: '2026-01-04' as CalendarDate, weekStartDay: 0 });
+      expect(options.immediate).toBe(false);
+      expect(options.dates).toEqual([]);
+      expect(options.problem).toMatch(/no date in the next two years/i);
+    });
+  });
+
+  // Stepping by "one period of the current schedule" skipped periods when moving back from a
+  // longer schedule into a shorter one (semimonthly Nov 16 − 1 period = Nov 1 → weekly Oct 26,
+  // hiding the Nov 2 and Nov 9 weeks).
+  describe('period navigation across a schedule change', () => {
+    beforeEach(async () => {
+      const db = getTestDb();
+      await db.insert(schema.payPeriodConfig).values([
+        { periodType: 'weekly', anchorDate: '2026-01-05', weekStartDay: 1, effectiveFrom: '1900-01-01' },
+        { periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1, effectiveFrom: '2026-11-16' },
+      ]);
+    });
+
+    it('the prev arrow from the first new period lands on the last old one, and next comes back', async () => {
+      const prev = await getNeighborPeriod('2026-11-16' as CalendarDate, 'prev');
+      expect(prev).toMatchObject({ periodStart: '2026-11-09', numDays: 7 });
+      const next = await getNeighborPeriod('2026-11-09' as CalendarDate, 'next');
+      expect(next).toMatchObject({ periodStart: '2026-11-16', numDays: 15 });
+    });
+
+    it('the period list includes every period across the change', async () => {
+      const options = await getPeriodOptions('2026-11-16' as CalendarDate, 3, 1);
+      expect(options.map((o) => o.start)).toEqual(['2026-10-26', '2026-11-02', '2026-11-09', '2026-11-16', '2026-12-01']);
+    });
+
+    it('caps how many periods one call may build', async () => {
+      await expect(getPeriodOptions('2026-11-16' as CalendarDate, 61, 0)).rejects.toThrow(/0 to 60/);
+      await expect(getPeriodOptions('2026-11-16' as CalendarDate, 0, 1e9)).rejects.toThrow(/0 to 60/);
     });
   });
 

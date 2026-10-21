@@ -2,7 +2,7 @@ import 'server-only';
 import { cache } from 'react';
 import { getDb } from '@/db';
 import { workspaceSettings } from '@/db/schema';
-import { todayIn, isValidTimeZone, type CalendarDate } from '@/lib/calendar-date';
+import { todayIn, canonicalTimeZone, addMonths, daysInMonth, startOfMonth, withDayOfMonth, type CalendarDate } from '@/lib/calendar-date';
 
 const FALLBACK_TIMEZONE = 'America/New_York';
 
@@ -17,7 +17,7 @@ export const getWorkspaceTimezone = cache(async (): Promise<string> => {
   const db = await getDb();
   const [row] = await db.select({ timezone: workspaceSettings.timezone }).from(workspaceSettings).limit(1);
   const timezone = row?.timezone;
-  return timezone && isValidTimeZone(timezone) ? timezone : FALLBACK_TIMEZONE;
+  return canonicalTimeZone(timezone) ?? FALLBACK_TIMEZONE;
 });
 
 /**
@@ -31,3 +31,14 @@ export const getWorkspaceToday = cache(async (): Promise<CalendarDate> => {
   const timezone = await getWorkspaceTimezone();
   return todayIn(timezone);
 });
+
+/**
+ * Default manual-sync window for QuickBooks/Gusto: the start of the month two months back
+ * through the end of the current month, in the workspace's calendar (never the admin's browser).
+ */
+export async function getDefaultSyncWindow(): Promise<{ periodStart: CalendarDate; periodEnd: CalendarDate }> {
+  const today = await getWorkspaceToday();
+  const periodStart = startOfMonth(addMonths(today, -2));
+  const periodEnd = withDayOfMonth(today, daysInMonth(today));
+  return { periodStart, periodEnd };
+}

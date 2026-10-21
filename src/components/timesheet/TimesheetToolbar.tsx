@@ -7,7 +7,6 @@ import { useTimesheet } from '@/components/timesheet/TimesheetContext';
 import { useState, useMemo } from 'react';
 import { ReasonModal } from '@/components/timesheet/ReasonModal';
 import { SubmitModal } from '@/components/timesheet/SubmitModal';
-import { getNumDaysInPeriod, getLastWeekdayInPeriod } from '@/lib/date-utils';
 import { addDays, dayOfWeek, formatCalendarDate, isAfter, isBefore, type CalendarDate } from '@/lib/calendar-date';
 import { PERIOD_STATUS_COLOR } from '@/lib/ui/status-colors';
 
@@ -28,13 +27,14 @@ export function TimesheetToolbar() {
   const isEditable = periodStatus === 'draft' || periodStatus === 'rejected';
 
   // Build period label for the submit modal
-  const numDays = getNumDaysInPeriod(periodStart, state.periodConfig);
+  const numDays = state.numDays; // server-resolved
   const end = addDays(periodStart, numDays - 1);
   const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(end, 'MMM D, YYYY')}`;
 
   // Submit only available on or after the last WEEKDAY of the pay period, per the WORKSPACE's
   // today (state.today — server-resolved, never the browser's clock).
-  const lastWeekday = getLastWeekdayInPeriod(periodStart, state.periodConfig);
+  let lastWeekday = end;
+  while (dayOfWeek(lastWeekday) === 0 || dayOfWeek(lastWeekday) === 6) lastWeekday = addDays(lastWeekday, -1);
   const isPeriodComplete = !isBefore(state.today, lastWeekday);
   const canSubmit = isEditable && dirtyCount === 0 && isPeriodComplete
     && state.entries.some((e) => e.hours.some((h) => h > 0));
@@ -277,14 +277,14 @@ export function TimesheetToolbar() {
                 variant="default"
                 leftSection={<IconArrowBack size={16} />}
                 onClick={handleDiscard}
-                disabled={dirtyCount === 0}
+                disabled={dirtyCount === 0 || state.isLoadingPeriod}
               >
                 Discard Changes
               </Button>
               <Button
                 leftSection={<IconDeviceFloppy size={16} />}
                 onClick={handleSave}
-                disabled={dirtyCount === 0}
+                disabled={dirtyCount === 0 || state.isLoadingPeriod}
                 loading={state.isSaving}
               >
                 Save
@@ -294,7 +294,7 @@ export function TimesheetToolbar() {
                   color="success"
                   leftSection={<IconSend size={16} />}
                   onClick={() => setSubmitModalOpen(true)}
-                  disabled={!canSubmit}
+                  disabled={!canSubmit || state.isLoadingPeriod}
                   title={!isPeriodComplete ? `Submit available on ${formatCalendarDate(lastWeekday, 'MMM D, YYYY')}` : undefined}
                 >
                   Submit

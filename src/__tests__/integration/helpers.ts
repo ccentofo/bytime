@@ -118,6 +118,8 @@ export async function cleanupTestData() {
   // Cascades to integration mappings, sync logs and sync records. connected_by references users.
   await db.delete(schema.integrationConnections);
   await db.delete(schema.users);
+  // Pay schedule history: tests that change the schedule must not leak it into later tests.
+  await db.delete(schema.payPeriodConfig);
   // Single-row table (seeded by migration 0011) — reset to the default rather than delete, so
   // a test that mutates the workspace timezone can't leak into the next test in the suite.
   await db.update(schema.workspaceSettings).set({ timezone: 'America/New_York' });

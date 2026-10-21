@@ -19,7 +19,7 @@ import {
 import { eq, and, gte, lt, sql } from 'drizzle-orm';
 import { decrypt } from '@/lib/encryption';
 import { getConnector } from './registry';
-import { resolvePeriod } from '@/server/internal/periods';
+import { existingPeriodLength } from '@/server/internal/pay-period-config';
 import { addDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import type { SyncContext, TimesheetSyncEntry, SyncResult } from './types';
 
@@ -40,6 +40,7 @@ export async function getApprovedEntriesForSync(
     .select({
       userId: timesheetPeriods.userId,
       periodStart: timesheetPeriods.periodStart,
+      periodNumDays: timesheetPeriods.periodNumDays,
       approvedAt: timesheetPeriods.reviewedAt,
     })
     .from(timesheetPeriods)
@@ -60,7 +61,7 @@ export async function getApprovedEntriesForSync(
     // D3/D6 §0.6: this period's REAL length from its effective config, never a hard-coded
     // semimonthly (1st/16th) assumption — a weekly or biweekly tenant would otherwise have its
     // sync window silently truncated or overrun.
-    const { numDays } = await resolvePeriod(pStart);
+    const numDays = await existingPeriodLength(db, pStart, period.periodNumDays);
     const pEndExclusive = addDays(pStart, numDays);
 
     const rows = await db
@@ -95,7 +96,7 @@ export async function getApprovedEntriesForSync(
               SELECT MAX(te2.revision_number)
               FROM timesheet_entries te2
               WHERE te2.user_id = ${timesheetEntries.userId}
-                AND COALESCE(te2.clin_id, te2.indirect_code_id) = COALESCE(${timesheetEntries.clinId}, ${timesheetEntries.indirectCodeId})
+                AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                 AND te2.entry_date = ${timesheetEntries.entryDate}
             )`
           ),

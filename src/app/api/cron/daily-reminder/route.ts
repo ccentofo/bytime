@@ -40,52 +40,60 @@ export async function GET(request: NextRequest) {
 
   let totalSent = 0;
 
+  // One unreachable or unmigrated tenant must not stop reminders for every tenant after it.
+  const failedTenants: string[] = [];
+
   for (const tenant of activeTenants) {
-    const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted));
+    try {
+      const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted));
 
-    // D7: "today" and the weekend skip are evaluated per-tenant, in THAT tenant's workspace
-    // timezone — never the cron process's own (UTC) clock, which would call it Saturday for a
-    // tenant where it's already Monday morning, or vice versa.
-    const [settingsRow] = await db.select({ timezone: workspaceSettings.timezone }).from(workspaceSettings).limit(1);
-    const timezone = settingsRow?.timezone && isValidTimeZone(settingsRow.timezone) ? settingsRow.timezone : FALLBACK_TIMEZONE;
-    const today = todayIn(timezone);
-    const dow = dayOfWeek(today);
-    if (dow === 0 || dow === 6) continue;
+      // D7: "today" and the weekend skip are evaluated per-tenant, in THAT tenant's workspace
+      // timezone — never the cron process's own (UTC) clock, which would call it Saturday for a
+      // tenant where it's already Monday morning, or vice versa.
+      const [settingsRow] = await db.select({ timezone: workspaceSettings.timezone }).from(workspaceSettings).limit(1);
+      const timezone = settingsRow?.timezone && isValidTimeZone(settingsRow.timezone) ? settingsRow.timezone : FALLBACK_TIMEZONE;
+      const today = todayIn(timezone);
+      const dow = dayOfWeek(today);
+      if (dow === 0 || dow === 6) continue;
 
-    // Get all active employees for this tenant
-    const allEmployees = await db
-      .select({ id: users.id, fullName: users.fullName, email: users.email })
-      .from(users)
-      .where(and(eq(users.isActive, true), eq(users.role, 'employee')));
+      // Get all active employees for this tenant
+      const allEmployees = await db
+        .select({ id: users.id, fullName: users.fullName, email: users.email })
+        .from(users)
+        .where(and(eq(users.isActive, true), eq(users.role, 'employee')));
 
-    // Find who has entered time today
-    const entriesForToday = await db
-      .select({ userId: timesheetEntries.userId })
-      .from(timesheetEntries)
-      .where(eq(timesheetEntries.entryDate, today));
+      // Find who has entered time today
+      const entriesForToday = await db
+        .select({ userId: timesheetEntries.userId })
+        .from(timesheetEntries)
+        .where(eq(timesheetEntries.entryDate, today));
 
-    const usersWithEntries = new Set(entriesForToday.map((e) => e.userId));
+      const usersWithEntries = new Set(entriesForToday.map((e) => e.userId));
 
-    for (const emp of allEmployees) {
-      if (usersWithEntries.has(emp.id)) continue;
+      for (const emp of allEmployees) {
+        if (usersWithEntries.has(emp.id)) continue;
 
-      const prefs = await db
-        .select({ enabled: notificationPreferences.emailDailyReminder })
-        .from(notificationPreferences)
-        .where(eq(notificationPreferences.userId, emp.id));
+        const prefs = await db
+          .select({ enabled: notificationPreferences.emailDailyReminder })
+          .from(notificationPreferences)
+          .where(eq(notificationPreferences.userId, emp.id));
 
-      const enabled = prefs.length === 0 ? true : prefs[0].enabled;
+        const enabled = prefs.length === 0 ? true : prefs[0].enabled;
 
-      if (enabled) {
-        await sendDailyReminderEmail({
-          employeeEmail: emp.email,
-          employeeName: emp.fullName,
-          todayDate: formatCalendarDate(today, 'dddd, MMM D, YYYY'),
-        });
-        totalSent++;
+        if (enabled) {
+          await sendDailyReminderEmail({
+            employeeEmail: emp.email,
+            employeeName: emp.fullName,
+            todayDate: formatCalendarDate(today, 'dddd, MMM D, YYYY'),
+          });
+          totalSent++;
+        }
       }
+    } catch (err) {
+      failedTenants.push(tenant.slug);
+      console.error(`Cron: tenant ${tenant.slug} failed:`, err);
     }
   }
 
-  return NextResponse.json({ message: 'Daily reminders sent', sent: totalSent });
+  return NextResponse.json({ message: 'Daily reminders sent', sent: totalSent, failedTenants });
 }

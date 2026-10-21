@@ -1,5 +1,6 @@
 'use server';
 
+import { getDefaultSyncWindow } from '@/server/internal/workspace-settings';
 import { getDb } from '@/db';
 import { integrationConnections, users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
@@ -44,15 +45,19 @@ export async function getBytimeEmployeesForGustoMapping() {
  */
 export async function triggerGustoSync(data: {
   connectionId: string;
-  periodStart: CalendarDate;
-  periodEnd: CalendarDate;
+  /** Omit both to use the default window, computed in the workspace's calendar. */
+  periodStart?: CalendarDate;
+  periodEnd?: CalendarDate;
 }) {
   const actor = await requireAdmin();
+  const window = data.periodStart && data.periodEnd
+    ? { periodStart: parseCalendarDate(data.periodStart), periodEnd: parseCalendarDate(data.periodEnd) }
+    : await getDefaultSyncWindow();
   return executeSyncOperation(
     data.connectionId,
     'timesheet_push',
-    parseCalendarDate(data.periodStart),
-    parseCalendarDate(data.periodEnd),
+    window.periodStart,
+    window.periodEnd,
     actor.id,
     'manual'
   );

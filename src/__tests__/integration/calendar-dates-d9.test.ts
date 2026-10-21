@@ -120,7 +120,7 @@ describe('D9 — calendar-date correctness regardless of clock/timezone', () => 
     try {
       // Fake "now" to the last day of that period (Sun Jan 18, noon Eastern) — on/after the last
       // weekday (Fri Jan 16), so submission is allowed.
-      vi.useFakeTimers();
+      vi.useFakeTimers({ toFake: ['Date'] }); // clock only: faking all timers stalls the Postgres driver
       vi.setSystemTime(new Date('2026-01-18T17:00:00Z'));
 
       actingAs(employee);
@@ -158,7 +158,7 @@ describe('D9 — calendar-date correctness regardless of clock/timezone', () => 
     try {
       // 10pm Eastern on Jan 15 2026 is 3am UTC on Jan 16. A server that used UTC "today" would
       // think today is Jan 16, making an entry for Jan 15 look like a late (yesterday) entry.
-      vi.useFakeTimers();
+      vi.useFakeTimers({ toFake: ['Date'] }); // clock only: faking all timers stalls the Postgres driver
       vi.setSystemTime(new Date('2026-01-16T03:00:00Z'));
 
       actingAs(employee);
@@ -188,8 +188,10 @@ describe('D9 — calendar-date correctness regardless of clock/timezone', () => 
     await db.insert(schema.userChargeCodes).values({ userId: employee.id, chargeCodeId: chargeCode.id, isActive: true });
 
     try {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date('2026-01-15T17:00:00Z')); // noon Eastern, Jan 15
+      vi.useFakeTimers({ toFake: ['Date'] }); // clock only: faking all timers stalls the Postgres driver
+      // Noon Eastern, Jan 14: "tomorrow" (Jan 15) is still inside the Jan 1–15 period (day 14),
+      // so the future-date rule, not the day-index bound, is what rejects it.
+      vi.setSystemTime(new Date('2026-01-14T17:00:00Z'));
 
       actingAs(employee);
       const periodStart = '2026-01-01' as CalendarDate;
@@ -197,13 +199,13 @@ describe('D9 — calendar-date correctness regardless of clock/timezone', () => 
       await expect(
         saveTimesheetBatch({
           periodStart,
-          cells: [{ chargeCodeId: chargeCode.id, dayIndex: 15, hours: 8, isEdit: false, isLateEntry: false }], // day 15 = Jan 16 (tomorrow)
+          cells: [{ chargeCodeId: chargeCode.id, dayIndex: 14, hours: 8, isEdit: false, isLateEntry: false }], // day 14 = Jan 15 (tomorrow)
         })
       ).rejects.toThrow(/future date/i);
 
       await saveTimesheetBatch({
         periodStart,
-        cells: [{ chargeCodeId: chargeCode.id, dayIndex: 14, hours: 8, isEdit: false, isLateEntry: false }], // day 14 = Jan 15 (today)
+        cells: [{ chargeCodeId: chargeCode.id, dayIndex: 13, hours: 8, isEdit: false, isLateEntry: false }], // day 13 = Jan 14 (today)
       });
       const rows = await db.select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.chargeCodeId, chargeCode.id));
       expect(rows).toHaveLength(1);
@@ -224,7 +226,7 @@ describe('D9 — calendar-date correctness regardless of clock/timezone', () => 
     const db = getTestDb();
     await db.insert(schema.userChargeCodes).values({ userId: employee.id, chargeCodeId: chargeCode.id, isActive: true });
 
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['Date'] }); // clock only: faking all timers stalls the Postgres driver
     vi.setSystemTime(new Date('2026-01-05T17:00:00Z')); // noon Eastern, Jan 5 — same day as the entry
 
     actingAs(employee);

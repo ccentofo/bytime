@@ -4,7 +4,7 @@ import { timesheetEntries, timesheetPeriods, users, clins, contracts, indirectCh
 import { eq, and, gte, lt, sql } from 'drizzle-orm';
 import { validateApiKey, apiResponse, apiError } from '@/lib/api-auth';
 import { addDays, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
-import { resolvePeriod } from '@/server/internal/periods';
+import { existingPeriodLength } from '@/server/internal/pay-period-config';
 
 // Date format: `startDate`/`endDate` query params and every `periodStart`/`entryDate` in the
 // response are plain 'YYYY-MM-DD' calendar-date strings — never an ISO instant/timestamp.
@@ -30,6 +30,7 @@ export async function GET(request: NextRequest) {
       .select({
         userId: timesheetPeriods.userId,
         periodStart: timesheetPeriods.periodStart,
+        periodNumDays: timesheetPeriods.periodNumDays,
         approvedAt: timesheetPeriods.reviewedAt,
       })
       .from(timesheetPeriods)
@@ -47,7 +48,9 @@ export async function GET(request: NextRequest) {
       // D3/§0.6: bound the window to this period's REAL length — the original query had no
       // upper bound at all here, so it silently pulled every later period's entries too.
       const pStart = period.periodStart as CalendarDate;
-      const { numDays } = await resolvePeriod(pStart);
+      // Session-free and non-throwing: API-key callers have no session, and a stored period must
+      // stay readable even if it doesn't line up with today's schedule.
+      const numDays = await existingPeriodLength(db, pStart, period.periodNumDays);
       const pEndExclusive = addDays(pStart, numDays);
       const entries = await db
         .select({
@@ -75,7 +78,7 @@ export async function GET(request: NextRequest) {
                 SELECT MAX(te2.revision_number)
                 FROM timesheet_entries te2
                 WHERE te2.user_id = ${timesheetEntries.userId}
-                  AND COALESCE(te2.clin_id, te2.indirect_code_id) = COALESCE(${timesheetEntries.clinId}, ${timesheetEntries.indirectCodeId})
+                  AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
                   AND te2.entry_date = ${timesheetEntries.entryDate}
               )`
             ),

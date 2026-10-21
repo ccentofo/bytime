@@ -7,7 +7,7 @@ import { getDbForUrl } from '@/db';
 import * as schema from '@/db/schema';
 import { createNeonDatabase } from './neon';
 import { migrateTenantDatabase } from './migrate-tenant';
-import { isValidTimeZone } from '@/lib/calendar-date';
+import { canonicalTimeZone } from '@/lib/calendar-date';
 
 const RESERVED_SLUGS = new Set(['www', 'app', 'api', 'admin', 'static', 'assets', 'mail', 'support']);
 
@@ -79,7 +79,7 @@ export async function provisionTenant(input: ProvisionInput): Promise<ProvisionR
   // D8: seed workspace_settings with the signer's captured timezone (validated; the column's
   // own default covers a missing/invalid value). Migration 0011 seeds this row too, so this is
   // an upsert, not a bare insert — safe to re-run on a resumed provision.
-  const timezone = input.timezone && isValidTimeZone(input.timezone) ? input.timezone : undefined;
+  const timezone = canonicalTimeZone(input.timezone) ?? undefined;
   if (timezone) {
     await db.insert(schema.workspaceSettings).values({ id: 1, timezone })
       .onConflictDoUpdate({ target: schema.workspaceSettings.id, set: { timezone, updatedAt: new Date() } });

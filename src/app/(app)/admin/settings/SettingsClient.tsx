@@ -17,11 +17,11 @@ import {
 import { DatePickerInput } from '@mantine/dates';
 import { IconAlertCircle, IconCheck, IconClock } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
-import { updatePayPeriodConfig, getValidScheduleChangeDates, type ConfigHistoryRow, type UpdatePayPeriodConfigResult } from '@/server/actions/pay-period-config';
+import { updatePayPeriodConfig, getValidScheduleChangeDates, type ConfigHistoryRow, type ScheduleChangeOptions, type UpdatePayPeriodConfigResult } from '@/server/actions/pay-period-config';
 import { updateWorkspaceTimezone } from '@/server/actions/workspace-settings';
 import type { PeriodConfig, PeriodType } from '@/lib/date-utils';
 import { formatDate } from '@/lib/format';
-import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { dayOfWeek, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { PageHeader } from '@/components/ui/PageHeader';
 
 interface Props {
@@ -30,9 +30,20 @@ interface Props {
   initialTimezone: string;
 }
 
-const TIMEZONE_OPTIONS = typeof Intl.supportedValuesOf === 'function'
-  ? Intl.supportedValuesOf('timeZone').map((tz) => ({ value: tz, label: tz }))
+const BROWSER_TIMEZONES: string[] = typeof Intl.supportedValuesOf === 'function'
+  ? Intl.supportedValuesOf('timeZone')
   : [];
+
+/** The browser's zone list, always including `current`: browsers disagree on names
+ *  (e.g. Asia/Calcutta vs Asia/Kolkata) and some omit UTC, and a Select whose value isn't
+ *  among its options renders blank. */
+function timezoneOptions(current: string | null) {
+  const zones = current && !BROWSER_TIMEZONES.includes(current) ? [current, ...BROWSER_TIMEZONES] : BROWSER_TIMEZONES;
+  return zones.map((tz) => ({ value: tz, label: tz }));
+}
+
+const IMMEDIATE = 'immediate';
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 const PERIOD_TYPE_OPTIONS = [
   { value: 'weekly', label: 'Weekly (7 days, Mon–Sun)' },
@@ -61,16 +72,19 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
   const [scheduledEffectiveFrom, setScheduledEffectiveFrom] = useState<CalendarDate | null>(
     pendingChange ? pendingChange.effectiveFrom : null
   );
+  const [scheduledPeriodType, setScheduledPeriodType] = useState<PeriodType | null>(
+    pendingChange ? pendingChange.periodType : null
+  );
 
   // §0.9: effective_from must be a boundary common to both the current and the new schedule —
   // the server computes and offers the valid choices; the client never picks one out of thin air.
-  const [effectiveFromOptions, setEffectiveFromOptions] = useState<CalendarDate[]>([]);
-  const [selectedEffectiveFrom, setSelectedEffectiveFrom] = useState<CalendarDate | null>(null);
+  const [changeOptions, setChangeOptions] = useState<ScheduleChangeOptions | null>(null);
+  const [selectedEffectiveFrom, setSelectedEffectiveFrom] = useState<string | null>(null);
   const [loadingOptions, setLoadingOptions] = useState(false);
 
   useEffect(() => {
     if (!anchorDate) {
-      setEffectiveFromOptions([]);
+      setChangeOptions(null);
       setSelectedEffectiveFrom(null);
       return;
     }
@@ -78,13 +92,13 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
     setLoadingOptions(true);
     setSelectedEffectiveFrom(null);
     getValidScheduleChangeDates({ periodType, anchorDate, weekStartDay: parseInt(weekStartDay, 10) })
-      .then((dates) => {
+      .then((options) => {
         if (cancelled) return;
-        setEffectiveFromOptions(dates);
-        setSelectedEffectiveFrom(dates[0] ?? null);
+        setChangeOptions(options);
+        setSelectedEffectiveFrom(options.immediate ? IMMEDIATE : (options.dates[0] ?? null));
       })
-      .catch(() => {
-        if (!cancelled) setEffectiveFromOptions([]);
+      .catch((error) => {
+        if (!cancelled) setChangeOptions({ immediate: false, dates: [], problem: error instanceof Error ? error.message : String(error) });
       })
       .finally(() => {
         if (!cancelled) setLoadingOptions(false);
@@ -95,16 +109,19 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
   }, [periodType, anchorDate, weekStartDay]);
 
   const [timezone, setTimezone] = useState<string | null>(initialTimezone);
+  const [savedTimezone, setSavedTimezone] = useState<string>(initialTimezone);
   const [isTimezonePending, startTimezoneTransition] = useTransition();
 
   function handleSaveTimezone() {
     if (!timezone) return;
     startTimezoneTransition(async () => {
       try {
-        await updateWorkspaceTimezone(timezone);
+        const stored = await updateWorkspaceTimezone(timezone);
+        setSavedTimezone(stored);
+        setTimezone(stored);
         notifications.show({
           title: 'Workspace timezone updated',
-          message: `"Today" and every late/future-date rule now use ${timezone}.`,
+          message: `"Today" and every late/future-date rule now use ${stored}.`,
           color: 'success',
           icon: <IconCheck size={16} />,
         });
@@ -130,12 +147,15 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
           periodType,
           anchorDate,
           weekStartDay: parseInt(weekStartDay, 10),
-          effectiveFrom: selectedEffectiveFrom,
+          effectiveFrom: selectedEffectiveFrom === IMMEDIATE ? null : (selectedEffectiveFrom as CalendarDate),
         });
         setScheduledEffectiveFrom(result.effectiveFrom);
+        setScheduledPeriodType(result.effectiveFrom ? periodType : null);
         notifications.show({
           title: 'Schedule change saved',
-          message: `Your new ${PERIOD_TYPE_LABELS[periodType]} schedule takes effect ${formatDate(result.effectiveFrom)}. Current and past periods are unchanged.`,
+          message: result.effectiveFrom
+            ? `Your new ${PERIOD_TYPE_LABELS[periodType]} schedule takes effect ${formatDate(result.effectiveFrom)}. Current and past periods are unchanged.`
+            : `Your ${PERIOD_TYPE_LABELS[periodType]} schedule is now in effect.`,
           color: 'success',
           icon: <IconCheck size={16} />,
           autoClose: 8000,
@@ -147,6 +167,10 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
   }
 
   const showAnchorDate = periodType === 'weekly' || periodType === 'biweekly';
+  const effectiveFromChoices = [
+    ...(changeOptions?.immediate ? [{ value: IMMEDIATE, label: 'Immediately (no timesheets entered yet)' }] : []),
+    ...(changeOptions?.dates ?? []).map((d) => ({ value: d, label: formatDate(d) })),
+  ];
 
   return (
     <Container size="md" py="xl">
@@ -164,14 +188,14 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
         </Text>
         <Group align="flex-end">
           <Select
-            data={TIMEZONE_OPTIONS}
+            data={timezoneOptions(timezone)}
             value={timezone}
             onChange={setTimezone}
             searchable
             allowDeselect={false}
             w={320}
           />
-          <Button onClick={handleSaveTimezone} loading={isTimezonePending} disabled={timezone === initialTimezone}>
+          <Button onClick={handleSaveTimezone} loading={isTimezonePending} disabled={!timezone || timezone === savedTimezone}>
             Save Timezone
           </Button>
         </Group>
@@ -185,7 +209,7 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
           <Alert icon={<IconClock size={16} />} color="signal" variant="light" mb="lg">
             <Group gap="xs">
               <Text size="sm">
-                <strong>Scheduled change:</strong> Your new {PERIOD_TYPE_LABELS[periodType] ?? periodType} schedule
+                <strong>Scheduled change:</strong> Your new {PERIOD_TYPE_LABELS[scheduledPeriodType ?? periodType] ?? periodType} schedule
                 takes effect <strong>{formatDate(scheduledEffectiveFrom)}</strong>.
                 Current and past periods are unchanged.
               </Text>
@@ -222,12 +246,13 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
               <Text fw={600} size="sm" mb="xs">Anchor Date</Text>
               <Text size="xs" c="dimmed" mb="sm">
                 {periodType === 'biweekly'
-                  ? 'A Monday that marks the start of a bi-weekly period. All periods are calculated relative to this date.'
-                  : 'A Monday that marks the start of a weekly period.'}
+                  ? `A ${DAY_NAMES[parseInt(weekStartDay, 10)]} that marks the start of a bi-weekly period. All periods are calculated relative to this date.`
+                  : `A ${DAY_NAMES[parseInt(weekStartDay, 10)]} that marks the start of a weekly period.`}
               </Text>
               <DatePickerInput
                 value={anchorDate}
                 onChange={(val) => setAnchorDate(val && isCalendarDate(val) ? val : null)}
+                excludeDate={(d) => isCalendarDate(d) && dayOfWeek(d) !== parseInt(weekStartDay, 10)}
                 placeholder="Select anchor date..."
                 w={240}
               />
@@ -255,14 +280,17 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
               change.
             </Text>
             <Select
-              data={effectiveFromOptions.map((d) => ({ value: d, label: formatDate(d) }))}
+              data={effectiveFromChoices}
               value={selectedEffectiveFrom}
-              onChange={(val) => setSelectedEffectiveFrom(val as CalendarDate | null)}
-              placeholder={loadingOptions ? 'Finding valid dates…' : effectiveFromOptions.length === 0 ? 'No valid date found — try a different anchor' : 'Select effective date...'}
-              disabled={loadingOptions || effectiveFromOptions.length === 0}
-              w={260}
+              onChange={setSelectedEffectiveFrom}
+              placeholder={loadingOptions ? 'Finding valid dates…' : effectiveFromChoices.length === 0 ? 'No valid date' : 'Select effective date...'}
+              disabled={loadingOptions || effectiveFromChoices.length === 0}
+              w={320}
               allowDeselect={false}
             />
+            {!loadingOptions && changeOptions?.problem && (
+              <Text size="xs" c="red" mt="xs">{changeOptions.problem}</Text>
+            )}
           </div>
 
           <Group>
