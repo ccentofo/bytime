@@ -12,24 +12,25 @@
 
 ## 0. Decisions required before starting (BLOCKING — product owner fills in)
 
-Answer each, then replace `TBD` here and in `src/lib/tenant/lifecycle-config.ts` (Phase T2).
-Engineering defaults are listed only where the Terms already state the value.
+Answered 2026-10-21. Values live in `src/lib/tenant/lifecycle-config.ts` (created ahead of Phase T2;
+T2 adds `lifecycle.ts` on top of it). The Terms drafts in `business/legal/` were updated to match
+(§3.2, §4.7, §9.2, §9.3 and the `[14]`/`[15]`/`[30]` placeholders).
 
 | ID | Question | Terms basis | Answer |
 |---|---|---|---|
-| D1 | Trial length: exactly 30 days? Does it start at workspace creation (email verified)? | §3.1 "up to 30 days" | TBD |
-| D2 | Trial-end reminder emails: how many, and how many days before the end (e.g. 7 and 1)? | §3.2 "before the trial ends" | TBD |
-| D3 | Days of notice before deletion (fills the `[14]` placeholder). | §3.3 | TBD |
-| D4 | After the 90-day window: delete **automatically** (cron), or **founder-run** after the notice? | §3.3/§9.2 "may"; Privacy §7 "deleted" | TBD |
-| D5 | In read-only mode (trial expired / subscription ended), who may export: admins only, or every user (employees only their own data)? | §3.2 "your Users can view and export" | TBD |
-| D6 | Export during the 90 days after a subscription ends: self-service in the read-only workspace, or support-run "on request"? | §9.2 "on request" | TBD |
-| D7 | Payment grace: days overdue before suspension (fills `[15]`), and how many days of email notice precede suspension? | §4.7 | TBD |
-| D8 | While **suspended** (unpaid), may admins export? (The Terms promise only sign-in to pay.) | §4.7 vs §9.1 | TBD |
-| D9 | When does an unpaid, suspended workspace count as "terminated", starting the 90-day deletion clock? (e.g. N days suspended, or when Stripe gives up and deletes the subscription) | §9.2, §17 | TBD |
-| D10 | Who receives notices: all active admins of the workspace, the original signup email, or both? | §20.4 "administrators' email addresses" | TBD |
-| D11 | Backup window after deletion (fills `[30]`). Engineering note: Neon keeps a deleted project restorable for a period set by Neon, and PITR history follows the project's retention setting; the value chosen must be ≥ what Neon actually retains (see T7.4). | §9.3, Privacy §7 | TBD |
-| D12 | Export scope: only §1 "Customer Data", or also login attempts, integration sync logs, notification preferences, API-key metadata? | §1, §9.1 | TBD |
-| D13 | Terms version string to record at signup (e.g. `2026-10-draft-1`), and the final Terms/Privacy text for `/terms` and `/privacy`. | checklist #1–2 | TBD |
+| D1 | Trial length: exactly 30 days? Does it start at workspace creation (email verified)? | §3.1 "up to 30 days" | **30 days exactly**, starting when the workspace is provisioned (after email verification): `trial_ends_at = provisioned_at + 30d`, exact timestamp. Backfill: `max(created_at + 30d, backfill_time + 14d)` so nobody already mid-trial loses access without warning. → `TRIAL_DAYS`, `TRIAL_BACKFILL_MIN_DAYS` |
+| D2 | Trial-end reminder emails: how many, and how many days before the end (e.g. 7 and 1)? | §3.2 "before the trial ends" | **Two reminders: 7 days and 1 day before the end**, plus a `trial-ended` notice at the end. → `TRIAL_REMINDER_DAYS_BEFORE = [7, 1]` |
+| D3 | Days of notice before deletion (fills the `[14]` placeholder). | §3.3 | **14 days** (the contractual notice; fills `[14]`), plus a courtesy final reminder **3 days** before. `tenant:delete` checks against the 14-day notice. → `DELETION_NOTICE_DAYS`, `DELETION_FINAL_REMINDER_DAYS` |
+| D4 | After the 90-day window: delete **automatically** (cron), or **founder-run** after the notice? | §3.3/§9.2 "may"; Privacy §7 "deleted" | **Founder-run** at launch (`AUTO_DELETE = false`). The cron flags due tenants in its summary; the founder runs `tenant:delete` within **7 days** of `deletion_scheduled_for` (so Privacy §7 "deleted" stays true). Revisit once deletions are routine. → `AUTO_DELETE`, `DELETION_SLA_DAYS` |
+| D5 | In read-only mode (trial expired / subscription ended), who may export: admins only, or every user (employees only their own data)? | §3.2 "your Users can view and export" | **Full-workspace export: admins only.** Every user can still sign in and view; employees and supervisors keep their normal role-scoped views and downloads (no new export for them). Terms §3.2 reworded to match. → `READ_ONLY_EXPORT_ROLES = ['admin']` |
+| D6 | Export during the 90 days after a subscription ends: self-service in the read-only workspace, or support-run "on request"? | §9.2 "on request" | **Self-service**: admins sign in to the read-only workspace and export it themselves. No support ticket. Terms §9.2 reworded to match. → `POST_END_SELF_SERVICE_EXPORT = true` |
+| D7 | Payment grace: days overdue before suspension (fills `[15]`), and how many days of email notice precede suspension? | §4.7 | **15 days past due** before suspension (fills `[15]`), counted from the first failed charge or an unpaid invoice's due date. Notices: `payment-failed` on day 0, `suspension-warning` **3 days** before suspension, `suspended` at suspension. → `PAYMENT_GRACE_DAYS`, `SUSPENSION_NOTICE_DAYS` |
+| D8 | While **suspended** (unpaid), may admins export? (The Terms promise only sign-in to pay.) | §4.7 vs §9.1 | **Yes**, admins may export while suspended. It's their audit record (§8.1); holding it hostage is a bad look. Terms §4.7 updated to say so. → `SUSPENDED_EXPORT_ALLOWED = true` |
+| D9 | When does an unpaid, suspended workspace count as "terminated", starting the 90-day deletion clock? (e.g. N days suspended, or when Stripe gives up and deletes the subscription) | §9.2, §17 | **30 days after suspension** (day 45 past due). The cron cancels the Stripe subscription, sets `subscription_ended_at`, and the workspace follows the normal subscription-ended path (read-only + admin export, deletion 90 days later). Configure Stripe dunning to **not** cancel subscriptions; our cron is the only thing that terminates for non-payment. The `suspended` email states the termination date. Non-payment timeline: fail d0 → suspend d15 → terminate d45 → delete d135. → `SUSPENDED_DAYS_UNTIL_TERMINATION` |
+| D10 | Who receives notices: all active admins of the workspace, the original signup email, or both? | §20.4 "administrators' email addresses" | **All active admins + the Stripe customer's billing email** (if set), deduplicated. If there's no active admin, fall back to the original signup email. (The signup email alone may belong to someone who has left.) → `NOTICE_RECIPIENTS` |
+| D11 | Backup window after deletion (fills `[30]`). Engineering note: Neon keeps a deleted project restorable for a period set by Neon, and PITR history follows the project's retention setting; the value chosen must be ≥ what Neon actually retains (see T7.4). | §9.3, Privacy §7 | **30 days** (fills `[30]`). Neon's deleted-project recovery period is 7 days (Neon docs, checked 2026-10-21), so 30 is true today. Any backup system added later (e.g. long-term DCAA backups) must purge a deleted tenant within 30 days, or this value and the Terms must change first. T7.4 should still confirm PITR data goes with the project. → `BACKUP_RETENTION_DAYS` |
+| D12 | Export scope: only §1 "Customer Data", or also login attempts, integration sync logs, notification preferences, API-key metadata? | §1, §9.1 | **§1 Customer Data tables + `period_events` + `notification_preferences`, `integration_entity_mappings`, `integration_sync_logs`, `integration_sync_records`** (sync logs + records show what was pushed to QuickBooks, which is useful for audit reconciliation; records reference their log, so both go together). **Excluded:** login attempts, API-key metadata, password-reset tokens (security records, not Customer Data). Column allowlists still apply. → `EXPORT_EXTRA_TABLES` |
+| D13 | Terms version string to record at signup (e.g. `2026-10-draft-1`), and the final Terms/Privacy text for `/terms` and `/privacy`. | checklist #1–2 | Version format `<effective date>[-draft-N]`; current **`2026-10-21-draft-1`** (fine for staging). **Final text is not ready**: it's blocked on forming Hundred Cents LLC (mailing address, effective date). Per T9, leave `/terms` and `/privacy` as they are until the founder supplies final text, then drop `-draft-N` and use the effective date. → `TERMS_VERSION` |
 
 Anything else ambiguous you hit while building: **stop and ask**; do not pick a business value.
 
@@ -125,11 +126,14 @@ constraint = no duplicate sends on cron retries), sends to the admins resolved p
 Add to `tenants` (all nullable): `trial_ends_at`, `past_due_since`, `suspended_at`,
 `subscription_ended_at`, `deletion_scheduled_for`, `deleted_at` (timestamptz);
 `neon_project_id` (varchar); `terms_version`, `terms_accepted_at`; `last_stripe_event_at`
-(timestamptz, for ordering). Add `'deleted'` to `tenant_status` (`ALTER TYPE … ADD VALUE` is
+(timestamptz, for ordering); `signup_email` and `billing_email` (varchar, for D10 notice recipients:
+`signup_email` copied from the `signups` row at provisioning, `billing_email` kept current from Stripe
+in T5). Add `'deleted'` to `tenant_status` (`ALTER TYPE … ADD VALUE` is
 additive). Add `tenant_notices` (§3.3). Add `terms_version`, `terms_accepted_at` to `signups`.
 Generate with `npm run db:generate:cp`; `npm run db:safety` must pass.
 **Backfill** (one-off script `scripts/backfill-trial-dates.ts`, idempotent): for `plan = 'trial'`
-and no Stripe subscription, `trial_ends_at = created_at + D1 days`. Run it in staging and production
+and no Stripe subscription, `trial_ends_at = max(created_at + TRIAL_DAYS, now + TRIAL_BACKFILL_MIN_DAYS)`
+(D1); `signup_email` from the matching consumed `signups` row (by slug). Run it in staging and production
 right after the migration (add it to PRODUCTION-DEPLOY.md).
 
 ### T2 — Lifecycle config + access function
@@ -165,6 +169,10 @@ unit tests for both, covering every boundary (day before/of/after each deadline)
   trial_ends_at + 90d` when the trial ends unpurchased; suspend after grace; mark for deletion per
   D4). Idempotent: safe to run twice the same day. Per-tenant try/catch so one failure doesn't stop
   the run; log a summary.
+- **Founder digest (D4)**: because deletions are founder-run, the cron emails `OPS_ALERT_EMAIL` (new env
+  var; document it in `.env.example` and PRODUCTION-DEPLOY.md) whenever any tenant is due for deletion,
+  overdue against `DELETION_SLA_DAYS`, or failed in the run. No email when there's nothing to do. A log
+  line alone would go unread.
 - Email templates (React, `src/lib/email/templates/`): `trial-ending`, `trial-ended`,
   `payment-failed`, `suspension-warning`, `suspended`, `subscription-ended`, `deletion-scheduled`.
   Links go to the **tenant's** subdomain (not the apex `APP_URL`). Wording: plain, states the date,
@@ -182,16 +190,24 @@ unit tests for both, covering every boundary (day before/of/after each deadline)
   active**, send `payment-failed` notice. Suspension happens in the cron after `PAYMENT_GRACE_DAYS`
   with prior notice (R7), not in the webhook.
 - `customer.subscription.deleted` / `canceled` → `subscription_ended_at = now`, status `active` with
-  mode `read_only` (R9), `deletion_scheduled_for = now + 90d`, send `subscription-ended`. (If it was
-  already suspended for non-payment, D9 decides whether this starts the 90-day clock.)
+  mode `read_only` (R9), `deletion_scheduled_for = now + 90d`, send `subscription-ended`.
+  **Idempotent with D9 termination**: the lifecycle cron terminates an unpaid workspace
+  `SUSPENDED_DAYS_UNTIL_TERMINATION` days after suspension by cancelling the Stripe subscription and
+  setting `subscription_ended_at` itself; the resulting `subscription.deleted` webhook must **not** move
+  `subscription_ended_at` or `deletion_scheduled_for` if they're already set, and must not re-send the
+  notice (the `tenant_notices` unique key also prevents that).
+- Re-subscribing from the read-only workspace (Subscribe → checkout) during the 90-day window restores
+  `full` via the `active` branch above, which clears the end/deletion dates.
 - `checkout.session.completed` → link `stripeCustomerId` if missing (fixes paying from the wall when
-  there was no customer).
+  there was no customer) and set `billing_email` from `customer_details.email`.
+- `customer.updated` → refresh `billing_email` (D10).
+- Update PRODUCTION-DEPLOY.md 9.2 so the webhook subscribes to every event this handler now uses.
 - Tests: a table of event sequences (fail → retry success; fail → grace expiry → suspend → pay →
   restore; cancel → end of term → read-only → 90 days → closed; out-of-order delivery).
 
 ### T6 — Full workspace export (R8)
-- Route `GET /api/export/workspace` (Route Handler, streams a `.zip`): `requireAdminFresh()` (or the
-  roles from D5/D6/D8 per mode); allowed in `full`, `read_only`, and `billing_only` only if D8.
+- Route `GET /api/export/workspace` (Route Handler, streams a `.zip`): `requireAdminFresh()` — admins
+  only in every mode (D5); allowed in `full`, `read_only` (D6, self-service) and `billing_only` (D8).
   Rate-limit to a few per hour per tenant. Add `jszip` (or `fflate`) as a **direct** dependency.
 - Contents: one CSV per table (papaparse `unparse`), UTF-8 with BOM, ISO-8601 UTC timestamps, plus
   `README.md` (data dictionary: every file, every column, meaning, and how revisions work) and
@@ -202,7 +218,8 @@ unit tests for both, covering every boundary (day before/of/after each deadline)
   `timesheet_entries_current.csv` (latest revision per cell) for convenience.
 - Tables per D12; at minimum (§1 Customer Data): users, contracts, clins, slins, charge_codes,
   cost_classes, indirect_charge_codes, labor_categories, user_assignments, user_charge_codes,
-  user_labor_categories, pay_period_config, timesheet_periods, period_events (T8), timesheet_entries.
+  user_labor_categories, pay_period_config, timesheet_periods, period_events (T8), timesheet_entries,
+  plus `EXPORT_EXTRA_TABLES` from `lifecycle-config.ts` (D12).
 - **Never exported**: `users.password_hash`, `totp_secret`, `totp_recovery_codes`,
   `totp_last_used_step`, `session_version`; `api_keys.key_hash`; `password_reset_tokens` (whole
   table); `integration_connections.access_token_encrypted` / `refresh_token_encrypted`. Implement as
