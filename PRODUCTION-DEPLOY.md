@@ -333,6 +333,11 @@ between your three prices, save. (The app's "Manage billing" button fails until 
 **9.4** **Developers → API keys** → copy the **Secret key** → `STRIPE_SECRET_KEY`
 (`sk_test_…` for staging, `sk_live_…` for production).
 
+**9.5** **Settings → Billing → Subscriptions and emails → Manage failed payments**: when all
+retries fail, choose **leave the subscription past due** (never "cancel the subscription"). The app
+itself suspends at day 15 and terminates at day 45 after notice emails (Terms §4.7); if Stripe cancels
+first, customers would be cut off on Stripe's schedule, without the notices the Terms promise.
+
 ✅ **Check:** each Vercel project has its Stripe secret, webhook secret, and three price IDs.
 
 ---
