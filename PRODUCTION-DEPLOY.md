@@ -87,14 +87,21 @@ which webpack's CSS Modules rejects (Turbopack tolerated it). The rule moved to 
 
 ---
 
-## Phase 1b — Security hardening (BLOCKING for production)
+## Phase 1b — Security hardening ✅ done (merged to `main`)
 
 A review found critical authorization gaps (account takeover via password reset, self-approval of
-timesheets, supervisor-to-admin escalation, MFA not enforced). Implement
-`feature-plan-security-hardening.md` (round 1, done) **and**
+timesheets, supervisor-to-admin escalation, MFA not enforced). Both blueprints are implemented,
+audited and merged: `feature-plan-security-hardening.md` (round 1) and
 `feature-plan-security-hardening-round2.md` (cross-tenant session replay, period-lock bypass, data
-exposure, OAuth) before any real customer data goes in. The staging rehearsal
-(Phase 12) can use your own test data, but run it on the hardened code so it tests what you'll ship.
+exposure, OAuth).
+
+What it means for deployment:
+- **Migration `0010`** (additive `users.totp_last_used_step`) ships with it. The deploy workflows
+  run `db:migrate:all` before the app goes live, so nothing extra to do there; run
+  `npm run db:migrate` on your local demo database yourself.
+- **Optional env var `OAUTH_STATE_SECRET`** signs the QuickBooks/Gusto connect flow. If unset, a key
+  is derived from `AUTH_SECRET`, so it only matters if you want to rotate the two separately. Set
+  it alongside `QBO_*` / `GUSTO_*` when you enable those integrations.
 
 ---
 
