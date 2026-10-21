@@ -103,6 +103,18 @@ What it means for deployment:
   is derived from `AUTH_SECRET`, so it only matters if you want to rotate the two separately. Set
   it alongside `QBO_*` / `GUSTO_*` when you enable those integrations.
 
+## Phase 1c — Calendar dates & timezones (BLOCKING, do before any production tenant exists)
+
+`feature-plan-calendar-dates.md`. In production (server on UTC, users in US time zones) the
+timesheet grid is off by one day, edits can split into duplicate revision chains, and hours can be
+double-counted. It changes date column types in one migration, which is only safe **before the first
+production tenant**; after that it becomes a multi-deploy migration.
+
+## Phase 1d — Terms compliance (BLOCKING for paid launch)
+
+`feature-plan-terms-compliance.md`: trial expiry, billing grace/suspension, full export with every
+revision, workspace deletion. Its §0 decisions come from the business side first. Build after 1c.
+
 ---
 
 ## Phase 2 — Get the code onto `main` (you, ~15 min)
