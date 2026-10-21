@@ -115,5 +115,7 @@ export async function cleanupTestData() {
   await db.delete(schema.loginAttempts);
   await db.delete(schema.notificationPreferences);
   await db.delete(schema.apiKeys);
+  // Cascades to integration mappings, sync logs and sync records. connected_by references users.
+  await db.delete(schema.integrationConnections);
   await db.delete(schema.users);
 }

@@ -1,4 +1,7 @@
-'use server';
+// NOT a 'use server' module: every export of one is a public HTTP endpoint, and these helpers
+// do no authorization of their own. Callers (the guarded qbo/gusto/payroll-export actions)
+// authorize first.
+import 'server-only';
 
 import { getDb } from '@/db';
 import {

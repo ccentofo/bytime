@@ -7,7 +7,8 @@ import path from 'path';
 //
 // Every exported function in a `'use server'` file is a public HTTP endpoint —
 // callable with arbitrary arguments by anyone who can reach the app, logged in
-// or not. This test statically scans every file in src/server/actions/ and
+// or not. This test statically scans every file in src/server/actions/ (and
+// fails if a 'use server' file exists anywhere else under src/) and
 // asserts that each exported function either:
 //   (a) calls one of the session guards (requireSession/requireAdmin/
 //       requireApprover) or getTenantForBilling (which itself requires a
@@ -23,10 +24,11 @@ const ACTIONS_DIR = path.resolve(__dirname, '../../server/actions');
 
 const GUARD_PATTERN = /\b(requireSession|requireAdmin|requireApprover|requireAdminFresh|requireApproverFresh|getTenantForBilling)\s*\(/;
 const IDENTITY_PARAM_PATTERN = /\b(adminUserId|reviewedBy|createdByUserId|assignedBy)\s*(\?)?\s*:/;
-const DB_QUERY_PATTERN = /\b(db|tx)\.(select|insert|update|delete)\s*\(/;
-// R2-6: the exact pattern from the blueprint's own §3 verification grep — a caller-supplied
-// object spread directly into a DB write lets the caller set columns the form never offered.
-const UNSAFE_SPREAD_PATTERN = /\.\.\.(data|prefs|input)\b/g;
+const DB_QUERY_PATTERN = /\b(db|tx)\.(select|insert|update|delete|execute|transaction|query)\b/;
+// R2-6: start of a DB write's payload — `.values(` or `.set(`. Its argument must never be a
+// caller-supplied parameter, whole or spread, or the caller can set columns the form never offered.
+const DB_WRITE_CALL_PATTERN = /\.(values|set)\s*\(/g;
+const SRC_DIR = path.resolve(__dirname, '../..');
 
 /**
  * R2-12: strip comments before matching, so a comment that happens to mention a guard name or
@@ -148,6 +150,64 @@ function parseExportedFunctions(source: string): ParsedFunction[] {
   return results;
 }
 
+
+/** Top-level parameter names of a function's parameter list (`a: T, b?: { x: U } = {}` → a, b). */
+function parameterNames(paramText: string): string[] {
+  const names: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of paramText + ',') {
+    if ('({[<'.includes(ch)) depth++;
+    else if (')}]>'.includes(ch)) depth--;
+    if (ch === ',' && depth === 0) {
+      const m = current.trim().match(/^(\w+)/);
+      if (m) names.push(m[1]);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  return names;
+}
+
+/** The argument text of every `.values(...)` / `.set(...)` call in a function body. */
+function writePayloads(bodyText: string): string[] {
+  const payloads: string[] = [];
+  let match: RegExpExecArray | null;
+  DB_WRITE_CALL_PATTERN.lastIndex = 0;
+  while ((match = DB_WRITE_CALL_PATTERN.exec(bodyText)) !== null) {
+    const open = match.index + match[0].length - 1;
+    let depth = 0;
+    let i = open;
+    for (; i < bodyText.length; i++) {
+      if (bodyText[i] === '(') depth++;
+      else if (bodyText[i] === ')' && --depth === 0) break;
+    }
+    payloads.push(bodyText.slice(open + 1, i));
+  }
+  return payloads;
+}
+
+/**
+ * Every file under src/ whose first statement is the 'use server' directive. All of them must
+ * live in src/server/actions/ so the checks below see them — a server-action file anywhere else
+ * is a public endpoint this test would silently skip.
+ */
+function findUseServerFiles(dir: string): string[] {
+  const found: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules' || entry.name === '__tests__') continue;
+      found.push(...findUseServerFiles(full));
+    } else if (/\.(ts|tsx)$/.test(entry.name)) {
+      const head = stripComments(fs.readFileSync(full, 'utf-8')).trimStart();
+      if (/^['"]use server['"]/.test(head)) found.push(full);
+    }
+  }
+  return found;
+}
+
 describe('Server action guard coverage', () => {
   const files = fs.readdirSync(ACTIONS_DIR).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'));
   expect(files.length).toBeGreaterThan(0);
@@ -198,16 +258,40 @@ describe('Server action guard coverage', () => {
       ).toEqual([]);
     });
 
-    // R2-6: a caller-supplied object spread directly into a DB write lets the caller set
-    // columns the form never intended to expose (role, passwordHash, isActive, userId, ...).
-    it(`${file}: no DB write spreads a raw caller-supplied object`, () => {
-      const matches = source.match(UNSAFE_SPREAD_PATTERN) ?? [];
+    // R2-6: a caller-supplied object passed straight into a DB write — whole (`.values(data)`)
+    // or spread (`.set({ ...data })`) — lets the caller set columns the form never intended to
+    // expose (role, passwordHash, isActive, userId, ...).
+    it(`${file}: no DB write passes or spreads a raw caller-supplied parameter`, () => {
+      const offenders: string[] = [];
+      for (const fn of fns) {
+        for (const param of parameterNames(fn.paramText)) {
+          const whole = new RegExp(`^\\s*${param}\\s*(as\\b[\\s\\S]*)?$`);
+          const spread = new RegExp(`\\.\\.\\.\\s*${param}\\b`);
+          for (const payload of writePayloads(fn.bodyText)) {
+            if (whole.test(payload) || spread.test(payload)) offenders.push(`${fn.name}(${param})`);
+          }
+        }
+      }
       expect(
-        matches,
-        `${file} spreads a caller-supplied object (...data/...prefs/...input) directly into a DB write — build an explicit allowlist instead: ${matches.join(', ')}`
+        offenders,
+        `${file} writes a caller-supplied parameter directly into .values()/.set() — build an explicit allowlist instead: ${offenders.join(', ')}`
       ).toEqual([]);
     });
+
+    // The scanner only understands `export async function`. Any other export form would be a
+    // public endpoint that none of the checks above ever look at.
+    it(`${file}: every export is an \`export async function\` the scanner can check`, () => {
+      const otherExports = source.match(/export\s+(?:const|let|var|function|default|class)\b[^\n]*/g) ?? [];
+      expect(otherExports, `${file} has export(s) the guard scanner can't parse: ${otherExports.join(' | ')}`).toEqual([]);
+    });
   }
+
+  it("every 'use server' file under src/ lives in src/server/actions/ (so this test scans it)", () => {
+    const outside = findUseServerFiles(SRC_DIR)
+      .filter((f) => path.dirname(f) !== ACTIONS_DIR)
+      .map((f) => path.relative(SRC_DIR, f));
+    expect(outside, `'use server' files outside src/server/actions/: ${outside.join(', ')}`).toEqual([]);
+  });
 
   it('PUBLIC_ACTIONS allowlist has no stale entries (file/name must still exist and be exported)', () => {
     const staleEntries: string[] = [];

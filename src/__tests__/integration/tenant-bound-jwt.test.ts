@@ -15,7 +15,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const tenantState = vi.hoisted(() => ({ requestSlug: 'tenant-a' }));
 
 vi.mock('@/lib/tenant/context', () => ({
-  getTenantSlug: async () => tenantState.requestSlug,
+  getTenantSlug: vi.fn(async () => tenantState.requestSlug),
 }));
 
 import { jwtCallback } from '@/auth';
@@ -95,7 +95,6 @@ describe('jwtCallback tenant binding (R2-1)', () => {
   // getTenantSlug() throws on a host / x-tenant-slug header mismatch (tampering) —
   // jwtCallback must fail closed, not propagate the throw.
   it('fails closed when getTenantSlug() throws (header tampering)', async () => {
-    tenantState.requestSlug = undefined as any; // force getTenantSlug() mock to misbehave below
     const { getTenantSlug } = await import('@/lib/tenant/context');
     vi.mocked(getTenantSlug).mockImplementationOnce(async () => {
       throw new Error('Tenant context mismatch — possible header tampering.');

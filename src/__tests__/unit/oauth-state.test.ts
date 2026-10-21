@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import crypto from 'crypto';
 
 // oauth-state.ts is `import 'server-only'` (it handles a signing secret) — stub the marker so
 // it's importable from a plain unit test, same as the integration suite's setup-db.ts does.
@@ -13,14 +14,20 @@ import { mintOAuthState, verifyOAuthState, generateOAuthNonce } from '@/lib/inte
 // ---------------------------------------------------------------------------
 
 describe('OAuth state signing (R2-9)', () => {
-  const originalSecret = process.env.AUTH_SECRET;
+  const originalAuthSecret = process.env.AUTH_SECRET;
+  const originalStateSecret = process.env.OAUTH_STATE_SECRET;
 
   beforeEach(() => {
+    // Control both inputs so the result never depends on the developer's shell or .env.
     process.env.AUTH_SECRET = 'test-secret-for-oauth-state-signing-only';
+    delete process.env.OAUTH_STATE_SECRET;
   });
 
   afterEach(() => {
-    process.env.AUTH_SECRET = originalSecret;
+    if (originalAuthSecret === undefined) delete process.env.AUTH_SECRET;
+    else process.env.AUTH_SECRET = originalAuthSecret;
+    if (originalStateSecret === undefined) delete process.env.OAUTH_STATE_SECRET;
+    else process.env.OAUTH_STATE_SECRET = originalStateSecret;
   });
 
   it('round-trips a validly-signed, unexpired state', () => {
@@ -69,10 +76,29 @@ describe('OAuth state signing (R2-9)', () => {
     }
   });
 
-  it('a state minted for one tenant/user does not verify as belonging to another', () => {
+  it('falls back to AUTH_SECRET when OAUTH_STATE_SECRET is an empty string (copied .env.example)', () => {
+    process.env.OAUTH_STATE_SECRET = '';
     const state = mintOAuthState({ tenantSlug: 'acme', userId: 'user-1', provider: 'quickbooks_online', nonce: generateOAuthNonce() });
-    const payload = verifyOAuthState(state)!;
-    expect(payload.tenantSlug === 'globex').toBe(false);
-    expect(payload.userId === 'user-2').toBe(false);
+    expect(verifyOAuthState(state)).not.toBeNull();
+  });
+
+  it('prefers OAUTH_STATE_SECRET over AUTH_SECRET when both are set', () => {
+    process.env.OAUTH_STATE_SECRET = 'dedicated-state-secret';
+    const state = mintOAuthState({ tenantSlug: 'acme', userId: 'user-1', provider: 'quickbooks_online', nonce: generateOAuthNonce() });
+    process.env.OAUTH_STATE_SECRET = 'rotated-state-secret';
+    expect(verifyOAuthState(state)).toBeNull();
+  });
+
+  it('with no secret at all: minting throws and verifying returns null (never signs with an empty key)', () => {
+    const state = mintOAuthState({ tenantSlug: 'acme', userId: 'user-1', provider: 'quickbooks_online', nonce: generateOAuthNonce() });
+    delete process.env.AUTH_SECRET;
+    expect(() => mintOAuthState({ tenantSlug: 'acme', userId: 'user-1', provider: 'quickbooks_online', nonce: 'n' })).toThrow();
+    expect(verifyOAuthState(state)).toBeNull();
+  });
+
+  it('rejects a state HMAC-signed with the raw AUTH_SECRET (the key is derived, not reused)', () => {
+    const payloadB64 = Buffer.from(JSON.stringify({ tenantSlug: 'acme', userId: 'user-1', provider: 'quickbooks_online', nonce: 'n', exp: Date.now() + 60_000 }), 'utf-8').toString('base64url');
+    const rawSignature = crypto.createHmac('sha256', process.env.AUTH_SECRET!).update(payloadB64).digest('base64url');
+    expect(verifyOAuthState(`${payloadB64}.${rawSignature}`)).toBeNull();
   });
 });

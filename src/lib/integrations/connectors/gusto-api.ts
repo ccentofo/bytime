@@ -35,7 +35,7 @@ function getGustoCredentials() {
 /**
  * Build the Gusto OAuth authorization URL.
  */
-export function getGustoAuthUrl(state?: string): string {
+export function getGustoAuthUrl(state: string): string {
   const { clientId } = getGustoCredentials();
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
   const redirectUri = `${appUrl}/api/integrations/callback/gusto`;
@@ -44,7 +44,7 @@ export function getGustoAuthUrl(state?: string): string {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    state: state ?? 'bytime_gusto_connect',
+    state, // signed, single-use (see src/lib/integrations/oauth-state.ts)
   });
 
   return `${GUSTO_AUTH_URL}?${params.toString()}`;
@@ -86,9 +86,6 @@ export async function exchangeGustoCode(code: string): Promise<{
 
   const data = await response.json();
 
-  // Log the full token response to discover company UUID location
-  console.log('Gusto token exchange full response keys:', Object.keys(data));
-  console.log('Gusto token exchange full response:', JSON.stringify(data, null, 2));
 
   return {
     accessToken: data.access_token,

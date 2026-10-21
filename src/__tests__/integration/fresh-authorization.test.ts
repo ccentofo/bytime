@@ -101,6 +101,11 @@ describe('Fresh authorization for sensitive actions (R2-8)', () => {
     }).returning();
 
     actingAsStale(demoted, 'admin'); // stale session: still claims admin
-    await expect(approvePeriod({ periodId: period.id })).rejects.toThrow(/access has changed/i);
+    // The fresh guard admits a supervisor, but must hand back the DB role, so the admin-only
+    // self-approval exception no longer applies.
+    await expect(approvePeriod({ periodId: period.id })).rejects.toThrow(/cannot approve your own timesheet/i);
+
+    const [unchanged] = await db.select({ status: schema.timesheetPeriods.status }).from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, period.id));
+    expect(unchanged.status).toBe('submitted');
   });
 });

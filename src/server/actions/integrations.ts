@@ -9,7 +9,7 @@ import {
 } from '@/db/schema';
 import { eq, desc, and } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
-import { encrypt, decrypt } from '@/lib/encryption';
+import { decrypt } from '@/lib/encryption';
 import { getAllConnectorMetadata } from '@/lib/integrations/registry';
 
 // ---------------------------------------------------------------------------
@@ -33,40 +33,6 @@ export async function getConnections() {
     })
     .from(integrationConnections)
     .orderBy(integrationConnections.createdAt);
-}
-
-export async function createConnection(data: {
-  provider: string;
-  displayName: string;
-  externalCompanyId?: string;
-  externalCompanyName?: string;
-  accessToken?: string;
-  refreshToken?: string;
-  tokenExpiresAt?: Date;
-  scopes?: string;
-}) {
-  const db = await getDb();
-  const actor = await requireAdminFresh();
-
-  const values: Record<string, unknown> = {
-    provider: data.provider,
-    displayName: data.displayName,
-    externalCompanyId: data.externalCompanyId,
-    externalCompanyName: data.externalCompanyName,
-    scopes: data.scopes,
-    connectedBy: actor.id,
-    tokenExpiresAt: data.tokenExpiresAt,
-  };
-
-  if (data.accessToken) {
-    values.accessTokenEncrypted = encrypt(data.accessToken);
-  }
-  if (data.refreshToken) {
-    values.refreshTokenEncrypted = encrypt(data.refreshToken);
-  }
-
-  const rows = await db.insert(integrationConnections).values(values as any).returning();
-  return rows[0];
 }
 
 export async function disconnectIntegration(connectionId: string) {
@@ -142,7 +108,15 @@ export async function saveMapping(data: {
       })
       .where(eq(integrationEntityMappings.id, existing[0].id));
   } else {
-    await db.insert(integrationEntityMappings).values(data);
+    await db.insert(integrationEntityMappings).values({
+      connectionId: data.connectionId,
+      entityType: data.entityType,
+      bytimeEntityId: data.bytimeEntityId,
+      bytimeEntityName: data.bytimeEntityName,
+      externalEntityId: data.externalEntityId,
+      externalEntityName: data.externalEntityName,
+      metadata: data.metadata,
+    });
   }
 }
 

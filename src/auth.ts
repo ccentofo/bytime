@@ -8,7 +8,7 @@ import { recordFailedAttempt, recordSuccessfulLogin } from '@/server/internal/lo
 import { getDbForUrl, getDbForAuth } from '@/db';
 import { getTenantBySlug } from '@/lib/tenant/registry';
 import { users } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull, lt, or } from 'drizzle-orm';
 import { decrypt, encrypt } from '@/lib/encryption';
 import { getTOTPStep, verifyRecoveryCode } from '@/lib/totp';
 
@@ -74,13 +74,16 @@ export async function authorizeCredentials(credentials: Record<string, unknown> 
     if (user.totpSecret) {
       // R2-12: reject a code whose time-step has already been accepted — otherwise the same
       // code is valid for its whole window and could be replayed (e.g. captured in a log).
+      // The compare-and-set is one conditional UPDATE, so two concurrent sign-ins with the same
+      // code can't both succeed: only the first one matches the WHERE clause.
       const step = getTOTPStep(decrypt(user.totpSecret), mfaCode);
-      if (step !== null && (user.totpLastUsedStep == null || step > user.totpLastUsedStep)) {
-        mfaValid = true;
+      if (step !== null) {
         const db = await getDbForAuth();
-        await db.update(users)
+        const claimed = await db.update(users)
           .set({ totpLastUsedStep: step, updatedAt: new Date() })
-          .where(eq(users.id, user.id));
+          .where(and(eq(users.id, user.id), or(isNull(users.totpLastUsedStep), lt(users.totpLastUsedStep, step))))
+          .returning({ id: users.id });
+        mfaValid = claimed.length > 0;
       }
     }
 

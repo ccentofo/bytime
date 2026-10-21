@@ -97,26 +97,25 @@ export async function requireApprover(): Promise<SessionUser> {
  * reads only users.role/isActive, the same columns the login path already reads for a
  * suspended tenant — it is not a business-data query.
  */
-async function assertFreshRole(user: SessionUser, allowedRoles: SessionUser['role'][]): Promise<void> {
+async function withFreshRole(user: SessionUser, allowedRoles: SessionUser['role'][]): Promise<SessionUser> {
   const db = await getDbForAuth();
   const [row] = await db.select({ role: users.role, isActive: users.isActive }).from(users).where(eq(users.id, user.id));
   if (!row || !row.isActive || !allowedRoles.includes(row.role)) {
     throw new AuthorizationError('forbidden', 'Forbidden: Your access has changed — please sign in again.');
   }
+  // Return the DB role, not the JWT's: callers branch on actor.role (admin self-approval,
+  // all-employee scope), so an admin demoted to supervisor must be treated as a supervisor now.
+  return { ...user, role: row.role };
 }
 
-/** Admin only, with a fresh DB check (see assertFreshRole). Use for sensitive admin actions. */
+/** Admin only, with a fresh DB check (see withFreshRole). Use for sensitive admin actions. */
 export async function requireAdminFresh(): Promise<SessionUser> {
-  const user = await requireAdmin();
-  await assertFreshRole(user, ['admin']);
-  return user;
+  return withFreshRole(await requireAdmin(), ['admin']);
 }
 
-/** Admin or supervisor, with a fresh DB check (see assertFreshRole). Use for sensitive approver actions. */
+/** Admin or supervisor, with a fresh DB check (see withFreshRole). Use for sensitive approver actions. */
 export async function requireApproverFresh(): Promise<SessionUser> {
-  const user = await requireApprover();
-  await assertFreshRole(user, ['admin', 'supervisor']);
-  return user;
+  return withFreshRole(await requireApprover(), ['admin', 'supervisor']);
 }
 
 /**

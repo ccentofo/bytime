@@ -13,6 +13,7 @@ import {
   userAssignments,
 } from '@/db/schema';
 import { eq, and, gte, lt, desc, sql, inArray } from 'drizzle-orm';
+import { calendarDayWindow } from '@/server/internal/periods';
 import dayjs from 'dayjs';
 import { getNumDaysInPeriod } from '@/lib/date-utils';
 import { requireSession, requireAdmin, requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
@@ -86,13 +87,15 @@ export async function getTimesheetReportData(
   const numDays = getNumDaysInPeriod(periodStart);
   const periodEnd = dayjs(periodStart).add(numDays - 1, 'day').toDate();
 
+  const [dayFrom, dayTo] = calendarDayWindow(periodStart);
   const periodRows = await db
     .select()
     .from(timesheetPeriods)
     .where(
       and(
         eq(timesheetPeriods.userId, userId),
-        eq(timesheetPeriods.periodStart, periodStart),
+        gte(timesheetPeriods.periodStart, dayFrom),
+        lt(timesheetPeriods.periodStart, dayTo),
       )
     );
 
@@ -100,8 +103,11 @@ export async function getTimesheetReportData(
 
   // Get approved-by name if applicable. R2-7: an admin may approve/reject their own period —
   // show "Self-approved" rather than their own name, so self-approval stays visibly auditable.
+  // Only an APPROVED period prints an approval line; rejecting also sets reviewedBy/reviewedAt,
+  // and a rejected timesheet must never read as approved.
+  const isApproved = period?.status === 'approved';
   let approvedByName: string | null = null;
-  if (period?.reviewedBy) {
+  if (isApproved && period?.reviewedBy) {
     if (period.reviewedBy === userId) {
       approvedByName = 'Self-approved';
     } else {
@@ -207,7 +213,7 @@ export async function getTimesheetReportData(
     periodEnd,
     periodStatus: period?.status ?? 'draft',
     submittedAt: period?.submittedAt ?? null,
-    approvedAt: period?.reviewedAt ?? null,
+    approvedAt: isApproved ? period?.reviewedAt ?? null : null,
     approvedBy: approvedByName,
     chargeCodes,
     dailyTotals,

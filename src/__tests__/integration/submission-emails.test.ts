@@ -89,8 +89,13 @@ describe('Submission notifications are scoped (R2-10)', () => {
     const outOfScopeSupervisor = await createTestUser({ role: 'supervisor' });
     await assignUserToClin(outOfScopeSupervisor.id, otherClin.id);
 
+    const inactiveInScopeSupervisor = await createTestUser({ role: 'supervisor', isActive: false });
+    await assignUserToClin(inactiveInScopeSupervisor.id, scopedClin.id);
+
     const inactiveAdmin = await createTestUser({ role: 'admin', isActive: false });
     const activeAdmin = await createTestUser({ role: 'admin' });
+    const optedOutAdmin = await createTestUser({ role: 'admin' });
+    await db.insert(schema.notificationPreferences).values({ userId: optedOutAdmin.id, emailOnSubmit: false });
 
     const periodStart = new Date('2020-01-01');
     await db.insert(schema.timesheetEntries).values({
@@ -110,6 +115,30 @@ describe('Submission notifications are scoped (R2-10)', () => {
     expect(notifiedEmails).toContain(activeAdmin.email);
     expect(notifiedEmails).not.toContain(outOfScopeSupervisor.email);
     expect(notifiedEmails).not.toContain(inactiveAdmin.email);
+    expect(notifiedEmails).not.toContain(inactiveInScopeSupervisor.email);
+    expect(notifiedEmails).not.toContain(optedOutAdmin.email); // emailOnSubmit = false
     expect(notifiedEmails).not.toContain(employee.email); // never the submitter themselves
+  });
+
+  it('notifies on a re-submission after rejection too, and never emails an admin about their own submission', async () => {
+    await cleanupTestData();
+    const db = getTestDb();
+    const contract = await createTestContract();
+    const clin = await createTestClin(contract.id);
+    const submittingAdmin = await createTestUser({ role: 'admin' });
+    const otherAdmin = await createTestUser({ role: 'admin' });
+
+    const periodStart = new Date('2020-01-01');
+    await db.insert(schema.timesheetEntries).values({
+      userId: submittingAdmin.id, clinId: clin.id, entryDate: periodStart, hours: '8', revisionNumber: 1, createdBy: submittingAdmin.id,
+    });
+    // A previously rejected period: submitPeriod takes the update path, not the insert path.
+    await db.insert(schema.timesheetPeriods).values({ userId: submittingAdmin.id, periodStart, status: 'rejected' });
+
+    actingAs(submittingAdmin);
+    await submitPeriod({ periodStart });
+
+    const notifiedEmails = emailState.sendTimesheetSubmittedEmail.mock.calls.map((call) => call[0].supervisorEmail);
+    expect(notifiedEmails).toEqual([otherAdmin.email]);
   });
 });

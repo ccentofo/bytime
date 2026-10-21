@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import dayjs from 'dayjs';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
 import { getPeriodStartForDate } from '@/lib/date-utils';
 import {
@@ -23,6 +23,8 @@ import {
 vi.mock('@/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/db')>()),
   getDb: async () => getTestDb(),
+  // requireAdminFresh/requireApproverFresh (R2-8) re-read the role through getDbForAuth.
+  getDbForAuth: async () => getTestDb(),
 }));
 
 // R2-1: getSessionUser() now checks session.user.tenantSlug against the request's tenant
@@ -158,13 +160,15 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const [approved] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, inScopePeriod.id));
     expect(approved.status).toBe('approved');
 
-    // R2-12: out-of-scope and self-approval (for non-admins) both mask as "Period not found" —
-    // an out-of-scope period must look exactly like a missing one, not disclose that it exists.
+    // R2-12: an out-of-scope period must look exactly like a missing one, not disclose that it exists.
     await expect(rejectPeriod({ periodId: outOfScopePeriod.id, comment: 'nope' }))
       .rejects.toThrow(/Period not found/);
 
+    // R2-7: a supervisor's own period is refused outright (Forbidden) — nothing to mask.
     await expect(approvePeriod({ periodId: ownPeriod.id }))
-      .rejects.toThrow(/Period not found/);
+      .rejects.toThrow(/Forbidden: You cannot approve your own timesheet/);
+    await expect(rejectPeriod({ periodId: ownPeriod.id, comment: 'x' }))
+      .rejects.toThrow(/Forbidden: You cannot reject your own timesheet/);
   });
 
   // R2-7. -------------------------------------------------------------------
@@ -218,22 +222,32 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
   });
 
   it('5b. nobody can demote the last active admin — enforced from DB truth, not the session', async () => {
-    // Models a stale/divergent session: the caller's session claims 'admin' (so it clears
-    // requireAdmin()), but their own DB row is NOT an active admin — e.g. a role change by
-    // another admin that this session's JWT hasn't revalidated yet (there's up to a 60s
-    // window in the auth.ts jwt callback). The target is the one remaining real admin.
-    // This is the only way to exercise the check: the self-change guard above always fires
-    // first for a real admin acting on themselves, so the last-admin count (which excludes
-    // only the target, per `ne(users.id, id)`) can only ever hit zero when the actor's own
-    // DB row doesn't count as an active admin.
+    const db = getTestDb();
+    const activeAdminCount = async () =>
+      (await db.select({ id: schema.users.id }).from(schema.users)
+        .where(and(eq(schema.users.role, 'admin'), eq(schema.users.isActive, true)))).length;
+
+    // (a) A stale session claiming 'admin' whose DB row is an employee is refused by the fresh
+    // role check (R2-8) before it can touch the last real admin.
     const soleAdmin = await createTestUser({ role: 'admin' });
     const staleActor = await createTestUser({ role: 'employee' });
     actingAs({ id: staleActor.id, role: 'admin', email: staleActor.email, fullName: staleActor.fullName });
+    await expect(updateUser(soleAdmin.id, { role: 'employee' })).rejects.toThrow(/access has changed/i);
+    await expect(updateUser(soleAdmin.id, { isActive: false })).rejects.toThrow(/access has changed/i);
+    expect(await activeAdminCount()).toBe(1);
 
-    await expect(updateUser(soleAdmin.id, { role: 'employee' }))
-      .rejects.toThrow(/last active admin/i);
-    await expect(updateUser(soleAdmin.id, { isActive: false }))
-      .rejects.toThrow(/last active admin/i);
+    // (b) With the fresh check in front, the last-admin count only matters when two admins demote
+    // each other at the same moment. Exactly one may win; an active admin must always remain.
+    const otherAdmin = await createTestUser({ role: 'admin' });
+    // auth() reads the session synchronously when each call starts, so each call gets its own actor.
+    actingAs(asFake(soleAdmin));
+    const first = updateUser(otherAdmin.id, { role: 'employee' });
+    actingAs(asFake(otherAdmin));
+    const second = updateUser(soleAdmin.id, { role: 'employee' });
+    const results = await Promise.allSettled([first, second]);
+
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(await activeAdminCount()).toBe(1);
   });
 
   // 6. ---------------------------------------------------------------------

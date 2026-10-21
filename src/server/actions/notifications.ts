@@ -30,7 +30,7 @@ const NOTIFICATION_PREF_KEYS = [
  * Update the session user's own notification preferences (upsert).
  *
  * R2-6: builds the write from an explicit allowlist of the five boolean preference keys,
- * each coerced to boolean, with `userId` always `actor.id` — the caller-supplied preferences
+ * each required to be a real boolean, with `userId` always `actor.id` — the caller-supplied preferences
  * object is never spread wholesale into the write. Previously it was spread after `userId:
  * actor.id`, so a caller sending an extra `userId` field in the request body could create or
  * retarget another user's notification row.
@@ -44,7 +44,9 @@ export async function updateNotificationPreferences(
   const allowedUpdates: Partial<NotificationPrefs> = {};
   for (const key of NOTIFICATION_PREF_KEYS) {
     if (prefs[key] !== undefined) {
-      allowedUpdates[key] = Boolean(prefs[key]);
+      // A real boolean only: Boolean("false") would be true.
+      if (typeof prefs[key] !== 'boolean') throw new Error(`Invalid value for ${key}.`);
+      allowedUpdates[key] = prefs[key];
     }
   }
 

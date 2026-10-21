@@ -6,6 +6,7 @@ import { eq, and, inArray } from 'drizzle-orm';
 import { requireAdminFresh } from '@/lib/session';
 import { assertSeatsAvailable } from '@/server/internal/seats';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 
 // ---------------------------------------------------------------------------
 // Bulk Employee Import
@@ -33,11 +34,15 @@ export async function bulkImportEmployees(rows: EmployeeImportRow[]): Promise<Im
   // reject the WHOLE batch up front if it would exceed the plan's seat limit. Previously only
   // single-user creation paths (createUser/createUserWithPassword) checked this, so a bulk
   // import could blow straight past the limit in one request.
-  const incomingEmails = rows.map((row) => row.email.toLowerCase().trim());
+  // Distinct, well-formed emails only: a row with a missing email is reported by the per-row
+  // loop below, and a repeated email only ever creates one user.
+  const incomingEmails = [...new Set(
+    rows.map((row) => (typeof row.email === 'string' ? row.email.toLowerCase().trim() : '')).filter(Boolean)
+  )];
   const existingRows = incomingEmails.length > 0
     ? await db.select({ email: users.email }).from(users).where(inArray(users.email, incomingEmails))
     : [];
-  const existingEmails = new Set(existingRows.map((r) => r.email));
+  const existingEmails = new Set(existingRows.map((r) => r.email.toLowerCase()));
   const newRowCount = incomingEmails.filter((email) => !existingEmails.has(email)).length;
   if (newRowCount > 0) {
     await assertSeatsAvailable(newRowCount);
@@ -315,7 +320,7 @@ function generateRandomPassword(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$';
   let password = '';
   for (let i = 0; i < 12; i++) {
-    password += chars.charAt(Math.floor(Math.random() * chars.length));
+    password += chars.charAt(crypto.randomInt(chars.length)); // CSPRNG, not Math.random
   }
   return password;
 }

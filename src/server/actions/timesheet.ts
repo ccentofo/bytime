@@ -4,11 +4,11 @@ import { getDb } from '@/db';
 import { timesheetEntries, userAssignments, clins, contracts, slins, indirectChargeCodes, chargeCodes, userChargeCodes, costClasses } from '@/db/schema';
 import { eq, and, gte, lt, desc, sql } from 'drizzle-orm';
 import dayjs from 'dayjs';
-import { getNumDaysInPeriod, getPeriodStartForDate } from '@/lib/date-utils';
+import { getNumDaysInPeriod } from '@/lib/date-utils';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
 import { validateUUID, validateHours } from '@/lib/validation';
 import { requireSession, assertCanAccessEmployee } from '@/lib/session';
-import { getPeriodStatusFor } from '@/server/internal/periods';
+import { assertEntryDatesEditable, resolvePeriod } from '@/server/internal/periods';
 import { getEffectiveConfigAt } from '@/server/actions/pay-period-config';
 
 /**
@@ -55,21 +55,6 @@ async function validateClinAssignment(userId: string, clinId: string): Promise<v
 
   if (assignment.length === 0) {
     throw new Error(`Unauthorized: You are not assigned to CLIN ${clinId}. Cannot save timesheet entry.`);
-  }
-}
-
-/**
- * Assert that a user's period is editable (draft or rejected).
- * Throws if the period has been certified (submitted) or approved.
- * This enforces DCAA audit-trail integrity: certified timesheets are immutable.
- */
-async function assertPeriodEditable(userId: string, periodStart: Date): Promise<void> {
-  const info = await getPeriodStatusFor(userId, periodStart);
-  if (info.status !== 'draft' && info.status !== 'rejected') {
-    throw new Error(
-      `Cannot modify a ${info.status} timesheet. This period has been certified and is locked. ` +
-      `If a correction is required, the supervisor must reject the period first.`
-    );
   }
 }
 
@@ -170,24 +155,22 @@ export async function saveTimesheetBatch(data: {
   const today = dayjs().startOf('day');
   const newRevisions: Record<string, number> = {};
 
-  // R2-2: period-lock integrity. `periodStart` must be a REAL period boundary — otherwise
-  // getPeriodStatusFor finds no row and treats it as an editable draft — and every cell's
-  // dayIndex must land strictly inside THAT period. Without this, a dayIndex outside
-  // [0, numDays) computes an entryDate in an ADJACENT period whose own lock status was never
-  // checked (assertPeriodEditable below only checks the period named by periodStart).
-  const periodConfig = await getEffectiveConfigAt(data.periodStart);
-  const canonicalPeriodStart = dayjs(getPeriodStartForDate(data.periodStart, periodConfig)).startOf('day');
-  if (!dayjs(data.periodStart).startOf('day').isSame(canonicalPeriodStart, 'day')) {
-    throw new Error('Invalid period start date.');
-  }
-  const numDays = getNumDaysInPeriod(data.periodStart, periodConfig);
+  // R2-2: period-lock integrity. `periodStart` must be a real period boundary and every
+  // dayIndex must land inside that period; then every entry DATE is checked against the user's
+  // locked periods by calendar day (assertEntryDatesEditable), so neither an out-of-range
+  // dayIndex nor a periodStart sent at an odd time of day can reach a certified period.
+  const { numDays } = await resolvePeriod(data.periodStart);
   for (const cell of data.cells) {
     if (!Number.isInteger(cell.dayIndex) || cell.dayIndex < 0 || cell.dayIndex >= numDays) {
       throw new Error(`Invalid day index ${cell.dayIndex} for this pay period.`);
     }
   }
 
-  await assertPeriodEditable(userId, data.periodStart);
+  await assertEntryDatesEditable(
+    userId,
+    data.cells.map((cell) => start.add(cell.dayIndex, 'day').toDate()),
+    async (periodStart) => getNumDaysInPeriod(periodStart, await getEffectiveConfigAt(periodStart)),
+  );
 
   validateUUID(userId, 'User ID');
   for (const cell of data.cells) {

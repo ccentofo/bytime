@@ -181,7 +181,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
               {status.charAt(0).toUpperCase() + status.slice(1)}
             </Badge>
             {isSelfApproved && (status === 'approved' || status === 'rejected') && (
-              <Badge color="gray" variant="light" size="sm">Self-approved</Badge>
+              <Badge color="gray" variant="light" size="sm">{status === 'approved' ? 'Self-approved' : 'Self-rejected'}</Badge>
             )}
           </Group>
         );
@@ -334,8 +334,8 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
                 <Badge color={PERIOD_STATUS_COLOR[selectedPeriod.status as keyof typeof PERIOD_STATUS_COLOR] ?? 'gray'}>
                   {selectedPeriod.status}
                 </Badge>
-                {selectedPeriod.reviewedBy === selectedPeriod.userId && (
-                  <Badge color="gray" variant="light">Self-approved</Badge>
+                {selectedPeriod.reviewedBy === selectedPeriod.userId && (selectedPeriod.status === 'approved' || selectedPeriod.status === 'rejected') && (
+                  <Badge color="gray" variant="light">{selectedPeriod.status === 'approved' ? 'Self-approved' : 'Self-rejected'}</Badge>
                 )}
               </Group>
             </Paper>

@@ -24,16 +24,29 @@ export interface OAuthStatePayload {
   exp: number; // unix ms
 }
 
-function getStateSecret(): string {
-  const secret = process.env.OAUTH_STATE_SECRET ?? process.env.AUTH_SECRET;
+/**
+ * HMAC key for the state, derived (HKDF) from OAUTH_STATE_SECRET or, if that's unset or empty,
+ * AUTH_SECRET. Deriving keeps this key distinct from anything else AUTH_SECRET signs. `||`, not
+ * `??`: a copied .env.example leaves OAUTH_STATE_SECRET as an empty string. Throws if neither
+ * is set — never signs with an empty key.
+ */
+function getStateKey(): Buffer {
+  const secret = process.env.OAUTH_STATE_SECRET || process.env.AUTH_SECRET;
   if (!secret) {
     throw new Error('OAUTH_STATE_SECRET or AUTH_SECRET must be set to use the OAuth connect flow.');
   }
-  return secret;
+  return Buffer.from(crypto.hkdfSync('sha256', secret, '', 'cadenzpoint-oauth-state-v1', 32));
 }
 
 function sign(payloadB64: string): string {
-  return crypto.createHmac('sha256', getStateSecret()).update(payloadB64).digest('base64url');
+  return crypto.createHmac('sha256', getStateKey()).update(payloadB64).digest('base64url');
+}
+
+/** Constant-time string comparison (false on any length mismatch). */
+export function safeEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
 }
 
 /** Generate a random, single-use nonce for the connect flow's cookie. */
@@ -58,10 +71,13 @@ export function verifyOAuthState(state: string | null | undefined): OAuthStatePa
   if (parts.length !== 2) return null;
   const [payloadB64, signature] = parts;
 
-  const expectedSignature = sign(payloadB64);
-  const a = Buffer.from(signature);
-  const b = Buffer.from(expectedSignature);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  let expectedSignature: string;
+  try {
+    expectedSignature = sign(payloadB64);
+  } catch {
+    return null; // no secret configured — nothing can verify
+  }
+  if (!safeEqual(signature, expectedSignature)) return null;
 
   let payload: OAuthStatePayload;
   try {

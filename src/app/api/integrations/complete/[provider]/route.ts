@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAdminFresh, AuthorizationError } from '@/lib/session';
 import { getTenantSlug } from '@/lib/tenant/context';
 import { getConnector } from '@/lib/integrations/registry';
-import { createConnection } from '@/server/actions/integrations';
-import { verifyOAuthState } from '@/lib/integrations/oauth-state';
+import { saveIntegrationConnection } from '@/server/internal/integrations';
+import { verifyOAuthState, safeEqual } from '@/lib/integrations/oauth-state';
 
 const NONCE_COOKIES: Record<string, string> = {
   quickbooks_online: 'qbo_oauth_nonce',
@@ -22,26 +22,37 @@ export async function GET(
   { params }: { params: Promise<{ provider: string }> }
 ) {
   const { provider } = await params;
+  const nonceCookieName = NONCE_COOKIES[provider];
+  const cookieNonce = nonceCookieName ? request.cookies.get(nonceCookieName)?.value : undefined;
+
+  // Single-use: the nonce cookie is cleared on EVERY exit from this route, success or failure.
+  const response = await complete(request, provider, cookieNonce);
+  if (nonceCookieName) response.cookies.delete(nonceCookieName);
+  return response;
+}
+
+async function complete(request: NextRequest, provider: string, cookieNonce: string | undefined): Promise<NextResponse> {
+  const redirectTo = (path: string) => NextResponse.redirect(new URL(path, request.url));
 
   let actor;
   try {
     actor = await requireAdminFresh();
   } catch (error) {
-    if (error instanceof AuthorizationError && error.kind === 'unauthenticated') {
-      return NextResponse.redirect(new URL('/login', request.url));
-    }
-    return NextResponse.redirect(new URL('/timesheet', request.url));
+    if (error instanceof AuthorizationError && error.kind === 'unauthenticated') return redirectTo('/login');
+    return redirectTo('/timesheet');
   }
 
   const { searchParams } = new URL(request.url);
   const code = searchParams.get('code');
   const realmId = searchParams.get('realmId') ?? undefined;
-  const state = searchParams.get('state');
+  const payload = verifyOAuthState(searchParams.get('state'));
 
-  const payload = verifyOAuthState(state);
-  const nonceCookieName = NONCE_COOKIES[provider];
-  const cookieNonce = nonceCookieName ? request.cookies.get(nonceCookieName)?.value : undefined;
-  const tenantSlug = await getTenantSlug();
+  let tenantSlug: string;
+  try {
+    tenantSlug = await getTenantSlug();
+  } catch {
+    return redirectTo('/admin/integrations?error=connection_failed');
+  }
 
   const valid =
     !!code &&
@@ -50,31 +61,19 @@ export async function GET(
     payload.userId === actor.id &&
     payload.tenantSlug === tenantSlug &&
     !!cookieNonce &&
-    payload.nonce === cookieNonce;
+    safeEqual(payload.nonce, cookieNonce);
 
-  if (!valid) {
-    const response = NextResponse.redirect(new URL('/admin/integrations?error=connection_failed', request.url));
-    if (nonceCookieName) response.cookies.delete(nonceCookieName);
-    return response;
-  }
-
-  // Single-use: the nonce cookie is consumed here regardless of what happens next.
-  const clearNonceCookie = (response: NextResponse) => {
-    if (nonceCookieName) response.cookies.delete(nonceCookieName);
-    return response;
-  };
+  if (!valid) return redirectTo('/admin/integrations?error=connection_failed');
 
   const connector = getConnector(provider);
   if (!connector || !connector.exchangeCodeForTokens) {
-    return clearNonceCookie(
-      NextResponse.redirect(new URL('/admin/integrations?error=unknown_provider', request.url))
-    );
+    return redirectTo('/admin/integrations?error=unknown_provider');
   }
 
   try {
     const tokens = await connector.exchangeCodeForTokens(code, realmId);
 
-    await createConnection({
+    await saveIntegrationConnection(actor.id, {
       provider,
       displayName: `${connector.metadata.name}${tokens.companyName ? ` — ${tokens.companyName}` : ''}`,
       externalCompanyId: tokens.realmId,
@@ -84,13 +83,9 @@ export async function GET(
       tokenExpiresAt: new Date(Date.now() + tokens.expiresIn * 1000),
     });
 
-    return clearNonceCookie(
-      NextResponse.redirect(new URL('/admin/integrations?connected=true', request.url))
-    );
+    return redirectTo('/admin/integrations?connected=true');
   } catch (err) {
     console.error(`OAuth completion error for ${provider}:`, err);
-    return clearNonceCookie(
-      NextResponse.redirect(new URL('/admin/integrations?error=connection_failed', request.url))
-    );
+    return redirectTo('/admin/integrations?error=connection_failed');
   }
 }

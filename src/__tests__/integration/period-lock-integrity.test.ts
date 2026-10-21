@@ -54,6 +54,7 @@ vi.mock('@/auth', () => ({
 }));
 
 import { saveTimesheetBatch } from '@/server/actions/timesheet';
+import { resolvePeriod } from '@/server/internal/periods';
 
 function actingAs(user: Awaited<ReturnType<typeof createTestUser>>) {
   sessionState.user = { id: user.id, role: user.role, email: user.email, fullName: user.fullName };
@@ -135,24 +136,98 @@ describe('Period-lock integrity (R2-2)', () => {
 
     await expect(
       saveTimesheetBatch({
-        periodStart, // current period — draft (no row), passes assertPeriodEditable on its own
-        cells: [{ chargeCodeId: chargeCode.id, dayIndex: -1, hours: 4, isEdit: false, isLateEntry: false }],
+        periodStart, // current period — draft (no row)
+        cells: [{ chargeCodeId: chargeCode.id, dayIndex: -1, hours: 4, isEdit: false, isLateEntry: true }],
+        // A valid reason code, so the late-entry rule can't be what rejects this.
+        changeReasonCode: 'LATE_ENTRY',
       })
     ).rejects.toThrow(/Invalid day index/i);
 
     // Confirm nothing was written into the approved prior period.
-    const lastDayOfPrevPeriod = dayjs(periodStart).subtract(1, 'day').toDate();
     const rows = await db.select().from(schema.timesheetEntries).where(
       and(eq(schema.timesheetEntries.userId, employee.id), eq(schema.timesheetEntries.chargeCodeId, chargeCode.id))
     );
     expect(rows).toHaveLength(0);
-    void lastDayOfPrevPeriod;
+  });
+
+  it('rejects writing into an approved period by sending its start at a different time of day', async () => {
+    const db = getTestDb();
+    const previousPeriodStart = navigatePeriod(periodStart, 'prev');
+    await db.insert(schema.timesheetPeriods).values({
+      userId: employee.id,
+      periodStart: previousPeriodStart,
+      status: 'approved',
+      submittedAt: new Date(),
+      reviewedAt: new Date(),
+      periodNumDays: getNumDaysInPeriod(previousPeriodStart),
+    });
+
+    // Same calendar day, one second later: an exact-timestamp lookup finds no row and treats
+    // the period as an editable draft.
+    const offByOneSecond = dayjs(previousPeriodStart).add(1, 'second').toDate();
+    await expect(
+      saveTimesheetBatch({
+        periodStart: offByOneSecond,
+        cells: [{ chargeCodeId: chargeCode.id, dayIndex: 0, hours: 4, isEdit: false, isLateEntry: true }],
+        changeReasonCode: 'LATE_ENTRY',
+      })
+    ).rejects.toThrow(/locked/i);
+
+    const rows = await db.select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.userId, employee.id));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('rejects writing into an approved period whose row was stored at a browser-local midnight', async () => {
+    const db = getTestDb();
+    const previousPeriodStart = navigatePeriod(periodStart, 'prev');
+    // The period picker computes midnight in the browser's timezone, e.g. 04:00Z for New York.
+    await db.insert(schema.timesheetPeriods).values({
+      userId: employee.id,
+      periodStart: dayjs(previousPeriodStart).add(4, 'hour').toDate(),
+      status: 'approved',
+      submittedAt: new Date(),
+      reviewedAt: new Date(),
+      periodNumDays: getNumDaysInPeriod(previousPeriodStart),
+    });
+
+    await expect(
+      saveTimesheetBatch({
+        periodStart: previousPeriodStart, // server midnight
+        cells: [{ chargeCodeId: chargeCode.id, dayIndex: 2, hours: 4, isEdit: false, isLateEntry: true }],
+        changeReasonCode: 'LATE_ENTRY',
+      })
+    ).rejects.toThrow(/locked/i);
+  });
+
+  it('accepts the first period of a new pay schedule that starts before the change takes effect', async () => {
+    const db = getTestDb();
+    // Biweekly from Mon Jan 6 2025, effective Sat Nov 1 2025. The timesheet navigation snaps
+    // the first new period to Mon Oct 27 2025 (it contains Nov 1), while the config in effect
+    // AT Oct 27 is still the old semi-monthly one, whose period started Oct 16.
+    const [newConfig] = await db.insert(schema.payPeriodConfig).values({
+      periodType: 'biweekly',
+      anchorDate: new Date(2025, 0, 6),
+      weekStartDay: 1,
+      effectiveFrom: new Date(2025, 10, 1),
+    }).returning();
+    try {
+      const { config, numDays: length } = await resolvePeriod(new Date(2025, 9, 27));
+      expect(config.periodType).toBe('biweekly');
+      expect(length).toBe(14);
+      // The old schedule's own boundary is still valid, and a mid-period date is not.
+      expect((await resolvePeriod(new Date(2025, 9, 16))).config.periodType).toBe('semimonthly');
+      await expect(resolvePeriod(new Date(2025, 9, 28))).rejects.toThrow(/Invalid period start/i);
+    } finally {
+      await db.delete(schema.payPeriodConfig).where(eq(schema.payPeriodConfig.id, newConfig.id));
+    }
   });
 
   it('a normal, in-bounds save still succeeds', async () => {
+    // Today's cell: neither late nor an edit, so no reason code is needed.
+    const todayIndex = dayjs().startOf('day').diff(dayjs(periodStart).startOf('day'), 'day');
     const result = await saveTimesheetBatch({
       periodStart,
-      cells: [{ chargeCodeId: chargeCode.id, dayIndex: 0, hours: 6, isEdit: false, isLateEntry: false }],
+      cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 6, isEdit: false, isLateEntry: false }],
     });
     expect(Object.keys(result)).toHaveLength(1);
 

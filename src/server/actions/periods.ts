@@ -3,15 +3,14 @@
 import { getDb } from '@/db';
 import { timesheetPeriods, users, timesheetEntries } from '@/db/schema';
 import { eq, and, inArray, gte, lt, sql } from 'drizzle-orm';
-import { requireSession, requireApprover, requireApproverFresh, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
-import { getPeriodStatusFor, type PeriodInfo, type PeriodStatus } from '@/server/internal/periods';
+import { requireSession, requireApprover, requireApproverFresh, getEmployeeScope, assertCanAccessEmployee, AuthorizationError } from '@/lib/session';
+import { getPeriodStatusFor, resolvePeriod, calendarDayWindow, type PeriodInfo, type PeriodStatus } from '@/server/internal/periods';
 import { getSupervisorScopeInfo, getSupervisedEmployeeIds } from '@/server/internal/supervisor-scope';
 import { sendTimesheetSubmittedEmail, sendTimesheetApprovedEmail, sendTimesheetRejectedEmail } from '@/lib/email/send';
 import { isNotificationEnabled } from '@/server/internal/notifications';
 import dayjs from 'dayjs';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 import { getNumDaysInPeriod, getLastWeekdayInPeriod } from '@/lib/date-utils';
-import { getEffectiveConfigAt } from '@/server/actions/pay-period-config';
 
 dayjs.extend(isSameOrAfter);
 
@@ -27,6 +26,60 @@ export async function getPeriodStatus(periodStart: Date): Promise<PeriodInfo> {
 }
 
 /**
+ * Email the reviewers of a just-submitted period: active admins plus active supervisors whose
+ * scope includes the submitter, never the submitter, each only if they opted in (emailOnSubmit).
+ * Called on both the first submission and a re-submission. Sends are fire-and-forget.
+ */
+async function notifyReviewersOfSubmission(userId: string, periodStart: Date, numDays: number): Promise<void> {
+  const periodEnd = dayjs(periodStart).add(numDays - 1, 'day');
+  const periodLabel = `${dayjs(periodStart).format('MMM D')} – ${periodEnd.format('MMM D, YYYY')}`;
+  const db = await getDb();
+
+  const [employee] = await db
+    .select({ fullName: users.fullName, email: users.email })
+    .from(users)
+    .where(eq(users.id, userId));
+
+  // R2-10: only ACTIVE reviewers, and only supervisors whose scope actually includes this
+  // submitter (sharing an active CLIN assignment) — previously every supervisor in the tenant
+  // was notified regardless of scope or active status, leaking who's submitting to people with
+  // no business reason to know.
+  const allSupervisors = await db
+    .select({ id: users.id, fullName: users.fullName, email: users.email })
+    .from(users)
+    .where(and(eq(users.role, 'supervisor'), eq(users.isActive, true)));
+
+  const inScopeSupervisors: typeof allSupervisors = [];
+  for (const supervisor of allSupervisors) {
+    const scope = await getSupervisedEmployeeIds(supervisor.id, 'supervisor');
+    if (scope.includes(userId)) inScopeSupervisors.push(supervisor);
+  }
+
+  const admins = await db
+    .select({ id: users.id, fullName: users.fullName, email: users.email })
+    .from(users)
+    .where(and(eq(users.role, 'admin'), eq(users.isActive, true)));
+
+  // Never notify the submitter about their own submission (e.g. an admin's own timesheet).
+  const reviewers = [...inScopeSupervisors, ...admins].filter((r) => r.id !== userId);
+
+  for (const reviewer of reviewers) {
+    const enabled = await isNotificationEnabled(reviewer.id, 'emailOnSubmit');
+    if (enabled && employee) {
+      sendTimesheetSubmittedEmail({
+        supervisorEmail: reviewer.email,
+        supervisorName: reviewer.fullName,
+        employeeName: employee.fullName,
+        employeeEmail: employee.email,
+        periodLabel,
+        submittedAt: dayjs().format('MMM D, YYYY h:mm A'),
+      }); // No await — fire-and-forget
+    }
+  }
+
+}
+
+/**
  * Submit a timesheet period (employee certification) for the session user.
  * Creates the period record if it doesn't exist, or updates status to 'submitted'.
  */
@@ -39,8 +92,10 @@ export async function submitPeriod(data: {
   const userId = actor.id;
   const db = await getDb();
 
-  // Resolve the config that was in effect for this specific period
-  const periodConfig = await getEffectiveConfigAt(data.periodStart);
+  // Must be a real period start (same rule as saveTimesheetBatch), so a submission can't
+  // certify — and lock — an arbitrary date range. Also resolves the config this period
+  // belongs to (the new one, for the first period of a schedule change).
+  const { config: periodConfig, numDays } = await resolvePeriod(data.periodStart);
 
   // Server-side validation: cannot submit before the last WEEKDAY of the period
   const lastWeekday = getLastWeekdayInPeriod(data.periodStart, periodConfig);
@@ -50,7 +105,6 @@ export async function submitPeriod(data: {
   }
 
   // Server-side validation: cannot submit a completely empty timesheet
-  const numDays = getNumDaysInPeriod(data.periodStart, periodConfig);
   const periodEndExclusive = dayjs(data.periodStart).add(numDays, 'day').toDate();
   const entryCount = await db
     .select({ count: sql<number>`COUNT(*)` })
@@ -67,20 +121,24 @@ export async function submitPeriod(data: {
     throw new Error('Cannot submit an empty timesheet. Please enter your hours before submitting.');
   }
 
+  // Match by calendar day, not exact timestamp, so a re-submission sent at a different time of
+  // day finds the existing row instead of creating a second one for the same period.
+  const [dayFrom, dayTo] = calendarDayWindow(data.periodStart);
   const existing = await db
     .select()
     .from(timesheetPeriods)
     .where(
       and(
         eq(timesheetPeriods.userId, userId),
-        eq(timesheetPeriods.periodStart, data.periodStart),
+        gte(timesheetPeriods.periodStart, dayFrom),
+        lt(timesheetPeriods.periodStart, dayTo),
       )
     );
 
   if (existing.length === 0) {
     // Create new period record — snapshot the effective config at this period's start date
     // (full config stored as audit record; periodConfig already resolved above)
-    const snapshotNumDays = getNumDaysInPeriod(data.periodStart, periodConfig);
+    const snapshotNumDays = numDays;
 
     const rows = await db.insert(timesheetPeriods).values({
       userId,
@@ -92,6 +150,9 @@ export async function submitPeriod(data: {
       periodNumDays: snapshotNumDays,
       completenessSnapshot: data.completeness ?? null,
     }).returning();
+
+    // The submission is already committed; a notification failure must not report it as failed.
+    await notifyReviewersOfSubmission(userId, data.periodStart, snapshotNumDays).catch((err) => console.error('Submission notification failed:', err));
 
     return {
       id: rows[0].id,
@@ -136,51 +197,8 @@ export async function submitPeriod(data: {
     periodNumDays: rows[0].periodNumDays ?? null,
   };
 
-  // Fire-and-forget: notify supervisor(s) via email
-  const periodEnd = dayjs(data.periodStart).add(getNumDaysInPeriod(data.periodStart, periodConfig) - 1, 'day');
-  const periodLabel = `${dayjs(data.periodStart).format('MMM D')} – ${periodEnd.format('MMM D, YYYY')}`;
-
-  const [employee] = await db
-    .select({ fullName: users.fullName, email: users.email })
-    .from(users)
-    .where(eq(users.id, userId));
-
-  // R2-10: only ACTIVE reviewers, and only supervisors whose scope actually includes this
-  // submitter (sharing an active CLIN assignment) — previously every supervisor in the tenant
-  // was notified regardless of scope or active status, leaking who's submitting to people with
-  // no business reason to know.
-  const allSupervisors = await db
-    .select({ id: users.id, fullName: users.fullName, email: users.email })
-    .from(users)
-    .where(and(eq(users.role, 'supervisor'), eq(users.isActive, true)));
-
-  const inScopeSupervisors: typeof allSupervisors = [];
-  for (const supervisor of allSupervisors) {
-    const scope = await getSupervisedEmployeeIds(supervisor.id, 'supervisor');
-    if (scope.includes(userId)) inScopeSupervisors.push(supervisor);
-  }
-
-  const admins = await db
-    .select({ id: users.id, fullName: users.fullName, email: users.email })
-    .from(users)
-    .where(and(eq(users.role, 'admin'), eq(users.isActive, true)));
-
-  // Never notify the submitter about their own submission (e.g. an admin's own timesheet).
-  const reviewers = [...inScopeSupervisors, ...admins].filter((r) => r.id !== userId);
-
-  for (const reviewer of reviewers) {
-    const enabled = await isNotificationEnabled(reviewer.id, 'emailOnSubmit');
-    if (enabled && employee) {
-      sendTimesheetSubmittedEmail({
-        supervisorEmail: reviewer.email,
-        supervisorName: reviewer.fullName,
-        employeeName: employee.fullName,
-        employeeEmail: employee.email,
-        periodLabel,
-        submittedAt: dayjs().format('MMM D, YYYY h:mm A'),
-      }); // No await — fire-and-forget
-    }
-  }
+  // The submission is already committed; a notification failure must not report it as failed.
+  await notifyReviewersOfSubmission(userId, data.periodStart, numDays).catch((err) => console.error('Submission notification failed:', err));
 
   return result;
 }
@@ -206,7 +224,8 @@ export async function approvePeriod(data: {
   // R2-7 (§0, locked product decision): admins may approve their own timesheet; supervisors
   // and employees still may not.
   if (period.userId === actor.id && actor.role !== 'admin') {
-    throw new Error('Period not found');
+    // Their own period, so there's nothing to mask: say plainly why it's refused.
+    throw new AuthorizationError('forbidden', 'Forbidden: You cannot approve your own timesheet.');
   }
 
   // R2-12: scope check immediately after loading the period, before anything about its status
@@ -277,7 +296,7 @@ export async function rejectPeriod(data: {
   // R2-7 (§0, locked product decision): admins may reject their own timesheet; supervisors
   // and employees still may not.
   if (period.userId === actor.id && actor.role !== 'admin') {
-    throw new Error('Period not found');
+    throw new AuthorizationError('forbidden', 'Forbidden: You cannot reject your own timesheet.');
   }
 
   // R2-12: scope check immediately after loading the period, before anything about its status

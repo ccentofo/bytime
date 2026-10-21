@@ -12,12 +12,23 @@ import { getTestDb, createTestUser, cleanupTestData } from './helpers';
 vi.mock('@/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/db')>()),
   getDb: async () => getTestDb(),
+  // requireAdminFresh/requireApproverFresh (R2-8) re-read the role through getDbForAuth.
+  getDbForAuth: async () => getTestDb(),
 }));
 
-const tenantState = vi.hoisted(() => ({ requestSlug: 'test-tenant' }));
+const tenantState = vi.hoisted(() => ({ requestSlug: 'test-tenant', plan: 'trial' }));
 
 vi.mock('@/lib/tenant/context', () => ({
   getTenantSlug: async () => tenantState.requestSlug,
+  // Seat checks (createUser*, reactivation) read the tenant's plan.
+  getTenantOrThrow: async () => ({
+    id: 'test-tenant-id',
+    slug: tenantState.requestSlug,
+    name: 'Test Tenant',
+    status: 'active',
+    plan: tenantState.plan,
+    dbUrl: 'unused-in-this-test',
+  }),
 }));
 
 type FakeSessionUser = { id: string; role: string; email: string; fullName: string };
@@ -119,5 +130,52 @@ describe('Mass assignment is blocked (R2-6)', () => {
 
     const [row] = await db.select().from(schema.users).where(eq(schema.users.id, target.id));
     expect(row.email).toBe('mixedcase@example.com');
+  });
+
+  it('updateUser rejects a non-boolean isActive, so the last admin cannot be deactivated with "false"', async () => {
+    await cleanupTestData();
+    const db = getTestDb();
+    const soleAdmin = await createTestUser({ role: 'admin' });
+    actingAs(soleAdmin);
+
+    // Postgres would coerce the string "false" to false; the strict `=== false` guards wouldn't.
+    await expect(
+      updateUser(soleAdmin.id, { isActive: 'false' as unknown as boolean })
+    ).rejects.toThrow(/must be true or false/);
+
+    const [row] = await db.select({ isActive: schema.users.isActive }).from(schema.users).where(eq(schema.users.id, soleAdmin.id));
+    expect(row.isActive).toBe(true);
+  });
+
+  it('updateNotificationPreferences rejects a non-boolean value instead of coercing it', async () => {
+    await cleanupTestData();
+    const user = await createTestUser({ role: 'employee' });
+    actingAs(user);
+    await expect(
+      updateNotificationPreferences({ emailOnSubmit: 'false' as unknown as boolean })
+    ).rejects.toThrow(/Invalid value/);
+  });
+
+  it('reactivating a user counts against the plan seat limit', async () => {
+    await cleanupTestData();
+    const db = getTestDb();
+    tenantState.plan = 'trial'; // 10 seats
+    const admin = await createTestUser({ role: 'admin' });
+    for (let i = 0; i < 9; i++) await createTestUser({ role: 'employee' }); // 10 active, plan full
+    const parked = await createTestUser({ role: 'employee', isActive: false });
+    actingAs(admin);
+
+    await expect(updateUser(parked.id, { isActive: true })).rejects.toThrow(/plan allows 10 active users/);
+
+    const [row] = await db.select({ isActive: schema.users.isActive }).from(schema.users).where(eq(schema.users.id, parked.id));
+    expect(row.isActive).toBe(false);
+
+    // With a seat free, the same reactivation succeeds.
+    const someone = (await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.role, 'employee')))
+      .find((u) => u.id !== parked.id)!;
+    await db.update(schema.users).set({ isActive: false }).where(eq(schema.users.id, someone.id));
+    await updateUser(parked.id, { isActive: true });
+    const [after] = await db.select({ isActive: schema.users.isActive }).from(schema.users).where(eq(schema.users.id, parked.id));
+    expect(after.isActive).toBe(true);
   });
 });

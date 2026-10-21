@@ -3,7 +3,7 @@
 import { getDb } from '@/db';
 import { users } from '@/db/schema';
 import bcrypt from 'bcryptjs';
-import { eq, and, ne } from 'drizzle-orm';
+import { eq, and, ne, sql } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { unlockAccount } from '@/server/internal/login-attempts';
 import { SAFE_USER_COLUMNS } from '@/server/internal/users';
@@ -107,6 +107,16 @@ export async function updateUser(id: string, data: {
   const actor = await requireAdminFresh();
   const db = await getDb();
 
+  // Server-action arguments are untrusted JSON. The last-admin and self-deactivation checks
+  // below key on `isActive === false`, and Postgres would happily coerce "false" or 0 to false,
+  // so anything that isn't a real boolean is rejected up front.
+  if (data.isActive !== undefined && typeof data.isActive !== 'boolean') {
+    throw new Error('Active status must be true or false.');
+  }
+  if (data.flsaExempt !== undefined && typeof data.flsaExempt !== 'boolean') {
+    throw new Error('FLSA exempt must be true or false.');
+  }
+
   // An admin cannot change their own role or deactivate themselves.
   if (actor.id === id) {
     if (data.role !== undefined && data.role !== actor.role) {
@@ -137,8 +147,15 @@ export async function updateUser(id: string, data: {
   const shouldInvalidateSession = data.role !== undefined || data.isActive !== undefined;
   const demotingRole = data.role !== undefined && data.role !== 'admin';
   const deactivating = data.isActive === false;
+  const activating = data.isActive === true;
 
   const result = await db.transaction(async (tx) => {
+    if (activating) {
+      // Reactivating a user takes a seat, same as creating one (R2-11).
+      const [target] = await tx.select({ isActive: users.isActive }).from(users).where(eq(users.id, id)).for('update');
+      if (target && !target.isActive) await assertSeatsAvailable(1, tx);
+    }
+
     if (demotingRole || deactivating) {
       const [target] = await tx
         .select({ role: users.role, isActive: users.isActive })
@@ -165,13 +182,8 @@ export async function updateUser(id: string, data: {
     }
 
     if (shouldInvalidateSession) {
-      const [currentUser] = await tx
-        .select({ sessionVersion: users.sessionVersion })
-        .from(users)
-        .where(eq(users.id, id));
-      if (currentUser) {
-        updateData.sessionVersion = currentUser.sessionVersion + 1;
-      }
+      // Increment in SQL so two concurrent edits can't both write the same bumped value.
+      updateData.sessionVersion = sql`${users.sessionVersion} + 1`;
     }
 
     const rows = await tx.update(users).set(updateData).where(eq(users.id, id)).returning(SAFE_USER_COLUMNS);

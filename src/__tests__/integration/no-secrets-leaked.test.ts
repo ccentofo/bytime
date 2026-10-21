@@ -11,12 +11,23 @@ import { getTestDb, createTestUser, cleanupTestData } from './helpers';
 vi.mock('@/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/db')>()),
   getDb: async () => getTestDb(),
+  // requireAdminFresh/requireApproverFresh (R2-8) re-read the role through getDbForAuth.
+  getDbForAuth: async () => getTestDb(),
 }));
 
-const tenantState = vi.hoisted(() => ({ requestSlug: 'test-tenant' }));
+const tenantState = vi.hoisted(() => ({ requestSlug: 'test-tenant', plan: 'trial' }));
 
 vi.mock('@/lib/tenant/context', () => ({
   getTenantSlug: async () => tenantState.requestSlug,
+  // Seat checks (createUser*, reactivation) read the tenant's plan.
+  getTenantOrThrow: async () => ({
+    id: 'test-tenant-id',
+    slug: tenantState.requestSlug,
+    name: 'Test Tenant',
+    status: 'active',
+    plan: tenantState.plan,
+    dbUrl: 'unused-in-this-test',
+  }),
 }));
 
 type FakeSessionUser = { id: string; role: string; email: string; fullName: string };
