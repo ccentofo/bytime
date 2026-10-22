@@ -40,6 +40,12 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // Signup provisioning runs drizzle's migrator at runtime, which reads the .sql files from ./drizzle. The
+  // tracer only sees the journal import, so include the folder explicitly or every signup fails on Vercel.
+  // CI asserts this (scripts/check-build-trace.mjs).
+  outputFileTracingIncludes: {
+    "/signup/verify": ["./drizzle/**/*"],
+  },
   async headers() {
     return [
       {

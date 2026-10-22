@@ -40,6 +40,9 @@ jobs:
           AUTH_SECRET: ci-dummy-auth-secret-not-real
           DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
 
+      - name: Build output includes the tenant migrations (signup provisioning)
+        run: node scripts/check-build-trace.mjs
+
       - name: Unit Tests (TZ=UTC, America/Los_Angeles, Pacific/Auckland)
         run: npm run test:tz
 

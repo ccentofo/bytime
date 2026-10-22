@@ -11,6 +11,12 @@ const KEY_LENGTH = 32;  // 256 bits
  */
 function getKey(): Buffer {
   const envKey = process.env.ENCRYPTION_KEY;
+  // Production fails CLOSED: this key protects every tenant's database credentials, TOTP secrets and integration
+  // tokens. A missing key (or the .env.example placeholder, which scrypt would turn into a guessable key) must
+  // never silently fall back to a derivable one.
+  if (process.env.NODE_ENV === 'production' && !(envKey && /^[0-9a-f]{64}$/i.test(envKey))) {
+    throw new Error('ENCRYPTION_KEY must be set to 64 hex characters in production (openssl rand -hex 32).');
+  }
   if (!envKey) {
     console.warn('ENCRYPTION_KEY not set — using insecure development key. DO NOT use in production.');
     // Development fallback — deterministic key for local testing
