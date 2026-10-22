@@ -13,6 +13,7 @@ import { eq } from 'drizzle-orm';
 import { controlDb } from '@/db/control-plane';
 import { tenants } from '@/db/control-plane/schema';
 import { ConflictError, UserFacingError } from '@/lib/errors';
+import { userAction, type ActionResult } from '@/lib/action-result';
 
 async function readTenantRow(slug: string) {
   const [row] = await controlDb.select().from(tenants).where(eq(tenants.slug, slug)).limit(1);
@@ -23,57 +24,76 @@ async function readTenantRow(slug: string) {
 /** A LIVE or `incomplete` subscription means a plan already exists or a payment is pending (§5.6). */
 const BLOCKS_NEW_CHECKOUT = (status: string | null) => status !== null && (isLive(status) || status === 'incomplete');
 
-export async function startCheckout(plan: PlanKey): Promise<{ url: string }> {
-  await requireAdminFresh();
-  const tenant = await getTenantForBilling(); // refuses deleting/deleted/provisioning
-  const priceId = PLANS[plan].priceId;
-  if (!priceId) throw new UserFacingError('That plan is not purchasable.');
+export async function startCheckout(plan: PlanKey): Promise<ActionResult<{ url: string }>> {
+  return userAction(async () => {
+    await requireAdminFresh();
+    const tenant = await getTenantForBilling(); // refuses deleting/deleted/provisioning
+    const priceId = PLANS[plan].priceId;
+    if (!priceId) throw new UserFacingError('That plan is not purchasable.');
 
-  const row = await readTenantRow(tenant.slug);
-  if (getTenantAccess(toLifecycleFacts(row), new Date()) === 'closed') {
-    throw new UserFacingError('This workspace is closed and can no longer be subscribed.');
-  }
-  if (row.status === 'suspended' && row.suspensionReason === 'policy') {
-    throw new UserFacingError('This workspace is suspended. Please contact support.');
-  }
+    const row = await readTenantRow(tenant.slug);
+    if (getTenantAccess(toLifecycleFacts(row), new Date()) === 'closed') {
+      throw new UserFacingError('This workspace is closed and can no longer be subscribed.');
+    }
+    if (row.status === 'suspended' && row.suspensionReason === 'policy') {
+      throw new UserFacingError('This workspace is suspended. Please contact support.');
+    }
 
-  const customerId = await ensureStripeCustomer(row.id);
+    const customerId = await ensureStripeCustomer(row.id);
 
-  // Authoritative duplicate check against Stripe (the mirror can lag a webhook).
-  const subs = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 100 });
-  if (subs.data.some((s) => BLOCKS_NEW_CHECKOUT(s.status))) {
-    throw new ConflictError('A subscription or payment is already in progress. Use Manage billing to change plans or pay.');
-  }
+    // Authoritative duplicate check against Stripe (the mirror can lag a webhook).
+    const subs = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 100 });
+    if (subs.data.some((s) => BLOCKS_NEW_CHECKOUT(s.status))) {
+      throw new ConflictError('A subscription or payment is already in progress. Use Manage billing to change plans or pay.');
+    }
 
-  const base = tenantBaseUrl(tenant.slug);
-  const session = await stripe.checkout.sessions.create({
-    mode: 'subscription',
-    customer: customerId,
-    line_items: [{ price: priceId, quantity: 1 }],
-    success_url: `${base}/admin/billing?status=success`,
-    cancel_url: `${base}/admin/billing?status=cancelled`,
-    metadata: { slug: tenant.slug },
+    const base = tenantBaseUrl(tenant.slug);
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      customer: customerId,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${base}/admin/billing?status=success`,
+      cancel_url: `${base}/admin/billing?status=cancelled`,
+      metadata: { slug: tenant.slug },
+    });
+    if (!session.url) throw new UserFacingError('Could not start checkout.');
+    return { url: session.url };
   });
-  if (!session.url) throw new UserFacingError('Could not start checkout.');
-  return { url: session.url };
 }
 
-export async function openBillingPortal(): Promise<{ url: string }> {
-  await requireAdminFresh();
-  const tenant = await getTenantForBilling();
-  const row = await readTenantRow(tenant.slug);
-  if (!row.stripeCustomerId) throw new UserFacingError('No billing account yet — subscribe first.');
-  if (row.stripeCustomerDeletedAt) throw new UserFacingError('Your billing account was closed — subscribe again to create a new one.');
+export async function openBillingPortal(): Promise<ActionResult<{ url: string }>> {
+  return userAction(async () => {
+    await requireAdminFresh();
+    const tenant = await getTenantForBilling();
+    const row = await readTenantRow(tenant.slug);
+    if (!row.stripeCustomerId) throw new UserFacingError('No billing account yet — subscribe first.');
+    if (row.stripeCustomerDeletedAt) throw new UserFacingError('Your billing account was closed — subscribe again to create a new one.');
 
-  const portal = await stripe.billingPortal.sessions.create({
-    customer: row.stripeCustomerId,
-    return_url: `${tenantBaseUrl(tenant.slug)}/admin/billing`,
+    const portal = await stripe.billingPortal.sessions.create({
+      customer: row.stripeCustomerId,
+      return_url: `${tenantBaseUrl(tenant.slug)}/admin/billing`,
+    });
+    return { url: portal.url };
   });
-  return { url: portal.url };
+}
+
+/**
+ * A plan as the billing UI sees it (feature-plan-launch-blockers.md P4 §8): computed server-side so Stripe price IDs —
+ * and the env they come from — never reach a client bundle (a client value import of @/lib/billing/plans would read
+ * process.env there, where it is empty, and wrongly disable Subscribe).
+ */
+export interface BillingPlan {
+  key: PlanKey;
+  label: string;
+  seatLimit: number | null;
+  /** A Stripe price is configured for this plan: Subscribe can be offered. */
+  purchasable: boolean;
 }
 
 export interface TenantBillingInfo {
   plan: string;
+  /** Every plan, in display order (trial first). */
+  plans: BillingPlan[];
   subscriptionStatus: string | null;
   /** A usable (not deleted) Stripe customer exists: Manage billing is available. */
   hasCustomer: boolean;
@@ -102,8 +122,16 @@ export async function getTenantBillingInfo(): Promise<TenantBillingInfo> {
     }
   }
 
+  const plans = (Object.entries(PLANS) as [PlanKey, typeof PLANS[PlanKey]][]).map(([key, p]) => ({
+    key,
+    label: p.label,
+    seatLimit: p.seatLimit,
+    purchasable: Boolean(p.priceId),
+  }));
+
   return {
     plan: row.plan ?? 'trial',
+    plans,
     subscriptionStatus: row.subscriptionStatus ?? null,
     hasCustomer,
     canSubscribe: !BLOCKS_NEW_CHECKOUT(row.subscriptionStatus ?? null) && row.suspensionReason !== 'policy',

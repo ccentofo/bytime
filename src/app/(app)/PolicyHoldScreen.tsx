@@ -1,5 +1,6 @@
 import { Center, Stack, Title, Text, ThemeIcon, Anchor, Button } from '@mantine/core';
 import { IconHandStop, IconDownload } from '@tabler/icons-react';
+import { SignOutButton } from '@/components/auth/SignOutButton';
 
 /**
  * F5: shown to EVERY signed-in user (admins included) of a workspace suspended for a policy breach (Terms §17.3).
@@ -25,6 +26,7 @@ export function PolicyHoldScreen({ canExport }: { canExport: boolean }) {
             Export all workspace data
           </Button>
         )}
+        <SignOutButton />
       </Stack>
     </Center>
   );

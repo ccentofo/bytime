@@ -213,7 +213,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     await expectFailure(createUser({ email: `new-${Date.now()}@bytime.dev`, fullName: 'New User' }), 'forbidden', /Admin role required/);
     await expectFailure(createApiKey({ name: 'test key' }), 'forbidden', /Admin role required/);
     await expectFailure(bulkImportEmployees([]), 'forbidden', /Admin role required/);
-    await expect(startCheckout('starter')).rejects.toThrow(/Admin role required/);
+    await expectFailure(startCheckout('starter'), 'forbidden', /Admin role required/);
     await expect(listChargeCodes()).rejects.toThrow(/Admin role required/);
   });
 

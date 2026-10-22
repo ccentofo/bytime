@@ -1,14 +1,17 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Container, Title, Text, Paper, Group, Stack, Badge, Button,
   Alert, Divider,
 } from '@mantine/core';
 import { IconCheck, IconAlertCircle, IconExternalLink } from '@tabler/icons-react';
-import { notifications } from '@mantine/notifications';
 import { startCheckout, openBillingPortal, type TenantBillingInfo } from '@/server/actions/billing';
-import { PLANS, type PlanKey } from '@/lib/billing/plans';
+// Type-only: plan data (labels, seat limits, purchasable) comes from the server in `billing.plans` — a value import of
+// @/lib/billing/plans here would read Stripe price env vars in the browser (empty) (feature-plan-launch-blockers.md P4 §8).
+import type { PlanKey } from '@/lib/billing/plans';
+import { runAction } from '@/lib/run-action';
 import { PageHeader } from '@/components/ui/PageHeader';
 
 interface Props {
@@ -27,32 +30,33 @@ const STATUS_COLORS: Record<string, string> = {
 export function BillingClient({ billing, checkoutStatus }: Props) {
   const [isPending, startTransition] = useTransition();
   const [pendingPlan, setPendingPlan] = useState<PlanKey | null>(null);
+  const router = useRouter();
+
+  // Back from Stripe Checkout: the webhook that activates the plan usually lands within seconds. Refresh once after
+  // 5 s so the page picks it up (one refresh — not a polling loop).
+  useEffect(() => {
+    if (checkoutStatus !== 'success') return;
+    const timer = setTimeout(() => router.refresh(), 5000);
+    return () => clearTimeout(timer);
+  }, [checkoutStatus, router]);
 
   async function handleSubscribe(plan: PlanKey) {
     setPendingPlan(plan);
     startTransition(async () => {
-      try {
-        const { url } = await startCheckout(plan);
-        window.location.href = url;
-      } catch (err) {
-        notifications.show({ title: 'Checkout failed', message: String(err), color: 'red' });
-        setPendingPlan(null);
-      }
+      const result = await runAction(startCheckout(plan), { errorTitle: 'Checkout failed' });
+      if (result.ok) window.location.href = result.data.url;
+      else setPendingPlan(null);
     });
   }
 
   async function handlePortal() {
     startTransition(async () => {
-      try {
-        const { url } = await openBillingPortal();
-        window.location.href = url;
-      } catch (err) {
-        notifications.show({ title: 'Portal unavailable', message: String(err), color: 'red' });
-      }
+      const result = await runAction(openBillingPortal(), { errorTitle: 'Portal unavailable' });
+      if (result.ok) window.location.href = result.data.url;
     });
   }
 
-  const currentPlan = PLANS[billing.plan as PlanKey] ?? PLANS.trial;
+  const currentPlan = billing.plans.find((p) => p.key === billing.plan) ?? billing.plans.find((p) => p.key === 'trial')!;
   // "Current plan" only while a subscription is actually running; after it ends, the same plan can be bought again.
   const isCurrent = (key: PlanKey) => !billing.canSubscribe && billing.plan === key;
   const statusColor = billing.subscriptionStatus ? (STATUS_COLORS[billing.subscriptionStatus] ?? 'gray') : 'gray';
@@ -66,7 +70,7 @@ export function BillingClient({ billing, checkoutStatus }: Props) {
 
       {checkoutStatus === 'success' && (
         <Alert icon={<IconCheck size={16} />} color="success" variant="light" mb="lg">
-          Subscription activated — welcome to {currentPlan.label}!
+          Thanks — your subscription is being activated.
         </Alert>
       )}
       {checkoutStatus === 'cancelled' && (
@@ -118,10 +122,10 @@ export function BillingClient({ billing, checkoutStatus }: Props) {
             : 'You already have a subscription or a payment in progress. Use Manage billing to change plans or pay.'}
         </Text>
         <Stack gap="md">
-          {(Object.entries(PLANS) as [PlanKey, typeof PLANS[PlanKey]][])
-            .filter(([key]) => key !== 'trial')
-            .map(([key, plan]) => (
-              <Paper key={key} withBorder p="md" radius="md">
+          {billing.plans
+            .filter((plan) => plan.key !== 'trial')
+            .map((plan) => (
+              <Paper key={plan.key} withBorder p="md" radius="md">
                 <Group justify="space-between">
                   <Stack gap={2}>
                     <Text fw={700}>{plan.label}</Text>
@@ -131,12 +135,12 @@ export function BillingClient({ billing, checkoutStatus }: Props) {
                   </Stack>
                   <Button
                     size="sm"
-                    variant={isCurrent(key) ? 'filled' : 'default'}
-                    loading={isPending && pendingPlan === key}
-                    disabled={!billing.canSubscribe || !plan.priceId}
-                    onClick={() => handleSubscribe(key)}
+                    variant={isCurrent(plan.key) ? 'filled' : 'default'}
+                    loading={isPending && pendingPlan === plan.key}
+                    disabled={!billing.canSubscribe || !plan.purchasable}
+                    onClick={() => handleSubscribe(plan.key)}
                   >
-                    {isCurrent(key) ? 'Current plan' : 'Subscribe'}
+                    {isCurrent(plan.key) ? 'Current plan' : 'Subscribe'}
                   </Button>
                 </Group>
               </Paper>
