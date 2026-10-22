@@ -113,6 +113,106 @@ const WRITE_GATE_AUTH_ALLOWLIST: Record<string, { names: string[]; reason: strin
   },
 };
 
+/**
+ * feature-plan-launch-blockers.md P3 (LB-D4): the cached `requireAdmin()` trusts the JWT role, which can be up to
+ * 60 s stale — a demoted admin keeps admin powers until it refreshes. So `requireAdmin()` is BANNED in exported
+ * actions; anything that writes uses `requireAdminFresh()`. The only exceptions are listed here: actions that
+ * perform NO write and call NO writing helper (any DB write — including credential/token bookkeeping such as an
+ * OAuth refresh or a login-attempt reset — disqualifies an action). Each entry is checked below: it must still be
+ * exported, still use requireAdmin(), and contain no write.
+ */
+const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
+  'api-keys.ts': { getApiKeys: 'lists key metadata (name/prefix/dates); no write' },
+  'assignments.ts': {
+    getAssignments: 'reads CLIN assignments for the admin table; no write',
+    getAssignmentsForUser: 'reads one user\'s CLIN assignments; no write',
+  },
+  'billing.ts': { getTenantBillingInfo: 'reads the control-plane billing fields; no write' },
+  'charge-codes.ts': {
+    listCostClasses: 'reads cost classes; no write',
+    listChargeCodes: 'reads charge codes with joined labels; no write',
+    getUserChargeCodeIds: 'reads one user\'s active charge-code ids; no write',
+    getChargeCodeAssignments: 'reads user↔charge-code assignments; no write',
+  },
+  'clins.ts': { getClinsByContract: 'reads CLINs of a contract; no write' },
+  'contracts.ts': {
+    getContracts: 'reads contracts; no write',
+    getContractById: 'reads one contract; no write',
+  },
+  'dashboard.ts': {
+    getContractSummaries: 'aggregates hours/cost per contract; read-only queries',
+    getPeriodCostReport: 'aggregates a period\'s cost; read-only queries',
+  },
+  'gusto.ts': { getBytimeEmployeesForGustoMapping: 'reads active employees for the mapping UI; no token refresh, no write' },
+  'indirect-codes.ts': {
+    getIndirectChargeCodes: 'reads indirect codes; no write',
+    getActiveIndirectCodes: 'reads active indirect codes; no write',
+  },
+  'integrations.ts': {
+    getAvailableConnectors: 'returns static connector metadata; no DB access',
+    getConnections: 'reads connection rows (no tokens selected); no write',
+    getMappings: 'reads entity mappings; no write',
+    getSyncLogs: 'reads sync logs; no write',
+    getSyncRecords: 'reads sync records; no write',
+  },
+  'labor-categories.ts': {
+    getAllLaborCategories: 'reads labor categories; no write',
+    getAssignableLaborCategories: 'reads assignable labor categories; no write',
+    getLaborCategoriesByClin: 'reads a CLIN\'s labor categories; no write',
+    getUserLaborCategoryAssignments: 'reads one user\'s LCAT assignments; no write',
+  },
+  'migration.ts': { validateMigrationData: 'validates uploaded rows against existing records; read-only lookups' },
+  'pay-period-config.ts': {
+    getConfigHistory: 'reads schedule history; no write',
+    getPendingConfigChange: 'reads the pending schedule change; no write',
+    getValidScheduleChangeDates: 'computes valid change dates from reads; no write',
+  },
+  'payroll-export.ts': {
+    getPayrollFormats: 'returns static format metadata; no DB access',
+    getPayrollExportPreview: 'reads approved entries (getApprovedEntriesForSync is read-only); no write',
+    generatePayrollExportCSV: 'builds a CSV from read-only approved entries; no write',
+  },
+  'qbo.ts': {
+    getBytimeEmployeesForMapping: 'reads active employees; no token refresh, no write',
+    getBytimeContractsForMapping: 'reads active contracts; no token refresh, no write',
+    getBytimeClinsForMapping: 'reads active CLINs; no token refresh, no write',
+  },
+  'reports.ts': { getDetailedCostReport: 'reads cost report rows via the read-only internal reader; no write' },
+  'setup.ts': { getSetupStatus: 'reads setup-checklist counts; no write' },
+  'slins.ts': { getSlinsByClin: 'reads a CLIN\'s SLINs; no write' },
+  'users.ts': { getUsers: 'reads users (SAFE_USER_COLUMNS); no write' },
+};
+
+/** Matches the cached guard only — `requireAdminFresh(` does not match (an "F" follows "requireAdmin"). */
+const CACHED_ADMIN_PATTERN = /\brequireAdmin\s*\(/;
+/** Helpers known to write (DB or credential bookkeeping) — calling one disqualifies a read-only allowlist entry. */
+const WRITING_HELPER_PATTERN = /\b(?:getDbForWrite|getDbForAuth|executeSyncOperation|unlockAccount|ensureValidToken|ensureValidGustoToken)\s*\(/;
+
+/**
+ * Violations of the cached-admin ban in one actions file: an exported action using requireAdmin() without an
+ * allowlist entry, or an allowlisted action that writes / calls a writing helper / calls a non-allowlisted action
+ * of the same file.
+ */
+function cachedAdminViolations(source: string, allowed: Record<string, string>): string[] {
+  const fns = parseExportedFunctions(source);
+  const exported = new Set(fns.map((f) => f.name));
+  const out: string[] = [];
+  for (const fn of fns) {
+    if (!CACHED_ADMIN_PATTERN.test(fn.bodyText)) continue;
+    if (!(fn.name in allowed)) {
+      out.push(`${fn.name}: uses cached requireAdmin() — use requireAdminFresh(), or allowlist a provably read-only action`);
+      continue;
+    }
+    if (DB_WRITE_PATTERN.test(fn.bodyText) || WRITING_HELPER_PATTERN.test(fn.bodyText)) {
+      out.push(`${fn.name}: allowlisted as read-only but writes (or calls a writing helper)`);
+      continue;
+    }
+    const calledWriter = [...exported].find((other) => other !== fn.name && !(other in allowed) && new RegExp(`\\b${other}\\s*\\(`).test(fn.bodyText));
+    if (calledWriter) out.push(`${fn.name}: allowlisted as read-only but calls ${calledWriter}`);
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Minimal brace-matching source scanner. We can't pull in a real TS parser
 // dependency just for this, and regex-per-line is too fragile given multi-line
@@ -262,6 +362,11 @@ describe('Server action guard coverage', () => {
     const fns = parseExportedFunctions(source);
     const allowlist = PUBLIC_ACTIONS[file]?.names ?? [];
 
+    it(`${file}: no exported action uses the cached requireAdmin() unless allowlisted as read-only (P3)`, () => {
+      const violations = cachedAdminViolations(source, ADMIN_READ_ONLY_ALLOWLIST[file] ?? {});
+      expect(violations, `${file}: ${violations.join('; ')}`).toEqual([]);
+    });
+
     it(`${file}: every exported action is guarded or explicitly public`, () => {
       const unguarded = fns
         .filter((fn) => !GUARD_PATTERN.test(fn.bodyText) && !allowlist.includes(fn.name))
@@ -397,6 +502,42 @@ describe('Server action guard coverage', () => {
       }
     }
     expect(staleEntries, `Stale PUBLIC_ACTIONS entries: ${staleEntries.join(', ')}`).toEqual([]);
+  });
+
+  it('cached-admin ban: adding requireAdmin() to a writer fails (mutation check)', () => {
+    const writer = `
+      export async function evilWriter(id: string) {
+        await requireAdmin();
+        const db = await getDbForWrite();
+        await db.update(contracts).set({ name: 'x' }).where(eq(contracts.id, id));
+      }`;
+    expect(cachedAdminViolations(writer, {})).toEqual([expect.stringContaining('evilWriter: uses cached requireAdmin()')]);
+    // Allowlisting a writer doesn't help: an allowlisted action that writes is still a violation.
+    expect(cachedAdminViolations(writer, { evilWriter: 'claims read-only' })).toEqual([expect.stringContaining('allowlisted as read-only but writes')]);
+    // …nor one that writes through a helper, or by calling a writing action in the same file.
+    const viaHelper = `export async function refresher() { await requireAdmin(); return ensureValidToken('c'); }`;
+    expect(cachedAdminViolations(viaHelper, { refresher: 'x' })).toHaveLength(1);
+    const viaAction = `
+      export async function bulk() { await requireAdmin(); await writeOne(); }
+      export async function writeOne() { await requireAdminFresh(); }`;
+    expect(cachedAdminViolations(viaAction, { bulk: 'x' })).toEqual([expect.stringContaining('calls writeOne')]);
+    // The fresh guard is not matched.
+    expect(cachedAdminViolations(`export async function ok() { await requireAdminFresh(); }`, {})).toEqual([]);
+  });
+
+  it('ADMIN_READ_ONLY_ALLOWLIST has no stale entries (must be exported and still use requireAdmin())', () => {
+    const stale: string[] = [];
+    for (const [file, entries] of Object.entries(ADMIN_READ_ONLY_ALLOWLIST)) {
+      const fullPath = path.join(ACTIONS_DIR, file);
+      if (!fs.existsSync(fullPath)) { stale.push(`${file} (file does not exist)`); continue; }
+      const byName = new Map(parseExportedFunctions(stripComments(fs.readFileSync(fullPath, 'utf-8'))).map((fn) => [fn.name, fn]));
+      for (const name of Object.keys(entries)) {
+        const fn = byName.get(name);
+        if (!fn) stale.push(`${file}: ${name} (not exported)`);
+        else if (!CACHED_ADMIN_PATTERN.test(fn.bodyText)) stale.push(`${file}: ${name} (no longer uses requireAdmin() — remove)`);
+      }
+    }
+    expect(stale, `Stale ADMIN_READ_ONLY_ALLOWLIST entries: ${stale.join(', ')}`).toEqual([]);
   });
 
   it('WRITE_GATE_AUTH_ALLOWLIST has no stale entries (file/name must still exist, be exported, write, and call getDbForAuth)', () => {

@@ -3,7 +3,7 @@
 import { getDb, getDbForWrite } from '@/db';
 import { contracts } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { validateContractNumber, validateRequired, validateStringLength, validateOptionalString, validateOptionalCalendarDate, validateMonetaryValue } from '@/lib/validation';
 import type { CalendarDate } from '@/lib/calendar-date';
 
@@ -36,7 +36,7 @@ export async function createContract(data: {
   fundedValue?: string;
   ceilingValue?: string;
 }) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDbForWrite();
   const validatedData = {
     contractNumber: validateContractNumber(data.contractNumber),
@@ -63,7 +63,7 @@ export async function updateContract(id: string, data: {
   fundedValue?: string;
   ceilingValue?: string;
 }) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDbForWrite();
   const validatedData: Record<string, unknown> = { updatedAt: new Date() };
   if (data.contractNumber !== undefined) validatedData.contractNumber = validateContractNumber(data.contractNumber);

@@ -3,7 +3,7 @@
 import { getDb, getDbForWrite } from '@/db';
 import { clins } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { validateClinNumber, validateOptionalString, validateMonetaryValue } from '@/lib/validation';
 
 export async function getClinsByContract(contractId: string) {
@@ -19,7 +19,7 @@ export async function createClin(data: {
   fundedAmount?: string;
 }) {
   const db = await getDbForWrite();
-  await requireAdmin();
+  await requireAdminFresh();
   const validatedData = {
     contractId: data.contractId,
     clinNumber: validateClinNumber(data.clinNumber),
@@ -37,7 +37,7 @@ export async function updateClin(id: string, data: {
   status?: 'active' | 'inactive' | 'closed';
 }) {
   const db = await getDbForWrite();
-  await requireAdmin();
+  await requireAdminFresh();
   const validatedData: Record<string, unknown> = { updatedAt: new Date() };
   if (data.clinNumber !== undefined) validatedData.clinNumber = validateClinNumber(data.clinNumber);
   if (data.description !== undefined) validatedData.description = validateOptionalString(data.description, 'Description', 2000);

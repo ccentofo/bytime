@@ -5,6 +5,7 @@ import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import { requireSession, requireAdminFresh } from '@/lib/session';
+import { verifyCurrentPassword } from '@/server/internal/login-attempts';
 
 // ---------------------------------------------------------------------------
 // Password Validation
@@ -56,10 +57,11 @@ export async function changePassword(data: {
     return { success: false, error: 'Account has no password set. Contact your administrator.' };
   }
 
-  // Verify current password
-  const isValid = await bcrypt.compare(data.currentPassword, user.passwordHash);
-  if (!isValid) {
-    return { success: false, error: 'Current password is incorrect.' };
+  // Verify current password — lockout checked before bcrypt; a wrong password counts toward the sign-in lockout
+  // (shared login_attempts counter, intended: a stolen session can't be used to guess the password freely).
+  const reauth = await verifyCurrentPassword(actor.email, user.passwordHash, data.currentPassword);
+  if (!reauth.ok) {
+    return { success: false, error: reauth.error };
   }
 
   // Check new password is different from current

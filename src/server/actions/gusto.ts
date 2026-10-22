@@ -4,7 +4,7 @@ import { getDefaultSyncWindow } from '@/server/internal/workspace-settings';
 import { getDb } from '@/db';
 import { integrationConnections, users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { ensureValidGustoToken, fetchGustoEmployees } from '@/lib/integrations/connectors/gusto-api';
 import { executeSyncOperation } from '@/lib/integrations/sync-engine';
 import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -13,7 +13,7 @@ import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
  * Fetch Gusto employees for the mapping UI.
  */
 export async function fetchGustoEmployeesForMapping(connectionId: string) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDb();
   const accessToken = await ensureValidGustoToken(connectionId);
 
@@ -49,7 +49,7 @@ export async function triggerGustoSync(data: {
   periodStart?: CalendarDate;
   periodEnd?: CalendarDate;
 }) {
-  const actor = await requireAdmin();
+  const actor = await requireAdminFresh();
   const window = data.periodStart && data.periodEnd
     ? { periodStart: parseCalendarDate(data.periodStart), periodEnd: parseCalendarDate(data.periodEnd) }
     : await getDefaultSyncWindow();

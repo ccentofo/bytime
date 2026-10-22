@@ -4,7 +4,7 @@ import { getDefaultSyncWindow } from '@/server/internal/workspace-settings';
 import { getDb, getDbForWrite } from '@/db';
 import { integrationConnections, users, contracts, clins, integrationEntityMappings } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { decrypt } from '@/lib/encryption';
 import { ensureValidToken, fetchQBOEmployees, fetchQBOCustomers, fetchQBOServiceItems, fetchQBOVendors, fetchQBOClasses } from '@/lib/integrations/connectors/qbo-api';
 import { getMappings } from '@/server/actions/integrations';
@@ -17,7 +17,7 @@ import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
  * Automatically refreshes the token if needed.
  */
 export async function fetchQBOEmployeesForMapping(connectionId: string) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDb();
   const accessToken = await ensureValidToken(connectionId);
 
@@ -35,7 +35,7 @@ export async function fetchQBOEmployeesForMapping(connectionId: string) {
  * Fetch QBO customers for the mapping UI.
  */
 export async function fetchQBOCustomersForMapping(connectionId: string) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDb();
   const accessToken = await ensureValidToken(connectionId);
 
@@ -53,7 +53,7 @@ export async function fetchQBOCustomersForMapping(connectionId: string) {
  * Fetch QBO service items for the mapping UI.
  */
 export async function fetchQBOServiceItemsForMapping(connectionId: string) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDb();
   const accessToken = await ensureValidToken(connectionId);
 
@@ -120,7 +120,7 @@ export async function getBytimeClinsForMapping() {
  * Automatically refreshes the token if needed.
  */
 export async function fetchQBOVendorsForMapping(connectionId: string) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDb();
   const accessToken = await ensureValidToken(connectionId);
 
@@ -143,7 +143,7 @@ export async function triggerQBOSync(data: {
   periodStart?: CalendarDate;
   periodEnd?: CalendarDate;
 }) {
-  const actor = await requireAdmin();
+  const actor = await requireAdminFresh();
   const window = data.periodStart && data.periodEnd
     ? { periodStart: parseCalendarDate(data.periodStart), periodEnd: parseCalendarDate(data.periodEnd) }
     : await getDefaultSyncWindow();
@@ -161,7 +161,7 @@ export async function triggerQBOSync(data: {
  * Fetch QBO Classes for the mapping/import UI.
  */
 export async function fetchQBOClassesForMapping(connectionId: string) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDb();
   const accessToken = await ensureValidToken(connectionId);
   const [connection] = await db
@@ -185,7 +185,7 @@ export async function fetchQBOClassesForMapping(connectionId: string) {
  * Idempotent: re-running updates mapping, doesn't duplicate.
  */
 export async function importQboClasses(connectionId: string, selected: Array<{ qboId: string; name: string }>) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDbForWrite();
   let created = 0;
   let updated = 0;
@@ -235,7 +235,7 @@ export async function importQboChargeCodes(
     workLocation?: 'onsite' | 'telework' | 'other';
   }>
 ) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDbForWrite();
   let created = 0;
   let updated = 0;

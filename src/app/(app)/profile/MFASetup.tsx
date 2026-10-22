@@ -32,6 +32,7 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
   const [pendingSecret, setPendingSecret] = useState('');
   const [qrUri, setQrUri] = useState('');
   const [verifyCode, setVerifyCode] = useState('');
+  const [setupPassword, setSetupPassword] = useState('');
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [disablePassword, setDisablePassword] = useState('');
   const [error, setError] = useState('');
@@ -53,9 +54,10 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
   async function handleVerify() {
     setError('');
     startTransition(async () => {
-      const result = await completeMFASetup({ pendingSecret, code: verifyCode });
+      const result = await completeMFASetup({ pendingSecret, code: verifyCode, currentPassword: setupPassword });
       if (result.success && result.recoveryCodes) {
         setRecoveryCodes(result.recoveryCodes);
+        setSetupPassword('');
         setStep('recovery');
         notifications.show({ title: '2FA Enabled', message: 'Two-factor authentication is now active.', color: 'success' });
       } else {
@@ -166,13 +168,20 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
             value={verifyCode}
             onChange={setVerifyCode}
             autoFocus
-            onComplete={handleVerify}
+          />
+          {/* Re-authentication (launch-blockers P3). No auto-submit on PIN completion: an empty password would
+              count as a failed attempt toward the sign-in lockout. */}
+          <PasswordInput
+            label="3. Confirm with your current password"
+            value={setupPassword}
+            onChange={(e) => setSetupPassword(e.currentTarget.value)}
+            autoComplete="current-password"
           />
           <Group>
-            <Button onClick={handleVerify} loading={isPending} disabled={verifyCode.length !== 6}>
+            <Button onClick={handleVerify} loading={isPending} disabled={verifyCode.length !== 6 || !setupPassword}>
               Verify & Enable
             </Button>
-            <Button variant="subtle" onClick={() => setStep('idle')}>Cancel</Button>
+            <Button variant="subtle" onClick={() => { setSetupPassword(''); setStep('idle'); }}>Cancel</Button>
           </Group>
         </Stack>
       )}

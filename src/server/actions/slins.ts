@@ -3,7 +3,7 @@
 import { getDb, getDbForWrite } from '@/db';
 import { slins } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { validateSlinNumber, validateOptionalString, validateMonetaryValue } from '@/lib/validation';
 
 export async function getSlinsByClin(clinId: string) {
@@ -19,7 +19,7 @@ export async function createSlin(data: {
   fundedAmount?: string;
 }) {
   const db = await getDbForWrite();
-  await requireAdmin();
+  await requireAdminFresh();
   const validatedData = {
     clinId: data.clinId,
     slinNumber: validateSlinNumber(data.slinNumber),
@@ -37,7 +37,7 @@ export async function updateSlin(id: string, data: {
   status?: 'active' | 'inactive' | 'closed';
 }) {
   const db = await getDbForWrite();
-  await requireAdmin();
+  await requireAdminFresh();
   const validatedData: Record<string, unknown> = { updatedAt: new Date() };
   if (data.slinNumber !== undefined) validatedData.slinNumber = validateSlinNumber(data.slinNumber);
   if (data.description !== undefined) validatedData.description = validateOptionalString(data.description, 'Description', 2000);

@@ -3,7 +3,7 @@
 import { getDb, getDbForWrite } from '@/db';
 import { indirectChargeCodes } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { validateRequired, validateStringLength, validateOptionalString, validateEnum } from '@/lib/validation';
 
 const INDIRECT_CATEGORIES = ['overhead', 'ga', 'irad', 'bp', 'leave', 'unallowable'] as const;
@@ -41,7 +41,7 @@ export async function createIndirectCode(data: {
   availableToAll?: boolean;
 }) {
   const db = await getDbForWrite();
-  await requireAdmin();
+  await requireAdminFresh();
   const validatedData = {
     code: validateStringLength(validateRequired(data.code, 'Code'), 'Code', 1, 50),
     name: validateStringLength(validateRequired(data.name, 'Name'), 'Name', 1, 255),
@@ -65,7 +65,7 @@ export async function updateIndirectCode(id: string, data: {
   availableToAll?: boolean;
 }) {
   const db = await getDbForWrite();
-  await requireAdmin();
+  await requireAdminFresh();
   const validatedData: Record<string, unknown> = { updatedAt: new Date() };
   if (data.code !== undefined) validatedData.code = validateStringLength(validateRequired(data.code, 'Code'), 'Code', 1, 50);
   if (data.name !== undefined) validatedData.name = validateStringLength(validateRequired(data.name, 'Name'), 'Name', 1, 255);
@@ -86,7 +86,7 @@ export async function updateIndirectCode(id: string, data: {
  */
 export async function seedIndirectCodes() {
   const db = await getDbForWrite();
-  await requireAdmin();
+  await requireAdminFresh();
 
   const defaults = [
     { code: 'OH-001', name: 'Overhead', category: 'overhead' as const, description: 'General overhead — admin, training, company meetings' },

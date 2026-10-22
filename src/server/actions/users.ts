@@ -41,48 +41,8 @@ export async function createUser(data: {
 }
 
 export async function unlockUserAccount(email: string): Promise<void> {
-  await requireAdmin();
+  await requireAdminFresh();
   await unlockAccount(email);
-}
-
-/**
- * Seed demo users with a known default password. Development/demo convenience only —
- * refuses outright in production so a known-password account can never be created there (F12).
- */
-export async function seedUsers() {
-  await requireAdmin();
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('seedUsers is disabled in production.');
-  }
-  const db = await getDbForWrite();
-  // Hash the default dev password for all seed users
-  const defaultPassword = 'Password123!';
-  const hash = await bcrypt.hash(defaultPassword, 12);
-
-  const seedData = [
-    { email: 'admin@cadenzpoint.dev', fullName: 'Admin User', role: 'admin' as const, passwordHash: hash },
-    { email: 'jane.smith@cadenzpoint.dev', fullName: 'Jane Smith', role: 'employee' as const, passwordHash: hash },
-    { email: 'john.doe@cadenzpoint.dev', fullName: 'John Doe', role: 'employee' as const, passwordHash: hash },
-    { email: 'sarah.wilson@cadenzpoint.dev', fullName: 'Sarah Wilson', role: 'supervisor' as const, passwordHash: hash },
-  ];
-
-  // Upsert: update password_hash for existing users, insert new ones
-  const results = [];
-  for (const user of seedData) {
-    const existing = await db.select({ id: users.id }).from(users).where(eq(users.email, user.email));
-    if (existing.length > 0) {
-      const updated = await db.update(users)
-        .set({ passwordHash: user.passwordHash })
-        .where(eq(users.email, user.email))
-        .returning(SAFE_USER_COLUMNS);
-      results.push(updated[0]);
-    } else {
-      const inserted = await db.insert(users).values(user).returning(SAFE_USER_COLUMNS);
-      results.push(inserted[0]);
-    }
-  }
-
-  return results;
 }
 
 /**

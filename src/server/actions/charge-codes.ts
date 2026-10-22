@@ -3,7 +3,7 @@
 import { getDb, getDbForWrite } from '@/db';
 import { chargeCodes, costClasses, userChargeCodes, userAssignments, clins, contracts, slins, laborCategories, users } from '@/db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
 
 // ---------------------------------------------------------------------------
 // Cost Classes
@@ -16,7 +16,7 @@ export async function listCostClasses() {
 }
 
 export async function createCostClass(name: string) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDbForWrite();
   const [row] = await db.insert(costClasses).values({ name: name.trim() }).onConflictDoNothing().returning();
   return row;
@@ -66,7 +66,7 @@ export async function createChargeCode(data: {
   workLocation?: 'onsite' | 'telework' | 'other';
   billable?: boolean;
 }) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDbForWrite();
   const [row] = await db.insert(chargeCodes).values({
     code: data.code.trim(),
@@ -93,7 +93,7 @@ export async function updateChargeCode(id: string, data: {
   workLocation?: 'onsite' | 'telework' | 'other' | null;
   billable?: boolean;
 }) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDbForWrite();
   // R2-6: explicit allowlist — never spread the caller's object into .set(). `isActive` in
   // particular is a real column not in this form's type; deactivation has its own action
@@ -120,7 +120,7 @@ export async function updateChargeCode(id: string, data: {
  * Soft-delete a charge code. Never hard-delete — historical entries reference it.
  */
 export async function deactivateChargeCode(id: string) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDbForWrite();
   await db.update(chargeCodes).set({ isActive: false, updatedAt: new Date() }).where(eq(chargeCodes.id, id));
 }
@@ -135,7 +135,7 @@ export async function deactivateChargeCode(id: string) {
  * approval routing and LCAT rates remain intact.
  */
 export async function assignChargeCodeToUser(userId: string, chargeCodeId: string) {
-  const actor = await requireAdmin();
+  const actor = await requireAdminFresh();
   const db = await getDbForWrite();
 
   // Look up the charge code's CLIN (needed for user_assignments sync)
@@ -164,7 +164,7 @@ export async function assignChargeCodeToUser(userId: string, chargeCodeId: strin
 }
 
 export async function unassignChargeCodeFromUser(userId: string, chargeCodeId: string) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDbForWrite();
   await db.update(userChargeCodes).set({ isActive: false })
     .where(and(eq(userChargeCodes.userId, userId), eq(userChargeCodes.chargeCodeId, chargeCodeId)));
@@ -175,7 +175,7 @@ export async function unassignChargeCodeFromUser(userId: string, chargeCodeId: s
  * Convenience for onboarding: "assign all codes under this CLIN."
  */
 export async function assignAllUnderClin(userId: string, clinId: string) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDb();
   const codes = await db.select({ id: chargeCodes.id })
     .from(chargeCodes)
@@ -235,7 +235,7 @@ export async function getChargeCodeAssignments() {
  * Idempotent — skips CLINs that already have at least one charge code.
  */
 export async function autobridgeChargeCodesFromClins() {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDbForWrite();
 
   // Get all active CLINs with their contract info

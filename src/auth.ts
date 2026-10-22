@@ -3,8 +3,7 @@ import Credentials from 'next-auth/providers/credentials';
 import { CredentialsSignin } from '@auth/core/errors';
 import type { JWT } from '@auth/core/jwt';
 import bcrypt from 'bcryptjs';
-import { checkLockout } from '@/server/actions/login-attempts';
-import { recordFailedAttempt, recordSuccessfulLogin } from '@/server/internal/login-attempts';
+import { getLockoutInfo, recordFailedAttempt, recordSuccessfulLogin } from '@/server/internal/login-attempts';
 import { getDbForUrl, getDbForAuth } from '@/db';
 import { getTenantBySlug } from '@/lib/tenant/registry';
 import { getTenantAccess } from '@/lib/tenant/lifecycle';
@@ -37,7 +36,7 @@ export async function authorizeCredentials(credentials: Record<string, unknown> 
   const mfaCode = (credentials.mfaCode as string | undefined)?.trim();
 
   // Check if the account is locked out
-  const lockoutInfo = await checkLockout(email);
+  const lockoutInfo = await getLockoutInfo(email);
   if (lockoutInfo?.isLocked) {
     return null;
   }
@@ -89,17 +88,24 @@ export async function authorizeCredentials(credentials: Record<string, unknown> 
     }
 
     if (!mfaValid && user.totpRecoveryCodes) {
-      const hashedCodes: string[] = JSON.parse(decrypt(user.totpRecoveryCodes));
-      const matchIndex = verifyRecoveryCode(mfaCode, hashedCodes);
-      if (matchIndex !== -1) {
-        mfaValid = true;
-        // Consume the used recovery code — single use.
+      // Single use under concurrency (feature-plan-launch-blockers.md P3): lock the user row, re-read the codes,
+      // verify and remove the used one in ONE transaction. A concurrent sign-in with the same code waits on the
+      // row lock, then re-reads the remaining codes and no longer finds it.
+      const db = await getDbForAuth();
+      const userId = user.id;
+      mfaValid = await db.transaction(async (tx) => {
+        const [row] = await tx.select({ codes: users.totpRecoveryCodes }).from(users)
+          .where(eq(users.id, userId)).for('update');
+        if (!row?.codes) return false;
+        const hashedCodes: string[] = JSON.parse(decrypt(row.codes));
+        const matchIndex = verifyRecoveryCode(mfaCode, hashedCodes);
+        if (matchIndex === -1) return false;
         hashedCodes.splice(matchIndex, 1);
-        const db = await getDbForAuth();
-        await db.update(users)
+        await tx.update(users)
           .set({ totpRecoveryCodes: encrypt(JSON.stringify(hashedCodes)), updatedAt: new Date() })
-          .where(eq(users.id, user.id));
-      }
+          .where(eq(users.id, userId));
+        return true;
+      });
     }
 
     if (!mfaValid) {

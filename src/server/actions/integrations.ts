@@ -52,7 +52,7 @@ export async function disconnectIntegration(connectionId: string) {
 
 export async function toggleAutoSync(connectionId: string, enabled: boolean) {
   const db = await getDbForWrite();
-  await requireAdmin();
+  await requireAdminFresh();
   await db.update(integrationConnections)
     .set({
       autoSyncOnApproval: enabled,
@@ -85,7 +85,7 @@ export async function saveMapping(data: {
   metadata?: string;
 }) {
   const db = await getDbForWrite();
-  await requireAdmin();
+  await requireAdminFresh();
 
   // Upsert — update if mapping already exists for this connection + entity type + bytime ID
   const existing = await db
@@ -123,7 +123,7 @@ export async function saveMapping(data: {
 
 export async function deleteMapping(mappingId: string) {
   const db = await getDbForWrite();
-  await requireAdmin();
+  await requireAdminFresh();
   await db.delete(integrationEntityMappings).where(eq(integrationEntityMappings.id, mappingId));
 }
 

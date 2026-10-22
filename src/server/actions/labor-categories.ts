@@ -3,7 +3,7 @@
 import { getDb, getDbForWrite } from '@/db';
 import { laborCategories, userLaborCategories, users, clins, contracts, slins } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { validateRequired, validateStringLength, validateOptionalString, validateRate } from '@/lib/validation';
 import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
@@ -69,7 +69,7 @@ export async function createLaborCategory(data: {
   ceilingRate?: string;
 }) {
   const db = await getDbForWrite();
-  await requireAdmin();
+  await requireAdminFresh();
   const validatedData = {
     clinId: data.clinId,
     slinId: data.slinId,
@@ -93,7 +93,7 @@ export async function updateLaborCategory(id: string, data: {
   status?: 'active' | 'inactive' | 'closed';
 }) {
   const db = await getDbForWrite();
-  await requireAdmin();
+  await requireAdminFresh();
   const validatedData: Record<string, unknown> = { updatedAt: new Date() };
   if (data.lcatCode !== undefined) validatedData.lcatCode = validateStringLength(validateRequired(data.lcatCode, 'LCAT code'), 'LCAT code', 1, 50);
   if (data.title !== undefined) validatedData.title = validateStringLength(validateRequired(data.title, 'Title'), 'Title', 1, 255);
@@ -169,7 +169,7 @@ export async function assignUserToLaborCategory(data: {
   effectiveDate: CalendarDate;
   endDate?: CalendarDate;
 }) {
-  const actor = await requireAdmin();
+  const actor = await requireAdminFresh();
   const db = await getDbForWrite();
   // R2-6: explicit allowlist — never spread the caller's object into .values().
   const rows = await db.insert(userLaborCategories).values({
@@ -188,7 +188,7 @@ export async function assignUserToLaborCategory(data: {
  */
 export async function endUserLaborCategoryAssignment(id: string) {
   const db = await getDbForWrite();
-  await requireAdmin();
+  await requireAdminFresh();
   const endDate = await getWorkspaceToday();
   const rows = await db.update(userLaborCategories)
     .set({ endDate, updatedAt: new Date() })

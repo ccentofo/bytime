@@ -4,8 +4,8 @@ import { getDb, getDbForAuth } from '@/db';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireSession } from '@/lib/session';
-import bcrypt from 'bcryptjs';
 import { encrypt, decrypt } from '@/lib/encryption';
+import { verifyCurrentPassword } from '@/server/internal/login-attempts';
 import {
   generateTOTPSecret,
   verifyTOTPCode,
@@ -33,16 +33,27 @@ export async function initMFASetup(): Promise<{
 }
 
 /**
- * Complete MFA setup — verifies the code against the pending secret,
- * then saves the encrypted secret + hashed recovery codes to the DB.
+ * Complete MFA setup — re-authenticates with the current password (a stolen session alone must not be able to
+ * bind its own authenticator to the account — feature-plan-launch-blockers.md P3), verifies the code against the
+ * pending secret, then saves the encrypted secret + hashed recovery codes to the DB.
  * Returns the plaintext recovery codes (shown once to the user).
  */
 export async function completeMFASetup(data: {
   pendingSecret: string;
   code: string;
+  currentPassword: string;
 }): Promise<{ success: boolean; recoveryCodes?: string[]; error?: string }> {
   const actor = await requireSession();
   const db = await getDbForAuth();
+
+  const [user] = await db
+    .select({ passwordHash: users.passwordHash })
+    .from(users)
+    .where(eq(users.id, actor.id));
+  const reauth = await verifyCurrentPassword(actor.email, user?.passwordHash ?? null, data.currentPassword);
+  if (!reauth.ok) {
+    return { success: false, error: reauth.error };
+  }
 
   // Verify the code against the pending secret
   const isValid = verifyTOTPCode(data.pendingSecret, data.code);
@@ -82,13 +93,10 @@ export async function disableMFA(currentPassword: string): Promise<{ success: bo
     .from(users)
     .where(eq(users.id, actor.id));
 
-  if (!user?.passwordHash) {
-    return { success: false, error: 'No password set on this account.' };
-  }
-
-  const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
-  if (!isValid) {
-    return { success: false, error: 'Incorrect password.' };
+  // Lockout checked before bcrypt; a wrong password counts toward the sign-in lockout (shared counter, intended).
+  const reauth = await verifyCurrentPassword(actor.email, user?.passwordHash ?? null, currentPassword);
+  if (!reauth.ok) {
+    return { success: false, error: reauth.error };
   }
 
   await db.update(users)

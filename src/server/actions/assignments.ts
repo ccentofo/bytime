@@ -3,7 +3,7 @@
 import { getDb, getDbForWrite } from '@/db';
 import { userAssignments, users, clins, contracts, slins } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
 
 export async function getAssignments() {
   await requireAdmin();
@@ -61,7 +61,7 @@ export async function assignUserToClin(data: {
   clinId: string;
   slinId?: string;
 }) {
-  const actor = await requireAdmin();
+  const actor = await requireAdminFresh();
   const db = await getDbForWrite();
   // R2-6: explicit allowlist — isActive/assignedAt/assignedBy are real columns on this table
   // that spreading the caller's object wholesale would otherwise expose to forgery.
@@ -82,7 +82,7 @@ export async function assignUserToClin(data: {
 }
 
 export async function unassignUserFromClin(userId: string, clinId: string) {
-  await requireAdmin();
+  await requireAdminFresh();
   const db = await getDbForWrite();
   const rows = await db
     .update(userAssignments)
