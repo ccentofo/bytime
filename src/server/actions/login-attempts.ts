@@ -1,5 +1,6 @@
 'use server';
 
+import { getDbForAuth } from '@/db';
 import { getLockoutInfo, type LockoutInfo } from '@/server/internal/login-attempts';
 
 /**
@@ -11,5 +12,5 @@ import { getLockoutInfo, type LockoutInfo } from '@/server/internal/login-attemp
  * current-password checks (changePassword, disableMFA, completeMFASetup).
  */
 export async function checkLockout(email: string): Promise<LockoutInfo | null> {
-  return getLockoutInfo(email);
+  return getLockoutInfo(await getDbForAuth(), email);
 }

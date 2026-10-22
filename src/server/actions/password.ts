@@ -59,7 +59,7 @@ export async function changePassword(data: {
 
   // Verify current password — lockout checked before bcrypt; a wrong password counts toward the sign-in lockout
   // (shared login_attempts counter, intended: a stolen session can't be used to guess the password freely).
-  const reauth = await verifyCurrentPassword(actor.email, user.passwordHash, data.currentPassword);
+  const reauth = await verifyCurrentPassword(db, actor.email, user.passwordHash, data.currentPassword);
   if (!reauth.ok) {
     return { success: false, error: reauth.error };
   }

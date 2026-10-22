@@ -4,6 +4,7 @@ import { users } from '@/db/schema';
 import { eq, count } from 'drizzle-orm';
 import { getTenantOrThrow } from '@/lib/tenant/context';
 import { PLANS, type PlanKey } from '@/lib/billing/plans';
+import { UserFacingError } from '@/lib/errors';
 
 /** A Drizzle client or an open transaction — anything with .select(). */
 type SeatExecutor = Pick<Awaited<ReturnType<typeof getDb>>, 'select'>;
@@ -35,7 +36,7 @@ export async function assertSeatsAvailable(additionalCount: number, executor?: S
   const { limit, currentActive, planLabel } = await getSeatUsage(executor);
   if (limit == null) return; // unlimited
   if (currentActive + additionalCount > limit) {
-    throw new Error(
+    throw new UserFacingError(
       `Your ${planLabel} plan allows ${limit} active users (you currently have ${currentActive}). ` +
       `This would add ${additionalCount} more. Upgrade in Billing to add more.`
     );

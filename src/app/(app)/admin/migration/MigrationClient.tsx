@@ -28,9 +28,8 @@ import {
   validateMigrationData,
   importMigrationData,
   importMigrationPeriods,
-  type MigrationEntryRow,
-  type MigrationValidationResult,
 } from '@/server/actions/migration';
+import type { MigrationEntryRow, MigrationValidationResult } from '@/types/migration';
 import { PageHeader } from '@/components/ui/PageHeader';
 
 export function MigrationClient() {

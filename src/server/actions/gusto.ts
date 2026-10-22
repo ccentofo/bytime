@@ -8,6 +8,7 @@ import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { ensureValidGustoToken, fetchGustoEmployees } from '@/lib/integrations/connectors/gusto-api';
 import { executeSyncOperation } from '@/lib/integrations/sync-engine';
 import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { UserFacingError } from '@/lib/errors';
 
 /**
  * Fetch Gusto employees for the mapping UI.
@@ -22,7 +23,7 @@ export async function fetchGustoEmployeesForMapping(connectionId: string) {
     .from(integrationConnections)
     .where(eq(integrationConnections.id, connectionId));
 
-  if (!connection?.externalCompanyId) throw new Error('Connection has no company ID.');
+  if (!connection?.externalCompanyId) throw new UserFacingError('Connection has no company ID.');
 
   return fetchGustoEmployees(accessToken, connection.externalCompanyId);
 }

@@ -9,6 +9,7 @@ import {
   DEFAULT_NOTIFICATION_PREFS,
   type NotificationPrefs,
 } from '@/server/internal/notifications';
+import { UserFacingError } from '@/lib/errors';
 
 /** Get the session user's own notification preferences. */
 export async function getNotificationPreferences(): Promise<NotificationPrefs> {
@@ -43,7 +44,7 @@ export async function updateNotificationPreferences(
   for (const key of NOTIFICATION_PREF_KEYS) {
     if (prefs[key] !== undefined) {
       // A real boolean only: Boolean("false") would be true.
-      if (typeof prefs[key] !== 'boolean') throw new Error(`Invalid value for ${key}.`);
+      if (typeof prefs[key] !== 'boolean') throw new UserFacingError(`Invalid value for ${key}.`);
       allowedUpdates[key] = prefs[key];
     }
   }

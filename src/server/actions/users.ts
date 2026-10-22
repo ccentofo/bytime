@@ -1,14 +1,15 @@
 'use server';
 
-import { getDb, getDbForWrite } from '@/db';
+import { getDb, getDbForAuth, getDbForWrite } from '@/db';
 import { users } from '@/db/schema';
 import bcrypt from 'bcryptjs';
 import { eq, and, ne, sql } from 'drizzle-orm';
-import { requireAdmin, requireAdminFresh } from '@/lib/session';
+import { requireAdmin, requireAdminFresh, AuthorizationError } from '@/lib/session';
 import { unlockAccount } from '@/server/internal/login-attempts';
 import { SAFE_USER_COLUMNS } from '@/server/internal/users';
 import { assertSeatsAvailable } from '@/server/internal/seats';
 import { validateEmail, validateRequired, validateStringLength, validateEnum } from '@/lib/validation';
+import { UserFacingError } from '@/lib/errors';
 
 async function assertSeatAvailable(): Promise<void> {
   await assertSeatsAvailable(1);
@@ -42,7 +43,8 @@ export async function createUser(data: {
 
 export async function unlockUserAccount(email: string): Promise<void> {
   await requireAdminFresh();
-  await unlockAccount(email);
+  // Credential bookkeeping through the auth client, as before: an admin can unlock a user in any non-closed mode.
+  await unlockAccount(await getDbForAuth(), email);
 }
 
 /**
@@ -71,19 +73,19 @@ export async function updateUser(id: string, data: {
   // below key on `isActive === false`, and Postgres would happily coerce "false" or 0 to false,
   // so anything that isn't a real boolean is rejected up front.
   if (data.isActive !== undefined && typeof data.isActive !== 'boolean') {
-    throw new Error('Active status must be true or false.');
+    throw new UserFacingError('Active status must be true or false.');
   }
   if (data.flsaExempt !== undefined && typeof data.flsaExempt !== 'boolean') {
-    throw new Error('FLSA exempt must be true or false.');
+    throw new UserFacingError('FLSA exempt must be true or false.');
   }
 
   // An admin cannot change their own role or deactivate themselves.
   if (actor.id === id) {
     if (data.role !== undefined && data.role !== actor.role) {
-      throw new Error('Forbidden: You cannot change your own role.');
+      throw new AuthorizationError('forbidden', 'Forbidden: You cannot change your own role.');
     }
     if (data.isActive === false) {
-      throw new Error('Forbidden: You cannot deactivate your own account.');
+      throw new AuthorizationError('forbidden', 'Forbidden: You cannot deactivate your own account.');
     }
   }
 
@@ -132,7 +134,7 @@ export async function updateUser(id: string, data: {
           .where(and(eq(users.role, 'admin'), eq(users.isActive, true), ne(users.id, id)))
           .for('update');
         if (otherActiveAdmins.length === 0) {
-          throw new Error(
+          throw new AuthorizationError('forbidden', 
             demotingRole
               ? 'Forbidden: Cannot change the role of the last active admin.'
               : 'Forbidden: Cannot deactivate the last active admin.'

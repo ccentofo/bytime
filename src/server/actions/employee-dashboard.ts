@@ -4,7 +4,7 @@ import { getDb } from '@/db';
 import { timesheetEntries, timesheetPeriods } from '@/db/schema';
 import { eq, and, gte, lt, desc, sql } from 'drizzle-orm';
 import { getCurrentPeriodStart, getLastWeekdayInPeriod } from '@/lib/date-utils';
-import { getCurrentEffectiveConfig } from '@/server/actions/pay-period-config';
+import { getCurrentEffectiveConfigInternal } from '@/server/internal/pay-period-config';
 import { resolvePeriod } from '@/server/internal/periods';
 import { existingPeriodLength } from '@/server/internal/pay-period-config';
 import { getWorkspaceToday, getWorkspaceTimezone } from '@/server/internal/workspace-settings';
@@ -62,7 +62,7 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
   const userId = actor.id;
   const db = await getDb();
   const today = await getWorkspaceToday();
-  const landingConfig = await getCurrentEffectiveConfig();
+  const landingConfig = await getCurrentEffectiveConfigInternal();
   const periodStart = getCurrentPeriodStart(today, landingConfig);
   // D3/§0.6: resolve this period's REAL config/length (handles a pending schedule change),
   // never the landing config assumed by default.

@@ -1,9 +1,16 @@
 'use server';
 
 import { getDb, getDbForWrite } from '@/db';
-import { chargeCodes, costClasses, userChargeCodes, userAssignments, clins, contracts, slins, laborCategories, users } from '@/db/schema';
+import { chargeCodes, costClasses, userChargeCodes, clins, contracts, slins, laborCategories, users } from '@/db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
+import { UserFacingError } from '@/lib/errors';
+import {
+  assignChargeCodeToUserInternal,
+  createChargeCodeInternal,
+  createCostClassInternal,
+  type ChargeCodeInput,
+} from '@/server/internal/charge-codes';
 
 // ---------------------------------------------------------------------------
 // Cost Classes
@@ -18,8 +25,7 @@ export async function listCostClasses() {
 export async function createCostClass(name: string) {
   await requireAdminFresh();
   const db = await getDbForWrite();
-  const [row] = await db.insert(costClasses).values({ name: name.trim() }).onConflictDoNothing().returning();
-  return row;
+  return createCostClassInternal(db, name);
 }
 
 // ---------------------------------------------------------------------------
@@ -55,31 +61,10 @@ export async function listChargeCodes() {
     .orderBy(contracts.name, clins.clinNumber, chargeCodes.code);
 }
 
-export async function createChargeCode(data: {
-  code: string;
-  name: string;
-  description?: string;
-  clinId: string;
-  slinId?: string;
-  laborCategoryId?: string;
-  classId?: string;
-  workLocation?: 'onsite' | 'telework' | 'other';
-  billable?: boolean;
-}) {
+export async function createChargeCode(data: ChargeCodeInput) {
   await requireAdminFresh();
   const db = await getDbForWrite();
-  const [row] = await db.insert(chargeCodes).values({
-    code: data.code.trim(),
-    name: data.name.trim(),
-    description: data.description ?? null,
-    clinId: data.clinId,
-    slinId: data.slinId ?? null,
-    laborCategoryId: data.laborCategoryId ?? null,
-    classId: data.classId ?? null,
-    workLocation: data.workLocation ?? null,
-    billable: data.billable ?? true,
-  }).returning();
-  return row;
+  return createChargeCodeInternal(db, data);
 }
 
 export async function updateChargeCode(id: string, data: {
@@ -137,29 +122,7 @@ export async function deactivateChargeCode(id: string) {
 export async function assignChargeCodeToUser(userId: string, chargeCodeId: string) {
   const actor = await requireAdminFresh();
   const db = await getDbForWrite();
-
-  // Look up the charge code's CLIN (needed for user_assignments sync)
-  const [cc] = await db.select({ clinId: chargeCodes.clinId, slinId: chargeCodes.slinId })
-    .from(chargeCodes).where(eq(chargeCodes.id, chargeCodeId)).limit(1);
-  if (!cc) throw new Error(`Charge code ${chargeCodeId} not found.`);
-
-  // Upsert user_charge_codes
-  await db.insert(userChargeCodes).values({
-    userId, chargeCodeId, isActive: true, assignedBy: actor.id,
-  }).onConflictDoUpdate({
-    target: [userChargeCodes.userId, userChargeCodes.chargeCodeId],
-    set: { isActive: true, assignedBy: actor.id },
-  });
-
-  // CRITICAL: also ensure the user has a user_assignments row for the CLIN
-  // so supervisor scope and LCAT lookups work correctly.
-  await db.insert(userAssignments).values({
-    userId, clinId: cc.clinId, slinId: cc.slinId ?? null, isActive: true, assignedBy: actor.id,
-  }).onConflictDoUpdate({
-    target: [userAssignments.userId, userAssignments.clinId],
-    set: { isActive: true },
-  });
-
+  await assignChargeCodeToUserInternal(db, actor.id, userId, chargeCodeId);
   return { success: true };
 }
 
@@ -175,16 +138,25 @@ export async function unassignChargeCodeFromUser(userId: string, chargeCodeId: s
  * Convenience for onboarding: "assign all codes under this CLIN."
  */
 export async function assignAllUnderClin(userId: string, clinId: string) {
-  await requireAdminFresh();
-  const db = await getDb();
+  const actor = await requireAdminFresh();
+  const db = await getDbForWrite();
   const codes = await db.select({ id: chargeCodes.id })
     .from(chargeCodes)
     .where(and(eq(chargeCodes.clinId, clinId), eq(chargeCodes.isActive, true)));
 
+  // Real per-code results: one code failing (e.g. deleted meanwhile) doesn't hide the others' outcome.
+  let assigned = 0;
+  const failed: Array<{ chargeCodeId: string; error: string }> = [];
   for (const code of codes) {
-    await assignChargeCodeToUser(userId, code.id);
+    try {
+      await assignChargeCodeToUserInternal(db, actor.id, userId, code.id);
+      assigned++;
+    } catch (err) {
+      if (!(err instanceof UserFacingError)) throw err;
+      failed.push({ chargeCodeId: code.id, error: err.message });
+    }
   }
-  return { assigned: codes.length };
+  return { assigned, failed };
 }
 
 export async function getUserChargeCodeIds(userId: string): Promise<string[]> {

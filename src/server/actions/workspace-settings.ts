@@ -4,6 +4,7 @@ import { getDb, getDbForWrite } from '@/db';
 import { workspaceSettings } from '@/db/schema';
 import { requireAdminFresh, requireSession } from '@/lib/session';
 import { canonicalTimeZone } from '@/lib/calendar-date';
+import { UserFacingError } from '@/lib/errors';
 
 /**
  * The workspace's configured IANA timezone, for the settings page's initial value.
@@ -24,7 +25,7 @@ export async function updateWorkspaceTimezone(timezone: string): Promise<string>
   await requireAdminFresh();
   const canonical = canonicalTimeZone(timezone);
   if (!canonical) {
-    throw new Error('Choose a timezone from the list (an IANA name such as America/New_York).');
+    throw new UserFacingError('Choose a timezone from the list (an IANA name such as America/New_York).');
   }
   const db = await getDbForWrite();
   // Upsert: an UPDATE alone would silently do nothing if the settings row were missing.

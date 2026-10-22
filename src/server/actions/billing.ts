@@ -12,10 +12,11 @@ import { tenantBaseUrl } from '@/lib/tenant/host';
 import { eq } from 'drizzle-orm';
 import { controlDb } from '@/db/control-plane';
 import { tenants } from '@/db/control-plane/schema';
+import { ConflictError, UserFacingError } from '@/lib/errors';
 
 async function readTenantRow(slug: string) {
   const [row] = await controlDb.select().from(tenants).where(eq(tenants.slug, slug)).limit(1);
-  if (!row) throw new Error('Unknown workspace.');
+  if (!row) throw new UserFacingError('Unknown workspace.', 'not_found');
   return row;
 }
 
@@ -26,14 +27,14 @@ export async function startCheckout(plan: PlanKey): Promise<{ url: string }> {
   await requireAdminFresh();
   const tenant = await getTenantForBilling(); // refuses deleting/deleted/provisioning
   const priceId = PLANS[plan].priceId;
-  if (!priceId) throw new Error('That plan is not purchasable.');
+  if (!priceId) throw new UserFacingError('That plan is not purchasable.');
 
   const row = await readTenantRow(tenant.slug);
   if (getTenantAccess(toLifecycleFacts(row), new Date()) === 'closed') {
-    throw new Error('This workspace is closed and can no longer be subscribed.');
+    throw new UserFacingError('This workspace is closed and can no longer be subscribed.');
   }
   if (row.status === 'suspended' && row.suspensionReason === 'policy') {
-    throw new Error('This workspace is suspended. Please contact support.');
+    throw new UserFacingError('This workspace is suspended. Please contact support.');
   }
 
   const customerId = await ensureStripeCustomer(row.id);
@@ -41,7 +42,7 @@ export async function startCheckout(plan: PlanKey): Promise<{ url: string }> {
   // Authoritative duplicate check against Stripe (the mirror can lag a webhook).
   const subs = await stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 100 });
   if (subs.data.some((s) => BLOCKS_NEW_CHECKOUT(s.status))) {
-    throw new Error('A subscription or payment is already in progress. Use Manage billing to change plans or pay.');
+    throw new ConflictError('A subscription or payment is already in progress. Use Manage billing to change plans or pay.');
   }
 
   const base = tenantBaseUrl(tenant.slug);
@@ -53,7 +54,7 @@ export async function startCheckout(plan: PlanKey): Promise<{ url: string }> {
     cancel_url: `${base}/admin/billing?status=cancelled`,
     metadata: { slug: tenant.slug },
   });
-  if (!session.url) throw new Error('Could not start checkout.');
+  if (!session.url) throw new UserFacingError('Could not start checkout.');
   return { url: session.url };
 }
 
@@ -61,8 +62,8 @@ export async function openBillingPortal(): Promise<{ url: string }> {
   await requireAdminFresh();
   const tenant = await getTenantForBilling();
   const row = await readTenantRow(tenant.slug);
-  if (!row.stripeCustomerId) throw new Error('No billing account yet — subscribe first.');
-  if (row.stripeCustomerDeletedAt) throw new Error('Your billing account was closed — subscribe again to create a new one.');
+  if (!row.stripeCustomerId) throw new UserFacingError('No billing account yet — subscribe first.');
+  if (row.stripeCustomerDeletedAt) throw new UserFacingError('Your billing account was closed — subscribe again to create a new one.');
 
   const portal = await stripe.billingPortal.sessions.create({
     customer: row.stripeCustomerId,

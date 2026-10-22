@@ -17,6 +17,7 @@ import { isNotificationEnabled } from '@/server/internal/notifications';
 import { getLastWeekdayInPeriod } from '@/lib/date-utils';
 import { addDays, formatInstant, isBefore, formatCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
+import { ConflictError, UserFacingError } from '@/lib/errors';
 
 /**
  * Get the period status for the session user and a given period start date.
@@ -65,7 +66,7 @@ export async function getPeriodOptions(aroundDay: CalendarDate, before: number, 
   // Bounded: this is a public endpoint, and each step is work on the server.
   for (const [name, n] of [['before', before], ['after', after]] as const) {
     if (!Number.isInteger(n) || n < 0 || n > MAX_PERIOD_OPTIONS_EACH_WAY) {
-      throw new Error(`${name} must be an integer from 0 to ${MAX_PERIOD_OPTIONS_EACH_WAY}.`);
+      throw new UserFacingError(`${name} must be an integer from 0 to ${MAX_PERIOD_OPTIONS_EACH_WAY}.`);
     }
   }
 
@@ -181,7 +182,7 @@ export async function submitPeriod(data: {
   const lastWeekday = getLastWeekdayInPeriod(periodStart, periodConfig);
   const today = await getWorkspaceToday();
   if (isBefore(today, lastWeekday)) {
-    throw new Error(`Cannot submit before the last day of the pay period (${formatCalendarDate(lastWeekday, 'MMM D, YYYY')}).`);
+    throw new UserFacingError(`Cannot submit before the last day of the pay period (${formatCalendarDate(lastWeekday, 'MMM D, YYYY')}).`);
   }
 
   // One transaction holding this employee's timesheet lock (shared with saveTimesheetBatch), so a save can't
@@ -205,7 +206,7 @@ export async function submitPeriod(data: {
           )
         );
       if (Number(entryCount[0]?.count ?? 0) === 0) {
-        throw new Error('Cannot submit an empty timesheet. Please enter your hours before submitting.');
+        throw new UserFacingError('Cannot submit an empty timesheet. Please enter your hours before submitting.');
       }
 
       // periodStart is an exact calendar day (a `date` column), so an exact match finds a resubmission.
@@ -229,7 +230,7 @@ export async function submitPeriod(data: {
         }).returning();
       } else {
         if (existing.status !== 'draft' && existing.status !== 'rejected') {
-          throw new Error(`Cannot submit period with status "${existing.status}". Only draft or rejected periods can be submitted.`);
+          throw new UserFacingError(`Cannot submit period with status "${existing.status}". Only draft or rejected periods can be submitted.`);
         }
         // Conditional on the status we just checked: if a reviewer changed it meanwhile, nothing is written.
         const updated = await tx.update(timesheetPeriods)
@@ -245,7 +246,7 @@ export async function submitPeriod(data: {
           })
           .where(and(eq(timesheetPeriods.id, existing.id), inArray(timesheetPeriods.status, ['draft', 'rejected'])))
           .returning();
-        if (updated.length === 0) throw new Error(CONCURRENT_REVIEW_MESSAGE);
+        if (updated.length === 0) throw new ConflictError(CONCURRENT_REVIEW_MESSAGE);
         saved = updated[0];
       }
       // T8/R11: append-only approval history, written in the same transaction as the period change.
@@ -258,7 +259,7 @@ export async function submitPeriod(data: {
   } catch (err) {
     // Two first submissions for the same period at once: the per-user lock makes this near-impossible, but
     // the unique index is the backstop, and Postgres aborts the transaction on it.
-    if (isUniqueViolation(err, 'user_period_unique_idx')) throw new Error(CONCURRENT_REVIEW_MESSAGE);
+    if (isUniqueViolation(err, 'user_period_unique_idx')) throw new ConflictError(CONCURRENT_REVIEW_MESSAGE);
     throw err;
   }
 
@@ -297,7 +298,7 @@ export async function approvePeriod(data: {
     .from(timesheetPeriods)
     .where(eq(timesheetPeriods.id, data.periodId));
 
-  if (existing.length === 0) throw new Error('Period not found');
+  if (existing.length === 0) throw new UserFacingError('Period not found', 'not_found');
   const period = existing[0];
 
   // R2-7 (§0, locked product decision): admins may approve their own timesheet; supervisors
@@ -313,11 +314,11 @@ export async function approvePeriod(data: {
   try {
     await assertCanAccessEmployee(actor, period.userId);
   } catch {
-    throw new Error('Period not found');
+    throw new UserFacingError('Period not found', 'not_found');
   }
 
   if (period.status !== 'submitted') {
-    throw new Error(`Cannot approve period with status "${period.status}". Only submitted periods can be approved.`);
+    throw new UserFacingError(`Cannot approve period with status "${period.status}". Only submitted periods can be approved.`);
   }
 
   await db.transaction(async (tx) => {
@@ -332,7 +333,7 @@ export async function approvePeriod(data: {
       // Only if still submitted: two reviewers acting at once can't both record a decision.
       .where(and(eq(timesheetPeriods.id, data.periodId), eq(timesheetPeriods.status, 'submitted')))
       .returning({ id: timesheetPeriods.id });
-    if (updated.length === 0) throw new Error(CONCURRENT_REVIEW_MESSAGE);
+    if (updated.length === 0) throw new ConflictError(CONCURRENT_REVIEW_MESSAGE);
     // T8/R11: append-only approval history, written in the same transaction as the period change.
     await tx.insert(periodEvents).values({
       periodId: data.periodId, userId: period.userId, event: 'approved', actorId: actor.id,
@@ -384,7 +385,7 @@ export async function rejectPeriod(data: {
     .from(timesheetPeriods)
     .where(eq(timesheetPeriods.id, data.periodId));
 
-  if (existing.length === 0) throw new Error('Period not found');
+  if (existing.length === 0) throw new UserFacingError('Period not found', 'not_found');
   const period = existing[0];
 
   // R2-7 (§0, locked product decision): admins may reject their own timesheet; supervisors
@@ -398,11 +399,11 @@ export async function rejectPeriod(data: {
   try {
     await assertCanAccessEmployee(actor, period.userId);
   } catch {
-    throw new Error('Period not found');
+    throw new UserFacingError('Period not found', 'not_found');
   }
 
   if (period.status !== 'submitted') {
-    throw new Error(`Cannot reject period with status "${period.status}". Only submitted periods can be rejected.`);
+    throw new UserFacingError(`Cannot reject period with status "${period.status}". Only submitted periods can be rejected.`);
   }
 
   await db.transaction(async (tx) => {
@@ -417,7 +418,7 @@ export async function rejectPeriod(data: {
       // Only if still submitted: two reviewers acting at once can't both record a decision.
       .where(and(eq(timesheetPeriods.id, data.periodId), eq(timesheetPeriods.status, 'submitted')))
       .returning({ id: timesheetPeriods.id });
-    if (updated.length === 0) throw new Error(CONCURRENT_REVIEW_MESSAGE);
+    if (updated.length === 0) throw new ConflictError(CONCURRENT_REVIEW_MESSAGE);
     // T8/R11: append-only approval history, written in the same transaction as the period change.
     await tx.insert(periodEvents).values({
       periodId: data.periodId, userId: period.userId, event: 'rejected', actorId: actor.id,

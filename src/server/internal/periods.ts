@@ -5,6 +5,7 @@ import { eq, and, gte, lte, inArray, sql } from 'drizzle-orm';
 import { getNumDaysInPeriod, getPeriodStartForDate, type PeriodConfig } from '@/lib/date-utils';
 import { addDays, compare, isBefore, isAfter, type CalendarDate } from '@/lib/calendar-date';
 import { configAt } from '@/server/internal/pay-period-config';
+import { UserFacingError } from '@/lib/errors';
 
 export type PeriodStatus = 'draft' | 'submitted' | 'approved' | 'rejected';
 
@@ -108,7 +109,7 @@ export async function assertEntryDatesEditable(
     const end = addDays(start, numDays - 1);
     const hit = entryDates.find((d) => !isBefore(d, start) && !isAfter(d, end));
     if (hit) {
-      throw new Error(
+      throw new UserFacingError(
         `Cannot modify a ${row.status} timesheet. This period has been certified and is locked. ` +
         `If a correction is required, the supervisor must reject the period first.`
       );
@@ -132,7 +133,7 @@ export async function resolvePeriod(periodStart: CalendarDate): Promise<{ config
   if (compare(getPeriodStartForDate(periodStart, config), periodStart) === 0) {
     return { config, numDays: getNumDaysInPeriod(periodStart, config) };
   }
-  throw new Error('Invalid period start date.');
+  throw new UserFacingError('Invalid period start date.');
 }
 
 /**

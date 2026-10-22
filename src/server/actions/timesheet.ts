@@ -5,7 +5,7 @@ import { timesheetEntries, userAssignments, clins, contracts, slins, indirectCha
 import { eq, and, gte, lt, desc, sql, isNull } from 'drizzle-orm';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
 import { validateUUID, validateHours } from '@/lib/validation';
-import { requireSession, assertCanAccessEmployee } from '@/lib/session';
+import { requireSession, assertCanAccessEmployee, AuthorizationError } from '@/lib/session';
 import { isUniqueViolation } from '@/lib/db-errors';
 import { assertEntryDatesEditable, lockEmployeeTimesheet, resolvePeriod } from '@/server/internal/periods';
 import { configAt, existingPeriodLength } from '@/server/internal/pay-period-config';
@@ -14,6 +14,7 @@ import type { PeriodConfig } from '@/lib/date-utils';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { getNumDaysInPeriod } from '@/lib/date-utils';
 import { addDays, diffDays, isAfter, isBefore, formatCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { ConflictError, UserFacingError } from '@/lib/errors';
 
 /**
  * Validate that a user has an active assignment to a specific charge code.
@@ -35,7 +36,7 @@ async function validateChargeCodeAssignment(userId: string, chargeCodeId: string
     .limit(1);
 
   if (assignment.length === 0) {
-    throw new Error(`Unauthorized: You are not assigned to charge code ${chargeCodeId}. Cannot save timesheet entry.`);
+    throw new AuthorizationError('forbidden', `Unauthorized: You are not assigned to charge code ${chargeCodeId}. Cannot save timesheet entry.`);
   }
 }
 
@@ -58,7 +59,7 @@ async function validateClinAssignment(userId: string, clinId: string): Promise<v
     .limit(1);
 
   if (assignment.length === 0) {
-    throw new Error(`Unauthorized: You are not assigned to CLIN ${clinId}. Cannot save timesheet entry.`);
+    throw new AuthorizationError('forbidden', `Unauthorized: You are not assigned to CLIN ${clinId}. Cannot save timesheet entry.`);
   }
 }
 
@@ -221,7 +222,7 @@ export async function saveTimesheetBatch(data: {
   const { numDays } = await resolvePeriod(start);
   for (const cell of data.cells) {
     if (!Number.isInteger(cell.dayIndex) || cell.dayIndex < 0 || cell.dayIndex >= numDays) {
-      throw new Error(`Invalid day index ${cell.dayIndex} for this pay period.`);
+      throw new UserFacingError(`Invalid day index ${cell.dayIndex} for this pay period.`);
     }
   }
 
@@ -232,10 +233,10 @@ export async function saveTimesheetBatch(data: {
     // caller's charge code / CLIN, i.e. booking hours to a contract the user isn't assigned to.
     const kinds = [cell.chargeCodeId, cell.clinId, cell.indirectCodeId].filter(Boolean).length;
     if (kinds !== 1) {
-      throw new Error('Each timesheet cell must reference exactly one charge code, CLIN, or indirect code.');
+      throw new UserFacingError('Each timesheet cell must reference exactly one charge code, CLIN, or indirect code.');
     }
     if (cell.slinId && !cell.clinId) {
-      throw new Error('A SLIN can only be given with a legacy CLIN entry.');
+      throw new UserFacingError('A SLIN can only be given with a legacy CLIN entry.');
     }
     validateHours(cell.hours, 'Hours');
     if (cell.chargeCodeId) validateUUID(cell.chargeCodeId, 'Charge Code ID');
@@ -246,7 +247,7 @@ export async function saveTimesheetBatch(data: {
   for (const cell of data.cells) {
     const entryDate = addDays(start, cell.dayIndex);
     if (isAfter(entryDate, today)) {
-      throw new Error(`Cannot save hours for future date: ${formatCalendarDate(entryDate, 'MMM D, YYYY')}`);
+      throw new UserFacingError(`Cannot save hours for future date: ${formatCalendarDate(entryDate, 'MMM D, YYYY')}`);
     }
   }
 
@@ -267,7 +268,7 @@ export async function saveTimesheetBatch(data: {
             eq(indirectChargeCodes.availableToAll, true),
           ))
           .limit(1);
-        if (!code) throw new Error(`Indirect code ${cell.indirectCodeId} is not available.`);
+        if (!code) throw new UserFacingError(`Indirect code ${cell.indirectCodeId} is not available.`);
         checkedIndirectCodes.add(cell.indirectCodeId);
       }
       continue;
@@ -281,7 +282,7 @@ export async function saveTimesheetBatch(data: {
           .from(chargeCodes)
           .where(eq(chargeCodes.id, cell.chargeCodeId))
           .limit(1);
-        if (!cc) throw new Error(`Charge code ${cell.chargeCodeId} not found.`);
+        if (!cc) throw new UserFacingError(`Charge code ${cell.chargeCodeId} not found.`, 'not_found');
         chargeCodeCache.set(cell.chargeCodeId, { clinId: cc.clinId, slinId: cc.slinId ?? null });
       }
     } else if (cell.clinId) {
@@ -290,7 +291,7 @@ export async function saveTimesheetBatch(data: {
       if (cell.slinId) {
         const [slin] = await db.select({ id: slins.id }).from(slins)
           .where(and(eq(slins.id, cell.slinId), eq(slins.clinId, cell.clinId))).limit(1);
-        if (!slin) throw new Error(`SLIN ${cell.slinId} does not belong to CLIN ${cell.clinId}.`);
+        if (!slin) throw new UserFacingError(`SLIN ${cell.slinId} does not belong to CLIN ${cell.clinId}.`);
       }
     }
   }
@@ -326,7 +327,7 @@ export async function saveTimesheetBatch(data: {
 
           const dbRevision = currentRevision[0]?.maxRevision ?? 0;
           if (dbRevision !== cell.expectedRevision) {
-            throw new Error(
+            throw new ConflictError(
               `Conflict detected: The entry for ${formatCalendarDate(entryDate, 'MMM D, YYYY')} was modified by another session (expected revision ${cell.expectedRevision}, but server has revision ${dbRevision}). Please refresh your timesheet and re-enter your changes.`
             );
           }
@@ -361,7 +362,7 @@ export async function saveTimesheetBatch(data: {
           const code = (data.changeReasonCode ?? '').trim();
           if (!code) {
             const label = formatCalendarDate(entryDate, 'MMM D, YYYY');
-            throw new Error(
+            throw new UserFacingError(
               serverIsLate
                 ? `A reason code is required for the late entry on ${label}.`
                 : `A reason code is required to edit the entry on ${label}.`
@@ -369,7 +370,7 @@ export async function saveTimesheetBatch(data: {
           }
           const { REASON_CODES } = await import('@/lib/reason-codes');
           const valid = REASON_CODES.some((rc) => rc.value === code);
-          if (!valid) throw new Error(`Invalid change reason code: ${code}`);
+          if (!valid) throw new UserFacingError(`Invalid change reason code: ${code}`);
         }
 
         // The new unique index (user, code, day, revision) can reject a genuine race — two
@@ -392,7 +393,7 @@ export async function saveTimesheetBatch(data: {
         } catch (err) {
           // Another save inserted this cell's next revision between our read and our insert.
           if (isUniqueViolation(err, 'entries_user_code_date_rev_unique_idx')) {
-            throw new Error(
+            throw new ConflictError(
               `Conflict detected: The entry for ${formatCalendarDate(entryDate, 'MMM D, YYYY')} was modified by another session. Please refresh your timesheet and re-enter your changes.`
             );
           }
@@ -407,7 +408,7 @@ export async function saveTimesheetBatch(data: {
     // Another save inserted a cell's next revision first (the per-cell unique index); caught outside the
     // transaction because Postgres aborts the transaction on the violation.
     if (isUniqueViolation(err, 'entries_user_code_date_rev_unique_idx')) {
-      throw new Error('Conflict detected: one of these entries was modified by another session. Please refresh your timesheet and re-enter your changes.');
+      throw new ConflictError('Conflict detected: one of these entries was modified by another session. Please refresh your timesheet and re-enter your changes.');
     }
     throw err;
   }

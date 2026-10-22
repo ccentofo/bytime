@@ -7,10 +7,10 @@ import { eq, and } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { decrypt } from '@/lib/encryption';
 import { ensureValidToken, fetchQBOEmployees, fetchQBOCustomers, fetchQBOServiceItems, fetchQBOVendors, fetchQBOClasses } from '@/lib/integrations/connectors/qbo-api';
-import { getMappings } from '@/server/actions/integrations';
 import { executeSyncOperation } from '@/lib/integrations/sync-engine';
-import { createCostClass, createChargeCode } from '@/server/actions/charge-codes';
+import { createCostClassInternal, createChargeCodeInternal } from '@/server/internal/charge-codes';
 import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { UserFacingError } from '@/lib/errors';
 
 /**
  * Fetch QBO employees for the mapping UI.
@@ -26,7 +26,7 @@ export async function fetchQBOEmployeesForMapping(connectionId: string) {
     .from(integrationConnections)
     .where(eq(integrationConnections.id, connectionId));
 
-  if (!connection?.externalCompanyId) throw new Error('Connection has no company ID.');
+  if (!connection?.externalCompanyId) throw new UserFacingError('Connection has no company ID.');
 
   return fetchQBOEmployees(accessToken, connection.externalCompanyId);
 }
@@ -44,7 +44,7 @@ export async function fetchQBOCustomersForMapping(connectionId: string) {
     .from(integrationConnections)
     .where(eq(integrationConnections.id, connectionId));
 
-  if (!connection?.externalCompanyId) throw new Error('Connection has no company ID.');
+  if (!connection?.externalCompanyId) throw new UserFacingError('Connection has no company ID.');
 
   return fetchQBOCustomers(accessToken, connection.externalCompanyId);
 }
@@ -62,7 +62,7 @@ export async function fetchQBOServiceItemsForMapping(connectionId: string) {
     .from(integrationConnections)
     .where(eq(integrationConnections.id, connectionId));
 
-  if (!connection?.externalCompanyId) throw new Error('Connection has no company ID.');
+  if (!connection?.externalCompanyId) throw new UserFacingError('Connection has no company ID.');
 
   return fetchQBOServiceItems(accessToken, connection.externalCompanyId);
 }
@@ -129,7 +129,7 @@ export async function fetchQBOVendorsForMapping(connectionId: string) {
     .from(integrationConnections)
     .where(eq(integrationConnections.id, connectionId));
 
-  if (!connection?.externalCompanyId) throw new Error('Connection has no company ID.');
+  if (!connection?.externalCompanyId) throw new UserFacingError('Connection has no company ID.');
 
   return fetchQBOVendors(accessToken, connection.externalCompanyId);
 }
@@ -205,7 +205,7 @@ export async function importQboClasses(connectionId: string, selected: Array<{ q
     }
 
     // Create the cost class (idempotent via UNIQUE constraint on name)
-    const costClass = await createCostClass(item.name);
+    const costClass = await createCostClassInternal(db, item.name);
     if (!costClass) continue;
 
     await db.insert(integrationEntityMappings).values({
@@ -241,7 +241,7 @@ export async function importQboChargeCodes(
   let updated = 0;
 
   for (const item of items) {
-    if (!item.clinId) throw new Error(`Charge code "${item.name}" requires a CLIN selection.`);
+    if (!item.clinId) throw new UserFacingError(`Charge code "${item.name}" requires a CLIN selection.`);
 
     const existing = await db.select({ id: integrationEntityMappings.id, bytimeEntityId: integrationEntityMappings.bytimeEntityId })
       .from(integrationEntityMappings)
@@ -259,7 +259,7 @@ export async function importQboChargeCodes(
 
     // Use QBO item name as both code and human name (admin can edit later)
     const code = item.name.replace(/\s+/g, '-').substring(0, 100);
-    const chargeCode = await createChargeCode({
+    const chargeCode = await createChargeCodeInternal(db, {
       code, name: item.name, clinId: item.clinId,
       classId: item.classId ?? undefined, workLocation: item.workLocation,
     });

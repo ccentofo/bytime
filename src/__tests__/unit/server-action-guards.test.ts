@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import {
+  stripComments,
+  parseExportedFunctions,
+  parameterNames,
+  writePayloads,
+} from '../helpers/source-scanner';
 
 // ---------------------------------------------------------------------------
 // Guard-coverage test.
@@ -32,21 +38,8 @@ const DB_QUERY_PATTERN = /\b(db|tx)\.(select|insert|update|delete|execute|transa
 const DB_WRITE_PATTERN = /\b(?:db|tx)\s*\.\s*(?:insert|update|delete)\s*\(|\.execute\(\s*sql`\s*(?:insert|update|delete)\b/i;
 const WRITE_GATE_PATTERN = /\bgetDbForWrite\s*\(/;
 const AUTH_GATE_PATTERN = /\bgetDbForAuth\s*\(/;
-// R2-6: start of a DB write's payload — `.values(` or `.set(`. Its argument must never be a
-// caller-supplied parameter, whole or spread, or the caller can set columns the form never offered.
-const DB_WRITE_CALL_PATTERN = /\.(values|set)\s*\(/g;
 const SRC_DIR = path.resolve(__dirname, '../..');
 
-/**
- * R2-12: strip comments before matching, so a comment that happens to mention a guard name or
- * a banned identity parameter can't fool these checks into thinking real code is present.
- * Doesn't special-case comment-like text inside string/template literals — none of the guard
- * calls, DB queries, or spreads this file looks for occur inside this codebase's string
- * literals, so that's an acceptable simplification.
- */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
-}
 
 /**
  * Explicit allowlist of exported server actions that intentionally run without
@@ -213,124 +206,9 @@ function cachedAdminViolations(source: string, allowed: Record<string, string>):
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Minimal brace-matching source scanner. We can't pull in a real TS parser
-// dependency just for this, and regex-per-line is too fragile given multi-line
-// parameter object types — so walk the source char-by-char.
-// ---------------------------------------------------------------------------
-
-interface ParsedFunction {
-  name: string;
-  paramText: string;
-  bodyText: string;
-}
-
-function parseExportedFunctions(source: string): ParsedFunction[] {
-  const results: ParsedFunction[] = [];
-  const fnRegex = /export\s+async\s+function\s+(\w+)\s*\(/g;
-  let match: RegExpExecArray | null;
-
-  while ((match = fnRegex.exec(source)) !== null) {
-    const name = match[1];
-    const parenStart = match.index + match[0].length - 1; // index of the opening '('
-
-    // Find the matching close paren for the parameter list.
-    let depth = 0;
-    let i = parenStart;
-    for (; i < source.length; i++) {
-      if (source[i] === '(') depth++;
-      else if (source[i] === ')') {
-        depth--;
-        if (depth === 0) break;
-      }
-    }
-    const paramText = source.slice(parenStart + 1, i);
-
-    // Find the function body's opening brace. Can't just take the first '{' after the
-    // param list — a return type like `Promise<{ secret: string }>` has its own braces.
-    // Walk forward tracking <>/()/[] nesting so a brace is only "the body" when none of
-    // those are open and we're not already inside a nested {} from the type annotation.
-    let angleDepth = 0;
-    let parenDepth2 = 0;
-    let bracketDepth = 0;
-    let typeBraceDepth = 0;
-    let bodyStart = -1;
-    for (let k = i + 1; k < source.length; k++) {
-      const ch = source[k];
-      if (ch === '<') angleDepth++;
-      else if (ch === '>') {
-        if (angleDepth > 0) angleDepth--;
-      } else if (ch === '(') parenDepth2++;
-      else if (ch === ')') parenDepth2--;
-      else if (ch === '[') bracketDepth++;
-      else if (ch === ']') bracketDepth--;
-      else if (ch === '{') {
-        if (angleDepth === 0 && parenDepth2 === 0 && bracketDepth === 0 && typeBraceDepth === 0) {
-          bodyStart = k;
-          break;
-        }
-        typeBraceDepth++;
-      } else if (ch === '}') {
-        typeBraceDepth--;
-      }
-    }
-    if (bodyStart === -1) continue;
-
-    // Find the matching close brace for the body.
-    let braceDepth = 0;
-    let j = bodyStart;
-    for (; j < source.length; j++) {
-      if (source[j] === '{') braceDepth++;
-      else if (source[j] === '}') {
-        braceDepth--;
-        if (braceDepth === 0) break;
-      }
-    }
-    const bodyText = source.slice(bodyStart, j + 1);
-
-    results.push({ name, paramText, bodyText });
-  }
-
-  return results;
-}
 
 
-/** Top-level parameter names of a function's parameter list (`a: T, b?: { x: U } = {}` → a, b). */
-function parameterNames(paramText: string): string[] {
-  const names: string[] = [];
-  let depth = 0;
-  let current = '';
-  for (const ch of paramText + ',') {
-    if ('({[<'.includes(ch)) depth++;
-    else if (')}]>'.includes(ch)) depth--;
-    if (ch === ',' && depth === 0) {
-      const m = current.trim().match(/^(\w+)/);
-      if (m) names.push(m[1]);
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-  return names;
-}
 
-/** The argument text of every `.values(...)` / `.set(...)` call in a function body. */
-function writePayloads(bodyText: string): string[] {
-  const payloads: string[] = [];
-  let match: RegExpExecArray | null;
-  DB_WRITE_CALL_PATTERN.lastIndex = 0;
-  while ((match = DB_WRITE_CALL_PATTERN.exec(bodyText)) !== null) {
-    const open = match.index + match[0].length - 1;
-    let depth = 0;
-    let i = open;
-    for (; i < bodyText.length; i++) {
-      if (bodyText[i] === '(') depth++;
-      else if (bodyText[i] === ')' && --depth === 0) break;
-    }
-    payloads.push(bodyText.slice(open + 1, i));
-  }
-  return payloads;
-}
 
 /**
  * Every file under src/ whose first statement is the 'use server' directive. All of them must
@@ -502,6 +380,41 @@ describe('Server action guard coverage', () => {
       }
     }
     expect(staleEntries, `Stale PUBLIC_ACTIONS entries: ${staleEntries.join(', ')}`).toEqual([]);
+  });
+
+  it('a missing guard inside userAction(...) is still caught (fixture, launch-blockers P4)', () => {
+    const fixture = `
+      export async function unguarded(id: string) {
+        return userAction(async () => {
+          const db = await getDbForWrite();
+          await db.delete(contracts).where(eq(contracts.id, id));
+        });
+      }
+      export async function guarded(id: string) {
+        return userAction(async () => {
+          await requireAdminFresh();
+          const db = await getDbForWrite();
+          await db.delete(contracts).where(eq(contracts.id, id));
+        });
+      }
+      export async function queryFirst(id: string) {
+        return userAction(async () => {
+          const db = await getDbForWrite();
+          const rows = await db.select().from(contracts).where(eq(contracts.id, id));
+          await requireAdminFresh();
+          return rows;
+        });
+      }`;
+    const fns = parseExportedFunctions(stripComments(fixture));
+    expect(fns.map((f) => f.name)).toEqual(['unguarded', 'guarded', 'queryFirst']);
+    expect(fns.filter((fn) => !GUARD_PATTERN.test(fn.bodyText)).map((f) => f.name)).toEqual(['unguarded']);
+    // The guard-before-first-query rule sees inside the callback too.
+    const late = fns.filter((fn) => {
+      const g = GUARD_PATTERN.exec(fn.bodyText);
+      const q = DB_QUERY_PATTERN.exec(fn.bodyText);
+      return Boolean(g && q && q.index < g.index);
+    }).map((f) => f.name);
+    expect(late).toEqual(['queryFirst']);
   });
 
   it('cached-admin ban: adding requireAdmin() to a writer fails (mutation check)', () => {

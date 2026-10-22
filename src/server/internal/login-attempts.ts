@@ -2,7 +2,7 @@ import 'server-only';
 import bcrypt from 'bcryptjs';
 import dayjs from 'dayjs';
 import { and, desc, eq, gte } from 'drizzle-orm';
-import { getDbForAuth } from '@/db';
+import type { AuthDb, ReadDb, TenantWriter } from '@/db';
 import { loginAttempts } from '@/db/schema';
 
 const MAX_FAILED_ATTEMPTS = 5;         // Lock after 5 consecutive failures
@@ -15,12 +15,14 @@ export interface LockoutInfo {
   minutesRemaining: number;
 }
 
+/** The auth client (works in billing_only/read_only — F10) or a write-gated one. */
+type AttemptsWriter = AuthDb | TenantWriter;
+
 /**
  * Lockout state for an email: locked after MAX_FAILED_ATTEMPTS failures (since the last success) within the
- * window. Uses getDbForAuth so a suspended tenant's admin still sees an accurate state (F10).
+ * window. Callers pass the auth client (getDbForAuth) so a suspended tenant's admin still sees an accurate state (F10).
  */
-export async function getLockoutInfo(email: string): Promise<LockoutInfo> {
-  const db = await getDbForAuth();
+export async function getLockoutInfo(db: Pick<ReadDb, 'select'> | AttemptsWriter, email: string): Promise<LockoutInfo> {
   const normalizedEmail = email.toLowerCase().trim();
   const windowStart = dayjs().subtract(LOCKOUT_DURATION_MINUTES, 'minute').toDate();
 
@@ -92,6 +94,7 @@ export async function getLockoutInfo(email: string): Promise<LockoutInfo> {
  * without also locking the account's sign-in.
  */
 export async function verifyCurrentPassword(
+  db: AttemptsWriter,
   email: string,
   passwordHash: string | null,
   candidate: string,
@@ -99,7 +102,7 @@ export async function verifyCurrentPassword(
   if (!passwordHash) {
     return { ok: false, error: 'Set a password first.' };
   }
-  const lockout = await getLockoutInfo(email);
+  const lockout = await getLockoutInfo(db, email);
   if (lockout.isLocked) {
     return {
       ok: false,
@@ -107,7 +110,7 @@ export async function verifyCurrentPassword(
     };
   }
   if (typeof candidate !== 'string' || !(await bcrypt.compare(candidate, passwordHash))) {
-    await recordFailedAttempt(email);
+    await recordFailedAttempt(db, email);
     return { ok: false, error: 'Current password is incorrect.' };
   }
   return { ok: true };
@@ -115,14 +118,14 @@ export async function verifyCurrentPassword(
 
 /**
  * Record a failed login attempt.
- * INTERNAL — called from auth.ts's authorize(), before any session exists, so it must use
- * getDbForAuth (tolerates suspended tenants — F10) rather than the strict getDb().
+ * INTERNAL — called from auth.ts's authorize(), before any session exists, with the getDbForAuth client
+ * (tolerates suspended tenants — F10) rather than the strict getDb().
  */
 export async function recordFailedAttempt(
+  db: AttemptsWriter,
   email: string,
   ipAddress?: string
 ): Promise<void> {
-  const db = await getDbForAuth();
   const normalizedEmail = email.toLowerCase().trim();
 
   await db.insert(loginAttempts).values({
@@ -136,10 +139,10 @@ export async function recordFailedAttempt(
  * Record a successful login (resets the failure counter).
  */
 export async function recordSuccessfulLogin(
+  db: AttemptsWriter,
   email: string,
   ipAddress?: string
 ): Promise<void> {
-  const db = await getDbForAuth();
   const normalizedEmail = email.toLowerCase().trim();
 
   await db.insert(loginAttempts).values({
@@ -154,8 +157,7 @@ export async function recordSuccessfulLogin(
  * This inserts a successful login record, which resets the counter.
  * Called from the admin-guarded unlockUserAccount() action in users.ts.
  */
-export async function unlockAccount(email: string): Promise<void> {
-  const db = await getDbForAuth();
+export async function unlockAccount(db: AttemptsWriter, email: string): Promise<void> {
   const normalizedEmail = email.toLowerCase().trim();
 
   await db.insert(loginAttempts).values({

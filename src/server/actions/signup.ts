@@ -5,8 +5,7 @@ import dayjs from 'dayjs';
 import { headers } from 'next/headers';
 import { controlDb } from '@/db/control-plane';
 import { signups } from '@/db/control-plane/schema';
-import { getTenantBySlug } from '@/lib/tenant/registry';
-import { isValidSlug } from '@/lib/tenant/slug-rules';
+import { checkSlugAvailableInternal } from '@/server/internal/signup';
 import { sendSignupVerifyEmail } from '@/lib/email/send-signup';
 import { scheduleEmail } from '@/lib/email/schedule';
 import { apexBaseUrl } from '@/lib/tenant/host';
@@ -18,9 +17,7 @@ import { TERMS_VERSION } from '@/lib/tenant/lifecycle-config';
 const VERIFY_EXPIRY_HOURS = 24;
 
 export async function checkSlugAvailable(slug: string): Promise<{ available: boolean; reason?: string }> {
-  if (!isValidSlug(slug)) return { available: false, reason: 'invalid' };
-  const existing = await getTenantBySlug(slug);
-  return existing ? { available: false, reason: 'taken' } : { available: true };
+  return checkSlugAvailableInternal(slug);
 }
 
 export async function startSignup(input: {
@@ -49,7 +46,7 @@ export async function startSignup(input: {
     return { success: false, error: 'Please enter a valid email address.' };
   }
   const slug = (input.slug?.trim() || slugify(input.companyName));
-  const avail = await checkSlugAvailable(slug);
+  const avail = await checkSlugAvailableInternal(slug);
   if (!avail.available) {
     return {
       success: false,

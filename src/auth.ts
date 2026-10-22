@@ -35,32 +35,33 @@ export async function authorizeCredentials(credentials: Record<string, unknown> 
   const password = credentials.password as string;
   const mfaCode = (credentials.mfaCode as string | undefined)?.trim();
 
-  // Check if the account is locked out
-  const lockoutInfo = await getLockoutInfo(email);
-  if (lockoutInfo?.isLocked) {
+  // Use suspended-tolerant DB resolver so suspended admins can still log in
+  // and reach the billing wall. getDb() stays strict everywhere else.
+  let authDb: Awaited<ReturnType<typeof getDbForAuth>>;
+  try {
+    authDb = await getDbForAuth();
+  } catch {
+    // Workspace not found / closed / other error — treat as bad credentials. (There is no workspace database to
+    // record an attempt in.)
     return null;
   }
 
-  // Use suspended-tolerant DB resolver so suspended admins can still log in
-  // and reach the billing wall. getDb() stays strict everywhere else.
-  let user: typeof users.$inferSelect | null = null;
-  try {
-    const db = await getDbForAuth();
-    const rows = await db.select().from(users).where(eq(users.email, email));
-    user = rows[0] ?? null;
-  } catch {
-    // Workspace not found / deleting / other error — treat as bad credentials
-    await recordFailedAttempt(email);
+  // Check if the account is locked out
+  const lockoutInfo = await getLockoutInfo(authDb, email);
+  if (lockoutInfo.isLocked) {
     return null;
   }
+
+  const rows = await authDb.select().from(users).where(eq(users.email, email));
+  const user: typeof users.$inferSelect | null = rows[0] ?? null;
   if (!user || !user.passwordHash || !user.isActive) {
-    await recordFailedAttempt(email);
+    await recordFailedAttempt(authDb, email);
     return null;
   }
 
   const isValid = await bcrypt.compare(password, user.passwordHash);
   if (!isValid) {
-    await recordFailedAttempt(email);
+    await recordFailedAttempt(authDb, email);
     return null;
   }
 
@@ -78,8 +79,7 @@ export async function authorizeCredentials(credentials: Record<string, unknown> 
       // code can't both succeed: only the first one matches the WHERE clause.
       const step = getTOTPStep(decrypt(user.totpSecret), mfaCode);
       if (step !== null) {
-        const db = await getDbForAuth();
-        const claimed = await db.update(users)
+        const claimed = await authDb.update(users)
           .set({ totpLastUsedStep: step, updatedAt: new Date() })
           .where(and(eq(users.id, user.id), or(isNull(users.totpLastUsedStep), lt(users.totpLastUsedStep, step))))
           .returning({ id: users.id });
@@ -91,9 +91,8 @@ export async function authorizeCredentials(credentials: Record<string, unknown> 
       // Single use under concurrency (feature-plan-launch-blockers.md P3): lock the user row, re-read the codes,
       // verify and remove the used one in ONE transaction. A concurrent sign-in with the same code waits on the
       // row lock, then re-reads the remaining codes and no longer finds it.
-      const db = await getDbForAuth();
       const userId = user.id;
-      mfaValid = await db.transaction(async (tx) => {
+      mfaValid = await authDb.transaction(async (tx) => {
         const [row] = await tx.select({ codes: users.totpRecoveryCodes }).from(users)
           .where(eq(users.id, userId)).for('update');
         if (!row?.codes) return false;
@@ -109,12 +108,12 @@ export async function authorizeCredentials(credentials: Record<string, unknown> 
     }
 
     if (!mfaValid) {
-      await recordFailedAttempt(email); // counts toward lockout, same as a bad password
+      await recordFailedAttempt(authDb, email); // counts toward lockout, same as a bad password
       throw new MFAInvalidSignin();
     }
   }
 
-  await recordSuccessfulLogin(email);
+  await recordSuccessfulLogin(authDb, email);
 
   return {
     id: user.id,

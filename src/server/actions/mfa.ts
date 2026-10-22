@@ -50,7 +50,7 @@ export async function completeMFASetup(data: {
     .select({ passwordHash: users.passwordHash })
     .from(users)
     .where(eq(users.id, actor.id));
-  const reauth = await verifyCurrentPassword(actor.email, user?.passwordHash ?? null, data.currentPassword);
+  const reauth = await verifyCurrentPassword(db, actor.email, user?.passwordHash ?? null, data.currentPassword);
   if (!reauth.ok) {
     return { success: false, error: reauth.error };
   }
@@ -94,7 +94,7 @@ export async function disableMFA(currentPassword: string): Promise<{ success: bo
     .where(eq(users.id, actor.id));
 
   // Lockout checked before bcrypt; a wrong password counts toward the sign-in lockout (shared counter, intended).
-  const reauth = await verifyCurrentPassword(actor.email, user?.passwordHash ?? null, currentPassword);
+  const reauth = await verifyCurrentPassword(db, actor.email, user?.passwordHash ?? null, currentPassword);
   if (!reauth.ok) {
     return { success: false, error: reauth.error };
   }

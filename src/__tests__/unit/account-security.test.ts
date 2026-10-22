@@ -64,13 +64,13 @@ beforeEach(() => {
 
 describe('verifyCurrentPassword', () => {
   it('an account with no password → "Set a password first", no bcrypt', async () => {
-    await expect(verifyCurrentPassword('jane@acme.com', null, 'x')).resolves.toEqual({ ok: false, error: 'Set a password first.' });
+    await expect(verifyCurrentPassword(fake.db as never, 'jane@acme.com', null, 'x')).resolves.toEqual({ ok: false, error: 'Set a password first.' });
     expect(compare.spy).not.toHaveBeenCalled();
   });
 
   it('a locked account is refused BEFORE bcrypt runs, even with the right password', async () => {
     fake.state.results = [failures(5), []]; // 5 recent failures, no later success
-    const result = await verifyCurrentPassword('jane@acme.com', HASH, 'Correct123!');
+    const result = await verifyCurrentPassword(fake.db as never, 'jane@acme.com', HASH, 'Correct123!');
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toMatch(/too many failed attempts/i);
     expect(compare.spy).not.toHaveBeenCalled();
@@ -79,13 +79,13 @@ describe('verifyCurrentPassword', () => {
 
   it('a wrong password is recorded in the shared login_attempts counter', async () => {
     fake.state.results = [[], []];
-    await expect(verifyCurrentPassword('jane@acme.com', HASH, 'wrong')).resolves.toEqual({ ok: false, error: 'Current password is incorrect.' });
+    await expect(verifyCurrentPassword(fake.db as never, 'jane@acme.com', HASH, 'wrong')).resolves.toEqual({ ok: false, error: 'Current password is incorrect.' });
     expect(fake.state.inserts).toEqual([expect.objectContaining({ email: 'jane@acme.com', successful: false })]);
   });
 
   it('the right password passes and records nothing', async () => {
     fake.state.results = [[], []];
-    await expect(verifyCurrentPassword('jane@acme.com', HASH, 'Correct123!')).resolves.toEqual({ ok: true });
+    await expect(verifyCurrentPassword(fake.db as never, 'jane@acme.com', HASH, 'Correct123!')).resolves.toEqual({ ok: true });
     expect(fake.state.inserts).toHaveLength(0);
   });
 });
