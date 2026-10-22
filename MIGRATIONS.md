@@ -107,8 +107,10 @@ deploy would migrate production databases.
 npm run db:migrate:check
 
 # 2. Apply. Migrates the control plane first, then every tenant in status
-#    active/suspended/provisioning (never 'deleting'), with bounded concurrency and one
-#    retry-after-5s per database on a connection error (Neon cold starts).
+#    active/suspended/provisioning/deleting, with bounded concurrency and one
+#    retry-after-5s per database on a connection error (Neon cold starts). A 'deleting'
+#    tenant whose database is CONFIRMED gone (Neon 404 / no pg_database row) is reported
+#    "skipped (database deleted)"; any other failure is FAILED.
 npm run db:migrate:all
 
 # 3. Confirm nothing is left pending.
@@ -161,12 +163,14 @@ takes no lock on its own.
 4. **Commit `drizzle/` directory** — Including `drizzle/meta/` — this is the migration history
 5. **Never use `push` in production** — Always use `generate` + `migrate`
 
-## Rollback
+## Rollback: fix forward only
 
-Drizzle Kit does not have a built-in rollback command. To rollback:
+There are no down-migrations, and a production database is never edited by hand to "undo" one.
 
-1. Revert the `schema.ts` change in git
-2. Generate a new migration (which will be the "undo" of the previous change)
-3. Apply the new migration
+1. Write a **new** migration that corrects the problem (revert the `schema.ts` change if that is the fix, then
+   `npm run db:generate` / `npm run db:generate:cp`).
+2. `npm run db:safety`, then deploy it through the normal pipeline.
 
-For emergency rollbacks, manually execute the reverse SQL against the database.
+Never re-run a broken migration, never edit one that has already been applied, and never rewind a tenant database to
+undo one. Code can be rolled back with Vercel Instant Rollback (the expand/contract rule keeps older code working on the
+newer schema — see PRODUCTION-DEPLOY.md Phase 14). Restoring lost data is in `RESTORE.md`.

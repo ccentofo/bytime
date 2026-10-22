@@ -50,6 +50,13 @@
       "when": 1792691817905,
       "tag": "0006_policy_export_allowed",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792712538911,
+      "tag": "0007_cron_runs",
+      "breakpoints": true
     }
   ]
 }

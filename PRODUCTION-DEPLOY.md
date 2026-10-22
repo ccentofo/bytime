@@ -124,18 +124,36 @@ Use `--check` first to preview with no changes applied.
 **Lifecycle crons** (`feature-plan-terms-compliance-fixes.md` §4.4): `/api/cron/tenant-lifecycle`
 (daily) reconciles with Stripe, applies due state changes, and emails the founder digest;
 `/api/cron/notice-delivery` (every 10 minutes, needs Vercel **Pro**) delivers and retries the
-lifecycle notices. Both are in `vercel.json`. Set `OPS_ALERT_EMAIL` (6.4): the digest lists
-unresolved alerts, workspaces ready for deletion, stuck deletions, notices pending more than 24 h,
-forced notices and the lifecycle-exempt (demo) list. Without it the digest is skipped, with a log
-warning.
+lifecycle notices. Both are in `vercel.json`. Set `OPS_ALERT_EMAIL` (6.4). The digest is **sent every
+day** (LB-D7, `feature-plan-launch-blockers.md` P6) — a short "all quiet" version when nothing needs action
+— and lists unresolved alerts, workspaces ready for deletion, stuck deletions, notices pending more than
+24 h, forced notices, the lifecycle-exempt (demo) list, and **any cron that is overdue or has never run**
+(each cron records a heartbeat in `cron_runs`). Without `OPS_ALERT_EMAIL` no digest is sent (log warning,
+plus a `digest-disabled` alert in production). **No digest by 15:00 UTC → the lifecycle cron is down;
+investigate** (Vercel → Cron Jobs and the function logs).
 
-**Before the lifecycle cron first runs in an environment:** mark the existing demo workspaces exempt
-(F1), or re-seed them with `npm run seed:demo` (which marks them exempt):
-```bash
-npm run tenant:admin -- set-exempt acme on --reason "demo workspace" --yes
-```
-(repeat for each demo slug). In **staging**, also clear `tenant_notices` rows created by the earlier
-build (they use old anchors; pre-launch only): `TRUNCATE tenant_notices;` on the staging control plane.
+**First deploy of the lifecycle code in an environment — in this order:**
+1. Migrate the control plane **before** any new code is deployed, with that environment's values in your
+   shell (the deploy workflow would migrate too, but steps 2–3 must happen in between):
+   ```bash
+   CONTROL_PLANE_DATABASE_URL='<that environment's pooled URL>' ENCRYPTION_KEY='<that environment's key>' npm run db:migrate:all
+   ```
+2. Mark the existing demo workspaces exempt (F1), or re-seed them with `npm run seed:demo` (which marks
+   them exempt) — with the same `CONTROL_PLANE_DATABASE_URL` in your shell:
+   ```bash
+   npm run tenant:admin -- set-exempt acme on --reason "demo workspace" --yes
+   npm run tenant:admin -- set-exempt globex on --reason "demo workspace" --yes
+   npm run tenant:admin -- set-exempt initech on --reason "demo workspace" --yes
+   ```
+3. **Staging only:** clear the `tenant_notices` rows created by the earlier build (old anchors; pre-launch
+   only):
+   ```bash
+   psql '<staging control plane URL>' -c 'TRUNCATE tenant_notices;'
+   ```
+4. Then deploy the new code (Phase 12.1 for staging, 13.1 for production).
+
+Every founder script prints the control plane it is about to touch (`Target control plane: host/db`, with
+a boxed warning when it isn't local) — read it before typing `--yes`.
 
 **Founder tooling** (`npm run tenant:admin -- <command>`; every change needs `--yes`, is audited, and
 can take 60 s to show in the app): `show <slug>`, `extend-trial <slug> <days>`, `end-trial <slug>`,
@@ -151,15 +169,27 @@ every pre-existing tenant gets its `neon_project_id` recorded — `npm run tenan
 know which Neon project to delete. Idempotent; `--check` previews with no changes. See
 `TENANT-DELETION.md` for the deletion runbook itself.
 
+**LB-D1 retention backfill**: tenant Neon projects created before `feature-plan-launch-blockers.md` P6
+keep Neon's default 1 day of history. After that code is deployed, run (reads `CONTROL_PLANE_DATABASE_URL`
+and `NEON_API_KEY`):
+```bash
+npm run backfill:neon-retention -- --check
+npm run backfill:neon-retention
+```
+It sets 7 days on every tenant project, lists tenants without a `neon_project_id` as needing manual action
+(run the T7 backfill first), and exits non-zero if any project failed. Restores use this history:
+[`RESTORE.md`](RESTORE.md).
+
 ---
 
 ## Phase 2 — Get the code onto `main` (you, ~15 min)
 
 Production deploys should come from `main`, never a work-in-progress branch.
 
-**2.1** Open a pull request from `wip/cadenzpoint-rebuild` into `main`:
+**2.1** Open a pull request into `main` from the branch that holds the work you're shipping (replace
+`<release-branch>`; check with `git branch -a` — don't reuse an old branch name from this guide):
 ```bash
-gh pr create --repo ccentofo/bytime --base main --head wip/cadenzpoint-rebuild --title "CadenzPoint multi-tenant SaaS" --body "Multi-tenant control plane, rebrand, charge codes, billing, UI polish, deploy safety."
+gh pr create --repo ccentofo/bytime --base main --head <release-branch> --fill
 ```
 **2.2** Wait for CI on the PR to go green (GitHub → the PR → **Checks**). It runs lint, build,
 unit tests, `db:safety`, and integration tests. Fix anything red before continuing.
@@ -284,6 +314,14 @@ values and production gets production values):
 | `STRIPE_PRICE_STARTER` / `_PRO` / `_ENTERPRISE` | test price IDs | live price IDs |
 | `NEXT_PUBLIC_SENTRY_DSN` | Sentry DSN (Phase 10) | Sentry DSN |
 | `SENTRY_TRACES_SAMPLE_RATE` | `0.2` | `0.1` |
+| `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE` | `0.2` (browser) | `0.1` (browser) |
+| `SENTRY_ENVIRONMENT` / `NEXT_PUBLIC_SENTRY_ENVIRONMENT` | `staging` | `production` |
+| `SENTRY_CRON_MONITORS` | leave unset | leave unset (LB-D7: no paid cron monitors; revisit at ~10 paying customers) |
+| `NEON_HISTORY_RETENTION_SECONDS` | `21600` **only** if the staging Neon org is on the Free plan (it rejects more) | leave unset (7 days, LB-D1) |
+| `NEXT_PUBLIC_DEMO_URL` | *optional* — a demo workspace URL for the marketing page's demo buttons (hidden when unset) | same |
+| `SIGNUP_CONTROLS_ENABLED` | leave unset (signup works as before) until the product owner decides to enable signup controls (P5) | **leave unset until the updated Privacy Policy is published** (LB-D3, LB-D5) |
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile widget keys (staging hostname) | production hostname keys |
+| `SIGNUP_IP_SALT` | `openssl rand -hex 32` (secret; never shown to browsers) | a different `openssl rand -hex 32` |
 | `SENTRY_ORG` / `SENTRY_PROJECT` / `SENTRY_AUTH_TOKEN` | *optional* — enables source-map upload for readable stack traces | same |
 | `CSP_MODE` | `report-only` | `report-only` (flip to `enforce` in Phase 13) |
 
@@ -386,8 +424,9 @@ first, customers would be cut off on Stripe's schedule, without the notices the 
 
 **10.1** Sentry → **Create Project** → platform **Next.js** → name `cadenzpoint`.
 
-**10.2** Copy the **DSN** into both Vercel projects' `NEXT_PUBLIC_SENTRY_DSN`. (Sentry tags each
-event with its environment, so one project is fine for both.)
+**10.2** Copy the **DSN** into both Vercel projects' `NEXT_PUBLIC_SENTRY_DSN`. One Sentry project serves
+both: set `SENTRY_ENVIRONMENT` and `NEXT_PUBLIC_SENTRY_ENVIRONMENT` (6.4) to `staging` / `production` so
+every event is tagged with where it came from.
 
 **10.3** Sentry → **Alerts** → create an alert: "a new issue is created" → email you.
 
@@ -451,7 +490,8 @@ enter time, submit, approve, export a report. Toggle dark mode.
 ```bash
 ./scripts/smoke-tenancy.sh https://staging.cadenzpoint.com https://stagetest.staging.cadenzpoint.com <STAGING_CRON_SECRET>
 ```
-↑ expect all checks passing.
+↑ expect all checks passing. The cron check uses the `?probe=1` smoke probe: it proves the cron route and
+`CRON_SECRET` without running the real job (no reminder emails).
 
 **12.7** Isolation stress test (requires fix 1.3's `tenant_<slug>` database names):
 1. In the **staging** Vercel project, temporarily add `DIAG_SECRET` = output of `openssl rand -hex 32`, then redeploy (re-run 12.1).
@@ -486,7 +526,11 @@ deliveries and the app shows the plan as active. Open **Manage billing** (custom
 reports. Note any for Phase 13.4.
 
 **12.11** Sentry (after fix 1.5): visit a deliberately broken URL or trigger a test error and
-confirm an event appears in Sentry.
+confirm an event appears in Sentry tagged **`staging`**.
+
+**12.12** Operations: the daily ops digest arrives (the "all quiet" version is fine) and lists no overdue
+crons after a day; `npm run backfill:neon-retention -- --check` shows every staging tenant project at the
+expected retention.
 
 ✅ **Check:** every step above passed on staging. **Do not touch production until it does.**
 
@@ -530,16 +574,25 @@ and the 800-second lifecycle/export duration need the **Pro** plan — staging t
 2. Deploy to **staging** (Phase 12.1) and spot-check.
 3. Deploy to **production** (Phase 13.1) and approve.
 
-**Rollback:** Vercel → production project → **Deployments** → pick the last good one →
+**Rollback (code):** Vercel → production project → **Deployments** → pick the last good one →
 **Instant Rollback**. Because migrations are backward-compatible (expand/contract), the older code
-keeps working against the newer schema. Never roll back by running down-migrations.
+keeps working against the newer schema. After an Instant Rollback, Vercel stops promoting new production
+deployments to your domains automatically — once the fix is deployed, **promote that deployment manually**
+(Deployments → the new deployment → Promote).
+
+**Rollback (database): fix forward only.** Never run down-migrations, never re-run a broken migration,
+never rewind a tenant database to undo one: write a corrective migration and deploy it. Lost or damaged
+customer data is restored into a copy and re-entered through the app — [`RESTORE.md`](RESTORE.md).
 
 **A single tenant failed to migrate:** the deploy stops before the new code goes live. Fix the
 cause, then re-run just that tenant locally with the production values in your shell:
 `npm run db:migrate:all -- --tenant <slug>`, then re-run the deploy.
 
-**Monthly:** test a Neon point-in-time restore into a scratch branch, and confirm Sentry and email
-are still delivering. **Yearly:** rotate `VERCEL_TOKEN` before it expires.
+**Daily:** the ops digest arrives. **No digest by 15:00 UTC → the lifecycle cron is down; investigate.**
+
+**Monthly:** the restore drill in [`RESTORE.md`](RESTORE.md) (throwaway workspace, branch restore, row
+counts match), and confirm Sentry and email are still delivering. **Yearly:** rotate `VERCEL_TOKEN` before
+it expires.
 
 ---
 
@@ -548,7 +601,7 @@ are still delivering. **Yearly:** rotate `VERCEL_TOKEN` before it expires.
 | Item | Why |
 |---|---|
 | **Distributed rate limiting** (e.g. Upstash Redis) | The current limiter is in memory and per serverless instance, so it barely protects login/signup on Vercel. |
-| **Long-term retention + backup policy** | DCAA expects ~3-year record retention; Neon's restore window is far shorter. |
+| **Long-term retention + backup policy** | DCAA expects ~3-year record retention; Neon's 7-day history (LB-D1) is for undoing mistakes, not retention. |
 | **Your own security posture** (NIST 800-171 / CMMC answer, SOC 2 roadmap) | Usually the deciding question from defense-contractor buyers. Also decide whether you'll store CUI; if so, commercial-region hosting may not be acceptable. |
 | **Terms of Service, Privacy Policy, DPA** reviewed by a lawyer | Required to sell. |
 | **Trademark clearance** for "CadenzPoint" | Before marketing spend. |

@@ -14,6 +14,7 @@
  *   force-notice-sent <slug> <kind> --reason "<why>" [--anchor <iso>] --yes
  *   export-destroyed <slug> [--legal-hold "<reason>"] --yes
  *   resolve-alert <alert-id> --note "<text>" --yes
+ *   audit-note <slug> --note "<text>" --yes        (append a founder note to the audit trail, e.g. RESTORE.md)
  *
  * Writes print what they would do and refuse to run without --yes. Running app instances cache the tenant
  * registry for up to 60 seconds, so a change can take a minute to show in the app.
@@ -33,8 +34,9 @@ import type { TenantRow } from '../src/lib/tenant/lifecycle-store';
 import { deliverPendingNotices } from '../src/lib/tenant/notices';
 import {
   AdminCommandError, applyAdminPlan, findForceableNotice, forceNoticeSent, plans, recordFounderExportDisposal,
-  resolveAlertById, type Planner,
+  recordFounderNote, resolveAlertById, type Planner,
 } from '../src/lib/tenant/admin-commands';
+import { printTargetBanner } from './lib/target';
 
 const ACTOR = `founder:${process.env.USER ?? 'unknown'}`;
 const CACHE_NOTE = 'Note: running app instances may show the old state for up to 60 seconds (registry cache).';
@@ -131,6 +133,7 @@ async function show(slug: string) {
 }
 
 async function main() {
+  printTargetBanner();
   const [command, target, ...rest] = process.argv.slice(2);
   if (!command || !target) fail('Usage: tenant-admin.ts <command> <slug|alert-id> [args] [--yes] (see the header of scripts/tenant-admin.ts)');
   const yes = rest.includes('--yes');
@@ -200,6 +203,16 @@ async function main() {
       confirmOrExit(yes);
       await resolveAlertById(target, note, ACTOR);
       console.log('✓ Resolved.');
+      break;
+    }
+    case 'audit-note': {
+      const note = flag(rest, '--note') ?? fail('audit-note requires --note "<text>".');
+      const t = await loadBySlug(target);
+      console.log(`Would append to ${t.slug}'s audit trail: ${note}`);
+      console.log('Append-only bookkeeping; it changes no lifecycle state.');
+      confirmOrExit(yes);
+      const id = await recordFounderNote(t.id, note, ACTOR);
+      console.log(`✓ Recorded (audit event ${id}).`);
       break;
     }
     default:

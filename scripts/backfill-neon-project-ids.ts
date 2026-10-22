@@ -20,6 +20,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { and, eq, isNull, isNotNull } from 'drizzle-orm';
 import { tenants } from '../src/db/control-plane/schema';
 import { findNeonProjectIdByName } from '../src/lib/tenant/neon';
+import { printTargetBanner } from './lib/target';
 
 function fail(msg: string): never {
   console.error(`✗ ${msg}`);
@@ -27,6 +28,7 @@ function fail(msg: string): never {
 }
 
 async function main() {
+  printTargetBanner();
   const check = process.argv.includes('--check');
 
   const controlUrl = process.env.CONTROL_PLANE_DATABASE_URL;

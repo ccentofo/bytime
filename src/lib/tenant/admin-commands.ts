@@ -199,6 +199,16 @@ export async function recordFounderExportDisposal(tenantId: string, legalHold: s
   return taken.detail ?? '';
 }
 
+/**
+ * A free-text founder note on the workspace's audit trail (feature-plan-launch-blockers.md P6 §2, LB-D6): e.g. the
+ * written record of what an in-place restore erased and why, referencing the customer's consent. Append-only;
+ * changes no lifecycle state.
+ */
+export async function recordFounderNote(tenantId: string, note: string, actor: string): Promise<string> {
+  if (!note.trim()) throw new AdminCommandError('audit-note requires --note "<text>".');
+  return withLockedPool((db) => recordAudit(db, { tenantId, kind: 'founder-note', actor, detail: note.trim() }));
+}
+
 /** Manual resolution (bookkeeping only — never changes lifecycle state). */
 export async function resolveAlertById(alertId: string, note: string, actor: string): Promise<void> {
   if (!note.trim()) throw new AdminCommandError('resolve-alert requires --note.');

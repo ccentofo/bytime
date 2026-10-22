@@ -446,8 +446,9 @@ export async function runLifecycleCron(opts: {
   }
 
   const doneAt = clock();
-  await withLockedPool((db) => incomplete
-    ? raiseAlert(db, { tenantId: null, kind: 'cron-incomplete-run', detail: { processed: results.length, candidates: candidates.length } }, doneAt)
-    : resolveAlert(db, { tenantId: null, kind: 'cron-incomplete-run' }, doneAt));
+  await withLockedPool(async (db) => {
+    if (incomplete) await raiseAlert(db, { tenantId: null, kind: 'cron-incomplete-run', detail: { processed: results.length, candidates: candidates.length } }, doneAt);
+    else await resolveAlert(db, { tenantId: null, kind: 'cron-incomplete-run' }, doneAt);
+  });
   return { results, candidates: candidates.length, incomplete };
 }

@@ -11,10 +11,22 @@
 import dotenv from 'dotenv';
 dotenv.config({ path: ['.env.local', '.env'] });
 import { provisionTenant } from '../src/lib/tenant/provision';
+import { localDevAdminUrl } from '../src/lib/tenant/neon';
+import { printTargetBanner } from './lib/target';
+import { provisionWithoutNeonRefusal } from './lib/provision-guard';
 
 const [slug, name, adminEmail, adminName] = process.argv.slice(2);
 if (!slug || !name || !adminEmail || !adminName) {
   console.error('Usage: npm run provision:tenant -- <slug> <name> <admin-email> <admin-name>');
+  process.exit(1);
+}
+
+printTargetBanner();
+// feature-plan-launch-blockers.md P6 §5: without a Neon key provisioning creates a database on the admin server —
+// only acceptable when that server is local.
+const refusal = provisionWithoutNeonRefusal(process.env, localDevAdminUrl());
+if (refusal) {
+  console.error(`✗ ${refusal}`);
   process.exit(1);
 }
 

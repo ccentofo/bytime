@@ -30,6 +30,7 @@ import { addDays } from '../src/lib/tenant/lifecycle';
 import { BACKUP_RETENTION_DAYS } from '../src/lib/tenant/lifecycle-config';
 import { recordAudit } from '../src/lib/tenant/lifecycle-store';
 import { refusedOutputReason } from '../src/lib/export/founder-export-path';
+import { printTargetBanner } from './lib/target';
 
 const PBKDF2_ITERATIONS = 600_000;
 
@@ -49,6 +50,7 @@ function excludeFromTimeMachine(dir: string) {
 }
 
 async function main() {
+  printTargetBanner();
   const [slug, outArg] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
   if (!slug || !outArg) fail('Usage: npm run tenant:export -- <slug> <out-dir>');
 

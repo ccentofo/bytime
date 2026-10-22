@@ -19,3 +19,11 @@ export function rejectUnauthorizedCron(request: NextRequest): Response | null {
   }
   return null;
 }
+
+/**
+ * Smoke probe (feature-plan-launch-blockers.md P6 §6): `?probe=1` on a cron route, checked AFTER auth, answers
+ * 200 {"probe":"ok"} without doing any work — so a deploy smoke test proves routing + CRON_SECRET without sending mail.
+ */
+export function isProbe(request: NextRequest): boolean {
+  return request.nextUrl.searchParams.get('probe') === '1';
+}

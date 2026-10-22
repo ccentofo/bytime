@@ -7,11 +7,15 @@ import { BACKUP_RETENTION_DAYS } from './lifecycle-config';
 import { addDays } from './lifecycle';
 import { raiseAlert, resolveAlert } from './lifecycle-store';
 import type { TenantRunResult } from './lifecycle-runner';
+import { cronProblems, readCronRuns, type CronProblem } from '@/lib/cron/heartbeat';
 
 /**
- * Founder digest (feature-plan-terms-compliance-fixes.md §4.4, D4): sent to OPS_ALERT_EMAIL whenever there is
- * something to act on. Its own send requires a provider message id; a failure raises an alert and the next run
- * retries.
+ * Founder digest (feature-plan-terms-compliance-fixes.md §4.4, D4): sent to OPS_ALERT_EMAIL by the daily lifecycle
+ * cron. Its own send requires a provider message id; a failure raises an alert and the next run retries.
+ *
+ * LB-D7 (feature-plan-launch-blockers.md P6 §3): ALWAYS sent — a short "all quiet" version when there is no news — so
+ * its absence is itself the alarm ("no digest by 15:00 UTC → the lifecycle cron is down"). Lists every cron whose
+ * last success is older than its own limit, or that has never run (cron_runs heartbeat).
  */
 
 const MS_PER_HOUR = 3600_000;
@@ -58,7 +62,14 @@ async function checkFounderExports(now: Date): Promise<void> {
   });
 }
 
-export async function sendOpsDigest(results: TenantRunResult[], now: Date, incomplete: boolean): Promise<'sent' | 'nothing' | 'failed' | 'disabled'> {
+/** One line per overdue / never-run cron (exported for tests). */
+export function cronProblemLines(problems: CronProblem[]): string[] {
+  return problems.map((p) => p.problem === 'never-ran'
+    ? `${esc(p.name)} — <strong>never ran</strong> (no heartbeat recorded)`
+    : `${esc(p.name)} — last success ${p.lastSucceededAt ? esc(p.lastSucceededAt.toISOString()) : '<strong>never</strong>'} (limit ${p.limitHours} h)`);
+}
+
+export async function sendOpsDigest(results: TenantRunResult[], now: Date, incomplete: boolean): Promise<'sent' | 'failed' | 'disabled'> {
   await checkFounderExports(now);
 
   const data = await withLockedPool(async (db) => {
@@ -77,12 +88,12 @@ export async function sendOpsDigest(results: TenantRunResult[], now: Date, incom
       .where(and(eq(tenants.lifecycleExempt, true), ne(tenants.status, 'deleted')));
     return { alerts, deleting, stalePending, forced, exempt };
   });
+  const crons = cronProblems(await readCronRuns(), now);
 
   const ready = results.filter((r) => r.readyForDeletion);
   const blocked = results.filter((r) => r.blockedDeletion);
   const hasNews = data.alerts.length > 0 || ready.length > 0 || blocked.length > 0 || data.deleting.length > 0
-    || data.stalePending.length > 0 || incomplete;
-  if (!hasNews) return 'nothing';
+    || data.stalePending.length > 0 || incomplete || crons.length > 0;
 
   const to = process.env.OPS_ALERT_EMAIL;
   if (!to || !resend) {
@@ -98,7 +109,9 @@ export async function sendOpsDigest(results: TenantRunResult[], now: Date, incom
     if (items.length === 0) return;
     lines.push(`<h3>${esc(title)}</h3><ul>${items.map((i) => `<li>${i}</li>`).join('')}</ul>`);
   };
+  if (!hasNews) lines.push('<p>All quiet — nothing needs action today. Every cron has run within its limit.</p>');
   if (incomplete) lines.push('<p><strong>The lifecycle run stopped early (time budget); remaining tenants run next time.</strong></p>');
+  section('Crons overdue or never run (cron_runs heartbeat)', cronProblemLines(crons));
   section('Ready for deletion (D4: run tenant:delete)', ready.map((r) =>
     `${esc(r.slug)} — deletion date ${esc(r.readyForDeletion!.deletionScheduledFor.toISOString())}${r.readyForDeletion!.overdue ? ' <strong>OVERDUE</strong>' : ''}`));
   section('Deletion blocked by payment activity', blocked.map((r) => `${esc(r.slug)}: ${esc(r.blockedDeletion)}`));
@@ -115,7 +128,7 @@ export async function sendOpsDigest(results: TenantRunResult[], now: Date, incom
     const { data: sent, error } = await resend.emails.send({
       from: EMAIL_FROM,
       to,
-      subject: `CadenzPoint ops digest — ${now.toISOString().slice(0, 10)}`,
+      subject: `CadenzPoint ops digest — ${now.toISOString().slice(0, 10)}${hasNews ? '' : ' (all quiet)'}`,
       html: `<div style="font-family:system-ui,sans-serif;font-size:14px">${lines.join('')}</div>`,
     });
     if (!sent?.id) throw new Error(error?.message ?? 'no message id');

@@ -6,7 +6,7 @@ vi.mock('@/lib/email/client', async () => (await import('./fakes/fake-resend')).
 import { controlDb } from '@/db/control-plane';
 import {
   AdminCommandError, applyAdminPlan, findForceableNotice, forceNoticeSent, plans, recordFounderExportDisposal,
-  resolveAlertById,
+  recordFounderNote, resolveAlertById,
 } from '@/lib/tenant/admin-commands';
 import { runTenantLifecycle } from '@/lib/tenant/lifecycle-runner';
 import { raiseAlert, recordAudit } from '@/lib/tenant/lifecycle-store';
@@ -199,6 +199,16 @@ describe.skipIf(!cpReady)('tenant:admin commands (§5.6)', () => {
     await recordAudit(controlDb, { tenantId: t.id, kind: 'founder-export-taken', actor: 'test', detail: '{}' });
     await recordFounderExportDisposal(t.id, undefined, 'test');
     expect((await auditOf(t.id)).map((e) => e.kind)).toContain('founder-export-destroyed');
+  });
+
+  it('audit-note appends a founder note (RESTORE.md in-place record) and changes no lifecycle state', async () => {
+    const t = await makeTenant();
+    const before = await getTenantRow(t.id);
+    await expect(recordFounderNote(t.id, '   ', 'test')).rejects.toThrow(/requires --note/);
+    await recordFounderNote(t.id, 'In-place restore to 2026-10-20T14:00Z; erased 3 entries; consent ref CS-12', 'test');
+    const notes = (await auditOf(t.id)).filter((e) => e.kind === 'founder-note');
+    expect(notes.map((e) => e.detail)).toEqual(['In-place restore to 2026-10-20T14:00Z; erased 3 entries; consent ref CS-12']);
+    expect((await getTenantRow(t.id)).lifecycleVersion).toBe(before.lifecycleVersion);
   });
 
   it('the same alert raised twice upserts one row (empty dedup key included)', async () => {

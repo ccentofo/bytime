@@ -30,6 +30,7 @@ import { tenants, signups } from '../src/db/control-plane/schema';
 import { TRIAL_DAYS, TRIAL_BACKFILL_MIN_DAYS } from '../src/lib/tenant/lifecycle-config';
 import { withTenantLock } from '../src/db/control-plane/locked';
 import { readTenant, updateTenantGuarded } from '../src/lib/tenant/lifecycle-store';
+import { printTargetBanner } from './lib/target';
 
 function fail(msg: string): never {
   console.error(`✗ ${msg}`);
@@ -37,6 +38,7 @@ function fail(msg: string): never {
 }
 
 async function main() {
+  printTargetBanner();
   const check = process.argv.includes('--check');
 
   const controlUrl = process.env.CONTROL_PLANE_DATABASE_URL;

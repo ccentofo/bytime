@@ -51,6 +51,27 @@ export const DELETION_SLA_DAYS = 7;
  */
 export const BACKUP_RETENTION_DAYS = 30;
 
+/**
+ * LB-D1 (feature-plan-launch-blockers.md §0): point-in-time history kept on every tenant Neon project — 7 days, the
+ * Launch plan maximum. Mistake-undo backups (restore into a branch, RESTORE.md), not DCAA retention. Revisit on Scale.
+ * Sent at project creation; existing projects via `npm run backfill:neon-retention`.
+ */
+export const TENANT_DB_HISTORY_RETENTION_SECONDS = 604_800;
+
+/**
+ * The retention actually requested: `NEON_HISTORY_RETENTION_SECONDS` overrides the policy value (a Free-plan staging
+ * org rejects anything above 21600). A set-but-invalid value throws rather than silently falling back.
+ */
+export function tenantDbHistoryRetentionSeconds(): number {
+  const raw = process.env.NEON_HISTORY_RETENTION_SECONDS?.trim();
+  if (!raw) return TENANT_DB_HISTORY_RETENTION_SECONDS;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new Error(`NEON_HISTORY_RETENTION_SECONDS must be a non-negative integer number of seconds (got "${raw}").`);
+  }
+  return n;
+}
+
 // ── Read-only mode and export (Terms §3.2, §9.1, §9.2) ──────────────────────
 
 /**

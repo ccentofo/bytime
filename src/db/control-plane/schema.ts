@@ -160,3 +160,15 @@ export const paymentPendingObservations = pgTable('payment_pending_observations'
 }, (table) => [
   primaryKey({ columns: [table.tenantId, table.invoiceId, table.kind] }),
 ]);
+
+/**
+ * LB-D7 (feature-plan-launch-blockers.md P6 §3): the free cron heartbeat — one row per cron, written at start and on
+ * success. The daily digest lists any cron whose last success is older than its limit, or that has no row (never ran).
+ * `last_summary` holds the run's JSON summary, including the reminder crons' fair-rotation `cursor`.
+ */
+export const cronRuns = pgTable('cron_runs', {
+  name: varchar('name', { length: 60 }).primaryKey(),
+  lastStartedAt: timestamp('last_started_at', { withTimezone: true }),
+  lastSucceededAt: timestamp('last_succeeded_at', { withTimezone: true }),
+  lastSummary: jsonb('last_summary'),
+});

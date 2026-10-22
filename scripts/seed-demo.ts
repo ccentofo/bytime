@@ -31,6 +31,7 @@ import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { registerTenant } from './register-tenant';
 import { encrypt } from '../src/lib/encryption';
 import { seedRichData } from './seed-full';
+import { printTargetBanner } from './lib/target';
 
 const [
   slug,
@@ -59,6 +60,7 @@ if (!process.env.ENCRYPTION_KEY) {
 }
 
 async function main() {
+  printTargetBanner();
   // 1. Migrate the tenant DB. Tolerate a DB that already has the schema but no migration
   //    journal (42P07 = duplicate table, 42710 = duplicate object/type).
   const tsql = postgres(tenantDbUrl, { max: 1 });
