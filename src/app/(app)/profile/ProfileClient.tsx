@@ -16,6 +16,7 @@ import {
 import { IconKey, IconCheck, IconAlertCircle, IconUser } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { changePassword } from '@/server/actions/password';
+import { runAction } from '@/lib/run-action';
 import { formatDateTime } from '@/lib/format';
 import { ROLE_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -67,12 +68,12 @@ export function ProfileClient({ fullName, email, role, passwordInfo, mfaStatus, 
     }
 
     startTransition(async () => {
-      const result = await changePassword({
+      const result = await runAction(changePassword({
         currentPassword,
         newPassword,
-      });
+      }), { silent: true });
 
-      if (result.success) {
+      if (result.ok) {
         setSuccess(true);
         setCurrentPassword('');
         setNewPassword('');
@@ -84,7 +85,7 @@ export function ProfileClient({ fullName, email, role, passwordInfo, mfaStatus, 
           icon: <IconCheck size={16} />,
         });
       } else {
-        setError(result.error ?? 'Failed to change password.');
+        setError(result.error);
       }
     });
   }

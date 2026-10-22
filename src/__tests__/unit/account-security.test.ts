@@ -43,6 +43,9 @@ vi.mock('bcryptjs', async (importOriginal) => {
 });
 
 vi.mock('@/lib/session', () => ({
+  AuthorizationError: class AuthorizationError extends Error {
+    constructor(public kind: 'unauthenticated' | 'forbidden', message: string) { super(message); this.name = 'AuthorizationError'; }
+  },
   requireSession: async () => ({ id: 'u1', email: 'jane@acme.com', fullName: 'Jane', role: 'employee' }),
 }));
 
@@ -94,21 +97,21 @@ describe('completeMFASetup requires the current password', () => {
   it('the right current password and a valid code enable MFA', async () => {
     fake.state.results = [[{ passwordHash: HASH }], [], []];
     const result = await completeMFASetup({ pendingSecret: SECRET, code: validCode(), currentPassword: 'Correct123!' });
-    expect(result.success).toBe(true);
+    expect(result.ok).toBe(true);
     expect(fake.state.updates).toBe(1);
   });
 
   it('a wrong current password is refused and nothing is saved', async () => {
     fake.state.results = [[{ passwordHash: HASH }], [], []];
     const result = await completeMFASetup({ pendingSecret: SECRET, code: validCode(), currentPassword: 'wrong' });
-    expect(result.success).toBe(false);
+    expect(result).toEqual({ ok: false, code: 'validation', error: 'Current password is incorrect.' });
     expect(fake.state.updates).toBe(0);
   });
 
   it('an account without a password is told to set one first', async () => {
     fake.state.results = [[{ passwordHash: null }]];
     const result = await completeMFASetup({ pendingSecret: SECRET, code: validCode(), currentPassword: 'anything' });
-    expect(result).toEqual({ success: false, error: 'Set a password first.' });
+    expect(result).toEqual({ ok: false, code: 'validation', error: 'Set a password first.' });
     expect(fake.state.updates).toBe(0);
   });
 });

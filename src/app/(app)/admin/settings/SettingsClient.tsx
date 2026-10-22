@@ -17,6 +17,7 @@ import {
 import { DatePickerInput } from '@mantine/dates';
 import { IconAlertCircle, IconCheck, IconClock } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { runAction } from '@/lib/run-action';
 import { updatePayPeriodConfig, getValidScheduleChangeDates, type ConfigHistoryRow, type ScheduleChangeOptions, type UpdatePayPeriodConfigResult } from '@/server/actions/pay-period-config';
 import { updateWorkspaceTimezone } from '@/server/actions/workspace-settings';
 import type { PeriodConfig, PeriodType } from '@/lib/date-utils';
@@ -115,19 +116,17 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
   function handleSaveTimezone() {
     if (!timezone) return;
     startTimezoneTransition(async () => {
-      try {
-        const stored = await updateWorkspaceTimezone(timezone);
-        setSavedTimezone(stored);
-        setTimezone(stored);
-        notifications.show({
-          title: 'Workspace timezone updated',
-          message: `"Today" and every late/future-date rule now use ${stored}.`,
-          color: 'success',
-          icon: <IconCheck size={16} />,
-        });
-      } catch (error) {
-        notifications.show({ title: 'Save failed', message: String(error), color: 'red' });
-      }
+      const result = await runAction(updateWorkspaceTimezone(timezone), { errorTitle: 'Save failed' });
+      if (!result.ok) return;
+      const stored = result.data;
+      setSavedTimezone(stored);
+      setTimezone(stored);
+      notifications.show({
+        title: 'Workspace timezone updated',
+        message: `"Today" and every late/future-date rule now use ${stored}.`,
+        color: 'success',
+        icon: <IconCheck size={16} />,
+      });
     });
   }
 
@@ -142,27 +141,25 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
     }
 
     startTransition(async () => {
-      try {
-        const result: UpdatePayPeriodConfigResult = await updatePayPeriodConfig({
-          periodType,
-          anchorDate,
-          weekStartDay: parseInt(weekStartDay, 10),
-          effectiveFrom: selectedEffectiveFrom === IMMEDIATE ? null : (selectedEffectiveFrom as CalendarDate),
-        });
-        setScheduledEffectiveFrom(result.effectiveFrom);
-        setScheduledPeriodType(result.effectiveFrom ? periodType : null);
-        notifications.show({
-          title: 'Schedule change saved',
-          message: result.effectiveFrom
-            ? `Your new ${PERIOD_TYPE_LABELS[periodType]} schedule takes effect ${formatDate(result.effectiveFrom)}. Current and past periods are unchanged.`
-            : `Your ${PERIOD_TYPE_LABELS[periodType]} schedule is now in effect.`,
-          color: 'success',
-          icon: <IconCheck size={16} />,
-          autoClose: 8000,
-        });
-      } catch (error) {
-        notifications.show({ title: 'Save failed', message: String(error), color: 'red' });
-      }
+      const outcome = await runAction(updatePayPeriodConfig({
+        periodType,
+        anchorDate,
+        weekStartDay: parseInt(weekStartDay, 10),
+        effectiveFrom: selectedEffectiveFrom === IMMEDIATE ? null : (selectedEffectiveFrom as CalendarDate),
+      }), { errorTitle: 'Save failed' });
+      if (!outcome.ok) return;
+      const result: UpdatePayPeriodConfigResult = outcome.data;
+      setScheduledEffectiveFrom(result.effectiveFrom);
+      setScheduledPeriodType(result.effectiveFrom ? periodType : null);
+      notifications.show({
+        title: 'Schedule change saved',
+        message: result.effectiveFrom
+          ? `Your new ${PERIOD_TYPE_LABELS[periodType]} schedule takes effect ${formatDate(result.effectiveFrom)}. Current and past periods are unchanged.`
+          : `Your ${PERIOD_TYPE_LABELS[periodType]} schedule is now in effect.`,
+        color: 'success',
+        icon: <IconCheck size={16} />,
+        autoClose: 8000,
+      });
     });
   }
 

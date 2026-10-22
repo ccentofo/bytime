@@ -11,6 +11,7 @@ import {
   createTestChargeCode,
   cleanupTestData,
   expectFailure,
+  expectOk,
 } from './helpers';
 
 // ---------------------------------------------------------------------------
@@ -190,9 +191,9 @@ describe('calendar-dates audit fixes', () => {
 
   it('updateWorkspaceTimezone stores the canonical IANA name and rejects abbreviations and non-strings', async () => {
     actingAs(admin);
-    await expect(updateWorkspaceTimezone('america/new_york')).resolves.toBe('America/New_York');
-    await expect(updateWorkspaceTimezone('EST')).rejects.toThrow(/Choose a timezone/);
-    await expect(updateWorkspaceTimezone(['UTC'] as unknown as string)).rejects.toThrow(/Choose a timezone/);
+    expect(await expectOk(updateWorkspaceTimezone('america/new_york'))).toBe('America/New_York');
+    await expectFailure(updateWorkspaceTimezone('EST'), 'validation', /Choose a timezone/);
+    await expectFailure(updateWorkspaceTimezone(['UTC'] as unknown as string), 'validation', /Choose a timezone/);
     const [row] = await getTestDb().select().from(schema.workspaceSettings);
     expect(row.timezone).toBe('America/New_York');
   });

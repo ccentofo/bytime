@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const ctx = vi.hoisted(() => ({ slug: 'acme' as string, throwMismatch: false }));
 vi.mock('@/lib/tenant/context', () => ({
+  WorkspaceReadOnlyError: class WorkspaceReadOnlyError extends Error {},
   getTenantSlug: async () => {
     if (ctx.throwMismatch) throw new Error('Tenant context mismatch — possible header tampering.');
     return ctx.slug;
@@ -58,7 +59,7 @@ beforeEach(() => {
 describe('requestPasswordReset', () => {
   it('on a workspace host, emails a link to THAT workspace host, scheduled with after()', async () => {
     fake.state.selects = [[], [{ id: 'u1', fullName: 'Jane' }]]; // no recent requests; active user found
-    await expect(requestPasswordReset('jane@acme.com')).resolves.toEqual({ success: true });
+    await expect(requestPasswordReset('jane@acme.com')).resolves.toEqual({ ok: true, data: undefined });
 
     expect(fake.state.inserted).toHaveLength(1);
     expect(sendReset).not.toHaveBeenCalled(); // not sent inline
@@ -73,13 +74,13 @@ describe('requestPasswordReset', () => {
   it('a failed send ({ ok: false }) never affects the action’s result', async () => {
     sendReset.mockResolvedValueOnce({ ok: false, reason: 'error' } as never);
     fake.state.selects = [[], [{ id: 'u1', fullName: 'Jane' }]];
-    await expect(requestPasswordReset('jane@acme.com')).resolves.toEqual({ success: true });
+    await expect(requestPasswordReset('jane@acme.com')).resolves.toEqual({ ok: true, data: undefined });
     await expect(afterTasks[0]()).resolves.toBeUndefined();
   });
 
   it('on the apex (no tenant), returns the generic success and sends nothing', async () => {
     ctx.slug = '';
-    await expect(requestPasswordReset('jane@acme.com')).resolves.toEqual({ success: true });
+    await expect(requestPasswordReset('jane@acme.com')).resolves.toEqual({ ok: true, data: undefined });
     expect(dbAccess.getDbForAuth).not.toHaveBeenCalled();
     expect(fake.state.inserted).toHaveLength(0);
     expect(afterTasks).toHaveLength(0);
@@ -87,7 +88,7 @@ describe('requestPasswordReset', () => {
 
   it('a host/header mismatch is treated like no tenant: generic success, nothing sent', async () => {
     ctx.throwMismatch = true;
-    await expect(requestPasswordReset('jane@acme.com')).resolves.toEqual({ success: true });
+    await expect(requestPasswordReset('jane@acme.com')).resolves.toEqual({ ok: true, data: undefined });
     expect(afterTasks).toHaveLength(0);
   });
 });

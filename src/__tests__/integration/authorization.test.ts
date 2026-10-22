@@ -209,9 +209,9 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const target = await createTestUser({ role: 'employee' });
     actingAs(asFake(supervisor));
 
-    await expect(updateUser(target.id, { fullName: 'New Name' })).rejects.toThrow(/Admin role required/);
-    await expect(createUser({ email: `new-${Date.now()}@bytime.dev`, fullName: 'New User' })).rejects.toThrow(/Admin role required/);
-    await expect(createApiKey({ name: 'test key' })).rejects.toThrow(/Admin role required/);
+    await expectFailure(updateUser(target.id, { fullName: 'New Name' }), 'forbidden', /Admin role required/);
+    await expectFailure(createUser({ email: `new-${Date.now()}@bytime.dev`, fullName: 'New User' }), 'forbidden', /Admin role required/);
+    await expectFailure(createApiKey({ name: 'test key' }), 'forbidden', /Admin role required/);
     await expect(bulkImportEmployees([])).rejects.toThrow(/Admin role required/);
     await expect(startCheckout('starter')).rejects.toThrow(/Admin role required/);
     await expect(listChargeCodes()).rejects.toThrow(/Admin role required/);
@@ -222,8 +222,8 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const admin = await createTestUser({ role: 'admin' });
     actingAs(asFake(admin));
 
-    await expect(updateUser(admin.id, { role: 'employee' })).rejects.toThrow(/cannot change your own role/i);
-    await expect(updateUser(admin.id, { isActive: false })).rejects.toThrow(/cannot deactivate your own account/i);
+    await expectFailure(updateUser(admin.id, { role: 'employee' }), 'forbidden', /cannot change your own role/i);
+    await expectFailure(updateUser(admin.id, { isActive: false }), 'forbidden', /cannot deactivate your own account/i);
   });
 
   it('5b. nobody can demote the last active admin — enforced from DB truth, not the session', async () => {
@@ -237,8 +237,8 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const soleAdmin = await createTestUser({ role: 'admin' });
     const staleActor = await createTestUser({ role: 'employee' });
     actingAs({ id: staleActor.id, role: 'admin', email: staleActor.email, fullName: staleActor.fullName });
-    await expect(updateUser(soleAdmin.id, { role: 'employee' })).rejects.toThrow(/access has changed/i);
-    await expect(updateUser(soleAdmin.id, { isActive: false })).rejects.toThrow(/access has changed/i);
+    await expectFailure(updateUser(soleAdmin.id, { role: 'employee' }), 'forbidden', /access has changed/i);
+    await expectFailure(updateUser(soleAdmin.id, { isActive: false }), 'forbidden', /access has changed/i);
     expect(await activeAdminCount()).toBe(1);
 
     // (b) With the fresh check in front, the last-admin count only matters when two admins demote
@@ -249,9 +249,10 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const first = updateUser(otherAdmin.id, { role: 'employee' });
     actingAs(asFake(otherAdmin));
     const second = updateUser(soleAdmin.id, { role: 'employee' });
-    const results = await Promise.allSettled([first, second]);
+    const results = await Promise.all([first, second]); // ActionResults; an unexpected throw fails the test
 
-    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.find((r) => !r.ok)).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/last active admin|access has changed/i) });
     expect(await activeAdminCount()).toBe(1);
   });
 
@@ -368,8 +369,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const db = getTestDb();
 
     actingAs(asFake(admin));
-    const result = await adminResetPassword({ targetUserId: target.id, newPassword: 'BrandNewPass123!' });
-    expect(result.success).toBe(true);
+    await expectOk(adminResetPassword({ targetUserId: target.id, newPassword: 'BrandNewPass123!' }));
 
     const [updated] = await db.select({ sessionVersion: schema.users.sessionVersion }).from(schema.users).where(eq(schema.users.id, target.id));
     expect(updated.sessionVersion).toBe((target.sessionVersion ?? 1) + 1);

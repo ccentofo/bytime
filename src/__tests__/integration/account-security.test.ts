@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
 import { encrypt } from '@/lib/encryption';
 import { hashRecoveryCode } from '@/lib/totp';
-import { getTestDb, createTestUser, cleanupTestData } from './helpers';
+import { getTestDb, createTestUser, cleanupTestData, expectFailure } from './helpers';
 
 /**
  * feature-plan-launch-blockers.md P3 / §9 "Account security" (database scenarios). Tenant resolution points the
@@ -53,16 +53,14 @@ describe('account security (P3)', () => {
 
   it('MFA setup without the current password is refused; MFA stays off', async () => {
     const user = await userWithPassword();
-    const result = await completeMFASetup({ pendingSecret: 'JBSWY3DPEHPK3PXP', code: '000000', currentPassword: '' });
-    expect(result.success).toBe(false);
+    await expectFailure(completeMFASetup({ pendingSecret: 'JBSWY3DPEHPK3PXP', code: '000000', currentPassword: '' }), 'validation', /incorrect/i);
     const [row] = await getTestDb().select().from(schema.users).where(eq(schema.users.id, user.id));
     expect(row.totpEnabled).toBe(false);
   });
 
   it('MFA setup on an account with no password → "Set a password first"', async () => {
     await userWithPassword({ passwordHash: null });
-    await expect(completeMFASetup({ pendingSecret: 'JBSWY3DPEHPK3PXP', code: '000000', currentPassword: 'x' }))
-      .resolves.toEqual({ success: false, error: 'Set a password first.' });
+    await expectFailure(completeMFASetup({ pendingSecret: 'JBSWY3DPEHPK3PXP', code: '000000', currentPassword: 'x' }), 'validation', /^Set a password first\.$/);
   });
 
   it('two concurrent sign-ins with the same recovery code: exactly one succeeds', async () => {
@@ -82,12 +80,9 @@ describe('account security (P3)', () => {
   it('changePassword: the 6th attempt after 5 bad passwords is refused even with the right password', async () => {
     const user = await userWithPassword();
     for (let i = 0; i < 5; i++) {
-      const r = await changePassword({ currentPassword: `wrong-${i}`, newPassword: 'BrandNewPass123!' });
-      expect(r).toEqual({ success: false, error: 'Current password is incorrect.' });
+      await expectFailure(changePassword({ currentPassword: `wrong-${i}`, newPassword: 'BrandNewPass123!' }), 'validation', /^Current password is incorrect\.$/);
     }
-    const sixth = await changePassword({ currentPassword: PASSWORD, newPassword: 'BrandNewPass123!' });
-    expect(sixth.success).toBe(false);
-    expect(sixth.error).toMatch(/too many failed attempts/i);
+    await expectFailure(changePassword({ currentPassword: PASSWORD, newPassword: 'BrandNewPass123!' }), 'validation', /too many failed attempts/i);
     const [row] = await getTestDb().select().from(schema.users).where(eq(schema.users.id, user.id));
     expect(await bcrypt.compare(PASSWORD, row.passwordHash!)).toBe(true); // unchanged
   });
@@ -95,11 +90,9 @@ describe('account security (P3)', () => {
   it('disableMFA: the 6th attempt after 5 bad passwords is refused; MFA stays on', async () => {
     const user = await userWithPassword({ totpEnabled: true, totpSecret: encrypt('JBSWY3DPEHPK3PXP') });
     for (let i = 0; i < 5; i++) {
-      expect((await disableMFA(`wrong-${i}`)).success).toBe(false);
+      await expectFailure(disableMFA(`wrong-${i}`), 'validation', /incorrect/i);
     }
-    const sixth = await disableMFA(PASSWORD);
-    expect(sixth.success).toBe(false);
-    expect(sixth.error).toMatch(/too many failed attempts/i);
+    await expectFailure(disableMFA(PASSWORD), 'validation', /too many failed attempts/i);
     const [row] = await getTestDb().select().from(schema.users).where(eq(schema.users.id, user.id));
     expect(row.totpEnabled).toBe(true);
   });

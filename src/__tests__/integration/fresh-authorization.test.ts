@@ -71,9 +71,7 @@ describe('Fresh authorization for sensitive actions (R2-8)', () => {
     const target = await createTestUser({ role: 'employee' });
     actingAsStale(demoted, 'admin'); // stale session: still claims admin
 
-    await expect(
-      adminResetPassword({ targetUserId: target.id, newPassword: 'NewPassword123!' })
-    ).rejects.toThrow(/access has changed/i);
+    await expectFailure(adminResetPassword({ targetUserId: target.id, newPassword: 'NewPassword123!' }), 'forbidden', /access has changed/i);
   });
 
   it('adminResetPassword denies a session claiming admin whose DB row has been deactivated', async () => {
@@ -83,9 +81,7 @@ describe('Fresh authorization for sensitive actions (R2-8)', () => {
     const target = await createTestUser({ role: 'employee' });
     actingAsStale(deactivatedAdmin, 'admin');
 
-    await expect(
-      adminResetPassword({ targetUserId: target.id, newPassword: 'NewPassword123!' })
-    ).rejects.toThrow(/access has changed/i);
+    await expectFailure(adminResetPassword({ targetUserId: target.id, newPassword: 'NewPassword123!' }), 'forbidden', /access has changed/i);
 
     const [row] = await db.select({ passwordHash: schema.users.passwordHash }).from(schema.users).where(eq(schema.users.id, target.id));
     expect(row.passwordHash).not.toBeNull(); // unchanged — the reset never happened

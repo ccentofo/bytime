@@ -14,6 +14,7 @@ import {
 } from '@mantine/core';
 import { IconMail, IconCheck, IconArrowLeft } from '@tabler/icons-react';
 import { requestPasswordReset } from '@/server/actions/password-reset';
+import { runAction } from '@/lib/run-action';
 import { Logo } from '@/components/brand/Logo';
 
 export function ForgotPasswordForm() {
@@ -27,11 +28,11 @@ export function ForgotPasswordForm() {
     setError('');
     setLoading(true);
 
-    const result = await requestPasswordReset(email);
+    const result = await runAction(requestPasswordReset(email), { silent: true });
 
     setLoading(false);
 
-    if (result.error) {
+    if (!result.ok) {
       setError(result.error);
     } else {
       setSent(true);

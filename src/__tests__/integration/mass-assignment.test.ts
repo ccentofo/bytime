@@ -1,7 +1,13 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
-import { getTestDb, createTestUser, cleanupTestData } from './helpers';
+import {
+  getTestDb,
+  createTestUser,
+  cleanupTestData,
+  expectOk,
+  expectFailure,
+} from './helpers';
 
 // ---------------------------------------------------------------------------
 // R2-6: mass assignment. Client objects were spread into DB writes, so a caller
@@ -74,11 +80,11 @@ describe('Mass assignment is blocked (R2-6)', () => {
     const userB = await createTestUser({ role: 'employee' });
     actingAs(userA);
 
-    await updateNotificationPreferences({
+    await expectOk(updateNotificationPreferences({
       emailOnSubmit: false,
       // @ts-expect-error — simulating a caller sending an extra field the type doesn't declare.
       userId: userB.id,
-    });
+    }));
 
     const rowsA = await db.select().from(schema.notificationPreferences).where(eq(schema.notificationPreferences.userId, userA.id));
     const rowsB = await db.select().from(schema.notificationPreferences).where(eq(schema.notificationPreferences.userId, userB.id));
@@ -95,13 +101,13 @@ describe('Mass assignment is blocked (R2-6)', () => {
     const target = await createTestUser({ role: 'employee', passwordHash: 'original-hash', totpEnabled: false });
     actingAs(admin);
 
-    await updateUser(target.id, {
+    await expectOk(updateUser(target.id, {
       fullName: 'Updated Name',
       // @ts-expect-error — simulating a caller sending extra fields the type doesn't declare.
       passwordHash: 'attacker-controlled-hash',
       sessionVersion: 999,
       totpEnabled: true,
-    });
+    }));
 
     const [row] = await db.select().from(schema.users).where(eq(schema.users.id, target.id));
     expect(row.fullName).toBe('Updated Name');
@@ -116,9 +122,7 @@ describe('Mass assignment is blocked (R2-6)', () => {
     const target = await createTestUser({ role: 'employee' });
     actingAs(admin);
 
-    await expect(
-      updateUser(target.id, { role: 'superadmin' as any })
-    ).rejects.toThrow();
+    await expectFailure(updateUser(target.id, { role: 'superadmin' as any }), 'validation', /Role must be one of/);
   });
 
   it('updateUser normalizes email (lowercase, trimmed)', async () => {
@@ -128,7 +132,7 @@ describe('Mass assignment is blocked (R2-6)', () => {
     const target = await createTestUser({ role: 'employee' });
     actingAs(admin);
 
-    await updateUser(target.id, { email: '  MixedCase@Example.COM  ' });
+    await expectOk(updateUser(target.id, { email: '  MixedCase@Example.COM  ' }));
 
     const [row] = await db.select().from(schema.users).where(eq(schema.users.id, target.id));
     expect(row.email).toBe('mixedcase@example.com');
@@ -141,9 +145,7 @@ describe('Mass assignment is blocked (R2-6)', () => {
     actingAs(soleAdmin);
 
     // Postgres would coerce the string "false" to false; the strict `=== false` guards wouldn't.
-    await expect(
-      updateUser(soleAdmin.id, { isActive: 'false' as unknown as boolean })
-    ).rejects.toThrow(/must be true or false/);
+    await expectFailure(updateUser(soleAdmin.id, { isActive: 'false' as unknown as boolean }), 'validation', /must be true or false/);
 
     const [row] = await db.select({ isActive: schema.users.isActive }).from(schema.users).where(eq(schema.users.id, soleAdmin.id));
     expect(row.isActive).toBe(true);
@@ -153,9 +155,7 @@ describe('Mass assignment is blocked (R2-6)', () => {
     await cleanupTestData();
     const user = await createTestUser({ role: 'employee' });
     actingAs(user);
-    await expect(
-      updateNotificationPreferences({ emailOnSubmit: 'false' as unknown as boolean })
-    ).rejects.toThrow(/Invalid value/);
+    await expectFailure(updateNotificationPreferences({ emailOnSubmit: 'false' as unknown as boolean }), 'validation', /Invalid value/);
   });
 
   it('reactivating a user counts against the plan seat limit', async () => {
@@ -167,7 +167,7 @@ describe('Mass assignment is blocked (R2-6)', () => {
     const parked = await createTestUser({ role: 'employee', isActive: false });
     actingAs(admin);
 
-    await expect(updateUser(parked.id, { isActive: true })).rejects.toThrow(/plan allows 10 active users/);
+    await expectFailure(updateUser(parked.id, { isActive: true }), 'validation', /plan allows 10 active users/);
 
     const [row] = await db.select({ isActive: schema.users.isActive }).from(schema.users).where(eq(schema.users.id, parked.id));
     expect(row.isActive).toBe(false);
@@ -176,7 +176,7 @@ describe('Mass assignment is blocked (R2-6)', () => {
     const someone = (await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.role, 'employee')))
       .find((u) => u.id !== parked.id)!;
     await db.update(schema.users).set({ isActive: false }).where(eq(schema.users.id, someone.id));
-    await updateUser(parked.id, { isActive: true });
+    await expectOk(updateUser(parked.id, { isActive: true }));
     const [after] = await db.select({ isActive: schema.users.isActive }).from(schema.users).where(eq(schema.users.id, parked.id));
     expect(after.isActive).toBe(true);
   });

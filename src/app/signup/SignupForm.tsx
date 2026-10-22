@@ -7,6 +7,7 @@ import {
 import { IconAlertCircle, IconCheck } from '@tabler/icons-react';
 import { Logo } from '@/components/brand/Logo';
 import { startSignup } from '@/server/actions/signup';
+import { runAction } from '@/lib/run-action';
 import { slugify } from '@/lib/tenant/slugify';
 
 export function SignupForm({ errorParam }: { errorParam?: string }) {
@@ -54,12 +55,12 @@ export function SignupForm({ errorParam }: { errorParam?: string }) {
     // D8: capture the signer's browser timezone so the new tenant's workspace starts configured
     // for the right zone instead of the generic default. Best-effort — undefined if unsupported.
     const timezone = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined;
-    const result = await startSignup({ companyName, email, slug: slug || undefined, timezone, termsAccepted });
+    const result = await runAction(startSignup({ companyName, email, slug: slug || undefined, timezone, termsAccepted }), { silent: true });
     setLoading(false);
-    if (result.success) {
+    if (result.ok) {
       setSuccess(true);
     } else {
-      setError(result.error ?? 'Something went wrong. Please try again.');
+      setError(result.error);
     }
   }
 

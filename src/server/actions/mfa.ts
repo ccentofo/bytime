@@ -12,6 +12,8 @@ import {
   generateRecoveryCodes,
   hashRecoveryCode,
 } from '@/lib/totp';
+import { UserFacingError } from '@/lib/errors';
+import { userAction, type ActionResult } from '@/lib/action-result';
 
 // ---------------------------------------------------------------------------
 // MFA Setup — all self-only. MFA login verification itself lives in auth.ts's
@@ -42,73 +44,77 @@ export async function completeMFASetup(data: {
   pendingSecret: string;
   code: string;
   currentPassword: string;
-}): Promise<{ success: boolean; recoveryCodes?: string[]; error?: string }> {
-  const actor = await requireSession();
-  const db = await getDbForAuth();
+}): Promise<ActionResult<{ recoveryCodes: string[] }>> {
+  return userAction(async () => {
+    const actor = await requireSession();
+    const db = await getDbForAuth();
 
-  const [user] = await db
-    .select({ passwordHash: users.passwordHash })
-    .from(users)
-    .where(eq(users.id, actor.id));
-  const reauth = await verifyCurrentPassword(db, actor.email, user?.passwordHash ?? null, data.currentPassword);
-  if (!reauth.ok) {
-    return { success: false, error: reauth.error };
-  }
+    const [user] = await db
+      .select({ passwordHash: users.passwordHash })
+      .from(users)
+      .where(eq(users.id, actor.id));
+    const reauth = await verifyCurrentPassword(db, actor.email, user?.passwordHash ?? null, data.currentPassword);
+    if (!reauth.ok) {
+      throw new UserFacingError(reauth.error);
+    }
 
-  // Verify the code against the pending secret
-  const isValid = verifyTOTPCode(data.pendingSecret, data.code);
-  if (!isValid) {
-    return { success: false, error: 'Invalid code. Please try again.' };
-  }
+    // Verify the code against the pending secret
+    const isValid = verifyTOTPCode(data.pendingSecret, data.code);
+    if (!isValid) {
+      throw new UserFacingError('Invalid code. Please try again.');
+    }
 
-  // Generate recovery codes
-  const plainCodes = generateRecoveryCodes();
-  const hashedCodes = plainCodes.map(hashRecoveryCode);
+    // Generate recovery codes
+    const plainCodes = generateRecoveryCodes();
+    const hashedCodes = plainCodes.map(hashRecoveryCode);
 
-  // Encrypt and save
-  const encryptedSecret = encrypt(data.pendingSecret);
-  const encryptedRecoveryCodes = encrypt(JSON.stringify(hashedCodes));
+    // Encrypt and save
+    const encryptedSecret = encrypt(data.pendingSecret);
+    const encryptedRecoveryCodes = encrypt(JSON.stringify(hashedCodes));
 
-  await db.update(users)
-    .set({
-      totpSecret: encryptedSecret,
-      totpEnabled: true,
-      totpRecoveryCodes: encryptedRecoveryCodes,
-      updatedAt: new Date(),
-    })
-    .where(eq(users.id, actor.id));
+    await db.update(users)
+      .set({
+        totpSecret: encryptedSecret,
+        totpEnabled: true,
+        totpRecoveryCodes: encryptedRecoveryCodes,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, actor.id));
 
-  return { success: true, recoveryCodes: plainCodes };
+    return { recoveryCodes: plainCodes };
+  });
 }
 
 /**
  * Disable MFA — requires current password confirmation.
  */
-export async function disableMFA(currentPassword: string): Promise<{ success: boolean; error?: string }> {
-  const actor = await requireSession();
-  const db = await getDbForAuth();
+export async function disableMFA(currentPassword: string): Promise<ActionResult<void>> {
+  return userAction(async () => {
+    const actor = await requireSession();
+    const db = await getDbForAuth();
 
-  const [user] = await db
-    .select({ passwordHash: users.passwordHash })
-    .from(users)
-    .where(eq(users.id, actor.id));
+    const [user] = await db
+      .select({ passwordHash: users.passwordHash })
+      .from(users)
+      .where(eq(users.id, actor.id));
 
-  // Lockout checked before bcrypt; a wrong password counts toward the sign-in lockout (shared counter, intended).
-  const reauth = await verifyCurrentPassword(db, actor.email, user?.passwordHash ?? null, currentPassword);
-  if (!reauth.ok) {
-    return { success: false, error: reauth.error };
-  }
+    // Lockout checked before bcrypt; a wrong password counts toward the sign-in lockout (shared counter, intended).
+    const reauth = await verifyCurrentPassword(db, actor.email, user?.passwordHash ?? null, currentPassword);
+    if (!reauth.ok) {
+      throw new UserFacingError(reauth.error);
+    }
 
-  await db.update(users)
-    .set({
-      totpSecret: null,
-      totpEnabled: false,
-      totpRecoveryCodes: null,
-      updatedAt: new Date(),
-    })
-    .where(eq(users.id, actor.id));
+    await db.update(users)
+      .set({
+        totpSecret: null,
+        totpEnabled: false,
+        totpRecoveryCodes: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, actor.id));
 
-  return { success: true };
+    return;
+  });
 }
 
 /**

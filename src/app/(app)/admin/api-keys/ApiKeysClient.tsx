@@ -17,6 +17,7 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
+import { runAction } from '@/lib/run-action';
 import { IconPlus, IconTrash, IconBan, IconCheck, IconCopy, IconKey } from '@tabler/icons-react';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
@@ -56,31 +57,32 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
 
   function handleCreate() {
     startTransition(async () => {
-      try {
-        setFormError(null);
-        if (!form.name.trim()) {
-          setFormError('Name is required.');
-          return;
-        }
-        const result = await createApiKey({
-          name: form.name.trim(),
-          permissions: form.permissions as 'read' | 'read-write',
-        });
-        setNewKeyValue(result.key);
-        setCreateModalOpen(false);
-        setNewKeyModalOpen(true);
-        setForm({ name: '', permissions: 'read' });
-        const refreshed = await getApiKeys();
-        setKeys(refreshed as ApiKey[]);
-      } catch (error) {
-        setFormError(String(error));
+      setFormError(null);
+      if (!form.name.trim()) {
+        setFormError('Name is required.');
+        return;
       }
+      const result = await runAction(createApiKey({
+        name: form.name.trim(),
+        permissions: form.permissions as 'read' | 'read-write',
+      }), { silent: true });
+      if (!result.ok) {
+        setFormError(result.error);
+        return;
+      }
+      setNewKeyValue(result.data.key);
+      setCreateModalOpen(false);
+      setNewKeyModalOpen(true);
+      setForm({ name: '', permissions: 'read' });
+      const refreshed = await getApiKeys();
+      setKeys(refreshed as ApiKey[]);
     });
   }
 
   function handleRevoke(key: ApiKey) {
     startTransition(async () => {
-      await revokeApiKey(key.id);
+      const result = await runAction(revokeApiKey(key.id), { errorTitle: 'Couldn’t revoke key' });
+      if (!result.ok) return;
       const refreshed = await getApiKeys();
       setKeys(refreshed as ApiKey[]);
       notifications.show({ title: 'Key Revoked', message: `"${key.name}" has been revoked.`, color: 'warning' });
@@ -90,7 +92,8 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
 
   function handleDelete(key: ApiKey) {
     startTransition(async () => {
-      await deleteApiKey(key.id);
+      const result = await runAction(deleteApiKey(key.id), { errorTitle: 'Couldn’t delete key' });
+      if (!result.ok) return;
       const refreshed = await getApiKeys();
       setKeys(refreshed as ApiKey[]);
       notifications.show({ title: 'Key Deleted', message: `"${key.name}" has been deleted.`, color: 'red' });

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import crypto from 'crypto';
 import { eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
-import { getTestDb, createTestUser, cleanupTestData, flushAfter } from './helpers';
+import { getTestDb, createTestUser, cleanupTestData, flushAfter, expectOk, expectFailure } from './helpers';
 
 /**
  * feature-plan-launch-blockers.md P1 §4.2 / §9 "Reset" (database scenarios).
@@ -45,7 +45,7 @@ describe('password reset (P1)', () => {
 
   it('requested on a workspace host, the link points at that workspace host', async () => {
     const admin = await createTestUser({ role: 'admin' });
-    await expect(requestPasswordReset(admin.email)).resolves.toEqual({ success: true });
+    await expectOk(requestPasswordReset(admin.email));
     await flushAfter();
     expect(sent).toHaveBeenCalledTimes(1);
     const arg = sent.mock.calls[0][0];
@@ -57,8 +57,7 @@ describe('password reset (P1)', () => {
     const admin = await createTestUser({ role: 'admin' });
     await issueToken(admin.email, 'tok-billing', new Date(Date.now() + 60 * 60_000));
     await expect(verifyResetToken(admin.email, 'tok-billing')).resolves.toEqual({ valid: true });
-    await expect(resetPassword({ email: admin.email, token: 'tok-billing', newPassword: 'NewPassword123!' }))
-      .resolves.toEqual({ success: true });
+    await expectOk(resetPassword({ email: admin.email, token: 'tok-billing', newPassword: 'NewPassword123!' }));
   });
 
   it('two concurrent resets with the same token: exactly one succeeds', async () => {
@@ -68,8 +67,8 @@ describe('password reset (P1)', () => {
       resetPassword({ email: user.email, token: 'tok-race', newPassword: 'FirstPassword123!' }),
       resetPassword({ email: user.email, token: 'tok-race', newPassword: 'SecondPassword123!' }),
     ]);
-    expect(results.filter((r) => r.success)).toHaveLength(1);
-    expect(results.filter((r) => !r.success)).toHaveLength(1);
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.filter((r) => !r.ok)).toEqual([expect.objectContaining({ ok: false, code: 'validation', error: expect.stringMatching(/Invalid or expired/) })]);
     const [row] = await getTestDb().select().from(schema.users).where(eq(schema.users.id, user.id));
     expect(row.sessionVersion).toBe(user.sessionVersion + 1); // bumped exactly once
   });
@@ -77,8 +76,7 @@ describe('password reset (P1)', () => {
   it('an expired token is refused and the password is unchanged', async () => {
     const user = await createTestUser();
     await issueToken(user.email, 'tok-expired', new Date(Date.now() - 1000));
-    const result = await resetPassword({ email: user.email, token: 'tok-expired', newPassword: 'NewPassword123!' });
-    expect(result.success).toBe(false);
+    await expectFailure(resetPassword({ email: user.email, token: 'tok-expired', newPassword: 'NewPassword123!' }), 'validation', /Invalid or expired/);
     const [row] = await getTestDb().select().from(schema.users).where(eq(schema.users.id, user.id));
     expect(row.passwordHash).toBe(user.passwordHash);
   });
@@ -87,13 +85,12 @@ describe('password reset (P1)', () => {
     const user = await createTestUser();
     await getTestDb().update(schema.users).set({ sessionVersion: 7 }).where(eq(schema.users.id, user.id));
     await issueToken(user.email, 'tok-ok', new Date(Date.now() + 60 * 60_000));
-    await expect(resetPassword({ email: user.email, token: 'tok-ok', newPassword: 'NewPassword123!' }))
-      .resolves.toEqual({ success: true });
+    await expectOk(resetPassword({ email: user.email, token: 'tok-ok', newPassword: 'NewPassword123!' }));
     const [row] = await getTestDb().select().from(schema.users).where(eq(schema.users.id, user.id));
     expect(row.sessionVersion).toBe(8);
     const [token] = await getTestDb().select().from(schema.passwordResetTokens).where(eq(schema.passwordResetTokens.tokenHash, hash('tok-ok')));
     expect(token.usedAt).not.toBeNull();
     // Reusing the token fails.
-    expect((await resetPassword({ email: user.email, token: 'tok-ok', newPassword: 'Another123!!' })).success).toBe(false);
+    await expectFailure(resetPassword({ email: user.email, token: 'tok-ok', newPassword: 'Another123!!' }), 'validation', /Invalid or expired/);
   });
 });

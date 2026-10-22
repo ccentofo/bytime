@@ -16,6 +16,7 @@ import {
 } from '@mantine/core';
 import { IconCheck, IconAlertCircle, IconArrowLeft, IconLock } from '@tabler/icons-react';
 import { verifyResetToken, resetPassword } from '@/server/actions/password-reset';
+import { runAction } from '@/lib/run-action';
 import { Logo } from '@/components/brand/Logo';
 
 function ResetPasswordForm() {
@@ -67,17 +68,12 @@ function ResetPasswordForm() {
 
     setLoading(true);
 
-    try {
-      const result = await resetPassword({ email, token, newPassword: password });
-      if (result.success) {
-        setSuccess(true);
-      } else {
-        setError(result.error ?? 'An error occurred. Please try again.');
-      }
-    } catch {
-      setError('An error occurred. Please try again.');
-    } finally {
-      setLoading(false);
+    const result = await runAction(resetPassword({ email, token, newPassword: password }), { silent: true });
+    setLoading(false);
+    if (result.ok) {
+      setSuccess(true);
+    } else {
+      setError(result.error);
     }
   }
 

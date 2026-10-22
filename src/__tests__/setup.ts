@@ -37,8 +37,11 @@ vi.mock('@/auth', () => ({
   }),
 }));
 
-// Mock session module
+// Mock session module. AuthorizationError is real-shaped: userAction (src/lib/action-result.ts) maps it by instanceof.
 vi.mock('@/lib/session', () => ({
+  AuthorizationError: class AuthorizationError extends Error {
+    constructor(public kind: 'unauthenticated' | 'forbidden', message: string) { super(message); this.name = 'AuthorizationError'; }
+  },
   getSessionUser: vi.fn().mockResolvedValue({
     id: 'test-user-id',
     email: 'test@bytime.dev',
