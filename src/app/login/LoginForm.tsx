@@ -52,64 +52,67 @@ export function LoginForm() {
       }
     }
 
-    // Show loading IMMEDIATELY — before any async calls
+    // Show loading IMMEDIATELY — before any async calls. try/finally: a throw from checkLockout or signIn
+    // (e.g. an unreachable workspace) must never leave the button spinning (feature-plan-launch-blockers.md P2).
     setLoading(true);
-
-    // Client-side lockout check (server also enforces this)
-    const lockoutInfo = await checkLockout(email.toLowerCase().trim());
-    if (lockoutInfo?.isLocked) {
-      setLoading(false);
-      setLockoutMessage(
-        `Account is temporarily locked due to too many failed login attempts. Please try again in ${lockoutInfo.minutesRemaining} minute${lockoutInfo.minutesRemaining !== 1 ? 's' : ''}.`
-      );
-      return;
-    }
-
-    const result = await signIn('credentials', {
-      email: email.toLowerCase().trim(),
-      password,
-      mfaCode: mfaRequired ? (useRecoveryCode ? recoveryCode.trim() : mfaCode.trim()) : undefined,
-      redirect: false,
-    });
-
-    setLoading(false);
-
-    if (result?.code === 'mfa_required') {
-      setMfaRequired(true);
-      return;
-    }
-
-    if (result?.code === 'mfa_invalid') {
-      setError('Invalid code. Please try again.');
-      setMfaCode('');
-      return;
-    }
-
-    if (result?.error) {
-      // Check updated lockout status after this failure
-      const updatedLockout = await checkLockout(email.toLowerCase().trim());
-      const attempts = updatedLockout?.failedAttempts ?? 0;
-      setFailedCount(attempts);
-
-      if (updatedLockout?.isLocked) {
+    try {
+      // Client-side lockout check (server also enforces this)
+      const lockoutInfo = await checkLockout(email.toLowerCase().trim());
+      if (lockoutInfo?.isLocked) {
         setLockoutMessage(
-          `Account is temporarily locked due to too many failed login attempts. Please try again in ${updatedLockout.minutesRemaining} minute${updatedLockout.minutesRemaining !== 1 ? 's' : ''}.`
+          `Account is temporarily locked due to too many failed login attempts. Please try again in ${lockoutInfo.minutesRemaining} minute${lockoutInfo.minutesRemaining !== 1 ? 's' : ''}.`
         );
-        setError('');
-      } else {
-        const remaining = 5 - attempts;
-        if (remaining <= 2 && remaining > 0) {
-          setError(`Invalid email or password. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining before account lockout.`);
-        } else {
-          setError('Invalid email or password.');
-        }
+        return;
       }
-      return;
-    }
 
-    // Success — a session now exists (MFA, if enabled, already passed).
-    router.push('/timesheet');
-    router.refresh();
+      const result = await signIn('credentials', {
+        email: email.toLowerCase().trim(),
+        password,
+        mfaCode: mfaRequired ? (useRecoveryCode ? recoveryCode.trim() : mfaCode.trim()) : undefined,
+        redirect: false,
+      });
+
+      if (result?.code === 'mfa_required') {
+        setMfaRequired(true);
+        return;
+      }
+
+      if (result?.code === 'mfa_invalid') {
+        setError('Invalid code. Please try again.');
+        setMfaCode('');
+        return;
+      }
+
+      if (result?.error) {
+        // Check updated lockout status after this failure
+        const updatedLockout = await checkLockout(email.toLowerCase().trim());
+        const attempts = updatedLockout?.failedAttempts ?? 0;
+        setFailedCount(attempts);
+
+        if (updatedLockout?.isLocked) {
+          setLockoutMessage(
+            `Account is temporarily locked due to too many failed login attempts. Please try again in ${updatedLockout.minutesRemaining} minute${updatedLockout.minutesRemaining !== 1 ? 's' : ''}.`
+          );
+          setError('');
+        } else {
+          const remaining = 5 - attempts;
+          if (remaining <= 2 && remaining > 0) {
+            setError(`Invalid email or password. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining before account lockout.`);
+          } else {
+            setError('Invalid email or password.');
+          }
+        }
+        return;
+      }
+
+      // Success — a session now exists (MFA, if enabled, already passed).
+      router.push('/timesheet');
+      router.refresh();
+    } catch {
+      setError('Something went wrong signing in. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (

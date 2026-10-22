@@ -23,6 +23,11 @@ export function tenantBaseUrl(slug: string): string {
   return `${apexUrl.protocol}//${slug}.${ROOT_DOMAIN}${apexUrl.port ? `:${apexUrl.port}` : ''}`;
 }
 
+/** The workspace root domain (server-side value of APP_ROOT_DOMAIN), e.g. for "your-company.<root>" hints. */
+export function rootDomain(): string {
+  return ROOT_DOMAIN;
+}
+
 /** The apex (marketing/signup) base URL, without a trailing slash. */
 export function apexBaseUrl(): string {
   return (process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000').replace(/\/+$/, '');

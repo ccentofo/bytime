@@ -1,10 +1,26 @@
 import { Container, Title, Text, Button, Group, Stack, Paper, SimpleGrid, ThemeIcon, Badge, Divider, Center, Anchor } from '@mantine/core';
 import { IconClock, IconShieldCheck, IconCloudLock, IconReportAnalytics, IconUsers, IconDeviceFloppy, IconApi, IconMoon } from '@tabler/icons-react';
 import React from 'react';
+import { redirect } from 'next/navigation';
 import { Logo } from '@/components/brand/Logo';
 import { ROLE_COLOR } from '@/lib/ui/status-colors';
+import { getTenantSlug } from '@/lib/tenant/context';
 
-export default function LandingPage() {
+export const dynamic = 'force-dynamic';
+
+export default async function LandingPage() {
+  // feature-plan-launch-blockers.md P2: the marketing page is the APEX. On a workspace host, "/" is the app.
+  let slug = '';
+  try {
+    slug = await getTenantSlug();
+  } catch {
+    slug = ''; // host/header mismatch: nothing workspace-specific to show — render the public page
+  }
+  if (slug) redirect('/timesheet');
+
+  // The demo lives on its own workspace; without a configured URL there is nothing to link to.
+  const demoUrl = process.env.NEXT_PUBLIC_DEMO_URL || null;
+
   return (
     <Container size="lg" py="xl">
       {/* Hero Section */}
@@ -20,9 +36,11 @@ export default function LandingPage() {
             <Button component="a" href="/signup" size="lg" radius="md">
               Start Free Trial
             </Button>
-            <Button component="a" href="/login" size="lg" variant="default" radius="md">
-              Try the Demo
-            </Button>
+            {demoUrl && (
+              <Button component="a" href={demoUrl} size="lg" variant="default" radius="md">
+                Try the Demo
+              </Button>
+            )}
             <Button component="a" href="#features" size="lg" variant="subtle" radius="md">
               See Features
             </Button>
@@ -32,30 +50,32 @@ export default function LandingPage() {
 
       <Divider my="xl" />
 
-      {/* Demo Credentials */}
-      <Paper withBorder p="lg" radius="md" mb="xl">
-        <Title order={3} mb="md" ta="center">🎯 Demo Credentials</Title>
-        <Text size="sm" c="dimmed" ta="center" mb="md">
-          Try different roles to see the full experience. All accounts use password: <strong>Password123!</strong>
-        </Text>
-        <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="md">
-          <Paper withBorder p="md" radius="md">
-            <Badge color={ROLE_COLOR.admin} mb="xs">Admin</Badge>
-            <Text size="sm" fw={600}>admin@cadenzpoint.dev</Text>
-            <Text size="xs" c="dimmed">Full system access — manage users, contracts, approvals</Text>
-          </Paper>
-          <Paper withBorder p="md" radius="md">
-            <Badge color={ROLE_COLOR.supervisor} mb="xs">Supervisor</Badge>
-            <Text size="sm" fw={600}>sarah.wilson@cadenzpoint.dev</Text>
-            <Text size="xs" c="dimmed">Review and approve employee timesheets</Text>
-          </Paper>
-          <Paper withBorder p="md" radius="md">
-            <Badge color={ROLE_COLOR.employee} mb="xs">Employee</Badge>
-            <Text size="sm" fw={600}>jane.smith@cadenzpoint.dev</Text>
-            <Text size="xs" c="dimmed">Enter time, submit for approval, view dashboard</Text>
-          </Paper>
-        </SimpleGrid>
-      </Paper>
+      {/* Demo Credentials — only when there is a demo workspace to use them on */}
+      {demoUrl && (
+        <Paper withBorder p="lg" radius="md" mb="xl">
+          <Title order={3} mb="md" ta="center">🎯 Demo Credentials</Title>
+          <Text size="sm" c="dimmed" ta="center" mb="md">
+            Try different roles to see the full experience. All accounts use password: <strong>Password123!</strong>
+          </Text>
+          <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="md">
+            <Paper withBorder p="md" radius="md">
+              <Badge color={ROLE_COLOR.admin} mb="xs">Admin</Badge>
+              <Text size="sm" fw={600}>admin@cadenzpoint.dev</Text>
+              <Text size="xs" c="dimmed">Full system access — manage users, contracts, approvals</Text>
+            </Paper>
+            <Paper withBorder p="md" radius="md">
+              <Badge color={ROLE_COLOR.supervisor} mb="xs">Supervisor</Badge>
+              <Text size="sm" fw={600}>sarah.wilson@cadenzpoint.dev</Text>
+              <Text size="xs" c="dimmed">Review and approve employee timesheets</Text>
+            </Paper>
+            <Paper withBorder p="md" radius="md">
+              <Badge color={ROLE_COLOR.employee} mb="xs">Employee</Badge>
+              <Text size="sm" fw={600}>jane.smith@cadenzpoint.dev</Text>
+              <Text size="xs" c="dimmed">Enter time, submit for approval, view dashboard</Text>
+            </Paper>
+          </SimpleGrid>
+        </Paper>
+      )}
 
       {/* Features Grid */}
       <div id="features">
@@ -136,9 +156,11 @@ export default function LandingPage() {
             <Button component="a" href="/signup" size="lg" radius="md">
               Start Free Trial →
             </Button>
-            <Button component="a" href="/login" size="lg" variant="default" radius="md">
-              Launch Demo
-            </Button>
+            {demoUrl && (
+              <Button component="a" href={demoUrl} size="lg" variant="default" radius="md">
+                Launch Demo
+              </Button>
+            )}
           </Group>
         </Stack>
       </Center>

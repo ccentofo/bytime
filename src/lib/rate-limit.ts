@@ -75,11 +75,16 @@ export function checkRateLimit(
  * Checks x-forwarded-for (reverse proxy), x-real-ip, then falls back to 'unknown'.
  */
 export function getClientIp(request: Request): string {
-  const forwarded = request.headers.get('x-forwarded-for');
+  return getClientIpFromHeaders(request.headers);
+}
+
+/** Same as getClientIp, for server actions (which get `headers()`, not a Request). */
+export function getClientIpFromHeaders(headers: Pick<Headers, 'get'>): string {
+  const forwarded = headers.get('x-forwarded-for');
   if (forwarded) {
     return forwarded.split(',')[0].trim();
   }
-  const realIp = request.headers.get('x-real-ip');
+  const realIp = headers.get('x-real-ip');
   if (realIp) return realIp;
   return 'unknown';
 }
@@ -122,4 +127,13 @@ export function checkCronRateLimit(request: Request): Response | null {
   const ip = getClientIp(request);
   const result = checkRateLimit(`cron:${ip}`, 2, ONE_MINUTE);
   return result.allowed ? null : rateLimitResponse(result.retryAfterMs);
+}
+
+/**
+ * One shared budget for every "does this workspace name exist?" lookup — the signup availability check
+ * (/signup/check) and the apex workspace finder (goToWorkspace) — so neither can be used to enumerate faster.
+ */
+export function checkSlugLookupRateLimit(ip: string): { allowed: boolean; retryAfterMs: number } {
+  const result = checkRateLimit(`signup-check:${ip}`, 30, ONE_MINUTE); // 30/min
+  return { allowed: result.allowed, retryAfterMs: result.retryAfterMs };
 }

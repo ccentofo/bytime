@@ -74,6 +74,13 @@ const PUBLIC_ACTIONS: Record<string, { names: string[]; reason: string }> = {
       'Pre-login lockout banner: the client calls this before any authentication has ' +
       'happened, so there is no session yet. Read-only, keyed by email, no sensitive data.',
   },
+  'workspace-finder.ts': {
+    names: ['goToWorkspace'],
+    reason:
+      'Apex "Find your workspace" (launch-blockers P2): runs on the apex, where no session exists. ' +
+      'Read-only registry lookup; redirects only to <isValidSlug label>.<APP_ROOT_DOMAIN> + an exact ' +
+      'allowlisted path; shares the signup availability check\'s rate-limit budget.',
+  },
 };
 
 /**

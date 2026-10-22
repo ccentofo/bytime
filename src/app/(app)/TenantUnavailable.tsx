@@ -1,12 +1,14 @@
 import { Center, Stack, Title, Text, Anchor } from '@mantine/core';
 import type { TenantState } from '@/lib/tenant/context';
+import { rootDomain } from '@/lib/tenant/host';
 
 type Reason = Exclude<TenantState['kind'], 'full' | 'read_only' | 'billing_only' | 'policy_hold'>;
 
+// Server-rendered: rootDomain() reads the server-only APP_ROOT_DOMAIN.
 const COPY: Record<Reason, { title: string; body: string }> = {
   none: {
     title: 'No workspace selected',
-    body: 'Open your organization’s workspace URL (for example, your-company.example.com) to sign in.',
+    body: `Open your organization’s workspace URL (for example, your-company.${rootDomain()}) to sign in.`,
   },
   unknown: {
     title: 'Workspace not found',

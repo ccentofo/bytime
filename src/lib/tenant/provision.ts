@@ -13,12 +13,9 @@ import { addDays } from './lifecycle';
 import { withTenantLock } from '@/db/control-plane/locked';
 import { readTenant, updateTenantGuarded } from './lifecycle-store';
 
-const RESERVED_SLUGS = new Set(['www', 'app', 'api', 'admin', 'static', 'assets', 'mail', 'support']);
-
-export function isValidSlug(slug: string): boolean {
-  // DNS label: 1–63 chars, lowercase alphanumeric and hyphens, no leading/trailing hyphen.
-  return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(slug) && !RESERVED_SLUGS.has(slug);
-}
+// The slug rules live in a pure module (usable outside 'server-only' code); re-exported for existing importers.
+export { isValidSlug } from './slug-rules';
+import { isValidSlug } from './slug-rules';
 
 export type ProvisionInput = {
   slug: string;

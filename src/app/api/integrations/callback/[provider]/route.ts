@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyOAuthState } from '@/lib/integrations/oauth-state';
-import { isValidSlug } from '@/lib/tenant/provision';
+import { isValidSlug } from '@/lib/tenant/slug-rules';
 import { tenantBaseUrl } from '@/lib/tenant/host';
 
 /**

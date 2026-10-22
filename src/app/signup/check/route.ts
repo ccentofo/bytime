@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
+import { checkSlugLookupRateLimit, getClientIp } from '@/lib/rate-limit';
 import { checkSlugAvailable } from '@/server/actions/signup';
 import { slugify } from '@/lib/tenant/slugify';
 
 export async function GET(req: NextRequest) {
   const ip = getClientIp(req);
-  const limit = checkRateLimit(`signup-check:${ip}`, 30, 60 * 1000); // 30/min for availability checks
+  const limit = checkSlugLookupRateLimit(ip); // shared with the apex workspace finder
   if (!limit.allowed) {
     return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
   }

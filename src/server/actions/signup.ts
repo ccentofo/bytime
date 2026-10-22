@@ -6,7 +6,7 @@ import { headers } from 'next/headers';
 import { controlDb } from '@/db/control-plane';
 import { signups } from '@/db/control-plane/schema';
 import { getTenantBySlug } from '@/lib/tenant/registry';
-import { isValidSlug } from '@/lib/tenant/provision';
+import { isValidSlug } from '@/lib/tenant/slug-rules';
 import { sendSignupVerifyEmail } from '@/lib/email/send-signup';
 import { scheduleEmail } from '@/lib/email/schedule';
 import { apexBaseUrl } from '@/lib/tenant/host';
