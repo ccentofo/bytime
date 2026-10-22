@@ -1,4 +1,4 @@
-import { getDb } from '@/db';
+import { getDb, getDbForAuth } from '@/db';
 import { apiKeys, users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import crypto from 'crypto';
@@ -104,10 +104,11 @@ export async function validateApiKey(request: Request): Promise<ApiKeyInfo | Res
     );
   }
 
-  // Update lastUsedAt (fire-and-forget)
-  db.update(apiKeys)
+  // Update lastUsedAt (fire-and-forget). Credential bookkeeping, not business data: uses the auth client
+  // (allowed in read_only/billing_only), never a read client.
+  getDbForAuth().then((authDb) => authDb.update(apiKeys)
     .set({ lastUsedAt: new Date() })
-    .where(eq(apiKeys.id, key.id))
+    .where(eq(apiKeys.id, key.id)))
     .then(() => {})
     .catch(() => {});
 

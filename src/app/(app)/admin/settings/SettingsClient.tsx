@@ -202,6 +202,18 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
       </Paper>
 
       <Paper withBorder p="lg" radius="md" mb="xl">
+        <Title order={4} mb="md">Export Workspace Data</Title>
+        <Text size="sm" c="dimmed" mb="sm">
+          Download every record in your workspace — employees, contracts, CLINs/SLINs, charge
+          codes, and every timesheet revision — as a zip of CSV files, with a data dictionary and
+          a manifest. Available to admins at any time, including while read-only or suspended.
+        </Text>
+        <Button component="a" href="/api/export/workspace" variant="default">
+          Export all workspace data
+        </Button>
+      </Paper>
+
+      <Paper withBorder p="lg" radius="md" mb="xl">
         <Title order={4} mb="md">Pay Period Configuration</Title>
 
         {/* Pending change banner */}

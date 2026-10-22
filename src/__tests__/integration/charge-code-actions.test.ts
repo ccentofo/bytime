@@ -23,6 +23,8 @@ import {
 vi.mock('@/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/db')>()),
   getDb: async () => getTestDb(),
+  // Write actions obtain their client through the write gate (feature-plan-terms-compliance-fixes.md §5.1).
+  getDbForWrite: async () => getTestDb(),
 }));
 
 // R2-1: getSessionUser() now checks session.user.tenantSlug against the request's tenant

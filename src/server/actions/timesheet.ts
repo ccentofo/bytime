@@ -1,17 +1,16 @@
 'use server';
 
-import { getDb } from '@/db';
+import { getDb, getDbForWrite } from '@/db';
 import { timesheetEntries, userAssignments, clins, contracts, slins, indirectChargeCodes, chargeCodes, userChargeCodes, costClasses, timesheetPeriods } from '@/db/schema';
-import { eq, and, gte, lt, desc, sql } from 'drizzle-orm';
+import { eq, and, gte, lt, desc, sql, isNull } from 'drizzle-orm';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
 import { validateUUID, validateHours } from '@/lib/validation';
 import { requireSession, assertCanAccessEmployee } from '@/lib/session';
 import { isUniqueViolation } from '@/lib/db-errors';
-import { assertEntryDatesEditable, resolvePeriod } from '@/server/internal/periods';
+import { assertEntryDatesEditable, lockEmployeeTimesheet, resolvePeriod } from '@/server/internal/periods';
 import { configAt, existingPeriodLength } from '@/server/internal/pay-period-config';
 import { getPeriodStatusFor, type PeriodStatus } from '@/server/internal/periods';
 import type { PeriodConfig } from '@/lib/date-utils';
-import { getEffectiveConfigAt } from '@/server/actions/pay-period-config';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { getNumDaysInPeriod } from '@/lib/date-utils';
 import { addDays, diffDays, isAfter, isBefore, formatCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -172,6 +171,20 @@ async function revisionMapFor(userId: string, start: CalendarDate, numDays: numb
   return revisionMap;
 }
 
+type CellRef = { chargeCodeId?: string; clinId?: string; indirectCodeId?: string };
+
+/**
+ * The rows of one timesheet cell, matching the database's cell identity
+ * `COALESCE(charge_code_id, indirect_code_id, clin_id)` (the per-cell revision unique index). A legacy
+ * CLIN-only cell must not count charge-code rows that merely carry the same denormalized CLIN.
+ */
+function cellWhere(userId: string, cell: CellRef, entryDate: CalendarDate) {
+  const base = [eq(timesheetEntries.userId, userId), eq(timesheetEntries.entryDate, entryDate)];
+  if (cell.chargeCodeId) return and(...base, eq(timesheetEntries.chargeCodeId, cell.chargeCodeId));
+  if (cell.indirectCodeId) return and(...base, eq(timesheetEntries.indirectCodeId, cell.indirectCodeId), isNull(timesheetEntries.chargeCodeId));
+  return and(...base, eq(timesheetEntries.clinId, cell.clinId!), isNull(timesheetEntries.chargeCodeId), isNull(timesheetEntries.indirectCodeId));
+}
+
 /**
  * Batch save multiple timesheet entries in a single call, for the session user.
  * Direct entries carry chargeCodeId; the server looks up clinId/slinId and denormalizes them.
@@ -196,7 +209,7 @@ export async function saveTimesheetBatch(data: {
 }): Promise<Record<string, number>> {
   const actor = await requireSession();
   const userId = actor.id;
-  const db = await getDb();
+  const db = await getDbForWrite();
   const start = parseCalendarDate(data.periodStart);
   const today = await getWorkspaceToday();
   const newRevisions: Record<string, number> = {};
@@ -211,12 +224,6 @@ export async function saveTimesheetBatch(data: {
       throw new Error(`Invalid day index ${cell.dayIndex} for this pay period.`);
     }
   }
-
-  await assertEntryDatesEditable(
-    userId,
-    data.cells.map((cell) => addDays(start, cell.dayIndex)),
-    async (periodStart) => getNumDaysInPeriod(periodStart, await getEffectiveConfigAt(periodStart)),
-  );
 
   validateUUID(userId, 'User ID');
   for (const cell of data.cells) {
@@ -288,106 +295,121 @@ export async function saveTimesheetBatch(data: {
     }
   }
 
-  // Optimistic concurrency control
-  if (!data.skipConflictCheck) {
-    for (const cell of data.cells) {
-      if (cell.expectedRevision === undefined) continue;
-      const entryDate = addDays(start, cell.dayIndex);
-      const entryId = cell.chargeCodeId ?? cell.clinId ?? cell.indirectCodeId;
-      if (!entryId) continue;
-
-      const whereClause = cell.chargeCodeId
-        ? and(eq(timesheetEntries.userId, userId), eq(timesheetEntries.chargeCodeId, cell.chargeCodeId), eq(timesheetEntries.entryDate, entryDate))
-        : cell.clinId
-          ? and(eq(timesheetEntries.userId, userId), eq(timesheetEntries.clinId, cell.clinId), eq(timesheetEntries.entryDate, entryDate))
-          : and(eq(timesheetEntries.userId, userId), eq(timesheetEntries.indirectCodeId, cell.indirectCodeId!), eq(timesheetEntries.entryDate, entryDate));
-
-      const currentRevision = await db
-        .select({ maxRevision: sql<number>`COALESCE(MAX(${timesheetEntries.revisionNumber}), 0)` })
-        .from(timesheetEntries)
-        .where(whereClause!);
-
-      const dbRevision = currentRevision[0]?.maxRevision ?? 0;
-      if (dbRevision !== cell.expectedRevision) {
-        throw new Error(
-          `Conflict detected: The entry for ${formatCalendarDate(entryDate, 'MMM D, YYYY')} was modified by another session (expected revision ${cell.expectedRevision}, but server has revision ${dbRevision}). Please refresh your timesheet and re-enter your changes.`
-        );
-      }
-    }
-  }
-
-  for (const cell of data.cells) {
-    const entryDate = addDays(start, cell.dayIndex);
-    const entryKey = cell.chargeCodeId ?? cell.clinId ?? cell.indirectCodeId ?? '';
-
-    // Resolve denormalized ids for direct entries
-    const resolved = cell.chargeCodeId ? chargeCodeCache.get(cell.chargeCodeId) : null;
-    // Charge-code cells take CLIN/SLIN only from the charge code itself, never from the caller.
-    const effectiveClinId = cell.chargeCodeId ? resolved!.clinId : (cell.clinId ?? null);
-    const effectiveSlinId = cell.chargeCodeId ? resolved!.slinId : (cell.slinId ?? null);
-
-    const whereClause = cell.chargeCodeId
-      ? and(eq(timesheetEntries.userId, userId), eq(timesheetEntries.chargeCodeId, cell.chargeCodeId), eq(timesheetEntries.entryDate, entryDate))
-      : cell.clinId
-        ? and(eq(timesheetEntries.userId, userId), eq(timesheetEntries.clinId, cell.clinId), eq(timesheetEntries.entryDate, entryDate))
-        : and(eq(timesheetEntries.userId, userId), eq(timesheetEntries.indirectCodeId, cell.indirectCodeId!), eq(timesheetEntries.entryDate, entryDate));
-
-    const existing = await db
-      .select({ maxRevision: sql<number>`COALESCE(MAX(${timesheetEntries.revisionNumber}), 0)` })
-      .from(timesheetEntries)
-      .where(whereClause!);
-
-    const priorRevision = existing[0]?.maxRevision ?? 0;
-    const nextRevision = priorRevision + 1;
-
-    const serverIsEdit = priorRevision > 0;
-    const serverIsLate = priorRevision === 0 && isBefore(entryDate, today);
-    const requiresReason = serverIsEdit || serverIsLate;
-
-    if (requiresReason) {
-      const code = (data.changeReasonCode ?? '').trim();
-      if (!code) {
-        const label = formatCalendarDate(entryDate, 'MMM D, YYYY');
-        throw new Error(
-          serverIsLate
-            ? `A reason code is required for the late entry on ${label}.`
-            : `A reason code is required to edit the entry on ${label}.`
-        );
-      }
-      const { REASON_CODES } = await import('@/lib/reason-codes');
-      const valid = REASON_CODES.some((rc) => rc.value === code);
-      if (!valid) throw new Error(`Invalid change reason code: ${code}`);
-    }
-
-    // The new unique index (user, code, day, revision) can reject a genuine race — two
-    // concurrent saves both reading the same priorRevision and trying to insert the same
-    // nextRevision. Surface that as the existing conflict message rather than a raw DB error.
-    try {
-      await db.insert(timesheetEntries).values({
+  // One transaction holding this employee's timesheet lock (shared with submitPeriod): the period-lock check,
+  // the conflict check and every insert see the same state, so a save can't land in a period that's being
+  // submitted, and a save is all-or-nothing (a failing cell leaves nothing half-written).
+  try {
+    await db.transaction(async (tx) => {
+      await lockEmployeeTimesheet(tx, userId);
+      await assertEntryDatesEditable(
         userId,
-        chargeCodeId: cell.chargeCodeId ?? null,          // new charge code id
-        clinId: effectiveClinId,                           // DENORMALIZED from charge code (preserves CLIN-based queries)
-        slinId: effectiveSlinId,
-        indirectCodeId: cell.indirectCodeId ?? null,
-        entryDate,
-        hours: cell.hours.toString(),
-        revisionNumber: nextRevision,
-        changeReasonCode: requiresReason ? (data.changeReasonCode ?? undefined) : undefined,
-        comment: requiresReason ? (data.comment ?? undefined) : undefined,
-        createdBy: userId,
-      });
-    } catch (err) {
-      // Another save inserted this cell's next revision between our read and our insert.
-      if (isUniqueViolation(err, 'entries_user_code_date_rev_unique_idx')) {
-        throw new Error(
-          `Conflict detected: The entry for ${formatCalendarDate(entryDate, 'MMM D, YYYY')} was modified by another session. Please refresh your timesheet and re-enter your changes.`
-        );
-      }
-      throw err;
-    }
+        data.cells.map((cell) => addDays(start, cell.dayIndex)),
+        // Read the schedule through the same transaction: never a second connection while holding the lock.
+        async (periodStart) => getNumDaysInPeriod(periodStart, await configAt(tx, periodStart)),
+        tx,
+      );
 
-    const key = `${entryKey}-${cell.dayIndex}`;
-    newRevisions[key] = nextRevision;
+      // Optimistic concurrency control
+      if (!data.skipConflictCheck) {
+        for (const cell of data.cells) {
+          if (cell.expectedRevision === undefined) continue;
+          const entryDate = addDays(start, cell.dayIndex);
+          const entryId = cell.chargeCodeId ?? cell.clinId ?? cell.indirectCodeId;
+          if (!entryId) continue;
+
+          const whereClause = cellWhere(userId, cell, entryDate);
+
+          const currentRevision = await tx
+            .select({ maxRevision: sql<number>`COALESCE(MAX(${timesheetEntries.revisionNumber}), 0)` })
+            .from(timesheetEntries)
+            .where(whereClause!);
+
+          const dbRevision = currentRevision[0]?.maxRevision ?? 0;
+          if (dbRevision !== cell.expectedRevision) {
+            throw new Error(
+              `Conflict detected: The entry for ${formatCalendarDate(entryDate, 'MMM D, YYYY')} was modified by another session (expected revision ${cell.expectedRevision}, but server has revision ${dbRevision}). Please refresh your timesheet and re-enter your changes.`
+            );
+          }
+        }
+      }
+
+      for (const cell of data.cells) {
+        const entryDate = addDays(start, cell.dayIndex);
+        const entryKey = cell.chargeCodeId ?? cell.clinId ?? cell.indirectCodeId ?? '';
+
+        // Resolve denormalized ids for direct entries
+        const resolved = cell.chargeCodeId ? chargeCodeCache.get(cell.chargeCodeId) : null;
+        // Charge-code cells take CLIN/SLIN only from the charge code itself, never from the caller.
+        const effectiveClinId = cell.chargeCodeId ? resolved!.clinId : (cell.clinId ?? null);
+        const effectiveSlinId = cell.chargeCodeId ? resolved!.slinId : (cell.slinId ?? null);
+
+        const whereClause = cellWhere(userId, cell, entryDate);
+
+        const existing = await tx
+          .select({ maxRevision: sql<number>`COALESCE(MAX(${timesheetEntries.revisionNumber}), 0)` })
+          .from(timesheetEntries)
+          .where(whereClause!);
+
+        const priorRevision = existing[0]?.maxRevision ?? 0;
+        const nextRevision = priorRevision + 1;
+
+        const serverIsEdit = priorRevision > 0;
+        const serverIsLate = priorRevision === 0 && isBefore(entryDate, today);
+        const requiresReason = serverIsEdit || serverIsLate;
+
+        if (requiresReason) {
+          const code = (data.changeReasonCode ?? '').trim();
+          if (!code) {
+            const label = formatCalendarDate(entryDate, 'MMM D, YYYY');
+            throw new Error(
+              serverIsLate
+                ? `A reason code is required for the late entry on ${label}.`
+                : `A reason code is required to edit the entry on ${label}.`
+            );
+          }
+          const { REASON_CODES } = await import('@/lib/reason-codes');
+          const valid = REASON_CODES.some((rc) => rc.value === code);
+          if (!valid) throw new Error(`Invalid change reason code: ${code}`);
+        }
+
+        // The new unique index (user, code, day, revision) can reject a genuine race — two
+        // concurrent saves both reading the same priorRevision and trying to insert the same
+        // nextRevision. Surface that as the existing conflict message rather than a raw DB error.
+        try {
+          await tx.insert(timesheetEntries).values({
+            userId,
+            chargeCodeId: cell.chargeCodeId ?? null,          // new charge code id
+            clinId: effectiveClinId,                           // DENORMALIZED from charge code (preserves CLIN-based queries)
+            slinId: effectiveSlinId,
+            indirectCodeId: cell.indirectCodeId ?? null,
+            entryDate,
+            hours: cell.hours.toString(),
+            revisionNumber: nextRevision,
+            changeReasonCode: requiresReason ? (data.changeReasonCode ?? undefined) : undefined,
+            comment: requiresReason ? (data.comment ?? undefined) : undefined,
+            createdBy: userId,
+          });
+        } catch (err) {
+          // Another save inserted this cell's next revision between our read and our insert.
+          if (isUniqueViolation(err, 'entries_user_code_date_rev_unique_idx')) {
+            throw new Error(
+              `Conflict detected: The entry for ${formatCalendarDate(entryDate, 'MMM D, YYYY')} was modified by another session. Please refresh your timesheet and re-enter your changes.`
+            );
+          }
+          throw err;
+        }
+
+        const key = `${entryKey}-${cell.dayIndex}`;
+        newRevisions[key] = nextRevision;
+      }
+    });
+  } catch (err) {
+    // Another save inserted a cell's next revision first (the per-cell unique index); caught outside the
+    // transaction because Postgres aborts the transaction on the violation.
+    if (isUniqueViolation(err, 'entries_user_code_date_rev_unique_idx')) {
+      throw new Error('Conflict detected: one of these entries was modified by another session. Please refresh your timesheet and re-enter your changes.');
+    }
+    throw err;
   }
 
   return newRevisions;

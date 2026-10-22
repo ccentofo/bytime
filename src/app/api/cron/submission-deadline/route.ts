@@ -8,6 +8,8 @@ import { eq, and } from 'drizzle-orm';
 import { sendSubmissionDeadlineEmail } from '@/lib/email/send';
 import { getCurrentPeriodStart, getLastWeekdayInPeriod, getNumDaysInPeriod } from '@/lib/date-utils';
 import { checkCronRateLimit } from '@/lib/rate-limit';
+import { getTenantAccess } from '@/lib/tenant/lifecycle';
+import { toLifecycleFacts } from '@/lib/tenant/registry';
 import { configAt } from '@/server/internal/pay-period-config';
 import { addDays, diffDays, formatCalendarDate, isValidTimeZone, todayIn } from '@/lib/calendar-date';
 
@@ -37,7 +39,10 @@ export async function GET(request: NextRequest) {
   }
 
   // Load all active tenants from the control plane
-  const activeTenants = await controlDb.select().from(tenants).where(eq(tenants.status, 'active'));
+  // Only workspaces in `full` mode get reminders (read-only / billing-only / closed can't enter time).
+  const now = new Date();
+  const activeTenants = (await controlDb.select().from(tenants).where(eq(tenants.status, 'active')))
+    .filter((t) => getTenantAccess(toLifecycleFacts(t), now) === 'full');
 
   let totalSent = 0;
 
@@ -46,7 +51,9 @@ export async function GET(request: NextRequest) {
 
   for (const tenant of activeTenants) {
     try {
-      const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted));
+      // T7: dbUrlEncrypted is only null for a tombstoned ('deleted') tenant; this query is
+      // filtered to status='active', which a deleted tenant never has.
+      const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted!));
 
       // D7: "today", the effective pay-period config, and the actual deadline (the last WEEKDAY
       // of the period — the same rule submitPeriod enforces, not just the period's calendar end,

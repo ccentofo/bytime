@@ -24,7 +24,7 @@ export function TimesheetToolbar() {
 
   const dirtyCount = dirtyCells.length;
   const { periodStatus, periodStart } = state;
-  const isEditable = periodStatus === 'draft' || periodStatus === 'rejected';
+  const isEditable = (periodStatus === 'draft' || periodStatus === 'rejected') && !state.readOnly;
 
   // Build period label for the submit modal
   const numDays = state.numDays; // server-resolved

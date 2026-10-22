@@ -8,7 +8,7 @@
  * What it does, idempotently:
  *   1. Migrate the tenant DB to the current schema.
  *   2. Seed the rich demo dataset (reuses seedRichData from seed-full.ts).
- *   3. Register the tenant in the control plane (encrypted URL, status active).
+ *   3. Register the tenant in the control plane (encrypted URL, status active, lifecycle-exempt per F1).
  *
  * Requires CONTROL_PLANE_DATABASE_URL and ENCRYPTION_KEY (the SAME key the running app uses,
  * or it cannot decrypt the tenant URL). Reads .env.local then .env (Next.js precedence).
@@ -28,7 +28,7 @@ dotenv.config({ path: ['.env.local', '.env'] });
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import { tenants } from '../src/db/control-plane/schema';
+import { registerTenant } from './register-tenant';
 import { encrypt } from '../src/lib/encryption';
 import { seedRichData } from './seed-full';
 
@@ -37,7 +37,8 @@ const [
   tenantDbUrl,
   displayName,
   emailDomain = 'cadenzpoint.dev',
-] = process.argv.slice(2);
+] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const wipeDemoData = process.argv.includes('--wipe-demo-data');
 
 const controlUrl = process.env.CONTROL_PLANE_DATABASE_URL;
 
@@ -47,7 +48,7 @@ function fail(msg: string): never {
 }
 
 if (!slug || !tenantDbUrl) {
-  fail('Usage: tsx scripts/seed-demo.ts <slug> <tenantDbUrl> [displayName] [emailDomain]');
+  fail('Usage: tsx scripts/seed-demo.ts <slug> <tenantDbUrl> [displayName] [emailDomain] [--wipe-demo-data]');
 }
 if (!controlUrl) fail('CONTROL_PLANE_DATABASE_URL is not set (checked .env.local and .env).');
 if (!process.env.ENCRYPTION_KEY) {
@@ -76,19 +77,14 @@ async function main() {
   }
 
   // 2. Seed the rich demo dataset (clears + repopulates — safe to re-run).
-  await seedRichData(tdb, { emailDomain });
+  await seedRichData(tdb, { emailDomain, wipeDemoData });
   await tsql.end();
 
   // 3. Register in the control plane (encrypted URL, status active).
-  const csql = postgres(controlUrl!, { max: 1 });
-  const cdb = drizzle(csql);
-  await cdb.insert(tenants)
-    .values({ slug, name: displayName || slug, dbUrlEncrypted: encrypt(tenantDbUrl), status: 'active', plan: 'trial' })
-    .onConflictDoUpdate({
-      target: tenants.slug,
-      set: { name: displayName || slug, dbUrlEncrypted: encrypt(tenantDbUrl), status: 'active', updatedAt: new Date() },
-    });
-  await csql.end();
+  // F1: demo workspaces are lifecycle-exempt (no trial expiry, no lifecycle emails, never scheduled for deletion).
+  await registerTenant(controlUrl!, {
+    slug, name: displayName || slug, dbUrlEncrypted: encrypt(tenantDbUrl), exempt: true, actor: 'seed-demo',
+  });
 
   const rootDomain = process.env.APP_ROOT_DOMAIN ?? 'cadenzpoint.com';
   console.log(`\n✓ Demo tenant "${slug}" is ACTIVE and populated.`);

@@ -1,6 +1,6 @@
 'use server';
 
-import { getDb } from '@/db';
+import { getDb, getDbForWrite } from '@/db';
 import { chargeCodes, costClasses, userChargeCodes, userAssignments, clins, contracts, slins, laborCategories, users } from '@/db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
@@ -17,7 +17,7 @@ export async function listCostClasses() {
 
 export async function createCostClass(name: string) {
   await requireAdmin();
-  const db = await getDb();
+  const db = await getDbForWrite();
   const [row] = await db.insert(costClasses).values({ name: name.trim() }).onConflictDoNothing().returning();
   return row;
 }
@@ -67,7 +67,7 @@ export async function createChargeCode(data: {
   billable?: boolean;
 }) {
   await requireAdmin();
-  const db = await getDb();
+  const db = await getDbForWrite();
   const [row] = await db.insert(chargeCodes).values({
     code: data.code.trim(),
     name: data.name.trim(),
@@ -94,7 +94,7 @@ export async function updateChargeCode(id: string, data: {
   billable?: boolean;
 }) {
   await requireAdmin();
-  const db = await getDb();
+  const db = await getDbForWrite();
   // R2-6: explicit allowlist — never spread the caller's object into .set(). `isActive` in
   // particular is a real column not in this form's type; deactivation has its own action
   // (deactivateChargeCode) and must not be settable through this one.
@@ -121,7 +121,7 @@ export async function updateChargeCode(id: string, data: {
  */
 export async function deactivateChargeCode(id: string) {
   await requireAdmin();
-  const db = await getDb();
+  const db = await getDbForWrite();
   await db.update(chargeCodes).set({ isActive: false, updatedAt: new Date() }).where(eq(chargeCodes.id, id));
 }
 
@@ -136,7 +136,7 @@ export async function deactivateChargeCode(id: string) {
  */
 export async function assignChargeCodeToUser(userId: string, chargeCodeId: string) {
   const actor = await requireAdmin();
-  const db = await getDb();
+  const db = await getDbForWrite();
 
   // Look up the charge code's CLIN (needed for user_assignments sync)
   const [cc] = await db.select({ clinId: chargeCodes.clinId, slinId: chargeCodes.slinId })
@@ -165,7 +165,7 @@ export async function assignChargeCodeToUser(userId: string, chargeCodeId: strin
 
 export async function unassignChargeCodeFromUser(userId: string, chargeCodeId: string) {
   await requireAdmin();
-  const db = await getDb();
+  const db = await getDbForWrite();
   await db.update(userChargeCodes).set({ isActive: false })
     .where(and(eq(userChargeCodes.userId, userId), eq(userChargeCodes.chargeCodeId, chargeCodeId)));
 }
@@ -236,7 +236,7 @@ export async function getChargeCodeAssignments() {
  */
 export async function autobridgeChargeCodesFromClins() {
   await requireAdmin();
-  const db = await getDb();
+  const db = await getDbForWrite();
 
   // Get all active CLINs with their contract info
   const activeclins = await db

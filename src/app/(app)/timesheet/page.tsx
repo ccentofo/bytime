@@ -8,6 +8,7 @@ import { getUserByEmail } from '@/server/internal/users';
 import { getEmployeeDashboardData } from '@/server/actions/employee-dashboard';
 import { getCurrentEffectiveConfig } from '@/server/actions/pay-period-config';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
+import { getTenantState } from '@/lib/tenant/context';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,11 +26,12 @@ export default async function TimesheetPage() {
 
   // Fetch ALL independent data in parallel (single await). getTimesheetPeriod resolves the
   // period's length and schedule on the server, the same way navigation does.
-  const [chargeCodes, period, fullUser, dashboardData] = await Promise.all([
+  const [chargeCodes, period, fullUser, dashboardData, tenantState] = await Promise.all([
     getChargeCodesForUser(),
     getTimesheetPeriod(periodStart),
     getUserByEmail(session.user.email!),
     getEmployeeDashboardData(),
+    getTenantState(),
   ]);
 
   const pageData: TimesheetPageData = {
@@ -44,6 +46,7 @@ export default async function TimesheetPage() {
     flsaExempt: fullUser?.flsaExempt ?? false,
     dashboardData,
     periodConfig: period.periodConfig,
+    readOnly: tenantState.kind === 'read_only',
   };
 
   return <BiWeeklyTimesheetClient initialData={pageData} />;

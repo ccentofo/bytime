@@ -7,6 +7,7 @@ import { checkLockout } from '@/server/actions/login-attempts';
 import { recordFailedAttempt, recordSuccessfulLogin } from '@/server/internal/login-attempts';
 import { getDbForUrl, getDbForAuth } from '@/db';
 import { getTenantBySlug } from '@/lib/tenant/registry';
+import { getTenantAccess } from '@/lib/tenant/lifecycle';
 import { users } from '@/db/schema';
 import { and, eq, isNull, lt, or } from 'drizzle-orm';
 import { decrypt, encrypt } from '@/lib/encryption';
@@ -192,6 +193,19 @@ export async function jwtCallback({
       return null;
     }
 
+    // §5.6: the workspace's access mode, from the cached registry record (no extra query in the common case).
+    // A workspace being deleted (or deleted) ends every session; any other closed mode just skips the tenant-DB
+    // check below (its database may be unreachable by design). Control-plane errors fail open, like the DB case.
+    let tenant: Awaited<ReturnType<typeof getTenantBySlug>> = null;
+    try {
+      tenant = await getTenantBySlug((token.tenantSlug as string) ?? '');
+    } catch {
+      return token;
+    }
+    if (!tenant) return token; // can't validate without a tenant — fail-open like the DB-down case
+    if (tenant.status === 'deleting' || tenant.status === 'deleted') return null;
+    if (getTenantAccess(tenant, new Date()) === 'closed') return token;
+
     // PERFORMANCE: Only check DB every 60 seconds, not on every request.
     // The JWT stores a lastSessionCheck timestamp — if less than 60s old, skip the DB query.
     const now = Date.now();
@@ -203,9 +217,6 @@ export async function jwtCallback({
     }
 
     try {
-      const slug = (token.tenantSlug as string) ?? '';
-      const tenant = slug ? await getTenantBySlug(slug) : null;
-      if (!tenant) return token; // can't validate without a tenant — fail-open like the DB-down case
       const db = getDbForUrl(tenant.dbUrl);
 
       const dbPromise = db

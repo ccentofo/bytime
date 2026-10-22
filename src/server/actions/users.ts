@@ -1,6 +1,6 @@
 'use server';
 
-import { getDb } from '@/db';
+import { getDb, getDbForWrite } from '@/db';
 import { users } from '@/db/schema';
 import bcrypt from 'bcryptjs';
 import { eq, and, ne, sql } from 'drizzle-orm';
@@ -28,7 +28,7 @@ export async function createUser(data: {
   fullName: string;
   role?: 'admin' | 'supervisor' | 'employee';
 }) {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdminFresh();
   await assertSeatAvailable();
   const validatedData = {
@@ -54,7 +54,7 @@ export async function seedUsers() {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('seedUsers is disabled in production.');
   }
-  const db = await getDb();
+  const db = await getDbForWrite();
   // Hash the default dev password for all seed users
   const defaultPassword = 'Password123!';
   const hash = await bcrypt.hash(defaultPassword, 12);
@@ -105,7 +105,7 @@ export async function updateUser(id: string, data: {
   flsaExempt?: boolean;
 }) {
   const actor = await requireAdminFresh();
-  const db = await getDb();
+  const db = await getDbForWrite();
 
   // Server-action arguments are untrusted JSON. The last-admin and self-deactivation checks
   // below key on `isActive === false`, and Postgres would happily coerce "false" or 0 to false,
@@ -199,7 +199,7 @@ export async function createUserWithPassword(data: {
   role: 'admin' | 'supervisor' | 'employee';
   password: string;
 }) {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdminFresh();
   await assertSeatAvailable();
   const validatedEmail = validateEmail(data.email);

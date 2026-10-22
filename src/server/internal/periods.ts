@@ -1,7 +1,7 @@
 import 'server-only';
-import { getDb } from '@/db';
+import { getDb, type DbTx } from '@/db';
 import { timesheetPeriods } from '@/db/schema';
-import { eq, and, gte, lte, inArray } from 'drizzle-orm';
+import { eq, and, gte, lte, inArray, sql } from 'drizzle-orm';
 import { getNumDaysInPeriod, getPeriodStartForDate, type PeriodConfig } from '@/lib/date-utils';
 import { addDays, compare, isBefore, isAfter, type CalendarDate } from '@/lib/calendar-date';
 import { configAt } from '@/server/internal/pay-period-config';
@@ -80,6 +80,8 @@ export async function assertEntryDatesEditable(
   userId: string,
   entryDates: CalendarDate[],
   numDaysFor: (periodStart: CalendarDate) => Promise<number>,
+  /** Pass the save's transaction so the check and the writes see the same state under the per-user lock. */
+  executor?: Pick<DbTx, 'select'>,
 ): Promise<void> {
   if (entryDates.length === 0) return;
   const minDay = entryDates.reduce((a, b) => (isBefore(b, a) ? b : a));
@@ -87,7 +89,7 @@ export async function assertEntryDatesEditable(
 
   // No period is longer than a month (31 days): a period that could contain minDay starts no
   // earlier than 31 days before it; a period starting exactly on maxDay must also be checked.
-  const db = await getDb();
+  const db = executor ?? await getDb();
   const rows = await db
     .select({ periodStart: timesheetPeriods.periodStart, status: timesheetPeriods.status, periodNumDays: timesheetPeriods.periodNumDays })
     .from(timesheetPeriods)
@@ -131,4 +133,15 @@ export async function resolvePeriod(periodStart: CalendarDate): Promise<{ config
     return { config, numDays: getNumDaysInPeriod(periodStart, config) };
   }
   throw new Error('Invalid period start date.');
+}
+
+/**
+ * Take the per-employee timesheet lock inside a tenant-DB transaction (released at commit/rollback).
+ * saveTimesheetBatch and submitPeriod both take it, so a save can never land in a period that is being
+ * submitted at the same moment — including a FIRST submission, where no period row exists yet to lock.
+ * Per employee, not per period: periods can overlap across a schedule change, and contention is only
+ * that employee's own tabs.
+ */
+export async function lockEmployeeTimesheet(tx: Pick<DbTx, 'execute'>, userId: string): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'timesheet:' + userId}))`);
 }

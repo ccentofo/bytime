@@ -1,6 +1,6 @@
 'use server';
 
-import { getDb } from '@/db';
+import { getDbForAuth } from '@/db';
 import { notificationPreferences } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireSession } from '@/lib/session';
@@ -37,7 +37,7 @@ export async function updateNotificationPreferences(
   prefs: Partial<NotificationPrefs>
 ): Promise<void> {
   const actor = await requireSession();
-  const db = await getDb();
+  const db = await getDbForAuth();
 
   const allowedUpdates: Partial<NotificationPrefs> = {};
   for (const key of NOTIFICATION_PREF_KEYS) {

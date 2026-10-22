@@ -1,6 +1,6 @@
 'use server';
 
-import { getDb } from '@/db';
+import { getDb, getDbForWrite } from '@/db';
 import { contracts } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
@@ -37,7 +37,7 @@ export async function createContract(data: {
   ceilingValue?: string;
 }) {
   await requireAdmin();
-  const db = await getDb();
+  const db = await getDbForWrite();
   const validatedData = {
     contractNumber: validateContractNumber(data.contractNumber),
     name: validateStringLength(validateRequired(data.name, 'Contract name'), 'Contract name', 1, 255),
@@ -64,7 +64,7 @@ export async function updateContract(id: string, data: {
   ceilingValue?: string;
 }) {
   await requireAdmin();
-  const db = await getDb();
+  const db = await getDbForWrite();
   const validatedData: Record<string, unknown> = { updatedAt: new Date() };
   if (data.contractNumber !== undefined) validatedData.contractNumber = validateContractNumber(data.contractNumber);
   if (data.name !== undefined) validatedData.name = validateStringLength(validateRequired(data.name, 'Contract name'), 'Contract name', 1, 255);

@@ -1,0 +1,1 @@
+ALTER TABLE "tenants" ALTER COLUMN "db_url_encrypted" DROP NOT NULL;

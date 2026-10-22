@@ -28,7 +28,7 @@ import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import * as schema from '../src/db/schema';
-import { tenants } from '../src/db/control-plane/schema';
+import { registerTenant } from './register-tenant';
 import { encrypt } from '../src/lib/encryption';
 
 const [
@@ -98,15 +98,7 @@ async function main() {
   await tsql.end();
 
   // 3. Register in the control plane (encrypted URL, status active).
-  const csql = postgres(controlUrl!, { max: 1 });
-  const cdb = drizzle(csql);
-  await cdb.insert(tenants)
-    .values({ slug, name: slug, dbUrlEncrypted: encrypt(tenantDbUrl), status: 'active', plan: 'trial' })
-    .onConflictDoUpdate({
-      target: tenants.slug,
-      set: { dbUrlEncrypted: encrypt(tenantDbUrl), status: 'active', updatedAt: new Date() },
-    });
-  await csql.end();
+  await registerTenant(controlUrl!, { slug, name: slug, dbUrlEncrypted: encrypt(tenantDbUrl), exempt: false, actor: 'seed-tenant' });
 
   console.log(`\n✓ Tenant "${slug}" is ACTIVE.`);
   console.log(`  Visit:  http://${slug}.localhost:3000`);

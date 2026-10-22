@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { AppShell, Alert, Anchor, Group, CloseButton, ActionIcon, Tooltip, ScrollArea } from '@mantine/core';
+import { AppShell, Alert, Anchor, Group, CloseButton, ActionIcon, Tooltip, ScrollArea, Button } from '@mantine/core';
 import { useDisclosure, useMediaQuery } from '@mantine/hooks';
 import { SessionProvider } from 'next-auth/react';
-import { IconRocket, IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand } from '@tabler/icons-react';
+import { IconRocket, IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand, IconLock } from '@tabler/icons-react';
 import { AppHeader } from '@/components/shell/AppHeader';
 import { AppNavbar } from '@/components/shell/AppNavbar';
+
+type ReadOnlyReason = 'trial_ended' | 'subscription_ended';
 
 type Props = {
   user: {
@@ -17,13 +19,23 @@ type Props = {
   setupComplete?: boolean;
   /** Collapse preference, read from a cookie server-side so the first paint is already correct. */
   initialCollapsed?: boolean;
+  /** §3.2/T3: non-null when the workspace is `read_only` — shows a persistent (non-dismissible)
+   * banner. The server gate (getDbForWrite) is the real control; this is just visibility. */
+  readOnlyReason?: ReadOnlyReason | null;
+  /** F1: lifecycle-exempt (demo/internal) workspace — shows the Demo marker. */
+  isDemo?: boolean;
   children: React.ReactNode;
 };
 
 const BANNER_DISMISS_KEY = 'bytime-setup-banner-dismissed';
 const NAV_COLLAPSED_KEY = 'cadenzpoint-navbar-collapsed';
 
-export function AppShellWrapper({ user, setupComplete = true, initialCollapsed = false, children }: Props) {
+const READ_ONLY_COPY: Record<ReadOnlyReason, string> = {
+  trial_ended: 'Your trial has ended. You can still view and export your data.',
+  subscription_ended: 'Your subscription has ended. You can still view and export your data for a limited time.',
+};
+
+export function AppShellWrapper({ user, setupComplete = true, initialCollapsed = false, readOnlyReason = null, isDemo = false, children }: Props) {
   const [opened, { toggle }] = useDisclosure();
   const [bannerDismissed, setBannerDismissed] = useState(true); // Start hidden to avoid flash
   // Seed from the server-read cookie so the rail renders at the right width on the FIRST paint
@@ -72,7 +84,7 @@ export function AppShellWrapper({ user, setupComplete = true, initialCollapsed =
         padding="md"
       >
         <AppShell.Header>
-          <AppHeader user={user} mobileNavOpened={opened} onMobileNavToggle={toggle} />
+          <AppHeader user={user} mobileNavOpened={opened} onMobileNavToggle={toggle} isDemo={isDemo} />
         </AppShell.Header>
         <AppShell.Navbar p="xs">
           {/* Scrollable nav list grows to fill; the collapse toggle pins to the bottom (desktop only). */}
@@ -105,6 +117,29 @@ export function AppShellWrapper({ user, setupComplete = true, initialCollapsed =
             wide children (e.g. the timesheet table) scroll within their own container instead
             of stretching the page and clipping the right edge. */}
         <AppShell.Main style={{ minWidth: 0 }}>
+          {readOnlyReason && (
+            <Alert
+              icon={<IconLock size={18} />}
+              color="warning"
+              variant="light"
+              mb="md"
+              radius="md"
+            >
+              <Group justify="space-between" align="center" wrap="wrap" gap="sm">
+                <span>{READ_ONLY_COPY[readOnlyReason]}</span>
+                {user.role === 'admin' && (
+                  <Group gap="xs" wrap="wrap">
+                    <Button component="a" href="/api/export/workspace" size="xs" variant="default">
+                      Export data
+                    </Button>
+                    <Button component="a" href="/admin/billing" size="xs" variant="filled">
+                      Subscribe
+                    </Button>
+                  </Group>
+                )}
+              </Group>
+            </Alert>
+          )}
           {showBanner && (
             <Alert
               icon={<IconRocket size={18} />}

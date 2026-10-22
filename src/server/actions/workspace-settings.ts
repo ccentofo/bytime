@@ -1,6 +1,6 @@
 'use server';
 
-import { getDb } from '@/db';
+import { getDb, getDbForWrite } from '@/db';
 import { workspaceSettings } from '@/db/schema';
 import { requireAdminFresh, requireSession } from '@/lib/session';
 import { canonicalTimeZone } from '@/lib/calendar-date';
@@ -26,7 +26,7 @@ export async function updateWorkspaceTimezone(timezone: string): Promise<string>
   if (!canonical) {
     throw new Error('Choose a timezone from the list (an IANA name such as America/New_York).');
   }
-  const db = await getDb();
+  const db = await getDbForWrite();
   // Upsert: an UPDATE alone would silently do nothing if the settings row were missing.
   await db.insert(workspaceSettings)
     .values({ id: 1, timezone: canonical, updatedAt: new Date() })

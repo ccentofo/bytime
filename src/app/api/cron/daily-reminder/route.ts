@@ -7,6 +7,8 @@ import { users, timesheetEntries, notificationPreferences, workspaceSettings } f
 import { eq, and } from 'drizzle-orm';
 import { sendDailyReminderEmail } from '@/lib/email/send';
 import { checkCronRateLimit } from '@/lib/rate-limit';
+import { getTenantAccess } from '@/lib/tenant/lifecycle';
+import { toLifecycleFacts } from '@/lib/tenant/registry';
 import { dayOfWeek, formatCalendarDate, isValidTimeZone, todayIn } from '@/lib/calendar-date';
 
 const FALLBACK_TIMEZONE = 'America/New_York';
@@ -36,7 +38,10 @@ export async function GET(request: NextRequest) {
   }
 
   // Load all active tenants from the control plane
-  const activeTenants = await controlDb.select().from(tenants).where(eq(tenants.status, 'active'));
+  // Only workspaces in `full` mode get reminders (read-only / billing-only / closed can't enter time).
+  const now = new Date();
+  const activeTenants = (await controlDb.select().from(tenants).where(eq(tenants.status, 'active')))
+    .filter((t) => getTenantAccess(toLifecycleFacts(t), now) === 'full');
 
   let totalSent = 0;
 
@@ -45,7 +50,9 @@ export async function GET(request: NextRequest) {
 
   for (const tenant of activeTenants) {
     try {
-      const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted));
+      // T7: dbUrlEncrypted is only null for a tombstoned ('deleted') tenant; this query is
+      // filtered to status='active', which a deleted tenant never has.
+      const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted!));
 
       // D7: "today" and the weekend skip are evaluated per-tenant, in THAT tenant's workspace
       // timezone — never the cron process's own (UTC) clock, which would call it Saturday for a

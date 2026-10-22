@@ -1,6 +1,6 @@
 'use server';
 
-import { getDb } from '@/db';
+import { getDb, getDbForWrite } from '@/db';
 import { laborCategories, userLaborCategories, users, clins, contracts, slins } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
@@ -68,7 +68,7 @@ export async function createLaborCategory(data: {
   hourlyRate: string;
   ceilingRate?: string;
 }) {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdmin();
   const validatedData = {
     clinId: data.clinId,
@@ -92,7 +92,7 @@ export async function updateLaborCategory(id: string, data: {
   ceilingRate?: string;
   status?: 'active' | 'inactive' | 'closed';
 }) {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdmin();
   const validatedData: Record<string, unknown> = { updatedAt: new Date() };
   if (data.lcatCode !== undefined) validatedData.lcatCode = validateStringLength(validateRequired(data.lcatCode, 'LCAT code'), 'LCAT code', 1, 50);
@@ -170,7 +170,7 @@ export async function assignUserToLaborCategory(data: {
   endDate?: CalendarDate;
 }) {
   const actor = await requireAdmin();
-  const db = await getDb();
+  const db = await getDbForWrite();
   // R2-6: explicit allowlist — never spread the caller's object into .values().
   const rows = await db.insert(userLaborCategories).values({
     userId: data.userId,
@@ -187,7 +187,7 @@ export async function assignUserToLaborCategory(data: {
  * workspace's today, so hours already entered today still count toward this labor category.
  */
 export async function endUserLaborCategoryAssignment(id: string) {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdmin();
   const endDate = await getWorkspaceToday();
   const rows = await db.update(userLaborCategories)

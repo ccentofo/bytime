@@ -11,6 +11,7 @@ import { sendSignupVerifyEmail } from '@/lib/email/send-signup';
 import { slugify } from '@/lib/tenant/slugify';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { canonicalTimeZone } from '@/lib/calendar-date';
+import { TERMS_VERSION } from '@/lib/tenant/lifecycle-config';
 
 const VERIFY_EXPIRY_HOURS = 24;
 
@@ -25,7 +26,14 @@ export async function startSignup(input: {
   email: string;
   slug?: string;
   timezone?: string;
+  termsAccepted: boolean;
 }): Promise<{ success: boolean; error?: string }> {
+  // R12: identity isn't established yet at signup, but acceptance is still a real, required gate —
+  // reject server-side regardless of what the client's button disabling did or didn't allow.
+  if (input.termsAccepted !== true) {
+    return { success: false, error: 'You must agree to the Terms of Service and Privacy Policy.' };
+  }
+
   // IP-based rate limit: 8 signups per hour per IP to prevent abuse and spam provisioning.
   const h = await headers();
   const ip = h.get('x-forwarded-for')?.split(',')[0].trim() ?? h.get('x-real-ip') ?? 'unknown';
@@ -62,6 +70,8 @@ export async function startSignup(input: {
     slug,
     verifyTokenHash,
     timezone,
+    termsVersion: TERMS_VERSION,
+    termsAcceptedAt: new Date(),
     expiresAt: dayjs().add(VERIFY_EXPIRY_HOURS, 'hour').toDate(),
   });
 

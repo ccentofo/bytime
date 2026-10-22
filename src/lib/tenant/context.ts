@@ -2,6 +2,7 @@ import 'server-only';
 import { headers } from 'next/headers';
 import { getTenantBySlug, type TenantRecord } from './registry';
 import { tenantFromHost } from './host';
+import { canExport, getTenantAccess, type TenantAccessMode } from './lifecycle';
 
 /**
  * Resolve the tenant slug for the current request.
@@ -22,29 +23,91 @@ export async function getTenantSlug(): Promise<string> {
   return fromHost;
 }
 
-/**
- * Resolve the ACTIVE tenant or throw (fail-closed). Serves only `status === 'active'`:
- * provisioning (still being set up), suspended (billing), and deleting (offboarding) are
- * all rejected — a half-built or non-paying workspace must never serve requests.
- */
-export async function getTenantOrThrow(): Promise<TenantRecord> {
-  const slug = await getTenantSlug();
+/** Thrown by getTenantForWrite() when the tenant's access mode isn't `full`. */
+export class WorkspaceReadOnlyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WorkspaceReadOnlyError';
+  }
+}
+
+async function resolveTenant(slug: string): Promise<TenantRecord> {
   if (!slug) throw new Error('No tenant in request context.');
   const tenant = await getTenantBySlug(slug);
   if (!tenant) throw new Error(`Unknown workspace: ${slug}`);
-  if (tenant.status !== 'active') {
-    if (tenant.status === 'suspended') throw new Error('This workspace is suspended.');
-    if (tenant.status === 'deleting') throw new Error('This workspace is being removed.');
-    if (tenant.status === 'provisioning') throw new Error('This workspace is still being set up. Please try again shortly.');
-    throw new Error('This workspace is not available.');
-  }
   return tenant;
+}
+
+/**
+ * Resolve the tenant and throw unless its access mode is `full` or `read_only` (fail-closed).
+ * §3.1/T3: reads are allowed in both modes — `billing_only` and `closed` are rejected here.
+ */
+export async function getTenantOrThrow(): Promise<TenantRecord> {
+  const slug = await getTenantSlug();
+  const tenant = await resolveTenant(slug);
+  if (tenant.status === 'provisioning') {
+    throw new Error('This workspace is still being set up. Please try again shortly.');
+  }
+  const mode = getTenantAccess(tenant, new Date());
+  if (mode === 'full' || mode === 'read_only') return tenant;
+  if (mode === 'billing_only') throw new Error('This workspace is suspended.');
+  if (mode === 'policy_hold') throw new Error('This workspace is on hold. Contact support@cadenzpoint.com.');
+  if (tenant.status === 'deleting' || tenant.status === 'deleted') {
+    throw new Error('This workspace is being removed.');
+  }
+  throw new Error('This workspace is not available.');
+}
+
+/**
+ * Resolve the tenant and throw unless its access mode is `full` — the write gate (§3.2).
+ * `src/db/index.ts`'s `getDbForWrite()` is the only intended caller; every mutating server
+ * action goes through that, not this function directly.
+ */
+export async function getTenantForWrite(): Promise<TenantRecord> {
+  const slug = await getTenantSlug();
+  const tenant = await resolveTenant(slug);
+  if (tenant.status === 'provisioning') {
+    throw new WorkspaceReadOnlyError('This workspace is still being set up. Please try again shortly.');
+  }
+  const mode = getTenantAccess(tenant, new Date());
+  if (mode === 'full') return tenant;
+  throw new WorkspaceReadOnlyError(
+    mode === 'read_only'
+      ? 'This workspace is read-only. Subscribe to make changes.'
+      : mode === 'billing_only'
+        ? 'This workspace is suspended. Update billing to restore access.'
+        : mode === 'policy_hold'
+          ? 'This workspace is on hold. Contact support@cadenzpoint.com.'
+          : 'This workspace is not available.'
+  );
+}
+
+/** Thrown by getTenantForExport when export isn't allowed in the workspace's current state (route → 403). */
+export class ExportNotAllowedError extends Error {}
+
+/**
+ * Resolve the tenant for the T6 full-workspace export — `canExport`: every mode except `closed`, and a policy hold
+ * only when the founder allowed export for that workspace (F5). D6/D8: read_only and billing_only may export.
+ */
+export async function getTenantForExport(): Promise<TenantRecord> {
+  const slug = await getTenantSlug();
+  const tenant = await resolveTenant(slug);
+  if (tenant.status === 'provisioning') {
+    throw new ExportNotAllowedError('This workspace is still being set up. Please try again shortly.');
+  }
+  const now = new Date();
+  if (canExport(tenant, now)) return tenant;
+  throw new ExportNotAllowedError(
+    getTenantAccess(tenant, now) === 'policy_hold'
+      ? 'This workspace is on hold. Contact support@cadenzpoint.com.'
+      : 'This workspace is not available.'
+  );
 }
 
 /**
  * Resolve the ACTIVE or SUSPENDED tenant — for the billing path only.
  * Suspended tenants must be able to reach billing so they can pay and reactivate.
- * Still rejects none/unknown/deleting/provisioning/mismatch.
+ * Still rejects none/unknown/deleting/provisioning/deleted/mismatch.
  * DO NOT use this in data paths — only billing.ts should call this.
  */
 export async function getTenantForBilling(): Promise<TenantRecord> {
@@ -52,6 +115,10 @@ export async function getTenantForBilling(): Promise<TenantRecord> {
   if (!slug) throw new Error('No tenant in request context.');
   const tenant = await getTenantBySlug(slug);
   if (!tenant) throw new Error(`Unknown workspace: ${slug}`);
+  // F5: a policy hold has no billing screen (paying doesn't lift it).
+  if (tenant.status === 'suspended' && tenant.suspensionReason === 'policy') {
+    throw new Error('This workspace is on hold. Contact support@cadenzpoint.com.');
+  }
   if (tenant.status === 'active' || tenant.status === 'suspended') return tenant;
   if (tenant.status === 'deleting') throw new Error('This workspace is being removed.');
   if (tenant.status === 'provisioning') throw new Error('This workspace is still being set up.');
@@ -60,17 +127,20 @@ export async function getTenantForBilling(): Promise<TenantRecord> {
 
 /** Non-throwing tenant resolution for UI gating (e.g. rendering a clean "unavailable" screen). */
 export type TenantState =
-  | { kind: 'active'; tenant: TenantRecord }
+  | { kind: 'full'; tenant: TenantRecord }
+  | { kind: 'read_only'; tenant: TenantRecord }
+  | { kind: 'billing_only'; tenant: TenantRecord }
+  | { kind: 'policy_hold'; tenant: TenantRecord }  // F5: suspended for a policy breach
+  | { kind: 'closed' }        // deleting/deleted, or past the deletion window
+  | { kind: 'provisioning' }  // still being set up — not a lifecycle mode, a pre-lifecycle state
   | { kind: 'none' }          // no tenant in context (apex / wrong host)
   | { kind: 'unknown' }       // slug not found in the registry
-  | { kind: 'suspended' }
-  | { kind: 'deleting' }
-  | { kind: 'provisioning' }
   | { kind: 'mismatch' };     // injected header disagreed with host (possible tampering)
 
 /**
  * Resolve the current tenant WITHOUT throwing, so callers (layouts) can render an
- * appropriate screen per state. Mirrors getTenantOrThrow's gating but returns a tagged union.
+ * appropriate screen per state. Mirrors getTenantOrThrow's gating but returns a tagged union
+ * carrying the access MODE (§3.1) rather than the raw status — the layout routes on mode.
  */
 export async function getTenantState(): Promise<TenantState> {
   let slug: string;
@@ -82,9 +152,9 @@ export async function getTenantState(): Promise<TenantState> {
   if (!slug) return { kind: 'none' };
   const tenant = await getTenantBySlug(slug);
   if (!tenant) return { kind: 'unknown' };
-  if (tenant.status === 'active') return { kind: 'active', tenant };
-  if (tenant.status === 'suspended') return { kind: 'suspended' };
-  if (tenant.status === 'deleting') return { kind: 'deleting' };
   if (tenant.status === 'provisioning') return { kind: 'provisioning' };
-  return { kind: 'unknown' };
+
+  const mode: TenantAccessMode = getTenantAccess(tenant, new Date());
+  if (mode === 'closed') return { kind: 'closed' };
+  return { kind: mode, tenant };
 }

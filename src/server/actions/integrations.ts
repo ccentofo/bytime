@@ -1,6 +1,6 @@
 'use server';
 
-import { getDb } from '@/db';
+import { getDb, getDbForWrite } from '@/db';
 import {
   integrationConnections,
   integrationEntityMappings,
@@ -37,7 +37,7 @@ export async function getConnections() {
 }
 
 export async function disconnectIntegration(connectionId: string) {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdminFresh();
   await db.update(integrationConnections)
     .set({
@@ -51,7 +51,7 @@ export async function disconnectIntegration(connectionId: string) {
 }
 
 export async function toggleAutoSync(connectionId: string, enabled: boolean) {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdmin();
   await db.update(integrationConnections)
     .set({
@@ -84,7 +84,7 @@ export async function saveMapping(data: {
   externalEntityName: string;
   metadata?: string;
 }) {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdmin();
 
   // Upsert — update if mapping already exists for this connection + entity type + bytime ID
@@ -122,7 +122,7 @@ export async function saveMapping(data: {
 }
 
 export async function deleteMapping(mappingId: string) {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdmin();
   await db.delete(integrationEntityMappings).where(eq(integrationEntityMappings.id, mappingId));
 }

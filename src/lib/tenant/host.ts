@@ -16,3 +16,9 @@ export function tenantFromHost(host: string | null): string | null {
   if (!label || RESERVED.has(label) || label.includes('.')) return null;
   return label;
 }
+
+/** The inverse of tenantFromHost: a tenant's full base URL, for links in emails and redirects. */
+export function tenantBaseUrl(slug: string): string {
+  const apexUrl = new URL(process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000');
+  return `${apexUrl.protocol}//${slug}.${ROOT_DOMAIN}${apexUrl.port ? `:${apexUrl.port}` : ''}`;
+}

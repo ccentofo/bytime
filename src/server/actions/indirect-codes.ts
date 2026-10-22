@@ -1,6 +1,6 @@
 'use server';
 
-import { getDb } from '@/db';
+import { getDb, getDbForWrite } from '@/db';
 import { indirectChargeCodes } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
@@ -40,7 +40,7 @@ export async function createIndirectCode(data: {
   description?: string;
   availableToAll?: boolean;
 }) {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdmin();
   const validatedData = {
     code: validateStringLength(validateRequired(data.code, 'Code'), 'Code', 1, 50),
@@ -64,7 +64,7 @@ export async function updateIndirectCode(id: string, data: {
   isActive?: boolean;
   availableToAll?: boolean;
 }) {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdmin();
   const validatedData: Record<string, unknown> = { updatedAt: new Date() };
   if (data.code !== undefined) validatedData.code = validateStringLength(validateRequired(data.code, 'Code'), 'Code', 1, 50);
@@ -85,7 +85,7 @@ export async function updateIndirectCode(id: string, data: {
  * Creates standard codes if they don't exist.
  */
 export async function seedIndirectCodes() {
-  const db = await getDb();
+  const db = await getDbForWrite();
   await requireAdmin();
 
   const defaults = [

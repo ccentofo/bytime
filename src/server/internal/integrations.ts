@@ -1,5 +1,5 @@
 import 'server-only';
-import { getDb } from '@/db';
+import { getDbForWrite } from '@/db';
 import { integrationConnections, integrationProviderEnum } from '@/db/schema';
 import { encrypt } from '@/lib/encryption';
 
@@ -22,7 +22,7 @@ export async function saveIntegrationConnection(connectedBy: string, data: {
 }): Promise<{ id: string }> {
   const provider = integrationProviderEnum.enumValues.find((p) => p === data.provider);
   if (!provider) throw new Error(`Unknown integration provider: ${data.provider}`);
-  const db = await getDb();
+  const db = await getDbForWrite();
   const [row] = await db.insert(integrationConnections).values({
     provider,
     displayName: data.displayName,

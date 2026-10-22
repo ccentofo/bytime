@@ -1,7 +1,7 @@
 'use server';
 
 import { getDefaultSyncWindow } from '@/server/internal/workspace-settings';
-import { getDb } from '@/db';
+import { getDb, getDbForWrite } from '@/db';
 import { integrationConnections, users, contracts, clins, integrationEntityMappings } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
@@ -186,7 +186,7 @@ export async function fetchQBOClassesForMapping(connectionId: string) {
  */
 export async function importQboClasses(connectionId: string, selected: Array<{ qboId: string; name: string }>) {
   await requireAdmin();
-  const db = await getDb();
+  const db = await getDbForWrite();
   let created = 0;
   let updated = 0;
 
@@ -236,7 +236,7 @@ export async function importQboChargeCodes(
   }>
 ) {
   await requireAdmin();
-  const db = await getDb();
+  const db = await getDbForWrite();
   let created = 0;
   let updated = 0;
 

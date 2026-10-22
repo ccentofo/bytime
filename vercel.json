@@ -3,7 +3,21 @@
     "deploymentEnabled": false
   },
   "crons": [
-    { "path": "/api/cron/daily-reminder", "schedule": "0 20 * * 1-5" },
-    { "path": "/api/cron/submission-deadline", "schedule": "0 20 * * *" }
+    {
+      "path": "/api/cron/daily-reminder",
+      "schedule": "0 20 * * 1-5"
+    },
+    {
+      "path": "/api/cron/submission-deadline",
+      "schedule": "0 20 * * *"
+    },
+    {
+      "path": "/api/cron/tenant-lifecycle",
+      "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/cron/notice-delivery",
+      "schedule": "*/10 * * * *"
+    }
   ]
 }

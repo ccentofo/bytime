@@ -320,6 +320,25 @@ export const timesheetPeriods = pgTable('timesheet_periods', {
 ]);
 
 // ---------------------------------------------------------------------------
+// Period Events (feature-plan-terms-compliance.md T8 — append-only approval history; R11)
+// ---------------------------------------------------------------------------
+
+export const periodEventEnum = pgEnum('period_event', ['submitted', 'approved', 'rejected']);
+
+export const periodEvents = pgTable('period_events', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  periodId: uuid('period_id').notNull().references(() => timesheetPeriods.id),
+  userId: uuid('user_id').notNull().references(() => users.id), // whose period this event is about
+  event: periodEventEnum('event').notNull(),
+  actorId: uuid('actor_id').references(() => users.id),          // who performed it (approver for approved/rejected)
+  comment: text('comment'),
+  completenessSnapshot: jsonb('completeness_snapshot'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('idx_period_events_period').on(table.periodId),
+]);
+
+// ---------------------------------------------------------------------------
 // Notification Preferences (per-user email notification settings)
 // ---------------------------------------------------------------------------
 

@@ -89,11 +89,24 @@ jobs:
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
 
+      # The lifecycle / billing / deletion suites need a control plane; without it they skip silently.
+      - name: Create and migrate the control-plane test database
+        run: |
+          node -e "const p=require('postgres');const s=p(process.env.DATABASE_URL,{max:1});s.unsafe('CREATE DATABASE bytime_cp_test').catch(e=>{if(e.code!=='42P04')throw e}).finally(()=>s.end())"
+          npm run db:migrate:cp
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          CONTROL_PLANE_DATABASE_URL: postgresql://bytime:bytime_dev@localhost:5432/bytime_cp_test
+
       - name: Run integration tests
         run: npm run test:integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
           DATABASE_URL: ${{ env.DATABASE_URL }}
+          CONTROL_PLANE_DATABASE_URL: postgresql://bytime:bytime_dev@localhost:5432/bytime_cp_test
+          # Test-only key (32 bytes hex); never used outside CI.
+          ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000001
+          REQUIRE_CONTROL_PLANE_TESTS: '1'
           # CI's runner defaults to UTC; dev machines are usually US-local. Pin to a US-Eastern
           # zone with a DST transition so calendar-date bugs can't hide behind either default.
           TZ: America/New_York

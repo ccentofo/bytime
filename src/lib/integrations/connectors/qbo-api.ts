@@ -1,4 +1,4 @@
-import { getDb } from '@/db';
+import { getDb, getDbForWrite } from '@/db';
 import { integrationConnections } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { decrypt, encrypt } from '@/lib/encryption';
@@ -160,10 +160,13 @@ export async function ensureValidToken(connectionId: string): Promise<string> {
 
   // Token expired or about to expire — refresh
   const currentRefreshToken = decrypt(connection.refreshTokenEncrypted);
+  // Get the write client BEFORE refreshing: in a read-only workspace this throws here, before the
+  // provider rotates the refresh token, so the stored token is never invalidated and lost.
+  const writeDb = await getDbForWrite();
   const newTokens = await refreshQBOToken(currentRefreshToken);
 
   // Store the new tokens
-  await db.update(integrationConnections)
+  await writeDb.update(integrationConnections)
     .set({
       accessTokenEncrypted: encrypt(newTokens.accessToken),
       refreshTokenEncrypted: encrypt(newTokens.refreshToken),

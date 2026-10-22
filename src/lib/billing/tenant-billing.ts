@@ -1,34 +1,43 @@
 import 'server-only';
 import { eq } from 'drizzle-orm';
-import { controlDb } from '@/db/control-plane';
 import { tenants } from '@/db/control-plane/schema';
+import { withLockedPool, withTenantLock } from '@/db/control-plane/locked';
 import { invalidateTenant } from '@/lib/tenant/registry';
+import { readTenant, recordAudit, updateTenantGuarded } from '@/lib/tenant/lifecycle-store';
+import { stripe } from './stripe';
 
-export async function setTenantStripeCustomer(slug: string, stripeCustomerId: string): Promise<void> {
-  await controlDb.update(tenants).set({ stripeCustomerId, updatedAt: new Date() }).where(eq(tenants.slug, slug));
-  invalidateTenant(slug);
-}
+/**
+ * The tenant's Stripe customer link (feature-plan-terms-compliance-fixes.md §5.6). Creation uses an idempotency
+ * key and links only if the tenant still has no (live) customer, under the tenant advisory lock with the
+ * lifecycle_version guard. A deleted customer is replaced by a new one (the old id is audited, never reused).
+ */
+export async function ensureStripeCustomer(tenantId: string): Promise<string> {
+  const [row] = await withLockedPool((db) => db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1));
+  if (!row) throw new Error('Unknown workspace.');
+  if (row.stripeCustomerId && !row.stripeCustomerDeletedAt) return row.stripeCustomerId;
 
-export async function findTenantByStripeCustomer(stripeCustomerId: string) {
-  const [row] = await controlDb.select().from(tenants).where(eq(tenants.stripeCustomerId, stripeCustomerId)).limit(1);
-  return row ?? null;
-}
+  const oldId = row.stripeCustomerId;
+  const customer = await stripe.customers.create(
+    { name: row.name, metadata: { slug: row.slug, tenantId: row.id } },
+    { idempotencyKey: `cadenzpoint-customer:${row.id}:${oldId ?? 'first'}` },
+  );
 
-export async function applySubscriptionState(input: {
-  stripeCustomerId: string;
-  stripeSubscriptionId: string | null;
-  subscriptionStatus: string;
-  plan: string;
-  access: 'active' | 'suspended';
-}): Promise<void> {
-  const row = await findTenantByStripeCustomer(input.stripeCustomerId);
-  if (!row) return; // unknown customer — ignore
-  await controlDb.update(tenants).set({
-    stripeSubscriptionId: input.stripeSubscriptionId,
-    subscriptionStatus: input.subscriptionStatus,
-    plan: input.plan,
-    status: input.access,
-    updatedAt: new Date(),
-  }).where(eq(tenants.id, row.id));
+  const linked = await withTenantLock(tenantId, async (tx) => {
+    const current = await readTenant(tx, tenantId);
+    if (!current) throw new Error('Unknown workspace.');
+    const stillUnlinked = current.stripeCustomerId === oldId
+      && (oldId === null || current.stripeCustomerDeletedAt !== null);
+    if (!stillUnlinked) {
+      // Someone linked a customer meanwhile: use theirs.
+      if (current.stripeCustomerId && !current.stripeCustomerDeletedAt) return current.stripeCustomerId;
+      throw new Error('Billing account changed while starting checkout — please try again.');
+    }
+    await updateTenantGuarded(tx, current, { stripeCustomerId: customer.id, stripeCustomerDeletedAt: null }, new Date());
+    if (oldId) {
+      await recordAudit(tx, { tenantId, kind: 'stripe-customer-replaced', actor: 'checkout', detail: `old=${oldId} new=${customer.id}` });
+    }
+    return customer.id;
+  });
   invalidateTenant(row.slug);
+  return linked;
 }

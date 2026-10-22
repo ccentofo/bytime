@@ -113,7 +113,43 @@ production tenant**; after that it becomes a multi-deploy migration.
 ## Phase 1d — Terms compliance (BLOCKING for paid launch)
 
 `feature-plan-terms-compliance.md`: trial expiry, billing grace/suspension, full export with every
-revision, workspace deletion. Its §0 decisions come from the business side first. Build after 1c.
+revision, workspace deletion. Its §0 decisions come from the business side first (answered — see
+`src/lib/tenant/lifecycle-config.ts`). Build after 1c.
+
+**T1 backfill**: immediately after `db:migrate:all` applies the T1 control-plane migration in each
+environment, run `npm run backfill:trial-dates` (reads `CONTROL_PLANE_DATABASE_URL` from the
+environment) so every pre-existing trial tenant gets a `trial_ends_at`. Idempotent — safe to re-run.
+Use `--check` first to preview with no changes applied.
+
+**Lifecycle crons** (`feature-plan-terms-compliance-fixes.md` §4.4): `/api/cron/tenant-lifecycle`
+(daily) reconciles with Stripe, applies due state changes, and emails the founder digest;
+`/api/cron/notice-delivery` (every 10 minutes, needs Vercel **Pro**) delivers and retries the
+lifecycle notices. Both are in `vercel.json`. Set `OPS_ALERT_EMAIL` (6.4): the digest lists
+unresolved alerts, workspaces ready for deletion, stuck deletions, notices pending more than 24 h,
+forced notices and the lifecycle-exempt (demo) list. Without it the digest is skipped, with a log
+warning.
+
+**Before the lifecycle cron first runs in an environment:** mark the existing demo workspaces exempt
+(F1), or re-seed them with `npm run seed:demo` (which marks them exempt):
+```bash
+npm run tenant:admin -- set-exempt acme on --reason "demo workspace" --yes
+```
+(repeat for each demo slug). In **staging**, also clear `tenant_notices` rows created by the earlier
+build (they use old anchors; pre-launch only): `TRUNCATE tenant_notices;` on the staging control plane.
+
+**Founder tooling** (`npm run tenant:admin -- <command>`; every change needs `--yes`, is audited, and
+can take 60 s to show in the app): `show <slug>`, `extend-trial <slug> <days>`, `end-trial <slug>`,
+`suspend <slug> --reason "…"` (policy breach: hold screen for everyone, export blocked, admins emailed),
+`unsuspend <slug>`, `set-policy-export <slug> on|off --reason "…"` (F5: allow/block export for one policy hold),
+`set-exempt <slug> on|off --reason "…"`,
+`force-notice-sent <slug> <kind> --reason "…"`, `export-destroyed <slug> [--legal-hold "…"]`,
+`resolve-alert <id> --note "…"`.
+
+**T7 backfill**: after `db:migrate:cp` applies the T7 control-plane migration, run
+`npm run backfill:neon-project-ids` (reads `CONTROL_PLANE_DATABASE_URL` and `NEON_API_KEY`) so
+every pre-existing tenant gets its `neon_project_id` recorded — `npm run tenant:delete` needs it to
+know which Neon project to delete. Idempotent; `--check` previews with no changes. See
+`TENANT-DELETION.md` for the deletion runbook itself.
 
 ---
 
@@ -235,6 +271,7 @@ values and production gets production values):
 | `ENCRYPTION_KEY` | staging (Phase 4) | prod (Phase 4) |
 | `AUTH_SECRET` | staging | prod |
 | `CRON_SECRET` | staging | prod |
+| `OPS_ALERT_EMAIL` | your staging-watching inbox (optional) | the founder inbox for the deletion/failure digest (T4) |
 | `NEXT_PUBLIC_APP_URL` | `https://staging.cadenzpoint.com` | `https://cadenzpoint.com` |
 | `APP_ROOT_DOMAIN` | `staging.cadenzpoint.com` | `cadenzpoint.com` |
 | `NEXT_PUBLIC_APP_ROOT_DOMAIN` | `staging.cadenzpoint.com` | `cadenzpoint.com` |
@@ -322,16 +359,24 @@ monthly prices. Copy each **price ID** (`price_…`) into `STRIPE_PRICE_STARTER`
 **9.2** **Developers → Webhooks → Add endpoint**:
 - URL: `https://staging.cadenzpoint.com/api/stripe/webhook` (test) /
   `https://cadenzpoint.com/api/stripe/webhook` (live)
-- Events — select exactly these four (the ones the app handles):
-  `customer.subscription.created`, `customer.subscription.updated`,
-  `customer.subscription.deleted`, `invoice.payment_failed`
+- Events — select exactly these eight (the ones the app handles,
+  feature-plan-terms-compliance-fixes.md §4.3): `customer.subscription.created`,
+  `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`,
+  `invoice.payment_failed`, `checkout.session.completed`, `customer.updated`, `customer.deleted`
 - Copy the endpoint's **Signing secret** → `STRIPE_WEBHOOK_SECRET`.
 
-**9.3** **Settings → Billing → Customer portal** → enable it, allow cancel and plan switching
-between your three prices, save. (The app's "Manage billing" button fails until this is saved.)
+**9.3** **Settings → Billing → Customer portal** → enable it and allow: **payment method update**,
+**invoice history**, **cancel at end of billing period** (never "cancel immediately" — customers keep
+access until the period ends, Terms §17.2), and **plan switching** between your three prices. Save.
+(The app's "Manage billing" button fails until this is saved.)
 
 **9.4** **Developers → API keys** → copy the **Secret key** → `STRIPE_SECRET_KEY`
 (`sk_test_…` for staging, `sk_live_…` for production).
+
+**9.5** **Settings → Billing → Subscriptions and emails → Manage failed payments**: when all
+retries fail, choose **leave the subscription past due** (never "cancel the subscription"). The app
+itself suspends at day 15 and terminates at day 45 after notice emails (Terms §4.7); if Stripe cancels
+first, customers would be cut off on Stripe's schedule, without the notices the Terms promise.
 
 ✅ **Check:** each Vercel project has its Stripe secret, webhook secret, and three price IDs.
 
@@ -420,6 +465,21 @@ DIAG_SECRET=<that value> npm run stress:isolation -- --base staging.cadenzpoint.
 `4242 4242 4242 4242` (any future date, any CVC). Confirm Stripe → Webhooks shows successful
 deliveries and the app shows the plan as active. Open **Manage billing** (customer portal).
 
+**12.8b** Lifecycle rehearsal (test mode, on a throwaway workspace — never a demo workspace):
+1. `npm run tenant:admin -- end-trial stagetest2 --yes`, then trigger the lifecycle cron
+   (`curl -H "Authorization: Bearer <STAGING_CRON_SECRET>" https://staging.cadenzpoint.com/api/cron/tenant-lifecycle`).
+   Expect the workspace read-only and a "trial has ended" email stating the deletion date.
+2. Subscribe stagetest2 with card `4000 0000 0000 0341` (attaches, then fails on renewal) or use Stripe's
+   test clock to advance a subscription into `past_due`: expect the "payment failed" email with a suspension date.
+3. `npm run tenant:admin -- show stagetest2` lists every notice as SENT with a provider id, and no unresolved alerts
+   except the ones you caused.
+4. In the Stripe dashboard, cancel the subscription: expect read-only and the "subscription ended" email with a
+   deletion date 90 days out.
+5. ACH (Terms §4.3): in test mode, pay an invoice with a test bank account; while it is processing, the cron must not
+   suspend. Note what statuses Stripe shows; record anything unexpected in feature-plan-terms-compliance-fixes.md §2.
+6. Deletion dry run: `npm run tenant:delete -- stagetest2` (no `--yes`): it must report the classification and
+   "Not eligible" until the deletion date has passed.
+
 **12.9** Email: confirm the verification email arrived, and trigger a password reset to confirm it arrives too.
 
 **12.10** CSP: open the browser DevTools console on several pages and look for CSP violation
@@ -450,7 +510,9 @@ company or the first customer). Complete the verification email and password set
 Vercel project and redeploy (re-run 13.1). Re-check the console afterward.
 
 **13.5** Confirm crons are scheduled: production Vercel project → **Settings → Cron Jobs** shows
-the two jobs from `vercel.json`. (Crons only run on production deployments.)
+the four jobs from `vercel.json` (daily-reminder, submission-deadline, tenant-lifecycle,
+notice-delivery every 10 minutes). (Crons only run on production deployments; the 10-minute schedule
+and the 800-second lifecycle/export duration need the **Pro** plan — staging too.)
 
 **13.6** Run the smoke test against production:
 ```bash

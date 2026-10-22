@@ -37,6 +37,13 @@ vi.mock('@/lib/tenant/registry', () => ({
           status: tenantStatus,
           plan: 'trial',
           dbUrl: TEST_DB_URL,
+          // The registry's TenantRecord always carries every lifecycle fact (null when unset).
+          subscriptionStatus: null, stripeSubscriptionId: null, trialEndsAt: null, pastDueSince: null,
+          suspendedAt: tenantStatus === 'suspended' ? new Date('2026-01-01') : null,
+          suspensionReason: tenantStatus === 'suspended' ? 'nonpayment' : null,
+          subscriptionEndedAt: null, deletionScheduledFor: null, firstGoodAt: null, lifecycleExempt: false,
+          policyExportAllowed: false, stripeCustomerId: null, stripeCustomerDeletedAt: null, currentPeriodEnd: null,
+          neonProjectId: null, lifecycleVersion: 0,
         }
       : null,
 }));

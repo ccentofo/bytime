@@ -3,7 +3,7 @@
 // authorize first.
 import 'server-only';
 
-import { getDb } from '@/db';
+import { getDb, getDbForWrite } from '@/db';
 import {
   integrationConnections,
   integrationSyncLogs,
@@ -143,7 +143,8 @@ export async function executeSyncOperation(
   triggeredBy: string | null,
   triggerType: 'manual' | 'auto' | 'retry' = 'manual'
 ): Promise<{ syncLogId: string; result: SyncResult }> {
-  const db = await getDb();
+  // A sync writes logs/records and pushes data out: only in `full` mode (write gate).
+  const db = await getDbForWrite();
   // Get connection details
   const [connection] = await db
     .select()

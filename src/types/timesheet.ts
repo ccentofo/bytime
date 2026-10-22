@@ -51,6 +51,10 @@ export interface TimesheetState {
   flsaExempt: boolean; // true if user is FLSA exempt (salaried)
   periodConfig: PeriodConfig; // pay period configuration
   today: CalendarDate; // workspace "today" (server-resolved, never the browser's clock)
+  // feature-plan-terms-compliance.md §3.2: the workspace's access mode is read_only (trial ended
+  // or subscription ended). UI-only — disables entry so the DCAA reason-code flow doesn't even
+  // open for a save that getDbForWrite() would reject anyway; the server gate is the real control.
+  readOnly: boolean;
 }
 
 export type TimesheetAction =
@@ -91,4 +95,5 @@ export interface TimesheetPageData {
   flsaExempt?: boolean;
   dashboardData?: EmployeeDashboardData;
   periodConfig: PeriodConfig;
+  readOnly: boolean;
 }

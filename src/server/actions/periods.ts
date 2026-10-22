@@ -1,10 +1,11 @@
 'use server';
 
-import { getDb } from '@/db';
-import { timesheetPeriods, users, timesheetEntries } from '@/db/schema';
+import { getDb, getDbForWrite } from '@/db';
+import { isUniqueViolation } from '@/lib/db-errors';
+import { timesheetPeriods, users, timesheetEntries, periodEvents } from '@/db/schema';
 import { eq, and, inArray, gte, lt, sql } from 'drizzle-orm';
 import { requireSession, requireApprover, requireApproverFresh, getEmployeeScope, assertCanAccessEmployee, AuthorizationError } from '@/lib/session';
-import { getPeriodStatusFor, resolvePeriod, type PeriodInfo, type PeriodStatus } from '@/server/internal/periods';
+import { getPeriodStatusFor, lockEmployeeTimesheet, resolvePeriod, type PeriodInfo, type PeriodStatus } from '@/server/internal/periods';
 import { getSupervisorScopeInfo, getSupervisedEmployeeIds } from '@/server/internal/supervisor-scope';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { existingPeriodLength, loadScheduleResolver } from '@/server/internal/pay-period-config';
@@ -156,7 +157,7 @@ export async function submitPeriod(data: {
 }): Promise<PeriodInfo> {
   const actor = await requireSession();
   const userId = actor.id;
-  const db = await getDb();
+  const db = await getDbForWrite();
   const periodStart = parseCalendarDate(data.periodStart);
 
   // Must be a real period start (same rule as saveTimesheetBatch), so a submission can't
@@ -172,95 +173,93 @@ export async function submitPeriod(data: {
     throw new Error(`Cannot submit before the last day of the pay period (${formatCalendarDate(lastWeekday, 'MMM D, YYYY')}).`);
   }
 
-  // Server-side validation: cannot submit a completely empty timesheet
+  // One transaction holding this employee's timesheet lock (shared with saveTimesheetBatch), so a save can't
+  // land in this period while it is being certified — including a first submission, where no period row
+  // exists yet. The empty check, the status check and the write all see the same state.
   const periodEndExclusive = addDays(periodStart, numDays);
-  const entryCount = await db
-    .select({ count: sql<number>`COUNT(*)` })
-    .from(timesheetEntries)
-    .where(
-      and(
-        eq(timesheetEntries.userId, userId),
-        gte(timesheetEntries.entryDate, periodStart),
-        lt(timesheetEntries.entryDate, periodEndExclusive),
-      )
-    );
+  let row: typeof timesheetPeriods.$inferSelect;
+  try {
+    row = await db.transaction(async (tx) => {
+      await lockEmployeeTimesheet(tx, userId);
 
-  if (Number(entryCount[0]?.count ?? 0) === 0) {
-    throw new Error('Cannot submit an empty timesheet. Please enter your hours before submitting.');
+      // Server-side validation: cannot submit a completely empty timesheet
+      const entryCount = await tx
+        .select({ count: sql<number>`COUNT(*)` })
+        .from(timesheetEntries)
+        .where(
+          and(
+            eq(timesheetEntries.userId, userId),
+            gte(timesheetEntries.entryDate, periodStart),
+            lt(timesheetEntries.entryDate, periodEndExclusive),
+          )
+        );
+      if (Number(entryCount[0]?.count ?? 0) === 0) {
+        throw new Error('Cannot submit an empty timesheet. Please enter your hours before submitting.');
+      }
+
+      // periodStart is an exact calendar day (a `date` column), so an exact match finds a resubmission.
+      const [existing] = await tx
+        .select()
+        .from(timesheetPeriods)
+        .where(and(eq(timesheetPeriods.userId, userId), eq(timesheetPeriods.periodStart, periodStart)));
+
+      let saved: typeof timesheetPeriods.$inferSelect;
+      if (!existing) {
+        // First submission — snapshot the config this period belongs to.
+        [saved] = await tx.insert(timesheetPeriods).values({
+          userId,
+          periodStart,
+          status: 'submitted',
+          submittedAt: new Date(),
+          submittedComment: data.comment,
+          periodType: periodConfig.periodType,
+          periodNumDays: numDays,
+          completenessSnapshot: data.completeness ?? null,
+        }).returning();
+      } else {
+        if (existing.status !== 'draft' && existing.status !== 'rejected') {
+          throw new Error(`Cannot submit period with status "${existing.status}". Only draft or rejected periods can be submitted.`);
+        }
+        // Conditional on the status we just checked: if a reviewer changed it meanwhile, nothing is written.
+        const updated = await tx.update(timesheetPeriods)
+          .set({
+            status: 'submitted',
+            submittedAt: new Date(),
+            submittedComment: data.comment,
+            reviewedAt: null,
+            reviewedBy: null,
+            reviewComment: null,
+            completenessSnapshot: data.completeness ?? null,
+            updatedAt: new Date(),
+          })
+          .where(and(eq(timesheetPeriods.id, existing.id), inArray(timesheetPeriods.status, ['draft', 'rejected'])))
+          .returning();
+        if (updated.length === 0) throw new Error(CONCURRENT_REVIEW_MESSAGE);
+        saved = updated[0];
+      }
+      // T8/R11: append-only approval history, written in the same transaction as the period change.
+      await tx.insert(periodEvents).values({
+        periodId: saved.id, userId, event: 'submitted', actorId: userId,
+        comment: data.comment ?? null, completenessSnapshot: data.completeness ?? null,
+      });
+      return saved;
+    });
+  } catch (err) {
+    // Two first submissions for the same period at once: the per-user lock makes this near-impossible, but
+    // the unique index is the backstop, and Postgres aborts the transaction on it.
+    if (isUniqueViolation(err, 'user_period_unique_idx')) throw new Error(CONCURRENT_REVIEW_MESSAGE);
+    throw err;
   }
-
-  // periodStart is now an exact calendar day (a `date` column) — an exact match finds a
-  // resubmission regardless of what time of day it's sent, with no window needed.
-  const existing = await db
-    .select()
-    .from(timesheetPeriods)
-    .where(
-      and(
-        eq(timesheetPeriods.userId, userId),
-        eq(timesheetPeriods.periodStart, periodStart),
-      )
-    );
-
-  if (existing.length === 0) {
-    // Create new period record — snapshot the effective config at this period's start date
-    // (full config stored as audit record; periodConfig already resolved above)
-    const snapshotNumDays = numDays;
-
-    const rows = await db.insert(timesheetPeriods).values({
-      userId,
-      periodStart,
-      status: 'submitted',
-      submittedAt: new Date(),
-      submittedComment: data.comment,
-      periodType: periodConfig.periodType,
-      periodNumDays: snapshotNumDays,
-      completenessSnapshot: data.completeness ?? null,
-    }).returning();
-
-    // The submission is already committed; a notification failure must not report it as failed.
-    await notifyReviewersOfSubmission(userId, periodStart, snapshotNumDays).catch((err) => console.error('Submission notification failed:', err));
-
-    return {
-      id: rows[0].id,
-      status: 'submitted',
-      submittedAt: rows[0].submittedAt,
-      reviewedAt: null,
-      reviewedBy: null,
-      reviewComment: null,
-      periodType: rows[0].periodType ?? null,
-      periodNumDays: rows[0].periodNumDays ?? null,
-    };
-  }
-
-  // Update existing record
-  const row = existing[0];
-  if (row.status !== 'draft' && row.status !== 'rejected') {
-    throw new Error(`Cannot submit period with status "${row.status}". Only draft or rejected periods can be submitted.`);
-  }
-
-  const rows = await db.update(timesheetPeriods)
-    .set({
-      status: 'submitted',
-      submittedAt: new Date(),
-      submittedComment: data.comment,
-      reviewedAt: null,
-      reviewedBy: null,
-      reviewComment: null,
-      completenessSnapshot: data.completeness ?? null,
-      updatedAt: new Date(),
-    })
-    .where(eq(timesheetPeriods.id, row.id))
-    .returning();
 
   const result = {
-    id: rows[0].id,
+    id: row.id,
     status: 'submitted' as PeriodStatus,
-    submittedAt: rows[0].submittedAt,
+    submittedAt: row.submittedAt,
     reviewedAt: null,
     reviewedBy: null,
     reviewComment: null,
-    periodType: rows[0].periodType ?? null,
-    periodNumDays: rows[0].periodNumDays ?? null,
+    periodType: row.periodType ?? null,
+    periodNumDays: row.periodNumDays ?? null,
   };
 
   // The submission is already committed; a notification failure must not report it as failed.
@@ -268,6 +267,9 @@ export async function submitPeriod(data: {
 
   return result;
 }
+
+/** Shown when a period's status changed between our check and our write (another tab or reviewer). */
+const CONCURRENT_REVIEW_MESSAGE = 'This timesheet was just changed by someone else. Please refresh and try again.';
 
 /**
  * Approve a timesheet period. Approver only, and only for an employee in scope.
@@ -278,7 +280,7 @@ export async function approvePeriod(data: {
   comment?: string;
 }): Promise<void> {
   const actor = await requireApproverFresh();
-  const db = await getDb();
+  const db = await getDbForWrite();
   const existing = await db
     .select()
     .from(timesheetPeriods)
@@ -307,15 +309,25 @@ export async function approvePeriod(data: {
     throw new Error(`Cannot approve period with status "${period.status}". Only submitted periods can be approved.`);
   }
 
-  await db.update(timesheetPeriods)
-    .set({
-      status: 'approved',
-      reviewedAt: new Date(),
-      reviewedBy: actor.id,
-      reviewComment: data.comment ?? null,
-      updatedAt: new Date(),
-    })
-    .where(eq(timesheetPeriods.id, data.periodId));
+  await db.transaction(async (tx) => {
+    const updated = await tx.update(timesheetPeriods)
+      .set({
+        status: 'approved',
+        reviewedAt: new Date(),
+        reviewedBy: actor.id,
+        reviewComment: data.comment ?? null,
+        updatedAt: new Date(),
+      })
+      // Only if still submitted: two reviewers acting at once can't both record a decision.
+      .where(and(eq(timesheetPeriods.id, data.periodId), eq(timesheetPeriods.status, 'submitted')))
+      .returning({ id: timesheetPeriods.id });
+    if (updated.length === 0) throw new Error(CONCURRENT_REVIEW_MESSAGE);
+    // T8/R11: append-only approval history, written in the same transaction as the period change.
+    await tx.insert(periodEvents).values({
+      periodId: data.periodId, userId: period.userId, event: 'approved', actorId: actor.id,
+      comment: data.comment ?? null, completenessSnapshot: period.completenessSnapshot ?? null,
+    });
+  });
 
   // Fire-and-forget: notify employee via email
   const [employee] = await db
@@ -352,7 +364,7 @@ export async function rejectPeriod(data: {
   comment: string; // Required for rejections
 }): Promise<void> {
   const actor = await requireApproverFresh();
-  const db = await getDb();
+  const db = await getDbForWrite();
   const existing = await db
     .select()
     .from(timesheetPeriods)
@@ -379,15 +391,25 @@ export async function rejectPeriod(data: {
     throw new Error(`Cannot reject period with status "${period.status}". Only submitted periods can be rejected.`);
   }
 
-  await db.update(timesheetPeriods)
-    .set({
-      status: 'rejected',
-      reviewedAt: new Date(),
-      reviewedBy: actor.id,
-      reviewComment: data.comment,
-      updatedAt: new Date(),
-    })
-    .where(eq(timesheetPeriods.id, data.periodId));
+  await db.transaction(async (tx) => {
+    const updated = await tx.update(timesheetPeriods)
+      .set({
+        status: 'rejected',
+        reviewedAt: new Date(),
+        reviewedBy: actor.id,
+        reviewComment: data.comment,
+        updatedAt: new Date(),
+      })
+      // Only if still submitted: two reviewers acting at once can't both record a decision.
+      .where(and(eq(timesheetPeriods.id, data.periodId), eq(timesheetPeriods.status, 'submitted')))
+      .returning({ id: timesheetPeriods.id });
+    if (updated.length === 0) throw new Error(CONCURRENT_REVIEW_MESSAGE);
+    // T8/R11: append-only approval history, written in the same transaction as the period change.
+    await tx.insert(periodEvents).values({
+      periodId: data.periodId, userId: period.userId, event: 'rejected', actorId: actor.id,
+      comment: data.comment, completenessSnapshot: period.completenessSnapshot ?? null,
+    });
+  });
 
   // Fire-and-forget: notify employee via email
   const [employee] = await db

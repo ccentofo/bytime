@@ -158,6 +158,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
     flsaExempt: initialData.flsaExempt ?? false,
     periodConfig: initialData.periodConfig,
     today: initialData.today,
+    readOnly: initialData.readOnly,
   };
 
   const [state, dispatch] = useReducer(timesheetReducer, initialState);

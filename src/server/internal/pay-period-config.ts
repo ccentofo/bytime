@@ -29,7 +29,7 @@ function toConfig(row: ConfigRow): PeriodConfig {
 }
 
 /** The config in effect on `day`: the row with the greatest effective_from <= day, else the default. */
-export async function configAt(db: TenantDb, day: CalendarDate): Promise<PeriodConfig> {
+export async function configAt(db: Pick<TenantDb, 'select'>, day: CalendarDate): Promise<PeriodConfig> {
   const [row] = await db
     .select()
     .from(payPeriodConfig)

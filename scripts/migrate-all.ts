@@ -164,7 +164,7 @@ async function main() {
   // ---- Tenants ---------------------------------------------------------------
   const controlSql = postgres(controlUrl!, { max: 1 });
   const controlDrizzle = drizzle(controlSql);
-  let tenantRows: Array<{ slug: string; status: string; dbUrlEncrypted: string }>;
+  let tenantRows: Array<{ slug: string; status: string; dbUrlEncrypted: string | null }>;
   try {
     const where = inArray(tenants.status, [...RETRYABLE_TENANT_STATUSES]);
     tenantRows = await controlDrizzle
@@ -190,7 +190,9 @@ async function main() {
   const results = await runWithConcurrency(tenantRows, concurrency, async (t): Promise<TenantResult> => {
     const startedAt = Date.now();
     try {
-      const url = decrypt(t.dbUrlEncrypted);
+      // T7: dbUrlEncrypted is only null for a tombstoned ('deleted') tenant — RETRYABLE_TENANT_STATUSES
+      // never includes 'deleted', so every row reaching here still has one.
+      const url = decrypt(t.dbUrlEncrypted!);
       if (check) {
         const pending = await withConnectionRetry(() => getPendingMigrationCount(url, TENANT_MIGRATIONS_FOLDER));
         if (pending > 0) anyTenantPending = true;

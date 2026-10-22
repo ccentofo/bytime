@@ -77,8 +77,15 @@ echo "== 3/3 Seeding demo tenants =="
 for t in "${TENANTS[@]}"; do
   IFS=':' read -r slug db name <<< "$t"
   echo "-- $slug ($name) --"
+  # Local-only: these databases are this machine's demo copies, so wiping them on re-run is intended.
+  case "$PG_BASE" in
+    *@localhost:*|*@127.0.0.1:*) WIPE_FLAG="--wipe-demo-data" ;;
+    *) WIPE_FLAG="" ;;
+  esac
+  # The env prefix must sit on the command line itself so the seeder registers into THIS control plane,
+  # never whatever .env points at.
   CONTROL_PLANE_DATABASE_URL="$CONTROL_URL" APP_ROOT_DOMAIN="localhost" \
-    npm run seed:demo "$slug" "$PG_BASE/$db" "$name" || fail "seeding $slug failed"
+    npm run seed:demo "$slug" "$PG_BASE/$db" "$name" -- $WIPE_FLAG || fail "seeding $slug failed"
 done
 
 echo ""
