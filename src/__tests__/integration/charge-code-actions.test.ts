@@ -123,7 +123,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
   // -------------------------------------------------------------------------
   it('denormalizes clinId/slinId onto the entry when saving by chargeCodeId', async () => {
-    await assignChargeCodeToUser(employee.id, chargeCode.id);
+    await expectOk(assignChargeCodeToUser(employee.id, chargeCode.id));
 
     actingAs(employee);
     await expectOk(saveTimesheetBatch({
@@ -142,7 +142,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
   // -------------------------------------------------------------------------
   it('is append-only: editing a cell inserts revision 2 and leaves revision 1 untouched', async () => {
-    await assignChargeCodeToUser(employee.id, chargeCode.id);
+    await expectOk(assignChargeCodeToUser(employee.id, chargeCode.id));
 
     actingAs(employee);
     await expectOk(saveTimesheetBatch({
@@ -172,7 +172,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
   // -------------------------------------------------------------------------
   it('rejects an edit with no reason code', async () => {
-    await assignChargeCodeToUser(employee.id, chargeCode.id);
+    await expectOk(assignChargeCodeToUser(employee.id, chargeCode.id));
 
     actingAs(employee);
     await expectOk(saveTimesheetBatch({
@@ -189,8 +189,8 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
   // -------------------------------------------------------------------------
   it('tracks two charge codes on the same CLIN, same day, independently', async () => {
     const otherCode = await createTestChargeCode(clin.id, { workLocation: 'telework' });
-    await assignChargeCodeToUser(employee.id, chargeCode.id);
-    await assignChargeCodeToUser(employee.id, otherCode.id);
+    await expectOk(assignChargeCodeToUser(employee.id, chargeCode.id));
+    await expectOk(assignChargeCodeToUser(employee.id, otherCode.id));
 
     actingAs(employee);
     await expectOk(saveTimesheetBatch({
@@ -219,7 +219,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
       }), 'forbidden', /Unauthorized/);
 
     actingAs(admin);
-    await assignChargeCodeToUser(employee.id, chargeCode.id);
+    await expectOk(assignChargeCodeToUser(employee.id, chargeCode.id));
 
     actingAs(employee);
     await expectOk(saveTimesheetBatch({
@@ -228,7 +228,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
     }));
 
     actingAs(admin);
-    await unassignChargeCodeFromUser(employee.id, chargeCode.id);
+    await expectOk(unassignChargeCodeFromUser(employee.id, chargeCode.id));
 
     actingAs(employee);
     await expectFailure(saveTimesheetBatch({
@@ -241,21 +241,21 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
   it('assignChargeCodeToUser syncs an active user_assignments row, idempotently, and re-activates it', async () => {
     const db = getTestDb();
 
-    await assignChargeCodeToUser(employee.id, chargeCode.id);
+    await expectOk(assignChargeCodeToUser(employee.id, chargeCode.id));
     let [assignment] = await db.select().from(schema.userAssignments)
       .where(and(eq(schema.userAssignments.userId, employee.id), eq(schema.userAssignments.clinId, clin.id)));
     expect(assignment).toBeDefined();
     expect(assignment.isActive).toBe(true);
 
     // Idempotent — calling again doesn't create a second row.
-    await assignChargeCodeToUser(employee.id, chargeCode.id);
+    await expectOk(assignChargeCodeToUser(employee.id, chargeCode.id));
     const rows = await db.select().from(schema.userAssignments)
       .where(and(eq(schema.userAssignments.userId, employee.id), eq(schema.userAssignments.clinId, clin.id)));
     expect(rows).toHaveLength(1);
 
     // Re-activates a previously deactivated assignment.
     await db.update(schema.userAssignments).set({ isActive: false }).where(eq(schema.userAssignments.id, assignment.id));
-    await assignChargeCodeToUser(employee.id, chargeCode.id);
+    await expectOk(assignChargeCodeToUser(employee.id, chargeCode.id));
     [assignment] = await db.select().from(schema.userAssignments)
       .where(and(eq(schema.userAssignments.userId, employee.id), eq(schema.userAssignments.clinId, clin.id)));
     expect(assignment.isActive).toBe(true);
@@ -267,7 +267,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
     const db = getTestDb();
     await db.insert(schema.userAssignments).values({ userId: supervisor.id, clinId: clin.id, isActive: true });
 
-    await assignChargeCodeToUser(employee.id, chargeCode.id);
+    await expectOk(assignChargeCodeToUser(employee.id, chargeCode.id));
 
     const supervised = await getSupervisedEmployeeIds(supervisor.id, 'supervisor');
     expect(supervised).toContain(employee.id);
@@ -275,7 +275,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
   // -------------------------------------------------------------------------
   it('blocks any save once the period has been submitted', async () => {
-    await assignChargeCodeToUser(employee.id, chargeCode.id);
+    await expectOk(assignChargeCodeToUser(employee.id, chargeCode.id));
     const db = getTestDb();
     await db.insert(schema.timesheetPeriods).values({
       userId: employee.id,
@@ -293,7 +293,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
   // -------------------------------------------------------------------------
   it('rejects a save for a future date', async () => {
-    await assignChargeCodeToUser(employee.id, chargeCode.id);
+    await expectOk(assignChargeCodeToUser(employee.id, chargeCode.id));
 
     actingAs(employee);
     await expectFailure(saveTimesheetBatch({
@@ -322,7 +322,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
   // -------------------------------------------------------------------------
   it('getRevisionMap keys direct cells by chargeCodeId', async () => {
-    await assignChargeCodeToUser(employee.id, chargeCode.id);
+    await expectOk(assignChargeCodeToUser(employee.id, chargeCode.id));
 
     actingAs(employee);
     await expectOk(saveTimesheetBatch({
@@ -341,14 +341,14 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
   it('autobridgeChargeCodesFromClins creates one code per bare active CLIN and is idempotent', async () => {
     const bareClin = await createTestClin(contract.id);
 
-    const first = await autobridgeChargeCodesFromClins();
+    const first = await expectOk(autobridgeChargeCodesFromClins());
     expect(first.created).toBeGreaterThanOrEqual(1);
 
     const db = getTestDb();
     const codesForBareClin = await db.select().from(schema.chargeCodes).where(eq(schema.chargeCodes.clinId, bareClin.id));
     expect(codesForBareClin).toHaveLength(1);
 
-    const second = await autobridgeChargeCodesFromClins();
+    const second = await expectOk(autobridgeChargeCodesFromClins());
     expect(second.created).toBe(0);
 
     const codesForBareClinAfter = await db.select().from(schema.chargeCodes).where(eq(schema.chargeCodes.clinId, bareClin.id));
@@ -356,14 +356,14 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
   });
 
   it('deactivateChargeCode soft-deletes: the row remains but drops out of getChargeCodesForUser', async () => {
-    await assignChargeCodeToUser(employee.id, chargeCode.id);
+    await expectOk(assignChargeCodeToUser(employee.id, chargeCode.id));
 
     actingAs(employee);
     const before = await getChargeCodesForUser();
     expect(before.some((c) => c.id === chargeCode.id)).toBe(true);
 
     actingAs(admin);
-    await deactivateChargeCode(chargeCode.id);
+    await expectOk(deactivateChargeCode(chargeCode.id));
 
     const db = getTestDb();
     const [row] = await db.select().from(schema.chargeCodes).where(eq(schema.chargeCodes.id, chargeCode.id));

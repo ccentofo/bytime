@@ -7,6 +7,7 @@ import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { validateRequired, validateStringLength, validateOptionalString, validateRate } from '@/lib/validation';
 import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
+import { userAction } from '@/lib/action-result';
 
 // ---------------------------------------------------------------------------
 // Labor Category CRUD
@@ -68,18 +69,20 @@ export async function createLaborCategory(data: {
   hourlyRate: string;
   ceilingRate?: string;
 }) {
-  const db = await getDbForWrite();
-  await requireAdminFresh();
-  const validatedData = {
-    clinId: data.clinId,
-    slinId: data.slinId,
-    lcatCode: validateStringLength(validateRequired(data.lcatCode, 'LCAT code'), 'LCAT code', 1, 50),
-    title: validateStringLength(validateRequired(data.title, 'Title'), 'Title', 1, 255),
-    hourlyRate: validateRate(data.hourlyRate, 'Hourly rate'),
-    ceilingRate: data.ceilingRate ? validateRate(data.ceilingRate, 'Ceiling rate') : undefined,
-  };
-  const rows = await db.insert(laborCategories).values(validatedData).returning();
-  return rows[0];
+  return userAction(async () => {
+    const db = await getDbForWrite();
+    await requireAdminFresh();
+    const validatedData = {
+      clinId: data.clinId,
+      slinId: data.slinId,
+      lcatCode: validateStringLength(validateRequired(data.lcatCode, 'LCAT code'), 'LCAT code', 1, 50),
+      title: validateStringLength(validateRequired(data.title, 'Title'), 'Title', 1, 255),
+      hourlyRate: validateRate(data.hourlyRate, 'Hourly rate'),
+      ceilingRate: data.ceilingRate ? validateRate(data.ceilingRate, 'Ceiling rate') : undefined,
+    };
+    const rows = await db.insert(laborCategories).values(validatedData).returning();
+    return rows[0];
+  });
 }
 
 /**
@@ -92,19 +95,21 @@ export async function updateLaborCategory(id: string, data: {
   ceilingRate?: string;
   status?: 'active' | 'inactive' | 'closed';
 }) {
-  const db = await getDbForWrite();
-  await requireAdminFresh();
-  const validatedData: Record<string, unknown> = { updatedAt: new Date() };
-  if (data.lcatCode !== undefined) validatedData.lcatCode = validateStringLength(validateRequired(data.lcatCode, 'LCAT code'), 'LCAT code', 1, 50);
-  if (data.title !== undefined) validatedData.title = validateStringLength(validateRequired(data.title, 'Title'), 'Title', 1, 255);
-  if (data.hourlyRate !== undefined) validatedData.hourlyRate = validateRate(data.hourlyRate, 'Hourly rate');
-  if (data.ceilingRate !== undefined) validatedData.ceilingRate = data.ceilingRate ? validateRate(data.ceilingRate, 'Ceiling rate') : undefined;
-  if (data.status !== undefined) validatedData.status = data.status;
-  const rows = await db.update(laborCategories)
-    .set(validatedData)
-    .where(eq(laborCategories.id, id))
-    .returning();
-  return rows[0];
+  return userAction(async () => {
+    const db = await getDbForWrite();
+    await requireAdminFresh();
+    const validatedData: Record<string, unknown> = { updatedAt: new Date() };
+    if (data.lcatCode !== undefined) validatedData.lcatCode = validateStringLength(validateRequired(data.lcatCode, 'LCAT code'), 'LCAT code', 1, 50);
+    if (data.title !== undefined) validatedData.title = validateStringLength(validateRequired(data.title, 'Title'), 'Title', 1, 255);
+    if (data.hourlyRate !== undefined) validatedData.hourlyRate = validateRate(data.hourlyRate, 'Hourly rate');
+    if (data.ceilingRate !== undefined) validatedData.ceilingRate = data.ceilingRate ? validateRate(data.ceilingRate, 'Ceiling rate') : undefined;
+    if (data.status !== undefined) validatedData.status = data.status;
+    const rows = await db.update(laborCategories)
+      .set(validatedData)
+      .where(eq(laborCategories.id, id))
+      .returning();
+    return rows[0];
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -169,17 +174,19 @@ export async function assignUserToLaborCategory(data: {
   effectiveDate: CalendarDate;
   endDate?: CalendarDate;
 }) {
-  const actor = await requireAdminFresh();
-  const db = await getDbForWrite();
-  // R2-6: explicit allowlist — never spread the caller's object into .values().
-  const rows = await db.insert(userLaborCategories).values({
-    userId: data.userId,
-    laborCategoryId: data.laborCategoryId,
-    effectiveDate: parseCalendarDate(data.effectiveDate),
-    endDate: data.endDate ? parseCalendarDate(data.endDate) : undefined,
-    assignedBy: actor.id,
-  }).returning();
-  return rows[0];
+  return userAction(async () => {
+    const actor = await requireAdminFresh();
+    const db = await getDbForWrite();
+    // R2-6: explicit allowlist — never spread the caller's object into .values().
+    const rows = await db.insert(userLaborCategories).values({
+      userId: data.userId,
+      laborCategoryId: data.laborCategoryId,
+      effectiveDate: parseCalendarDate(data.effectiveDate),
+      endDate: data.endDate ? parseCalendarDate(data.endDate) : undefined,
+      assignedBy: actor.id,
+    }).returning();
+    return rows[0];
+  });
 }
 
 /**
@@ -187,14 +194,16 @@ export async function assignUserToLaborCategory(data: {
  * workspace's today, so hours already entered today still count toward this labor category.
  */
 export async function endUserLaborCategoryAssignment(id: string) {
-  const db = await getDbForWrite();
-  await requireAdminFresh();
-  const endDate = await getWorkspaceToday();
-  const rows = await db.update(userLaborCategories)
-    .set({ endDate, updatedAt: new Date() })
-    .where(eq(userLaborCategories.id, id))
-    .returning();
-  return rows[0];
+  return userAction(async () => {
+    const db = await getDbForWrite();
+    await requireAdminFresh();
+    const endDate = await getWorkspaceToday();
+    const rows = await db.update(userLaborCategories)
+      .set({ endDate, updatedAt: new Date() })
+      .where(eq(userLaborCategories.id, id))
+      .returning();
+    return rows[0];
+  });
 }
 
 /**

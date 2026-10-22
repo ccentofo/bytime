@@ -5,6 +5,7 @@ import { slins } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { validateSlinNumber, validateOptionalString, validateMonetaryValue } from '@/lib/validation';
+import { userAction } from '@/lib/action-result';
 
 export async function getSlinsByClin(clinId: string) {
   await requireAdmin();
@@ -18,16 +19,18 @@ export async function createSlin(data: {
   description?: string;
   fundedAmount?: string;
 }) {
-  const db = await getDbForWrite();
-  await requireAdminFresh();
-  const validatedData = {
-    clinId: data.clinId,
-    slinNumber: validateSlinNumber(data.slinNumber),
-    description: validateOptionalString(data.description, 'Description', 2000),
-    fundedAmount: validateMonetaryValue(data.fundedAmount, 'Funded amount'),
-  };
-  const rows = await db.insert(slins).values(validatedData).returning();
-  return rows[0];
+  return userAction(async () => {
+    const db = await getDbForWrite();
+    await requireAdminFresh();
+    const validatedData = {
+      clinId: data.clinId,
+      slinNumber: validateSlinNumber(data.slinNumber),
+      description: validateOptionalString(data.description, 'Description', 2000),
+      fundedAmount: validateMonetaryValue(data.fundedAmount, 'Funded amount'),
+    };
+    const rows = await db.insert(slins).values(validatedData).returning();
+    return rows[0];
+  });
 }
 
 export async function updateSlin(id: string, data: {
@@ -36,16 +39,18 @@ export async function updateSlin(id: string, data: {
   fundedAmount?: string;
   status?: 'active' | 'inactive' | 'closed';
 }) {
-  const db = await getDbForWrite();
-  await requireAdminFresh();
-  const validatedData: Record<string, unknown> = { updatedAt: new Date() };
-  if (data.slinNumber !== undefined) validatedData.slinNumber = validateSlinNumber(data.slinNumber);
-  if (data.description !== undefined) validatedData.description = validateOptionalString(data.description, 'Description', 2000);
-  if (data.fundedAmount !== undefined) validatedData.fundedAmount = validateMonetaryValue(data.fundedAmount, 'Funded amount');
-  if (data.status !== undefined) validatedData.status = data.status;
-  const rows = await db.update(slins)
-    .set(validatedData)
-    .where(eq(slins.id, id))
-    .returning();
-  return rows[0];
+  return userAction(async () => {
+    const db = await getDbForWrite();
+    await requireAdminFresh();
+    const validatedData: Record<string, unknown> = { updatedAt: new Date() };
+    if (data.slinNumber !== undefined) validatedData.slinNumber = validateSlinNumber(data.slinNumber);
+    if (data.description !== undefined) validatedData.description = validateOptionalString(data.description, 'Description', 2000);
+    if (data.fundedAmount !== undefined) validatedData.fundedAmount = validateMonetaryValue(data.fundedAmount, 'Funded amount');
+    if (data.status !== undefined) validatedData.status = data.status;
+    const rows = await db.update(slins)
+      .set(validatedData)
+      .where(eq(slins.id, id))
+      .returning();
+    return rows[0];
+  });
 }

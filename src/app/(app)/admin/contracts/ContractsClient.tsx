@@ -26,6 +26,7 @@ import {
   createContract,
   updateContract,
 } from '@/server/actions/contracts';
+import { runAction } from '@/lib/run-action';
 import { getClinsByContract, createClin, updateClin } from '@/server/actions/clins';
 import { getSlinsByClin, createSlin, updateSlin } from '@/server/actions/slins';
 import { formatDate } from '@/lib/format';
@@ -162,14 +163,18 @@ export function ContractsClient({ initialContracts }: Props) {
       };
 
       if (editingContract) {
-        const updated = await updateContract(editingContract.id, payload);
+        const updatedResult = await runAction(updateContract(editingContract.id, payload), { errorTitle: 'Couldn’t update contract' });
+        if (!updatedResult.ok) return;
+        const updated = updatedResult.data;
         if (updated) {
           setContracts((prev) =>
             prev.map((c) => (c.id === updated.id ? (updated as Contract) : c))
           );
         }
       } else {
-        const created = await createContract(payload);
+        const createdResult = await runAction(createContract(payload), { errorTitle: 'Couldn’t create contract' });
+        if (!createdResult.ok) return;
+        const created = createdResult.data;
         if (created) {
           setContracts((prev) => [...prev, created as Contract]);
         }
@@ -181,12 +186,14 @@ export function ContractsClient({ initialContracts }: Props) {
   function handleClinSubmit() {
     if (!selectedContract) return;
     startTransition(async () => {
-      const created = await createClin({
+      const createdResult = await runAction(createClin({
         contractId: selectedContract.id,
         clinNumber: clinForm.clinNumber,
         description: clinForm.description || undefined,
         fundedAmount: clinForm.fundedAmount || undefined,
-      });
+      }), { errorTitle: 'Couldn’t create CLIN' });
+      if (!createdResult.ok) return;
+      const created = createdResult.data;
       if (created) {
         setClins((prev) => [...prev, created as Clin]);
         setClinForm({ clinNumber: '', description: '', fundedAmount: '' });
@@ -197,7 +204,9 @@ export function ContractsClient({ initialContracts }: Props) {
   function handleClinStatusToggle(clin: Clin) {
     const newStatus = clin.status === 'active' ? 'inactive' : 'active';
     startTransition(async () => {
-      const updated = await updateClin(clin.id, { status: newStatus });
+      const updatedResult = await runAction(updateClin(clin.id, { status: newStatus }), { errorTitle: 'Couldn’t update CLIN' });
+      if (!updatedResult.ok) return;
+      const updated = updatedResult.data;
       if (updated) {
         setClins((prev) => prev.map((c) => (c.id === updated.id ? (updated as Clin) : c)));
       }
@@ -220,12 +229,14 @@ export function ContractsClient({ initialContracts }: Props) {
 
   function handleSlinSubmit(clinId: string) {
     startTransition(async () => {
-      const created = await createSlin({
+      const createdResult = await runAction(createSlin({
         clinId,
         slinNumber: slinForm.slinNumber,
         description: slinForm.description || undefined,
         fundedAmount: slinForm.fundedAmount || undefined,
-      });
+      }), { errorTitle: 'Couldn’t create SLIN' });
+      if (!createdResult.ok) return;
+      const created = createdResult.data;
       if (created) {
         setSlinsByClin((prev) => ({
           ...prev,
@@ -239,7 +250,9 @@ export function ContractsClient({ initialContracts }: Props) {
   function handleSlinStatusToggle(slin: Slin) {
     const newStatus = slin.status === 'active' ? 'inactive' : 'active';
     startTransition(async () => {
-      const updated = await updateSlin(slin.id, { status: newStatus });
+      const updatedResult = await runAction(updateSlin(slin.id, { status: newStatus }), { errorTitle: 'Couldn’t update SLIN' });
+      if (!updatedResult.ok) return;
+      const updated = updatedResult.data;
       if (updated) {
         setSlinsByClin((prev) => ({
           ...prev,

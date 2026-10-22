@@ -29,6 +29,7 @@ import {
   IconRefresh,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { runAction } from '@/lib/run-action';
 import { getSetupStatus } from '@/server/actions/setup';
 import type { SetupStatus } from '@/server/internal/setup';
 import { seedIndirectCodes } from '@/server/actions/indirect-codes';
@@ -157,23 +158,15 @@ export function SetupWizardClient({ initialStatus }: Props) {
 
   async function handleSeedIndirect() {
     setSeedingIndirect(true);
-    try {
-      await seedIndirectCodes();
-      notifications.show({
-        title: 'Indirect codes created',
-        message: '9 standard DCAA indirect charge codes have been seeded.',
-        color: 'success',
-      });
-      refreshStatus();
-    } catch (error) {
-      notifications.show({
-        title: 'Error',
-        message: String(error),
-        color: 'red',
-      });
-    } finally {
-      setSeedingIndirect(false);
-    }
+    const result = await runAction(seedIndirectCodes(), { errorTitle: 'Couldn’t create indirect codes' });
+    setSeedingIndirect(false);
+    if (!result.ok) return;
+    notifications.show({
+      title: 'Indirect codes created',
+      message: '9 standard DCAA indirect charge codes have been seeded.',
+      color: 'success',
+    });
+    refreshStatus();
   }
 
   function isStepComplete(step: StepConfig): boolean {

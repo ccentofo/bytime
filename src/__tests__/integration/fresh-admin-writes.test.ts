@@ -38,6 +38,22 @@ import * as slins from '@/server/actions/slins';
 import * as users from '@/server/actions/users';
 
 const call = (fn: unknown, ...args: unknown[]) => (fn as (...a: unknown[]) => Promise<unknown>)(...args);
+
+/**
+ * Refused by the fresh role check: a converted action returns { ok: false, code: 'forbidden' }; one not yet converted
+ * to ActionResult throws the same AuthorizationError. (P4 converts these feature area by feature area; the last
+ * commit narrows this to the result form only.)
+ */
+async function expectRefused(pending: Promise<unknown>): Promise<void> {
+  let result: unknown;
+  try {
+    result = await pending;
+  } catch (err) {
+    expect(String(err)).toMatch(/access has changed/i);
+    return;
+  }
+  expect(result).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/access has changed/i) });
+}
 const ZERO = '00000000-0000-0000-0000-000000000000';
 
 const ADMIN_WRITES: Array<[string, unknown, unknown[]]> = [
@@ -96,7 +112,7 @@ describe('the 37 admin-only writes refuse a JWT-admin whose DB role is superviso
   });
 
   it.each(ADMIN_WRITES)('%s', async (_name, fn, args) => {
-    await expect(call(fn, ...args)).rejects.toThrow(/access has changed/i);
+    await expectRefused(call(fn, ...args));
   });
 
   it('wrote nothing (no contract, cost class or indirect code was created)', async () => {

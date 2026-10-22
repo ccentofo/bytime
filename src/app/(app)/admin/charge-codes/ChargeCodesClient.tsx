@@ -6,6 +6,7 @@ import {
   Badge, Switch, ActionIcon, Tooltip,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
+import { runAction } from '@/lib/run-action';
 import { IconPlus, IconPencil, IconBan, IconBolt } from '@tabler/icons-react';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
@@ -114,37 +115,32 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
       return;
     }
     startTransition(async () => {
-      try {
-        if (editingId) {
-          await updateChargeCode(editingId, {
+      const result = editingId
+        ? await runAction(updateChargeCode(editingId, {
             code: form.code.trim(), name: form.name.trim(),
             description: form.description || undefined,
             clinId: form.clinId, classId: form.classId || null,
             workLocation: (form.workLocation as 'onsite' | 'telework' | 'other') || null,
             billable: form.billable,
-          });
-          notifications.show({ title: 'Updated', message: `${form.code} updated.`, color: 'success' });
-        } else {
-          await createChargeCode({
+          }), { errorTitle: 'Couldn’t update charge code' })
+        : await runAction(createChargeCode({
             code: form.code.trim(), name: form.name.trim(),
             description: form.description || undefined,
             clinId: form.clinId, classId: form.classId || undefined,
             workLocation: (form.workLocation as 'onsite' | 'telework' | 'other') || undefined,
             billable: form.billable,
-          });
-          notifications.show({ title: 'Created', message: `${form.code} created.`, color: 'success' });
-        }
-        setModalOpen(false);
-        await refreshCodes();
-      } catch (e) {
-        notifications.show({ title: 'Error', message: String(e), color: 'red' });
-      }
+          }), { errorTitle: 'Couldn’t create charge code' });
+      if (!result.ok) return; // the server's message is shown; the form stays open with the user's input
+      notifications.show({ title: editingId ? 'Updated' : 'Created', message: `${form.code} ${editingId ? 'updated' : 'created'}.`, color: 'success' });
+      setModalOpen(false);
+      await refreshCodes();
     });
   }
 
   async function handleDeactivate(id: string, code: string) {
     startTransition(async () => {
-      await deactivateChargeCode(id);
+      const result = await runAction(deactivateChargeCode(id), { errorTitle: 'Couldn’t deactivate' });
+      if (!result.ok) return;
       notifications.show({ title: 'Deactivated', message: `${code} deactivated.`, color: 'warning' });
       setConfirmTarget(null);
       await refreshCodes();
@@ -153,20 +149,19 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
 
   async function handleAutobridge() {
     startTransition(async () => {
-      try {
-        const result = await autobridgeChargeCodesFromClins();
-        notifications.show({ title: 'Auto-generated', message: `Created ${result.created} charge code(s) from ${result.total} active CLINs.`, color: 'success' });
-        await refreshCodes();
-      } catch (e) {
-        notifications.show({ title: 'Error', message: String(e), color: 'red' });
-      }
+      const result = await runAction(autobridgeChargeCodesFromClins(), { errorTitle: 'Couldn’t auto-generate codes' });
+      if (!result.ok) return;
+      notifications.show({ title: 'Auto-generated', message: `Created ${result.data.created} charge code(s) from ${result.data.total} active CLINs.`, color: 'success' });
+      await refreshCodes();
     });
   }
 
   async function handleAddClass() {
     if (!newClassName.trim()) return;
     startTransition(async () => {
-      const created = await createCostClass(newClassName.trim());
+      const result = await runAction(createCostClass(newClassName.trim()), { errorTitle: 'Couldn’t add class' });
+      if (!result.ok) return;
+      const created = result.data;
       if (created) {
         setClassList([...classList, { id: created.id, name: created.name }]);
         setForm((f) => ({ ...f, classId: created.id }));

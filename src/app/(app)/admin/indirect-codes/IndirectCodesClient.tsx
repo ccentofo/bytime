@@ -15,6 +15,7 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
+import { runAction } from '@/lib/run-action';
 import { IconPlus, IconEdit } from '@tabler/icons-react';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
@@ -102,45 +103,41 @@ export function IndirectCodesClient({ initialCodes }: Props) {
 
   function handleSubmit() {
     startTransition(async () => {
-      try {
-        setFormError(null);
-        if (!form.code || !form.name || !form.category) {
-          setFormError('Code, Name, and Category are required.');
-          return;
-        }
-
-        if (editingCode) {
-          await updateIndirectCode(editingCode.id, {
-            code: form.code,
-            name: form.name,
-            category: form.category as IndirectCode['category'],
-            description: form.description || undefined,
-            availableToAll: form.availableToAll,
-          });
-          notifications.show({ title: 'Code Updated', message: `${form.name} has been updated.`, color: 'success' });
-        } else {
-          await createIndirectCode({
-            code: form.code,
-            name: form.name,
-            category: form.category as IndirectCode['category'],
-            description: form.description || undefined,
-            availableToAll: form.availableToAll,
-          });
-          notifications.show({ title: 'Code Created', message: `${form.name} has been created.`, color: 'success' });
-        }
-
-        const refreshed = await getIndirectChargeCodes();
-        setCodes(refreshed as IndirectCode[]);
-        setModalOpen(false);
-      } catch (error) {
-        setFormError(String(error));
+      setFormError(null);
+      if (!form.code || !form.name || !form.category) {
+        setFormError('Code, Name, and Category are required.');
+        return;
       }
+
+      const fields = {
+        code: form.code,
+        name: form.name,
+        category: form.category as IndirectCode['category'],
+        description: form.description || undefined,
+        availableToAll: form.availableToAll,
+      };
+      // silent: the error is shown inside the form.
+      const result = editingCode
+        ? await runAction(updateIndirectCode(editingCode.id, fields), { silent: true })
+        : await runAction(createIndirectCode(fields), { silent: true });
+      if (!result.ok) {
+        setFormError(result.error);
+        return;
+      }
+      notifications.show(editingCode
+        ? { title: 'Code Updated', message: `${form.name} has been updated.`, color: 'success' }
+        : { title: 'Code Created', message: `${form.name} has been created.`, color: 'success' });
+
+      const refreshed = await getIndirectChargeCodes();
+      setCodes(refreshed as IndirectCode[]);
+      setModalOpen(false);
     });
   }
 
   function handleToggleActive(code: IndirectCode) {
     startTransition(async () => {
-      await updateIndirectCode(code.id, { isActive: !code.isActive });
+      const result = await runAction(updateIndirectCode(code.id, { isActive: !code.isActive }), { errorTitle: 'Couldn’t update code' });
+      if (!result.ok) return;
       const refreshed = await getIndirectChargeCodes();
       setCodes(refreshed as IndirectCode[]);
       notifications.show({
@@ -153,7 +150,8 @@ export function IndirectCodesClient({ initialCodes }: Props) {
 
   function handleSeedDefaults() {
     startTransition(async () => {
-      await seedIndirectCodes();
+      const result = await runAction(seedIndirectCodes(), { errorTitle: 'Couldn’t seed defaults' });
+      if (!result.ok) return;
       const refreshed = await getIndirectChargeCodes();
       setCodes(refreshed as IndirectCode[]);
       notifications.show({ title: 'Defaults Seeded', message: 'Default indirect charge codes have been created.', color: 'success' });

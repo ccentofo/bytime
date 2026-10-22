@@ -12,7 +12,7 @@ vi.mock('server-only', () => ({}));
 
 const session = vi.hoisted(() => {
   class AuthorizationError extends Error {
-    constructor(public code: string, message: string) { super(message); this.name = 'AuthorizationError'; }
+    constructor(public kind: 'unauthenticated' | 'forbidden', message: string) { super(message); this.name = 'AuthorizationError'; }
   }
   const staleAdmin = { id: 'u1', email: 'demoted@acme.com', fullName: 'Demoted', role: 'admin' as const };
   return {
@@ -49,6 +49,22 @@ import * as users from '@/server/actions/users';
 
 type AnyAction = (...args: never[]) => Promise<unknown>;
 const call = (fn: unknown, ...args: unknown[]) => (fn as (...a: unknown[]) => Promise<unknown>)(...args);
+
+/**
+ * Refused by the fresh role check: a converted action returns { ok: false, code: 'forbidden' }; one not yet converted
+ * to ActionResult throws the same AuthorizationError. (P4 converts these feature area by feature area; the last
+ * commit narrows this to the result form only.)
+ */
+async function expectRefused(pending: Promise<unknown>): Promise<void> {
+  let result: unknown;
+  try {
+    result = await pending;
+  } catch (err) {
+    expect(String(err)).toMatch(/access has changed/i);
+    return;
+  }
+  expect(result).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/access has changed/i) });
+}
 
 /** The 37 (feature-plan-launch-blockers.md §1 "Roles" + §4 P3). */
 const ADMIN_WRITES: Array<[string, AnyAction | unknown, unknown[]]> = [
@@ -99,7 +115,7 @@ describe('the 37 admin-only writes refuse a stale JWT-admin (requireAdminFresh)'
 
   it.each(ADMIN_WRITES)('%s', async (_name, fn, args) => {
     writes.count = 0;
-    await expect(call(fn, ...args)).rejects.toThrow(/access has changed/i);
+    await expectRefused(call(fn, ...args));
     expect(writes.count).toBe(0);
   });
 });

@@ -25,6 +25,8 @@ import {
   getChargeCodeAssignments,
 } from '@/server/actions/charge-codes';
 import { formatDateTime } from '@/lib/format';
+import { runAction } from '@/lib/run-action';
+import { notifications } from '@mantine/notifications';
 import { RECORD_STATUS_COLOR, WORK_LOCATION_COLOR } from '@/lib/ui/status-colors';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -173,7 +175,8 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
   function handleAssignChargeCode() {
     if (!ccUserId || !ccChargeCodeId) return;
     startCcTransition(async () => {
-      await assignChargeCodeToUser(ccUserId, ccChargeCodeId);
+      const result = await runAction(assignChargeCodeToUser(ccUserId, ccChargeCodeId), { errorTitle: 'Couldn’t assign charge code' });
+      if (!result.ok) return;
       const refreshed = await getChargeCodeAssignments();
       setCcAssignments(refreshed as ChargeCodeAssignment[]);
       setCcUserId(null);
@@ -186,7 +189,15 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
   function handleAssignAllUnderClin() {
     if (!ccUserId || !ccClinId) return;
     startCcTransition(async () => {
-      await assignAllUnderClin(ccUserId, ccClinId);
+      const result = await runAction(assignAllUnderClin(ccUserId, ccClinId), { errorTitle: 'Couldn’t assign charge codes' });
+      if (!result.ok) return;
+      if (result.data.failed.length > 0) {
+        notifications.show({
+          title: `Assigned ${result.data.assigned}; ${result.data.failed.length} failed`,
+          message: result.data.failed.map((f) => f.error).join(' '),
+          color: 'warning',
+        });
+      }
       const refreshed = await getChargeCodeAssignments();
       setCcAssignments(refreshed as ChargeCodeAssignment[]);
       setCcUserId(null);
@@ -198,7 +209,8 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
 
   function handleDeactivateChargeCode(assignment: ChargeCodeAssignment) {
     startCcTransition(async () => {
-      await unassignChargeCodeFromUser(assignment.userId, assignment.chargeCodeId);
+      const result = await runAction(unassignChargeCodeFromUser(assignment.userId, assignment.chargeCodeId), { errorTitle: 'Couldn’t remove assignment' });
+      if (!result.ok) return;
       const refreshed = await getChargeCodeAssignments();
       setCcAssignments(refreshed as ChargeCodeAssignment[]);
       setConfirmCcTarget(null);
@@ -285,7 +297,8 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
   function handleAssign() {
     if (!selectedUserId || !selectedClinId) return;
     startTransition(async () => {
-      await assignUserToClin({ userId: selectedUserId, clinId: selectedClinId });
+      const result = await runAction(assignUserToClin({ userId: selectedUserId, clinId: selectedClinId }), { errorTitle: 'Couldn’t assign CLIN' });
+      if (!result.ok) return;
       const refreshed = await getAssignments();
       setAssignments(refreshed as Assignment[]);
       // Reset form
@@ -298,7 +311,8 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
 
   function handleDeactivate(assignment: Assignment) {
     startTransition(async () => {
-      await unassignUserFromClin(assignment.userId, assignment.clinId);
+      const result = await runAction(unassignUserFromClin(assignment.userId, assignment.clinId), { errorTitle: 'Couldn’t remove assignment' });
+      if (!result.ok) return;
       const refreshed = await getAssignments();
       setAssignments(refreshed as Assignment[]);
       setConfirmClinTarget(null);
