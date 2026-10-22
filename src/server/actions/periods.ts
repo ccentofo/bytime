@@ -10,6 +10,9 @@ import { getSupervisorScopeInfo, getSupervisedEmployeeIds } from '@/server/inter
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { existingPeriodLength, loadScheduleResolver } from '@/server/internal/pay-period-config';
 import { sendTimesheetSubmittedEmail, sendTimesheetApprovedEmail, sendTimesheetRejectedEmail } from '@/lib/email/send';
+import { scheduleEmail } from '@/lib/email/schedule';
+import { getTenantSlug } from '@/lib/tenant/context';
+import { tenantBaseUrl } from '@/lib/tenant/host';
 import { isNotificationEnabled } from '@/server/internal/notifications';
 import { getLastWeekdayInPeriod } from '@/lib/date-utils';
 import { addDays, formatInstant, isBefore, formatCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -94,7 +97,8 @@ export async function getPeriodOptions(aroundDay: CalendarDate, before: number, 
 /**
  * Email the reviewers of a just-submitted period: active admins plus active supervisors whose
  * scope includes the submitter, never the submitter, each only if they opted in (emailOnSubmit).
- * Called on both the first submission and a re-submission. Sends are fire-and-forget.
+ * Called on both the first submission and a re-submission. Recipients are resolved now; the sends run after the
+ * response (`scheduleEmail`), with links to this workspace's own host.
  */
 async function notifyReviewersOfSubmission(userId: string, periodStart: CalendarDate, numDays: number): Promise<void> {
   const periodEnd = addDays(periodStart, numDays - 1);
@@ -130,20 +134,27 @@ async function notifyReviewersOfSubmission(userId: string, periodStart: Calendar
   // Never notify the submitter about their own submission (e.g. an admin's own timesheet).
   const reviewers = [...inScopeSupervisors, ...admins].filter((r) => r.id !== userId);
 
+  if (!employee) return;
+  const recipients: typeof reviewers = [];
   for (const reviewer of reviewers) {
-    const enabled = await isNotificationEnabled(reviewer.id, 'emailOnSubmit');
-    if (enabled && employee) {
-      sendTimesheetSubmittedEmail({
+    if (await isNotificationEnabled(reviewer.id, 'emailOnSubmit')) recipients.push(reviewer);
+  }
+  if (recipients.length === 0) return;
+
+  const appUrl = tenantBaseUrl(await getTenantSlug());
+  scheduleEmail('timesheet-submitted', async () => {
+    for (const reviewer of recipients) {
+      await sendTimesheetSubmittedEmail({
         supervisorEmail: reviewer.email,
         supervisorName: reviewer.fullName,
         employeeName: employee.fullName,
         employeeEmail: employee.email,
         periodLabel,
         submittedAt,
-      }); // No await — fire-and-forget
+        appUrl,
+      });
     }
-  }
-
+  });
 }
 
 /**
@@ -329,7 +340,7 @@ export async function approvePeriod(data: {
     });
   });
 
-  // Fire-and-forget: notify employee via email
+  // Notify the employee after the response (scheduleEmail).
   const [employee] = await db
     .select({ fullName: users.fullName, email: users.email })
     .from(users)
@@ -343,13 +354,16 @@ export async function approvePeriod(data: {
       const periodEnd = addDays(periodStart, numDays - 1);
       const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(periodEnd, 'MMM D, YYYY')}`;
 
-      sendTimesheetApprovedEmail({
+      const approvedAt = formatInstant(new Date(), await getWorkspaceTimezone(), 'MMM D, YYYY h:mm A');
+      const appUrl = tenantBaseUrl(await getTenantSlug());
+      scheduleEmail('timesheet-approved', () => sendTimesheetApprovedEmail({
         employeeEmail: employee.email,
         employeeName: employee.fullName,
         periodLabel,
         approvedBy: actor.fullName,
-        approvedAt: formatInstant(new Date(), await getWorkspaceTimezone(), 'MMM D, YYYY h:mm A'),
-      }); // No await — fire-and-forget
+        approvedAt,
+        appUrl,
+      }));
     }
   }
 }
@@ -411,7 +425,7 @@ export async function rejectPeriod(data: {
     });
   });
 
-  // Fire-and-forget: notify employee via email
+  // Notify the employee after the response (scheduleEmail).
   const [employee] = await db
     .select({ fullName: users.fullName, email: users.email })
     .from(users)
@@ -425,14 +439,18 @@ export async function rejectPeriod(data: {
       const periodEnd = addDays(periodStart, numDays - 1);
       const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(periodEnd, 'MMM D, YYYY')}`;
 
-      sendTimesheetRejectedEmail({
+      const rejectedAt = formatInstant(new Date(), await getWorkspaceTimezone(), 'MMM D, YYYY h:mm A');
+      const appUrl = tenantBaseUrl(await getTenantSlug());
+      const rejectionComment = data.comment;
+      scheduleEmail('timesheet-rejected', () => sendTimesheetRejectedEmail({
         employeeEmail: employee.email,
         employeeName: employee.fullName,
         periodLabel,
         rejectedBy: actor.fullName,
-        rejectedAt: formatInstant(new Date(), await getWorkspaceTimezone(), 'MMM D, YYYY h:mm A'),
-        rejectionComment: data.comment,
-      }); // No await — fire-and-forget
+        rejectedAt,
+        rejectionComment,
+        appUrl,
+      }));
     }
   }
 }

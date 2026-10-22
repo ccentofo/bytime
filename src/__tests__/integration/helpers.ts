@@ -8,6 +8,13 @@ export function getTestDb(): TestDb {
   return (globalThis as any).__TEST_DB__;
 }
 
+/** Await every `after()` callback scheduled so far (setup-db.ts runs them immediately and records the promise). */
+export async function flushAfter(): Promise<void> {
+  const pending = (globalThis as any).__AFTER_PROMISES__ as Promise<unknown>[] | undefined;
+  if (!pending) return;
+  while (pending.length > 0) await Promise.all(pending.splice(0));
+}
+
 // ---------------------------------------------------------------------------
 // Seed Helpers
 // ---------------------------------------------------------------------------

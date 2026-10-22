@@ -8,6 +8,8 @@ import { signups } from '@/db/control-plane/schema';
 import { getTenantBySlug } from '@/lib/tenant/registry';
 import { isValidSlug } from '@/lib/tenant/provision';
 import { sendSignupVerifyEmail } from '@/lib/email/send-signup';
+import { scheduleEmail } from '@/lib/email/schedule';
+import { apexBaseUrl } from '@/lib/tenant/host';
 import { slugify } from '@/lib/tenant/slugify';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { canonicalTimeZone } from '@/lib/calendar-date';
@@ -75,9 +77,11 @@ export async function startSignup(input: {
     expiresAt: dayjs().add(VERIFY_EXPIRY_HOURS, 'hour').toDate(),
   });
 
-  const apexUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
+  // Signup verification links to the APEX — the workspace host doesn't exist yet.
+  const apexUrl = apexBaseUrl();
   const verifyUrl = `${apexUrl}/signup/verify?token=${rawToken}&email=${encodeURIComponent(email)}`;
-  sendSignupVerifyEmail({ email, companyName: input.companyName.trim(), verifyUrl }); // fire-and-forget
+  const companyName = input.companyName.trim();
+  scheduleEmail('signup-verify', () => sendSignupVerifyEmail({ email, companyName, verifyUrl, appUrl: apexUrl }));
 
   // Dev convenience: surface the verify link in the server log so the flow is testable
   // locally without a configured email provider. Never logs in production.

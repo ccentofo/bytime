@@ -38,9 +38,15 @@ function ResetPasswordForm() {
         setVerifying(false);
         return;
       }
-      const result = await verifyResetToken(email, token);
-      setTokenValid(result.valid);
-      setVerifying(false);
+      try {
+        const result = await verifyResetToken(email, token);
+        setTokenValid(result.valid);
+      } catch {
+        // Unknown/closed workspace or a server error: show the invalid-link state, never an endless spinner.
+        setTokenValid(false);
+      } finally {
+        setVerifying(false);
+      }
     }
     verify();
   }, [token, email]);
@@ -61,14 +67,17 @@ function ResetPasswordForm() {
 
     setLoading(true);
 
-    const result = await resetPassword({ email, token, newPassword: password });
-
-    setLoading(false);
-
-    if (result.success) {
-      setSuccess(true);
-    } else {
-      setError(result.error ?? 'An error occurred. Please try again.');
+    try {
+      const result = await resetPassword({ email, token, newPassword: password });
+      if (result.success) {
+        setSuccess(true);
+      } else {
+        setError(result.error ?? 'An error occurred. Please try again.');
+      }
+    } catch {
+      setError('An error occurred. Please try again.');
+    } finally {
+      setLoading(false);
     }
   }
 

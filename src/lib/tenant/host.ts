@@ -22,3 +22,8 @@ export function tenantBaseUrl(slug: string): string {
   const apexUrl = new URL(process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000');
   return `${apexUrl.protocol}//${slug}.${ROOT_DOMAIN}${apexUrl.port ? `:${apexUrl.port}` : ''}`;
 }
+
+/** The apex (marketing/signup) base URL, without a trailing slash. */
+export function apexBaseUrl(): string {
+  return (process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
+}

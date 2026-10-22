@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { eq, like } from 'drizzle-orm';
 
 vi.mock('next/headers', () => ({ headers: async () => new Headers({ 'x-forwarded-for': `203.0.113.${Math.floor(Math.random() * 200)}` }) }));
-vi.mock('@/lib/email/send-signup', () => ({ sendSignupVerifyEmail: vi.fn(async () => undefined) }));
+vi.mock('@/lib/email/send-signup', () => ({ sendSignupVerifyEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })) }));
 
 import { controlDb } from '@/db/control-plane';
 import { signups } from '@/db/control-plane/schema';

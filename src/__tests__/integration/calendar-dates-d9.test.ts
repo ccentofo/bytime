@@ -52,12 +52,12 @@ vi.mock('@/auth', () => ({
 }));
 
 vi.mock('@/lib/email/send', () => ({
-  sendTimesheetSubmittedEmail: vi.fn(async () => undefined),
-  sendTimesheetApprovedEmail: vi.fn(async () => undefined),
-  sendTimesheetRejectedEmail: vi.fn(async () => undefined),
-  sendDailyReminderEmail: vi.fn(async () => undefined),
-  sendSubmissionDeadlineEmail: vi.fn(async () => undefined),
-  sendPasswordResetEmail: vi.fn(async () => undefined),
+  sendTimesheetSubmittedEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendTimesheetApprovedEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendTimesheetRejectedEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendDailyReminderEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendSubmissionDeadlineEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendPasswordResetEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
 }));
 
 import { saveTimesheetBatch } from '@/server/actions/timesheet';

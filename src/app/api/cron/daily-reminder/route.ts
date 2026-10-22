@@ -6,6 +6,8 @@ import { decrypt } from '@/lib/encryption';
 import { users, timesheetEntries, notificationPreferences, workspaceSettings } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { sendDailyReminderEmail } from '@/lib/email/send';
+import { createSendThrottle } from '@/lib/email/rate';
+import { tenantBaseUrl } from '@/lib/tenant/host';
 import { checkCronRateLimit } from '@/lib/rate-limit';
 import { getTenantAccess } from '@/lib/tenant/lifecycle';
 import { toLifecycleFacts } from '@/lib/tenant/registry';
@@ -44,6 +46,9 @@ export async function GET(request: NextRequest) {
     .filter((t) => getTenantAccess(toLifecycleFacts(t), now) === 'full');
 
   let totalSent = 0;
+  let totalFailed = 0;
+  // Shared Resend budget: ≤ 2 sends/second for this cron (feature-plan-launch-blockers.md P1 §5).
+  const sendThrottle = createSendThrottle();
 
   // One unreachable or unmigrated tenant must not stop reminders for every tenant after it.
   const failedTenants: string[] = [];
@@ -88,12 +93,15 @@ export async function GET(request: NextRequest) {
         const enabled = prefs.length === 0 ? true : prefs[0].enabled;
 
         if (enabled) {
-          await sendDailyReminderEmail({
+          await sendThrottle();
+          const outcome = await sendDailyReminderEmail({
             employeeEmail: emp.email,
             employeeName: emp.fullName,
             todayDate: formatCalendarDate(today, 'dddd, MMM D, YYYY'),
+            appUrl: tenantBaseUrl(tenant.slug),
           });
-          totalSent++;
+          if (outcome.ok) totalSent++;
+          else if (outcome.reason === 'error') totalFailed++;
         }
       }
     } catch (err) {
@@ -102,5 +110,5 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ message: 'Daily reminders sent', sent: totalSent, failedTenants });
+  return NextResponse.json({ message: 'Daily reminders sent', sent: totalSent, failedSends: totalFailed, failedTenants });
 }

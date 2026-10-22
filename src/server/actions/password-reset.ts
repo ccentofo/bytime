@@ -1,27 +1,48 @@
 'use server';
 
-import { getDb, getDbForAuth } from '@/db';
+import { getDbForAuth } from '@/db';
 import { users, passwordResetTokens } from '@/db/schema';
-import { eq, and, gte, isNull } from 'drizzle-orm';
+import { eq, and, gt, gte, isNull, sql } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import dayjs from 'dayjs';
 import { sendPasswordResetEmail } from '@/lib/email/send';
+import { scheduleEmail } from '@/lib/email/schedule';
+import { getTenantSlug } from '@/lib/tenant/context';
+import { tenantBaseUrl } from '@/lib/tenant/host';
 
 const TOKEN_EXPIRY_HOURS = 1;
 const MAX_REQUESTS_PER_HOUR = 3;
+const INVALID_LINK_MESSAGE = 'Invalid or expired reset link. Please request a new one.';
+
+/**
+ * The request's workspace slug, or '' when there is none: the apex host, or a host/header mismatch
+ * (`getTenantSlug` throws on possible tampering). Password reset only ever works on a workspace host.
+ */
+async function requestSlugOrEmpty(): Promise<string> {
+  try {
+    return await getTenantSlug();
+  } catch {
+    return '';
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Request Password Reset (sends email with reset link)
 // ---------------------------------------------------------------------------
 
 export async function requestPasswordReset(email: string): Promise<{ success: boolean; error?: string }> {
-  const db = await getDbForAuth();
   const normalizedEmail = email.toLowerCase().trim();
 
   if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
     return { success: false, error: 'Please enter a valid email address.' };
   }
+
+  // No workspace on this host → nothing to reset; same generic answer, no email.
+  const slug = await requestSlugOrEmpty();
+  if (!slug) return { success: true };
+
+  const db = await getDbForAuth();
 
   // Rate limit: max 3 requests per email per hour
   const oneHourAgo = dayjs().subtract(1, 'hour').toDate();
@@ -63,16 +84,18 @@ export async function requestPasswordReset(email: string): Promise<{ success: bo
     expiresAt,
   });
 
-  // Send reset email with the raw token in the URL
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
+  // The link goes to THIS workspace's host — the reset page only works where the tenant is resolvable.
+  const appUrl = tenantBaseUrl(slug);
   const resetUrl = `${appUrl}/reset-password?token=${rawToken}&email=${encodeURIComponent(normalizedEmail)}`;
+  const employeeName = user.fullName;
 
-  sendPasswordResetEmail({
+  scheduleEmail('password-reset', () => sendPasswordResetEmail({
     employeeEmail: normalizedEmail,
-    employeeName: user.fullName,
+    employeeName,
     resetUrl,
     expiresIn: `${TOKEN_EXPIRY_HOURS} hour`,
-  }); // Fire-and-forget — don't await
+    appUrl,
+  }));
 
   return { success: true };
 }
@@ -82,7 +105,12 @@ export async function requestPasswordReset(email: string): Promise<{ success: bo
 // ---------------------------------------------------------------------------
 
 export async function verifyResetToken(email: string, token: string): Promise<{ valid: boolean }> {
-  const db = await getDb();
+  // Explicit pre-check (not catch-by-message): no workspace on this host → the link can't be valid here.
+  const slug = await requestSlugOrEmpty();
+  if (!slug) return { valid: false };
+
+  // getDbForAuth, not getDb: a billing_only (suspended) workspace's admin must still be able to reset.
+  const db = await getDbForAuth();
   const normalizedEmail = email.toLowerCase().trim();
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
@@ -113,6 +141,8 @@ export async function verifyResetToken(email: string, token: string): Promise<{ 
 // Reset Password (consume token + set new password)
 // ---------------------------------------------------------------------------
 
+class AccountMissingError extends Error {}
+
 export async function resetPassword(data: {
   email: string;
   token: string;
@@ -129,55 +159,59 @@ export async function resetPassword(data: {
     return { success: false, error: 'Password must not exceed 128 characters.' };
   }
 
-  // Verify token
   const tokenHash = crypto.createHash('sha256').update(data.token).digest('hex');
 
+  // Cheap pre-check so an invalid token never costs a bcrypt hash. NOT the authority — the conditional consume
+  // below is (a concurrent request can pass this check too).
   const [record] = await db
-    .select({ id: passwordResetTokens.id, expiresAt: passwordResetTokens.expiresAt })
+    .select({ id: passwordResetTokens.id })
     .from(passwordResetTokens)
     .where(
       and(
         eq(passwordResetTokens.email, normalizedEmail),
         eq(passwordResetTokens.tokenHash, tokenHash),
         isNull(passwordResetTokens.usedAt),
+        gt(passwordResetTokens.expiresAt, new Date()),
       )
     );
-
   if (!record) {
-    return { success: false, error: 'Invalid or expired reset link. Please request a new one.' };
+    return { success: false, error: INVALID_LINK_MESSAGE };
   }
 
-  if (dayjs().isAfter(dayjs(record.expiresAt))) {
-    return { success: false, error: 'This reset link has expired. Please request a new one.' };
-  }
-
-  // Find the user
-  const [user] = await db
-    .select({ id: users.id, sessionVersion: users.sessionVersion })
-    .from(users)
-    .where(eq(users.email, normalizedEmail));
-
-  if (!user) {
-    return { success: false, error: 'Account not found.' };
-  }
-
-  // Hash the new password
   const newHash = await bcrypt.hash(data.newPassword, 12);
 
-  // Update password + increment session version (invalidates all existing sessions)
-  await db.update(users)
-    .set({
-      passwordHash: newHash,
-      passwordChangedAt: new Date(),
-      updatedAt: new Date(),
-      sessionVersion: (user.sessionVersion ?? 1) + 1,
-    })
-    .where(eq(users.id, user.id));
+  try {
+    const consumed = await db.transaction(async (tx) => {
+      const now = new Date();
+      // Single-use, atomically: only one concurrent request can flip used_at from NULL.
+      const claimed = await tx.update(passwordResetTokens)
+        .set({ usedAt: now })
+        .where(and(
+          eq(passwordResetTokens.id, record.id),
+          isNull(passwordResetTokens.usedAt),
+          gt(passwordResetTokens.expiresAt, now),
+        ))
+        .returning({ id: passwordResetTokens.id });
+      if (claimed.length === 0) return false;
 
-  // Mark token as used (single-use enforcement)
-  await db.update(passwordResetTokens)
-    .set({ usedAt: new Date() })
-    .where(eq(passwordResetTokens.id, record.id));
+      // Same transaction; SQL increment (not read-modify-write) invalidates every existing session.
+      const updated = await tx.update(users)
+        .set({
+          passwordHash: newHash,
+          passwordChangedAt: now,
+          updatedAt: now,
+          sessionVersion: sql`${users.sessionVersion} + 1`,
+        })
+        .where(eq(users.email, normalizedEmail))
+        .returning({ id: users.id });
+      if (updated.length === 0) throw new AccountMissingError(); // rolls back the token claim
+      return true;
+    });
+    if (!consumed) return { success: false, error: INVALID_LINK_MESSAGE };
+  } catch (err) {
+    if (err instanceof AccountMissingError) return { success: false, error: 'Account not found.' };
+    throw err;
+  }
 
   return { success: true };
 }

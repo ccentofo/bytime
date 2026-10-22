@@ -7,23 +7,14 @@ import { signups } from '@/db/control-plane/schema';
 import { ProvisionConflictError, provisionTenant } from '@/lib/tenant/provision';
 import { issueSetPasswordToken } from '@/lib/tenant/invite';
 import { getTenantBySlug } from '@/lib/tenant/registry';
+import { apexBaseUrl, tenantBaseUrl } from '@/lib/tenant/host';
 
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-function apex() {
-  return process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
-}
-
-function tenantBase(slug: string) {
-  const rootDomain = process.env.APP_ROOT_DOMAIN ?? 'localhost';
-  const apexUrl = new URL(apex());
-  return `${apexUrl.protocol}//${slug}.${rootDomain}${apexUrl.port ? `:${apexUrl.port}` : ''}`;
-}
-
 function failRedirect(msg: string) {
-  return NextResponse.redirect(`${apex()}/signup?error=${encodeURIComponent(msg)}`);
+  return NextResponse.redirect(`${apexBaseUrl()}/signup?error=${encodeURIComponent(msg)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -116,7 +107,7 @@ export async function POST(req: NextRequest) {
   if (!row) return failRedirect('This link is invalid or already used.');
   if (dayjs().isAfter(dayjs(row.expiresAt))) return failRedirect('This link has expired. Please sign up again.');
 
-  const base = tenantBase(row.slug);
+  const base = tenantBaseUrl(row.slug);
 
   // If already provisioned and active, route to login
   const already = await getTenantBySlug(row.slug);
