@@ -1,0 +1,1 @@
+ALTER TABLE "tenants" ADD COLUMN "policy_export_allowed" boolean DEFAULT false NOT NULL;

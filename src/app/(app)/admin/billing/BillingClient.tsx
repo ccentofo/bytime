@@ -7,12 +7,12 @@ import {
 } from '@mantine/core';
 import { IconCheck, IconAlertCircle, IconExternalLink } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
-import { startCheckout, openBillingPortal } from '@/server/actions/billing';
+import { startCheckout, openBillingPortal, type TenantBillingInfo } from '@/server/actions/billing';
 import { PLANS, type PlanKey } from '@/lib/billing/plans';
 import { PageHeader } from '@/components/ui/PageHeader';
 
 interface Props {
-  billing: { plan: string; subscriptionStatus: string | null; hasCustomer: boolean };
+  billing: TenantBillingInfo;
   checkoutStatus?: string;
 }
 
@@ -53,6 +53,8 @@ export function BillingClient({ billing, checkoutStatus }: Props) {
   }
 
   const currentPlan = PLANS[billing.plan as PlanKey] ?? PLANS.trial;
+  // "Current plan" only while a subscription is actually running; after it ends, the same plan can be bought again.
+  const isCurrent = (key: PlanKey) => !billing.canSubscribe && billing.plan === key;
   const statusColor = billing.subscriptionStatus ? (STATUS_COLORS[billing.subscriptionStatus] ?? 'gray') : 'gray';
 
   return (
@@ -88,6 +90,11 @@ export function BillingClient({ billing, checkoutStatus }: Props) {
               {billing.subscriptionStatus.replace('_', ' ')}
             </Badge>
           )}
+          {billing.payUrl && (
+            <Button component="a" href={billing.payUrl} color="warning" size="sm" rightSection={<IconExternalLink size={14} />}>
+              Pay outstanding balance
+            </Button>
+          )}
           {billing.hasCustomer && (
             <Button
               variant="default"
@@ -106,7 +113,9 @@ export function BillingClient({ billing, checkoutStatus }: Props) {
       <Paper withBorder p="lg" radius="md">
         <Title order={4} mb="md">Upgrade Plan</Title>
         <Text size="sm" c="dimmed" mb="lg">
-          All plans include full DCAA-compliant timekeeping. Upgrade at any time.
+          {billing.canSubscribe
+            ? 'All plans include full DCAA-compliant timekeeping.'
+            : 'You already have a subscription or a payment in progress. Use Manage billing to change plans or pay.'}
         </Text>
         <Stack gap="md">
           {(Object.entries(PLANS) as [PlanKey, typeof PLANS[PlanKey]][])
@@ -122,12 +131,12 @@ export function BillingClient({ billing, checkoutStatus }: Props) {
                   </Stack>
                   <Button
                     size="sm"
-                    variant={billing.plan === key ? 'filled' : 'default'}
+                    variant={isCurrent(key) ? 'filled' : 'default'}
                     loading={isPending && pendingPlan === key}
-                    disabled={billing.plan === key || !plan.priceId}
+                    disabled={!billing.canSubscribe || !plan.priceId}
                     onClick={() => handleSubscribe(key)}
                   >
-                    {billing.plan === key ? 'Current plan' : 'Subscribe'}
+                    {isCurrent(key) ? 'Current plan' : 'Subscribe'}
                   </Button>
                 </Group>
               </Paper>

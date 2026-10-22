@@ -10,13 +10,15 @@
  * 9 indirect codes, ~2400 timesheet entries, period records (draft/submitted/approved),
  * revision-2 corrections with reason codes, notification prefs, login attempts, and 1 API key.
  *
- * Safe to re-run: clears existing data first, then re-seeds.
+ * Safe to re-run on demo data: clears existing data first, then re-seeds. Refuses to wipe a database that
+ * holds users outside the demo domains unless --wipe-demo-data is passed.
  */
 import 'dotenv/config';
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from '../src/db/schema';
 import { eq } from 'drizzle-orm';
+import { clearTenantData, SEED_EMAIL_DOMAINS } from '../src/db/clear-tenant-data';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import dayjs from 'dayjs';
@@ -44,29 +46,28 @@ function isWeekday(date: dayjs.Dayjs): boolean {
 
 export async function seedRichData(
   db: PostgresJsDatabase<Record<string, never>>,
-  opts: { emailDomain?: string } = {},
+  opts: { emailDomain?: string; wipeDemoData?: boolean } = {},
 ): Promise<{ entryCount: number; periodCount: number; apiKeyPrefix: string }> {
   const ED = opts.emailDomain ?? 'cadenzpoint.dev';
   console.log('🌱 Seeding rich GovCon dataset...\n');
 
-  // ── Clear existing data (reverse FK order) ──
+  // ── Refuse to wipe a database that isn't demo data ──
+  // The append-only trigger is bypassed below, so this guard is the safety net that stops
+  // `seed:demo <url>` from erasing a real customer's timekeeping records.
+  const existing = await db.select({ email: schema.users.email }).from(schema.users);
+  const allowed = new Set<string>([...SEED_EMAIL_DOMAINS, ED].map((d) => d.toLowerCase()));
+  const foreign = existing.filter((u) => !allowed.has(u.email.split('@')[1]?.toLowerCase() ?? ''));
+  if (foreign.length > 0 && !opts.wipeDemoData) {
+    throw new Error(
+      `Refusing to wipe this database: it has ${foreign.length} user(s) outside the demo domains ` +
+      `(${[...allowed].join(', ')}), e.g. ${foreign[0].email}. Pass --wipe-demo-data only if this is a ` +
+      'local or demo database you intend to erase.'
+    );
+  }
+
+  // ── Clear existing data (shared with the test cleanup; one transaction, FK order) ──
   console.log('  Clearing existing data...');
-  await db.delete(schema.timesheetEntries);
-  await db.delete(schema.timesheetPeriods);
-  await db.delete(schema.userLaborCategories);
-  await db.delete(schema.userChargeCodes);
-  await db.delete(schema.userAssignments);
-  await db.delete(schema.chargeCodes);
-  await db.delete(schema.costClasses);
-  await db.delete(schema.laborCategories);
-  await db.delete(schema.slins);
-  await db.delete(schema.clins);
-  await db.delete(schema.contracts);
-  await db.delete(schema.indirectChargeCodes);
-  await db.delete(schema.loginAttempts);
-  await db.delete(schema.notificationPreferences);
-  await db.delete(schema.apiKeys);
-  await db.delete(schema.users);
+  await clearTenantData(db);
 
   // ── 1. Users ──
   console.log('  Creating users...');
@@ -495,7 +496,7 @@ async function main() {
   const connectionString = process.env.DATABASE_URL ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime';
   const client = postgres(connectionString, { max: 1 });
   const db = drizzle(client);
-  await seedRichData(db);
+  await seedRichData(db, { wipeDemoData: process.argv.includes('--wipe-demo-data') });
   await client.end();
   process.exit(0);
 }

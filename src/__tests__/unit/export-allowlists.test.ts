@@ -62,6 +62,18 @@ describe('EXPORT_TABLES allowlist', () => {
     expect(new Set(files).size).toBe(files.length);
   });
 
+  it('every column has a README description (data dictionary, §5.2)', () => {
+    for (const table of EXPORT_TABLES) {
+      for (const col of table.columns) {
+        expect(col.description.trim().length, `${table.file}.${col.header} has no description`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('exports workspace_settings (the timezone the calendar dates are in)', () => {
+    expect(EXPORT_TABLES.map((t) => t.file)).toContain('workspace_settings');
+  });
+
   it('every table includes an id column (required for keyset pagination)', () => {
     for (const table of EXPORT_TABLES) {
       expect(table.columns.some((c) => c.key === 'id'), `${table.file} has no id column`).toBe(true);

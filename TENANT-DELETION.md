@@ -1,36 +1,53 @@
 # Tenant Deletion Runbook
 
-feature-plan-terms-compliance.md T7 / R10. Deleting a workspace is **permanent** — its database
-is destroyed and cannot be recovered after Neon's recovery window closes (see "Backup window"
-below). Only the founder runs this, and only against a workspace that is actually due.
+feature-plan-terms-compliance-fixes.md §5.3 (logic: `src/lib/tenant/delete-tenant.ts`; CLI:
+`scripts/delete-tenant.ts`). Deleting a workspace is **permanent**: its database is destroyed and cannot
+be recovered after Neon's recovery window closes (see "Backup window" below). Only the founder runs this,
+and only against a workspace that is actually due. **Never** run it against a demo workspace (they are
+lifecycle-exempt and refused unless you pass `--include-exempt`) or any remote database you are not
+deliberately deleting.
 
 ## When deletion is allowed
 
-`npm run tenant:delete -- <slug>` (no `--yes`) refuses to apply and instead prints exactly what's
-missing. It is eligible when **both** are true:
+The lifecycle cron's founder digest lists workspaces **ready for deletion** (D4: deletion is never
+automatic). `npm run tenant:delete -- <slug>` (no `--yes`) is a dry run that prints the database it would
+delete, the Stripe state, and anything that makes the workspace not eligible. It is eligible when:
 
-1. `deletion_scheduled_for` (control plane `tenants` table) has passed.
-2. A `deletion-notice` row exists in `tenant_notices` for this tenant with `sent_at` at least
-   `DELETION_NOTICE_DAYS` (D3, `src/lib/tenant/lifecycle-config.ts`) days ago.
+1. `deletion_scheduled_for` has passed;
+2. a non-superseded `deletion-notice` for the **current** retention anchor (subscription end, else trial end)
+   was given (delivered with a provider message id, or force-marked with `tenant:admin force-notice-sent`)
+   at least `DELETION_NOTICE_DAYS` before that date;
+3. the workspace is not lifecycle-exempt (or you pass `--include-exempt`).
 
-Both facts come from the database — this tool never takes your word for it. If a workspace needs
-to be deleted sooner (e.g. a legal request), pass `--force-with-reason "<text>"`; the reason is
-printed into the run's own receipt as the audit trail for the override.
+All three come from the database; this tool never takes your word for it. For a deletion that must happen
+sooner (e.g. a legal request or the customer's own written request), pass `--force-with-reason "<text>"`:
+it bypasses 1–2 only, and the reason is recorded in `tenant_audit_events`.
 
-## Take a final export first
+Deletion **aborts and restores the workspace** whenever payment activity appears: an active/trialing or
+incomplete subscription, a payment processing on an open invoice (ACH), or an invoice void still pending.
+A restored workspace goes back to `active` (or `suspended` for a policy suspension), the abort is audited
+(`deletion-aborted`) and raised as an alert, and the next cron run re-reconciles it with Stripe.
 
-Before deleting, strongly consider taking (or sending the customer) a final export:
+## Final export
+
+Customers export everything themselves (Settings → Export Workspace Data) and receive three notices during
+the 90 days. **A founder copy is not taken by default (F2).** Take one only when the customer asks for it to
+be sent, or for a legal request:
 
 ```bash
-# As the tenant's admin, from that tenant's subdomain:
-curl -o final-export.zip https://<slug>.cadenzpoint.com/api/export/workspace \
-  -H "Cookie: <admin session cookie>"
+npm run tenant:export -- <slug> <out-dir>
 ```
 
-In practice, do this from the browser while signed in as an admin of that workspace (Settings →
-Export Workspace Data), not via curl — the export route requires a real authenticated admin
-session. Whether to send the export to the customer first is a case-by-case call; there is no
-automatic step for it.
+- The output is AES-256 encrypted; the password is printed **once** and never stored.
+- `<out-dir>` must be outside the repo and outside `~/Documents`, `~/Desktop`, `~/Library/Mobile Documents`,
+  `~/Library/CloudStorage`, and any iCloud/Dropbox/OneDrive/Google Drive folder; the tool refuses those, and
+  excludes the folder from Time Machine (`tmutil addexclusion`, verified).
+- **Never email the file unencrypted.** Send it through an expiring link, and the password separately.
+- **Destroy it** once delivered, and in every case by its destroy-by date: 30 days after the export, or 30 days
+  after the workspace is deleted if sooner (the deletion receipt prints it). Then record it:
+  `npm run tenant:admin -- export-destroyed <slug> --yes` (or `--legal-hold "<reason>"` to keep it only as long
+  as a legal obligation requires). The digest alerts when a destroy-by date passes without a record.
+- Decrypt: `openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -md sha256 -in <file> -out <file>.zip`
 
 ## Running it
 
@@ -38,66 +55,62 @@ automatic step for it.
 # Dry run — always do this first.
 npm run tenant:delete -- <slug>
 
-# Apply.
+# Apply (also resumes an interrupted run).
 npm run tenant:delete -- <slug> --yes
 
-# Apply before the notice window has elapsed (logged in the receipt).
-npm run tenant:delete -- <slug> --yes --force-with-reason "legal request, ticket #123"
+# Before the notice window has elapsed (audited).
+npm run tenant:delete -- <slug> --yes --force-with-reason "customer written request, ticket #123"
 ```
 
-Required env: `CONTROL_PLANE_DATABASE_URL`, and `STRIPE_SECRET_KEY` / `NEON_API_KEY` if the
-tenant has a subscription / a Neon project respectively.
+Required env: `CONTROL_PLANE_DATABASE_URL`, `ENCRYPTION_KEY`, and `STRIPE_SECRET_KEY` / `NEON_API_KEY` if the
+tenant has a Stripe customer / a dedicated Neon project.
 
-The script, in order:
+The steps, in order (each idempotent; a re-run resumes while `status = deleting`):
 
-1. Sets `status = deleting` — blocks all access immediately (`getTenantAccess` maps `deleting` to
-   `closed`).
-2. Cancels any Stripe subscription (keeps the Stripe **customer** — billing/tax records, Privacy
-   §7). A Stripe failure is logged but does not stop deletion.
-3. Deletes the database: the Neon project (if `neon_project_id` is on file) via
-   `DELETE /projects/{project_id}`, or the local `tenant_<slug>` database in dev. If
-   `neon_project_id` is missing and `NEON_API_KEY` is set, it stops and tells you to delete the
-   project manually in the Neon console, then re-run — it will skip straight to tombstoning.
-4. Tombstones the control-plane row: `status = deleted`, `deleted_at`, `db_url_encrypted = NULL`.
-   `slug`, `name`, Stripe ids, every date, and `tenant_notices` are kept — proof of notice and of
-   deletion, and the slug stays reserved (nobody can re-register a deleted company's subdomain and
-   receive its former users' bookmarks or stray emails).
-5. Prints a deletion receipt: slug, name, status, `deletion_scheduled_for`, `deleted_at`,
-   `neon_project_id`, and every logged notice with its `sent_at`.
+1. **Preconditions** (above).
+2. **Classify the database** from the decrypted URL: **local** (`localhost`/`127.0.0.1`/`[::1]`, dropped with
+   the admin connection, refusing protected names); **shared-project** (a database inside the control plane's
+   Neon project — refused unless `--drop-shared-database`; Neon keeps its history for the PITR window, which must
+   stay ≤ D11); **dedicated Neon project** (`neon_project_id`). Anything else fails before any change.
+3. **Locked reconcile** with Stripe and the transition table, re-check the preconditions on the reconciled facts,
+   then set `status = deleting` (all access blocked immediately).
+4. **Stripe**: abort-and-restore on payment activity; otherwise cancel every past-due/unpaid/paused subscription
+   and void (or mark uncollectible) every open invoice. A Stripe failure stops the run with the status still
+   `deleting`; re-run to resume. The Stripe **customer** is kept (billing/tax records, Privacy §7).
+5. **Preflight** (the same Stripe check again), then delete the database. Neon: the project must have an endpoint
+   matching the tenant URL host and must not host the control plane; `DELETE`, then confirm it returns 404. Local /
+   shared: `DROP DATABASE … WITH (FORCE)`, confirmed via `pg_database`.
+6. **Tombstone**: `status = deleted`, `deleted_at`, `db_url_encrypted = NULL`, only after step 5 is confirmed.
+   `slug`, `name`, Stripe ids, every date, `tenant_notices` and `tenant_audit_events` are kept — proof of notice and
+   of deletion, and the slug stays reserved.
 
-Running it again against an already-deleted tenant prints the existing tombstone and exits — a
-no-op, not an error.
+The receipt lists the dates, the database, any forced reason, every notice (sent / forced / superseded), and the
+founder export destroy-by date if one was taken. Running it again against a deleted tenant prints the tombstone.
 
 ## How to verify
 
-1. Neon console (if applicable): the project is gone from the project list (or shows as
-   "recoverable" for 7 days — see below).
-2. `https://<slug>.cadenzpoint.com` shows the "Workspace closed" screen (`TenantUnavailable`,
-   `kind: 'closed'`) for everyone, logged in or not.
-3. Connecting to the old tenant database URL fails (Neon: the project no longer resolves; local
-   dev: `psql` against `tenant_<slug>` fails with "database does not exist").
-4. `npm run tenant:admin -- show <slug>` (or a direct query of the control-plane `tenants` table)
-   shows `status = deleted`, `deleted_at` set, `db_url_encrypted` NULL, and `neon_project_id` still
-   recorded (historical reference — the project itself is gone).
-5. Re-running `npm run tenant:delete -- <slug> --yes` is a no-op (prints the tombstone, makes no
-   further changes).
+1. Neon console (if applicable): the project is gone (or shows as recoverable for 7 days — see below).
+2. `https://<slug>.cadenzpoint.com` shows the "Workspace closed" screen for everyone; existing sessions end.
+3. Connecting to the old tenant database URL fails.
+4. `npm run tenant:admin -- show <slug>` shows `status deleted`, `deleted_at`, and the audit trail.
+5. Re-running `npm run tenant:delete -- <slug> --yes` is a no-op.
 
-**Manual local test procedure** (do this before trusting the tool against a real tenant, and only
-against a throwaway tenant you created for exactly this purpose — never acme/globex/initech, never
-a remote database):
+**Manual local test procedure** (only against a throwaway local tenant created for exactly this purpose —
+never acme/globex/initech, never a remote database):
 
 ```bash
-# 1. Provision a throwaway local tenant.
-npm run provision:tenant -- --slug=delete-test --name="Delete Test" --admin-email=test@example.com
+# 1. Provision a throwaway local tenant (no NEON_API_KEY in your local env → a local database).
+npm run provision:tenant -- delete-test "Delete Test" test@example.com "Test Admin"
 
-# 2. Make it eligible: set deletion_scheduled_for in the past and log a deletion notice sent
-#    >= DELETION_NOTICE_DAYS ago, directly in the control-plane DB (there is no UI for this —
-#    it's normally the lifecycle cron's job). Example using psql against CONTROL_PLANE_DATABASE_URL:
+# 2. Make it eligible directly in the LOCAL control-plane DB: a lapsed trial, a past deletion date, and a
+#    deletion notice for that same anchor delivered 20 days before the deletion date.
 psql "$CONTROL_PLANE_DATABASE_URL" -c "
-  UPDATE tenants SET deletion_scheduled_for = now() - interval '1 day' WHERE slug = 'delete-test';
-  INSERT INTO tenant_notices (tenant_id, kind, scheduled_for, sent_at, recipients)
-  SELECT id, 'deletion-notice', now() - interval '20 days', now() - interval '20 days', ARRAY['test@example.com']
-  FROM tenants WHERE slug = 'delete-test';
+  UPDATE tenants SET trial_ends_at = '2026-01-01T00:00:00Z', deletion_scheduled_for = now() - interval '1 day',
+         lifecycle_version = lifecycle_version + 1
+   WHERE slug = 'delete-test';
+  INSERT INTO tenant_notices (tenant_id, kind, scheduled_for, sent_at, provider_message_id, recipients)
+  SELECT id, 'deletion-notice', '2026-01-01T00:00:00Z', now() - interval '21 days', 'manual-test', ARRAY['test@example.com']
+    FROM tenants WHERE slug = 'delete-test';
 "
 
 # 3. Dry run, then apply.
@@ -131,11 +144,14 @@ enterprise-tier numbers.
 ## What is retained and why
 
 - **Kept forever**: the tombstoned `tenants` row (slug, name, Stripe customer/subscription ids,
-  every lifecycle date, `neon_project_id`) and every `tenant_notices` row — this is the proof the
+  every lifecycle date, `neon_project_id`), every `tenant_notices` row, and every `tenant_audit_events`
+  row — this is the proof the
   Terms require that a notice was sent and that deletion happened, and it's what
   `tenant:admin -- show` and this runbook's receipt read from.
 - **Destroyed**: the tenant's entire Postgres database (every table — users, timesheets,
   contracts, everything) and `db_url_encrypted` (nulled so there is nothing left to decrypt even
   if it were somehow still readable).
 - **Kept, not deleted by this tool**: the Stripe **customer** record (billing/tax history —
-  Privacy §7 allows this). Only the subscription is canceled.
+  Privacy §7 allows this). Subscriptions are canceled and open invoices voided.
+- **Founder export (if one was taken)**: destroyed by its destroy-by date and recorded with
+  `tenant:admin export-destroyed` (see "Final export").

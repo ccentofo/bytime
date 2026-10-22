@@ -17,7 +17,7 @@ import {
   pushTimeActivities,
   type TimeActivityInput,
 } from './qbo-api';
-import { getDb } from '@/db';
+import { getDbForWrite } from '@/db';
 import { integrationSyncRecords } from '@/db/schema';
 import { formatCalendarDate } from '@/lib/calendar-date';
 
@@ -104,7 +104,7 @@ export const quickbooksOnlineConnector: IntegrationConnector = {
   },
 
   async pushTimesheetEntries(context: SyncContext, entries: TimesheetSyncEntry[]): Promise<SyncResult> {
-  const db = await getDb();
+  const db = await getDbForWrite();
     const employeeMappings = context.mappings.get('employee') ?? new Map();
     const vendorMappings = context.mappings.get('vendor') ?? new Map();
     const contractMappings = context.mappings.get('contract') ?? new Map();

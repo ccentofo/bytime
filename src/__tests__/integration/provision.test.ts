@@ -7,7 +7,7 @@ import { controlDb } from '@/db/control-plane';
 import { tenants } from '@/db/control-plane/schema';
 import { encrypt } from '@/lib/encryption';
 import { invalidateTenant } from '@/lib/tenant/registry';
-import { eq, like } from 'drizzle-orm';
+import { and, eq, like, notLike } from 'drizzle-orm';
 
 // Use the test DB as the "tenant database" — the provisioning engine accepts a
 // pluggable createDatabase that returns any postgres:// URL.
@@ -24,7 +24,8 @@ const cpReady = !!process.env.CONTROL_PLANE_DATABASE_URL;
 
 /** Remove any 'test-*' registry rows so the suite is re-runnable and doesn't pollute the CP. */
 async function cleanControlPlaneTestRows() {
-  await controlDb.delete(tenants).where(like(tenants.slug, 'test-%'));
+  // Not test-lc-* (lifecycle suites own those, with child rows) — this suite's rows have no children.
+  await controlDb.delete(tenants).where(and(like(tenants.slug, 'test-%'), notLike(tenants.slug, 'test-lc-%')));
 }
 
 // -------------------------------------------------------------------------
@@ -166,6 +167,7 @@ describe.skipIf(!cpReady)('provisionTenant', () => {
       dbUrlEncrypted: encrypt(TEST_DB_URL),
       status: 'provisioning',
       plan: 'trial',
+      signupEmail: 'admin@resume.com', // the signer recorded by the crashed first attempt
     });
     invalidateTenant('test-resume');
     const tdb = getDbForUrl(TEST_DB_URL);
@@ -187,6 +189,32 @@ describe.skipIf(!cpReady)('provisionTenant', () => {
     expect(users).toHaveLength(1); // no duplicate admin
     const [row] = await controlDb.select().from(tenants).where(eq(tenants.slug, 'test-resume'));
     expect(row.status).toBe('active'); // resume completed activation
+  });
+
+  it('a DIFFERENT signer can never resume someone else\'s provisioning (no cross-tenant admin)', async () => {
+    await controlDb.insert(tenants).values({
+      slug: 'test-race', name: 'Race Corp', dbUrlEncrypted: encrypt(TEST_DB_URL), status: 'provisioning', plan: 'trial',
+      signupEmail: 'victim@race.com',
+    });
+    invalidateTenant('test-race');
+    await expect(provisionTenant({
+      slug: 'test-race', name: 'Race Corp', adminEmail: 'attacker@evil.com', adminName: 'X', createDatabase: fakeCreateDatabase,
+    })).rejects.toThrow(/already exists/i);
+    const tdb = getDbForUrl(TEST_DB_URL);
+    expect(await tdb.select().from(schema.users).where(eq(schema.users.email, 'attacker@evil.com'))).toHaveLength(0);
+  });
+
+  it('a stale verify link can never revive a suspended workspace', async () => {
+    await controlDb.insert(tenants).values({
+      slug: 'test-revive', name: 'Revive Corp', dbUrlEncrypted: encrypt(TEST_DB_URL), status: 'suspended', plan: 'trial',
+      signupEmail: 'owner@revive.com', suspendedAt: new Date(), suspensionReason: 'policy',
+    });
+    invalidateTenant('test-revive');
+    await expect(provisionTenant({
+      slug: 'test-revive', name: 'Revive Corp', adminEmail: 'owner@revive.com', adminName: 'O', createDatabase: fakeCreateDatabase,
+    })).rejects.toThrow(/already exists/i);
+    const [row] = await controlDb.select().from(tenants).where(eq(tenants.slug, 'test-revive'));
+    expect(row.status).toBe('suspended');
   });
 
   it('throws for an invalid slug', async () => {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sql } from 'drizzle-orm';
-import { getDb } from '@/db';
+import { readSql } from '@/db';
 import { getTenantSlug } from '@/lib/tenant/context';
 
 // Always run fresh; never cache a tenant-bound response.
@@ -23,10 +23,9 @@ export async function GET(req: NextRequest) {
   }
   try {
     const slug = await getTenantSlug();          // host-derived (source of truth); '' for apex
-    const db = await getDb();                     // active-tenant client; fail-closed (throws on none/unknown/suspended/mismatch)
-    const rows = await db.execute(sql`SELECT current_database() AS db`);
-    // postgres-js execute() returns a row array (same pattern as the health route's controlDb.execute).
-    const database = (rows as unknown as Array<{ db: string }>)[0]?.db ?? null;
+    // Active-tenant raw read; fail-closed (throws on none/unknown/suspended/mismatch).
+    const rows = await readSql<{ db: string }>(sql`SELECT current_database() AS db`);
+    const database = rows[0]?.db ?? null;
     return NextResponse.json({ slug, database });
   } catch (err) {
     // 409 = resolution refused (apex/unknown/suspended/header-mismatch). Distinct from 404 (disabled).

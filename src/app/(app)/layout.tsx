@@ -7,6 +7,8 @@ import { getTenantState } from '@/lib/tenant/context';
 import { TenantUnavailable } from './TenantUnavailable';
 import { BillingWall } from './BillingWall';
 import { OnHoldScreen } from './OnHoldScreen';
+import { PolicyHoldScreen } from './PolicyHoldScreen';
+import { canExport } from '@/lib/tenant/lifecycle';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   // (app) routes require a usable workspace. Resolve the tenant's access mode first (§3.1) and
@@ -15,7 +17,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   // `closed`/`unknown`/`none`/`mismatch`/`provisioning`: a dead-end screen, no sign-in needed —
   // there is nothing behind it to sign in to.
-  if (tenant.kind !== 'full' && tenant.kind !== 'read_only' && tenant.kind !== 'billing_only') {
+  if (tenant.kind !== 'full' && tenant.kind !== 'read_only' && tenant.kind !== 'billing_only' && tenant.kind !== 'policy_hold') {
     return <TenantUnavailable reason={tenant.kind} />;
   }
 
@@ -24,6 +26,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // billing details to an unauthenticated visitor would leak that this workspace exists and is
   // suspended. §3.3/T3.
   const session = await auth();
+
+  // policy_hold (F5): signed-in users — admins included — get the hold screen; no billing. Logged-out → /login
+  // (same reasoning as billing_only: don't reveal the workspace's state to an anonymous visitor).
+  if (tenant.kind === 'policy_hold') {
+    if (!session?.user) {
+      redirect('/login');
+    }
+    const role = (session.user as any).role ?? 'employee';
+    return <PolicyHoldScreen canExport={role === 'admin' && canExport(tenant.tenant, new Date())} />;
+  }
 
   if (tenant.kind === 'billing_only') {
     if (!session?.user) {
@@ -75,6 +87,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       setupComplete={setupComplete}
       initialCollapsed={navCollapsed}
       readOnlyReason={readOnlyReason}
+      isDemo={tenant.tenant.lifecycleExempt}
     >
       {children}
     </AppShellWrapper>

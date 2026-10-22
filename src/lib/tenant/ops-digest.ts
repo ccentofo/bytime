@@ -1,0 +1,132 @@
+import 'server-only';
+import { and, desc, eq, inArray, isNotNull, isNull, lt, ne } from 'drizzle-orm';
+import { opsAlerts, tenantAuditEvents, tenantNotices, tenants } from '@/db/control-plane/schema';
+import { withLockedPool } from '@/db/control-plane/locked';
+import { resend, EMAIL_FROM } from '@/lib/email/client';
+import { BACKUP_RETENTION_DAYS } from './lifecycle-config';
+import { addDays } from './lifecycle';
+import { raiseAlert, resolveAlert } from './lifecycle-store';
+import type { TenantRunResult } from './lifecycle-runner';
+
+/**
+ * Founder digest (feature-plan-terms-compliance-fixes.md §4.4, D4): sent to OPS_ALERT_EMAIL whenever there is
+ * something to act on. Its own send requires a provider message id; a failure raises an alert and the next run
+ * retries.
+ */
+
+const MS_PER_HOUR = 3600_000;
+
+/** Founder export audit detail (written by scripts/tenant-export.ts). */
+export interface FounderExportDetail {
+  path: string;
+  destroyBy: string; // ISO instant
+}
+
+function esc(s: unknown): string {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+}
+
+/** Raise/resolve the "founder export past its destroy-by date" alert for every taken export (F2). */
+async function checkFounderExports(now: Date): Promise<void> {
+  await withLockedPool(async (db) => {
+    const events = await db.select().from(tenantAuditEvents)
+      .where(inArray(tenantAuditEvents.kind, ['founder-export-taken', 'founder-export-destroyed', 'founder-export-legal-hold']))
+      .orderBy(desc(tenantAuditEvents.createdAt));
+    const deleted = new Map((await db.select({ id: tenants.id, deletedAt: tenants.deletedAt }).from(tenants)
+      .where(isNotNull(tenants.deletedAt))).map((t) => [t.id, t.deletedAt!]));
+    for (const taken of events.filter((e) => e.kind === 'founder-export-taken')) {
+      const closed = events.some((e) => e.tenantId === taken.tenantId && e.kind !== 'founder-export-taken'
+        && e.createdAt.getTime() >= taken.createdAt.getTime());
+      let destroyBy: Date;
+      try {
+        destroyBy = new Date((JSON.parse(taken.detail ?? '{}') as FounderExportDetail).destroyBy);
+      } catch {
+        destroyBy = addDays(taken.createdAt, BACKUP_RETENTION_DAYS);
+      }
+      const deletedAt = deleted.get(taken.tenantId);
+      if (deletedAt) {
+        const byDeletion = addDays(deletedAt, BACKUP_RETENTION_DAYS);
+        if (byDeletion.getTime() < destroyBy.getTime()) destroyBy = byDeletion;
+      }
+      const alert = { tenantId: taken.tenantId, kind: 'founder-export-overdue', dedupKey: taken.id };
+      if (!closed && now.getTime() > destroyBy.getTime()) {
+        await raiseAlert(db, { ...alert, detail: { destroyBy: destroyBy.toISOString() } }, now);
+      } else {
+        await resolveAlert(db, alert, now);
+      }
+    }
+  });
+}
+
+export async function sendOpsDigest(results: TenantRunResult[], now: Date, incomplete: boolean): Promise<'sent' | 'nothing' | 'failed' | 'disabled'> {
+  await checkFounderExports(now);
+
+  const data = await withLockedPool(async (db) => {
+    const alerts = await db.select({ a: opsAlerts, slug: tenants.slug }).from(opsAlerts)
+      .leftJoin(tenants, eq(opsAlerts.tenantId, tenants.id))
+      .where(isNull(opsAlerts.resolvedAt)).orderBy(desc(opsAlerts.lastSeenAt));
+    const deleting = await db.select({ slug: tenants.slug, updatedAt: tenants.updatedAt }).from(tenants).where(eq(tenants.status, 'deleting'));
+    const stalePending = await db.select({ slug: tenants.slug, kind: tenantNotices.kind, createdAt: tenantNotices.createdAt, lastError: tenantNotices.lastError })
+      .from(tenantNotices).innerJoin(tenants, eq(tenantNotices.tenantId, tenants.id))
+      .where(and(isNull(tenantNotices.sentAt), isNull(tenantNotices.forcedAt), isNull(tenantNotices.supersededAt),
+        lt(tenantNotices.createdAt, new Date(now.getTime() - 24 * MS_PER_HOUR))));
+    const forced = await db.select({ slug: tenants.slug, kind: tenantNotices.kind, forcedAt: tenantNotices.forcedAt, reason: tenantNotices.forcedReason })
+      .from(tenantNotices).innerJoin(tenants, eq(tenantNotices.tenantId, tenants.id))
+      .where(and(isNotNull(tenantNotices.forcedAt), isNull(tenantNotices.supersededAt), ne(tenants.status, 'deleted')));
+    const exempt = await db.select({ slug: tenants.slug, name: tenants.name }).from(tenants)
+      .where(and(eq(tenants.lifecycleExempt, true), ne(tenants.status, 'deleted')));
+    return { alerts, deleting, stalePending, forced, exempt };
+  });
+
+  const ready = results.filter((r) => r.readyForDeletion);
+  const blocked = results.filter((r) => r.blockedDeletion);
+  const hasNews = data.alerts.length > 0 || ready.length > 0 || blocked.length > 0 || data.deleting.length > 0
+    || data.stalePending.length > 0 || incomplete;
+  if (!hasNews) return 'nothing';
+
+  const to = process.env.OPS_ALERT_EMAIL;
+  if (!to || !resend) {
+    console.error('[ops digest] OPS_ALERT_EMAIL or RESEND_API_KEY not set — digest not sent.');
+    if (process.env.NODE_ENV === 'production') {
+      await withLockedPool((db) => raiseAlert(db, { tenantId: null, kind: 'digest-disabled' }, now));
+    }
+    return 'disabled';
+  }
+
+  const lines: string[] = [];
+  const section = (title: string, items: string[]) => {
+    if (items.length === 0) return;
+    lines.push(`<h3>${esc(title)}</h3><ul>${items.map((i) => `<li>${i}</li>`).join('')}</ul>`);
+  };
+  if (incomplete) lines.push('<p><strong>The lifecycle run stopped early (time budget); remaining tenants run next time.</strong></p>');
+  section('Ready for deletion (D4: run tenant:delete)', ready.map((r) =>
+    `${esc(r.slug)} — deletion date ${esc(r.readyForDeletion!.deletionScheduledFor.toISOString())}${r.readyForDeletion!.overdue ? ' <strong>OVERDUE</strong>' : ''}`));
+  section('Deletion blocked by payment activity', blocked.map((r) => `${esc(r.slug)}: ${esc(r.blockedDeletion)}`));
+  section('Stuck in "deleting" (abandoned deletion run — resume tenant:delete)', data.deleting.map((d) => `${esc(d.slug)} since ${esc(d.updatedAt.toISOString())}`));
+  section('Unresolved alerts', data.alerts.map(({ a, slug }) =>
+    `${esc(slug ?? a.scope)} — <strong>${esc(a.kind)}</strong>${a.dedupKey ? ` (${esc(a.dedupKey)})` : ''} × ${a.occurrences}, last ${esc(a.lastSeenAt.toISOString())}${a.detail ? ` — ${esc(JSON.stringify(a.detail))}` : ''} [id ${esc(a.id)}]`));
+  section('Notices pending more than 24 hours', data.stalePending.map((n) =>
+    `${esc(n.slug)} — ${esc(n.kind)} since ${esc(n.createdAt.toISOString())}${n.lastError ? `: ${esc(n.lastError)}` : ''}`));
+  section('Notices marked sent by founder override (force-notice-sent)', data.forced.map((n) =>
+    `${esc(n.slug)} — ${esc(n.kind)} at ${esc(n.forcedAt!.toISOString())}: ${esc(n.reason ?? '')}`));
+  section('Lifecycle-exempt workspaces (F1)', data.exempt.map((t) => `${esc(t.slug)} (${esc(t.name)})`));
+
+  try {
+    const { data: sent, error } = await resend.emails.send({
+      from: EMAIL_FROM,
+      to,
+      subject: `CadenzPoint ops digest — ${now.toISOString().slice(0, 10)}`,
+      html: `<div style="font-family:system-ui,sans-serif;font-size:14px">${lines.join('')}</div>`,
+    });
+    if (!sent?.id) throw new Error(error?.message ?? 'no message id');
+    await withLockedPool(async (db) => {
+      await resolveAlert(db, { tenantId: null, kind: 'digest-send-failed' }, now);
+      await resolveAlert(db, { tenantId: null, kind: 'digest-disabled' }, now);
+    });
+    return 'sent';
+  } catch (err) {
+    console.error('[ops digest] send failed:', err);
+    await withLockedPool((db) => raiseAlert(db, { tenantId: null, kind: 'digest-send-failed', detail: { error: String(err) } }, now));
+    return 'failed';
+  }
+}

@@ -22,6 +22,8 @@ type Props = {
   /** §3.2/T3: non-null when the workspace is `read_only` — shows a persistent (non-dismissible)
    * banner. The server gate (getDbForWrite) is the real control; this is just visibility. */
   readOnlyReason?: ReadOnlyReason | null;
+  /** F1: lifecycle-exempt (demo/internal) workspace — shows the Demo marker. */
+  isDemo?: boolean;
   children: React.ReactNode;
 };
 
@@ -33,7 +35,7 @@ const READ_ONLY_COPY: Record<ReadOnlyReason, string> = {
   subscription_ended: 'Your subscription has ended. You can still view and export your data for a limited time.',
 };
 
-export function AppShellWrapper({ user, setupComplete = true, initialCollapsed = false, readOnlyReason = null, children }: Props) {
+export function AppShellWrapper({ user, setupComplete = true, initialCollapsed = false, readOnlyReason = null, isDemo = false, children }: Props) {
   const [opened, { toggle }] = useDisclosure();
   const [bannerDismissed, setBannerDismissed] = useState(true); // Start hidden to avoid flash
   // Seed from the server-read cookie so the rail renders at the right width on the FIRST paint
@@ -82,7 +84,7 @@ export function AppShellWrapper({ user, setupComplete = true, initialCollapsed =
         padding="md"
       >
         <AppShell.Header>
-          <AppHeader user={user} mobileNavOpened={opened} onMobileNavToggle={toggle} />
+          <AppHeader user={user} mobileNavOpened={opened} onMobileNavToggle={toggle} isDemo={isDemo} />
         </AppShell.Header>
         <AppShell.Navbar p="xs">
           {/* Scrollable nav list grows to fill; the collapse toggle pins to the bottom (desktop only). */}

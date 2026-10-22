@@ -4,7 +4,7 @@ import dayjs from 'dayjs';
 import { and, eq, isNull } from 'drizzle-orm';
 import { controlDb } from '@/db/control-plane';
 import { signups } from '@/db/control-plane/schema';
-import { provisionTenant } from '@/lib/tenant/provision';
+import { ProvisionConflictError, provisionTenant } from '@/lib/tenant/provision';
 import { issueSetPasswordToken } from '@/lib/tenant/invite';
 import { getTenantBySlug } from '@/lib/tenant/registry';
 
@@ -125,16 +125,25 @@ export async function POST(req: NextRequest) {
     return NextResponse.redirect(`${base}/login`);
   }
 
-  // Provision the tenant (idempotent/resumable)
-  await provisionTenant({
-    slug: row.slug,
-    name: row.companyName,
-    adminEmail: email,
-    adminName: email.split('@')[0],
-    timezone: row.timezone ?? undefined,
-    termsVersion: row.termsVersion ?? undefined,
-    termsAcceptedAt: row.termsAcceptedAt ?? undefined,
-  });
+  // Provision the tenant (resumable only by the signer who started it — see provisionTenant)
+  try {
+    await provisionTenant({
+      slug: row.slug,
+      name: row.companyName,
+      adminEmail: email,
+      adminName: email.split('@')[0],
+      timezone: row.timezone ?? undefined,
+      termsVersion: row.termsVersion ?? undefined,
+      termsAcceptedAt: row.termsAcceptedAt ?? undefined,
+    });
+  } catch (err) {
+    if (err instanceof ProvisionConflictError) {
+      await controlDb.update(signups).set({ consumedAt: new Date() }).where(eq(signups.id, row.id));
+      return failRedirect('That workspace name was just taken. Please sign up again with a different name.');
+    }
+    console.error('[signup] provisioning failed:', err);
+    return failRedirect('We could not finish creating your workspace. Please open your verification link again, or contact support.');
+  }
 
   // Mark signup consumed — happens AFTER provisioning so a crash before here allows retry
   await controlDb.update(signups).set({ consumedAt: new Date() }).where(eq(signups.id, row.id));

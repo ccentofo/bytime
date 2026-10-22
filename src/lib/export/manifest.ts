@@ -28,6 +28,32 @@ export function buildManifest(input: {
   };
 }
 
+/** timesheet_entries.csv / timesheet_entries_current.csv columns (resolved labels are a convenience). */
+export const TIMESHEET_COLUMNS: { header: string; description: string }[] = [
+  { header: 'id', description: 'Unique identifier of this revision row.' },
+  { header: 'user_id', description: 'The employee (users.csv id).' },
+  { header: 'user_email', description: 'The employee email (convenience label).' },
+  { header: 'user_full_name', description: 'The employee name (convenience label).' },
+  { header: 'entry_date', description: 'The day worked (calendar date in the workspace time zone, YYYY-MM-DD).' },
+  { header: 'hours', description: 'Hours recorded for the cell in this revision.' },
+  { header: 'revision_number', description: 'Revision of this cell (employee + code + date); the highest is current.' },
+  { header: 'change_reason_code', description: 'Why a correction was made (blank on the first entry).' },
+  { header: 'comment', description: 'Comment entered with the entry or correction.' },
+  { header: 'created_at', description: 'When this revision was recorded (UTC).' },
+  { header: 'created_by', description: 'Who recorded this revision (users.csv id).' },
+  { header: 'created_by_email', description: 'Email of who recorded it (convenience label).' },
+  { header: 'charge_code_id', description: 'Direct charge code (charge_codes.csv id), if any.' },
+  { header: 'charge_code', description: 'Charge code (convenience label).' },
+  { header: 'charge_code_name', description: 'Charge code name (convenience label).' },
+  { header: 'clin_id', description: 'Contract line item (clins.csv id), if any.' },
+  { header: 'clin_number', description: 'CLIN number (convenience label).' },
+  { header: 'slin_id', description: 'Sub-line item (slins.csv id), if any.' },
+  { header: 'slin_number', description: 'SLIN number (convenience label).' },
+  { header: 'indirect_code_id', description: 'Indirect charge code (indirect_charge_codes.csv id), if any.' },
+  { header: 'indirect_code', description: 'Indirect code (convenience label).' },
+  { header: 'indirect_code_name', description: 'Indirect code name (convenience label).' },
+];
+
 const EXTRA_FILES: { file: string; description: string }[] = [
   {
     file: 'timesheet_entries.csv',
@@ -54,9 +80,11 @@ export function buildReadme(manifest: ExportManifest): string {
     `Generated: ${manifest.generatedAt}`,
     `App version: ${manifest.appVersion}`,
     '',
-    'This export contains every Customer Data table for this workspace. All timestamps are ' +
-      'ISO-8601 in UTC. All CSV files are UTF-8 with a BOM (so Excel opens them correctly) and ' +
-      'RFC 4180 quoting. See manifest.json for exact row counts.',
+    'This export contains every Customer Data table for this workspace, read from one consistent ' +
+      'snapshot. All timestamps are ISO-8601 in UTC; calendar dates (YYYY-MM-DD) are days in the ' +
+      'workspace time zone (workspace_settings.csv). All CSV files are UTF-8 with a BOM (so Excel ' +
+      'opens them correctly), RFC 4180 quoting, and CRLF line endings. See manifest.json for exact ' +
+      'row counts.',
     '',
     '## Conventions',
     '',
@@ -65,6 +93,10 @@ export function buildReadme(manifest: ExportManifest): string {
     '- `status`, `role`, `category`, `work_location`, and similar columns are fixed sets of ' +
       'values used by the app; the choices are visible in each file\'s data.',
     '- A blank cell means the column was null.',
+    '- **Leading apostrophe:** a cell that would start with `=`, `+`, `@`, a tab, a carriage return, ' +
+      'or a `-` that is not part of a plain number is written with a leading `\'` so spreadsheet ' +
+      'programs show it as text instead of running it as a formula. Remove that one leading `\'` to ' +
+      'recover the exact original value.',
     '',
     '## Files',
     '',
@@ -73,7 +105,7 @@ export function buildReadme(manifest: ExportManifest): string {
   for (const t of EXPORT_TABLES) {
     lines.push(`### ${t.file}.csv`);
     lines.push('');
-    lines.push(t.columns.map((c) => c.header).join(', '));
+    for (const c of t.columns) lines.push(`- \`${c.header}\`: ${c.description}`);
     lines.push('');
   }
 
@@ -81,6 +113,8 @@ export function buildReadme(manifest: ExportManifest): string {
     lines.push(`### ${extra.file}`);
     lines.push('');
     lines.push(extra.description);
+    lines.push('');
+    for (const c of TIMESHEET_COLUMNS) lines.push(`- \`${c.header}\`: ${c.description}`);
     lines.push('');
   }
 

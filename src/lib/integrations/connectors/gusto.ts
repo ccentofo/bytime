@@ -14,7 +14,7 @@ import {
   gustoGetRaw,
   fetchGustoCompanyInfo,
 } from './gusto-api';
-import { getDb } from '@/db';
+import { getDbForWrite } from '@/db';
 import { integrationSyncRecords } from '@/db/schema';
 import dayjs from 'dayjs';
 import {
@@ -143,7 +143,7 @@ export const gustoConnector: IntegrationConnector = {
   },
 
   async pushTimesheetEntries(context: SyncContext, entries: TimesheetSyncEntry[]): Promise<SyncResult> {
-  const db = await getDb();
+  const db = await getDbForWrite();
     const employeeMappings = context.mappings.get('employee') ?? new Map();
 
     const result: SyncResult = { pushed: 0, failed: 0, skipped: 0, errors: [] };
@@ -152,7 +152,6 @@ export const gustoConnector: IntegrationConnector = {
     const aggregated = aggregateEntriesByEmployee(entries, 'YYYY-MM-DD');
 
     for (const emp of aggregated) {
-  const db = await getDb();
       // Find the ByTime user ID from the first entry
       const bytimeUserId = emp.entries[0]?.userId;
       if (!bytimeUserId) {

@@ -1,7 +1,7 @@
 import { Center, Stack, Title, Text, Anchor } from '@mantine/core';
 import type { TenantState } from '@/lib/tenant/context';
 
-type Reason = Exclude<TenantState['kind'], 'full' | 'read_only' | 'billing_only'>;
+type Reason = Exclude<TenantState['kind'], 'full' | 'read_only' | 'billing_only' | 'policy_hold'>;
 
 const COPY: Record<Reason, { title: string; body: string }> = {
   none: {

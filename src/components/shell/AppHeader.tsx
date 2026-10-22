@@ -1,6 +1,6 @@
 'use client';
 
-import { Group, Avatar, ActionIcon, Text, Menu, UnstyledButton, useMantineColorScheme, Box, Burger } from '@mantine/core';
+import { Group, Avatar, ActionIcon, Text, Menu, UnstyledButton, useMantineColorScheme, Box, Burger, Badge, Tooltip } from '@mantine/core';
 import Link from 'next/link';
 import { Logo } from '@/components/brand/Logo';
 import { IconSun, IconMoon, IconLogout, IconUser, IconKey, IconBell } from '@tabler/icons-react';
@@ -16,9 +16,11 @@ type AppHeaderProps = {
   /** Mobile nav toggle — wired to AppShellWrapper's useDisclosure toggle */
   mobileNavOpened?: boolean;
   onMobileNavToggle?: () => void;
+  /** F1: lifecycle-exempt demo/internal workspace — always visibly marked, never hidden. */
+  isDemo?: boolean;
 };
 
-export function AppHeader({ user, mobileNavOpened, onMobileNavToggle }: AppHeaderProps) {
+export function AppHeader({ user, mobileNavOpened, onMobileNavToggle, isDemo = false }: AppHeaderProps) {
   const { toggleColorScheme } = useMantineColorScheme();
 
   return (
@@ -33,6 +35,11 @@ export function AppHeader({ user, mobileNavOpened, onMobileNavToggle }: AppHeade
           aria-label="Toggle navigation"
         />
         <Logo size="sm" />
+        {isDemo && (
+          <Tooltip label="Demo workspace: exempt from trial expiry and billing">
+            <Badge color="grape" variant="filled" size="sm">Demo</Badge>
+          </Tooltip>
+        )}
       </Group>
       <Group gap="sm">
         <SyncStatusIndicator />

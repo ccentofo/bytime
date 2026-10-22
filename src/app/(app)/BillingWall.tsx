@@ -4,7 +4,7 @@ import { getTenantBillingInfo } from '@/server/actions/billing';
 import { BillingClient } from './admin/billing/BillingClient';
 
 /**
- * Billing wall shown to an ADMIN on a `billing_only` (suspended for non-payment) tenant — the
+ * Billing wall shown to an ADMIN on a `billing_only` (suspended for NON-PAYMENT) tenant — the
  * layout only renders this for admins; everyone else sees OnHoldScreen instead (§4.7: "admins
  * can sign in, pay"). Reuses the normal billing settings page's Subscribe/Manage billing flow
  * (startCheckout creates a Stripe customer if there isn't one yet) so there's exactly one
@@ -24,7 +24,7 @@ export async function BillingWall() {
           <Stack gap="xs" align="center">
             <Title order={2}>Workspace suspended</Title>
             <Text c="dimmed">
-              Access has been paused due to a billing issue. Subscribe or update your billing
+              Access has been paused due to a billing issue. Pay the outstanding balance or update your billing
               information below to restore access for everyone in your workspace.
             </Text>
           </Stack>

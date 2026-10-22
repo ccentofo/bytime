@@ -4,6 +4,12 @@ import { eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
 import { getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, cleanupTestData } from './helpers';
 
+/** Drizzle 0.45 wraps database errors ("Failed query: …"); the trigger's own message is on `cause`. */
+function isAppendOnlyError(err: unknown): boolean {
+  const e = err as { message?: string; cause?: { message?: string } };
+  return /append-only/.test(`${e?.message ?? ''} ${e?.cause?.message ?? ''}`);
+}
+
 /**
  * T8/R11: a database-level trigger makes timesheet_entries and period_events append-only —
  * UPDATE/DELETE raise unless the session opts in with `SET LOCAL cadenzpoint.allow_entry_delete
@@ -44,7 +50,7 @@ describe('append-only trigger (T8)', () => {
 
     await expect(
       db.update(schema.timesheetEntries).set({ hours: '4' }).where(eq(schema.timesheetEntries.id, row.id)),
-    ).rejects.toThrow(/append-only/);
+    ).rejects.toSatisfy(isAppendOnlyError);
   });
 
   it('DELETE on timesheet_entries is rejected outside the escape hatch', async () => {
@@ -55,7 +61,7 @@ describe('append-only trigger (T8)', () => {
 
     await expect(
       db.delete(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, row.id)),
-    ).rejects.toThrow(/append-only/);
+    ).rejects.toSatisfy(isAppendOnlyError);
   });
 
   it('DELETE succeeds inside a transaction with the escape hatch set', async () => {
@@ -85,10 +91,10 @@ describe('append-only trigger (T8)', () => {
 
     await expect(
       db.update(schema.periodEvents).set({ comment: 'edited' }).where(eq(schema.periodEvents.id, event.id)),
-    ).rejects.toThrow(/append-only/);
+    ).rejects.toSatisfy(isAppendOnlyError);
     await expect(
       db.delete(schema.periodEvents).where(eq(schema.periodEvents.id, event.id)),
-    ).rejects.toThrow(/append-only/);
+    ).rejects.toSatisfy(isAppendOnlyError);
   });
 
   it("cleanupTestData() itself (the suite's own escape hatch) succeeds with rows present in both append-only tables", async () => {

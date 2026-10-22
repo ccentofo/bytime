@@ -17,6 +17,11 @@ vi.mock('client-only', () => ({}));
 const TEST_DB_URL = process.env.TEST_DATABASE_URL
   ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime_test';
 
+// CI sets REQUIRE_CONTROL_PLANE_TESTS so the lifecycle / billing / deletion suites can never skip silently there.
+if (process.env.REQUIRE_CONTROL_PLANE_TESTS === '1' && !process.env.CONTROL_PLANE_DATABASE_URL) {
+  throw new Error('REQUIRE_CONTROL_PLANE_TESTS=1 but CONTROL_PLANE_DATABASE_URL is not set — control-plane suites would skip.');
+}
+
 let sql: ReturnType<typeof postgres>;
 
 beforeAll(async () => {

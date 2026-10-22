@@ -28,6 +28,8 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { and, eq, isNull, isNotNull } from 'drizzle-orm';
 import { tenants, signups } from '../src/db/control-plane/schema';
 import { TRIAL_DAYS, TRIAL_BACKFILL_MIN_DAYS } from '../src/lib/tenant/lifecycle-config';
+import { withTenantLock } from '../src/db/control-plane/locked';
+import { readTenant, updateTenantGuarded } from '../src/lib/tenant/lifecycle-store';
 
 function fail(msg: string): never {
   console.error(`✗ ${msg}`);
@@ -86,9 +88,12 @@ async function main() {
       console.log(`  ${t.slug}: trial_ends_at → ${trialEndsAt.toISOString()}${signupEmail ? `, signup_email → ${signupEmail}` : ''}`);
 
       if (!check) {
-        await db.update(tenants)
-          .set({ trialEndsAt, signupEmail: signupEmail ?? t.signupEmail, updatedAt: new Date() })
-          .where(eq(tenants.id, t.id));
+        // §4.1: lock + lifecycle_version guard; re-checked under the lock so a re-run stays a no-op.
+        await withTenantLock(t.id, async (tx) => {
+          const row = await readTenant(tx, t.id);
+          if (!row || row.trialEndsAt !== null) return;
+          await updateTenantGuarded(tx, row, { trialEndsAt, signupEmail: signupEmail ?? row.signupEmail }, new Date());
+        });
       }
     }
 

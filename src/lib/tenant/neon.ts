@@ -167,56 +167,97 @@ async function createLocalDevDatabase(slug: string): Promise<CreatedTenantDataba
   return { dbUrl: u.toString(), neonProjectId: null };
 }
 
-/**
- * T7: DEV-ONLY counterpart to deleteNeonProject — drops the local tenant_<slug> database.
- * Mirrors createLocalDevDatabase's admin-connection resolution exactly.
- */
-export async function dropLocalDevDatabase(slug: string): Promise<void> {
-  const adminUrl =
-    process.env.DEV_TENANT_ADMIN_DATABASE_URL ??
-    process.env.CONTROL_PLANE_DATABASE_URL ??
-    'postgresql://bytime:bytime_dev@localhost:5432/bytime';
-  const dbName = tenantDatabaseName(slug);
+/** Neon endpoint host without the PgBouncer `-pooler` suffix on its first label. */
+export function directNeonHost(host: string): string {
+  const [first, ...rest] = host.split('.');
+  return [first.replace(/-pooler$/, ''), ...rest].join('.');
+}
 
-  const admin = postgres(adminUrl, { max: 1 });
+/**
+ * §5.3 step 5 (Neon): delete a dedicated tenant project only after proving it is the right one.
+ * Preflight `GET /projects/{id}` and `GET /projects/{id}/endpoints`: an endpoint host must equal the tenant
+ * URL's host (minus `-pooler`), and none may equal the control plane's. Then `DELETE` and confirm `GET` → 404.
+ * A 404 at preflight means a previous run already deleted it (accepted on resume).
+ *
+ * Neon keeps a deleted project recoverable for 7 days (POST /projects/{id}/recover, neon.com/docs/manage/projects).
+ */
+export async function deleteNeonProjectVerified(input: {
+  projectId: string;
+  tenantHost: string;
+  controlPlaneHost: string;
+}): Promise<{ alreadyDeleted: boolean }> {
+  const apiKey = process.env.NEON_API_KEY;
+  if (!apiKey) throw new Error('NEON_API_KEY is not set — cannot delete a Neon project.');
+  const headers = { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' };
+  const base = `${NEON_API_BASE}/projects/${encodeURIComponent(input.projectId)}`;
+
+  const project = await fetch(base, { headers });
+  if (project.status === 404) return { alreadyDeleted: true };
+  if (!project.ok) throw new Error(`Neon project lookup failed: ${project.status} ${await project.text()}`);
+
+  const eps = await fetch(`${base}/endpoints`, { headers });
+  if (!eps.ok) throw new Error(`Neon endpoint lookup failed: ${eps.status} ${await eps.text()}`);
+  const hosts = ((await eps.json()) as { endpoints?: Array<{ host: string }> }).endpoints?.map((e) => directNeonHost(e.host)) ?? [];
+  const tenantHost = directNeonHost(input.tenantHost);
+  const controlHost = directNeonHost(input.controlPlaneHost);
+  if (!hosts.includes(tenantHost)) {
+    throw new Error(`Refusing: Neon project ${input.projectId} has no endpoint ${tenantHost} (has: ${hosts.join(', ') || 'none'}).`);
+  }
+  if (hosts.includes(controlHost)) {
+    throw new Error(`Refusing: Neon project ${input.projectId} hosts the CONTROL PLANE (${controlHost}).`);
+  }
+
+  const del = await fetch(base, { method: 'DELETE', headers });
+  if (!del.ok && del.status !== 404) throw new Error(`Neon project deletion failed: ${del.status} ${await del.text()}`);
+
+  for (let i = 0; i < 30; i++) {
+    const check = await fetch(base, { headers });
+    if (check.status === 404) return { alreadyDeleted: false };
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error(`Neon project ${input.projectId} still exists 30 s after DELETE — re-run to confirm.`);
+}
+
+/** §5.3 step 2 (first run): does the Neon project exist? 404 → false; any other failure throws (never "absent"). */
+export async function neonProjectExists(projectId: string): Promise<boolean> {
+  const apiKey = process.env.NEON_API_KEY;
+  if (!apiKey) throw new Error('NEON_API_KEY is not set — cannot verify the Neon project.');
+  const res = await fetch(`${NEON_API_BASE}/projects/${encodeURIComponent(projectId)}`, {
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+  });
+  if (res.status === 404) return false;
+  if (!res.ok) throw new Error(`Neon project lookup failed: ${res.status} ${await res.text()}`);
+  return true;
+}
+
+/** §5.3 step 2 (first run): does the database exist on that server? */
+export async function databaseExists(adminUrl: string, dbName: string): Promise<boolean> {
+  const admin = postgres(adminUrl, { max: 1, prepare: false });
   try {
-    // Terminate other connections first — DROP DATABASE fails while any session is attached
-    // (the app's own pooled client for this tenant, if still warm in this process).
-    await admin.unsafe(
-      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${dbName}' AND pid <> pg_backend_pid()`,
-    );
-    await admin.unsafe(`DROP DATABASE IF EXISTS ${dbName}`);
-    console.log(`[tenant:delete] dropped local database ${dbName}`);
+    return (await admin`SELECT 1 FROM pg_database WHERE datname = ${dbName}`).length > 0;
   } finally {
     await admin.end();
   }
 }
 
 /**
- * T7.4: DELETE /projects/{project_id} (Neon API v2). Returns 200 on success; treat a 404 as
- * already-deleted (idempotent). Per api-docs.neon.tech/reference/deleteproject (confirmed Oct
- * 2026): success is 200 with a ProjectResponse body; other outcomes use a generic GeneralError
- * response without a documented specific status for "already deleted" — 404 is this function's
- * own defensive choice for that case, consistent with the blueprint's "treat 404 as already
- * deleted," not something Neon's reference explicitly promises.
- *
- * A deleted project is recoverable for 7 days via POST /projects/{project_id}/recover (per
- * neon.com/docs/manage/projects, confirmed Oct 2026) — after that, deletion is permanent.
+ * §5.3 step 5 (local dev, or a database inside the control plane's Neon project): DROP the database named in
+ * the tenant URL, WITH (FORCE) so pooled app connections can't block it, connecting with `adminUrl` to another
+ * database on the same server. Confirms via pg_database. Callers have already refused protected names.
  */
-export async function deleteNeonProject(projectId: string): Promise<{ alreadyDeleted: boolean }> {
-  const apiKey = process.env.NEON_API_KEY;
-  if (!apiKey) throw new Error('NEON_API_KEY is not set — cannot delete a Neon project.');
-
-  const res = await fetch(`${NEON_API_BASE}/projects/${projectId}`, {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
-  });
-
-  if (res.status === 404) return { alreadyDeleted: true };
-  if (!res.ok) {
-    throw new Error(`Neon project deletion failed for ${projectId}: ${res.status} ${await res.text()}`);
+export async function dropDatabaseVerified(adminUrl: string, dbName: string): Promise<{ alreadyDeleted: boolean }> {
+  if (!/^[a-z_][a-z0-9_]*$/.test(dbName)) throw new Error(`Refusing to drop an unexpected database name: ${dbName}`);
+  const admin = postgres(adminUrl, { max: 1, prepare: false });
+  try {
+    const before = await admin`SELECT 1 FROM pg_database WHERE datname = ${dbName}`;
+    if (before.length === 0) return { alreadyDeleted: true };
+    await admin.unsafe(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);
+    const after = await admin`SELECT 1 FROM pg_database WHERE datname = ${dbName}`;
+    if (after.length > 0) throw new Error(`Database ${dbName} still exists after DROP.`);
+    return { alreadyDeleted: false };
+  } finally {
+    await admin.end();
   }
-  return { alreadyDeleted: false };
 }
 
 /**

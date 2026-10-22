@@ -1,174 +1,101 @@
 /**
- * Permanently delete a tenant workspace — its database and its Stripe subscription — and
- * tombstone the control-plane row (feature-plan-terms-compliance.md T7, R10).
+ * Permanently delete a tenant workspace (feature-plan-terms-compliance-fixes.md §5.3; logic in
+ * src/lib/tenant/delete-tenant.ts). THIS IS IRREVERSIBLE once the database step runs.
  *
- * THIS IS IRREVERSIBLE. The tenant's database is destroyed (Neon: the project; local dev: the
- * tenant_<slug> database). Only run this against a throwaway LOCAL tenant you created for a
- * test. NEVER run it against a demo tenant (acme, globex, initech) or any remote database unless
- * you are the founder doing a real, authorized deletion.
+ * Only run this against a throwaway LOCAL tenant you created for a test. NEVER against a demo tenant
+ * (acme, globex, initech — they are lifecycle-exempt and refused without --include-exempt) or any remote
+ * database unless you are the founder doing a real, authorized deletion.
  *
- * Usage:
- *   tsx scripts/delete-tenant.ts <slug>                                   # dry run — prints what would happen
- *   tsx scripts/delete-tenant.ts <slug> --yes                             # apply
- *   tsx scripts/delete-tenant.ts <slug> --yes --force-with-reason "<text>" # bypass the notice-timing check
+ * Usage (npm run tenant:delete -- <slug> [flags]):
+ *   <slug>                                   dry run: preconditions, database classification, Stripe summary
+ *   <slug> --yes                             apply (or resume an interrupted run)
+ *   --force-with-reason "<text>"             bypass the deletion-date / notice checks (audited)
+ *   --include-exempt                         allow deleting a lifecycle-exempt workspace
+ *   --drop-shared-database                   allow dropping a database inside the control plane's Neon project
  *
- * Refuses to apply unless `deletion_scheduled_for` has passed AND a 'deletion-notice' was sent at
- * least DELETION_NOTICE_DAYS (D3) days ago — both proven by rows this tool reads, not asserted.
- * `--force-with-reason` bypasses that check but still requires `--yes`, and the reason is printed
- * in the receipt as part of this run's own audit trail.
- *
- * Idempotent: running it again against an already-deleted tenant is a no-op that prints the
- * existing tombstone.
- *
- * Required env (loaded from .env.local then .env): CONTROL_PLANE_DATABASE_URL, STRIPE_SECRET_KEY
- * (if the tenant has a subscription), NEON_API_KEY (if the tenant has a neon_project_id).
+ * Required env (.env.local then .env): CONTROL_PLANE_DATABASE_URL, ENCRYPTION_KEY, STRIPE_SECRET_KEY (if the
+ * tenant has a Stripe customer), NEON_API_KEY (dedicated Neon project).
  */
 import dotenv from 'dotenv';
 dotenv.config({ path: ['.env.local', '.env'] });
 
-import postgres from 'postgres';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { desc, eq } from 'drizzle-orm';
-import { tenants, tenantNotices } from '../src/db/control-plane/schema';
-import { DELETION_NOTICE_DAYS } from '../src/lib/tenant/lifecycle-config';
-import { deleteNeonProject, dropLocalDevDatabase } from '../src/lib/tenant/neon';
-
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
+import { deleteTenant, type DeletionReceipt } from '../src/lib/tenant/delete-tenant';
 
 function fail(msg: string): never {
   console.error(`✗ ${msg}`);
   process.exit(1);
 }
 
+function flagValue(args: string[], name: string): string | undefined {
+  const i = args.indexOf(name);
+  if (i === -1) return undefined;
+  const v = args[i + 1];
+  if (!v || v.startsWith('--')) fail(`${name} requires a value.`);
+  return v;
+}
+
+function printReceipt(r: DeletionReceipt) {
+  const iso = (d: Date | null) => d?.toISOString() ?? '(none)';
+  console.log('--- Deletion receipt ---');
+  console.log(`  slug:                    ${r.slug}`);
+  console.log(`  name:                    ${r.name}`);
+  console.log(`  status:                  ${r.status}`);
+  console.log(`  deletion_scheduled_for:  ${iso(r.deletionScheduledFor)}`);
+  console.log(`  deleted_at:              ${iso(r.deletedAt)}`);
+  console.log(`  database:                ${r.database}`);
+  if (r.forcedReason) console.log(`  FORCED:                  ${r.forcedReason}`);
+  if (r.founderExportDestroyBy) console.log(`  founder export: DESTROY BY ${iso(r.founderExportDestroyBy)} (then: npm run tenant:admin -- export-destroyed ${r.slug} --yes)`);
+  console.log(`  notices (${r.notices.length}):`);
+  for (const n of r.notices) {
+    const state = n.sentAt ? `sent ${iso(n.sentAt)}` : n.forcedAt ? `FORCED ${iso(n.forcedAt)}` : n.supersededAt ? 'superseded' : 'NOT SENT';
+    console.log(`    ${n.kind.padEnd(24)} anchor ${iso(n.anchor)}  ${state}`);
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
-  const slug = args.find((a) => !a.startsWith('--'));
-  const yes = args.includes('--yes');
-  const forceIdx = args.indexOf('--force-with-reason');
-  const forceReason = forceIdx >= 0 ? args[forceIdx + 1] : undefined;
-  if (forceIdx >= 0 && !forceReason) fail('--force-with-reason requires a reason string.');
+  const valueFlags = new Set(['--force-with-reason']);
+  const slug = args.find((a, i) => !a.startsWith('--') && !valueFlags.has(args[i - 1]));
+  if (!slug) fail('Usage: tenant:delete -- <slug> [--yes] [--force-with-reason "<text>"] [--include-exempt] [--drop-shared-database]');
 
-  if (!slug) fail('Usage: delete-tenant.ts <slug> [--yes] [--force-with-reason "<text>"]');
+  const result = await deleteTenant({
+    slug,
+    apply: args.includes('--yes'),
+    forceWithReason: flagValue(args, '--force-with-reason'),
+    includeExempt: args.includes('--include-exempt'),
+    dropSharedDatabase: args.includes('--drop-shared-database'),
+    actor: `founder:${process.env.USER ?? 'unknown'}`,
+  });
 
-  const controlUrl = process.env.CONTROL_PLANE_DATABASE_URL;
-  if (!controlUrl) fail('CONTROL_PLANE_DATABASE_URL is not set (checked .env.local and .env).');
-
-  const sql = postgres(controlUrl!, { max: 1 });
-  const db = drizzle(sql);
-
-  try {
-    const [tenant] = await db.select().from(tenants).where(eq(tenants.slug, slug!)).limit(1);
-    if (!tenant) fail(`No tenant with slug "${slug}".`);
-
-    if (tenant!.status === 'deleted') {
-      console.log(`"${slug}" is already deleted. Tombstone:`);
-      printReceipt(tenant!, await notices(db, tenant!.id));
-      process.exit(0);
-    }
-
-    const now = new Date();
-    const scheduledOk = tenant!.deletionScheduledFor !== null && tenant!.deletionScheduledFor <= now;
-    const noticeRows = await notices(db, tenant!.id);
-    const deletionNotice = noticeRows.find((n) => n.kind === 'deletion-notice' && n.sentAt !== null);
-    const noticeOk = Boolean(
-      deletionNotice?.sentAt && now.getTime() - deletionNotice.sentAt.getTime() >= DELETION_NOTICE_DAYS * MS_PER_DAY,
-    );
-    const eligible = scheduledOk && noticeOk;
-
-    console.log(`Tenant: ${tenant!.slug} (${tenant!.name}), status=${tenant!.status}`);
-    console.log(`  deletion_scheduled_for: ${tenant!.deletionScheduledFor?.toISOString() ?? '(not set)'} — ${scheduledOk ? 'passed' : 'NOT YET PASSED'}`);
-    console.log(`  deletion-notice sent:   ${deletionNotice?.sentAt?.toISOString() ?? '(never sent)'} — ${noticeOk ? `≥${DELETION_NOTICE_DAYS}d ago` : `needs ≥${DELETION_NOTICE_DAYS}d notice`}`);
-
-    if (!eligible && !forceReason) {
-      fail(
-        `Not eligible for deletion yet. Pass --force-with-reason "<text>" to override (logged in this run's receipt).`,
-      );
-    }
-    if (forceReason) {
-      console.log(`\n⚠ FORCED (bypassing eligibility check): ${forceReason}`);
-    }
-
-    console.log('\nThis will, in order:');
-    console.log('  1. Set status = deleting (blocks all access immediately)');
-    console.log(`  2. Cancel the Stripe subscription${tenant!.stripeSubscriptionId ? ` (${tenant!.stripeSubscriptionId})` : ' (none on file)'}`);
-    console.log(`  3. Delete the database${tenant!.neonProjectId ? ` (Neon project ${tenant!.neonProjectId})` : ' (local dev database)'}`);
-    console.log('  4. Tombstone the registry row (status = deleted, db_url_encrypted = null)');
-
-    if (!yes) {
-      console.log('\nDry run — pass --yes to apply.');
-      process.exit(0);
-    }
-
-    // 1. Block access immediately.
-    await db.update(tenants).set({ status: 'deleting', updatedAt: new Date() }).where(eq(tenants.id, tenant!.id));
-    console.log('\n✓ Status set to deleting.');
-
-    // 2. Cancel Stripe subscription (keep the customer — billing/tax records, Privacy §7).
-    if (tenant!.stripeSubscriptionId) {
-      try {
-        const { stripe } = await import('../src/lib/billing/stripe');
-        await stripe.subscriptions.cancel(tenant!.stripeSubscriptionId);
-        console.log('✓ Stripe subscription canceled.');
-      } catch (err) {
-        console.error(`⚠ Failed to cancel Stripe subscription (continuing with deletion): ${(err as Error).message}`);
+  switch (result.outcome) {
+    case 'dry-run':
+      if (result.problems.length > 0) {
+        console.log('\nNot eligible:');
+        for (const p of result.problems) console.log(`  - ${p}`);
+      } else {
+        console.log('\nEligible. Steps on --yes: reconcile + set deleting → cancel DUNNING/paused subscriptions and close open invoices → preflight → delete the database → tombstone.');
       }
-    }
-
-    // 3. Delete the database.
-    if (tenant!.neonProjectId) {
-      const { alreadyDeleted } = await deleteNeonProject(tenant!.neonProjectId);
-      console.log(alreadyDeleted ? '✓ Neon project already deleted.' : '✓ Neon project deleted.');
-    } else if (!process.env.NEON_API_KEY) {
-      await dropLocalDevDatabase(slug!);
-      console.log('✓ Local database dropped.');
-    } else {
-      console.error(
-        '⚠ No neon_project_id on file and NEON_API_KEY is set — cannot determine which Neon ' +
-        'project to delete. DELETE IT MANUALLY in the Neon console (look for ' +
-        `"cadenzpoint-${slug}"), then re-run this script (it will skip straight to tombstoning).`,
-      );
-    }
-
-    // 4. Tombstone. Slug, name, Stripe ids, dates, and tenant_notices all stay — proof of notice
-    // and of deletion, and the slug stays reserved.
-    const [tombstoned] = await db.update(tenants).set({
-      status: 'deleted',
-      deletedAt: new Date(),
-      dbUrlEncrypted: null,
-      updatedAt: new Date(),
-    }).where(eq(tenants.id, tenant!.id)).returning();
-
-    console.log('\n✓ Deletion complete.\n');
-    printReceipt(tombstoned!, await notices(db, tenant!.id));
-    process.exit(0);
-  } finally {
-    await sql.end();
+      console.log('\nDry run — pass --yes to apply.');
+      break;
+    case 'deleted':
+      console.log('\n✓ Deletion complete.\n');
+      printReceipt(result.receipt);
+      break;
+    case 'already-deleted':
+      console.log('Already deleted. Tombstone:');
+      printReceipt(result.receipt);
+      break;
+    case 'aborted':
+      fail(`Aborted (the workspace was restored if it was being deleted): ${result.reason}`);
+    case 'stopped':
+      fail(`Stopped: ${result.reason}`);
+    case 'refused':
+      fail(result.reason);
   }
-}
-
-async function notices(db: ReturnType<typeof drizzle>, tenantId: string) {
-  return db
-    .select({ kind: tenantNotices.kind, scheduledFor: tenantNotices.scheduledFor, sentAt: tenantNotices.sentAt })
-    .from(tenantNotices)
-    .where(eq(tenantNotices.tenantId, tenantId))
-    .orderBy(desc(tenantNotices.scheduledFor));
-}
-
-function printReceipt(tenant: typeof tenants.$inferSelect, noticeRows: Array<{ kind: string; scheduledFor: Date; sentAt: Date | null }>) {
-  console.log('--- Deletion receipt ---');
-  console.log(`  slug:                   ${tenant.slug}`);
-  console.log(`  name:                   ${tenant.name}`);
-  console.log(`  status:                 ${tenant.status}`);
-  console.log(`  deletion_scheduled_for: ${tenant.deletionScheduledFor?.toISOString() ?? '(none)'}`);
-  console.log(`  deleted_at:             ${tenant.deletedAt?.toISOString() ?? '(none)'}`);
-  console.log(`  neon_project_id:        ${tenant.neonProjectId ?? '(none)'}`);
-  console.log(`  notices (${noticeRows.length}):`);
-  for (const n of noticeRows) {
-    console.log(`    ${n.kind.padEnd(24)} scheduled ${n.scheduledFor.toISOString()}  ${n.sentAt ? `sent ${n.sentAt.toISOString()}` : 'NOT SENT'}`);
-  }
+  process.exit(0);
 }
 
 main().catch((err) => {
-  console.error('delete-tenant failed:', err?.message ?? err);
+  console.error('tenant:delete failed:', err?.message ?? err);
   process.exit(1);
 });

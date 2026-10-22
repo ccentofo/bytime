@@ -28,7 +28,8 @@ const DB_QUERY_PATTERN = /\b(db|tx)\.(select|insert|update|delete|execute|transa
 // §3.2 write gate: a DB write (insert/update/delete, direct or inside a transaction) must run
 // against a client obtained from getDbForWrite() — the only accessor that enforces 'full' mode —
 // unless the function is a security function on the getDbForAuth() allowlist below.
-const DB_WRITE_PATTERN = /\b(db|tx)\.(insert|update|delete)\s*\(/;
+// Whitespace-tolerant: `db\n  .insert(` (a chain split across lines) is still a write. Raw SQL writes count too.
+const DB_WRITE_PATTERN = /\b(?:db|tx)\s*\.\s*(?:insert|update|delete)\s*\(|\.execute\(\s*sql`\s*(?:insert|update|delete)\b/i;
 const WRITE_GATE_PATTERN = /\bgetDbForWrite\s*\(/;
 const AUTH_GATE_PATTERN = /\bgetDbForAuth\s*\(/;
 // R2-6: start of a DB write's payload — `.values(` or `.set(`. Its argument must never be a
@@ -343,6 +344,27 @@ describe('Server action guard coverage', () => {
       expect(otherExports, `${file} has export(s) the guard scanner can't parse: ${otherExports.join(' | ')}`).toEqual([]);
     });
   }
+
+  // §5.1: internal helpers and integration code aren't server actions, so the per-function rule above never
+  // sees them. Writing through getDb() can't compile (it returns ReadDb, which has no insert/update/delete);
+  // the remaining bypass is getDbForUrl(), which returns an unrestricted client. Business-data code here must
+  // never use it — only infrastructure (auth, crons, provisioning, notices, export) may.
+  it('src/server/internal and src/lib/integrations never use the unrestricted getDbForUrl() client', () => {
+    const roots = [path.join(SRC_DIR, 'server/internal'), path.join(SRC_DIR, 'lib/integrations')];
+    const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? walk(path.join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [path.join(dir, e.name)] : []);
+    const offenders = roots.flatMap(walk)
+      .filter((file) => /\bgetDbForUrl\s*\(/.test(stripComments(fs.readFileSync(file, 'utf-8'))))
+      .map((f) => path.relative(SRC_DIR, f));
+    expect(offenders, `getDbForUrl() used in business-data code: ${offenders.join(', ')}`).toEqual([]);
+  });
+
+  it('DB_WRITE_PATTERN catches multi-line chains and raw SQL writes (mutation check)', () => {
+    expect(DB_WRITE_PATTERN.test('const rows = await db\n    .insert(userAssignments)')).toBe(true);
+    expect(DB_WRITE_PATTERN.test('await tx .update(x)')).toBe(true);
+    expect(DB_WRITE_PATTERN.test('await db.execute(sql`DELETE FROM users`)')).toBe(true);
+    expect(DB_WRITE_PATTERN.test('await db.select().from(users)')).toBe(false);
+  });
 
   it("every 'use server' file under src/ lives in src/server/actions/ (so this test scans it)", () => {
     const outside = findUseServerFiles(SRC_DIR)
