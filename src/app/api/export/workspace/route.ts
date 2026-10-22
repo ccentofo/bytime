@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
-import { requireAdminFresh } from '@/lib/session';
+import { AuthorizationError, requireAdminFresh } from '@/lib/session';
+import { guardErrorResponse } from '@/lib/http-errors';
 import { ExportNotAllowedError, getTenantForExport } from '@/lib/tenant/context';
 import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit';
 import { createWorkspaceZipStream, openExportSnapshot } from '@/lib/export/workspace-export';
@@ -13,7 +14,14 @@ import { createWorkspaceZipStream, openExportSnapshot } from '@/lib/export/works
 export const maxDuration = 800;
 
 export async function GET(request: NextRequest) {
-  const actor = await requireAdminFresh();
+  let actor;
+  try {
+    actor = await requireAdminFresh();
+  } catch (err) {
+    // feature-plan-launch-blockers.md P4 §7: no session → 401, not an admin → 403 (not an unhandled 500).
+    if (err instanceof AuthorizationError) return guardErrorResponse(err);
+    throw err;
+  }
   let tenant;
   try {
     tenant = await getTenantForExport();

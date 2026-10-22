@@ -272,6 +272,10 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
               )}
             </CopyButton>
           </Group>
+          {/* The API's 401 no longer carries a usage hint (one identical body for every auth failure), so it lives here. */}
+          <Text size="sm" c="dimmed">
+            Send it on every request as the header <Code>Authorization: Bearer {'<key>'}</Code>.
+          </Text>
           <Button onClick={() => { setNewKeyModalOpen(false); setNewKeyValue(''); }} color="success">
             I've Copied the Key
           </Button>

@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { validateApiKey, apiResponse, apiError } from '@/lib/api-auth';
+import { handleApiRequest, apiResponse, apiError } from '@/lib/api-auth';
 import { getDetailedCostReportData } from '@/server/internal/reports';
 import { isCalendarDate, isBefore, diffDays } from '@/lib/calendar-date';
 
@@ -9,9 +9,10 @@ import { isCalendarDate, isBefore, diffDays } from '@/lib/calendar-date';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function GET(request: NextRequest) {
-  const authResult = await validateApiKey(request);
-  if (authResult instanceof Response) return authResult;
+  return handleApiRequest(request, () => getCostReport(request));
+}
 
+async function getCostReport(request: NextRequest): Promise<Response> {
   const { searchParams } = new URL(request.url);
   const startDate = searchParams.get('startDate');
   const endDate = searchParams.get('endDate');
@@ -33,18 +34,14 @@ export async function GET(request: NextRequest) {
     return apiError('contractId must be a valid UUID.');
   }
 
-  try {
-    // R2-4: call the internal query directly, not the admin-only server action — API key
-    // requests have no session, so requireAdmin() inside getDetailedCostReport() would always
-    // reject them. validateApiKey() above is this route's own, equivalent authorization.
-    const data = await getDetailedCostReportData(
-      startDate,
-      endDate,
-      contractId ?? undefined
-    );
+  // R2-4: call the internal query directly, not the admin-only server action — API key
+  // requests have no session, so requireAdmin() inside getDetailedCostReport() would always
+  // reject them. handleApiRequest() in GET is this route's own, equivalent authorization.
+  const data = await getDetailedCostReportData(
+    startDate,
+    endDate,
+    contractId ?? undefined
+  );
 
-    return apiResponse(data, { total: data.length });
-  } catch (error) {
-    return apiError('Internal server error', 500);
-  }
+  return apiResponse(data, { total: data.length });
 }

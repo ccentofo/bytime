@@ -23,7 +23,6 @@ const GET_DB_FOR_AUTH_ALLOWED = new Set([
   'db/index.ts',
   'auth.ts',
   'lib/session.ts',
-  'lib/api-auth.ts',
   'server/internal/login-attempts.ts',
   'server/actions/login-attempts.ts',
   'server/actions/password.ts',
