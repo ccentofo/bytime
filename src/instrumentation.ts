@@ -6,6 +6,10 @@ import * as Sentry from '@sentry/nextjs';
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     await import('../sentry.server.config');
+    // Fail loudly at boot (not at the first decrypt) if a production deploy is missing a valid ENCRYPTION_KEY.
+    if (process.env.NODE_ENV === 'production' && !/^[0-9a-f]{64}$/i.test(process.env.ENCRYPTION_KEY ?? '')) {
+      console.error('FATAL: ENCRYPTION_KEY must be set to 64 hex characters in production (openssl rand -hex 32).');
+    }
   }
   if (process.env.NEXT_RUNTIME === 'edge') {
     await import('../sentry.edge.config');

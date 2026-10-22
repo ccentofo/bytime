@@ -227,6 +227,21 @@ describe.skipIf(!cpReady)('Stripe webhook (§4.3)', () => {
     expect((await openAlertsOf(tenant.id)).map((a) => a.kind)).toContain('policy-suspended-subscription-ended');
   });
 
+  it('a basil-shaped invoice event (subscription under parent.subscription_details) is processed, not ignored', async () => {
+    const s = stripeState.addSub(customer, 'active');
+    await setTenant(tenant.id, {
+      stripeSubscriptionId: s, subscriptionStatus: 'past_due', firstGoodAt: daysFrom(NOW, -90), pastDueSince: daysFrom(NOW, -3),
+    });
+    const res = await post(event('invoice.paid', {
+      id: 'in_basil', object: 'invoice', customer,
+      parent: { type: 'subscription_details', subscription_details: { subscription: s } },
+    }));
+    expect(((await res.json()) as { ignored?: boolean }).ignored).toBeUndefined();
+    const row = await getTenantRow(tenant.id);
+    expect(row.subscriptionStatus).toBe('active');
+    expect(row.pastDueSince).toBeNull();
+  });
+
   it('a one-off invoice (no subscription) is ignored without reading Stripe', async () => {
     const res = await post(invoiceEvent('invoice.paid', customer, null));
     expect(res.status).toBe(200);

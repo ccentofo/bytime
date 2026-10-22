@@ -33,6 +33,18 @@ function idOf(ref: string | { id: string } | null | undefined): string | null {
   return typeof ref === 'string' ? ref : ref.id;
 }
 
+/**
+ * Webhook payloads use the ENDPOINT's API version, not the SDK's pinned one. From 2025-03-31.basil on, Stripe
+ * moved `invoice.subscription` to `invoice.parent.subscription_details.subscription`; read both so an endpoint
+ * created with a newer version never makes us ignore invoice events.
+ */
+function invoiceSubscriptionOf(inv: Stripe.Invoice): string | null {
+  const legacy = idOf((inv as { subscription?: string | { id: string } | null }).subscription);
+  if (legacy) return legacy;
+  const parent = (inv as { parent?: { subscription_details?: { subscription?: string | { id: string } | null } | null } | null }).parent;
+  return idOf(parent?.subscription_details?.subscription ?? null);
+}
+
 type Outcome = { slug: string; noticeIds: string[] } | null;
 
 // Stripe requires the RAW body for signature verification.
@@ -67,7 +79,7 @@ export async function POST(req: NextRequest) {
   } else if (SUBSCRIPTION_EVENTS.has(event.type) || event.type === 'customer.updated') {
     if (event.type === 'invoice.paid' || event.type === 'invoice.payment_failed') {
       const inv = event.data.object as Stripe.Invoice;
-      invoiceSubscriptionId = idOf(inv.subscription);
+      invoiceSubscriptionId = invoiceSubscriptionOf(inv);
       if (!invoiceSubscriptionId) return ignored(); // one-off invoice: not a subscription fact
     }
     customerId = event.type.startsWith('customer.') && !event.type.startsWith('customer.subscription.')
