@@ -2,7 +2,6 @@
 
 import { useMemo, useState, useTransition } from 'react';
 import {
-  Button,
   Select,
   Group,
   Title,
@@ -31,6 +30,7 @@ import { RECORD_STATUS_COLOR, WORK_LOCATION_COLOR } from '@/lib/ui/status-colors
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
 import type { CalendarDate } from '@/lib/calendar-date';
+import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 type User = {
   id: string;
@@ -124,6 +124,7 @@ type Props = {
 };
 
 export function AssignmentsClient({ initialAssignments, users, contracts, chargeCodes, initialChargeCodeAssignments, workspaceTimezone }: Props) {
+  const canWrite = useCanWrite();
   const [isPending, startTransition] = useTransition();
   const [assignments, setAssignments] = useState<Assignment[]>(initialAssignments);
 
@@ -263,7 +264,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
           variant="subtle"
           color="red"
           onClick={() => setConfirmCcTarget(row.original)}
-          disabled={!row.original.isActive}
+          disabled={!canWrite || (!row.original.isActive)}
           aria-label="Deactivate charge code assignment"
         >
           <IconBan size={16} />
@@ -374,7 +375,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
           variant="subtle"
           color="red"
           onClick={() => setConfirmClinTarget(row.original)}
-          disabled={!row.original.isActive}
+          disabled={!canWrite || (!row.original.isActive)}
           aria-label="Deactivate supervisor assignment"
         >
           <IconBan size={16} />
@@ -447,21 +448,21 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
                 searchable
                 style={{ minWidth: 240 }}
               />
-              <Button
+              <WriteButton
                 onClick={handleAssignChargeCode}
                 loading={ccIsPending}
                 disabled={!ccUserId || !ccChargeCodeId}
               >
                 Assign Code
-              </Button>
-              <Button
+              </WriteButton>
+              <WriteButton
                 variant="default"
                 onClick={handleAssignAllUnderClin}
                 loading={ccIsPending}
                 disabled={!ccUserId || !ccClinId}
               >
                 Assign all codes under CLIN
-              </Button>
+              </WriteButton>
             </Group>
           </Paper>
 
@@ -507,13 +508,13 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
                 searchable
                 style={{ minWidth: 220 }}
               />
-              <Button
+              <WriteButton
                 onClick={handleAssign}
                 loading={isPending}
                 disabled={!selectedUserId || !selectedClinId}
               >
                 Assign
-              </Button>
+              </WriteButton>
             </Group>
           </Paper>
 

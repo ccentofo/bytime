@@ -25,6 +25,7 @@ import { createUserWithPassword, updateUser, getUsers, unlockUserAccount } from 
 import { adminResetPassword } from '@/server/actions/password';
 import { ROLE_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 type User = {
   id: string;
@@ -63,6 +64,7 @@ const EMPTY_FORM: UserForm = {
 };
 
 export function UsersClient({ initialUsers, currentUserId }: Props) {
+  const canWrite = useCanWrite();
   const [users, setUsers] = useState<User[]>(initialUsers);
   const [isPending, startTransition] = useTransition();
 
@@ -247,7 +249,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
           <Switch
             checked={row.original.isActive}
             onChange={() => handleToggleActive(row.original)}
-            disabled={isPending || row.original.id === currentUserId}
+            disabled={!canWrite || (isPending || row.original.id === currentUserId)}
             size="sm"
           />
         </Tooltip>
@@ -261,7 +263,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
         <Switch
           checked={row.original.flsaExempt}
           onChange={() => handleToggleFlsaExempt(row.original)}
-          disabled={isPending}
+          disabled={!canWrite || (isPending)}
           size="sm"
           label={row.original.flsaExempt ? 'Exempt' : 'Non-Exempt'}
         />
@@ -277,7 +279,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
     renderRowActions: ({ row }) => (
       <Group gap="xs" wrap="nowrap" justify="center">
         <Tooltip label="Edit User">
-          <ActionIcon variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit user">
+          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit user">
             <IconEdit size={16} />
           </ActionIcon>
         </Tooltip>
@@ -317,9 +319,9 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
       <PageHeader
         title="User Management"
         actions={
-          <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
+          <WriteButton leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
             Add User
-          </Button>
+          </WriteButton>
         }
       />
       <MantineReactTable table={table} />
@@ -410,9 +412,9 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
             <Button variant="default" onClick={() => setModalOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleSubmit} loading={isPending}>
+            <WriteButton onClick={handleSubmit} loading={isPending}>
               {editingUser ? 'Save Changes' : 'Create User'}
-            </Button>
+            </WriteButton>
           </Group>
         </Stack>
       </Modal>

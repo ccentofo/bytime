@@ -34,6 +34,7 @@ import { getSetupStatus } from '@/server/actions/setup';
 import type { SetupStatus } from '@/server/internal/setup';
 import { seedIndirectCodes } from '@/server/actions/indirect-codes';
 import classes from './Setup.module.css';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 interface Props {
   initialStatus: SetupStatus;
@@ -315,14 +316,14 @@ export function SetupWizardClient({ initialStatus }: Props) {
               <Group gap="sm">
                 {/* Special: Seed Default Codes button for indirect codes step */}
                 {step.key === 'indirectCodes' && status.indirectCodes === 0 && (
-                  <Button
+                  <WriteButton
                     variant="filled"
                     size="sm"
                     onClick={handleSeedIndirect}
                     loading={seedingIndirect}
                   >
                     Seed Default DCAA Codes
-                  </Button>
+                  </WriteButton>
                 )}
 
                 <Button

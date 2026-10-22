@@ -7,6 +7,7 @@ import { SessionProvider } from 'next-auth/react';
 import { IconRocket, IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand, IconLock } from '@tabler/icons-react';
 import { AppHeader } from '@/components/shell/AppHeader';
 import { AppNavbar } from '@/components/shell/AppNavbar';
+import { WorkspaceModeProvider } from '@/components/shell/WorkspaceMode';
 
 type ReadOnlyReason = 'trial_ended' | 'subscription_ended';
 
@@ -160,7 +161,8 @@ export function AppShellWrapper({ user, setupComplete = true, initialCollapsed =
               </Group>
             </Alert>
           )}
-          {children}
+          {/* Mode snapshot from the layout's getTenantState() (readOnlyReason is set exactly when it is read_only). */}
+          <WorkspaceModeProvider mode={readOnlyReason ? 'read_only' : 'full'}>{children}</WorkspaceModeProvider>
         </AppShell.Main>
       </AppShell>
     </SessionProvider>

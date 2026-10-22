@@ -40,6 +40,7 @@ import {
   bulkImportAssignments,
   type ImportResult,
 } from '@/server/actions/import';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 // ---------------------------------------------------------------------------
 // Shared ImportWizard component
@@ -186,7 +187,7 @@ function ImportWizard({
             </Paper>
           )}
 
-          <Button
+          <WriteButton
             onClick={handleImport}
             loading={isPending}
             disabled={validCount === 0}
@@ -194,7 +195,7 @@ function ImportWizard({
             color="signal"
           >
             Import {validCount} Valid Row{validCount !== 1 ? 's' : ''}
-          </Button>
+          </WriteButton>
         </>
       )}
 
@@ -336,9 +337,9 @@ function EmployeeImportWizard() {
             </Paper>
           )}
 
-          <Button onClick={handleImport} loading={isPending} disabled={validCount === 0} leftSection={<IconUpload size={16} />} color="signal">
+          <WriteButton onClick={handleImport} loading={isPending} disabled={validCount === 0} leftSection={<IconUpload size={16} />} color="signal">
             Import {validCount} Employee{validCount !== 1 ? 's' : ''}
-          </Button>
+          </WriteButton>
         </>
       )}
 

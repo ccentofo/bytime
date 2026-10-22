@@ -26,6 +26,7 @@ import { formatDateTime } from '@/lib/format';
 import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 type ApiKey = {
   id: string;
@@ -46,6 +47,7 @@ type Props = {
 type PendingAction = { key: ApiKey; action: 'revoke' | 'delete' };
 
 export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
+  const canWrite = useCanWrite();
   const [keys, setKeys] = useState<ApiKey[]>(initialKeys);
   const [isPending, startTransition] = useTransition();
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -167,7 +169,7 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
               variant="subtle"
               color="warning"
               onClick={() => setPendingAction({ key: row.original, action: 'revoke' })}
-              disabled={isPending}
+              disabled={!canWrite || (isPending)}
               aria-label="Revoke key"
             >
               <IconBan size={16} />
@@ -179,7 +181,7 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
             variant="subtle"
             color="red"
             onClick={() => setPendingAction({ key: row.original, action: 'delete' })}
-            disabled={isPending}
+            disabled={!canWrite || (isPending)}
             aria-label="Delete key"
           >
             <IconTrash size={16} />
@@ -200,9 +202,9 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
       <PageHeader
         title="API Keys"
         actions={
-          <Button leftSection={<IconPlus size={16} />} onClick={() => setCreateModalOpen(true)}>
+          <WriteButton leftSection={<IconPlus size={16} />} onClick={() => setCreateModalOpen(true)}>
             Create API Key
-          </Button>
+          </WriteButton>
         }
       />
       <MantineReactTable table={table} />
@@ -236,9 +238,9 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
           )}
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setCreateModalOpen(false)}>Cancel</Button>
-            <Button onClick={handleCreate} loading={isPending} leftSection={<IconKey size={16} />}>
+            <WriteButton onClick={handleCreate} loading={isPending} leftSection={<IconKey size={16} />}>
               Generate Key
-            </Button>
+            </WriteButton>
           </Group>
         </Stack>
       </Modal>

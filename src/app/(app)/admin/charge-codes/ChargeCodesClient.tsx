@@ -17,6 +17,7 @@ import {
 import { RECORD_STATUS_COLOR, WORK_LOCATION_COLOR } from '@/lib/ui/status-colors';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 type ChargeCodeRow = {
   id: string;
@@ -72,6 +73,7 @@ const WORK_LOCATION_OPTIONS = [
 
 
 export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Props) {
+  const canWrite = useCanWrite();
   const [codes, setCodes] = useState(initialCodes);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -218,13 +220,13 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
     renderRowActions: ({ row }) => (
       <Group gap="xs" justify="center">
         <Tooltip label="Edit">
-          <ActionIcon variant="subtle" onClick={() => openEdit(row.original)} aria-label="Edit charge code">
+          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEdit(row.original)} aria-label="Edit charge code">
             <IconPencil size={16} />
           </ActionIcon>
         </Tooltip>
         {row.original.isActive && (
           <Tooltip label="Deactivate">
-            <ActionIcon
+            <ActionIcon disabled={!canWrite}
               variant="subtle"
               color="red"
               onClick={() => setConfirmTarget(row.original)}
@@ -251,10 +253,10 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
         description={'Direct charge codes that employees charge to. Each code rolls up to a CLIN → Contract. Use "Auto-generate from CLINs" to create one code per active CLIN, or create custom codes (e.g. Onsite/Telework variants).'}
         actions={
           <Group gap="sm">
-            <Button leftSection={<IconPlus size={16} />} onClick={openCreate} size="sm">New Charge Code</Button>
-            <Button leftSection={<IconBolt size={16} />} variant="default" onClick={handleAutobridge} loading={isPending} size="sm">
+            <WriteButton leftSection={<IconPlus size={16} />} onClick={openCreate} size="sm">New Charge Code</WriteButton>
+            <WriteButton leftSection={<IconBolt size={16} />} variant="default" onClick={handleAutobridge} loading={isPending} size="sm">
               Auto-generate from CLINs
-            </Button>
+            </WriteButton>
           </Group>
         }
       />
@@ -291,7 +293,7 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
               style={{ flex: 1 }} />
             <TextInput placeholder="New class name" value={newClassName}
               onChange={(e) => setNewClassName(e.target.value)} style={{ flex: 1 }} />
-            <Button variant="default" onClick={handleAddClass} loading={isPending}>Add</Button>
+            <WriteButton variant="default" onClick={handleAddClass} loading={isPending}>Add</WriteButton>
           </Group>
 
           <Switch label="Billable" checked={form.billable}
@@ -299,7 +301,7 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
 
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button onClick={handleSave} loading={isPending}>Save</Button>
+            <WriteButton onClick={handleSave} loading={isPending}>Save</WriteButton>
           </Group>
         </Stack>
       </Modal>

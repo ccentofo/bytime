@@ -19,6 +19,7 @@ import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import { approvePeriod, rejectPeriod, getScopedPeriods } from '@/server/actions/periods';
 import { runAction } from '@/lib/run-action';
+import { ReviewDecisionButtons } from '@/components/approvals/ReviewDecisionButtons';
 import { getTimesheetForReview } from '@/server/actions/timesheet';
 import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { formatDateTime } from '@/lib/format';
@@ -390,26 +391,13 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
                   style={{ maxWidth: 500 }}
                 />
 
-                <Group justify="flex-end" mt="md">
-                  <Button
-                    color="red"
-                    variant="light"
-                    leftSection={<IconX size={16} />}
-                    onClick={handleReject}
-                    disabled={!rejectComment.trim()}
-                    loading={isPending}
-                  >
-                    {isOwnPeriod ? 'Reject (Self)' : 'Reject'}
-                  </Button>
-                  <Button
-                    color="success"
-                    leftSection={<IconCheck size={16} />}
-                    onClick={handleApprove}
-                    loading={isPending}
-                  >
-                    {isOwnPeriod ? 'Approve (Self)' : 'Approve'}
-                  </Button>
-                </Group>
+                <ReviewDecisionButtons
+                  isOwnPeriod={isOwnPeriod}
+                  canReject={Boolean(rejectComment.trim())}
+                  pending={isPending}
+                  onApprove={handleApprove}
+                  onReject={handleReject}
+                />
               </>
             );
           })()}

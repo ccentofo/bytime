@@ -24,6 +24,7 @@ import type { PeriodConfig, PeriodType } from '@/lib/date-utils';
 import { formatDate } from '@/lib/format';
 import { dayOfWeek, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 interface Props {
   initialConfig: PeriodConfig;
@@ -192,9 +193,9 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
             allowDeselect={false}
             w={320}
           />
-          <Button onClick={handleSaveTimezone} loading={isTimezonePending} disabled={!timezone || timezone === savedTimezone}>
+          <WriteButton onClick={handleSaveTimezone} loading={isTimezonePending} disabled={!timezone || timezone === savedTimezone}>
             Save Timezone
-          </Button>
+          </WriteButton>
         </Group>
       </Paper>
 
@@ -303,9 +304,9 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
           </div>
 
           <Group>
-            <Button onClick={handleSave} loading={isPending} disabled={!selectedEffectiveFrom}>
+            <WriteButton onClick={handleSave} loading={isPending} disabled={!selectedEffectiveFrom}>
               Save Schedule Change
-            </Button>
+            </WriteButton>
           </Group>
 
           <Text size="xs" c="dimmed">

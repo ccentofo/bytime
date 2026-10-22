@@ -22,6 +22,7 @@ import { useAppTable } from '@/components/table/mrtDefaults';
 import { createIndirectCode, updateIndirectCode, getIndirectChargeCodes, seedIndirectCodes } from '@/server/actions/indirect-codes';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { INDIRECT_CATEGORY_COLOR } from '@/lib/ui/status-colors';
+import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 type IndirectCode = {
   id: string;
@@ -74,6 +75,7 @@ const EMPTY_FORM: CodeForm = {
 };
 
 export function IndirectCodesClient({ initialCodes }: Props) {
+  const canWrite = useCanWrite();
   const [codes, setCodes] = useState<IndirectCode[]>(initialCodes);
   const [isPending, startTransition] = useTransition();
   const [modalOpen, setModalOpen] = useState(false);
@@ -178,7 +180,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
         <Switch
           checked={row.original.isActive}
           onChange={() => handleToggleActive(row.original)}
-          disabled={isPending}
+          disabled={!canWrite || (isPending)}
           size="sm"
         />
       ),
@@ -198,7 +200,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
     enableRowActions: true,
     renderRowActions: ({ row }) => (
       <Tooltip label="Edit">
-        <ActionIcon variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit indirect code">
+        <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit indirect code">
           <IconEdit size={16} />
         </ActionIcon>
       </Tooltip>
@@ -217,12 +219,12 @@ export function IndirectCodesClient({ initialCodes }: Props) {
         title="Indirect Charge Codes"
         actions={
           <Group>
-            <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
+            <WriteButton leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
               Add Code
-            </Button>
-            <Button variant="default" onClick={handleSeedDefaults} loading={isPending}>
+            </WriteButton>
+            <WriteButton variant="default" onClick={handleSeedDefaults} loading={isPending}>
               Seed Defaults
-            </Button>
+            </WriteButton>
           </Group>
         }
       />
@@ -275,9 +277,9 @@ export function IndirectCodesClient({ initialCodes }: Props) {
           )}
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button onClick={handleSubmit} loading={isPending}>
+            <WriteButton onClick={handleSubmit} loading={isPending}>
               {editingCode ? 'Save Changes' : 'Create Code'}
-            </Button>
+            </WriteButton>
           </Group>
         </Stack>
       </Modal>

@@ -8,7 +8,6 @@ import {
   Paper,
   Group,
   Badge,
-  Button,
   Stack,
   Table,
   Select,
@@ -41,6 +40,7 @@ import { formatDateTime } from '@/lib/format';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { SYNC_STATUS_COLOR } from '@/lib/ui/status-colors';
 import type { CalendarDate } from '@/lib/calendar-date';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 dayjs.extend(relativeTime);
 
@@ -234,18 +234,18 @@ export function GustoConfigClient({
           </Text>
         </div>
         <Group>
-          <Button variant="light" size="sm" leftSection={<IconRefresh size={14} />} onClick={loadGustoEmployees} loading={loadingGusto}>
+          <WriteButton variant="light" size="sm" leftSection={<IconRefresh size={14} />} onClick={loadGustoEmployees} loading={loadingGusto}>
             Load Gusto Employees
-          </Button>
-          <Button variant="light" size="sm" color="signal" leftSection={<IconWand size={14} />} onClick={handleAutoMatch} disabled={gustoEmployees.length === 0}>
+          </WriteButton>
+          <WriteButton variant="light" size="sm" color="signal" leftSection={<IconWand size={14} />} onClick={handleAutoMatch} disabled={gustoEmployees.length === 0}>
             Auto-Match by Email
-          </Button>
-          <Button variant="filled" size="sm" leftSection={<IconPlayerPlay size={14} />} onClick={handleSync} loading={isPending} disabled={employeeMappingCount === 0}>
+          </WriteButton>
+          <WriteButton variant="filled" size="sm" leftSection={<IconPlayerPlay size={14} />} onClick={handleSync} loading={isPending} disabled={employeeMappingCount === 0}>
             Sync Now
-          </Button>
-          <Button variant="subtle" color="red" size="sm" onClick={() => setConfirmDisconnectOpen(true)}>
+          </WriteButton>
+          <WriteButton variant="subtle" color="red" size="sm" onClick={() => setConfirmDisconnectOpen(true)}>
             Disconnect
-          </Button>
+          </WriteButton>
         </Group>
       </Group>
 

@@ -8,7 +8,6 @@ import {
   Paper,
   Group,
   Badge,
-  Button,
   Stack,
   Table,
   Select,
@@ -47,6 +46,7 @@ import {
 import { saveMapping, disconnectIntegration, toggleAutoSync } from '@/server/actions/integrations';
 import { SYNC_STATUS_COLOR } from '@/lib/ui/status-colors';
 import type { CalendarDate } from '@/lib/calendar-date';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 dayjs.extend(relativeTime);
 
@@ -236,7 +236,7 @@ export function QBOConfigClient({
           </Text>
         </div>
         <Group>
-          <Button
+          <WriteButton
             variant="light"
             size="sm"
             leftSection={<IconRefresh size={14} />}
@@ -244,8 +244,8 @@ export function QBOConfigClient({
             loading={loadingQBO}
           >
             Load QBO Data
-          </Button>
-          <Button
+          </WriteButton>
+          <WriteButton
             variant="filled"
             size="sm"
             leftSection={<IconPlayerPlay size={14} />}
@@ -254,15 +254,15 @@ export function QBOConfigClient({
             disabled={mappings.filter((m) => m.entityType === 'employee' || m.entityType === 'vendor').length === 0}
           >
             Sync Now
-          </Button>
-          <Button
+          </WriteButton>
+          <WriteButton
             variant="subtle"
             color="red"
             size="sm"
             onClick={() => setConfirmDisconnectOpen(true)}
           >
             Disconnect
-          </Button>
+          </WriteButton>
         </Group>
       </Group>
 

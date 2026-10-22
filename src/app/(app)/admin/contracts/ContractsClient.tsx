@@ -33,6 +33,7 @@ import { formatDate } from '@/lib/format';
 import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 type Contract = {
   id: string;
@@ -98,6 +99,7 @@ const EMPTY_FORM: ContractForm = {
 };
 
 export function ContractsClient({ initialContracts }: Props) {
+  const canWrite = useCanWrite();
   const [contracts, setContracts] = useState<Contract[]>(initialContracts);
   const [isPending, startTransition] = useTransition();
 
@@ -318,7 +320,7 @@ export function ContractsClient({ initialContracts }: Props) {
     renderRowActions: ({ row }) => (
       <Group gap="xs" wrap="nowrap" justify="center">
         <Tooltip label="Edit">
-          <ActionIcon variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit contract">
+          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit contract">
             <IconEdit size={16} />
           </ActionIcon>
         </Tooltip>
@@ -349,9 +351,9 @@ export function ContractsClient({ initialContracts }: Props) {
       <PageHeader
         title="Contracts & CLINs"
         actions={
-          <Button leftSection={<IconPlus size={16} />} onClick={openAddModal}>
+          <WriteButton leftSection={<IconPlus size={16} />} onClick={openAddModal}>
             Add Contract
-          </Button>
+          </WriteButton>
         }
       />
       <MantineReactTable table={table} />
@@ -418,9 +420,9 @@ export function ContractsClient({ initialContracts }: Props) {
             <Button variant="default" onClick={() => setModalOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleContractSubmit} loading={isPending}>
+            <WriteButton onClick={handleContractSubmit} loading={isPending}>
               {editingContract ? 'Save Changes' : 'Create Contract'}
-            </Button>
+            </WriteButton>
           </Group>
         </Stack>
       </Modal>
@@ -460,9 +462,9 @@ export function ContractsClient({ initialContracts }: Props) {
               onChange={(e) => setClinForm((f) => ({ ...f, fundedAmount: e.target.value }))}
               style={{ minWidth: 150 }}
             />
-            <Button onClick={handleClinSubmit} loading={isPending} leftSection={<IconPlus size={14} />}>
+            <WriteButton onClick={handleClinSubmit} loading={isPending} leftSection={<IconPlus size={14} />}>
               Add
-            </Button>
+            </WriteButton>
           </Group>
 
           {/* CLINs list */}
@@ -500,14 +502,14 @@ export function ContractsClient({ initialContracts }: Props) {
                           <Badge color={RECORD_STATUS_COLOR[clin.status] ?? 'gray'}>{clin.status}</Badge>
                         </Table.Td>
                         <Table.Td>
-                          <Button
+                          <WriteButton
                             size="xs"
                             variant="subtle"
                             onClick={() => handleClinStatusToggle(clin)}
                             loading={isPending}
                           >
                             {clin.status === 'active' ? 'Deactivate' : 'Activate'}
-                          </Button>
+                          </WriteButton>
                         </Table.Td>
                       </Table.Tr>
                     </Table.Tbody>
@@ -545,7 +547,7 @@ export function ContractsClient({ initialContracts }: Props) {
                           size="xs"
                           style={{ minWidth: 120 }}
                         />
-                        <Button
+                        <WriteButton
                           size="xs"
                           onClick={() => handleSlinSubmit(clin.id)}
                           loading={isPending}
@@ -553,7 +555,7 @@ export function ContractsClient({ initialContracts }: Props) {
                           disabled={!slinForm.slinNumber.trim()}
                         >
                           Add SLIN
-                        </Button>
+                        </WriteButton>
                       </Group>
 
                       {/* SLINs table */}
@@ -585,14 +587,14 @@ export function ContractsClient({ initialContracts }: Props) {
                                   <Badge size="xs" color={RECORD_STATUS_COLOR[slin.status] ?? 'gray'}>{slin.status}</Badge>
                                 </Table.Td>
                                 <Table.Td>
-                                  <Button
+                                  <WriteButton
                                     size="xs"
                                     variant="subtle"
                                     onClick={() => handleSlinStatusToggle(slin)}
                                     loading={isPending}
                                   >
                                     {slin.status === 'active' ? 'Deactivate' : 'Activate'}
-                                  </Button>
+                                  </WriteButton>
                                 </Table.Td>
                               </Table.Tr>
                             ))}

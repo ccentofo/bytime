@@ -32,6 +32,7 @@ import {
 } from '@/server/actions/migration';
 import type { MigrationEntryRow, MigrationValidationResult } from '@/types/migration';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 export function MigrationClient() {
   const [isPending, startTransition] = useTransition();
@@ -211,14 +212,14 @@ export function MigrationClient() {
                 </Button>
               )}
               {entryValidated && validCount > 0 && (
-                <Button
+                <WriteButton
                   variant="filled"
                   size="sm"
                   onClick={handleImportEntries}
                   loading={isPending}
                 >
                   Import {validCount} Valid Rows
-                </Button>
+                </WriteButton>
               )}
             </Group>
 
@@ -304,14 +305,14 @@ export function MigrationClient() {
                 <input type="file" accept=".csv" hidden onChange={handlePeriodFileUpload} />
               </Button>
               {periodRows.length > 0 && (
-                <Button
+                <WriteButton
                   variant="filled"
                   size="sm"
                   onClick={handleImportPeriods}
                   loading={isPending}
                 >
                   Import {periodRows.length} Period Records
-                </Button>
+                </WriteButton>
               )}
             </Group>
 

@@ -36,6 +36,7 @@ import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 // ---------------------------------------------------------------------------
 // Types (derived from server action return types)
@@ -159,6 +160,7 @@ export function LaborCategoriesClient({
   users,
   assignableLcats: initialAssignableLcats,
 }: Props) {
+  const canWrite = useCanWrite();
   const [isPending, startTransition] = useTransition();
   const [laborCats, setLaborCats] = useState<LaborCategory[]>(initialLaborCategories);
   const [assignments, setAssignments] = useState<UserLcatAssignment[]>(initialAssignments);
@@ -394,12 +396,12 @@ export function LaborCategoriesClient({
     renderRowActions: ({ row }) => (
       <Group gap="xs" wrap="nowrap" justify="center">
         <Tooltip label="Edit">
-          <ActionIcon variant="subtle" onClick={() => openEditLcatModal(row.original)} aria-label="Edit labor category">
+          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEditLcatModal(row.original)} aria-label="Edit labor category">
             <IconEdit size={16} />
           </ActionIcon>
         </Tooltip>
         <Tooltip label={row.original.status === 'active' ? 'Deactivate' : 'Activate'}>
-          <ActionIcon
+          <ActionIcon disabled={!canWrite}
             variant="subtle"
             color={row.original.status === 'active' ? 'red' : 'success'}
             onClick={() =>
@@ -469,7 +471,7 @@ export function LaborCategoriesClient({
           variant="subtle"
           color="warning"
           onClick={() => setConfirmEndAssignment(row.original)}
-          disabled={row.original.endDate !== null}
+          disabled={!canWrite || (row.original.endDate !== null)}
           aria-label="End labor category assignment"
         >
           <IconBan size={16} />
@@ -490,9 +492,9 @@ export function LaborCategoriesClient({
       <PageHeader
         title="Labor Categories"
         actions={
-          <Button leftSection={<IconPlus size={16} />} onClick={openAddLcatModal}>
+          <WriteButton leftSection={<IconPlus size={16} />} onClick={openAddLcatModal}>
             Add Labor Category
-          </Button>
+          </WriteButton>
         }
       />
       <MantineReactTable table={lcatTable} />
@@ -565,7 +567,7 @@ export function LaborCategoriesClient({
             <Button variant="default" onClick={() => setLcatModalOpen(false)}>
               Cancel
             </Button>
-            <Button
+            <WriteButton
               onClick={handleLcatSubmit}
               loading={isPending}
               disabled={
@@ -576,7 +578,7 @@ export function LaborCategoriesClient({
               }
             >
               {editingLcat ? 'Save Changes' : 'Create'}
-            </Button>
+            </WriteButton>
           </Group>
         </Stack>
       </Modal>
@@ -623,13 +625,13 @@ export function LaborCategoriesClient({
             clearable
             style={{ minWidth: 160 }}
           />
-          <Button
+          <WriteButton
             onClick={handleAssignSubmit}
             loading={isPending}
             disabled={!assignUserId || !assignLcatId || !assignEffectiveDate}
           >
             Assign
-          </Button>
+          </WriteButton>
         </Group>
       </Paper>
 
