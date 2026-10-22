@@ -179,42 +179,33 @@ export function TimesheetToolbar() {
       return;
     }
 
-    try {
-      await saveAll();
-      notifications.show({
-        title: 'Timesheet Saved',
-        message: `${dirtyCount} ${dirtyCount === 1 ? 'entry' : 'entries'} saved successfully.`,
-        color: 'success',
-        icon: <IconCheck size={16} />,
-      });
-    } catch {
-      notifications.show({
-        title: 'Save Failed',
-        message: 'Failed to save timesheet. Please try again.',
-        color: 'red',
-        icon: <IconX size={16} />,
-      });
+    const result = await saveAll();
+    if (!result.ok) {
+      // The server's own message (e.g. "period locked", a conflict) — never a success toast on failure.
+      notifications.show({ title: 'Save Failed', message: result.error, color: 'red', icon: <IconX size={16} /> });
+      return;
     }
+    notifications.show({
+      title: 'Timesheet Saved',
+      message: `${dirtyCount} ${dirtyCount === 1 ? 'entry' : 'entries'} saved successfully.`,
+      color: 'success',
+      icon: <IconCheck size={16} />,
+    });
   }
 
   async function handleReasonConfirm(reasonCode: string, comment: string) {
-    try {
-      await saveAll(reasonCode, comment);
-      setReasonModalOpen(false);
-      notifications.show({
-        title: 'Timesheet Saved',
-        message: `${dirtyCount} ${dirtyCount === 1 ? 'entry' : 'entries'} saved with reason: ${reasonCode}.`,
-        color: 'success',
-        icon: <IconCheck size={16} />,
-      });
-    } catch {
-      notifications.show({
-        title: 'Save Failed',
-        message: 'Failed to save timesheet. Please try again.',
-        color: 'red',
-        icon: <IconX size={16} />,
-      });
+    const result = await saveAll(reasonCode, comment);
+    if (!result.ok) {
+      notifications.show({ title: 'Save Failed', message: result.error, color: 'red', icon: <IconX size={16} /> });
+      return;
     }
+    setReasonModalOpen(false);
+    notifications.show({
+      title: 'Timesheet Saved',
+      message: `${dirtyCount} ${dirtyCount === 1 ? 'entry' : 'entries'} saved with reason: ${reasonCode}.`,
+      color: 'success',
+      icon: <IconCheck size={16} />,
+    });
   }
 
   function handleDiscard() {
@@ -227,23 +218,18 @@ export function TimesheetToolbar() {
   }
 
   async function handleSubmitConfirm(comment?: string) {
-    try {
-      await submitTimesheet(comment);
-      setSubmitModalOpen(false);
-      notifications.show({
-        title: 'Timesheet Submitted',
-        message: `Your timesheet for ${periodLabel} has been submitted for supervisor review.`,
-        color: 'signal',
-        icon: <IconCheck size={16} />,
-      });
-    } catch {
-      notifications.show({
-        title: 'Submit Failed',
-        message: 'Failed to submit timesheet. Please try again.',
-        color: 'red',
-        icon: <IconX size={16} />,
-      });
+    const result = await submitTimesheet(comment);
+    if (!result.ok) {
+      notifications.show({ title: 'Submit Failed', message: result.error, color: 'red', icon: <IconX size={16} /> });
+      return;
     }
+    setSubmitModalOpen(false);
+    notifications.show({
+      title: 'Timesheet Submitted',
+      message: `Your timesheet for ${periodLabel} has been submitted for supervisor review.`,
+      color: 'signal',
+      icon: <IconCheck size={16} />,
+    });
   }
 
   return (

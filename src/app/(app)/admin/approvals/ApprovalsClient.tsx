@@ -18,6 +18,7 @@ import { notifications } from '@mantine/notifications';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import { approvePeriod, rejectPeriod, getScopedPeriods } from '@/server/actions/periods';
+import { runAction } from '@/lib/run-action';
 import { getTimesheetForReview } from '@/server/actions/timesheet';
 import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { formatDateTime } from '@/lib/format';
@@ -96,12 +97,16 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
   function handleApprove() {
     if (!selectedPeriod) return;
     startTransition(async () => {
+      setActionError(null);
+      const result = await runAction(approvePeriod({
+        periodId: selectedPeriod.id,
+        comment: approveComment.trim() || undefined,
+      }), { errorTitle: 'Approval Failed' });
+      if (!result.ok) {
+        setActionError(result.error); // the server's reason (e.g. another reviewer decided first)
+        return;
+      }
       try {
-        setActionError(null);
-        await approvePeriod({
-          periodId: selectedPeriod.id,
-          comment: approveComment.trim() || undefined,
-        });
         const refreshed = await getScopedPeriods();
         setPeriods(refreshed);
         setDrawerOpen(false);
@@ -111,14 +116,9 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
           color: 'success',
           icon: <IconCheck size={16} />,
         });
-      } catch (error) {
-        setActionError(String(error));
-        notifications.show({
-          title: 'Approval Failed',
-          message: 'Failed to approve timesheet. Please try again.',
-          color: 'red',
-          icon: <IconX size={16} />,
-        });
+      } catch {
+        // Approved; only the list refresh failed.
+        notifications.show({ title: 'Approved', message: 'Refresh the page to see the updated list.', color: 'warning' });
       }
     });
   }
@@ -126,12 +126,16 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
   function handleReject() {
     if (!selectedPeriod || !rejectComment.trim()) return;
     startTransition(async () => {
+      setActionError(null);
+      const result = await runAction(rejectPeriod({
+        periodId: selectedPeriod.id,
+        comment: rejectComment.trim(),
+      }), { errorTitle: 'Rejection Failed' });
+      if (!result.ok) {
+        setActionError(result.error);
+        return;
+      }
       try {
-        setActionError(null);
-        await rejectPeriod({
-          periodId: selectedPeriod.id,
-          comment: rejectComment.trim(),
-        });
         const refreshed = await getScopedPeriods();
         setPeriods(refreshed);
         setDrawerOpen(false);
@@ -141,14 +145,8 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
           color: 'warning',
           icon: <IconX size={16} />,
         });
-      } catch (error) {
-        setActionError(String(error));
-        notifications.show({
-          title: 'Rejection Failed',
-          message: 'Failed to reject timesheet. Please try again.',
-          color: 'red',
-          icon: <IconX size={16} />,
-        });
+      } catch {
+        notifications.show({ title: 'Returned', message: 'Refresh the page to see the updated list.', color: 'warning' });
       }
     });
   }

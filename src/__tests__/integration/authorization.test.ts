@@ -15,6 +15,8 @@ import {
   createTestChargeCode,
   assignUserToClin,
   cleanupTestData,
+  expectOk,
+  expectFailure,
 } from './helpers';
 
 // ---------------------------------------------------------------------------
@@ -129,7 +131,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     }).returning();
 
     actingAs(asFake(employee));
-    await expect(approvePeriod({ periodId: period.id })).rejects.toThrow(/Approver role required/);
+    await expectFailure(approvePeriod({ periodId: period.id }), 'forbidden', /Approver role required/);
   });
 
   // 3. ---------------------------------------------------------------------
@@ -162,19 +164,16 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
 
     actingAs(asFake(supervisor));
 
-    await approvePeriod({ periodId: inScopePeriod.id });
+    await expectOk(approvePeriod({ periodId: inScopePeriod.id }));
     const [approved] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, inScopePeriod.id));
     expect(approved.status).toBe('approved');
 
     // R2-12: an out-of-scope period must look exactly like a missing one, not disclose that it exists.
-    await expect(rejectPeriod({ periodId: outOfScopePeriod.id, comment: 'nope' }))
-      .rejects.toThrow(/Period not found/);
+    await expectFailure(rejectPeriod({ periodId: outOfScopePeriod.id, comment: 'nope' }), 'not_found', /Period not found/);
 
     // R2-7: a supervisor's own period is refused outright (Forbidden) — nothing to mask.
-    await expect(approvePeriod({ periodId: ownPeriod.id }))
-      .rejects.toThrow(/Forbidden: You cannot approve your own timesheet/);
-    await expect(rejectPeriod({ periodId: ownPeriod.id, comment: 'x' }))
-      .rejects.toThrow(/Forbidden: You cannot reject your own timesheet/);
+    await expectFailure(approvePeriod({ periodId: ownPeriod.id }), 'forbidden', /Forbidden: You cannot approve your own timesheet/);
+    await expectFailure(rejectPeriod({ periodId: ownPeriod.id, comment: 'x' }), 'forbidden', /Forbidden: You cannot reject your own timesheet/);
   });
 
   // R2-7. -------------------------------------------------------------------
@@ -188,7 +187,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     }).returning();
 
     actingAs(asFake(admin));
-    await approvePeriod({ periodId: ownPeriod.id });
+    await expectOk(approvePeriod({ periodId: ownPeriod.id }));
 
     const [approved] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, ownPeriod.id));
     expect(approved.status).toBe('approved');
@@ -198,7 +197,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const [ownPeriod2] = await db.insert(schema.timesheetPeriods).values({
       userId: admin.id, periodStart: addMonths(periodStart, -1), status: 'submitted', submittedAt: new Date(),
     }).returning();
-    await rejectPeriod({ periodId: ownPeriod2.id, comment: 'self-correction needed' });
+    await expectOk(rejectPeriod({ periodId: ownPeriod2.id, comment: 'self-correction needed' }));
     const [rejected] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, ownPeriod2.id));
     expect(rejected.status).toBe('rejected');
     expect(rejected.reviewedBy).toBe(admin.id);
@@ -271,13 +270,13 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const todayIndex = diffDays(periodStart, todayFixture());
 
     actingAs(asFake(employee));
-    await saveTimesheetBatch({
+    await expectOk(saveTimesheetBatch({
       // @ts-expect-error — simulating a malicious/legacy client that still sends userId;
       // the action no longer declares this param, so it must be silently ignored.
       userId: otherEmployee.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 4, isEdit: false, isLateEntry: false }],
-    });
+    }));
 
     const rows = await db.select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.chargeCodeId, chargeCode.id));
     expect(rows).toHaveLength(1);

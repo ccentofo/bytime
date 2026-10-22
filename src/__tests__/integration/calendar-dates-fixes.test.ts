@@ -10,6 +10,7 @@ import {
   createTestClin,
   createTestChargeCode,
   cleanupTestData,
+  expectFailure,
 } from './helpers';
 
 // ---------------------------------------------------------------------------
@@ -98,11 +99,11 @@ describe('calendar-dates audit fixes', () => {
       const unassignedCode = await createTestChargeCode(otherClin.id);
       actingAs(employee);
 
-      await expect(saveTimesheetBatch({
+      await expectFailure(saveTimesheetBatch({
         periodStart,
         changeReasonCode: 'LATE_ENTRY',
         cells: [{ indirectCodeId: indirect.id, chargeCodeId: unassignedCode.id, clinId: otherClin.id, dayIndex: 1, hours: 8, isEdit: false, isLateEntry: true }],
-      })).rejects.toThrow(/exactly one charge code, CLIN, or indirect code/);
+      }), 'validation', /exactly one charge code, CLIN, or indirect code/);
 
       const rows = await db.select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.userId, employee.id));
       expect(rows).toHaveLength(0);
@@ -113,15 +114,15 @@ describe('calendar-dates audit fixes', () => {
       const [inactive] = await db.insert(schema.indirectChargeCodes).values({ code: 'OLD', name: 'Retired', category: 'overhead', isActive: false }).returning();
       actingAs(employee);
 
-      await expect(saveTimesheetBatch({
+      await expectFailure(saveTimesheetBatch({
         periodStart, changeReasonCode: 'LATE_ENTRY',
         cells: [{ indirectCodeId: inactive.id, dayIndex: 1, hours: 8, isEdit: false, isLateEntry: true }],
-      })).rejects.toThrow(/is not available/);
+      }), 'validation', /is not available/);
 
-      await expect(saveTimesheetBatch({
+      await expectFailure(saveTimesheetBatch({
         periodStart, changeReasonCode: 'LATE_ENTRY',
         cells: [{ chargeCodeId, slinId: crypto.randomUUID(), dayIndex: 1, hours: 8, isEdit: false, isLateEntry: true }],
-      })).rejects.toThrow(/SLIN can only be given with a legacy CLIN/);
+      }), 'validation', /SLIN can only be given with a legacy CLIN/);
     });
   });
 

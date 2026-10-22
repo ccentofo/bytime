@@ -11,6 +11,8 @@ import {
   createTestChargeCode,
   createTestIndirectCode,
   cleanupTestData,
+  expectOk,
+  expectFailure,
 } from './helpers';
 
 // ---------------------------------------------------------------------------
@@ -124,10 +126,10 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
     await assignChargeCodeToUser(employee.id, chargeCode.id);
 
     actingAs(employee);
-    await saveTimesheetBatch({
+    await expectOk(saveTimesheetBatch({
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
-    });
+    }));
 
     const db = getTestDb();
     const [row] = await db.select().from(schema.timesheetEntries)
@@ -143,17 +145,17 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
     await assignChargeCodeToUser(employee.id, chargeCode.id);
 
     actingAs(employee);
-    await saveTimesheetBatch({
+    await expectOk(saveTimesheetBatch({
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
-    });
+    }));
 
-    await saveTimesheetBatch({
+    await expectOk(saveTimesheetBatch({
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 6, isEdit: true, isLateEntry: false }],
       changeReasonCode: 'CORRECTION',
       comment: 'Fixed hours',
-    });
+    }));
 
     const db = getTestDb();
     const rows = await db.select().from(schema.timesheetEntries)
@@ -173,17 +175,15 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
     await assignChargeCodeToUser(employee.id, chargeCode.id);
 
     actingAs(employee);
-    await saveTimesheetBatch({
+    await expectOk(saveTimesheetBatch({
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
-    });
+    }));
 
-    await expect(
-      saveTimesheetBatch({
+    await expectFailure(saveTimesheetBatch({
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 6, isEdit: true, isLateEntry: false }],
-      })
-    ).rejects.toThrow(/reason code/i);
+      }), 'validation', /reason code/i);
   });
 
   // -------------------------------------------------------------------------
@@ -193,13 +193,13 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
     await assignChargeCodeToUser(employee.id, otherCode.id);
 
     actingAs(employee);
-    await saveTimesheetBatch({
+    await expectOk(saveTimesheetBatch({
       periodStart,
       cells: [
         { chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 5, isEdit: false, isLateEntry: false },
         { chargeCodeId: otherCode.id, dayIndex: todayIndex, hours: 3, isEdit: false, isLateEntry: false },
       ],
-    });
+    }));
 
     const codes = await getChargeCodesForUser();
     const entries = await getTimesheetEntries(periodStart, codes);
@@ -213,32 +213,28 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
   // -------------------------------------------------------------------------
   it('enforces RBAC: unassigned user cannot save, and re-saving after unassignment fails again', async () => {
     actingAs(employee);
-    await expect(
-      saveTimesheetBatch({
+    await expectFailure(saveTimesheetBatch({
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
-      })
-    ).rejects.toThrow(/Unauthorized/);
+      }), 'forbidden', /Unauthorized/);
 
     actingAs(admin);
     await assignChargeCodeToUser(employee.id, chargeCode.id);
 
     actingAs(employee);
-    await saveTimesheetBatch({
+    await expectOk(saveTimesheetBatch({
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
-    });
+    }));
 
     actingAs(admin);
     await unassignChargeCodeFromUser(employee.id, chargeCode.id);
 
     actingAs(employee);
-    await expect(
-      saveTimesheetBatch({
+    await expectFailure(saveTimesheetBatch({
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex - 1, hours: 4, isEdit: false, isLateEntry: false }],
-      })
-    ).rejects.toThrow(/Unauthorized/);
+      }), 'forbidden', /Unauthorized/);
   });
 
   // -------------------------------------------------------------------------
@@ -289,12 +285,10 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
     });
 
     actingAs(employee);
-    await expect(
-      saveTimesheetBatch({
+    await expectFailure(saveTimesheetBatch({
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
-      })
-    ).rejects.toThrow(/certified and is locked/i);
+      }), 'validation', /certified and is locked/i);
   });
 
   // -------------------------------------------------------------------------
@@ -302,12 +296,10 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
     await assignChargeCodeToUser(employee.id, chargeCode.id);
 
     actingAs(employee);
-    await expect(
-      saveTimesheetBatch({
+    await expectFailure(saveTimesheetBatch({
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex + 1, hours: 8, isEdit: false, isLateEntry: false }],
-      })
-    ).rejects.toThrow(/future date/i);
+      }), 'validation', /future date/i);
   });
 
   // -------------------------------------------------------------------------
@@ -315,10 +307,10 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
     const indirect = await createTestIndirectCode();
 
     actingAs(employee);
-    await saveTimesheetBatch({
+    await expectOk(saveTimesheetBatch({
       periodStart,
       cells: [{ indirectCodeId: indirect.id, dayIndex: todayIndex, hours: 2, isEdit: false, isLateEntry: false }],
-    });
+    }));
 
     const db = getTestDb();
     const [row] = await db.select().from(schema.timesheetEntries)
@@ -333,10 +325,10 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
     await assignChargeCodeToUser(employee.id, chargeCode.id);
 
     actingAs(employee);
-    await saveTimesheetBatch({
+    await expectOk(saveTimesheetBatch({
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
-    });
+    }));
 
     // Wide enough to cover todayIndex regardless of period type/length (max is 16 days,
     // semimonthly) or where in the period "today" falls when the suite runs.

@@ -9,6 +9,7 @@ import {
   assignUserToClin,
   cleanupTestData,
   flushAfter,
+  expectOk,
 } from './helpers';
 import { tenantBaseUrl } from '@/lib/tenant/host';
 
@@ -119,7 +120,7 @@ describe('Submission notifications are scoped (R2-10)', () => {
     });
 
     actingAs(employee);
-    await submitPeriod({ periodStart });
+    await expectOk(submitPeriod({ periodStart }));
     await flushAfter(); // sends are scheduled with after() (feature-plan-launch-blockers.md P1)
 
     const notifiedEmails = emailState.sendTimesheetSubmittedEmail.mock.calls.map((call) => call[0].supervisorEmail);
@@ -152,7 +153,7 @@ describe('Submission notifications are scoped (R2-10)', () => {
     await db.insert(schema.timesheetPeriods).values({ userId: submittingAdmin.id, periodStart, status: 'rejected' });
 
     actingAs(submittingAdmin);
-    await submitPeriod({ periodStart });
+    await expectOk(submitPeriod({ periodStart }));
     await flushAfter();
 
     const notifiedEmails = emailState.sendTimesheetSubmittedEmail.mock.calls.map((call) => call[0].supervisorEmail);
@@ -173,8 +174,8 @@ describe('Submission notifications are scoped (R2-10)', () => {
       .values({ userId: employee.id, periodStart: '2020-01-16', status: 'submitted', submittedAt: new Date() }).returning();
 
     actingAs(admin);
-    await approvePeriod({ periodId: approveMe.id });
-    await rejectPeriod({ periodId: rejectMe.id, comment: 'Please fix Tuesday.' });
+    await expectOk(approvePeriod({ periodId: approveMe.id }));
+    await expectOk(rejectPeriod({ periodId: rejectMe.id, comment: 'Please fix Tuesday.' }));
     await flushAfter();
 
     expect(emailState.sendTimesheetApprovedEmail).toHaveBeenCalledTimes(1);

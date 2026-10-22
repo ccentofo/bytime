@@ -135,7 +135,7 @@ function importedConverted(source: string, converted: Map<string, Set<string>>):
 
 /**
  * Call sites of `names` whose result is not consumed. Consumed means: wrapped in runAction(...); returned to the
- * caller (`return [await] name(`); or assigned (`const|let x = [await] name(`) with `x.ok` / `x?.ok` read afterwards.
+ * caller (`return [await] name(`); or assigned (`[const|let] x = [await] name(`) with `x.ok` / `x?.ok` read afterwards.
  */
 function uncheckedCallSites(source: string, names: string[]): string[] {
   const out: string[] = [];
@@ -146,7 +146,7 @@ function uncheckedCallSites(source: string, names: string[]): string[] {
       if (/import\s*\{[^}]*$/.test(before)) continue;                       // inside an import list
       if (/runAction\(\s*(?:await\s+)?$/.test(before)) continue;
       if (/\breturn\s+(?:await\s+)?$/.test(before)) continue;
-      const assign = /\b(?:const|let)\s+(\w+)\s*(?::[^=]+)?=\s*(?:await\s+)?$/.exec(before);
+      const assign = /(?:\b(?:const|let)\s+)?\b(\w+)\s*(?::[^=;(){}\n]+)?(?<![=!<>])=\s*(?:await\s+)?$/.exec(before);
       if (assign) {
         const after = source.slice(m.index!);
         if (new RegExp(`\\b${assign[1]}\\s*(?:\\?\\.|\\.)\\s*ok\\b`).test(after)) continue;
@@ -166,7 +166,9 @@ function callSiteFiles(): string[] {
 }
 
 /** Non-action functions whose results must also be consumed, per file (they return ActionResult). */
-const RESULT_RETURNING_CALLS: Record<string, string[]> = {};
+const RESULT_RETURNING_CALLS: Record<string, string[]> = {
+  'components/timesheet/TimesheetToolbar.tsx': ['saveAll', 'submitTimesheet'],
+};
 
 // ---------------------------------------------------------------------------
 
@@ -278,6 +280,7 @@ describe('action-result contract (static, launch-blockers P4)', () => {
       'async function c() { return saveThing(3); }',
       'async function d() { const x = await saveThing(4); console.log(x); }',
       'async function e() { await saveThing(5); }',
+      'async function f(code: string, note: string) {\n  const res = await saveThing(6);\n  if (!res.ok) return;\n}',
     ].join('\n');
     expect(uncheckedCallSites(fixture, ['saveThing'])).toEqual(['saveThing() at line 5', 'saveThing() at line 6']);
   });

@@ -6,6 +6,7 @@ import type { TimesheetState, TimesheetAction, TimesheetPageData, DirtyCell } fr
 import { addDays, isBefore, type CalendarDate } from '@/lib/calendar-date';
 import { saveTimesheetBatch, getTimesheetPeriod } from '@/server/actions/timesheet';
 import { submitPeriod, getWorkspaceContext } from '@/server/actions/periods';
+import { runAction, type RunResult } from '@/lib/run-action';
 import { getNeighborPeriod } from '@/server/actions/pay-period-config';
 import { seedOfflineStore } from '@/lib/offline/offline-store';
 
@@ -121,11 +122,13 @@ interface TimesheetContextValue {
   dirtyCells: DirtyCell[];
   hasEdits: boolean;        // true if any dirty cell has a prior revision (isEdit=true)
   hasLateEntries: boolean;  // true if any dirty cell is a late first-time entry
-  saveAll: (changeReasonCode?: string, comment?: string) => Promise<void>;
+  /** Resolves to the save's result — never throws. MARK_SAVED happens only on `ok` (launch-blockers P4). */
+  saveAll: (changeReasonCode?: string, comment?: string) => Promise<RunResult<void>>;
   loadPeriod: (direction: 'prev' | 'next') => Promise<void>;
   loadPeriodByDate: (periodStart: CalendarDate) => Promise<void>;
   discardChanges: () => void;
-  submitTimesheet: (comment?: string) => Promise<void>;
+  /** Resolves to the submit's result — never throws. The status becomes 'submitted' only on `ok`. */
+  submitTimesheet: (comment?: string) => Promise<RunResult<void>>;
 }
 
 const TimesheetContext = createContext<TimesheetContextValue | undefined>(
@@ -200,45 +203,46 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
   const hasLateEntries = useMemo(() => dirtyCells.some((c) => c.isLateEntry), [dirtyCells]);
 
   const saveAll = useCallback(
-    async (changeReasonCode?: string, comment?: string) => {
-      if (dirtyCells.length === 0) return;
+    async (changeReasonCode?: string, comment?: string): Promise<RunResult<void>> => {
+      if (dirtyCells.length === 0) return { ok: true, data: undefined }; // nothing to save is a successful no-op
 
-      try {
-        dispatch({ type: 'SET_SAVING', isSaving: true });
+      dispatch({ type: 'SET_SAVING', isSaving: true });
+      // silent: the toolbar shows the server's message itself.
+      const result = await runAction(saveTimesheetBatch({
+        periodStart: state.periodStart,
+        cells: dirtyCells.map((c) => {
+          const chargeCode = state.chargeCodes.find((cc) => cc.id === c.chargeCodeId);
+          const revisionKey = `${c.chargeCodeId}-${c.dayIndex}`;
+          return {
+            // Direct entries: send chargeCodeId; server denormalizes clinId/slinId from the charge code.
+            // Indirect entries: send indirectCodeId as before.
+            chargeCodeId: chargeCode?.isIndirect ? undefined : c.chargeCodeId,
+            indirectCodeId: chargeCode?.isIndirect ? c.chargeCodeId : undefined,
+            dayIndex: c.dayIndex,
+            hours: c.hours,
+            isEdit: c.isEdit,
+            isLateEntry: c.isLateEntry,
+            expectedRevision: state.savedCellRevisions[revisionKey] ?? 0,
+          };
+        }),
+        changeReasonCode,
+        comment,
+      }), { silent: true });
 
-        const newRevisions = await saveTimesheetBatch({
-          periodStart: state.periodStart,
-          cells: dirtyCells.map((c) => {
-            const chargeCode = state.chargeCodes.find((cc) => cc.id === c.chargeCodeId);
-            const revisionKey = `${c.chargeCodeId}-${c.dayIndex}`;
-            return {
-              // Direct entries: send chargeCodeId; server denormalizes clinId/slinId from the charge code.
-              // Indirect entries: send indirectCodeId as before.
-              chargeCodeId: chargeCode?.isIndirect ? undefined : c.chargeCodeId,
-              indirectCodeId: chargeCode?.isIndirect ? c.chargeCodeId : undefined,
-              dayIndex: c.dayIndex,
-              hours: c.hours,
-              isEdit: c.isEdit,
-              isLateEntry: c.isLateEntry,
-              expectedRevision: state.savedCellRevisions[revisionKey] ?? 0,
-            };
-          }),
-          changeReasonCode,
-          comment,
-        });
-
-        // After successful save, update saved snapshot
-        dispatch({
-          type: 'MARK_SAVED',
-          periodStart: state.periodStart,
-          entries: state.entries,
-          revisions: newRevisions,
-        });
-      } catch (error) {
-        console.error('Failed to save timesheet:', error);
+      if (!result.ok) {
+        // Nothing was saved: keep the unsaved changes (dirty cells) exactly as they are.
         dispatch({ type: 'SET_SAVING', isSaving: false });
-        throw error; // Re-throw so the UI can show error notification
+        return result;
       }
+
+      // Only a confirmed save moves the saved snapshot.
+      dispatch({
+        type: 'MARK_SAVED',
+        periodStart: state.periodStart,
+        entries: state.entries,
+        revisions: result.data,
+      });
+      return { ok: true, data: undefined };
     },
     [dirtyCells, state.periodStart, state.entries, state.chargeCodes, state.savedCellRevisions]
   );
@@ -301,20 +305,16 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
   }, []);
 
   const submitTimesheet = useCallback(
-    async (comment?: string) => {
-      try {
-        dispatch({ type: 'SET_SAVING', isSaving: true });
-        await submitPeriod({
-          periodStart: state.periodStart,
-          comment,
-        });
-        dispatch({ type: 'SET_PERIOD_STATUS', status: 'submitted' });
-      } catch (error) {
-        console.error('Failed to submit timesheet:', error);
-        throw error;
-      } finally {
-        dispatch({ type: 'SET_SAVING', isSaving: false });
-      }
+    async (comment?: string): Promise<RunResult<void>> => {
+      dispatch({ type: 'SET_SAVING', isSaving: true });
+      const result = await runAction(submitPeriod({
+        periodStart: state.periodStart,
+        comment,
+      }), { silent: true });
+      // Only a confirmed submission changes the status.
+      if (result.ok) dispatch({ type: 'SET_PERIOD_STATUS', status: 'submitted' });
+      dispatch({ type: 'SET_SAVING', isSaving: false });
+      return result.ok ? { ok: true, data: undefined } : result;
     },
     [state.periodStart]
   );
