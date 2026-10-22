@@ -39,20 +39,9 @@ import * as users from '@/server/actions/users';
 
 const call = (fn: unknown, ...args: unknown[]) => (fn as (...a: unknown[]) => Promise<unknown>)(...args);
 
-/**
- * Refused by the fresh role check: a converted action returns { ok: false, code: 'forbidden' }; one not yet converted
- * to ActionResult throws the same AuthorizationError. (P4 converts these feature area by feature area; the last
- * commit narrows this to the result form only.)
- */
+/** Refused by the fresh role check: every one of the 37 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
 async function expectRefused(pending: Promise<unknown>): Promise<void> {
-  let result: unknown;
-  try {
-    result = await pending;
-  } catch (err) {
-    expect(String(err)).toMatch(/access has changed/i);
-    return;
-  }
-  expect(result).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/access has changed/i) });
+  expect(await pending).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/access has changed/i) });
 }
 const ZERO = '00000000-0000-0000-0000-000000000000';
 

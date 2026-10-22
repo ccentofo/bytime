@@ -1,7 +1,13 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
-import { getTestDb, createTestUser, cleanupTestData } from './helpers';
+import {
+  getTestDb,
+  createTestUser,
+  cleanupTestData,
+  expectOk,
+  expectFailure,
+} from './helpers';
 
 // ---------------------------------------------------------------------------
 // R2-11: bulkImportEmployees previously had no seat-limit check at all — only
@@ -79,7 +85,7 @@ describe('Bulk import respects the plan seat limit atomically (R2-11)', () => {
     // 1 admin already active; a batch of 10 more would make 11 > the trial's 10-seat limit.
     const rows = makeRows(10, 'overflow');
 
-    await expect(bulkImportEmployees(rows)).rejects.toThrow(/plan allows 10 active users/i);
+    await expectFailure(bulkImportEmployees(rows), 'validation', /plan allows 10 active users/i);
 
     const db = getTestDb();
     const created = await db.select().from(schema.users).where(eq(schema.users.fullName, 'overflow 0'));
@@ -92,7 +98,7 @@ describe('Bulk import respects the plan seat limit atomically (R2-11)', () => {
     actingAs(admin);
     const rows = makeRows(5, 'fits'); // 1 admin + 5 new = 6, within the 10-seat trial limit
 
-    const result = await bulkImportEmployees(rows);
+    const result = await expectOk(bulkImportEmployees(rows));
     expect(result.created).toBe(5);
     expect(result.errors).toHaveLength(0);
   });
@@ -108,7 +114,7 @@ describe('Bulk import respects the plan seat limit atomically (R2-11)', () => {
       ...makeRows(3, 'brandnew'),
     ];
 
-    const result = await bulkImportEmployees(rows);
+    const result = await expectOk(bulkImportEmployees(rows));
     expect(result.skipped).toBe(1);
     expect(result.created).toBe(3);
   });

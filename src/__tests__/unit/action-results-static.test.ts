@@ -135,7 +135,7 @@ function importedConverted(source: string, converted: Map<string, Set<string>>):
 
 /**
  * Call sites of `names` whose result is not consumed. Consumed means: wrapped in runAction(...); returned to the
- * caller (`return [await] name(`); or assigned (`[const|let] x = [await] name(`) with `x.ok` / `x?.ok` read afterwards.
+ * caller (`return [await] name(` or an arrow body `=> name(`); or assigned (`[const|let] x = [await] name(`) with `x.ok` / `x?.ok` read afterwards.
  */
 function uncheckedCallSites(source: string, names: string[]): string[] {
   const out: string[] = [];
@@ -146,6 +146,12 @@ function uncheckedCallSites(source: string, names: string[]): string[] {
       if (/import\s*\{[^}]*$/.test(before)) continue;                       // inside an import list
       if (/runAction\(\s*(?:await\s+)?$/.test(before)) continue;
       if (/\breturn\s+(?:await\s+)?$/.test(before)) continue;
+      if (/=>\s*(?:await\s+)?$/.test(before)) {
+        // An arrow body returns the result — but not to a JSX event handler (onClick={() => save(x)} discards it),
+        // unless the prop's own type returns the result to a component that checks it (RESULT_RETURNING_PROPS).
+        const handler = /\b(on[A-Z]\w*)=\{\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*(?:await\s+)?$/.exec(before);
+        if (!handler || RESULT_RETURNING_PROPS.has(handler[1])) continue;
+      }
       const assign = /(?:\b(?:const|let)\s+)?\b(\w+)\s*(?::[^=;(){}\n]+)?(?<![=!<>])=\s*(?:await\s+)?$/.exec(before);
       if (assign) {
         const after = source.slice(m.index!);
@@ -164,6 +170,9 @@ function callSiteFiles(): string[] {
   const extra = [path.join(SRC, 'lib/offline/sync-service.ts'), path.join(SRC, 'components/timesheet/TimesheetToolbar.tsx')];
   return [...new Set([...clientFiles, ...extra])];
 }
+
+/** JSX props typed to return ActionResult to a component that checks it (ImportWizard's onImport). */
+const RESULT_RETURNING_PROPS = new Set(['onImport']);
 
 /** Non-action functions whose results must also be consumed, per file (they return ActionResult). */
 const RESULT_RETURNING_CALLS: Record<string, string[]> = {
@@ -280,8 +289,10 @@ describe('action-result contract (static, launch-blockers P4)', () => {
       'async function c() { return saveThing(3); }',
       'async function d() { const x = await saveThing(4); console.log(x); }',
       'async function e() { await saveThing(5); }',
+      'const g = <Button onClick={() => saveThing(7)} />;',
+      'const h = <ImportWizard onImport={(rows) => saveThing(rows)} />;',
       'async function f(code: string, note: string) {\n  const res = await saveThing(6);\n  if (!res.ok) return;\n}',
     ].join('\n');
-    expect(uncheckedCallSites(fixture, ['saveThing'])).toEqual(['saveThing() at line 5', 'saveThing() at line 6']);
+    expect(uncheckedCallSites(fixture, ['saveThing'])).toEqual(['saveThing() at line 5', 'saveThing() at line 6', 'saveThing() at line 7']);
   });
 });

@@ -9,23 +9,26 @@ import { ensureValidGustoToken, fetchGustoEmployees } from '@/lib/integrations/c
 import { executeSyncOperation } from '@/lib/integrations/sync-engine';
 import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { UserFacingError } from '@/lib/errors';
+import { userAction } from '@/lib/action-result';
 
 /**
  * Fetch Gusto employees for the mapping UI.
  */
 export async function fetchGustoEmployeesForMapping(connectionId: string) {
-  await requireAdminFresh();
-  const db = await getDb();
-  const accessToken = await ensureValidGustoToken(connectionId);
+  return userAction(async () => {
+    await requireAdminFresh();
+    const db = await getDb();
+    const accessToken = await ensureValidGustoToken(connectionId);
 
-  const [connection] = await db
-    .select({ externalCompanyId: integrationConnections.externalCompanyId })
-    .from(integrationConnections)
-    .where(eq(integrationConnections.id, connectionId));
+    const [connection] = await db
+      .select({ externalCompanyId: integrationConnections.externalCompanyId })
+      .from(integrationConnections)
+      .where(eq(integrationConnections.id, connectionId));
 
-  if (!connection?.externalCompanyId) throw new UserFacingError('Connection has no company ID.');
+    if (!connection?.externalCompanyId) throw new UserFacingError('Connection has no company ID.');
 
-  return fetchGustoEmployees(accessToken, connection.externalCompanyId);
+    return fetchGustoEmployees(accessToken, connection.externalCompanyId);
+  });
 }
 
 /**
@@ -50,16 +53,18 @@ export async function triggerGustoSync(data: {
   periodStart?: CalendarDate;
   periodEnd?: CalendarDate;
 }) {
-  const actor = await requireAdminFresh();
-  const window = data.periodStart && data.periodEnd
-    ? { periodStart: parseCalendarDate(data.periodStart), periodEnd: parseCalendarDate(data.periodEnd) }
-    : await getDefaultSyncWindow();
-  return executeSyncOperation(
-    data.connectionId,
-    'timesheet_push',
-    window.periodStart,
-    window.periodEnd,
-    actor.id,
-    'manual'
-  );
+  return userAction(async () => {
+    const actor = await requireAdminFresh();
+    const window = data.periodStart && data.periodEnd
+      ? { periodStart: parseCalendarDate(data.periodStart), periodEnd: parseCalendarDate(data.periodEnd) }
+      : await getDefaultSyncWindow();
+    return executeSyncOperation(
+      data.connectionId,
+      'timesheet_push',
+      window.periodStart,
+      window.periodEnd,
+      actor.id,
+      'manual'
+    );
+  });
 }

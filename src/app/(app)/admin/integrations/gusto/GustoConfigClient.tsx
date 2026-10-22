@@ -29,6 +29,7 @@ import {
   IconWand,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { runAction } from '@/lib/run-action';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import {
@@ -108,15 +109,12 @@ export function GustoConfigClient({
 
   async function loadGustoEmployees() {
     setLoadingGusto(true);
-    try {
-      const employees = await fetchGustoEmployeesForMapping(connection.id);
-      setGustoEmployees(employees);
-      notifications.show({ title: 'Gusto data loaded', message: `${employees.length} employees fetched`, color: 'success' });
-    } catch (error) {
-      notifications.show({ title: 'Failed to load Gusto data', message: String(error), color: 'red' });
-    } finally {
-      setLoadingGusto(false);
-    }
+    const result = await runAction(fetchGustoEmployeesForMapping(connection.id), { errorTitle: 'Failed to load Gusto data' });
+    setLoadingGusto(false);
+    if (!result.ok) return;
+    const employees = result.data;
+    setGustoEmployees(employees);
+    notifications.show({ title: 'Gusto data loaded', message: `${employees.length} employees fetched`, color: 'success' });
   }
 
   async function handleAutoMatch() {
@@ -150,71 +148,65 @@ export function GustoConfigClient({
   }
 
   async function handleSaveMapping(entityType: string, bytimeId: string, bytimeName: string, externalId: string, externalName: string) {
-    try {
-      await saveMapping({
+    const saved = await runAction(saveMapping({
         connectionId: connection.id,
         entityType,
         bytimeEntityId: bytimeId,
         bytimeEntityName: bytimeName,
         externalEntityId: externalId,
         externalEntityName: externalName,
-      });
+    }), { errorTitle: 'Failed to save mapping' });
+    if (!saved.ok) return;
 
-      setMappings((prev) => {
-        const existing = prev.findIndex(
-          (m) => m.entityType === entityType && m.bytimeEntityId === bytimeId
-        );
-        const newMapping: Mapping = {
-          id: 'temp-' + Date.now(),
-          connectionId: connection.id,
-          entityType,
-          bytimeEntityId: bytimeId,
-          bytimeEntityName: bytimeName,
-          externalEntityId: externalId,
-          externalEntityName: externalName,
-          metadata: null,
-        };
-        if (existing >= 0) {
-          const updated = [...prev];
-          updated[existing] = newMapping;
-          return updated;
-        }
-        return [...prev, newMapping];
-      });
-    } catch (error) {
-      notifications.show({ title: 'Failed to save mapping', message: String(error), color: 'red' });
-    }
+    setMappings((prev) => {
+      const existing = prev.findIndex(
+        (m) => m.entityType === entityType && m.bytimeEntityId === bytimeId
+      );
+      const newMapping: Mapping = {
+        id: 'temp-' + Date.now(),
+        connectionId: connection.id,
+        entityType,
+        bytimeEntityId: bytimeId,
+        bytimeEntityName: bytimeName,
+        externalEntityId: externalId,
+        externalEntityName: externalName,
+        metadata: null,
+      };
+      if (existing >= 0) {
+        const updated = [...prev];
+        updated[existing] = newMapping;
+        return updated;
+      }
+      return [...prev, newMapping];
+    });
   }
 
   async function handleSync() {
     // Default window (two months back through this month) is computed on the server in the
     // workspace's calendar, not from this browser's clock.
     startTransition(async () => {
-      try {
-        const result = await triggerGustoSync({
-          connectionId: connection.id,
-        });
-        notifications.show({
-          title: 'Sync complete',
-          message: `Pushed: ${result.result.pushed}, Failed: ${result.result.failed}, Skipped: ${result.result.skipped}`,
-          color: result.result.failed === 0 ? 'success' : 'warning',
-        });
-      } catch (error) {
-        notifications.show({ title: 'Sync failed', message: String(error), color: 'red' });
-      }
+      const outcome = await runAction(triggerGustoSync({
+        connectionId: connection.id,
+      }), { errorTitle: 'Sync failed' });
+      if (!outcome.ok) return;
+      const result = outcome.data;
+      notifications.show({
+        title: 'Sync complete',
+        message: `Pushed: ${result.result.pushed}, Failed: ${result.result.failed}, Skipped: ${result.result.skipped}`,
+        color: result.result.failed === 0 ? 'success' : 'warning',
+      });
     });
   }
 
   async function handleDisconnect() {
     setDisconnecting(true);
-    try {
-      await disconnectIntegration(connection.id);
-      window.location.href = '/admin/integrations';
-    } catch (error) {
-      notifications.show({ title: 'Failed to disconnect', message: String(error), color: 'red' });
+    const result = await runAction(disconnectIntegration(connection.id), { errorTitle: 'Failed to disconnect' });
+    if (!result.ok) {
       setDisconnecting(false);
       setConfirmDisconnectOpen(false);
+      return;
     }
+    window.location.href = '/admin/integrations';
   }
 
   const employeeMappingCount = mappings.filter((m) => m.entityType === 'employee').length;

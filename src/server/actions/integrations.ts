@@ -12,6 +12,7 @@ import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { decrypt } from '@/lib/encryption';
 import { getAllConnectorMetadata } from '@/lib/integrations/registry';
 import type { CalendarDate } from '@/lib/calendar-date';
+import { userAction } from '@/lib/action-result';
 
 // ---------------------------------------------------------------------------
 // Connection Management
@@ -37,28 +38,32 @@ export async function getConnections() {
 }
 
 export async function disconnectIntegration(connectionId: string) {
-  const db = await getDbForWrite();
-  await requireAdminFresh();
-  await db.update(integrationConnections)
-    .set({
-      isActive: false,
-      accessTokenEncrypted: null,
-      refreshTokenEncrypted: null,
-      disconnectedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(integrationConnections.id, connectionId));
+  return userAction(async () => {
+    const db = await getDbForWrite();
+    await requireAdminFresh();
+    await db.update(integrationConnections)
+      .set({
+        isActive: false,
+        accessTokenEncrypted: null,
+        refreshTokenEncrypted: null,
+        disconnectedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(integrationConnections.id, connectionId));
+  });
 }
 
 export async function toggleAutoSync(connectionId: string, enabled: boolean) {
-  const db = await getDbForWrite();
-  await requireAdminFresh();
-  await db.update(integrationConnections)
-    .set({
-      autoSyncOnApproval: enabled,
-      updatedAt: new Date(),
-    })
-    .where(eq(integrationConnections.id, connectionId));
+  return userAction(async () => {
+    const db = await getDbForWrite();
+    await requireAdminFresh();
+    await db.update(integrationConnections)
+      .set({
+        autoSyncOnApproval: enabled,
+        updatedAt: new Date(),
+      })
+      .where(eq(integrationConnections.id, connectionId));
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -84,47 +89,51 @@ export async function saveMapping(data: {
   externalEntityName: string;
   metadata?: string;
 }) {
-  const db = await getDbForWrite();
-  await requireAdminFresh();
+  return userAction(async () => {
+    const db = await getDbForWrite();
+    await requireAdminFresh();
 
-  // Upsert — update if mapping already exists for this connection + entity type + bytime ID
-  const existing = await db
-    .select({ id: integrationEntityMappings.id })
-    .from(integrationEntityMappings)
-    .where(
-      and(
-        eq(integrationEntityMappings.connectionId, data.connectionId),
-        eq(integrationEntityMappings.entityType, data.entityType),
-        eq(integrationEntityMappings.bytimeEntityId, data.bytimeEntityId),
-      )
-    );
+    // Upsert — update if mapping already exists for this connection + entity type + bytime ID
+    const existing = await db
+      .select({ id: integrationEntityMappings.id })
+      .from(integrationEntityMappings)
+      .where(
+        and(
+          eq(integrationEntityMappings.connectionId, data.connectionId),
+          eq(integrationEntityMappings.entityType, data.entityType),
+          eq(integrationEntityMappings.bytimeEntityId, data.bytimeEntityId),
+        )
+      );
 
-  if (existing.length > 0) {
-    await db.update(integrationEntityMappings)
-      .set({
+    if (existing.length > 0) {
+      await db.update(integrationEntityMappings)
+        .set({
+          externalEntityId: data.externalEntityId,
+          externalEntityName: data.externalEntityName,
+          metadata: data.metadata,
+          updatedAt: new Date(),
+        })
+        .where(eq(integrationEntityMappings.id, existing[0].id));
+    } else {
+      await db.insert(integrationEntityMappings).values({
+        connectionId: data.connectionId,
+        entityType: data.entityType,
+        bytimeEntityId: data.bytimeEntityId,
+        bytimeEntityName: data.bytimeEntityName,
         externalEntityId: data.externalEntityId,
         externalEntityName: data.externalEntityName,
         metadata: data.metadata,
-        updatedAt: new Date(),
-      })
-      .where(eq(integrationEntityMappings.id, existing[0].id));
-  } else {
-    await db.insert(integrationEntityMappings).values({
-      connectionId: data.connectionId,
-      entityType: data.entityType,
-      bytimeEntityId: data.bytimeEntityId,
-      bytimeEntityName: data.bytimeEntityName,
-      externalEntityId: data.externalEntityId,
-      externalEntityName: data.externalEntityName,
-      metadata: data.metadata,
-    });
-  }
+      });
+    }
+  });
 }
 
 export async function deleteMapping(mappingId: string) {
-  const db = await getDbForWrite();
-  await requireAdminFresh();
-  await db.delete(integrationEntityMappings).where(eq(integrationEntityMappings.id, mappingId));
+  return userAction(async () => {
+    const db = await getDbForWrite();
+    await requireAdminFresh();
+    await db.delete(integrationEntityMappings).where(eq(integrationEntityMappings.id, mappingId));
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -176,10 +176,10 @@ describe('calendar-dates audit fixes', () => {
 
   it('importMigrationPeriods stores the length snapshot and reports off-schedule starts clearly', async () => {
     actingAs(admin);
-    const result = await importMigrationPeriods([
+    const result = await expectOk(importMigrationPeriods([
       { employeeEmail: employee.email, periodStart: '2026-01-16', status: 'approved', submittedAt: '', reviewedAt: '', reviewedByEmail: '', reviewComment: '' },
       { employeeEmail: employee.email, periodStart: '2026-01-05', status: 'approved', submittedAt: '', reviewedAt: '', reviewedByEmail: '', reviewComment: '' },
-    ]);
+    ]));
     expect(result.imported).toBe(1);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].message).toMatch(/not a period start under this workspace's pay schedule/);
