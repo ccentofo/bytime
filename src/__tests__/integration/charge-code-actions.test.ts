@@ -27,6 +27,8 @@ vi.mock('@/db', async (importOriginal) => ({
   getDb: async () => getTestDb(),
   // Write actions obtain their client through the write gate (feature-plan-terms-compliance-fixes.md §5.1).
   getDbForWrite: async () => getTestDb(),
+  // requireAdminFresh (feature-plan-launch-blockers.md P3) re-reads the role through getDbForAuth.
+  getDbForAuth: async () => getTestDb(),
 }));
 
 // R2-1: getSessionUser() now checks session.user.tenantSlug against the request's tenant

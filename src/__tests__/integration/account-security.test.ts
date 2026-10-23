@@ -7,11 +7,21 @@ import { hashRecoveryCode } from '@/lib/totp';
 import { getTestDb, createTestUser, cleanupTestData, expectFailure } from './helpers';
 
 /**
- * feature-plan-launch-blockers.md P3 / §9 "Account security" (database scenarios). Tenant resolution points the
- * REAL getDbForAuth at the test DB (as mfa-signin.test.ts does), so login_attempts counting and row locks run for real.
+ * feature-plan-launch-blockers.md P3 / §9 "Account security" (database scenarios). getDbForAuth returns the test DB, so
+ * login_attempts counting and row locks run for real.
+ *
+ * vitest 2.1.9 quirk (see dcaa-concurrency.test.ts): when two calls dynamically import() the same MOCKED module at the
+ * same moment, the overlapping one receives the REAL module. The real getDbForAuth lazily imports the tenant context
+ * and registry, so the concurrent sign-in test would see a "missing workspace" (null) instead of the row-lock outcome.
+ * getDbForAuth is therefore stubbed (production has no mocks; Node imports of loaded modules are safe).
  */
 
 const TEST_DB_URL = process.env.TEST_DATABASE_URL ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime_test';
+
+vi.mock('@/db', async (importOriginal) => {
+  const { getTestDb } = await import('./helpers');
+  return { ...(await importOriginal<typeof import('@/db')>()), getDbForAuth: async () => getTestDb() };
+});
 
 vi.mock('@/lib/tenant/context', () => ({ getTenantSlug: async () => 'test-tenant' }));
 vi.mock('@/lib/tenant/registry', () => ({

@@ -45,6 +45,14 @@ vi.mock('@/lib/tenant/context', () => ({
   getTenantSlug: async () => tenantState.requestSlug,
 }));
 
+// vitest 2.1.9 quirk (see dcaa-concurrency.test.ts): when two calls dynamically import() the same MOCKED module at the
+// same moment, the overlapping one receives the REAL module. getSessionUser lazily imports the tenant context, so in
+// the concurrent case (5b) one call runs the REAL getTenantSlug, which reads request headers. Give it headers that
+// resolve to the same workspace, so the real guards stay under test whichever module a call receives.
+vi.mock('next/headers', () => ({
+  headers: async () => new Headers({ host: `${tenantState.requestSlug}.${process.env.APP_ROOT_DOMAIN ?? 'localhost'}` }),
+}));
+
 type FakeSessionUser = { id: string; role: string; email: string; fullName: string; tenantSlug?: string };
 
 const sessionState = vi.hoisted(() => ({
