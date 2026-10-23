@@ -10,7 +10,7 @@ import { createSendThrottle } from '@/lib/email/rate';
 import { tenantBaseUrl } from '@/lib/tenant/host';
 import { getCurrentPeriodStart, getLastWeekdayInPeriod, getNumDaysInPeriod } from '@/lib/date-utils';
 import { runCron } from '@/lib/cron/run-cron';
-import { REMINDER_CRON_MAX_DURATION_S, isSeedRecipient, sweepTenants } from '@/lib/cron/tenant-sweep';
+import { isSeedRecipient, sweepTenants } from '@/lib/cron/tenant-sweep';
 import { getTenantAccess } from '@/lib/tenant/lifecycle';
 import { toLifecycleFacts } from '@/lib/tenant/registry';
 import { configAt } from '@/server/internal/pay-period-config';
@@ -26,7 +26,9 @@ const FALLBACK_TIMEZONE = 'America/New_York';
  *
  * Protect this endpoint with a CRON_SECRET header in production.
  */
-export const maxDuration = REMINDER_CRON_MAX_DURATION_S;
+// Audit R10: a literal — Next reads route segment config statically (an imported constant fails the build). Must
+// equal REMINDER_CRON_MAX_DURATION_S (checked by unit/route-segment-config).
+export const maxDuration = 300;
 
 export async function GET(request: NextRequest) {
   return runCron(request, 'submission-deadline', sendReminders, { maxRuntimeMinutes: 5 });
