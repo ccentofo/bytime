@@ -32,6 +32,15 @@ const tenantState = vi.hoisted(() => ({ requestSlug: 'test-tenant' }));
 
 vi.mock('@/lib/tenant/context', () => ({
   getTenantSlug: async () => tenantState.requestSlug,
+  // createUser checks the seat limit, which reads the tenant's plan (as mass-assignment.test.ts does).
+  getTenantOrThrow: async () => ({
+    id: 'test-tenant-id',
+    slug: tenantState.requestSlug,
+    name: 'Test Tenant',
+    status: 'active',
+    plan: 'trial',
+    dbUrl: 'unused-in-this-test',
+  }),
 }));
 
 type FakeSessionUser = { id: string; role: string; email: string; fullName: string };
