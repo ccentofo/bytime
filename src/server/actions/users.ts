@@ -31,8 +31,8 @@ export async function createUser(data: {
   role?: 'admin' | 'supervisor' | 'employee';
 }) {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
     await assertSeatAvailable();
     const validatedData = {
       email: validateEmail(data.email),
@@ -169,8 +169,8 @@ export async function createUserWithPassword(data: {
   password: string;
 }) {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
     await assertSeatAvailable();
     const validatedEmail = validateEmail(data.email);
     const validatedName = validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255);

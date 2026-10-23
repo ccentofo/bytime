@@ -69,8 +69,8 @@ export async function getApiKeys() {
  */
 export async function revokeApiKey(id: string): Promise<ActionResult<void>> {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
     await db.update(apiKeys)
       .set({ isActive: false, updatedAt: new Date() })
       .where(eq(apiKeys.id, id));
@@ -82,8 +82,8 @@ export async function revokeApiKey(id: string): Promise<ActionResult<void>> {
  */
 export async function deleteApiKey(id: string): Promise<ActionResult<void>> {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
     await db.delete(apiKeys).where(eq(apiKeys.id, id));
   });
 }

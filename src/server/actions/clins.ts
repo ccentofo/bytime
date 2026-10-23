@@ -20,8 +20,8 @@ export async function createClin(data: {
   fundedAmount?: string;
 }) {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
     const validatedData = {
       contractId: data.contractId,
       clinNumber: validateClinNumber(data.clinNumber),
@@ -40,8 +40,8 @@ export async function updateClin(id: string, data: {
   status?: 'active' | 'inactive' | 'closed';
 }) {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
     const validatedData: Record<string, unknown> = { updatedAt: new Date() };
     if (data.clinNumber !== undefined) validatedData.clinNumber = validateClinNumber(data.clinNumber);
     if (data.description !== undefined) validatedData.description = validateOptionalString(data.description, 'Description', 2000);

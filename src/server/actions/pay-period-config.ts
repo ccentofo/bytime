@@ -249,8 +249,8 @@ export async function updatePayPeriodConfig(data: {
   effectiveFrom: CalendarDate | null;
 }): Promise<ActionResult<UpdatePayPeriodConfigResult>> {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
     const candidateConfig = parseScheduleInput(data);
     const problem = anchorProblem(candidateConfig);
     if (problem) throw new UserFacingError(problem);

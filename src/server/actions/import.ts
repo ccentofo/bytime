@@ -30,8 +30,8 @@ export interface ImportResult {
 
 export async function bulkImportEmployees(rows: EmployeeImportRow[]): Promise<ActionResult<ImportResult>> {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
 
     // R2-11: count genuinely NEW rows (excluding ones matching an existing user by email) and
     // reject the WHOLE batch up front if it would exceed the plan's seat limit. Previously only

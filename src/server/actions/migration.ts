@@ -31,8 +31,8 @@ export async function importMigrationData(
   rows: MigrationEntryRow[]
 ): Promise<ActionResult<MigrationResult>> {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
 
     // Re-validate to get resolved IDs
     const validated = await validateMigrationDataInternal(db, rows);
@@ -93,8 +93,8 @@ export async function importMigrationPeriods(
   }>
 ): Promise<ActionResult<MigrationResult>> {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
 
     const allUsers = await db.select({ id: users.id, email: users.email }).from(users);
     const userMap = new Map(allUsers.map((u) => [u.email.toLowerCase(), u.id]));

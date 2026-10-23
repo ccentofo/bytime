@@ -180,6 +180,22 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
 
 /** Matches the cached guard only — `requireAdminFresh(` does not match (an "F" follows "requireAdmin"). */
 const CACHED_ADMIN_PATTERN = /\brequireAdmin\s*\(/;
+
+/**
+ * Launch-blockers audit A1: in a userAction-wrapped action the FIRST awaited call must be the session guard. Anything
+ * awaited before it (getDbForWrite above all) can throw a state-specific error — "suspended", "read-only", "on hold" —
+ * that userAction returns to the caller, letting an anonymous POST to victim.<root> learn the workspace's billing state.
+ */
+const SESSION_GUARD_CALLEE = /^(?:requireSession|requireAdmin|requireApprover|requireAdminFresh|requireApproverFresh)$/;
+const FIRST_AWAIT = /\bawait\s+([\w.]+)/;
+
+function guardNotFirstAwait(fns: Array<{ name: string; bodyText: string }>, publicNames: string[]): string[] {
+  return fns
+    .filter((fn) => /\buserAction\s*\(/.test(fn.bodyText) && !publicNames.includes(fn.name))
+    .map((fn) => ({ name: fn.name, first: FIRST_AWAIT.exec(fn.bodyText)?.[1] ?? '(no await)' }))
+    .filter(({ first }) => !SESSION_GUARD_CALLEE.test(first))
+    .map(({ name, first }) => `${name} (first await: ${first})`);
+}
 /** Helpers known to write (DB or credential bookkeeping) — calling one disqualifies a read-only allowlist entry. */
 const WRITING_HELPER_PATTERN = /\b(?:getDbForWrite|getDbForAuth|executeSyncOperation|unlockAccount|ensureValidToken|ensureValidGustoToken)\s*\(/;
 
@@ -256,6 +272,11 @@ describe('Server action guard coverage', () => {
         unguarded,
         `${file} has exported action(s) with no session guard and no PUBLIC_ACTIONS entry: ${unguarded.join(', ')}`
       ).toEqual([]);
+    });
+
+    it(`${file}: in every userAction callback the first await is the session guard (audit A1)`, () => {
+      const late = guardNotFirstAwait(fns, allowlist);
+      expect(late, `${file}: ${late.join('; ')}`).toEqual([]);
     });
 
     it(`${file}: no exported action accepts an acting-identity parameter`, () => {
@@ -417,6 +438,38 @@ describe('Server action guard coverage', () => {
       return Boolean(g && q && q.index < g.index);
     }).map((f) => f.name);
     expect(late).toEqual(['queryFirst']);
+  });
+
+  it('guard-first rule: getDbForWrite() (or any call) awaited before the guard is flagged (fixture, audit A1)', () => {
+    const fixture = `
+      export async function dbFirst(id: string) {
+        return userAction(async () => {
+          const db = await getDbForWrite();
+          await requireAdminFresh();
+          await db.delete(apiKeys).where(eq(apiKeys.id, id));
+        });
+      }
+      export async function guardFirst(id: string) {
+        return userAction(async () => {
+          const actor = await requireApproverFresh();
+          const db = await getDbForWrite();
+          await db.delete(apiKeys).where(eq(apiKeys.id, actor.id));
+        });
+      }
+      export async function parallel(id: string) {
+        return userAction(async () => {
+          const [actor, db] = await Promise.all([requireAdminFresh(), getDbForWrite()]);
+          await db.delete(apiKeys).where(eq(apiKeys.id, actor.id + id));
+        });
+      }
+      export async function publicOne(id: string) {
+        return userAction(async () => {
+          const db = await getDbForAuth();
+          return db.select().from(apiKeys).where(eq(apiKeys.id, id));
+        });
+      }`;
+    const fns = parseExportedFunctions(stripComments(fixture));
+    expect(guardNotFirstAwait(fns, ['publicOne'])).toEqual(['dbFirst (first await: getDbForWrite)', 'parallel (first await: Promise.all)']);
   });
 
   it('cached-admin ban: adding requireAdmin() to a writer fails (mutation check)', () => {

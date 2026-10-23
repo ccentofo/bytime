@@ -42,8 +42,8 @@ export async function createIndirectCode(data: {
   availableToAll?: boolean;
 }) {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
     const validatedData = {
       code: validateStringLength(validateRequired(data.code, 'Code'), 'Code', 1, 50),
       name: validateStringLength(validateRequired(data.name, 'Name'), 'Name', 1, 255),
@@ -68,8 +68,8 @@ export async function updateIndirectCode(id: string, data: {
   availableToAll?: boolean;
 }) {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
     const validatedData: Record<string, unknown> = { updatedAt: new Date() };
     if (data.code !== undefined) validatedData.code = validateStringLength(validateRequired(data.code, 'Code'), 'Code', 1, 50);
     if (data.name !== undefined) validatedData.name = validateStringLength(validateRequired(data.name, 'Name'), 'Name', 1, 255);
@@ -91,8 +91,8 @@ export async function updateIndirectCode(id: string, data: {
  */
 export async function seedIndirectCodes() {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
 
     const defaults = [
       { code: 'OH-001', name: 'Overhead', category: 'overhead' as const, description: 'General overhead — admin, training, company meetings' },

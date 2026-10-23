@@ -20,8 +20,8 @@ export async function createSlin(data: {
   fundedAmount?: string;
 }) {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
     const validatedData = {
       clinId: data.clinId,
       slinNumber: validateSlinNumber(data.slinNumber),
@@ -40,8 +40,8 @@ export async function updateSlin(id: string, data: {
   status?: 'active' | 'inactive' | 'closed';
 }) {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
     const validatedData: Record<string, unknown> = { updatedAt: new Date() };
     if (data.slinNumber !== undefined) validatedData.slinNumber = validateSlinNumber(data.slinNumber);
     if (data.description !== undefined) validatedData.description = validateOptionalString(data.description, 'Description', 2000);

@@ -70,8 +70,8 @@ export async function createLaborCategory(data: {
   ceilingRate?: string;
 }) {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
     const validatedData = {
       clinId: data.clinId,
       slinId: data.slinId,
@@ -96,8 +96,8 @@ export async function updateLaborCategory(id: string, data: {
   status?: 'active' | 'inactive' | 'closed';
 }) {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
     const validatedData: Record<string, unknown> = { updatedAt: new Date() };
     if (data.lcatCode !== undefined) validatedData.lcatCode = validateStringLength(validateRequired(data.lcatCode, 'LCAT code'), 'LCAT code', 1, 50);
     if (data.title !== undefined) validatedData.title = validateStringLength(validateRequired(data.title, 'Title'), 'Title', 1, 255);
@@ -195,8 +195,8 @@ export async function assignUserToLaborCategory(data: {
  */
 export async function endUserLaborCategoryAssignment(id: string) {
   return userAction(async () => {
-    const db = await getDbForWrite();
     await requireAdminFresh();
+    const db = await getDbForWrite();
     const endDate = await getWorkspaceToday();
     const rows = await db.update(userLaborCategories)
       .set({ endDate, updatedAt: new Date() })
