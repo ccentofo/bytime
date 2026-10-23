@@ -2,6 +2,7 @@ import { getDb, getDbForWrite } from '@/db';
 import { integrationConnections } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { decrypt, encrypt } from '@/lib/encryption';
+import { connectionExpiredError, providerHttpError, providerRefreshError } from '../provider-errors';
 
 // ---------------------------------------------------------------------------
 // Gusto API Configuration
@@ -121,10 +122,7 @@ export async function refreshGustoToken(refreshToken: string): Promise<{
     }),
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`Gusto token refresh failed: ${response.status} ${errorBody}`);
-  }
+  if (!response.ok) throw await providerRefreshError('Gusto', response); // audit R9
 
   const data = await response.json();
 
@@ -151,7 +149,7 @@ export async function ensureValidGustoToken(connectionId: string): Promise<strin
     .where(eq(integrationConnections.id, connectionId));
 
   if (!connection?.accessTokenEncrypted || !connection?.refreshTokenEncrypted) {
-    throw new Error('Connection has no stored tokens.');
+    throw connectionExpiredError('Gusto'); // audit R9: no stored tokens → reconnect
   }
 
   const expiresAt = connection.tokenExpiresAt ? new Date(connection.tokenExpiresAt).getTime() : 0;
@@ -210,10 +208,7 @@ export async function gustoGetRaw(accessToken: string, path: string): Promise<un
     headers: gustoHeaders(accessToken),
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`Gusto API GET ${path} failed: ${response.status} ${errorBody}`);
-  }
+  if (!response.ok) throw await providerHttpError('Gusto', `GET ${path}`, response); // audit R9: 401 → reconnect
 
   return response.json();
 }
@@ -226,10 +221,7 @@ async function gustoGet<T>(accessToken: string, path: string): Promise<T> {
     headers: gustoHeaders(accessToken),
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`Gusto API GET ${path} failed: ${response.status} ${errorBody}`);
-  }
+  if (!response.ok) throw await providerHttpError('Gusto', `GET ${path}`, response); // audit R9: 401 → reconnect
 
   return response.json();
 }
@@ -244,10 +236,7 @@ async function gustoPost<T>(accessToken: string, path: string, body: Record<stri
     body: JSON.stringify(body),
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`Gusto API POST ${path} failed: ${response.status} ${errorBody}`);
-  }
+  if (!response.ok) throw await providerHttpError('Gusto', `POST ${path}`, response); // audit R9
 
   return response.json();
 }

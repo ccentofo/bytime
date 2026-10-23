@@ -19,6 +19,9 @@ import {
 import { eq, and, gte, lt, sql } from 'drizzle-orm';
 import { decrypt } from '@/lib/encryption';
 import { safeErrorMessage } from '@/server/internal/import-errors';
+import { UserFacingError } from '@/lib/errors';
+import { INTEGRATION_DISCONNECTED_MESSAGE } from './provider-errors';
+import { ensureValidToken } from './connectors/qbo-api';
 import { getConnector } from './registry';
 import { existingPeriodLength } from '@/server/internal/pay-period-config';
 import { addDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -153,7 +156,7 @@ export async function executeSyncOperation(
     .where(eq(integrationConnections.id, connectionId));
 
   if (!connection || !connection.isActive) {
-    throw new Error('Integration connection not found or inactive.');
+    throw new UserFacingError(INTEGRATION_DISCONNECTED_MESSAGE); // audit R9
   }
 
   const connector = getConnector(connection.provider);
@@ -174,10 +177,14 @@ export async function executeSyncOperation(
   }).returning();
 
   try {
-    // Decrypt access token
-    const accessToken = connection.accessTokenEncrypted
-      ? decrypt(connection.accessTokenEncrypted)
-      : '';
+    // Audit R9: QuickBooks access tokens last an hour — refresh (if due) now, after the `running` row exists, so a
+    // refresh failure (e.g. "reconnect") lands in this sync's log. Gusto's sync makes no provider call, so its token is
+    // not refreshed (that would rotate the refresh token for nothing).
+    const accessToken = connection.provider === 'quickbooks_online'
+      ? await ensureValidToken(connectionId)
+      : connection.accessTokenEncrypted
+        ? decrypt(connection.accessTokenEncrypted)
+        : '';
 
     // Load entity mappings
     const mappingRows = await db
