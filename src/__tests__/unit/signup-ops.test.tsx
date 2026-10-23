@@ -64,18 +64,42 @@ describe('signup cleanup (LB-D5)', () => {
     expect(db.deletes).toEqual([]);
   });
 
-  it('flag on: unverified and verified-unprovisioned rows deleted; consumed rows only when the tenant holds the Terms version + time', async () => {
+  it('flag on: unverified and verified-unprovisioned rows deleted; consumed rows by the S1 rule', async () => {
     vi.stubEnv('SIGNUP_CONTROLS_ENABLED', 'true');
     db.onReturning('delete', signups, [{ id: 'u1' }, { id: 'u2' }]); // unverified
+    const terms = { tVersion: '2026-10-21', tAccepted: new Date() };
     db.onSelect(signups, [
-      { id: 'c1', slug: 'copied', tVersion: '2026-10-21', tAccepted: new Date() },
-      { id: 'c2', slug: 'not-copied', tVersion: null, tAccepted: null },
+      { id: 'c1', slug: 'copied', email: 'a@x.dev', tId: 't1', tSignupEmail: 'a@x.dev', ...terms },          // own + Terms → delete
+      { id: 'c2', slug: 'not-copied', email: 'b@x.dev', tId: 't2', tSignupEmail: 'b@x.dev', tVersion: null, tAccepted: null }, // own, no Terms → keep
+      { id: 'c3', slug: 'taken', email: 'c@x.dev', tId: 't3', tSignupEmail: 'someone@else.dev', tVersion: null, tAccepted: null }, // other signer → delete
+      { id: 'c4', slug: 'legacy', email: 'd@x.dev', tId: 't4', tSignupEmail: null, ...terms },               // NULL signup_email → keep
+      { id: 'c5', slug: 'no-tenant', email: 'e@x.dev', tId: null, tSignupEmail: null, tVersion: null, tAccepted: null }, // no tenant → keep
     ]);
     db.onReturning('delete', signups, [{ id: 'v1' }]); // verified-unprovisioned
     const r = await runSignupMaintenance(new Date());
-    expect(r.cleanup).toEqual({ unverifiedDeleted: 2, consumedDeleted: 1, consumedKept: ['not-copied'], verifiedUnprovisionedDeleted: 1 });
-    expect(db.deletes).toHaveLength(3); // unverified, c1, verified-unprovisioned — never c2
-    expect(h.raised).toEqual([expect.objectContaining({ kind: 'signup-terms-not-copied', dedupKey: 'not-copied' })]);
+    expect(r.cleanup).toEqual({ unverifiedDeleted: 2, consumedDeleted: 2, consumedKept: ['not-copied', 'legacy', 'no-tenant'], verifiedUnprovisionedDeleted: 1 });
+    expect(db.deletes).toHaveLength(4); // unverified, c1, c3, verified-unprovisioned
+    expect(h.raised.map((a) => a.dedupKey)).toEqual(['not-copied', 'legacy', 'no-tenant']);
+    // The alert for a slug is resolved once its row is deleted.
+    expect(h.resolved.filter((a) => a.kind === 'signup-terms-not-copied').map((a) => a.dedupKey)).toEqual(['copied', 'taken']);
+  });
+
+  it('audit S1: consumedRowDecision', async () => {
+    const { consumedRowDecision } = await import('@/lib/signup/maintenance');
+    const withTerms = { termsVersion: 'v', termsAcceptedAt: new Date() };
+    expect(consumedRowDecision('a@x.dev', { signupEmail: 'A@x.dev', ...withTerms })).toBe('delete');
+    expect(consumedRowDecision('a@x.dev', { signupEmail: 'a@x.dev', termsVersion: 'v', termsAcceptedAt: null })).toBe('keep');
+    expect(consumedRowDecision('a@x.dev', { signupEmail: 'other@x.dev', termsVersion: null, termsAcceptedAt: null })).toBe('delete');
+    expect(consumedRowDecision('a@x.dev', { signupEmail: null, ...withTerms })).toBe('keep');
+    expect(consumedRowDecision('a@x.dev', null)).toBe('keep');
+  });
+
+  it('audit S6: signup-cap-reached alerts of past UTC days are resolved (flag-independent)', async () => {
+    const { opsAlerts } = await import('@/db/control-plane/schema');
+    db.onReturning('update', opsAlerts, [{ id: 'a1' }, { id: 'a2' }]);
+    const r = await runSignupMaintenance(new Date('2026-10-23T13:00:00Z'));
+    expect(r.capAlertsResolved).toBe(2);
+    expect(db.updates.find((u) => u.table === opsAlerts)?.set).toMatchObject({ resolutionNote: 'that UTC day is over' });
   });
 });
 
@@ -214,6 +238,16 @@ describe('founder waitlist provisioning', () => {
     }
   });
 
+  it('audit S9: if the set-password token can’t be issued, the row is NOT marked provisioned and the recovery path is printed', async () => {
+    db.onSelect(signups, [waitlistedRow()]);
+    const d = deps();
+    d.issueToken.mockRejectedValueOnce(new Error('tenant db unreachable'));
+    await expect(provisionWaitlistedSignup('s1', d as unknown as WaitlistProvisionDeps))
+      .rejects.toThrow(/could not be issued[\s\S]*waitlist provision s1 --yes[\s\S]*Forgot password" at https?:\/\/newco\.[^ ]+\/forgot-password/);
+    expect(db.updates.filter((u) => u.table === signups)).toEqual([]);
+    expect(d.sendEmail).not.toHaveBeenCalled();
+  });
+
   it('a slug taken meanwhile is reported (ProvisionConflictError → WaitlistError)', async () => {
     db.onSelect(signups, [waitlistedRow()]);
     const d = deps();
@@ -253,6 +287,26 @@ describe('client wiring of the flag', () => {
     const on = (await SignupPage({ searchParams: Promise.resolve({}) })) as ReactElement<{ controls: unknown }>;
     expect(on.props.controls).toEqual({ turnstileSiteKey: 'site-key' });
     vi.doUnmock('@/lib/tenant/context');
+  });
+
+  it('audit S2: flag on in production with no public site key → the page raises signup-config-missing (after the response)', async () => {
+    vi.resetModules();
+    const raised: string[][] = [];
+    vi.doMock('@/lib/tenant/context', () => ({ getTenantSlug: async () => '' }));
+    vi.doMock('next/server', async (orig) => ({ ...(await orig<typeof import('next/server')>()), after: (fn: () => unknown) => { void fn(); } }));
+    vi.doMock('@/lib/signup/signals', () => ({ raiseSignupConfigMissing: async (missing: string[]) => { raised.push(missing); } }));
+    vi.stubEnv('SIGNUP_CONTROLS_ENABLED', 'true');
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', 'secret');
+    vi.stubEnv('SIGNUP_IP_SALT', 'salt');
+    vi.stubEnv('NEXT_PUBLIC_TURNSTILE_SITE_KEY', '');
+    const { default: SignupPage } = await import('@/app/signup/page');
+    await SignupPage({ searchParams: Promise.resolve({}) });
+    expect(raised).toEqual([['NEXT_PUBLIC_TURNSTILE_SITE_KEY']]);
+    vi.doUnmock('@/lib/tenant/context');
+    vi.doUnmock('next/server');
+    vi.doUnmock('@/lib/signup/signals');
+    vi.resetModules();
   });
 
   it('the Turnstile secret and the IP salt never appear in client code', () => {

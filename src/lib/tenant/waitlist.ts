@@ -80,13 +80,25 @@ export async function provisionWaitlistedSignup(signupId: string, deps: Waitlist
     throw err;
   }
 
+  const base = tenantBaseUrl(row.slug);
+  const tenant = await getTenantBySlug(row.slug);
+  if (!tenant) throw new WaitlistError(`Provisioned "${row.slug}" but it is not in the registry — check tenant:admin show.`);
+
+  // Audit S9: issue the set-password token BEFORE marking the row provisioned. If issuing fails, the row stays
+  // waitlisted (re-running resumes — provisioning is signer-bound and idempotent) and the founder gets the fallback.
+  let token: string;
+  try {
+    token = await deps.issueToken(tenant.dbUrl, row.email);
+  } catch (err) {
+    throw new WaitlistError(
+      `Workspace "${row.slug}" was created, but the set-password link could not be issued (${err instanceof Error ? err.message : String(err)}). `
+      + `Re-run \`waitlist provision ${row.id} --yes\` (it resumes), or ask ${row.email} to use "Forgot password" at ${base}/forgot-password.`,
+    );
+  }
+
   const now = new Date();
   await controlDb.update(signups).set({ consumedAt: now, provisionedAt: now }).where(eq(signups.id, row.id));
 
-  const tenant = await getTenantBySlug(row.slug);
-  if (!tenant) throw new WaitlistError(`Provisioned "${row.slug}" but it is not in the registry — check tenant:admin show.`);
-  const token = await deps.issueToken(tenant.dbUrl, row.email);
-  const base = tenantBaseUrl(row.slug);
   const setPasswordUrl = `${base}/reset-password?token=${token}&email=${encodeURIComponent(row.email)}&welcome=1`;
   const outcome = await deps.sendEmail({
     email: row.email,

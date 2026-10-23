@@ -1,8 +1,8 @@
 import 'server-only';
 import * as Sentry from '@sentry/nextjs';
-import { and, between, eq, isNotNull, isNull, lt } from 'drizzle-orm';
+import { and, between, eq, isNotNull, isNull, lt, type SQL } from 'drizzle-orm';
 import { controlDb } from '@/db/control-plane';
-import { signups, tenants } from '@/db/control-plane/schema';
+import { opsAlerts, signups, tenants } from '@/db/control-plane/schema';
 import { withLockedPool } from '@/db/control-plane/locked';
 import { raiseAlert, resolveAlert } from '@/lib/tenant/lifecycle-store';
 import { countNeonProjects } from '@/lib/tenant/neon';
@@ -26,14 +26,49 @@ const daysAgo = (now: Date, d: number) => new Date(now.getTime() - d * DAY);
 
 export interface SignupMaintenanceSummary {
   cleanup: 'off' | { unverifiedDeleted: number; consumedDeleted: number; consumedKept: string[]; verifiedUnprovisionedDeleted: number } | 'failed';
+  capAlertsResolved: number | 'failed';
   neonProjects: 'skipped' | number | 'failed';
 }
 
-export async function runSignupMaintenance(now: Date = new Date()): Promise<SignupMaintenanceSummary> {
-  const summary: SignupMaintenanceSummary = { cleanup: 'off', neonProjects: 'skipped' };
+export interface SignupMaintenanceOptions {
+  /**
+   * Narrows every signups read/delete (audit S4: the integration test scopes cleanup to its own `test-lc-signup-*`
+   * rows, so it never deletes a developer's real signup rows). Production passes nothing.
+   */
+  signupFilter?: SQL;
+}
+
+/**
+ * Audit S1 (replaces the LB-D5 slug+email join): may a consumed signup row past its retention be deleted?
+ * The tenant is matched on SLUG only (tenant rows are never hard-deleted).
+ * - delete: the tenant is this signer's (signup_email = row email) AND holds the Terms version + acceptance time
+ *   (proof of contract kept for the life of the account);
+ * - delete: the tenant belongs to someone else (signup_email non-null and different) — this signer never got that
+ *   workspace, so there is no contract to prove;
+ * - keep (+ signup-terms-not-copied): the tenant lacks Terms data, its signup_email is NULL (legacy), or no tenant has
+ *   the slug.
+ */
+export function consumedRowDecision(
+  rowEmail: string,
+  tenant: { signupEmail: string | null; termsVersion: string | null; termsAcceptedAt: Date | null } | null,
+): 'delete' | 'keep' {
+  if (!tenant || tenant.signupEmail === null) return 'keep';
+  if (tenant.signupEmail.toLowerCase() !== rowEmail.toLowerCase()) return 'delete';
+  return tenant.termsVersion && tenant.termsAcceptedAt ? 'delete' : 'keep';
+}
+
+export async function runSignupMaintenance(now: Date = new Date(), opts: SignupMaintenanceOptions = {}): Promise<SignupMaintenanceSummary> {
+  const summary: SignupMaintenanceSummary = { cleanup: 'off', capAlertsResolved: 0, neonProjects: 'skipped' };
+  try {
+    summary.capAlertsResolved = await resolvePastCapAlerts(now);
+  } catch (err) {
+    summary.capAlertsResolved = 'failed';
+    console.error('[signup maintenance] cap-alert resolution failed:', err);
+    Sentry.captureException(err);
+  }
   if (signupControlsEnabled()) {
     try {
-      summary.cleanup = await cleanupSignups(now);
+      summary.cleanup = await cleanupSignups(now, opts.signupFilter);
     } catch (err) {
       summary.cleanup = 'failed';
       console.error('[signup maintenance] cleanup failed:', err);
@@ -50,29 +85,46 @@ export async function runSignupMaintenance(now: Date = new Date()): Promise<Sign
   return summary;
 }
 
-async function cleanupSignups(now: Date) {
+/** Audit S6: `signup-cap-reached` is deduplicated per UTC day; once that day is over its alert is resolved. */
+async function resolvePastCapAlerts(now: Date): Promise<number> {
+  const today = now.toISOString().slice(0, 10);
+  const rows = await withLockedPool((db) => db.update(opsAlerts)
+    .set({ resolvedAt: now, resolutionNote: 'that UTC day is over' })
+    .where(and(eq(opsAlerts.kind, 'signup-cap-reached'), isNull(opsAlerts.resolvedAt), lt(opsAlerts.dedupKey, today)))
+    .returning({ id: opsAlerts.id }));
+  return rows.length;
+}
+
+async function cleanupSignups(now: Date, filter?: SQL) {
   // 1. Never verified (and never consumed) past 7 days.
   const unverified = await controlDb.delete(signups).where(and(
-    isNull(signups.verifiedAt), isNull(signups.consumedAt), lt(signups.createdAt, daysAgo(now, UNVERIFIED_SIGNUP_RETENTION_DAYS)),
+    isNull(signups.verifiedAt), isNull(signups.consumedAt), lt(signups.createdAt, daysAgo(now, UNVERIFIED_SIGNUP_RETENTION_DAYS)), filter,
   )).returning({ id: signups.id });
 
-  // 2. Consumed past 30 days — ONLY when the tenant row (slug + signup email) already holds the Terms version and
-  //    acceptance time (LB-D5: proof of contract). Otherwise keep it and tell the founder.
+  // 2. Consumed past 30 days — by consumedRowDecision (audit S1): the tenant matched on slug only.
   const consumed = await controlDb.select({
-    id: signups.id, slug: signups.slug, tVersion: tenants.termsVersion, tAccepted: tenants.termsAcceptedAt,
+    id: signups.id, slug: signups.slug, email: signups.email,
+    tSignupEmail: tenants.signupEmail, tId: tenants.id, tVersion: tenants.termsVersion, tAccepted: tenants.termsAcceptedAt,
   }).from(signups)
-    .leftJoin(tenants, and(eq(tenants.slug, signups.slug), eq(tenants.signupEmail, signups.email)))
-    .where(and(isNotNull(signups.consumedAt), lt(signups.consumedAt, daysAgo(now, CONSUMED_SIGNUP_RETENTION_DAYS))));
-  const deletable = consumed.filter((r) => r.tVersion && r.tAccepted);
-  const kept = consumed.filter((r) => !(r.tVersion && r.tAccepted));
-  for (const r of deletable) await controlDb.delete(signups).where(eq(signups.id, r.id));
+    .leftJoin(tenants, eq(tenants.slug, signups.slug))
+    .where(and(isNotNull(signups.consumedAt), lt(signups.consumedAt, daysAgo(now, CONSUMED_SIGNUP_RETENTION_DAYS)), filter));
+  const decide = (r: (typeof consumed)[number]) => consumedRowDecision(
+    r.email,
+    r.tId ? { signupEmail: r.tSignupEmail, termsVersion: r.tVersion, termsAcceptedAt: r.tAccepted } : null,
+  );
+  const deletable = consumed.filter((r) => decide(r) === 'delete');
+  const kept = consumed.filter((r) => decide(r) === 'keep');
+  for (const r of deletable) {
+    await controlDb.delete(signups).where(eq(signups.id, r.id));
+    await withLockedPool((db) => resolveAlert(db, { tenantId: null, kind: 'signup-terms-not-copied', dedupKey: r.slug }, now, 'signup row deleted'));
+  }
   for (const r of kept) {
     await withLockedPool((db) => raiseAlert(db, { tenantId: null, kind: 'signup-terms-not-copied', dedupKey: r.slug, detail: { slug: r.slug, signupId: r.id } }, now));
   }
 
   // 3. Verified but never provisioned (incl. waitlisted, IP-refused) past 30 days.
   const verifiedUnprovisioned = await controlDb.delete(signups).where(and(
-    isNotNull(signups.verifiedAt), isNull(signups.consumedAt), lt(signups.verifiedAt, daysAgo(now, VERIFIED_UNPROVISIONED_RETENTION_DAYS)),
+    isNotNull(signups.verifiedAt), isNull(signups.consumedAt), lt(signups.verifiedAt, daysAgo(now, VERIFIED_UNPROVISIONED_RETENTION_DAYS)), filter,
   )).returning({ id: signups.id });
 
   return {

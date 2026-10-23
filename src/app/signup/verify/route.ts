@@ -180,8 +180,10 @@ export async function POST(req: NextRequest) {
     return failRedirect('We could not finish creating your workspace. Please open your verification link again, or contact support.');
   }
 
-  // Mark signup consumed — happens AFTER provisioning so a crash before here allows retry
-  await controlDb.update(signups).set({ consumedAt: new Date() }).where(eq(signups.id, row.id));
+  // Mark signup consumed — happens AFTER provisioning so a crash before here allows retry. provisioned_at too (audit
+  // S1): the row's workspace now exists, whichever path created it.
+  const provisionedAt = new Date();
+  await controlDb.update(signups).set({ consumedAt: provisionedAt, provisionedAt }).where(eq(signups.id, row.id));
 
   // Mint a set-password token in the new tenant DB and redirect
   const tenant = await getTenantBySlug(row.slug);

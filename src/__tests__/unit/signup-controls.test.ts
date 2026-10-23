@@ -71,6 +71,7 @@ beforeEach(() => {
   vi.stubEnv('SIGNUP_CONTROLS_ENABLED', '');
   vi.stubEnv('TURNSTILE_SECRET_KEY', REAL_SECRET);
   vi.stubEnv('SIGNUP_IP_SALT', 'test-salt');
+  vi.stubEnv('NEXT_PUBLIC_TURNSTILE_SITE_KEY', '0x4AAAAAAA-site-key');
   vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 afterEach(() => {
@@ -90,6 +91,18 @@ describe('IP hashing', () => {
     expect(hashSignupIp('2001:db8:abcd:13::1')).not.toBe(a);
     expect(signupIpKey('2001:db8:abcd:12::1')).toBe('2001:db8:abcd:12::/64');
     expect(signupIpKey('::ffff:192.0.2.1')).toBe('192.0.2.1');
+  });
+
+  it('audit S8: IPv4 embedded in IPv6 (mapped hex, compatible, NAT64) maps to that IPv4, not a shared ::/64 bucket', () => {
+    expect(signupIpKey('::ffff:c000:201')).toBe('192.0.2.1');
+    expect(signupIpKey('0:0:0:0:0:ffff:c000:0201')).toBe('192.0.2.1');
+    expect(signupIpKey('::192.0.2.1')).toBe('192.0.2.1');
+    expect(signupIpKey('64:ff9b::198.51.100.7')).toBe('198.51.100.7');
+    expect(signupIpKey('64:ff9b::c633:6407')).toBe('198.51.100.7');
+    expect(hashSignupIp('::ffff:c000:201')).toBe(hashSignupIp('192.0.2.1'));
+    expect(hashSignupIp('::ffff:c000:201')).not.toBe(hashSignupIp('::ffff:c000:202'));
+    expect(signupIpKey('::1')).toBe('0:0:0:0::/64'); // loopback stays IPv6
+    expect(signupIpKey('::ffff:999.0.0.1')).toBeNull();
   });
 
   it('is sha256(salt + ip) — never the raw IP', () => {
@@ -157,16 +170,72 @@ describe('Turnstile outage alert', () => {
 
   it('resolves after an hour without an outage signal (not before); config-missing resolves once env is present', async () => {
     const now = new Date('2026-10-22T12:00:00Z');
-    db.onSelect(signalCounters, [{ at: new Date(now.getTime() - 30 * 60_000) }]);
+    const recent = [{ at: new Date(now.getTime() - 30 * 60_000) }];
+    const old = [{ at: new Date(now.getTime() - 61 * 60_000) }];
+    // Last-signal reads, in order: outage, hostname mismatch, secret rejected.
+    db.onSelect(signalCounters, recent);
+    db.onSelect(signalCounters, recent);
+    db.onSelect(signalCounters, recent);
     await resolveSignupSignals(now);
     expect(h.resolved.map((a) => a.kind)).toEqual(['signup-config-missing']); // flag off → config not required
     h.resolved = [];
-    db.onSelect(signalCounters, [{ at: new Date(now.getTime() - 61 * 60_000) }]);
+    db.onSelect(signalCounters, old);
+    db.onSelect(signalCounters, recent);
+    db.onSelect(signalCounters, old);
     vi.stubEnv('SIGNUP_CONTROLS_ENABLED', 'true');
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('SIGNUP_IP_SALT', '');
     await resolveSignupSignals(now);
-    expect(h.resolved.map((a) => a.kind)).toEqual(['turnstile-outage']); // salt still missing → config alert stays
+    // salt still missing → config alert stays; the secret alert resolves by quiet time, never by "env present" (S3)
+    expect(h.resolved.map((a) => a.kind)).toEqual(['turnstile-outage', 'turnstile-secret-rejected']);
+  });
+
+  it('audit S3: a rejected secret is its own alert, raised at once — not signup-config-missing', async () => {
+    vi.stubEnv('SIGNUP_CONTROLS_ENABLED', 'true');
+    setVerifier({ success: false, 'error-codes': ['invalid-input-secret'] });
+    expect(await startSignup(signupInput())).toEqual({ ok: false, code: 'validation', error: VERIFICATION_FAILED });
+    expect(h.alerts).toEqual([expect.objectContaining({ kind: 'turnstile-secret-rejected', detail: { codes: ['invalid-input-secret'] } })]);
+  });
+
+  it('audit S3: a successful siteverify resolves turnstile-secret-rejected', async () => {
+    vi.stubEnv('SIGNUP_CONTROLS_ENABLED', 'true');
+    setVerifier({ success: true, hostname: 'cadenzpoint.com' });
+    await startSignup(signupInput());
+    expect(h.resolved).toEqual([expect.objectContaining({ kind: 'turnstile-secret-rejected' })]);
+  });
+
+  it('audit S5: a Cloudflare test secret in production is refused (no siteverify) and alerted', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', '1x0000000000000000000000000000000AA');
+    const calls = setVerifier({ success: true, hostname: 'example.com' });
+    expect(await verifyTurnstile('t')).toEqual({ ok: false, kind: 'secret-rejected', codes: ['test-secret-in-production'] });
+    expect(calls).toEqual([]);
+  });
+
+  it('a test secret outside production still skips the hostname check (deviation #10, accepted)', async () => {
+    vi.stubEnv('TURNSTILE_SECRET_KEY', '1x0000000000000000000000000000000AA');
+    setVerifier({ success: true, hostname: 'example.com' });
+    expect(await verifyTurnstile('t')).toEqual({ ok: true });
+  });
+
+  it('audit S2: www.<root> is the apex; other hostnames count toward turnstile-hostname-mismatch at 3/hour', async () => {
+    setVerifier({ success: true, hostname: 'www.cadenzpoint.com' });
+    expect(await verifyTurnstile('t')).toEqual({ ok: true });
+    vi.stubEnv('SIGNUP_CONTROLS_ENABLED', 'true');
+    setVerifier({ success: true, hostname: 'evil.example' });
+    db.onReturning('insert', signalCounters, [{ count: 2 }]);
+    expect(await startSignup(signupInput())).toEqual({ ok: false, code: 'validation', error: VERIFICATION_FAILED });
+    expect(h.alerts).toEqual([]);
+    db.onReturning('insert', signalCounters, [{ count: 3 }]);
+    await startSignup(signupInput());
+    expect(h.alerts).toEqual([expect.objectContaining({ kind: 'turnstile-hostname-mismatch', detail: { mismatchesInLastHour: 3, lastReportedHostname: 'evil.example' } })]);
+  });
+
+  it('audit S2: a missing public site key counts as missing config (production)', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('NEXT_PUBLIC_TURNSTILE_SITE_KEY', '');
+    const { missingSignupConfig } = await import('@/lib/signup/controls');
+    expect(missingSignupConfig()).toEqual(['NEXT_PUBLIC_TURNSTILE_SITE_KEY']);
   });
 });
 
@@ -271,12 +340,21 @@ describe('resendSignupVerification', () => {
     setVerifier({ success: true, hostname: 'cadenzpoint.com' });
     const createdAt = new Date(Date.now() - 2 * 3_600_000);
     db.onSelect(signups, [{ id: 's1', email: 'a@acme.com', slug: 'acme', companyName: 'Acme', createdAt, verifyTokenHash: 'old' }]);
+    db.onReturning('update', signups, [{ id: 's1' }]); // the guarded UPDATE matched the still-pending row
     expect(await resendSignupVerification({ email: 'a@acme.com', slug: 'acme', turnstileToken: 't' })).toEqual({ ok: true, data: { message: RESEND_GENERIC_RESPONSE } });
     const set = db.updates.find((u) => u.table === signups)!.set as { verifyTokenHash: string; expiresAt: Date };
     expect(set.verifyTokenHash).not.toBe('old');
     expect(set.expiresAt.getTime()).toBeLessThanOrEqual(createdAt.getTime() + 24 * 3_600_000);
     expect(h.scheduled).toEqual(['signup-verify']);
     expect(db.updates.some((u) => 'ipHash' in u.set || 'verifiedAt' in u.set)).toBe(false); // not counted toward the IP limit
+  });
+
+  it('audit S7: the row was verified/waitlisted/consumed between the read and the write → generic answer, nothing sent', async () => {
+    setVerifier({ success: true, hostname: 'cadenzpoint.com' });
+    db.onSelect(signups, [{ id: 's1', email: 'a@acme.com', slug: 'acme', companyName: 'Acme', createdAt: new Date(), verifyTokenHash: 'old' }]);
+    db.onReturning('update', signups, []); // the guarded UPDATE matched nothing
+    expect(await resendSignupVerification({ email: 'a@acme.com', slug: 'acme', turnstileToken: 't' })).toEqual({ ok: true, data: { message: RESEND_GENERIC_RESPONSE } });
+    expect(h.scheduled).toEqual([]);
   });
 
   it('flag off → no resend action (generic, nothing happens)', async () => {

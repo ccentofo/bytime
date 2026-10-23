@@ -161,10 +161,18 @@ export async function resendSignupVerification(input: { email: string; slug: str
     const rawToken = crypto.randomBytes(32).toString('hex');
     const cap = dayjs(row.createdAt).add(VERIFY_EXPIRY_HOURS, 'hour');
     const extended = dayjs(now).add(VERIFY_EXPIRY_HOURS, 'hour');
-    await controlDb.update(signups).set({
+    // Audit S7: the UPDATE repeats the "still pending" predicates — a row verified, waitlisted or consumed between the
+    // read and this write is left alone, and nothing is sent.
+    const rotated = await controlDb.update(signups).set({
       verifyTokenHash: crypto.createHash('sha256').update(rawToken).digest('hex'),
       expiresAt: (extended.isBefore(cap) ? extended : cap).toDate(),
-    }).where(eq(signups.id, row.id));
+    }).where(and(
+      eq(signups.id, row.id),
+      isNull(signups.consumedAt),
+      isNull(signups.verifiedAt),
+      isNull(signups.waitlistedAt),
+    )).returning({ id: signups.id });
+    if (rotated.length === 0) return { message: RESEND_GENERIC_RESPONSE };
     scheduleVerifyEmail(email, row.companyName, rawToken);
     return { message: RESEND_GENERIC_RESPONSE };
   });

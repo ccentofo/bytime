@@ -16,6 +16,7 @@ import { runRetentionBackfill, type RetentionDeps } from '../../../scripts/lib/r
 import { MIGRATABLE_TENANT_STATUSES, migrateOneTenant, isTenantDatabaseConfirmedAbsent, NEON_KEY_MISSING_NOTE, type TenantMigrationDeps, type AbsenceCheck } from '../../../scripts/lib/tenant-migration';
 import { targetBanner, isLoopbackUrl, describeDatabaseUrl } from '../../../scripts/lib/target';
 import { provisionWithoutNeonRefusal } from '../../../scripts/lib/provision-guard';
+import { parseProvisionArgs } from '../../../scripts/lib/provision-args';
 
 const ROOT = path.resolve(__dirname, '../../..');
 const ENV_KEYS = ['NEON_API_KEY', 'NEON_HISTORY_RETENTION_SECONDS', 'NEON_REGION_ID'] as const;
@@ -281,6 +282,42 @@ describe('provision:tenant without NEON_API_KEY', () => {
 
   it('the refusal message never includes credentials', () => {
     expect(provisionWithoutNeonRefusal({}, 'postgresql://u:hunter2@ep-x.neon.tech/control')).not.toContain('hunter2');
+  });
+});
+
+describe('provision:tenant Terms record (audit §5)', () => {
+  const base = ['acme', 'Acme Corp', 'founder@acme.com', 'Pat Founder'];
+
+  it('refuses without a Terms record or --no-terms-record', () => {
+    const r = parseProvisionArgs(base);
+    expect(r).toEqual({ error: expect.stringMatching(/^Refusing: a founder-provisioned workspace needs the Terms record/) });
+  });
+
+  it('accepts --terms-version + --terms-accepted-at (ISO with zone) from the signed agreement', () => {
+    expect(parseProvisionArgs([...base, '--terms-version', '2026-10-21-draft-1', '--terms-accepted-at', '2026-10-20T15:30:00Z'])).toEqual({
+      slug: 'acme', name: 'Acme Corp', adminEmail: 'founder@acme.com', adminName: 'Pat Founder',
+      terms: { version: '2026-10-21-draft-1', acceptedAt: new Date('2026-10-20T15:30:00Z') },
+    });
+  });
+
+  it('--no-terms-record is accepted (and audited by the script), but not together with a Terms record', () => {
+    expect(parseProvisionArgs([...base, '--no-terms-record'])).toMatchObject({ terms: 'none' });
+    expect(parseProvisionArgs([...base, '--no-terms-record', '--terms-version', 'v'])).toEqual({ error: expect.stringMatching(/not both/) });
+  });
+
+  it('rejects half a record, a zone-less or invalid date, a future date, and unknown options', () => {
+    expect(parseProvisionArgs([...base, '--terms-version', 'v'])).toHaveProperty('error');
+    expect(parseProvisionArgs([...base, '--terms-version', 'v', '--terms-accepted-at', '2026-10-20 15:30'])).toEqual({ error: expect.stringMatching(/ISO date-time with a time zone/) });
+    expect(parseProvisionArgs([...base, '--terms-version', 'v', '--terms-accepted-at', '2026-02-30T10:00:00Z'])).toHaveProperty('error');
+    expect(parseProvisionArgs([...base, '--terms-version', 'v', '--terms-accepted-at', '2999-01-01T00:00:00Z'])).toEqual({ error: expect.stringMatching(/future/) });
+    expect(parseProvisionArgs([...base, '--terms', 'v'])).toEqual({ error: expect.stringMatching(/Unknown option --terms/) });
+  });
+
+  it('the script passes the Terms record to provisionTenant and audits it', () => {
+    const src = readFileSync(path.join(ROOT, 'scripts/provision-tenant.ts'), 'utf8');
+    expect(src).toMatch(/parseProvisionArgs\(process\.argv\.slice\(2\)\)/);
+    expect(src).toMatch(/termsVersion: terms\.version, termsAcceptedAt: terms\.acceptedAt/);
+    expect(src).toMatch(/recordProvisionTerms\(tenant\.id, terms,/);
   });
 });
 

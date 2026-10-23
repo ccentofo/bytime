@@ -8,7 +8,10 @@ import { isValidSlug } from '@/lib/tenant/slug-rules';
 import { UserFacingError } from '@/lib/errors';
 import { verifyTurnstile } from '@/lib/turnstile';
 import { missingSignupConfig, VERIFICATION_FAILED } from '@/lib/signup/controls';
-import { raiseSignupConfigMissing, recordTurnstileOutageSignal } from '@/lib/signup/signals';
+import {
+  raiseSignupConfigMissing, recordTurnstileHostnameMismatch, recordTurnstileOutageSignal, recordTurnstileSecretRejected,
+  resolveTurnstileSecretRejected,
+} from '@/lib/signup/signals';
 
 /**
  * Is this workspace name free? (feature-plan-launch-blockers.md P4 §2: shared by the public checkSlugAvailable action,
@@ -34,10 +37,16 @@ export async function requireHumanSignup(token: string | undefined, ip: string):
     throw new UserFacingError(VERIFICATION_FAILED);
   }
   const outcome = await verifyTurnstile(token, { remoteip: ip });
-  if (outcome.ok) return;
+  if (outcome.ok) {
+    // A successful siteverify proves the secret works (audit S3).
+    await resolveTurnstileSecretRejected().catch((err) => console.error('[signup] could not resolve turnstile-secret-rejected:', err));
+    return;
+  }
   try {
     if (outcome.kind === 'outage') await recordTurnstileOutageSignal();
-    if (outcome.kind === 'config') await raiseSignupConfigMissing(['TURNSTILE_SECRET_KEY (rejected by Cloudflare)']);
+    if (outcome.kind === 'hostname') await recordTurnstileHostnameMismatch(outcome.codes[0]?.replace(/^hostname:/, '') ?? '');
+    if (outcome.kind === 'secret-rejected') await recordTurnstileSecretRejected(outcome.codes);
+    if (outcome.kind === 'config') await raiseSignupConfigMissing(['TURNSTILE_SECRET_KEY']);
   } catch (err) {
     console.error('[signup] could not record a Turnstile signal:', err);
     Sentry.captureException(err);

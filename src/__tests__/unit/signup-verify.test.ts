@@ -103,7 +103,7 @@ describe('verify POST — flag off (as before)', () => {
     db.onSelect(signups, [signupRow({ ipHash: null })]);
     const res = await post();
     expect(h.provision).toHaveBeenCalledTimes(1);
-    expect(updatedKeys()).toEqual(['consumedAt']);
+    expect(updatedKeys()).toEqual(['consumedAt', 'provisionedAt']); // audit S1: provisioned_at on the success path
     expect(location(res)).toContain('/reset-password?token=set-token');
   });
 });

@@ -6,7 +6,7 @@ vi.mock('@/lib/email/client', async () => (await import('./fakes/fake-resend')).
 import { controlDb } from '@/db/control-plane';
 import {
   AdminCommandError, applyAdminPlan, findForceableNotice, forceNoticeSent, plans, recordFounderExportDisposal,
-  recordFounderNote, resolveAlertById,
+  recordFounderNote, recordProvisionTerms, resolveAlertById,
 } from '@/lib/tenant/admin-commands';
 import { runTenantLifecycle } from '@/lib/tenant/lifecycle-runner';
 import { raiseAlert, recordAudit } from '@/lib/tenant/lifecycle-store';
@@ -209,6 +209,17 @@ describe.skipIf(!cpReady)('tenant:admin commands (§5.6)', () => {
     const notes = (await auditOf(t.id)).filter((e) => e.kind === 'founder-note');
     expect(notes.map((e) => e.detail)).toEqual(['In-place restore to 2026-10-20T14:00Z; erased 3 entries; consent ref CS-12']);
     expect((await getTenantRow(t.id)).lifecycleVersion).toBe(before.lifecycleVersion);
+  });
+
+  it('provision:tenant audits the Terms record — or that there was none (audit §5)', async () => {
+    const withTerms = await makeTenant();
+    await recordProvisionTerms(withTerms.id, { version: '2026-10-21-draft-1', acceptedAt: new Date('2026-10-20T15:30:00Z') }, 'test');
+    expect((await auditOf(withTerms.id)).filter((e) => e.kind === 'terms-recorded').map((e) => e.detail)).toEqual([
+      "Terms 2026-10-21-draft-1 accepted 2026-10-20T15:30:00.000Z (from the customer's signed agreement; provision:tenant)",
+    ]);
+    const without = await makeTenant();
+    await recordProvisionTerms(without.id, 'none', 'test');
+    expect((await auditOf(without.id)).filter((e) => e.kind === 'founder-note').map((e) => e.detail)).toEqual(['provisioned without a Terms record']);
   });
 
   it('the same alert raised twice upserts one row (empty dedup key included)', async () => {
