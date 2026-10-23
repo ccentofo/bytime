@@ -27,8 +27,9 @@ async function recordWindowedSignal(key: string, now: Date): Promise<number> {
     .onConflictDoUpdate({
       target: signalCounters.key,
       set: {
-        windowStart: sql`CASE WHEN ${signalCounters.windowStart} < ${stale} THEN ${now} ELSE ${signalCounters.windowStart} END`,
-        count: sql`CASE WHEN ${signalCounters.windowStart} < ${stale} THEN 1 ELSE ${signalCounters.count} + 1 END`,
+        // Audit R11: ISO strings with a cast — a raw Date in a `sql` fragment crashes drizzle's postgres-js driver.
+        windowStart: sql`CASE WHEN ${signalCounters.windowStart} < ${stale.toISOString()}::timestamptz THEN ${now.toISOString()}::timestamptz ELSE ${signalCounters.windowStart} END`,
+        count: sql`CASE WHEN ${signalCounters.windowStart} < ${stale.toISOString()}::timestamptz THEN 1 ELSE ${signalCounters.count} + 1 END`,
       },
     })
     .returning({ count: signalCounters.count });

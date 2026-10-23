@@ -204,7 +204,9 @@ const NETWORK_LIMIT_MESSAGE = 'Too many workspaces have been created from your n
 async function signupControlsGate(row: SignupRow, email: string): Promise<NextResponse | null> {
   const now = new Date();
   // verified_at is set ONCE — reopening the link never slides the per-IP window.
-  await controlDb.update(signups).set({ verifiedAt: sql`coalesce(${signups.verifiedAt}, ${now})` }).where(eq(signups.id, row.id));
+  // Audit R11: a Date interpolated into a raw `sql` fragment skips the column encoder and crashes drizzle's postgres-js
+  // driver — pass the ISO string with a cast (as notices.ts does).
+  await controlDb.update(signups).set({ verifiedAt: sql`coalesce(${signups.verifiedAt}, ${now.toISOString()}::timestamptz)` }).where(eq(signups.id, row.id));
 
   // Resume: this signer's own half-provisioned tenant → continue (never capped or IP-limited).
   const [own] = await controlDb.select({ id: tenants.id }).from(tenants)
