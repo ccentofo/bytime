@@ -7,12 +7,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
-vi.mock('@/lib/tenant/context', () => {
-  class WorkspaceReadOnlyError extends Error {
-    constructor(message: string) { super(message); this.name = 'WorkspaceReadOnlyError'; }
-  }
-  return { WorkspaceReadOnlyError, getTenantOrThrow: async () => ({ plan: 'trial' }) };
-});
+// The context mock deliberately has NO WorkspaceReadOnlyError: userAction must not depend on that (often mocked) module.
+vi.mock('@/lib/tenant/context', () => ({ getTenantOrThrow: async () => ({ plan: 'trial' }) }));
 vi.mock('@/lib/session', () => {
   class AuthorizationError extends Error {
     constructor(public kind: 'unauthenticated' | 'forbidden', message: string) { super(message); this.name = 'AuthorizationError'; }
@@ -24,8 +20,7 @@ import { redirect } from 'next/navigation';
 import { userAction } from '@/lib/action-result';
 import { runAction, GENERIC_ACTION_ERROR } from '@/lib/run-action';
 import { AuthorizationError } from '@/lib/session';
-import { WorkspaceReadOnlyError } from '@/lib/tenant/context';
-import { ConflictError, UserFacingError } from '@/lib/errors';
+import { ConflictError, UserFacingError, WorkspaceReadOnlyError } from '@/lib/errors';
 import { assertSeatsAvailable } from '@/server/internal/seats';
 import { assertEntryDatesEditable } from '@/server/internal/periods';
 import type { CalendarDate } from '@/lib/calendar-date';

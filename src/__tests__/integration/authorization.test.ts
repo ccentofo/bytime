@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
@@ -48,21 +49,25 @@ type FakeSessionUser = { id: string; role: string; email: string; fullName: stri
 
 const sessionState = vi.hoisted(() => ({
   user: null as null | FakeSessionUser,
+  /** Set below: when a call runs inside `als.run(actor, …)`, auth() returns that actor wherever it awaits. */
+  als: null as null | { getStore(): FakeSessionUser | undefined },
 }));
 
 vi.mock('@/auth', () => ({
-  auth: async () =>
-    sessionState.user
+  auth: async () => {
+    const user = sessionState.als?.getStore() ?? sessionState.user;
+    return user
       ? {
           user: {
-            id: sessionState.user.id,
-            email: sessionState.user.email,
-            fullName: sessionState.user.fullName,
-            role: sessionState.user.role,
-            tenantSlug: sessionState.user.tenantSlug ?? tenantState.requestSlug,
+            id: user.id,
+            email: user.email,
+            fullName: user.fullName,
+            role: user.role,
+            tenantSlug: user.tenantSlug ?? tenantState.requestSlug,
           },
         }
-      : null,
+      : null;
+  },
 }));
 
 vi.mock('@/lib/email/send', () => ({
@@ -84,6 +89,9 @@ import { approvePeriod, rejectPeriod } from '@/server/actions/periods';
 import { getTimesheetForReview, saveTimesheetBatch } from '@/server/actions/timesheet';
 import { getTimesheetReportData } from '@/server/actions/reports';
 import { getAuditEntries } from '@/server/actions/audit';
+
+const actorStore = new AsyncLocalStorage<FakeSessionUser>();
+sessionState.als = actorStore;
 
 function actingAs(user: FakeSessionUser | null) {
   sessionState.user = user;
@@ -244,15 +252,14 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     // (b) With the fresh check in front, the last-admin count only matters when two admins demote
     // each other at the same moment. Exactly one may win; an active admin must always remain.
     const otherAdmin = await createTestUser({ role: 'admin' });
-    // auth() reads the session synchronously when each call starts, so each call gets its own actor.
-    actingAs(asFake(soleAdmin));
-    const first = updateUser(otherAdmin.id, { role: 'employee' });
-    actingAs(asFake(otherAdmin));
-    const second = updateUser(soleAdmin.id, { role: 'employee' });
+    // Each call carries its own actor through every await (AsyncLocalStorage) — never a shared, mutable session.
+    const first = actorStore.run(asFake(soleAdmin), () => updateUser(otherAdmin.id, { role: 'employee' }));
+    const second = actorStore.run(asFake(otherAdmin), () => updateUser(soleAdmin.id, { role: 'employee' }));
     const results = await Promise.all([first, second]); // ActionResults; an unexpected throw fails the test
 
-    expect(results.filter((r) => r.ok)).toHaveLength(1);
-    expect(results.find((r) => !r.ok)).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/last active admin|access has changed/i) });
+    // Printed on failure so a refusal for an unexpected reason is visible.
+    expect(results.filter((r) => r.ok), JSON.stringify(results)).toHaveLength(1);
+    expect(results.find((r) => !r.ok), JSON.stringify(results)).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/last active admin|access has changed/i) });
     expect(await activeAdminCount()).toBe(1);
   });
 

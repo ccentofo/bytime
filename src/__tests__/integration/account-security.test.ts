@@ -71,10 +71,10 @@ describe('account security (P3)', () => {
       totpRecoveryCodes: encrypt(JSON.stringify([hashRecoveryCode(CODE), hashRecoveryCode('ZZZZ9999')])),
     });
     const attempt = () => authorizeCredentials({ email: user.email, password: PASSWORD, mfaCode: CODE })
-      .then((u) => (u ? 'ok' : 'null'), () => 'rejected');
+      .then((u) => (u ? 'ok' : 'null'), (e: { code?: string; message?: string }) => `rejected:${e?.code ?? e?.message}`);
     const results = await Promise.all([attempt(), attempt()]);
-    expect(results.filter((r) => r === 'ok')).toHaveLength(1);
-    expect(results.filter((r) => r === 'rejected')).toHaveLength(1);
+    // The loser must be refused as an invalid MFA code (the code was consumed by the winner) — never signed in.
+    expect([...results].sort(), JSON.stringify(results)).toEqual(['ok', 'rejected:mfa_invalid']);
   });
 
   it('changePassword: the 6th attempt after 5 bad passwords is refused even with the right password', async () => {

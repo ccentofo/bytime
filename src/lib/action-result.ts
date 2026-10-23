@@ -1,7 +1,6 @@
 import { unstable_rethrow } from 'next/navigation';
 import { AuthorizationError } from '@/lib/session';
-import { WorkspaceReadOnlyError } from '@/lib/tenant/context';
-import { ConflictError, UserFacingError } from '@/lib/errors';
+import { ConflictError, UserFacingError, WorkspaceReadOnlyError } from '@/lib/errors';
 
 /**
  * Server-action result contract (feature-plan-launch-blockers.md P4). Every exported mutation returns an

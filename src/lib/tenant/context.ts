@@ -23,13 +23,9 @@ export async function getTenantSlug(): Promise<string> {
   return fromHost;
 }
 
-/** Thrown by getTenantForWrite() when the tenant's access mode isn't `full`. */
-export class WorkspaceReadOnlyError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'WorkspaceReadOnlyError';
-  }
-}
+/** Thrown by getTenantForWrite() when the tenant's access mode isn't `full` (defined in @/lib/errors). */
+import { WorkspaceReadOnlyError } from '@/lib/errors';
+export { WorkspaceReadOnlyError };
 
 async function resolveTenant(slug: string): Promise<TenantRecord> {
   if (!slug) throw new Error('No tenant in request context.');

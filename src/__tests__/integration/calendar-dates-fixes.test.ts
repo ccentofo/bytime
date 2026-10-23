@@ -26,10 +26,13 @@ vi.mock('@/db', async (importOriginal) => ({
   // Write actions obtain their client through the write gate (feature-plan-terms-compliance-fixes.md §5.1).
   getDbForWrite: async () => getTestDb(),
   getDbForAuth: async () => getTestDb(),
+  // The v1 API validates the key against getDbForUrl(tenant.dbUrl) (feature-plan-launch-blockers.md P4 §6).
+  getDbForUrl: () => getTestDb(),
 }));
 
 vi.mock('@/lib/tenant/context', () => ({
   getTenantSlug: async () => 'test-tenant',
+  getTenantState: async () => ({ kind: 'full', tenant: { slug: 'test-tenant', dbUrl: 'test-db' } }),
 }));
 
 type FakeSessionUser = { id: string; role: string; email: string; fullName: string };
