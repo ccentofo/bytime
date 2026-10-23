@@ -7,7 +7,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const ctx = vi.hoisted(() => ({ slug: 'acme' as string, throwMismatch: false }));
 vi.mock('@/lib/tenant/context', () => ({
-  WorkspaceReadOnlyError: class WorkspaceReadOnlyError extends Error {},
   getTenantSlug: async () => {
     if (ctx.throwMismatch) throw new Error('Tenant context mismatch — possible header tampering.');
     return ctx.slug;
@@ -94,14 +93,17 @@ describe('requestPasswordReset', () => {
 });
 
 describe('verifyResetToken', () => {
-  it('on the apex returns { valid: false } instead of throwing', async () => {
+  // Audit A9: the pre-check must answer before any database is resolved (a fake db would otherwise hide its removal).
+  it('on the apex returns { valid: false } instead of throwing — without touching the database', async () => {
     ctx.slug = '';
     await expect(verifyResetToken('jane@acme.com', 'tok')).resolves.toEqual({ valid: false });
+    expect(dbAccess.getDbForAuth).not.toHaveBeenCalled();
   });
 
-  it('a host/header mismatch returns { valid: false } instead of throwing', async () => {
+  it('a host/header mismatch returns { valid: false } instead of throwing — without touching the database', async () => {
     ctx.throwMismatch = true;
     await expect(verifyResetToken('jane@acme.com', 'tok')).resolves.toEqual({ valid: false });
+    expect(dbAccess.getDbForAuth).not.toHaveBeenCalled();
   });
 
   it('uses getDbForAuth, so a billing_only workspace’s admin can verify (getDb would refuse)', async () => {

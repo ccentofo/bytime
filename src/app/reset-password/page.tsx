@@ -120,7 +120,7 @@ function ResetPasswordForm() {
               </Alert>
             )}
             <Text size="sm" c="dimmed">
-              Resetting password for <strong>{decodeURIComponent(email)}</strong>
+              Resetting password for <strong>{email}</strong>
             </Text>
             <PasswordInput
               label="New Password"

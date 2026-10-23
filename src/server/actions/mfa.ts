@@ -26,12 +26,12 @@ import { userAction, type ActionResult } from '@/lib/action-result';
  * The secret is NOT saved until the user verifies a code.
  * Returns the secret (to be stored temporarily in session/state) and the QR URI.
  */
-export async function initMFASetup(): Promise<{
-  secret: string;
-  uri: string;
-}> {
-  const actor = await requireSession();
-  return generateTOTPSecret(actor.email);
+export async function initMFASetup(): Promise<ActionResult<{ secret: string; uri: string }>> {
+  // Launch-blockers audit A12: a result, so a refusal (e.g. signed out) reaches the page instead of a redacted digest.
+  return userAction(async () => {
+    const actor = await requireSession();
+    return generateTOTPSecret(actor.email);
+  });
 }
 
 /**

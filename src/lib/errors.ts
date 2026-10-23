@@ -19,7 +19,6 @@ export class UserFacingError extends Error {
   }
 }
 
-/** Someone else changed the same thing first (concurrent edit, stale revision, double decision). */
 /**
  * Thrown by the write gate (getTenantForWrite / getDbForWrite) when the workspace's access mode isn't `full`.
  * Lives here — not in src/lib/tenant/context.ts, which re-exports it — so `userAction`'s instanceof check never
@@ -32,6 +31,7 @@ export class WorkspaceReadOnlyError extends Error {
   }
 }
 
+/** Someone else changed the same thing first (concurrent edit, stale revision, double decision). */
 export class ConflictError extends Error {
   constructor(message: string) {
     super(message);

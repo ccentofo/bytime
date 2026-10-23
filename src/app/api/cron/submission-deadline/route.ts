@@ -4,7 +4,7 @@ import { controlDb } from '@/db/control-plane';
 import { tenants } from '@/db/control-plane/schema';
 import { decrypt } from '@/lib/encryption';
 import { users, timesheetPeriods, notificationPreferences, workspaceSettings } from '@/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, gt } from 'drizzle-orm';
 import { sendSubmissionDeadlineEmail } from '@/lib/email/send';
 import { createSendThrottle } from '@/lib/email/rate';
 import { tenantBaseUrl } from '@/lib/tenant/host';
@@ -50,7 +50,7 @@ async function sendReminders(): Promise<Record<string, unknown>> {
   const sweep = await sweepTenants({
     name: 'submission-deadline',
     tenants: activeTenants,
-    processTenant: async (tenant, { outOfTime }) => {
+    processTenant: async (tenant, { outOfTime, resumeAfter }) => {
       // T7: dbUrlEncrypted is only null for a tombstoned ('deleted') tenant; this query is
       // filtered to status='active', which a deleted tenant never has.
       const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted!));
@@ -78,9 +78,16 @@ async function sendReminders(): Promise<Record<string, unknown>> {
       const allEmployees = await db
         .select({ id: users.id, fullName: users.fullName, email: users.email })
         .from(users)
-        .where(and(eq(users.isActive, true), eq(users.role, 'employee')));
+        // Audit A10: id order, resuming after the last employee a stopped run finished in this tenant.
+        .where(and(eq(users.isActive, true), eq(users.role, 'employee'), resumeAfter ? gt(users.id, resumeAfter) : undefined))
+        .orderBy(users.id);
 
+      let lastDone: string | null = resumeAfter;
       for (const emp of allEmployees) {
+        // Audit A10: the budget is checked before EVERY employee (a big tenant with nothing to send still costs time);
+        // past the check, this employee is handled completely.
+        if (outOfTime()) return { stoppedAfter: lastDone };
+        lastDone = emp.id;
         if (isSeedRecipient(emp.email)) { skippedSeedRecipients++; continue; } // P6 §4: demo domains we don't own
 
         const periods = await db
@@ -106,7 +113,6 @@ async function sendReminders(): Promise<Record<string, unknown>> {
         const enabled = prefs.length === 0 ? true : prefs[0].enabled;
 
         if (enabled) {
-          if (outOfTime()) return 'stopped';
           await sendThrottle();
           const outcome = await sendSubmissionDeadlineEmail({
             employeeEmail: emp.email,
@@ -134,5 +140,6 @@ async function sendReminders(): Promise<Record<string, unknown>> {
     failedTenants: sweep.failedTenants,
     failedTenantCount: sweep.failedTenants.length,
     cursor: sweep.cursor, // P6 §4: the next run starts after this slug
+    resume: sweep.resume, // audit A10: the tenant a stopped run resumes mid-way, after this employee
   };
 }

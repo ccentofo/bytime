@@ -1,6 +1,7 @@
 import { unstable_rethrow } from 'next/navigation';
 import { AuthorizationError } from '@/lib/session';
 import { ConflictError, UserFacingError, WorkspaceReadOnlyError } from '@/lib/errors';
+import { duplicateEntityMessage } from '@/lib/db-errors';
 
 /**
  * Server-action result contract (feature-plan-launch-blockers.md P4). Every exported mutation returns an
@@ -23,7 +24,8 @@ export type ActionResult<T> =
  *
  * - redirect()/notFound() and other Next control flow are rethrown first (unstable_rethrow).
  * - AuthorizationError → unauthenticated/forbidden; WorkspaceReadOnlyError → read_only;
- *   ConflictError → conflict; UserFacingError → its own code.
+ *   ConflictError → conflict; UserFacingError → its own code; a known duplicate (unique email, contract number,
+ *   charge code… — DUPLICATE_ENTITY_MESSAGES in @/lib/db-errors) → conflict with a specific message.
  * - Anything else is a bug: rethrown unchanged (reported to Sentry by instrumentation's onRequestError; the
  *   browser gets Next's generic redacted error, never SQL text).
  */
@@ -36,6 +38,9 @@ export async function userAction<T>(fn: () => Promise<T>): Promise<ActionResult<
     if (err instanceof WorkspaceReadOnlyError) return { ok: false, code: 'read_only', error: err.message };
     if (err instanceof ConflictError) return { ok: false, code: 'conflict', error: err.message };
     if (err instanceof UserFacingError) return { ok: false, code: err.code, error: err.message };
+    // Audit A6: a known duplicate (unique email, contract number, charge code, …) → a specific, safe message.
+    const duplicate = duplicateEntityMessage(err);
+    if (duplicate) return { ok: false, code: 'conflict', error: duplicate };
     throw err;
   }
 }

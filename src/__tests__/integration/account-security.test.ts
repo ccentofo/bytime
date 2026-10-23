@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
@@ -7,8 +7,10 @@ import { hashRecoveryCode } from '@/lib/totp';
 import { getTestDb, createTestUser, cleanupTestData, expectFailure } from './helpers';
 
 /**
- * feature-plan-launch-blockers.md P3 / §9 "Account security" (database scenarios). getDbForAuth returns the test DB, so
- * login_attempts counting and row locks run for real.
+ * feature-plan-launch-blockers.md P3 / §9 "Account security" (database scenarios). Every getDbForAuth call gets its OWN
+ * one-connection client (as dcaa-concurrency.test.ts does for writes), so concurrent sign-ins run concurrent
+ * transactions and the recovery-code `FOR UPDATE` (auth.ts) is genuinely exercised (launch-blockers audit A2). The
+ * shared test client is `max: 1`, which would serialise both sign-ins and hide a missing lock.
  *
  * vitest 2.1.9 quirk (see dcaa-concurrency.test.ts): when two calls dynamically import() the same MOCKED module at the
  * same moment, the overlapping one receives the REAL module. The real getDbForAuth lazily imports the tenant context
@@ -18,9 +20,19 @@ import { getTestDb, createTestUser, cleanupTestData, expectFailure } from './hel
 
 const TEST_DB_URL = process.env.TEST_DATABASE_URL ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime_test';
 
+const authClients = vi.hoisted(() => [] as Array<{ end: () => Promise<void> }>);
 vi.mock('@/db', async (importOriginal) => {
-  const { getTestDb } = await import('./helpers');
-  return { ...(await importOriginal<typeof import('@/db')>()), getDbForAuth: async () => getTestDb() };
+  const postgres = (await import('postgres')).default;
+  const { drizzle } = await import('drizzle-orm/postgres-js');
+  const schemaModule = await import('@/db/schema');
+  return {
+    ...(await importOriginal<typeof import('@/db')>()),
+    getDbForAuth: async () => {
+      const client = postgres(process.env.TEST_DATABASE_URL ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime_test', { max: 1 });
+      authClients.push(client);
+      return drizzle(client, { schema: schemaModule });
+    },
+  };
 });
 
 vi.mock('@/lib/tenant/context', () => ({ getTenantSlug: async () => 'test-tenant' }));
@@ -60,6 +72,7 @@ async function userWithPassword(overrides: Partial<typeof schema.users.$inferIns
 describe('account security (P3)', () => {
   beforeEach(async () => { await cleanupTestData(); });
   afterEach(async () => { sessionState.user = null; await cleanupTestData(); });
+  afterAll(async () => { await Promise.all(authClients.splice(0).map((c) => c.end())); });
 
   it('MFA setup without the current password is refused; MFA stays off', async () => {
     const user = await userWithPassword();
@@ -73,18 +86,24 @@ describe('account security (P3)', () => {
     await expectFailure(completeMFASetup({ pendingSecret: 'JBSWY3DPEHPK3PXP', code: '000000', currentPassword: 'x' }), 'validation', /^Set a password first\.$/);
   });
 
-  it('two concurrent sign-ins with the same recovery code: exactly one succeeds', async () => {
-    const CODE = 'ABCD2345';
-    const user = await userWithPassword({
-      totpEnabled: true,
-      totpSecret: null,
-      totpRecoveryCodes: encrypt(JSON.stringify([hashRecoveryCode(CODE), hashRecoveryCode('ZZZZ9999')])),
-    });
-    const attempt = () => authorizeCredentials({ email: user.email, password: PASSWORD, mfaCode: CODE })
-      .then((u) => (u ? 'ok' : 'null'), (e: { code?: string; message?: string }) => `rejected:${e?.code ?? e?.message}`);
-    const results = await Promise.all([attempt(), attempt()]);
-    // The loser must be refused as an invalid MFA code (the code was consumed by the winner) — never signed in.
-    expect([...results].sort(), JSON.stringify(results)).toEqual(['ok', 'rejected:mfa_invalid']);
+  it('two concurrent sign-ins with the same recovery code: exactly one succeeds (every round)', async () => {
+    // Several rounds, each a fresh user and two truly concurrent sign-ins on separate connections: without the
+    // FOR UPDATE both transactions read the code before either removes it, and some round lets both in.
+    for (let round = 0; round < 5; round++) {
+      const CODE = 'ABCD2345';
+      const user = await userWithPassword({
+        totpEnabled: true,
+        totpSecret: null,
+        totpRecoveryCodes: encrypt(JSON.stringify([hashRecoveryCode(CODE), hashRecoveryCode('ZZZZ9999')])),
+      });
+      const attempt = () => authorizeCredentials({ email: user.email, password: PASSWORD, mfaCode: CODE })
+        .then((u) => (u ? 'ok' : 'null'), (e: { code?: string; message?: string }) => `rejected:${e?.code ?? e?.message}`);
+      const results = await Promise.all([attempt(), attempt()]);
+      // The loser must be refused as an invalid MFA code (the code was consumed by the winner) — never signed in.
+      expect([...results].sort(), `round ${round}: ${JSON.stringify(results)}`).toEqual(['ok', 'rejected:mfa_invalid']);
+      const [row] = await getTestDb().select({ codes: schema.users.totpRecoveryCodes }).from(schema.users).where(eq(schema.users.id, user.id));
+      expect(row.codes).not.toBeNull();
+    }
   });
 
   it('changePassword: the 6th attempt after 5 bad passwords is refused even with the right password', async () => {

@@ -41,14 +41,14 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
   async function handleStartSetup() {
     setError('');
     startTransition(async () => {
-      try {
-        const result = await initMFASetup();
-        setPendingSecret(result.secret);
-        setQrUri(result.uri);
-        setStep('setup');
-      } catch (err) {
-        setError(String(err));
+      const result = await runAction(initMFASetup(), { silent: true });
+      if (!result.ok) {
+        setError(result.error);
+        return;
       }
+      setPendingSecret(result.data.secret);
+      setQrUri(result.data.uri);
+      setStep('setup');
     });
   }
 

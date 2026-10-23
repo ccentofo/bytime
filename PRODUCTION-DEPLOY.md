@@ -456,11 +456,12 @@ Add these **environment secrets**:
 | `CONTROL_PLANE_DATABASE_URL` | staging pooled URL |
 | `ENCRYPTION_KEY` | staging key |
 | `AUTH_SECRET` | staging secret |
+| `NEON_API_KEY` | from 5.5 — the migrate steps use it to confirm a half-deleted (`deleting`) tenant's Neon project is gone; without it every deploy FAILS while such a tenant exists ("NEON_API_KEY missing — cannot confirm deletion") |
 | `VERCEL_TOKEN` | from 6.5 |
 | `VERCEL_ORG_ID` | from 6.5 |
 | `VERCEL_PROJECT_ID` | **staging** project ID |
 
-**11.2** **New environment** → `production`. Add the same six secrets with **production** values
+**11.2** **New environment** → `production`. Add the same seven secrets with **production** values
 (and the **production** `VERCEL_PROJECT_ID`). Then on this environment:
 - **Required reviewers:** add yourself (every production deploy waits for your approval).
 - **Deployment branches:** "Selected branches" → `main` only.
@@ -469,7 +470,7 @@ Add these **environment secrets**:
 Secrets and variables → Actions → Repository secrets**). If they do, delete them, or the two
 environments could read the same values.
 
-✅ **Check:** two environments, six secrets each, production gated to `main` + your approval.
+✅ **Check:** two environments, seven secrets each, production gated to `main` + your approval.
 
 ---
 

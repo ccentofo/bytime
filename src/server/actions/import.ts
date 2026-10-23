@@ -7,7 +7,7 @@ import { requireAdminFresh } from '@/lib/session';
 import { assertSeatsAvailable } from '@/server/internal/seats';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { parseCalendarDate } from '@/lib/calendar-date';
+import { importRowMessage, parseImportDate } from '@/server/internal/import-errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
 
 // ---------------------------------------------------------------------------
@@ -54,7 +54,6 @@ export async function bulkImportEmployees(rows: EmployeeImportRow[]): Promise<Ac
     const result: ImportResult = { created: 0, skipped: 0, errors: [], generatedPasswords: [] };
 
     for (let i = 0; i < rows.length; i++) {
-    const db = await getDbForWrite();
       const row = rows[i];
       try {
         const email = row.email.toLowerCase().trim();
@@ -86,7 +85,7 @@ export async function bulkImportEmployees(rows: EmployeeImportRow[]): Promise<Ac
         result.created++;
         result.generatedPasswords!.push({ email, password });
       } catch (error) {
-        result.errors.push({ row: i + 1, message: String(error) });
+        result.errors.push({ row: i + 1, message: importRowMessage(error, 'That employee already exists.') });
       }
     }
 
@@ -114,8 +113,8 @@ export async function bulkImportContracts(rows: ContractImportRow[]): Promise<Ac
 
     const result: ImportResult = { created: 0, skipped: 0, errors: [] };
 
-    for (let i = 0; i < rows.length; i++) {
     const db = await getDbForWrite();
+    for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       try {
         const existing = await db.select({ id: contracts.id }).from(contracts)
@@ -134,14 +133,14 @@ export async function bulkImportContracts(rows: ContractImportRow[]): Promise<Ac
           contractType: row.type?.toLowerCase() === 'sub' ? 'sub' : 'prime',
           fundedValue: row.fundedValue?.trim() || undefined,
           ceilingValue: row.ceilingValue?.trim() || undefined,
-          startDate: trimmedStart ? parseCalendarDate(trimmedStart) : undefined,
-          endDate: trimmedEnd ? parseCalendarDate(trimmedEnd) : undefined,
+          startDate: trimmedStart ? parseImportDate(trimmedStart, 'Start date') : undefined,
+          endDate: trimmedEnd ? parseImportDate(trimmedEnd, 'End date') : undefined,
           status: 'active',
         });
 
         result.created++;
       } catch (error) {
-        result.errors.push({ row: i + 1, message: String(error) });
+        result.errors.push({ row: i + 1, message: importRowMessage(error, 'That contract already exists.') });
       }
     }
 
@@ -166,8 +165,8 @@ export async function bulkImportClins(rows: ClinImportRow[]): Promise<ActionResu
 
     const result: ImportResult = { created: 0, skipped: 0, errors: [] };
 
-    for (let i = 0; i < rows.length; i++) {
     const db = await getDbForWrite();
+    for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       try {
         // Look up contract by number
@@ -189,7 +188,7 @@ export async function bulkImportClins(rows: ClinImportRow[]): Promise<ActionResu
 
         result.created++;
       } catch (error) {
-        result.errors.push({ row: i + 1, message: String(error) });
+        result.errors.push({ row: i + 1, message: importRowMessage(error, 'That CLIN already exists under this contract.') });
       }
     }
 
@@ -216,8 +215,8 @@ export async function bulkImportLaborCategories(rows: LcatImportRow[]): Promise<
 
     const result: ImportResult = { created: 0, skipped: 0, errors: [] };
 
-    for (let i = 0; i < rows.length; i++) {
     const db = await getDbForWrite();
+    for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       try {
         // Look up contract
@@ -247,7 +246,7 @@ export async function bulkImportLaborCategories(rows: LcatImportRow[]): Promise<
 
         result.created++;
       } catch (error) {
-        result.errors.push({ row: i + 1, message: String(error) });
+        result.errors.push({ row: i + 1, message: importRowMessage(error, 'That labor category already exists on this CLIN.') });
       }
     }
 
@@ -271,8 +270,8 @@ export async function bulkImportAssignments(rows: AssignmentImportRow[]): Promis
 
     const result: ImportResult = { created: 0, skipped: 0, errors: [] };
 
-    for (let i = 0; i < rows.length; i++) {
     const db = await getDbForWrite();
+    for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       try {
         // Look up user
@@ -314,7 +313,7 @@ export async function bulkImportAssignments(rows: AssignmentImportRow[]): Promis
 
         result.created++;
       } catch (error) {
-        result.errors.push({ row: i + 1, message: String(error) });
+        result.errors.push({ row: i + 1, message: importRowMessage(error, 'That assignment already exists.') });
       }
     }
 

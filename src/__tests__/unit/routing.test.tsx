@@ -14,6 +14,7 @@ class RedirectSignal extends Error {
 vi.mock('server-only', () => ({}));
 vi.mock('next/navigation', () => ({
   redirect: (url: string) => { throw new RedirectSignal(url); },
+  unstable_rethrow: (err: unknown) => { if (err instanceof RedirectSignal) throw err; },
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
 
@@ -129,26 +130,26 @@ describe('/signup', () => {
 });
 
 describe('goToWorkspace (apex finder action)', () => {
-  it('redirects to the slug’s own host for /login and /forgot-password', async () => {
-    expect(await redirectOf(goToWorkspace('acme', '/login'))).toBe(`${tenantBaseUrl('acme')}/login`);
-    expect(await redirectOf(goToWorkspace('  ACME ', '/forgot-password'))).toBe(`${tenantBaseUrl('acme')}/forgot-password`);
+  it('returns the slug’s own host for /login and /forgot-password (no server redirect — audit A4)', async () => {
+    expect(await goToWorkspace('acme', '/login')).toEqual({ ok: true, data: { url: `${tenantBaseUrl('acme')}/login` } });
+    expect(await goToWorkspace('  ACME ', '/forgot-password')).toEqual({ ok: true, data: { url: `${tenantBaseUrl('acme')}/forgot-password` } });
   });
 
   it.each(['/timesheet', '//evil.com', 'https://evil.com', '/login@evil.com', '', '/login/../admin'])(
-    'refuses target %j (open-redirect guard) without redirecting',
+    'refuses target %j (open-redirect guard) with the same refusal',
     async (target) => {
-      await expect(goToWorkspace('acme', target)).resolves.toEqual({ error: 'Invalid request.' });
+      await expect(goToWorkspace('acme', target)).resolves.toEqual({ ok: false, code: 'validation', error: 'Invalid request.' });
     },
   );
 
-  it('refuses an invalid slug with a message, without a lookup or redirect', async () => {
+  it('refuses an invalid slug with a message, without a lookup', async () => {
     for (const bad of ['acme.root@evil.com', 'a_b', '-acme', 'www', '']) {
       const result = await goToWorkspace(bad, '/login');
-      expect(result.error).toMatch(/workspace name/i);
+      expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/workspace name/i) });
     }
   });
 
   it('an unknown workspace returns "No workspace with that name"', async () => {
-    await expect(goToWorkspace('nobody', '/login')).resolves.toEqual({ error: 'No workspace with that name.' });
+    await expect(goToWorkspace('nobody', '/login')).resolves.toEqual({ ok: false, code: 'not_found', error: 'No workspace with that name.' });
   });
 });

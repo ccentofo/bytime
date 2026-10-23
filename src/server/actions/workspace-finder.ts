@@ -1,11 +1,12 @@
 'use server';
 
 import { headers } from 'next/headers';
-import { redirect } from 'next/navigation';
 import { getTenantBySlug } from '@/lib/tenant/registry';
 import { isValidSlug } from '@/lib/tenant/slug-rules';
 import { tenantBaseUrl } from '@/lib/tenant/host';
 import { checkSlugLookupRateLimit, getClientIpFromHeaders } from '@/lib/rate-limit';
+import { UserFacingError } from '@/lib/errors';
+import { userAction, type ActionResult } from '@/lib/action-result';
 
 /**
  * Apex "Find your workspace" (feature-plan-launch-blockers.md P2): sends a visitor who landed on the apex
@@ -17,26 +18,31 @@ import { checkSlugLookupRateLimit, getClientIpFromHeaders } from '@/lib/rate-lim
  *
  * Disclosure: "No workspace with that name" reveals whether a slug exists — no more than the public
  * signup availability check already does, and the two share one rate-limit budget (checkSlugLookupRateLimit).
+ *
+ * Returns the URL instead of redirect()ing (launch-blockers audit A4): Next rejects the client's promise on a
+ * cross-origin server-action redirect before hard-navigating, so the form showed an error on every success. The
+ * client navigates with window.location.assign(url).
  */
-export async function goToWorkspace(slug: string, target: string): Promise<{ error: string }> {
-  if (target !== '/login' && target !== '/forgot-password') {
-    return { error: 'Invalid request.' };
-  }
-  const normalized = typeof slug === 'string' ? slug.trim().toLowerCase() : '';
-  if (!isValidSlug(normalized)) {
-    return { error: 'Enter your workspace name: letters, numbers and hyphens (for example, acme).' };
-  }
+export async function goToWorkspace(slug: string, target: string): Promise<ActionResult<{ url: string }>> {
+  return userAction(async () => {
+    if (target !== '/login' && target !== '/forgot-password') {
+      throw new UserFacingError('Invalid request.');
+    }
+    const normalized = typeof slug === 'string' ? slug.trim().toLowerCase() : '';
+    if (!isValidSlug(normalized)) {
+      throw new UserFacingError('Enter your workspace name: letters, numbers and hyphens (for example, acme).');
+    }
 
-  const limit = checkSlugLookupRateLimit(getClientIpFromHeaders(await headers()));
-  if (!limit.allowed) {
-    return { error: 'Too many attempts. Please wait a minute and try again.' };
-  }
+    const limit = checkSlugLookupRateLimit(getClientIpFromHeaders(await headers()));
+    if (!limit.allowed) {
+      throw new UserFacingError('Too many attempts. Please wait a minute and try again.');
+    }
 
-  const tenant = await getTenantBySlug(normalized);
-  if (!tenant) {
-    return { error: 'No workspace with that name.' };
-  }
+    const tenant = await getTenantBySlug(normalized);
+    if (!tenant) {
+      throw new UserFacingError('No workspace with that name.', 'not_found');
+    }
 
-  // Outside any try/catch: redirect() works by throwing.
-  redirect(`${tenantBaseUrl(normalized)}${target}`);
+    return { url: `${tenantBaseUrl(normalized)}${target}` };
+  });
 }

@@ -5,10 +5,12 @@ import { Center, Stack, Paper, Title, Text, TextInput, Button, Alert, Anchor } f
 import { IconAlertCircle } from '@tabler/icons-react';
 import { Logo } from '@/components/brand/Logo';
 import { goToWorkspace } from '@/server/actions/workspace-finder';
+import { runAction } from '@/lib/run-action';
 
 /**
  * Apex "Find your workspace" form (feature-plan-launch-blockers.md P2). Shown instead of the sign-in /
- * forgot-password form on the apex, where no workspace is in context. The redirect itself is server-side.
+ * forgot-password form on the apex, where no workspace is in context. The action validates and builds the
+ * workspace URL server-side; the browser navigates to it (a cross-origin server-action redirect would reject first).
  */
 export function WorkspaceFinder({ target, rootDomain }: { target: '/login' | '/forgot-password'; rootDomain: string }) {
   const [slug, setSlug] = useState('');
@@ -19,14 +21,13 @@ export function WorkspaceFinder({ target, rootDomain }: { target: '/login' | '/f
     e.preventDefault();
     setError('');
     setLoading(true);
-    try {
-      const result = await goToWorkspace(slug, target);
-      if (result?.error) setError(result.error);
-    } catch {
-      setError('Something went wrong. Please try again.');
-    } finally {
-      setLoading(false);
+    const result = await runAction(goToWorkspace(slug, target), { silent: true });
+    if (result.ok) {
+      window.location.assign(result.data.url); // stays "loading" while the browser navigates away
+      return;
     }
+    setError(result.error);
+    setLoading(false);
   }
 
   return (

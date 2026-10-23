@@ -78,9 +78,22 @@ export async function readCronRuns(): Promise<CronRunRow[]> {
   return controlDb.select().from(cronRuns);
 }
 
-/** The reminder crons' fair-rotation cursor: the last fully processed tenant slug of the previous run. */
-export async function readCronCursor(name: CronName): Promise<string | null> {
-  const [row] = await controlDb.select({ cursor: sql<string | null>`${cronRuns.lastSummary} ->> 'cursor'` })
+/** Where a stopped reminder run left off inside one tenant: resume after this employee id (null = from the start). */
+export interface CronResume {
+  slug: string;
+  after: string | null;
+}
+
+/**
+ * The reminder crons' rotation state from the previous run's summary: `cursor` (the last fully processed tenant slug)
+ * and `resume` (launch-blockers audit A10: the tenant a run stopped inside, and the last employee it finished).
+ */
+export async function readCronState(name: CronName): Promise<{ cursor: string | null; resume: CronResume | null }> {
+  const [row] = await controlDb.select({ summary: cronRuns.lastSummary })
     .from(cronRuns).where(sql`${cronRuns.name} = ${name}`).limit(1);
-  return row?.cursor ?? null;
+  const summary = (row?.summary ?? {}) as { cursor?: unknown; resume?: unknown };
+  const cursor = typeof summary.cursor === 'string' ? summary.cursor : null;
+  const r = summary.resume as { slug?: unknown; after?: unknown } | null | undefined;
+  const resume = r && typeof r.slug === 'string' ? { slug: r.slug, after: typeof r.after === 'string' ? r.after : null } : null;
+  return { cursor, resume };
 }

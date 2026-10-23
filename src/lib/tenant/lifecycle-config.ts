@@ -58,16 +58,21 @@ export const BACKUP_RETENTION_DAYS = 30;
  */
 export const TENANT_DB_HISTORY_RETENTION_SECONDS = 604_800;
 
+/** Bounds for the NEON_HISTORY_RETENTION_SECONDS override (launch-blockers audit A12): at least an hour of history, never
+ * more than the LB-D1 policy. 0 would silently turn point-in-time restore off. */
+export const MIN_HISTORY_RETENTION_SECONDS = 3_600;
+export const MAX_HISTORY_RETENTION_SECONDS = TENANT_DB_HISTORY_RETENTION_SECONDS;
+
 /**
  * The retention actually requested: `NEON_HISTORY_RETENTION_SECONDS` overrides the policy value (a Free-plan staging
- * org rejects anything above 21600). A set-but-invalid value throws rather than silently falling back.
+ * org rejects anything above 21600). A set-but-invalid or out-of-range value throws rather than silently falling back.
  */
 export function tenantDbHistoryRetentionSeconds(): number {
   const raw = process.env.NEON_HISTORY_RETENTION_SECONDS?.trim();
   if (!raw) return TENANT_DB_HISTORY_RETENTION_SECONDS;
   const n = Number(raw);
-  if (!Number.isInteger(n) || n < 0) {
-    throw new Error(`NEON_HISTORY_RETENTION_SECONDS must be a non-negative integer number of seconds (got "${raw}").`);
+  if (!Number.isInteger(n) || n < MIN_HISTORY_RETENTION_SECONDS || n > MAX_HISTORY_RETENTION_SECONDS) {
+    throw new Error(`NEON_HISTORY_RETENTION_SECONDS must be a whole number of seconds from ${MIN_HISTORY_RETENTION_SECONDS} to ${MAX_HISTORY_RETENTION_SECONDS} (got "${raw}").`);
   }
   return n;
 }

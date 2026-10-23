@@ -6,7 +6,7 @@ import { controlDb } from '@/db/control-plane';
 import { cronRuns, opsAlerts } from '@/db/control-plane/schema';
 import { withLockedPool } from '@/db/control-plane/locked';
 import { raiseAlert, resolveAlert } from '@/lib/tenant/lifecycle-store';
-import { readCronCursor, readCronRuns } from '@/lib/cron/heartbeat';
+import { readCronState, readCronRuns } from '@/lib/cron/heartbeat';
 import { runCron } from '@/lib/cron/run-cron';
 import { cpReady } from './lifecycle-helpers';
 
@@ -31,13 +31,13 @@ describe.skipIf(!cpReady)('cron heartbeat (P6)', () => {
 
   it('a run writes cron_runs start + success with the summary (including the cursor)', async () => {
     const before = Date.now();
-    const res = await runCron(req(), 'notice-delivery', async () => ({ message: 'test', cursor: 'zz-heartbeat-test' }), { maxRuntimeMinutes: 5 });
+    const res = await runCron(req(), 'notice-delivery', async () => ({ message: 'test', cursor: 'zz-heartbeat-test', resume: { slug: 'zz-heartbeat-test', after: 'emp-7' } }), { maxRuntimeMinutes: 5 });
     expect(res.status).toBe(200);
     const r = await row('notice-delivery');
     expect(r!.lastStartedAt!.getTime()).toBeGreaterThanOrEqual(before - 1000);
     expect(r!.lastSucceededAt!.getTime()).toBeGreaterThanOrEqual(r!.lastStartedAt!.getTime());
-    expect(r!.lastSummary).toEqual({ message: 'test', cursor: 'zz-heartbeat-test' });
-    expect(await readCronCursor('notice-delivery')).toBe('zz-heartbeat-test');
+    expect(r!.lastSummary).toEqual({ message: 'test', cursor: 'zz-heartbeat-test', resume: { slug: 'zz-heartbeat-test', after: 'emp-7' } });
+    expect(await readCronState('notice-delivery')).toEqual({ cursor: 'zz-heartbeat-test', resume: { slug: 'zz-heartbeat-test', after: 'emp-7' } });
   });
 
   it('a failed run advances last_started_at only', async () => {

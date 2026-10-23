@@ -33,11 +33,15 @@ jobs:
         env:
           CONTROL_PLANE_DATABASE_URL: ${{ secrets.CONTROL_PLANE_DATABASE_URL }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          # Confirms a `deleting` tenant's Neon project is gone (skip, not FAIL) — launch-blockers audit A11.
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
       - name: Verify every database is current
         run: npm run db:migrate:check
         env:
           CONTROL_PLANE_DATABASE_URL: ${{ secrets.CONTROL_PLANE_DATABASE_URL }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          # Confirms a `deleting` tenant's Neon project is gone (skip, not FAIL) — launch-blockers audit A11.
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
       - name: Install Vercel CLI
         run: npm i -g vercel@latest
       - name: Deploy to Vercel (production)

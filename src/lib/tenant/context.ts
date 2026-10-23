@@ -24,7 +24,7 @@ export async function getTenantSlug(): Promise<string> {
 }
 
 /** Thrown by getTenantForWrite() when the tenant's access mode isn't `full` (defined in @/lib/errors). */
-import { WorkspaceReadOnlyError } from '@/lib/errors';
+import { UserFacingError, WorkspaceReadOnlyError } from '@/lib/errors';
 export { WorkspaceReadOnlyError };
 
 async function resolveTenant(slug: string): Promise<TenantRecord> {
@@ -107,18 +107,21 @@ export async function getTenantForExport(): Promise<TenantRecord> {
  * DO NOT use this in data paths — only billing.ts should call this.
  */
 export async function getTenantForBilling(): Promise<TenantRecord> {
+  // Launch-blockers audit A12: expected refusals are UserFacingErrors, so a billing action returns the message instead
+  // of a redacted error. Every caller runs the admin session guard first (audit A1), so this never reaches an
+  // anonymous visitor.
   const slug = await getTenantSlug();
-  if (!slug) throw new Error('No tenant in request context.');
+  if (!slug) throw new UserFacingError('No workspace on this address.', 'not_found');
   const tenant = await getTenantBySlug(slug);
-  if (!tenant) throw new Error(`Unknown workspace: ${slug}`);
+  if (!tenant) throw new UserFacingError('Unknown workspace.', 'not_found');
   // F5: a policy hold has no billing screen (paying doesn't lift it).
   if (tenant.status === 'suspended' && tenant.suspensionReason === 'policy') {
-    throw new Error('This workspace is on hold. Contact support@cadenzpoint.com.');
+    throw new UserFacingError('This workspace is on hold. Contact support@cadenzpoint.com.');
   }
   if (tenant.status === 'active' || tenant.status === 'suspended') return tenant;
-  if (tenant.status === 'deleting') throw new Error('This workspace is being removed.');
-  if (tenant.status === 'provisioning') throw new Error('This workspace is still being set up.');
-  throw new Error('This workspace is not available.');
+  if (tenant.status === 'deleting') throw new UserFacingError('This workspace is being removed.');
+  if (tenant.status === 'provisioning') throw new UserFacingError('This workspace is still being set up.');
+  throw new UserFacingError('This workspace is not available.');
 }
 
 /** Non-throwing tenant resolution for UI gating (e.g. rendering a clean "unavailable" screen). */

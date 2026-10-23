@@ -202,6 +202,7 @@ async function main() {
         classify: (u, row) => classifyDatabase(u, row, { dropSharedDatabase: true }), // existence check only — never drops
         neonProjectExists,
         databaseExists,
+        hasNeonKey: Boolean(process.env.NEON_API_KEY),
       }),
     redact,
   };

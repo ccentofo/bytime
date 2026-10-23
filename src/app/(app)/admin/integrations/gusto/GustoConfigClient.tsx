@@ -28,7 +28,7 @@ import {
   IconWand,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
-import { runAction } from '@/lib/run-action';
+import { runAction, type RunResult } from '@/lib/run-action';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import {
@@ -43,6 +43,9 @@ import type { CalendarDate } from '@/lib/calendar-date';
 import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 dayjs.extend(relativeTime);
+
+/** A refusal with one of these codes will refuse every remaining save too — the auto-match loop stops (audit A7). */
+const STOP_AUTO_MATCH_CODES = new Set(['unauthenticated', 'forbidden', 'read_only']);
 
 interface Connection {
   id: string;
@@ -123,7 +126,10 @@ export function GustoConfigClient({
       return;
     }
 
+    // Launch-blockers audit A7: count only saves that succeeded, and stop at the first refusal that will refuse
+    // every remaining save too (signed out, no longer an admin, workspace read-only).
     let matched = 0;
+    let failed = 0;
     for (const btEmp of bytimeEmployees) {
       // Check if already mapped
       const existing = mappings.find((m) => m.entityType === 'employee' && m.bytimeEntityId === btEmp.id);
@@ -135,19 +141,25 @@ export function GustoConfigClient({
       );
 
       if (gustoMatch) {
-        await handleSaveMapping('employee', btEmp.id, btEmp.fullName, gustoMatch.id, gustoMatch.name);
-        matched++;
+        const saved = await handleSaveMapping('employee', btEmp.id, btEmp.fullName, gustoMatch.id, gustoMatch.name);
+        if (saved.ok) {
+          matched++;
+        } else {
+          failed++;
+          if (STOP_AUTO_MATCH_CODES.has(saved.code)) break;
+        }
       }
     }
 
+    if (matched === 0 && failed > 0) return; // each failure already showed its error; nothing to celebrate
     notifications.show({
       title: 'Auto-match complete',
-      message: `${matched} employees matched by email. Review and adjust any remaining unmapped employees.`,
-      color: matched > 0 ? 'success' : 'warning',
+      message: `${matched} employees matched by email.${failed > 0 ? ` ${failed} could not be saved.` : ''} Review and adjust any remaining unmapped employees.`,
+      color: matched > 0 && failed === 0 ? 'success' : 'warning',
     });
   }
 
-  async function handleSaveMapping(entityType: string, bytimeId: string, bytimeName: string, externalId: string, externalName: string) {
+  async function handleSaveMapping(entityType: string, bytimeId: string, bytimeName: string, externalId: string, externalName: string): Promise<RunResult<unknown>> {
     const saved = await runAction(saveMapping({
         connectionId: connection.id,
         entityType,
@@ -156,7 +168,7 @@ export function GustoConfigClient({
         externalEntityId: externalId,
         externalEntityName: externalName,
     }), { errorTitle: 'Failed to save mapping' });
-    if (!saved.ok) return;
+    if (!saved.ok) return saved;
 
     setMappings((prev) => {
       const existing = prev.findIndex(
@@ -179,6 +191,7 @@ export function GustoConfigClient({
       }
       return [...prev, newMapping];
     });
+    return saved;
   }
 
   async function handleSync() {

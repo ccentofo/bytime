@@ -283,6 +283,75 @@ export async function submitPeriod(data: {
   });
 }
 
+/** Email the employee about the approval of their period, after the response (scheduleEmail). */
+async function notifyEmployeeOfApprove(
+  period: { userId: string; periodStart: string; periodNumDays: number | null },
+  actorName: string,
+): Promise<void> {
+  const db = await getDb();
+  const [employee] = await db
+    .select({ fullName: users.fullName, email: users.email })
+    .from(users)
+    .where(eq(users.id, period.userId));
+
+  if (employee) {
+    const enabled = await isNotificationEnabled(period.userId, 'emailOnApprove');
+    if (enabled) {
+      const periodStart = period.periodStart as CalendarDate;
+      const numDays = await resolvePeriodNumDays(periodStart, period.periodNumDays);
+      const periodEnd = addDays(periodStart, numDays - 1);
+      const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(periodEnd, 'MMM D, YYYY')}`;
+
+      const approvedAt = formatInstant(new Date(), await getWorkspaceTimezone(), 'MMM D, YYYY h:mm A');
+      const appUrl = tenantBaseUrl(await getTenantSlug());
+      scheduleEmail('timesheet-approved', () => sendTimesheetApprovedEmail({
+        employeeEmail: employee.email,
+        employeeName: employee.fullName,
+        periodLabel,
+        approvedBy: actorName,
+        approvedAt,
+        appUrl,
+      }));
+    }
+  }
+}
+
+/** Email the employee about the rejection of their period, after the response (scheduleEmail). */
+async function notifyEmployeeOfReject(
+  period: { userId: string; periodStart: string; periodNumDays: number | null },
+  actorName: string,
+  comment: string,
+): Promise<void> {
+  const db = await getDb();
+  const [employee] = await db
+    .select({ fullName: users.fullName, email: users.email })
+    .from(users)
+    .where(eq(users.id, period.userId));
+
+  if (employee) {
+    const enabled = await isNotificationEnabled(period.userId, 'emailOnReject');
+    if (enabled) {
+      const periodStart = period.periodStart as CalendarDate;
+      const numDays = await resolvePeriodNumDays(periodStart, period.periodNumDays);
+      const periodEnd = addDays(periodStart, numDays - 1);
+      const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(periodEnd, 'MMM D, YYYY')}`;
+
+      const rejectedAt = formatInstant(new Date(), await getWorkspaceTimezone(), 'MMM D, YYYY h:mm A');
+      const appUrl = tenantBaseUrl(await getTenantSlug());
+      const rejectionComment = comment;
+      scheduleEmail('timesheet-rejected', () => sendTimesheetRejectedEmail({
+        employeeEmail: employee.email,
+        employeeName: employee.fullName,
+        periodLabel,
+        rejectedBy: actorName,
+        rejectedAt,
+        rejectionComment,
+        appUrl,
+      }));
+    }
+  }
+}
+
 /** Shown when a period's status changed between our check and our write (another tab or reviewer). */
 const CONCURRENT_REVIEW_MESSAGE = 'This timesheet was just changed by someone else. Please refresh and try again.';
 
@@ -345,32 +414,8 @@ export async function approvePeriod(data: {
       });
     });
 
-    // Notify the employee after the response (scheduleEmail).
-    const [employee] = await db
-      .select({ fullName: users.fullName, email: users.email })
-      .from(users)
-      .where(eq(users.id, period.userId));
-
-    if (employee) {
-      const enabled = await isNotificationEnabled(period.userId, 'emailOnApprove');
-      if (enabled) {
-        const periodStart = period.periodStart as CalendarDate;
-        const numDays = await resolvePeriodNumDays(periodStart, period.periodNumDays);
-        const periodEnd = addDays(periodStart, numDays - 1);
-        const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(periodEnd, 'MMM D, YYYY')}`;
-
-        const approvedAt = formatInstant(new Date(), await getWorkspaceTimezone(), 'MMM D, YYYY h:mm A');
-        const appUrl = tenantBaseUrl(await getTenantSlug());
-        scheduleEmail('timesheet-approved', () => sendTimesheetApprovedEmail({
-          employeeEmail: employee.email,
-          employeeName: employee.fullName,
-          periodLabel,
-          approvedBy: actor.fullName,
-          approvedAt,
-          appUrl,
-        }));
-      }
-    }
+    // The decision is already committed; a notification failure must not report it as failed (audit A12).
+    await notifyEmployeeOfApprove(period, actor.fullName).catch((err) => console.error('Approve notification failed:', err));
   });
 }
 
@@ -432,34 +477,8 @@ export async function rejectPeriod(data: {
       });
     });
 
-    // Notify the employee after the response (scheduleEmail).
-    const [employee] = await db
-      .select({ fullName: users.fullName, email: users.email })
-      .from(users)
-      .where(eq(users.id, period.userId));
-
-    if (employee) {
-      const enabled = await isNotificationEnabled(period.userId, 'emailOnReject');
-      if (enabled) {
-        const periodStart = period.periodStart as CalendarDate;
-        const numDays = await resolvePeriodNumDays(periodStart, period.periodNumDays);
-        const periodEnd = addDays(periodStart, numDays - 1);
-        const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(periodEnd, 'MMM D, YYYY')}`;
-
-        const rejectedAt = formatInstant(new Date(), await getWorkspaceTimezone(), 'MMM D, YYYY h:mm A');
-        const appUrl = tenantBaseUrl(await getTenantSlug());
-        const rejectionComment = data.comment;
-        scheduleEmail('timesheet-rejected', () => sendTimesheetRejectedEmail({
-          employeeEmail: employee.email,
-          employeeName: employee.fullName,
-          periodLabel,
-          rejectedBy: actor.fullName,
-          rejectedAt,
-          rejectionComment,
-          appUrl,
-        }));
-      }
-    }
+    // The decision is already committed; a notification failure must not report it as failed (audit A12).
+    await notifyEmployeeOfReject(period, actor.fullName, data.comment).catch((err) => console.error('Reject notification failed:', err));
   });
 }
 

@@ -18,7 +18,6 @@ vi.mock('@/lib/session', () => ({
 vi.mock('@/lib/tenant/context', async () => {
   const { getTenantBySlug, invalidateTenant } = await import('@/lib/tenant/registry');
   return {
-    WorkspaceReadOnlyError: class WorkspaceReadOnlyError extends Error {},
     getTenantForBilling: async () => {
       invalidateTenant(state.slug);
       const t = await getTenantBySlug(state.slug);

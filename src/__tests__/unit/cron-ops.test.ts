@@ -12,6 +12,7 @@ import { NextRequest } from 'next/server';
 const h = vi.hoisted(() => ({
   calls: [] as string[],
   cursor: null as string | null,
+  resume: null as null | { slug: string; after: string | null },
   alertsWithEmail: [] as Array<Record<string, unknown>>,
   resolved: [] as Array<Record<string, unknown>>,
   sentry: { messages: [] as string[], exceptions: [] as Array<{ err: unknown; ctx: unknown }>, monitors: [] as Array<{ slug: string; config: unknown }>, flushes: [] as unknown[] },
@@ -38,7 +39,7 @@ vi.mock('@/lib/cron/heartbeat', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/cron/heartbeat')>()),
   recordCronStart: async (name: string) => { h.calls.push(`start:${name}`); },
   recordCronSuccess: async (name: string, summary: Record<string, unknown>) => { h.calls.push(`success:${name}:${JSON.stringify(summary)}`); },
-  readCronCursor: async () => h.cursor,
+  readCronState: async () => ({ cursor: h.cursor, resume: h.resume }),
 }));
 
 import { CRON_NAMES, CRON_SCHEDULES, cronProblems, type CronRunRow } from '@/lib/cron/heartbeat';
@@ -51,6 +52,7 @@ const HOUR = 3_600_000;
 beforeEach(() => {
   h.calls = [];
   h.cursor = null;
+  h.resume = null;
   h.alertsWithEmail = [];
   h.resolved = [];
   h.sentry = { messages: [], exceptions: [], monitors: [], flushes: [] };
@@ -198,12 +200,43 @@ describe('reminder sweep: fair rotation + time budget', () => {
     expect(h.resolved).toEqual([expect.objectContaining({ kind: 'cron-incomplete', dedupKey: 'daily-reminder' })]); // resolved by a complete run
   });
 
-  it('a tenant that runs out of time part-way is not counted as processed (cursor stays before it)', async () => {
+  it('a tenant that runs out of time part-way is not counted as processed (cursor stays before it) and is resumable', async () => {
     const r = await sweepTenants({
       name: 'submission-deadline', tenants: [T('a'), T('b')], budgetMs: 10_000,
-      processTenant: async (t) => (t.slug === 'b' ? 'stopped' : 'done'),
+      processTenant: async (t) => (t.slug === 'b' ? { stoppedAfter: 'emp-5' } : 'done'),
     });
-    expect(r).toMatchObject({ incomplete: true, processed: 1, cursor: 'a' });
+    expect(r).toMatchObject({ incomplete: true, processed: 1, cursor: 'a', resume: { slug: 'b', after: 'emp-5' } });
+  });
+
+  it('audit A10: a tenant that always stops can’t stall the rotation — the second run reaches the next tenant', async () => {
+    const seen: string[][] = [];
+    const run = async () => {
+      const order: string[] = [];
+      const r = await sweepTenants({
+        name: 'daily-reminder', tenants: [T('a'), T('b')], budgetMs: 10_000,
+        processTenant: async (t) => { order.push(t.slug); return t.slug === 'a' ? { stoppedAfter: null } : 'done'; },
+      });
+      seen.push(order);
+      h.cursor = r.cursor;
+      h.resume = r.resume;
+      return r;
+    };
+    const first = await run();
+    expect(first).toMatchObject({ incomplete: true, processed: 0, cursor: 'a', resume: { slug: 'a', after: null } });
+    await run();
+    expect(seen).toEqual([['a'], ['b', 'a']]); // b is served; a comes round again (and resumes)
+  });
+
+  it('audit A10: a stopped tenant resumes after the saved employee; a finished one clears the sub-cursor', async () => {
+    const resumeArgs: Array<[string, string | null]> = [];
+    h.cursor = 'z';
+    h.resume = { slug: 'a', after: 'emp-2' };
+    const r = await sweepTenants({
+      name: 'daily-reminder', tenants: [T('a'), T('b')], budgetMs: 10_000,
+      processTenant: async (t, { resumeAfter }) => { resumeArgs.push([t.slug, resumeAfter]); return 'done'; },
+    });
+    expect(resumeArgs).toEqual([['a', 'emp-2'], ['b', null]]);
+    expect(r).toMatchObject({ incomplete: false, resume: null });
   });
 
   it('a per-tenant failure → Sentry (tenant tag), counted, and the other tenants still run', async () => {

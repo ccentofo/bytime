@@ -3,7 +3,7 @@
 import { getDb, getDbForAuth, getDbForWrite } from '@/db';
 import { users } from '@/db/schema';
 import bcrypt from 'bcryptjs';
-import { eq, and, ne, sql } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh, AuthorizationError } from '@/lib/session';
 import { unlockAccount } from '@/server/internal/login-attempts';
 import { SAFE_USER_COLUMNS } from '@/server/internal/users';
@@ -125,6 +125,16 @@ export async function updateUser(id: string, data: {
       }
 
       if (demotingRole || deactivating) {
+        // Lock EVERY active admin row in one statement, in id order (launch-blockers audit A3). Two admins demoting
+        // each other then queue on the same rows in the same order — never the opposite-order deadlock (40P01) of
+        // "lock the target, then the others" — and the waiter re-reads under READ COMMITTED, so it no longer counts
+        // the admin the first transaction just demoted and gets the last-admin refusal.
+        const activeAdmins = await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(and(eq(users.role, 'admin'), eq(users.isActive, true)))
+          .orderBy(users.id)
+          .for('update');
         const [target] = await tx
           .select({ role: users.role, isActive: users.isActive })
           .from(users)
@@ -132,13 +142,7 @@ export async function updateUser(id: string, data: {
           .for('update');
 
         if (target?.role === 'admin' && target.isActive) {
-          // Lock the OTHER active admin rows too, so a concurrent transaction demoting one of
-          // THEM has to wait for this one to finish before it can (correctly) see the new count.
-          const otherActiveAdmins = await tx
-            .select({ id: users.id })
-            .from(users)
-            .where(and(eq(users.role, 'admin'), eq(users.isActive, true), ne(users.id, id)))
-            .for('update');
+          const otherActiveAdmins = activeAdmins.filter((a) => a.id !== id);
           if (otherActiveAdmins.length === 0) {
             throw new AuthorizationError('forbidden', 
               demotingRole

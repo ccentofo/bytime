@@ -13,7 +13,7 @@ vi.mock('server-only', () => ({}));
 import { createNeonDatabase, setNeonHistoryRetention, localDevAdminUrl } from '@/lib/tenant/neon';
 import { TENANT_DB_HISTORY_RETENTION_SECONDS, tenantDbHistoryRetentionSeconds } from '@/lib/tenant/lifecycle-config';
 import { runRetentionBackfill, type RetentionDeps } from '../../../scripts/lib/retention-backfill';
-import { MIGRATABLE_TENANT_STATUSES, migrateOneTenant, isTenantDatabaseConfirmedAbsent, type TenantMigrationDeps } from '../../../scripts/lib/tenant-migration';
+import { MIGRATABLE_TENANT_STATUSES, migrateOneTenant, isTenantDatabaseConfirmedAbsent, NEON_KEY_MISSING_NOTE, type TenantMigrationDeps, type AbsenceCheck } from '../../../scripts/lib/tenant-migration';
 import { targetBanner, isLoopbackUrl, describeDatabaseUrl } from '../../../scripts/lib/target';
 import { provisionWithoutNeonRefusal } from '../../../scripts/lib/provision-guard';
 
@@ -70,7 +70,18 @@ describe('Neon history retention (LB-D1)', () => {
 
   it('a set-but-invalid override throws instead of silently falling back', () => {
     process.env.NEON_HISTORY_RETENTION_SECONDS = '7d';
-    expect(() => tenantDbHistoryRetentionSeconds()).toThrow(/non-negative integer/);
+    expect(() => tenantDbHistoryRetentionSeconds()).toThrow(/whole number of seconds/);
+  });
+
+  it('audit A12: the override is bounded to 3600–604800 (0 would turn point-in-time restore off)', () => {
+    for (const bad of ['0', '3599', '604801', '2592000']) {
+      process.env.NEON_HISTORY_RETENTION_SECONDS = bad;
+      expect(() => tenantDbHistoryRetentionSeconds(), bad).toThrow(/from 3600 to 604800/);
+    }
+    for (const good of ['3600', '21600', '604800']) {
+      process.env.NEON_HISTORY_RETENTION_SECONDS = good;
+      expect(tenantDbHistoryRetentionSeconds()).toBe(Number(good));
+    }
   });
 
   it('the backfill PATCH sends project.history_retention_seconds', async () => {
@@ -146,7 +157,7 @@ describe('migrate-all', () => {
   const mdeps = (o: Partial<TenantMigrationDeps> = {}): TenantMigrationDeps => ({
     pendingCount: vi.fn(async () => 1),
     migrate: vi.fn(async () => { throw Object.assign(new Error('getaddrinfo ENOTFOUND ep-x.neon.tech'), { code: 'ENOTFOUND' }); }),
-    confirmedAbsent: vi.fn(async () => true),
+    confirmedAbsent: vi.fn(async (): Promise<AbsenceCheck> => ({ absent: true })),
     redact: (m: string) => m,
     ...o,
   });
@@ -163,8 +174,30 @@ describe('migrate-all', () => {
 
   it('a deleting tenant with a transient connect error (absence not confirmed) → FAILED', async () => {
     const r = await migrateOneTenant({ slug: 'del', status: 'deleting', neonProjectId: 'p' }, 'postgres://x', false,
-      mdeps({ confirmedAbsent: vi.fn(async () => false) }));
-    expect(r.outcome).toBe('FAILED');
+      mdeps({ confirmedAbsent: vi.fn(async (): Promise<AbsenceCheck> => ({ absent: false })) }));
+    expect(r).toEqual({ outcome: 'FAILED', detail: 'getaddrinfo ENOTFOUND ep-x.neon.tech' });
+  });
+
+  it('audit A11: a deleting Neon tenant with no NEON_API_KEY → FAILED with "NEON_API_KEY missing — cannot confirm deletion"', async () => {
+    const t = { slug: 'del', status: 'deleting', neonProjectId: 'p-1' };
+    const neonExists = vi.fn(async () => false);
+    const check = await isTenantDatabaseConfirmedAbsent(t, 'u', {
+      classify: () => ({ kind: 'neon-project' as const, projectId: 'p-1' }), neonProjectExists: neonExists, databaseExists: async () => true, hasNeonKey: false,
+    });
+    expect(check).toEqual({ absent: false, note: NEON_KEY_MISSING_NOTE });
+    expect(neonExists).not.toHaveBeenCalled();
+    const r = await migrateOneTenant(t, 'postgres://x', false, mdeps({ confirmedAbsent: async () => check }));
+    expect(r).toEqual({ outcome: 'FAILED', detail: 'NEON_API_KEY missing — cannot confirm deletion' });
+  });
+
+  it('audit A11: both deploy workflows give the migrate steps NEON_API_KEY', () => {
+    for (const wf of ['deploy-prod.yml', 'deploy-staging.yml']) {
+      const src = readFileSync(path.join(ROOT, `.github/workflows/${wf}`), 'utf8');
+      for (const step of ['npm run db:migrate:all', 'npm run db:migrate:check']) {
+        const block = src.slice(src.indexOf(step), src.indexOf('- name:', src.indexOf(step)));
+        expect(block, `${wf}: ${step}`).toMatch(/NEON_API_KEY:\s*\$\{\{\s*secrets\.NEON_API_KEY\s*\}\}/);
+      }
+    }
   });
 
   it('a non-deleting tenant that fails is FAILED and never probed for absence', async () => {
@@ -180,17 +213,17 @@ describe('migrate-all', () => {
     const t = { slug: 'del', status: 'deleting', neonProjectId: 'p-1' };
 
     it('Neon 404 → absent', async () => {
-      expect(await isTenantDatabaseConfirmedAbsent(t, 'u', { classify: neonClass, neonProjectExists: async () => false, databaseExists: async () => true })).toBe(true);
+      expect(await isTenantDatabaseConfirmedAbsent(t, 'u', { classify: neonClass, neonProjectExists: async () => false, databaseExists: async () => true, hasNeonKey: true })).toEqual({ absent: true });
     });
     it('no pg_database row → absent', async () => {
-      expect(await isTenantDatabaseConfirmedAbsent(t, 'u', { classify: localClass, neonProjectExists: async () => true, databaseExists: async () => false })).toBe(true);
+      expect(await isTenantDatabaseConfirmedAbsent(t, 'u', { classify: localClass, neonProjectExists: async () => true, databaseExists: async () => false, hasNeonKey: false })).toEqual({ absent: true });
     });
     it('the project still exists → not absent', async () => {
-      expect(await isTenantDatabaseConfirmedAbsent(t, 'u', { classify: neonClass, neonProjectExists: async () => true, databaseExists: async () => false })).toBe(false);
+      expect(await isTenantDatabaseConfirmedAbsent(t, 'u', { classify: neonClass, neonProjectExists: async () => true, databaseExists: async () => false, hasNeonKey: true })).toEqual({ absent: false });
     });
     it('a Neon API error or an unclassifiable URL → not confirmed', async () => {
-      expect(await isTenantDatabaseConfirmedAbsent(t, 'u', { classify: neonClass, neonProjectExists: async () => { throw new Error('503'); }, databaseExists: async () => false })).toBe(false);
-      expect(await isTenantDatabaseConfirmedAbsent(t, 'u', { classify: () => { throw new Error('cannot classify'); }, neonProjectExists: async () => false, databaseExists: async () => false })).toBe(false);
+      expect(await isTenantDatabaseConfirmedAbsent(t, 'u', { classify: neonClass, neonProjectExists: async () => { throw new Error('503'); }, databaseExists: async () => false, hasNeonKey: true })).toEqual({ absent: false });
+      expect(await isTenantDatabaseConfirmedAbsent(t, 'u', { classify: () => { throw new Error('cannot classify'); }, neonProjectExists: async () => false, databaseExists: async () => false, hasNeonKey: true })).toEqual({ absent: false });
     });
   });
 });

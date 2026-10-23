@@ -27,11 +27,22 @@ import {
 // assertCanAccessEmployee/getEmployeeScope) runs for real.
 // ---------------------------------------------------------------------------
 
+// Launch-blockers audit A3: while `writeClients.perCall` is on (case 5b), every getDbForWrite call gets its OWN
+// one-connection client, so two concurrent demotions run truly concurrent transactions (the shared test client is
+// `max: 1` and would serialise them, hiding a deadlock).
+const writeClients = vi.hoisted(() => ({ perCall: false, open: [] as Array<{ end: () => Promise<void> }> }));
 vi.mock('@/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/db')>()),
   getDb: async () => getTestDb(),
   // Write actions obtain their client through the write gate (feature-plan-terms-compliance-fixes.md §5.1).
-  getDbForWrite: async () => getTestDb(),
+  getDbForWrite: async () => {
+    if (!writeClients.perCall) return getTestDb();
+    const postgres = (await import('postgres')).default;
+    const { drizzle } = await import('drizzle-orm/postgres-js');
+    const client = postgres(process.env.TEST_DATABASE_URL ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime_test', { max: 1 });
+    writeClients.open.push(client);
+    return drizzle(client, { schema: await import('@/db/schema') });
+  },
   // requireAdminFresh/requireApproverFresh (R2-8) re-read the role through getDbForAuth.
   getDbForAuth: async () => getTestDb(),
 }));
@@ -257,18 +268,33 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     await expectFailure(updateUser(soleAdmin.id, { isActive: false }), 'forbidden', /access has changed/i);
     expect(await activeAdminCount()).toBe(1);
 
-    // (b) With the fresh check in front, the last-admin count only matters when two admins demote
-    // each other at the same moment. Exactly one may win; an active admin must always remain.
-    const otherAdmin = await createTestUser({ role: 'admin' });
-    // Each call carries its own actor through every await (AsyncLocalStorage) — never a shared, mutable session.
-    const first = actorStore.run(asFake(soleAdmin), () => updateUser(otherAdmin.id, { role: 'employee' }));
-    const second = actorStore.run(asFake(otherAdmin), () => updateUser(soleAdmin.id, { role: 'employee' }));
-    const results = await Promise.all([first, second]); // ActionResults; an unexpected throw fails the test
+    // (b) Two admins demote each other at the same moment, on separate connections (audit A3). Exactly one wins; the
+    // other gets the last-admin refusal — never a deadlock (40P01 would surface as a thrown, unexpected error and
+    // reject Promise.all). Several rounds, so an opposite-order lock shows up reliably.
+    writeClients.perCall = true;
+    try {
+      for (let round = 0; round < 5; round++) {
+        await cleanupTestData();
+        const adminA = await createTestUser({ role: 'admin' });
+        const adminB = await createTestUser({ role: 'admin' });
+        // Each call carries its own actor through every await (AsyncLocalStorage) — never a shared, mutable session.
+        const first = actorStore.run(asFake(adminA), () => updateUser(adminB.id, { role: 'employee' }));
+        const second = actorStore.run(asFake(adminB), () => updateUser(adminA.id, { role: 'employee' }));
+        const results = await Promise.all([first, second]); // ActionResults; a thrown error (deadlock) fails the test
 
-    // Printed on failure so a refusal for an unexpected reason is visible.
-    expect(results.filter((r) => r.ok), JSON.stringify(results)).toHaveLength(1);
-    expect(results.find((r) => !r.ok), JSON.stringify(results)).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/last active admin|access has changed/i) });
-    expect(await activeAdminCount()).toBe(1);
+        const tag = `round ${round}: ${JSON.stringify(results)}`;
+        expect(results.filter((r) => r.ok), tag).toHaveLength(1);
+        expect(results.find((r) => !r.ok), tag).toMatchObject({
+          ok: false,
+          code: 'forbidden',
+          error: expect.stringMatching(/last active admin|access has changed/i),
+        });
+        expect(await activeAdminCount(), tag).toBe(1);
+      }
+    } finally {
+      writeClients.perCall = false;
+      await Promise.all(writeClients.open.splice(0).map((c) => c.end()));
+    }
   });
 
   // 6. ---------------------------------------------------------------------

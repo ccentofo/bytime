@@ -133,9 +133,83 @@ function importedConverted(source: string, converted: Map<string, Set<string>>):
   return out;
 }
 
+const CONTROL_KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'catch', 'with']);
+
+/** Index of the brace matching the `{` at `open` (or the end of the source). */
+function matchingBrace(source: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    if (source[i] === '{') depth++;
+    else if (source[i] === '}' && --depth === 0) return i;
+  }
+  return source.length;
+}
+
+/** Does the `{` at `open` start a FUNCTION body (vs. an if/for/try block or an object literal)? */
+function opensFunctionBody(source: string, open: number): boolean {
+  const before = source.slice(0, open).trimEnd();
+  if (before.endsWith('=>')) return true;
+  // A return-type annotation sits between `)` and `{`: `function f(x): Promise<T> {`.
+  const head = before.replace(/\)\s*:\s*[^(){};=]+$/, ')');
+  if (!head.endsWith(')')) return false;
+  let depth = 0;
+  for (let i = head.length - 1; i >= 0; i--) {
+    if (head[i] === ')') depth++;
+    else if (head[i] === '(' && --depth === 0) {
+      const word = /(\w+)\s*$/.exec(head.slice(0, i))?.[1] ?? '';
+      return !CONTROL_KEYWORDS.has(word);
+    }
+  }
+  return false;
+}
+
+/**
+ * Launch-blockers audit A8: the end of the innermost enclosing FUNCTION around `index` — a result check must sit in
+ * the same function as the call, not anywhere later in the file. Walks outward past if/for/try/object blocks.
+ */
+function enclosingFunctionEnd(source: string, index: number): number {
+  let depth = 0;
+  for (let i = index - 1; i >= 0; i--) {
+    if (source[i] === '}') depth++;
+    else if (source[i] === '{') {
+      if (depth > 0) { depth--; continue; }
+      if (opensFunctionBody(source, i)) return matchingBrace(source, i);
+    }
+  }
+  return source.length;
+}
+
+/**
+ * The variable(s) a call's value is assigned to, if the call is part of the right-hand side of an assignment in the
+ * same statement: `x = [await] call(`, `x = cond ? await a(…) : await call(`, `const [a, b] = await Promise.all([…call(…)])`.
+ * The nearest preceding `=` whose right-hand side is bracket-balanced up to the call and has no top-level `;`.
+ */
+function assignedNames(source: string, index: number): string[] {
+  const windowStart = Math.max(0, index - 2000);
+  const window = source.slice(windowStart, index);
+  const assigns = [...window.matchAll(/(?:\b(?:const|let)\s+)?(\[[^\]=;]*\]|\b\w+)\s*(?::[^=;(){}\n]+)?(?<![=!<>])=(?![=>])/g)];
+  for (let k = assigns.length - 1; k >= 0; k--) {
+    const a = assigns[k];
+    const rhs = window.slice(a.index! + a[0].length);
+    let depth = 0;
+    let ok = true;
+    for (const ch of rhs) {
+      if ('([{'.includes(ch)) depth++;
+      else if (')]}'.includes(ch)) { if (--depth < 0) { ok = false; break; } }
+      else if (ch === ';' && depth === 0) { ok = false; break; }
+    }
+    if (!ok) continue;
+    const target = a[1];
+    if (!target.startsWith('[')) return [target];
+    return target.slice(1, -1).split(',').map((x) => x.trim().replace(/^\.\.\./, '').split(/\s*=/)[0]).filter((x) => /^\w+$/.test(x));
+  }
+  return [];
+}
+
 /**
  * Call sites of `names` whose result is not consumed. Consumed means: wrapped in runAction(...); returned to the
- * caller (`return [await] name(` or an arrow body `=> name(`); or assigned (`[const|let] x = [await] name(`) with `x.ok` / `x?.ok` read afterwards.
+ * caller (`return [await] name(` or an arrow body `=> name(`); or assigned (`[const|let] x = [await] name(`) with
+ * `x.ok` / `x?.ok` read later IN THE SAME FUNCTION (audit A8 — a same-named variable in another function doesn't count).
  */
 function uncheckedCallSites(source: string, names: string[]): string[] {
   const out: string[] = [];
@@ -152,14 +226,57 @@ function uncheckedCallSites(source: string, names: string[]): string[] {
         const handler = /\b(on[A-Z]\w*)=\{\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>\s*(?:await\s+)?$/.exec(before);
         if (!handler || RESULT_RETURNING_PROPS.has(handler[1])) continue;
       }
-      const assign = /(?:\b(?:const|let)\s+)?\b(\w+)\s*(?::[^=;(){}\n]+)?(?<![=!<>])=\s*(?:await\s+)?$/.exec(before);
-      if (assign) {
-        const after = source.slice(m.index!);
-        if (new RegExp(`\\b${assign[1]}\\s*(?:\\?\\.|\\.)\\s*ok\\b`).test(after)) continue;
+      const assigned = assignedNames(source, m.index!);
+      if (assigned.length > 0) {
+        const after = source.slice(m.index!, enclosingFunctionEnd(source, m.index!));
+        if (assigned.every((v) => new RegExp(`\\b${v}\\s*(?:\\?\\.|\\.)\\s*ok\\b`).test(after))) continue;
       }
       const line = source.slice(0, m.index!).split('\n').length;
       out.push(`${name}() at line ${line}`);
     }
+  }
+  return out;
+}
+
+/** The body of the function whose `{` is at `open`, with nested function bodies blanked (their returns aren't its own). */
+function ownBody(source: string, open: number): string {
+  const close = matchingBrace(source, open);
+  let out = '';
+  for (let i = open + 1; i < close; i++) {
+    if (source[i] === '{' && opensFunctionBody(source, i)) {
+      i = matchingBrace(source, i);
+      out += '{}';
+      continue;
+    }
+    out += source[i];
+  }
+  return out;
+}
+
+/**
+ * Launch-blockers audit A7/A8: a local helper that calls an action (directly or via runAction) and is itself AWAITED
+ * elsewhere in the file must return the outcome — a helper that returns void swallows the result, and its caller can
+ * only assume success (Gusto auto-match counted failed saves as matched).
+ */
+function voidAwaitedWrappers(source: string, actionNames: string[]): string[] {
+  const defs = [
+    ...source.matchAll(/(?:async\s+)?function\s+(\w+)\s*\(/g),
+    ...source.matchAll(/(?:const|let)\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|\w+)\s*(?::[^=;{}]+)?=>\s*\{/g),
+  ];
+  const callsAction = new RegExp(`(?<![.\\w])(?:${[...actionNames, 'runAction'].join('|')})\\s*\\(`);
+  const out: string[] = [];
+  for (const d of defs) {
+    const name = d[1];
+    let open = source.indexOf('{', d.index! + d[0].length - 1);
+    while (open !== -1 && !opensFunctionBody(source, open)) open = source.indexOf('{', open + 1);
+    if (open === -1) continue;
+    const close = matchingBrace(source, open);
+    const body = source.slice(open, close);
+    if (!callsAction.test(body)) continue;
+    const outside = source.slice(0, d.index!) + source.slice(close);
+    if (!new RegExp(`\\bawait\\s+${name}\\s*\\(`).test(outside)) continue;
+    if (/\breturn\s+(?!;)[^\s;]/.test(ownBody(source, open))) continue;
+    out.push(`${name}: awaited wrapper returns void`);
   }
   return out;
 }
@@ -265,8 +382,12 @@ describe('action-result contract (static, launch-blockers P4)', () => {
     for (const file of callSiteFiles()) {
       if (!fs.existsSync(file)) continue;
       const source = read(file);
-      const names = [...importedConverted(source, converted), ...(RESULT_RETURNING_CALLS[rel(file)] ?? [])];
+      const actions = importedConverted(source, converted);
+      // A runAction(...) result is a RunResult: it must be consumed like the action's own (audit A8).
+      const usesRunAction = /\bimport\s*\{[^}]*\brunAction\b[^}]*\}\s*from\s*['"]@\/lib\/run-action['"]/.test(source);
+      const names = [...actions, ...(usesRunAction ? ['runAction'] : []), ...(RESULT_RETURNING_CALLS[rel(file)] ?? [])];
       for (const site of uncheckedCallSites(source, names)) offenders.push(`${rel(file)}: ${site}`);
+      for (const w of voidAwaitedWrappers(source, actions)) offenders.push(`${rel(file)}: ${w}`);
     }
     expect(offenders).toEqual([]);
   });
@@ -294,5 +415,69 @@ describe('action-result contract (static, launch-blockers P4)', () => {
       'async function f(code: string, note: string) {\n  const res = await saveThing(6);\n  if (!res.ok) return;\n}',
     ].join('\n');
     expect(uncheckedCallSites(fixture, ['saveThing'])).toEqual(['saveThing() at line 5', 'saveThing() at line 6', 'saveThing() at line 7']);
+  });
+
+  it('a .ok check in ANOTHER function doesn’t count for this call (fixture, audit A8)', () => {
+    const fixture = [
+      'async function checked() {',
+      '  const result = await saveThing(1);',
+      '  if (!result.ok) return;',
+      '}',
+      'async function unchecked() {',
+      '  const result = await saveThing(2);',
+      '  toast("Saved");',
+      '}',
+      'async function nested() {',
+      '  const result = await saveThing(3);',
+      '  if (cond) { try { log(); } finally { done(); } }',
+      '  if (result.ok) toast("ok");',
+      '}',
+      'async function typed(x: string): Promise<void> {',
+      '  let result;',
+      '  try { result = await saveThing(4); } catch { return; }',
+      '  if (!result.ok) return;',
+      '}',
+      'async function ternary() {',
+      '  const result = cond',
+      '    ? await saveThing({ a: 1 })',
+      '    : await saveThing({ b: 2 });',
+      '  if (!result.ok) return;',
+      '}',
+      'async function all() {',
+      '  const [p, q] = await Promise.all([saveThing(5), saveThing(6)]);',
+      '  if (!p.ok) return;',
+      '}',
+    ].join('\n');
+    // line 6: unchecked in its own function; line 26: q is never checked (every destructured result must be).
+    expect(uncheckedCallSites(fixture, ['saveThing'])).toEqual(['saveThing() at line 6', 'saveThing() at line 26', 'saveThing() at line 26']);
+  });
+
+  it('an unconsumed runAction(...) result is flagged (fixture, audit A8)', () => {
+    const fixture = [
+      'async function a() { const r = await runAction(saveThing(1)); if (r.ok) toast(); }',
+      'async function b() { await runAction(saveThing(2)); markSaved(); }',
+    ].join('\n');
+    expect(uncheckedCallSites(fixture, ['saveThing', 'runAction'])).toEqual(['runAction() at line 2']);
+  });
+
+  it('an awaited helper that swallows the action result is flagged (fixture, audit A7/A8)', () => {
+    const fixture = `
+      async function handleSaveMapping(id: string) {
+        const saved = await runAction(saveMapping({ id }));
+        if (!saved.ok) return;
+        setMappings((prev) => { const next = [...prev]; return next; });
+      }
+      async function handleAutoMatch() {
+        let matched = 0;
+        for (const id of ids) { await handleSaveMapping(id); matched++; }
+      }
+      async function returnsOutcome(id: string): Promise<RunResult<unknown>> {
+        const saved = await runAction(saveMapping({ id }));
+        return saved;
+      }
+      async function caller() { const r = await returnsOutcome('x'); if (r.ok) count++; }
+      function onChange(id: string) { handleSelect(id); }
+      async function handleSelect(id: string) { const r = await runAction(saveMapping({ id })); if (!r.ok) return; }`;
+    expect(voidAwaitedWrappers(fixture, ['saveMapping'])).toEqual(['handleSaveMapping: awaited wrapper returns void']);
   });
 });

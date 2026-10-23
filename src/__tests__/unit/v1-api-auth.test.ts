@@ -167,3 +167,27 @@ describe('v1 API: failures are a generic, logged 500', () => {
     spy.mockRestore();
   });
 });
+
+describe('every v1 route goes through handleApiRequest (static, audit A12)', () => {
+  it('each exported handler is exactly `return handleApiRequest(request, …)`', async () => {
+    const { readdirSync, readFileSync, statSync } = await import('fs');
+    const path = await import('path');
+    const root = path.resolve(__dirname, '../../app/api/v1');
+    const routes = (dir: string): string[] => readdirSync(dir).flatMap((n) => {
+      const p = path.join(dir, n);
+      return statSync(p).isDirectory() ? routes(p) : n === 'route.ts' ? [p] : [];
+    });
+    const files = routes(root);
+    expect(files.length).toBeGreaterThan(0);
+    const offenders: string[] = [];
+    for (const f of files) {
+      const src = readFileSync(f, 'utf8');
+      const handlers = [...src.matchAll(/export\s+async\s+function\s+(GET|POST|PUT|PATCH|DELETE)\s*\([^)]*\)\s*\{\s*([^\n]*)/g)];
+      if (handlers.length === 0) offenders.push(`${path.relative(root, f)}: no exported handler found`);
+      for (const [, method, firstLine] of handlers) {
+        if (!/^return handleApiRequest\(request,/.test(firstLine.trim())) offenders.push(`${path.relative(root, f)} ${method}: ${firstLine.trim()}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});

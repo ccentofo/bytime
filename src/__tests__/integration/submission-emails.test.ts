@@ -28,7 +28,19 @@ vi.mock('@/db', async (importOriginal) => ({
   getDbForAuth: async () => getTestDb(),
 }));
 
-const tenantState = vi.hoisted(() => ({ requestSlug: 'test-tenant' }));
+const tenantState = vi.hoisted(() => ({ requestSlug: 'test-tenant', failNotificationPrep: false }));
+
+// Audit A12: lets a test make the post-commit notification preparation fail (a transient DB error).
+vi.mock('@/server/internal/notifications', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/server/internal/notifications')>();
+  return {
+    ...real,
+    isNotificationEnabled: async (...args: Parameters<typeof real.isNotificationEnabled>) => {
+      if (tenantState.failNotificationPrep) throw new Error('connection reset while preparing the email');
+      return real.isNotificationEnabled(...args);
+    },
+  };
+});
 
 vi.mock('@/lib/tenant/context', () => ({
   getTenantSlug: async () => tenantState.requestSlug,
@@ -182,5 +194,30 @@ describe('Submission notifications are scoped (R2-10)', () => {
     expect(emailState.sendTimesheetApprovedEmail.mock.calls[0][0].appUrl).toBe(tenantBaseUrl('test-tenant'));
     expect(emailState.sendTimesheetRejectedEmail).toHaveBeenCalledTimes(1);
     expect(emailState.sendTimesheetRejectedEmail.mock.calls[0][0].appUrl).toBe(tenantBaseUrl('test-tenant'));
+  });
+
+  it('audit A12: a failure preparing the approve/reject email still reports the committed decision as done', async () => {
+    await cleanupTestData();
+    const db = getTestDb();
+    const employee = await createTestUser({ role: 'employee' });
+    const admin = await createTestUser({ role: 'admin' });
+    const [approveMe] = await db.insert(schema.timesheetPeriods)
+      .values({ userId: employee.id, periodStart: '2020-02-01', status: 'submitted', submittedAt: new Date() }).returning();
+    const [rejectMe] = await db.insert(schema.timesheetPeriods)
+      .values({ userId: employee.id, periodStart: '2020-02-16', status: 'submitted', submittedAt: new Date() }).returning();
+
+    actingAs(admin);
+    tenantState.failNotificationPrep = true;
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expectOk(approvePeriod({ periodId: approveMe.id }));
+      await expectOk(rejectPeriod({ periodId: rejectMe.id, comment: 'Please fix Tuesday.' }));
+    } finally {
+      tenantState.failNotificationPrep = false;
+      logged.mockRestore();
+    }
+    const rows = await db.select({ id: schema.timesheetPeriods.id, status: schema.timesheetPeriods.status }).from(schema.timesheetPeriods);
+    expect(rows.find((r) => r.id === approveMe.id)?.status).toBe('approved');
+    expect(rows.find((r) => r.id === rejectMe.id)?.status).toBe('rejected');
   });
 });
