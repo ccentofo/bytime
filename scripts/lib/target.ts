@@ -3,19 +3,9 @@
  * plane it is about to touch — host and database only, never credentials — and a boxed warning when that is not a
  * loopback (local) database. Pure: no env loading, no server-only imports, so scripts and tests can both use it.
  */
+import { isLoopbackUrl } from '../../src/lib/tenant/loopback';
 
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
-
-/** True when the URL's host is a loopback address (localhost, 127.0.0.1, ::1, *.localhost). Unparseable → false. */
-export function isLoopbackUrl(url: string | undefined | null): boolean {
-  if (!url) return false;
-  try {
-    const host = new URL(url).hostname.toLowerCase();
-    return LOOPBACK_HOSTS.has(host) || host.endsWith('.localhost') || /^127\.\d+\.\d+\.\d+$/.test(host);
-  } catch {
-    return false;
-  }
-}
+export { isLoopbackUrl };
 
 /** `host[:port]/database` of a postgres URL, without user, password or query. Unparseable → a placeholder. */
 export function describeDatabaseUrl(url: string | undefined | null): string {

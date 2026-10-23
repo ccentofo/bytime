@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   cronRows: [] as Array<{ name: string; lastStartedAt: Date | null; lastSucceededAt: Date | null; lastSummary: unknown }>,
   opened: true,
   sentryMessages: [] as string[],
+  waitlisted: [] as Array<{ id: string; slug: string; email: string; waitlistedAt: Date }>,
 }));
 
 vi.mock('server-only', () => ({}));
@@ -33,6 +34,7 @@ vi.mock('@/lib/tenant/lifecycle-store', () => ({
   raiseAlert: async () => ({ opened: h.opened }),
   resolveAlert: async () => {},
 }));
+vi.mock('@/lib/signup/maintenance', () => ({ waitlistedSignups: async () => h.waitlisted, signupsDueForDeletion: async () => [] }));
 vi.mock('@/lib/cron/heartbeat', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/cron/heartbeat')>()),
   readCronRuns: async () => h.cronRows,
@@ -51,6 +53,7 @@ beforeEach(() => {
   h.cronRows = allFresh();
   h.opened = true;
   h.sentryMessages = [];
+  h.waitlisted = [];
   process.env.OPS_ALERT_EMAIL = 'ops@example.com';
 });
 afterEach(() => { delete process.env.OPS_ALERT_EMAIL; });
@@ -74,6 +77,15 @@ describe('daily digest', () => {
     expect(html).toMatch(/notice-delivery — last success 2026-10-21T10:00:00\.000Z \(limit 1 h\)/);
     expect(html).toMatch(/daily-reminder — <strong>never ran<\/strong>/);
     expect(html).not.toContain('All quiet');
+  });
+});
+
+describe('daily digest — signups (P5)', () => {
+  it('lists waitlisted signups with the provision command', async () => {
+    h.waitlisted = [{ id: 'sig-1', slug: 'newco', email: 'a@newco.com', waitlistedAt: NOW }];
+    await sendOpsDigest([], NOW, false);
+    expect(h.sends[0].subject).not.toContain('all quiet');
+    expect(h.sends[0].html).toMatch(/Waitlisted signups[\s\S]*newco — a@newco\.com[\s\S]*id sig-1/);
   });
 });
 

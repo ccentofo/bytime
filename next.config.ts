@@ -7,15 +7,17 @@ const isDev = process.env.NODE_ENV !== "production";
 // - Mantine injects inline <style> tags, so style-src must allow 'unsafe-inline'.
 // - Next.js requires 'unsafe-inline' (and 'unsafe-eval' in dev) for its runtime/scripts.
 // - Sentry ingest must be reachable from the browser via connect-src.
+// - Cloudflare Turnstile (signup controls, feature-plan-launch-blockers.md P5): https://challenges.cloudflare.com in
+//   script-src and frame-src, per developers.cloudflare.com/turnstile/reference/content-security-policy/ (2026-10-22).
 //   Replace the *.ingest.sentry.io host below with your project's ingest host if different.
 const csp = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://js.stripe.com`,
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://js.stripe.com https://challenges.cloudflare.com`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
   "connect-src 'self' https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://api.stripe.com",
-  "frame-src 'self' https://js.stripe.com https://hooks.stripe.com",
+  "frame-src 'self' https://js.stripe.com https://hooks.stripe.com https://challenges.cloudflare.com",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",

@@ -72,6 +72,29 @@ export function tenantDbHistoryRetentionSeconds(): number {
   return n;
 }
 
+// ── Signup abuse controls and retention (LB-D2, LB-D5 — feature-plan-launch-blockers.md P5) ─────────
+
+/** LB-D2: at most this many new workspaces per rolling 24 h; past it, verified signups are waitlisted. */
+export const SIGNUP_DAILY_WORKSPACE_CAP = 20;
+
+/** LB-D2: verified workspaces per IP hash per rolling 24 h. */
+export const SIGNUP_PER_IP_WORKSPACES_PER_DAY = 3;
+
+/** LB-D2: ops alert when the Neon account holds this many projects. */
+export const NEON_PROJECT_ALERT_THRESHOLD = 80;
+
+/** LB-D5 (Privacy §7): never-verified signup rows are deleted after this many days. */
+export const UNVERIFIED_SIGNUP_RETENTION_DAYS = 7;
+
+/** LB-D5: consumed signup rows — only once the tenant row holds the Terms version AND acceptance time. */
+export const CONSUMED_SIGNUP_RETENTION_DAYS = 30;
+
+/** LB-D5: verified signups that were never provisioned (e.g. waitlisted and never followed up). */
+export const VERIFIED_UNPROVISIONED_RETENTION_DAYS = 30;
+
+/** LB-D5: the signup IP hash is kept at most ~25 h (nulled after 24 h by the 10-minute notice-delivery cron). */
+export const SIGNUP_IP_HASH_RETENTION_HOURS = 24;
+
 // ── Read-only mode and export (Terms §3.2, §9.1, §9.2) ──────────────────────
 
 /**

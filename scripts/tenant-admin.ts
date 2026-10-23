@@ -15,6 +15,8 @@
  *   export-destroyed <slug> [--legal-hold "<reason>"] --yes
  *   resolve-alert <alert-id> --note "<text>" --yes
  *   audit-note <slug> --note "<text>" --yes        (append a founder note to the audit trail, e.g. RESTORE.md)
+ *   waitlist list                                   (LB-D2: verified signups held back by the daily cap)
+ *   waitlist provision <signup-id> --yes            (provision one, bypassing the cap; emails the set-password link)
  *
  * Writes print what they would do and refuse to run without --yes. Running app instances cache the tenant
  * registry for up to 60 seconds, so a change can take a minute to show in the app.
@@ -37,6 +39,9 @@ import {
   recordFounderNote, resolveAlertById, type Planner,
 } from '../src/lib/tenant/admin-commands';
 import { printTargetBanner } from './lib/target';
+import { listWaitlist, provisionWaitlistedSignup, WaitlistError } from '../src/lib/tenant/waitlist';
+import { apexBaseUrl } from '../src/lib/tenant/host';
+import { SIGNUP_DAILY_WORKSPACE_CAP } from '../src/lib/tenant/lifecycle-config';
 
 const ACTOR = `founder:${process.env.USER ?? 'unknown'}`;
 const CACHE_NOTE = 'Note: running app instances may show the old state for up to 60 seconds (registry cache).';
@@ -215,6 +220,29 @@ async function main() {
       console.log(`✓ Recorded (audit event ${id}).`);
       break;
     }
+    case 'waitlist': {
+      console.log(`Workspace links in emails will use: ${apexBaseUrl()} (APP_ROOT_DOMAIN / NEXT_PUBLIC_APP_URL)`);
+      if (target === 'list') {
+        const { rows, createdLast24h } = await listWaitlist();
+        console.log(`Workspaces created in the last 24 h: ${createdLast24h} (daily cap ${SIGNUP_DAILY_WORKSPACE_CAP}).`);
+        if (rows.length === 0) console.log('Waitlist is empty.');
+        for (const r of rows) console.log(`  ${r.id}  ${r.slug}  ${r.email}  "${r.companyName}"  waitlisted ${r.waitlistedAt!.toISOString()}`);
+        break;
+      }
+      if (target !== 'provision') fail('Usage: waitlist list | waitlist provision <signup-id> --yes');
+      const signupId = positional[0] ?? fail('waitlist provision needs a signup id (see `waitlist list`).');
+      const { createdLast24h } = await listWaitlist();
+      console.log(`Would provision waitlisted signup ${signupId}, bypassing the daily cap (${createdLast24h} created in the last 24 h; cap ${SIGNUP_DAILY_WORKSPACE_CAP}).`);
+      confirmOrExit(yes);
+      const r = await provisionWaitlistedSignup(signupId);
+      console.log(`✓ Provisioned "${r.slug}" for ${r.email}.`);
+      if (!r.emailed) {
+        console.error(`✗ The set-password email could not be sent. Send this link to ${r.email} yourself:\n  ${r.setPasswordUrl}`);
+        process.exit(1);
+      }
+      console.log('✓ Set-password email sent.');
+      break;
+    }
     default:
       fail(`Unknown command "${command}". See the header of scripts/tenant-admin.ts.`);
   }
@@ -222,7 +250,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  if (err instanceof AdminCommandError) fail(err.message);
+  if (err instanceof AdminCommandError || err instanceof WaitlistError) fail(err.message);
   console.error('tenant-admin failed:', err?.message ?? err);
   process.exit(1);
 });

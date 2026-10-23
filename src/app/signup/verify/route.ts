@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import dayjs from 'dayjs';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { controlDb } from '@/db/control-plane';
-import { signups } from '@/db/control-plane/schema';
+import { signups, tenants } from '@/db/control-plane/schema';
 import { ProvisionConflictError, provisionTenant } from '@/lib/tenant/provision';
 import { issueSetPasswordToken } from '@/lib/tenant/invite';
 import { getTenantBySlug } from '@/lib/tenant/registry';
 import { apexBaseUrl, tenantBaseUrl } from '@/lib/tenant/host';
+import { signupControlsEnabled } from '@/lib/signup/controls';
+import { raiseAlertWithEmail } from '@/lib/tenant/ops-alert-email';
+import { SIGNUP_DAILY_WORKSPACE_CAP, SIGNUP_PER_IP_WORKSPACES_PER_DAY } from '@/lib/tenant/lifecycle-config';
+import { tenantsCreatedSince, verifiedSignupsFromIp } from '@/server/internal/signup';
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -15,6 +19,37 @@ import { apexBaseUrl, tenantBaseUrl } from '@/lib/tenant/host';
 
 function failRedirect(msg: string) {
   return NextResponse.redirect(`${apexBaseUrl()}/signup?error=${encodeURIComponent(msg)}`);
+}
+
+/**
+ * LB-D2 waitlist message (feature-plan-launch-blockers.md P5). Shown for a waitlisted signup on every visit — GET or
+ * POST, expired or not, under the cap or not; only the founder provisions waitlisted rows (`tenant:admin waitlist`).
+ */
+function waitlistPage(email: string) {
+  return htmlPage('We’re setting up your workspace', `
+    <h1>We’re setting up a lot of new workspaces today</h1>
+    <p>We're setting up a lot of new workspaces today. Leave your email and we'll have yours ready within one business day.</p>
+    <p>Your email <strong>${escapeHtml(email)}</strong> is already on the list — there is nothing more you need to do.
+    We'll email you as soon as your workspace is ready.</p>`);
+}
+
+function htmlPage(title: string, body: string, status = 200) {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #f9fafb; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; margin: 0; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 40px; max-width: 480px; width: 100%; text-align: center; }
+    h1 { font-size: 22px; font-weight: 700; margin: 0 0 12px; color: #111; }
+    p { font-size: 14px; color: #6b7280; line-height: 1.6; margin: 0 0 16px; }
+  </style>
+</head>
+<body><div class="card">${body}</div></body>
+</html>`;
+  return new NextResponse(html, { status, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
 
 // ---------------------------------------------------------------------------
@@ -36,6 +71,8 @@ export async function GET(req: NextRequest) {
   ).limit(1);
 
   if (!row) return failRedirect('This link is invalid or already used.');
+  // GET never writes (email scanners open links). A waitlisted signup sees the waitlist message, whatever its expiry.
+  if (row.waitlistedAt) return waitlistPage(email);
   if (dayjs().isAfter(dayjs(row.expiresAt))) return failRedirect('This link has expired. Please sign up again.');
 
   // Render a scanner-safe confirmation page with a POST button.
@@ -105,6 +142,8 @@ export async function POST(req: NextRequest) {
   ).limit(1);
 
   if (!row) return failRedirect('This link is invalid or already used.');
+  // P5: FIRST — a waitlisted signup never provisions from this path (the founder provisions it), even after expiry.
+  if (row.waitlistedAt) return waitlistPage(email);
   if (dayjs().isAfter(dayjs(row.expiresAt))) return failRedirect('This link has expired. Please sign up again.');
 
   const base = tenantBaseUrl(row.slug);
@@ -114,6 +153,11 @@ export async function POST(req: NextRequest) {
   if (already && already.status === 'active') {
     await controlDb.update(signups).set({ consumedAt: new Date() }).where(eq(signups.id, row.id));
     return NextResponse.redirect(`${base}/login`);
+  }
+
+  if (signupControlsEnabled()) {
+    const refused = await signupControlsGate(row, email);
+    if (refused) return refused;
   }
 
   // Provision the tenant (resumable only by the signer who started it — see provisionTenant)
@@ -145,4 +189,51 @@ export async function POST(req: NextRequest) {
   const setToken = await issueSetPasswordToken(tenant.dbUrl, email);
   const url = `${base}/reset-password?token=${setToken}&email=${encodeURIComponent(email)}&welcome=1`;
   return NextResponse.redirect(url);
+}
+
+// ---------------------------------------------------------------------------
+// Signup controls at verify (feature-plan-launch-blockers.md P5, SIGNUP_CONTROLS_ENABLED only). Returns the response
+// that stops provisioning, or null to provision.
+// ---------------------------------------------------------------------------
+
+type SignupRow = typeof signups.$inferSelect;
+const NETWORK_LIMIT_MESSAGE = 'Too many workspaces have been created from your network today. Please try again tomorrow.';
+
+async function signupControlsGate(row: SignupRow, email: string): Promise<NextResponse | null> {
+  const now = new Date();
+  // verified_at is set ONCE — reopening the link never slides the per-IP window.
+  await controlDb.update(signups).set({ verifiedAt: sql`coalesce(${signups.verifiedAt}, ${now})` }).where(eq(signups.id, row.id));
+
+  // Resume: this signer's own half-provisioned tenant → continue (never capped or IP-limited).
+  const [own] = await controlDb.select({ id: tenants.id }).from(tenants)
+    .where(and(eq(tenants.slug, row.slug), eq(tenants.signupEmail, email))).limit(1);
+  if (own) return null;
+
+  // The IP hash lives 24 h; a non-resume verify without it can't be limited → the link counts as expired.
+  if (!row.ipHash) return failRedirect('This link has expired — please sign up again.');
+  const since = dayjs(now).subtract(1, 'day').toDate();
+  if (await verifiedSignupsFromIp(row.ipHash, since, row.id) >= SIGNUP_PER_IP_WORKSPACES_PER_DAY) {
+    return failRedirect(NETWORK_LIMIT_MESSAGE); // row stays unconsumed
+  }
+
+  // Slug taken by another tenant — checked BEFORE the cap so the waitlist never holds an unprovisionable slug.
+  if (await getTenantBySlug(row.slug)) {
+    await controlDb.update(signups).set({ consumedAt: now }).where(eq(signups.id, row.id));
+    return failRedirect('That workspace name was just taken. Please sign up again with a different name.');
+  }
+
+  // LB-D2 daily cap: tenants created in the last 24 h (any status).
+  const created = await tenantsCreatedSince(since);
+  if (created >= SIGNUP_DAILY_WORKSPACE_CAP) {
+    await controlDb.update(signups).set({ waitlistedAt: now }).where(eq(signups.id, row.id)); // stays unconsumed
+    await raiseAlertWithEmail({
+      tenantId: null,
+      kind: 'signup-cap-reached',
+      dedupKey: now.toISOString().slice(0, 10), // once per UTC day
+      detail: { createdLast24h: created, cap: SIGNUP_DAILY_WORKSPACE_CAP },
+      summary: `The daily workspace cap (${SIGNUP_DAILY_WORKSPACE_CAP}) was reached; new verified signups are waitlisted. Provision them with: npm run tenant:admin -- waitlist list`,
+    }, now);
+    return waitlistPage(email);
+  }
+  return null;
 }

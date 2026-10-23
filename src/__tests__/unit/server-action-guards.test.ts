@@ -55,11 +55,13 @@ const PUBLIC_ACTIONS: Record<string, { names: string[]; reason: string }> = {
       'supplied id — equivalent to a session for this purpose. Rate-limited.',
   },
   'signup.ts': {
-    names: ['checkSlugAvailable', 'startSignup'],
+    names: ['checkSlugAvailable', 'startSignup', 'resendSignupVerification'],
     reason:
       'Unauthenticated new-tenant signup flow — there is no session to require before a ' +
       'workspace exists. IP rate-limited; startSignup only mints a verification email, it ' +
-      'does not provision anything.',
+      'does not provision anything. resendSignupVerification (feature-plan-launch-blockers.md P5, ' +
+      'flag-gated) is Turnstile-gated, re-mails only a pending row matching email + slug, and ' +
+      'always answers the same generic message (no enumeration).',
   },
   'login-attempts.ts': {
     names: ['checkLockout'],

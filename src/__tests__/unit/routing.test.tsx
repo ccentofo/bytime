@@ -11,6 +11,7 @@ import type { ReactElement } from 'react';
 class RedirectSignal extends Error {
   constructor(public url: string) { super(`REDIRECT:${url}`); }
 }
+vi.mock('server-only', () => ({}));
 vi.mock('next/navigation', () => ({
   redirect: (url: string) => { throw new RedirectSignal(url); },
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),

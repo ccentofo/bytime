@@ -5,6 +5,7 @@ import { withLockedPool } from '@/db/control-plane/locked';
 import { runCron } from '@/lib/cron/run-cron';
 import { runLifecycleCron } from '@/lib/tenant/lifecycle-runner';
 import { sendOpsDigest } from '@/lib/tenant/ops-digest';
+import { runSignupMaintenance } from '@/lib/signup/maintenance';
 
 /**
  * Daily tenant lifecycle cron (feature-plan-terms-compliance-fixes.md §4.4): reconcile, apply due transitions,
@@ -20,6 +21,9 @@ export async function GET(request: NextRequest) {
 
 async function runLifecycle(): Promise<Record<string, unknown>> {
   const { results, candidates, incomplete } = await runLifecycleCron({ budgetMs: START_BUDGET_MS });
+  // feature-plan-launch-blockers.md P5: signup cleanup + Neon quota BEFORE the digest, even when the tenant loop
+  // stopped early (never throws; each step is isolated).
+  const signupMaintenance = await runSignupMaintenance(new Date());
   const digest = await sendOpsDigest(results, new Date(), incomplete);
   const exempt = await withLockedPool((db) => db.select({ slug: tenants.slug }).from(tenants)
     .where(and(eq(tenants.lifecycleExempt, true), ne(tenants.status, 'deleted'))));
@@ -36,6 +40,7 @@ async function runLifecycle(): Promise<Record<string, unknown>> {
     noticesEnqueued: results.reduce((n, r) => n + r.noticesEnqueued, 0),
     noticesSent: results.reduce((n, r) => n + r.noticesSent, 0),
     exempt: exempt.map((t) => t.slug), // F1: always listed, never hidden
+    signupMaintenance,
     digest,
   };
   console.log('[tenant-lifecycle] run summary', JSON.stringify(summary));

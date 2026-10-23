@@ -161,7 +161,19 @@ can take 60 s to show in the app): `show <slug>`, `extend-trial <slug> <days>`, 
 `unsuspend <slug>`, `set-policy-export <slug> on|off --reason "…"` (F5: allow/block export for one policy hold),
 `set-exempt <slug> on|off --reason "…"`,
 `force-notice-sent <slug> <kind> --reason "…"`, `export-destroyed <slug> [--legal-hold "…"]`,
-`resolve-alert <id> --note "…"`.
+`resolve-alert <id> --note "…"`, `audit-note <slug> --note "…"` (append a note to the audit trail — used by
+[`RESTORE.md`](RESTORE.md)), `waitlist list` and `waitlist provision <signup-id>` (below).
+
+**Signup abuse controls** (`feature-plan-launch-blockers.md` P5, LB-D2): Cloudflare Turnstile on `/signup`, at most
+3 verified workspaces per network per day, a global cap of 20 new workspaces per day (past it, verified signups are
+waitlisted and the founder is emailed once that day), cleanup of old signup rows (LB-D5) and an alert at 80 Neon
+projects. All of it is behind `SIGNUP_CONTROLS_ENABLED` (6.4), **off by default — signup then works exactly as
+before**. Before turning it on in **production**: (1) the updated Privacy Policy (§2 IP-hash sentence, §4 Cloudflare
+as subprocessor, §7 signup retention) is published; (2) `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` and
+`SIGNUP_IP_SALT` are set (missing secret or salt → every signup is refused and you get a `signup-config-missing`
+email). Waitlisted signups appear in the daily digest; provision one with
+`npm run tenant:admin -- waitlist provision <signup-id> --yes` (it emails the set-password link; if that email fails,
+it prints the link — send it yourself). The 80-project alert and the IP-hash cleanup run whatever the flag.
 
 **T7 backfill**: after `db:migrate:cp` applies the T7 control-plane migration, run
 `npm run backfill:neon-project-ids` (reads `CONTROL_PLANE_DATABASE_URL` and `NEON_API_KEY`) so

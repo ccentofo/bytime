@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { runCron } from '@/lib/cron/run-cron';
 import { deliverPendingNotices } from '@/lib/tenant/notices';
+import { nullExpiredSignupIpHashes, resolveSignupSignals } from '@/lib/signup/signals';
 
 /**
  * Notice delivery cron, every 10 minutes (feature-plan-terms-compliance-fixes.md §4.4/§4.5): retries every
@@ -13,6 +14,10 @@ const BUDGET_MS = 240_000;
 export async function GET(request: NextRequest) {
   return runCron(request, 'notice-delivery', async () => {
     const counts = await deliverPendingNotices(BUDGET_MS);
-    return { message: 'Notice delivery processed', ...counts };
+    // feature-plan-launch-blockers.md P5 (runs whatever the signup-controls flag): drop signup IP hashes older than
+    // 24 h (LB-D5: ≤ ~24 h 10 min), and resolve turnstile-outage / signup-config-missing once their condition cleared.
+    const ipHashesCleared = await nullExpiredSignupIpHashes();
+    await resolveSignupSignals();
+    return { message: 'Notice delivery processed', ...counts, ipHashesCleared };
   }, { maxRuntimeMinutes: Math.ceil(maxDuration / 60) });
 }

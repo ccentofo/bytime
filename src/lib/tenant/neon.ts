@@ -2,6 +2,7 @@ import 'server-only';
 import postgres from 'postgres';
 import { tenantDatabaseName } from './db-name';
 import { tenantDbHistoryRetentionSeconds } from './lifecycle-config';
+import { isLoopbackUrl } from './loopback';
 
 const NEON_API_BASE = 'https://console.neon.tech/api/v2';
 // How long to wait for Neon to finish creating the project's branch/role/database/compute.
@@ -152,6 +153,12 @@ export function localDevAdminUrl(env: Record<string, string | undefined> = proce
  */
 async function createLocalDevDatabase(slug: string): Promise<CreatedTenantDatabase> {
   const adminUrl = localDevAdminUrl();
+  // feature-plan-launch-blockers.md P5: covers every caller (provision:tenant, waitlist provision, signup in a
+  // misconfigured env) — a tenant database is never created on a non-local server without a Neon project.
+  if (!isLoopbackUrl(adminUrl)) {
+    throw new Error('Refusing to create a local tenant database on a non-loopback server (NEON_API_KEY is not set). '
+      + 'Set NEON_API_KEY, or point DEV_TENANT_ADMIN_DATABASE_URL at a local Postgres.');
+  }
 
   const dbName = tenantDatabaseName(slug); // same naming rule as production (see db-name.ts)
 
@@ -317,4 +324,29 @@ export async function setNeonHistoryRetention(projectId: string, seconds: number
   if (res.status === 404) return 'not-found';
   if (!res.ok) throw new Error(`Neon retention update failed: ${res.status} ${await res.text()}`);
   return 'updated';
+}
+
+const NEON_LIST_PAGE_LIMIT = 400; // GET /projects `limit` max (api-docs.neon.tech listprojects, confirmed 2026-10-22)
+const NEON_LIST_MAX_PAGES = 100;
+
+/**
+ * LB-D2 quota check (feature-plan-launch-blockers.md P5): how many projects the Neon account holds. Paginates
+ * `GET /projects?limit=400` with the returned `pagination.cursor` until a short page. Any failure throws.
+ */
+export async function countNeonProjects(): Promise<number> {
+  const apiKey = process.env.NEON_API_KEY;
+  if (!apiKey) throw new Error('NEON_API_KEY is not set — cannot count Neon projects.');
+  let total = 0;
+  let cursor: string | undefined;
+  for (let page = 0; page < NEON_LIST_MAX_PAGES; page++) {
+    const qs = new URLSearchParams({ limit: String(NEON_LIST_PAGE_LIMIT), ...(cursor ? { cursor } : {}) });
+    const res = await fetch(`${NEON_API_BASE}/projects?${qs}`, { headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' } });
+    if (!res.ok) throw new Error(`Neon project list failed: ${res.status} ${await res.text()}`);
+    const data = (await res.json()) as { projects?: unknown[]; pagination?: { cursor?: string } };
+    const n = data.projects?.length ?? 0;
+    total += n;
+    if (n < NEON_LIST_PAGE_LIMIT || !data.pagination?.cursor || data.pagination.cursor === cursor) return total;
+    cursor = data.pagination.cursor;
+  }
+  throw new Error(`Neon project list did not end after ${NEON_LIST_MAX_PAGES} pages.`);
 }

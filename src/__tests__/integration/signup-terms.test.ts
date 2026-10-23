@@ -27,7 +27,7 @@ describe.skipIf(!cpReady)('signup Terms acceptance (R12)', () => {
     const slug = `test-lc-signup-${Date.now().toString(36)}b`;
     const before = Date.now();
     const r = await startSignup({ companyName: 'Terms Co', email: 'b@test.dev', slug, termsAccepted: true });
-    expect(r).toEqual({ ok: true, data: undefined });
+    expect(r).toEqual({ ok: true, data: { slug } });
     const [row] = await controlDb.select().from(signups).where(eq(signups.slug, slug));
     expect(row.termsVersion).toBe(TERMS_VERSION);
     expect(row.termsAcceptedAt!.getTime()).toBeGreaterThanOrEqual(before - 1000);

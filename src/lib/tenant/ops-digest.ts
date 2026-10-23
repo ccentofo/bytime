@@ -8,6 +8,7 @@ import { addDays } from './lifecycle';
 import { raiseAlert, resolveAlert } from './lifecycle-store';
 import type { TenantRunResult } from './lifecycle-runner';
 import { cronProblems, readCronRuns, type CronProblem } from '@/lib/cron/heartbeat';
+import { signupsDueForDeletion, waitlistedSignups } from '@/lib/signup/maintenance';
 
 /**
  * Founder digest (feature-plan-terms-compliance-fixes.md §4.4, D4): sent to OPS_ALERT_EMAIL by the daily lifecycle
@@ -89,11 +90,13 @@ export async function sendOpsDigest(results: TenantRunResult[], now: Date, incom
     return { alerts, deleting, stalePending, forced, exempt };
   });
   const crons = cronProblems(await readCronRuns(), now);
+  const waitlisted = await waitlistedSignups();
+  const signupDeletions = await signupsDueForDeletion(now);
 
   const ready = results.filter((r) => r.readyForDeletion);
   const blocked = results.filter((r) => r.blockedDeletion);
   const hasNews = data.alerts.length > 0 || ready.length > 0 || blocked.length > 0 || data.deleting.length > 0
-    || data.stalePending.length > 0 || incomplete || crons.length > 0;
+    || data.stalePending.length > 0 || incomplete || crons.length > 0 || waitlisted.length > 0 || signupDeletions.length > 0;
 
   const to = process.env.OPS_ALERT_EMAIL;
   if (!to || !resend) {
@@ -112,6 +115,10 @@ export async function sendOpsDigest(results: TenantRunResult[], now: Date, incom
   if (!hasNews) lines.push('<p>All quiet — nothing needs action today. Every cron has run within its limit.</p>');
   if (incomplete) lines.push('<p><strong>The lifecycle run stopped early (time budget); remaining tenants run next time.</strong></p>');
   section('Crons overdue or never run (cron_runs heartbeat)', cronProblemLines(crons));
+  section('Waitlisted signups (npm run tenant:admin -- waitlist provision <id> --yes)', waitlisted.map((w) =>
+    `${esc(w.slug)} — ${esc(w.email)}, waitlisted ${esc(w.waitlistedAt!.toISOString())} [id ${esc(w.id)}]`));
+  section('Verified signups never provisioned — deleted within 3 days (LB-D5)', signupDeletions.map((d) =>
+    `${esc(d.slug)} — ${esc(d.email)}, verified ${esc(d.verifiedAt!.toISOString())}${d.waitlistedAt ? ' (waitlisted)' : ''} [id ${esc(d.id)}]`));
   section('Ready for deletion (D4: run tenant:delete)', ready.map((r) =>
     `${esc(r.slug)} — deletion date ${esc(r.readyForDeletion!.deletionScheduledFor.toISOString())}${r.readyForDeletion!.overdue ? ' <strong>OVERDUE</strong>' : ''}`));
   section('Deletion blocked by payment activity', blocked.map((r) => `${esc(r.slug)}: ${esc(r.blockedDeletion)}`));
