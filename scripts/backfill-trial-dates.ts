@@ -25,7 +25,7 @@ dotenv.config({ path: ['.env.local', '.env'] });
 
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
-import { and, eq, isNull, isNotNull } from 'drizzle-orm';
+import { and, asc, eq, isNull, isNotNull, sql as dsql } from 'drizzle-orm';
 import { tenants, signups } from '../src/db/control-plane/schema';
 import { TRIAL_DAYS, TRIAL_BACKFILL_MIN_DAYS } from '../src/lib/tenant/lifecycle-config';
 import { withTenantLock } from '../src/db/control-plane/locked';
@@ -83,6 +83,9 @@ async function main() {
           .select({ email: signups.email })
           .from(signups)
           .where(and(eq(signups.slug, t.slug), isNotNull(signups.consumedAt)))
+          // Audit R5: the row that provisioned the workspace (provisioned_at set) first, else the earliest consumed —
+          // never an arbitrary consumed row for the slug (signup cleanup trusts this signup_email).
+          .orderBy(dsql`${signups.provisionedAt} IS NULL`, asc(signups.provisionedAt), asc(signups.consumedAt))
           .limit(1);
         signupEmail = match?.email ?? null;
       }

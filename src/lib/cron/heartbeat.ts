@@ -78,22 +78,30 @@ export async function readCronRuns(): Promise<CronRunRow[]> {
   return controlDb.select().from(cronRuns);
 }
 
-/** Where a stopped reminder run left off inside one tenant: resume after this employee id (null = from the start). */
-export interface CronResume {
-  slug: string;
-  after: string | null;
-}
+/**
+ * Where stopped reminder runs left off inside tenants (audit R1): slug → resume after this employee id (null = from the
+ * start). One entry per tenant, so a stop in one tenant never overwrites another tenant's saved position.
+ */
+export type CronResumes = Record<string, string | null>;
 
 /**
  * The reminder crons' rotation state from the previous run's summary: `cursor` (the last fully processed tenant slug)
- * and `resume` (launch-blockers audit A10: the tenant a run stopped inside, and the last employee it finished).
+ * and `resumes` (audit A10/R1: per tenant, the last employee a stopped run finished). A summary written before R1 holds
+ * a single `resume: { slug, after }`; it is read as a one-entry map.
  */
-export async function readCronState(name: CronName): Promise<{ cursor: string | null; resume: CronResume | null }> {
+export async function readCronState(name: CronName): Promise<{ cursor: string | null; resumes: CronResumes }> {
   const [row] = await controlDb.select({ summary: cronRuns.lastSummary })
     .from(cronRuns).where(sql`${cronRuns.name} = ${name}`).limit(1);
-  const summary = (row?.summary ?? {}) as { cursor?: unknown; resume?: unknown };
+  const summary = (row?.summary ?? {}) as { cursor?: unknown; resumes?: unknown; resume?: unknown };
   const cursor = typeof summary.cursor === 'string' ? summary.cursor : null;
-  const r = summary.resume as { slug?: unknown; after?: unknown } | null | undefined;
-  const resume = r && typeof r.slug === 'string' ? { slug: r.slug, after: typeof r.after === 'string' ? r.after : null } : null;
-  return { cursor, resume };
+  const resumes: CronResumes = {};
+  if (summary.resumes && typeof summary.resumes === 'object' && !Array.isArray(summary.resumes)) {
+    for (const [slug, after] of Object.entries(summary.resumes as Record<string, unknown>)) {
+      resumes[slug] = typeof after === 'string' ? after : null;
+    }
+  } else {
+    const r = summary.resume as { slug?: unknown; after?: unknown } | null | undefined;
+    if (r && typeof r.slug === 'string') resumes[r.slug] = typeof r.after === 'string' ? r.after : null;
+  }
+  return { cursor, resumes };
 }

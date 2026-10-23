@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import crypto from 'crypto';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import type { SQL } from 'drizzle-orm';
 
 /**
  * feature-plan-launch-blockers.md P5 / §9 "Signup", "Resend verification": the SIGNUP_CONTROLS_ENABLED flag, IP
@@ -347,6 +349,19 @@ describe('resendSignupVerification', () => {
     expect(set.expiresAt.getTime()).toBeLessThanOrEqual(createdAt.getTime() + 24 * 3_600_000);
     expect(h.scheduled).toEqual(['signup-verify']);
     expect(db.updates.some((u) => 'ipHash' in u.set || 'verifiedAt' in u.set)).toBe(false); // not counted toward the IP limit
+  });
+
+  it('audit R6/S7: the rotating UPDATE repeats every "still pending" predicate (id + consumed/verified/waitlisted IS NULL)', async () => {
+    setVerifier({ success: true, hostname: 'cadenzpoint.com' });
+    db.onSelect(signups, [{ id: 's1', email: 'a@acme.com', slug: 'acme', companyName: 'Acme', createdAt: new Date(), verifyTokenHash: 'old' }]);
+    db.onReturning('update', signups, [{ id: 's1' }]);
+    await resendSignupVerification({ email: 'a@acme.com', slug: 'acme', turnstileToken: 't' });
+    const update = db.updates.find((u) => u.table === signups)!;
+    const { sql: where, params } = new PgDialect().sqlToQuery(update.where as SQL);
+    expect(params).toEqual(['s1']);
+    for (const predicate of ['"signups"."id" = $1', '"signups"."consumed_at" is null', '"signups"."verified_at" is null', '"signups"."waitlisted_at" is null']) {
+      expect(where).toContain(predicate);
+    }
   });
 
   it('audit S7: the row was verified/waitlisted/consumed between the read and the write → generic answer, nothing sent', async () => {

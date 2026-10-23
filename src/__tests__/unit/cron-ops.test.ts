@@ -12,7 +12,7 @@ import { NextRequest } from 'next/server';
 const h = vi.hoisted(() => ({
   calls: [] as string[],
   cursor: null as string | null,
-  resume: null as null | { slug: string; after: string | null },
+  resumes: {} as Record<string, string | null>,
   alertsWithEmail: [] as Array<Record<string, unknown>>,
   resolved: [] as Array<Record<string, unknown>>,
   sentry: { messages: [] as string[], exceptions: [] as Array<{ err: unknown; ctx: unknown }>, monitors: [] as Array<{ slug: string; config: unknown }>, flushes: [] as unknown[] },
@@ -39,7 +39,7 @@ vi.mock('@/lib/cron/heartbeat', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/cron/heartbeat')>()),
   recordCronStart: async (name: string) => { h.calls.push(`start:${name}`); },
   recordCronSuccess: async (name: string, summary: Record<string, unknown>) => { h.calls.push(`success:${name}:${JSON.stringify(summary)}`); },
-  readCronState: async () => ({ cursor: h.cursor, resume: h.resume }),
+  readCronState: async () => ({ cursor: h.cursor, resumes: structuredClone(h.resumes) }),
 }));
 
 import { CRON_NAMES, CRON_SCHEDULES, cronProblems, type CronRunRow } from '@/lib/cron/heartbeat';
@@ -52,7 +52,7 @@ const HOUR = 3_600_000;
 beforeEach(() => {
   h.calls = [];
   h.cursor = null;
-  h.resume = null;
+  h.resumes = {};
   h.alertsWithEmail = [];
   h.resolved = [];
   h.sentry = { messages: [], exceptions: [], monitors: [], flushes: [] };
@@ -205,7 +205,7 @@ describe('reminder sweep: fair rotation + time budget', () => {
       name: 'submission-deadline', tenants: [T('a'), T('b')], budgetMs: 10_000,
       processTenant: async (t) => (t.slug === 'b' ? { stoppedAfter: 'emp-5' } : 'done'),
     });
-    expect(r).toMatchObject({ incomplete: true, processed: 1, cursor: 'a', resume: { slug: 'b', after: 'emp-5' } });
+    expect(r).toMatchObject({ incomplete: true, processed: 1, cursor: 'a', resumes: { b: 'emp-5' } });
   });
 
   it('audit A10: a tenant that always stops can’t stall the rotation — the second run reaches the next tenant', async () => {
@@ -218,11 +218,11 @@ describe('reminder sweep: fair rotation + time budget', () => {
       });
       seen.push(order);
       h.cursor = r.cursor;
-      h.resume = r.resume;
+      h.resumes = r.resumes;
       return r;
     };
     const first = await run();
-    expect(first).toMatchObject({ incomplete: true, processed: 0, cursor: 'a', resume: { slug: 'a', after: null } });
+    expect(first).toMatchObject({ incomplete: true, processed: 0, cursor: 'a', resumes: { a: null } });
     await run();
     expect(seen).toEqual([['a'], ['b', 'a']]); // b is served; a comes round again (and resumes)
   });
@@ -230,13 +230,99 @@ describe('reminder sweep: fair rotation + time budget', () => {
   it('audit A10: a stopped tenant resumes after the saved employee; a finished one clears the sub-cursor', async () => {
     const resumeArgs: Array<[string, string | null]> = [];
     h.cursor = 'z';
-    h.resume = { slug: 'a', after: 'emp-2' };
+    h.resumes = { a: 'emp-2' };
     const r = await sweepTenants({
       name: 'daily-reminder', tenants: [T('a'), T('b')], budgetMs: 10_000,
       processTenant: async (t, { resumeAfter }) => { resumeArgs.push([t.slug, resumeAfter]); return 'done'; },
     });
     expect(resumeArgs).toEqual([['a', 'emp-2'], ['b', null]]);
-    expect(r).toMatchObject({ incomplete: false, resume: null });
+    expect(r).toMatchObject({ incomplete: false, resumes: {} });
+  });
+
+  /**
+   * Audit R1: simulated daily runs over tenants with `size` employees each (ids e01, e02, …). The clock ticks one unit
+   * per employee; the budget is checked before every employee, as the reminder routes do. Returns, per run, which
+   * employees each tenant reached, and carries cursor + resumes into the next run like cron_runs.last_summary does.
+   */
+  function simulator(sizes: Record<string, number>, budget: number) {
+    const id = (n: number) => `e${String(n).padStart(2, '0')}`;
+    const reached: Record<string, Set<string>> = Object.fromEntries(Object.keys(sizes).map((s) => [s, new Set<string>()]));
+    const completedRuns: Record<string, number[]> = Object.fromEntries(Object.keys(sizes).map((s) => [s, []]));
+    let runNo = 0;
+    return {
+      reached,
+      completedRuns,
+      async run() {
+        runNo++;
+        let now = 0;
+        const r = await sweepTenants({
+          name: 'daily-reminder', tenants: Object.keys(sizes).map(T), budgetMs: budget, clock: () => now,
+          processTenant: async (t, { outOfTime, resumeAfter }) => {
+            let lastDone = resumeAfter;
+            const start = resumeAfter ? Number(resumeAfter.slice(1)) + 1 : 1;
+            for (let n = start; n <= sizes[t.slug]; n++) {
+              if (outOfTime()) return { stoppedAfter: lastDone };
+              reached[t.slug].add(id(n));
+              lastDone = id(n);
+              now++;
+            }
+            completedRuns[t.slug].push(runNo);
+            return 'done';
+          },
+        });
+        h.cursor = r.cursor;
+        h.resumes = r.resumes;
+        return r;
+      },
+    };
+  }
+
+  it('audit R1: [a, b] both always stopping → each tenant reaches more employees every time it is served, until complete', async () => {
+    const sim = simulator({ a: 10, b: 10 }, 3);
+    const sizes: Record<string, number[]> = { a: [], b: [] };
+    for (let i = 0; i < 8; i++) {
+      await sim.run();
+      sizes.a.push(sim.reached.a.size);
+      sizes.b.push(sim.reached.b.size);
+    }
+    // Runs alternate a-first, b-first…; each serving adds 3 new employees — nobody restarts from the top.
+    expect(sizes.a).toEqual([3, 3, 6, 6, 9, 9, 10, 10]);
+    expect(sizes.b).toEqual([0, 3, 3, 6, 6, 9, 10, 10]); // run 7: a finishes with budget to spare, b finishes too
+    expect(sim.completedRuns.a.length).toBeGreaterThan(0);
+    expect(sim.completedRuns.b.length).toBeGreaterThan(0);
+  });
+
+  it('audit R1: a=20, b=4, c=4 with a budget of 6 → a eventually completes (c\'s stop no longer erases a\'s position)', async () => {
+    const sim = simulator({ a: 20, b: 4, c: 4 }, 6);
+    for (let i = 0; i < 12; i++) await sim.run();
+    expect(sim.reached.a.size).toBe(20);
+    expect(sim.completedRuns.a.length).toBeGreaterThan(0);
+    expect(sim.completedRuns.b.length).toBeGreaterThan(0);
+    expect(sim.completedRuns.c.length).toBeGreaterThan(0);
+  });
+
+  it('audit R1: resumes are set on a stop, deleted on done or tenant failure, kept for tenants not reached, dropped for tenants gone', async () => {
+    h.cursor = null;
+    h.resumes = { a: 'e03', b: 'e05', c: 'e07', gone: 'e01' };
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const r = await sweepTenants({
+      name: 'daily-reminder', tenants: [T('a'), T('b'), T('c'), T('d')], budgetMs: 10_000,
+      processTenant: async (t) => {
+        if (t.slug === 'a') return 'done';
+        if (t.slug === 'b') throw new Error('tenant db unreachable');
+        return { stoppedAfter: 'e09' }; // c stops; d is never reached
+      },
+    });
+    spy.mockRestore();
+    expect(r.resumes).toEqual({ c: 'e09' });
+
+    h.cursor = null;
+    h.resumes = { c: 'e07', d: 'e02' };
+    const r2 = await sweepTenants({
+      name: 'daily-reminder', tenants: [T('a'), T('b'), T('c'), T('d')], budgetMs: 10_000,
+      processTenant: async (t) => (t.slug === 'b' ? { stoppedAfter: 'e01' } : 'done'),
+    });
+    expect(r2.resumes).toEqual({ b: 'e01', c: 'e07', d: 'e02' }); // c and d not reached → kept
   });
 
   it('a per-tenant failure → Sentry (tenant tag), counted, and the other tenants still run', async () => {

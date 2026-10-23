@@ -67,3 +67,16 @@ export function parseProvisionArgs(argv: string[]): ProvisionArgs | { error: str
   if (acceptedAt.getTime() > Date.now() + 5 * 60_000) return { error: '--terms-accepted-at is in the future.' };
   return { slug, name, adminEmail, adminName, terms: { version, acceptedAt } };
 }
+
+/**
+ * Audit R8: the workspace exists once provisionTenant returns; if recording its Terms/audit note afterwards fails, say
+ * so (not "Provisioning failed") and give the exact `tenant:admin audit-note` command that records it by hand.
+ */
+export function provisionRecordFailedMessage(slug: string, terms: ProvisionArgs['terms'], err: unknown): string {
+  const note = terms === 'none'
+    ? 'provisioned without a Terms record'
+    : `Terms ${terms.version} accepted ${terms.acceptedAt.toISOString()} (from the customer's signed agreement; provision:tenant)`;
+  return `Workspace "${slug}" created, but recording the Terms/audit note failed (${err instanceof Error ? err.message : String(err)}). `
+    + 'Record it with `tenant:admin audit-note`:\n'
+    + `  npm run tenant:admin -- audit-note ${slug} --note "${note}" --yes`;
+}

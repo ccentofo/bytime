@@ -31,13 +31,18 @@ describe.skipIf(!cpReady)('cron heartbeat (P6)', () => {
 
   it('a run writes cron_runs start + success with the summary (including the cursor)', async () => {
     const before = Date.now();
-    const res = await runCron(req(), 'notice-delivery', async () => ({ message: 'test', cursor: 'zz-heartbeat-test', resume: { slug: 'zz-heartbeat-test', after: 'emp-7' } }), { maxRuntimeMinutes: 5 });
+    const res = await runCron(req(), 'notice-delivery', async () => ({ message: 'test', cursor: 'zz-heartbeat-test', resumes: { 'zz-heartbeat-test': 'emp-7', 'zz-other': null } }), { maxRuntimeMinutes: 5 });
     expect(res.status).toBe(200);
     const r = await row('notice-delivery');
     expect(r!.lastStartedAt!.getTime()).toBeGreaterThanOrEqual(before - 1000);
     expect(r!.lastSucceededAt!.getTime()).toBeGreaterThanOrEqual(r!.lastStartedAt!.getTime());
-    expect(r!.lastSummary).toEqual({ message: 'test', cursor: 'zz-heartbeat-test', resume: { slug: 'zz-heartbeat-test', after: 'emp-7' } });
-    expect(await readCronState('notice-delivery')).toEqual({ cursor: 'zz-heartbeat-test', resume: { slug: 'zz-heartbeat-test', after: 'emp-7' } });
+    expect(r!.lastSummary).toEqual({ message: 'test', cursor: 'zz-heartbeat-test', resumes: { 'zz-heartbeat-test': 'emp-7', 'zz-other': null } });
+    expect(await readCronState('notice-delivery')).toEqual({ cursor: 'zz-heartbeat-test', resumes: { 'zz-heartbeat-test': 'emp-7', 'zz-other': null } });
+  });
+
+  it('audit R1: a summary written before R1 (single `resume`) is read as a one-entry resumes map', async () => {
+    await runCron(req(), 'notice-delivery', async () => ({ message: 'test', cursor: 'zz-heartbeat-test', resume: { slug: 'zz-heartbeat-test', after: 'emp-7' } }), { maxRuntimeMinutes: 5 });
+    expect(await readCronState('notice-delivery')).toEqual({ cursor: 'zz-heartbeat-test', resumes: { 'zz-heartbeat-test': 'emp-7' } });
   });
 
   it('a failed run advances last_started_at only', async () => {

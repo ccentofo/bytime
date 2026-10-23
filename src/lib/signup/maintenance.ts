@@ -44,16 +44,18 @@ export interface SignupMaintenanceOptions {
  * - delete: the tenant is this signer's (signup_email = row email) AND holds the Terms version + acceptance time
  *   (proof of contract kept for the life of the account);
  * - delete: the tenant belongs to someone else (signup_email non-null and different) — this signer never got that
- *   workspace, so there is no contract to prove;
+ *   workspace, so there is no contract to prove — UNLESS the row itself has `provisioned_at` (audit R5): this row
+ *   provisioned the workspace, so the mismatch means the tenant's signup_email is wrong (e.g. a legacy backfill picked
+ *   another signer's row, scripts/backfill-trial-dates.ts) — keep;
  * - keep (+ signup-terms-not-copied): the tenant lacks Terms data, its signup_email is NULL (legacy), or no tenant has
  *   the slug.
  */
 export function consumedRowDecision(
-  rowEmail: string,
+  row: { email: string; provisionedAt: Date | null },
   tenant: { signupEmail: string | null; termsVersion: string | null; termsAcceptedAt: Date | null } | null,
 ): 'delete' | 'keep' {
   if (!tenant || tenant.signupEmail === null) return 'keep';
-  if (tenant.signupEmail.toLowerCase() !== rowEmail.toLowerCase()) return 'delete';
+  if (tenant.signupEmail.toLowerCase() !== row.email.toLowerCase()) return row.provisionedAt ? 'keep' : 'delete';
   return tenant.termsVersion && tenant.termsAcceptedAt ? 'delete' : 'keep';
 }
 
@@ -103,13 +105,13 @@ async function cleanupSignups(now: Date, filter?: SQL) {
 
   // 2. Consumed past 30 days — by consumedRowDecision (audit S1): the tenant matched on slug only.
   const consumed = await controlDb.select({
-    id: signups.id, slug: signups.slug, email: signups.email,
+    id: signups.id, slug: signups.slug, email: signups.email, provisionedAt: signups.provisionedAt,
     tSignupEmail: tenants.signupEmail, tId: tenants.id, tVersion: tenants.termsVersion, tAccepted: tenants.termsAcceptedAt,
   }).from(signups)
     .leftJoin(tenants, eq(tenants.slug, signups.slug))
     .where(and(isNotNull(signups.consumedAt), lt(signups.consumedAt, daysAgo(now, CONSUMED_SIGNUP_RETENTION_DAYS)), filter));
   const decide = (r: (typeof consumed)[number]) => consumedRowDecision(
-    r.email,
+    { email: r.email, provisionedAt: r.provisionedAt ?? null },
     r.tId ? { signupEmail: r.tSignupEmail, termsVersion: r.tVersion, termsAcceptedAt: r.tAccepted } : null,
   );
   const deletable = consumed.filter((r) => decide(r) === 'delete');

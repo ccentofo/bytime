@@ -16,7 +16,7 @@ import { runRetentionBackfill, type RetentionDeps } from '../../../scripts/lib/r
 import { MIGRATABLE_TENANT_STATUSES, migrateOneTenant, isTenantDatabaseConfirmedAbsent, NEON_KEY_MISSING_NOTE, type TenantMigrationDeps, type AbsenceCheck } from '../../../scripts/lib/tenant-migration';
 import { targetBanner, isLoopbackUrl, describeDatabaseUrl } from '../../../scripts/lib/target';
 import { provisionWithoutNeonRefusal } from '../../../scripts/lib/provision-guard';
-import { parseProvisionArgs } from '../../../scripts/lib/provision-args';
+import { parseProvisionArgs, provisionRecordFailedMessage } from '../../../scripts/lib/provision-args';
 
 const ROOT = path.resolve(__dirname, '../../..');
 const ENV_KEYS = ['NEON_API_KEY', 'NEON_HISTORY_RETENTION_SECONDS', 'NEON_REGION_ID'] as const;
@@ -318,6 +318,22 @@ describe('provision:tenant Terms record (audit §5)', () => {
     expect(src).toMatch(/parseProvisionArgs\(process\.argv\.slice\(2\)\)/);
     expect(src).toMatch(/termsVersion: terms\.version, termsAcceptedAt: terms\.acceptedAt/);
     expect(src).toMatch(/recordProvisionTerms\(tenant\.id, terms,/);
+  });
+
+  it('audit R8: a failed audit write after provisioning says "created, but recording … failed" with the audit-note command', () => {
+    const withTerms = provisionRecordFailedMessage('acme', { version: '2026-10-21-draft-1', acceptedAt: new Date('2026-10-20T15:30:00Z') }, new Error('connection reset'));
+    expect(withTerms).toMatch(/^Workspace "acme" created, but recording the Terms\/audit note failed \(connection reset\)\. Record it with `tenant:admin audit-note`/);
+    expect(withTerms).toContain('npm run tenant:admin -- audit-note acme --note "Terms 2026-10-21-draft-1 accepted 2026-10-20T15:30:00.000Z (from the customer\'s signed agreement; provision:tenant)" --yes');
+    expect(provisionRecordFailedMessage('acme', 'none', new Error('x'))).toContain('audit-note acme --note "provisioned without a Terms record" --yes');
+    expect(withTerms).not.toMatch(/Provisioning failed/);
+
+    // The script: "Provisioning failed" only around provisionTenant; the registry lookup + audit write have their own catch.
+    const src = readFileSync(path.join(ROOT, 'scripts/provision-tenant.ts'), 'utf8');
+    const provisionTry = src.slice(src.indexOf('r = await provisionTenant('), src.indexOf('// Audit R8'));
+    expect(provisionTry).toMatch(/catch \(err\) \{\s*console\.error\('Provisioning failed:', err\);\s*process\.exit\(1\);/);
+    const recordTry = src.slice(src.indexOf('// Audit R8'), src.indexOf("console.log(`✓ Provisioned"));
+    expect(recordTry).toMatch(/recordProvisionTerms\(tenant\.id, terms,[\s\S]*catch \(err\) \{\s*console\.error\(`✗ \$\{provisionRecordFailedMessage\(r\.slug, terms, err\)\}`\);\s*process\.exit\(1\);/);
+    expect(recordTry).not.toContain('Provisioning failed');
   });
 });
 

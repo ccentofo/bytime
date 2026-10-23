@@ -28,8 +28,12 @@ import { cpReady, cleanupLifecycleTenants, makeTenant } from './lifecycle-helper
  * — plus the outage window logic, the daily-cap count, resend for consumed / > 24 h rows, signup-config-missing
  * resolution and startSignup's opportunistic ip_hash nulling.
  *
- * Scoped: cleanup runs with an id filter over ONLY the rows this test inserted (the integration control plane can be
- * the developer's own); the window logic uses a unique test key; every alert / tenant / row created is removed.
+ * Scope (audit R6): the signups cleanup steps run with an id filter over ONLY the rows this test inserted (the
+ * integration control plane can be the developer's own), the window logic uses a unique test key, and every alert /
+ * tenant / row this test creates is removed. Some steps are NOT scoped and act on the whole control plane, exactly as
+ * production does: runSignupMaintenance resolves EVERY past-UTC-day `signup-cap-reached` alert; resolveSignupSignals
+ * resolves every quiet signup signal alert (outage, hostname mismatch, secret rejected) and `signup-config-missing`;
+ * startSignup nulls EVERY signups.ip_hash older than 24 h.
  */
 
 const DAY = 86_400_000;
@@ -93,6 +97,8 @@ describe.skipIf(!cpReady)('signup cleanup and signals (audit S4)', () => {
       consumedOtherSigner: await signup({ slug: someoneElses.slug, email: 'loser@test.dev', consumedAt: ago(31) }),
       consumedLegacy: await signup({ slug: legacy.slug, email: 'legacy@test.dev', consumedAt: ago(31) }),
       consumedNoTenant: await signup({ consumedAt: ago(31) }),
+      // R5: this row provisioned the workspace (provisioned_at) but the tenant names another signer → kept, not deleted.
+      consumedProvisionedMismatch: await signup({ slug: someoneElses.slug, email: 'founder@test.dev', consumedAt: ago(31), provisionedAt: ago(31) }),
       consumedRecent: await signup({ slug: own.slug, email: 'own@test.dev', consumedAt: ago(29) }),
       verifiedOld: await signup({ verifiedAt: ago(31), createdAt: ago(31) }),
       verifiedNew: await signup({ verifiedAt: ago(29), createdAt: ago(29) }),
@@ -112,6 +118,7 @@ describe.skipIf(!cpReady)('signup cleanup and signals (audit S4)', () => {
       consumedOtherSigner: false,
       consumedLegacy: true,
       consumedNoTenant: true,
+      consumedProvisionedMismatch: true,
       consumedRecent: true,
       verifiedOld: false,
       verifiedNew: true,
@@ -121,6 +128,7 @@ describe.skipIf(!cpReady)('signup cleanup and signals (audit S4)', () => {
     expect(await openFor(ownNoTerms.slug)).toBe(1);
     expect(await openFor(legacy.slug)).toBe(1);
     expect(await openFor(rows.consumedNoTenant.slug)).toBe(1);
+    expect(await openFor(someoneElses.slug)).toBe(1); // R5: the kept provisioning row's alert (raised after the loser's delete)
     expect(await openFor(own.slug)).toBe(0); // resolved when its row was deleted
   });
 

@@ -45,7 +45,7 @@ vi.mock('@/lib/cron/tenant-sweep', async (importOriginal) => {
       for (const t of opts.tenants) {
         h.outcomes.push(await opts.processTenant(t, { outOfTime: () => h.checks++ >= h.allowedChecks, resumeAfter: h.resumeAfter[t.slug] ?? null }));
       }
-      return { processed: opts.tenants.length, candidates: opts.tenants.length, failedTenants: [], incomplete: false, cursor: null, resume: null };
+      return { processed: opts.tenants.length, candidates: opts.tenants.length, failedTenants: [], incomplete: false, cursor: null, resumes: {} };
     },
   };
 });

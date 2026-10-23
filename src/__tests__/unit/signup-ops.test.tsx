@@ -35,7 +35,7 @@ vi.mock('@/server/internal/signup', () => ({ tenantsCreatedSince: async () => 7 
 vi.mock('@/server/actions/signup', () => ({ startSignup: vi.fn(), resendSignupVerification: vi.fn() }));
 
 import { controlDb } from '@/db/control-plane';
-import { signups } from '@/db/control-plane/schema';
+import { signups, tenants } from '@/db/control-plane/schema';
 import type { FakeControlDb } from '../helpers/fake-control-db';
 import { runSignupMaintenance } from '@/lib/signup/maintenance';
 import { createNeonDatabase } from '@/lib/tenant/neon';
@@ -87,11 +87,39 @@ describe('signup cleanup (LB-D5)', () => {
   it('audit S1: consumedRowDecision', async () => {
     const { consumedRowDecision } = await import('@/lib/signup/maintenance');
     const withTerms = { termsVersion: 'v', termsAcceptedAt: new Date() };
-    expect(consumedRowDecision('a@x.dev', { signupEmail: 'A@x.dev', ...withTerms })).toBe('delete');
-    expect(consumedRowDecision('a@x.dev', { signupEmail: 'a@x.dev', termsVersion: 'v', termsAcceptedAt: null })).toBe('keep');
-    expect(consumedRowDecision('a@x.dev', { signupEmail: 'other@x.dev', termsVersion: null, termsAcceptedAt: null })).toBe('delete');
-    expect(consumedRowDecision('a@x.dev', { signupEmail: null, ...withTerms })).toBe('keep');
-    expect(consumedRowDecision('a@x.dev', null)).toBe('keep');
+    const row = { email: 'a@x.dev', provisionedAt: null };
+    expect(consumedRowDecision(row, { signupEmail: 'A@x.dev', ...withTerms })).toBe('delete');
+    expect(consumedRowDecision(row, { signupEmail: 'a@x.dev', termsVersion: 'v', termsAcceptedAt: null })).toBe('keep');
+    expect(consumedRowDecision(row, { signupEmail: 'other@x.dev', termsVersion: null, termsAcceptedAt: null })).toBe('delete');
+    expect(consumedRowDecision(row, { signupEmail: null, ...withTerms })).toBe('keep');
+    expect(consumedRowDecision(row, null)).toBe('keep');
+  });
+
+  it('audit R5: a consumed row that itself has provisioned_at is never deleted as "different signer" (kept + alert)', async () => {
+    const { consumedRowDecision } = await import('@/lib/signup/maintenance');
+    const provisioned = { email: 'a@x.dev', provisionedAt: new Date('2026-09-01T00:00:00Z') };
+    expect(consumedRowDecision(provisioned, { signupEmail: 'other@x.dev', termsVersion: 'v', termsAcceptedAt: new Date() })).toBe('keep');
+    expect(consumedRowDecision(provisioned, { signupEmail: 'other@x.dev', termsVersion: null, termsAcceptedAt: null })).toBe('keep');
+    // Its own tenant: the Terms rule as before.
+    expect(consumedRowDecision(provisioned, { signupEmail: 'a@x.dev', termsVersion: 'v', termsAcceptedAt: new Date() })).toBe('delete');
+    expect(consumedRowDecision(provisioned, { signupEmail: 'a@x.dev', termsVersion: null, termsAcceptedAt: null })).toBe('keep');
+
+    // Through the cleanup: kept, listed, and alerted.
+    vi.stubEnv('SIGNUP_CONTROLS_ENABLED', 'true');
+    db.onReturning('delete', signups, []); // unverified
+    db.onSelect(signups, [
+      { id: 'p1', slug: 'mismatch', email: 'a@x.dev', provisionedAt: new Date('2026-09-01T00:00:00Z'), tId: 't1', tSignupEmail: 'other@x.dev', tVersion: 'v', tAccepted: new Date() },
+    ]);
+    db.onReturning('delete', signups, []); // verified-unprovisioned
+    const r = await runSignupMaintenance(new Date());
+    expect(r.cleanup).toMatchObject({ consumedDeleted: 0, consumedKept: ['mismatch'] });
+    expect(h.raised).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'signup-terms-not-copied', dedupKey: 'mismatch' })]));
+  });
+
+  it('audit R5: the legacy signup_email backfill picks the provisioning row first, else the earliest consumed (static)', () => {
+    const script = readFileSync(path.join(ROOT, '../scripts/backfill-trial-dates.ts'), 'utf8');
+    const lookup = script.slice(script.indexOf('.from(signups)'), script.indexOf('.limit(1)', script.indexOf('.from(signups)')));
+    expect(lookup).toMatch(/\.orderBy\(dsql`\$\{signups\.provisionedAt\} IS NULL`, asc\(signups\.provisionedAt\), asc\(signups\.consumedAt\)\)/);
   });
 
   it('audit S6: signup-cap-reached alerts of past UTC days are resolved (flag-independent)', async () => {
@@ -246,6 +274,39 @@ describe('founder waitlist provisioning', () => {
       .rejects.toThrow(/could not be issued[\s\S]*waitlist provision s1 --yes[\s\S]*Forgot password" at https?:\/\/newco\.[^ ]+\/forgot-password/);
     expect(db.updates.filter((u) => u.table === signups)).toEqual([]);
     expect(d.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('audit R2: token issue fails once → the re-run resumes (no "name taken"), sends the email, and the row ends consumed', async () => {
+    const d = deps();
+    // Like provisionTenant: a second provision of an already-active slug is a conflict.
+    let created = false;
+    d.provision.mockImplementation(async () => {
+      if (created) throw new ProvisionConflictError('Workspace "newco" already exists.');
+      created = true;
+      return { slug: 'newco', adminUserId: 'u1' };
+    });
+    d.issueToken.mockRejectedValueOnce(new Error('tenant db unreachable'));
+
+    db.onSelect(signups, [waitlistedRow()]); // first run: no tenant yet
+    await expect(provisionWaitlistedSignup('s1', d as unknown as WaitlistProvisionDeps)).rejects.toThrow(/could not be issued/);
+    expect(db.updates.filter((u) => u.table === signups)).toEqual([]);
+
+    db.onSelect(signups, [waitlistedRow()]); // re-run: the row is still waitlisted; the workspace is active, this signer's
+    db.onSelect(tenants, [{ status: 'active', signupEmail: 'Jane.Doe@newco.com' }]);
+    const r = await provisionWaitlistedSignup('s1', d as unknown as WaitlistProvisionDeps);
+    expect(d.provision).toHaveBeenCalledTimes(1);
+    expect(d.sendEmail).toHaveBeenCalledTimes(1);
+    expect(r).toMatchObject({ emailed: true, setPasswordUrl: expect.stringContaining('token=tok') });
+    expect(Object.keys(db.updates.find((u) => u.table === signups)!.set).sort()).toEqual(['consumedAt', 'provisionedAt']);
+  });
+
+  it('audit R2: an active workspace signed up by someone else is still "taken" (provision runs and conflicts)', async () => {
+    db.onSelect(signups, [waitlistedRow()]);
+    db.onSelect(tenants, [{ status: 'active', signupEmail: 'someone@else.dev' }]);
+    const d = deps();
+    d.provision.mockRejectedValueOnce(new ProvisionConflictError('taken'));
+    await expect(provisionWaitlistedSignup('s1', d as unknown as WaitlistProvisionDeps)).rejects.toThrow(/taken by someone else/);
+    expect(d.issueToken).not.toHaveBeenCalled();
   });
 
   it('a slug taken meanwhile is reported (ProvisionConflictError → WaitlistError)', async () => {

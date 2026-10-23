@@ -18,9 +18,13 @@ import { stripComments } from '../helpers/source-scanner';
 const h = vi.hoisted(() => {
   const refresh = vi.fn();
   // Stable across renders, like Next's useRouter().
-  return { refresh, router: { refresh, push: () => {} }, billing: null as unknown };
+  return { refresh, router: { refresh, push: () => {} }, billing: null as unknown, search: '' };
 });
-vi.mock('next/navigation', () => ({ usePathname: () => '/timesheet', useRouter: () => h.router }));
+vi.mock('next/navigation', () => ({
+  usePathname: () => '/timesheet',
+  useRouter: () => h.router,
+  useSearchParams: () => new URLSearchParams(h.search),
+}));
 vi.mock('next-auth/react', () => ({ signOut: vi.fn() }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 vi.mock('@/server/actions/billing', () => ({
@@ -177,6 +181,7 @@ describe('back from Stripe Checkout', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     h.refresh.mockReset();
+    h.search = '';
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -205,6 +210,29 @@ describe('back from Stripe Checkout', () => {
   it('no refresh without a successful checkout', () => {
     mount();
     mount('cancelled');
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it('audit R3: the BillingWall (no checkoutStatus prop — layouts get no searchParams) reads ?status=success from the URL: "being activated" + one refresh', async () => {
+    h.billing = billingInfo();
+    h.search = '?status=success';
+    const wall = await BillingWall();
+    act(() => { root.render(<MantineProvider>{wall}</MantineProvider>); });
+    expect(container.textContent).toContain('Workspace suspended');
+    expect(container.textContent).toContain('Thanks — your subscription is being activated');
+    act(() => { vi.advanceTimersByTime(5000); });
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('audit R3: ?status=cancelled on the wall shows the cancelled note and never refreshes', async () => {
+    h.billing = billingInfo();
+    h.search = '?status=cancelled';
+    const wall = await BillingWall();
+    act(() => { root.render(<MantineProvider>{wall}</MantineProvider>); });
+    expect(container.textContent).toContain('Checkout was cancelled');
     act(() => { vi.advanceTimersByTime(60_000); });
     expect(h.refresh).not.toHaveBeenCalled();
   });

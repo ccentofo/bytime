@@ -2,7 +2,7 @@ import 'server-only';
 import dayjs from 'dayjs';
 import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm';
 import { controlDb } from '@/db/control-plane';
-import { signups } from '@/db/control-plane/schema';
+import { signups, tenants } from '@/db/control-plane/schema';
 import { ProvisionConflictError, provisionTenant } from './provision';
 import { issueSetPasswordToken } from './invite';
 import { getTenantBySlug } from './registry';
@@ -16,6 +16,10 @@ import { tenantsCreatedSince } from '@/server/internal/signup';
  * and `tenant:admin waitlist provision <signupId> --yes`. A waitlisted signup is a verified, unconsumed signups row.
  * Provisioning bypasses the daily cap (founder decision) and awaits the set-password email; if that email fails the
  * command prints the link and exits non-zero so the founder can relay it.
+ *
+ * Audit R2: a re-run resumes. If the workspace for the row's slug is already `active` and was signed up by this row's
+ * email, provisioning is skipped (provisionTenant would call the name taken) and the run continues with the token,
+ * marking the row and the email.
  */
 
 export class WaitlistError extends Error {}
@@ -63,21 +67,29 @@ export async function provisionWaitlistedSignup(signupId: string, deps: Waitlist
   if (!row.verifiedAt) throw new WaitlistError('That signup never verified its email — it cannot be provisioned.');
   if (!row.waitlistedAt) throw new WaitlistError('That signup is not on the waitlist.');
 
-  try {
-    await deps.provision({
-      slug: row.slug,
-      name: row.companyName,
-      adminEmail: row.email,
-      adminName: row.email.split('@')[0],
-      timezone: row.timezone ?? undefined,
-      termsVersion: row.termsVersion ?? undefined,
-      termsAcceptedAt: row.termsAcceptedAt ?? undefined,
-    });
-  } catch (err) {
-    if (err instanceof ProvisionConflictError) {
-      throw new WaitlistError(`The workspace name "${row.slug}" was taken by someone else meanwhile — contact ${row.email} to pick another.`);
+  // Audit R2: a previous run created the workspace for this signer but stopped before the row was marked — resume.
+  const [existing] = await controlDb.select({ status: tenants.status, signupEmail: tenants.signupEmail })
+    .from(tenants).where(eq(tenants.slug, row.slug)).limit(1);
+  const alreadyProvisioned = existing?.status === 'active'
+    && !!existing.signupEmail && existing.signupEmail.toLowerCase() === row.email.toLowerCase();
+
+  if (!alreadyProvisioned) {
+    try {
+      await deps.provision({
+        slug: row.slug,
+        name: row.companyName,
+        adminEmail: row.email,
+        adminName: row.email.split('@')[0],
+        timezone: row.timezone ?? undefined,
+        termsVersion: row.termsVersion ?? undefined,
+        termsAcceptedAt: row.termsAcceptedAt ?? undefined,
+      });
+    } catch (err) {
+      if (err instanceof ProvisionConflictError) {
+        throw new WaitlistError(`The workspace name "${row.slug}" was taken by someone else meanwhile — contact ${row.email} to pick another.`);
+      }
+      throw err;
     }
-    throw err;
   }
 
   const base = tenantBaseUrl(row.slug);
@@ -85,7 +97,7 @@ export async function provisionWaitlistedSignup(signupId: string, deps: Waitlist
   if (!tenant) throw new WaitlistError(`Provisioned "${row.slug}" but it is not in the registry — check tenant:admin show.`);
 
   // Audit S9: issue the set-password token BEFORE marking the row provisioned. If issuing fails, the row stays
-  // waitlisted (re-running resumes — provisioning is signer-bound and idempotent) and the founder gets the fallback.
+  // waitlisted (re-running resumes — audit R2: the signer's active workspace is reused) and the founder gets the fallback.
   let token: string;
   try {
     token = await deps.issueToken(tenant.dbUrl, row.email);

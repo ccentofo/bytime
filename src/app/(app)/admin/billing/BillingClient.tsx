@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useTransition } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Container, Title, Text, Paper, Group, Stack, Badge, Button,
   Alert, Divider,
@@ -16,6 +16,8 @@ import { PageHeader } from '@/components/ui/PageHeader';
 
 interface Props {
   billing: TenantBillingInfo;
+  /** `?status=` from the billing page. Absent (the BillingWall, rendered by the layout, which gets no searchParams in
+   * Next 16) → read from the URL (audit A12/R3). */
   checkoutStatus?: string;
 }
 
@@ -27,10 +29,12 @@ const STATUS_COLORS: Record<string, string> = {
   unpaid: 'red',
 };
 
-export function BillingClient({ billing, checkoutStatus }: Props) {
+export function BillingClient({ billing, checkoutStatus: checkoutStatusProp }: Props) {
   const [isPending, startTransition] = useTransition();
   const [pendingPlan, setPendingPlan] = useState<PlanKey | null>(null);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const checkoutStatus = checkoutStatusProp ?? searchParams.get('status') ?? undefined;
 
   // Back from Stripe Checkout: the webhook that activates the plan usually lands within seconds. Refresh once after
   // 5 s so the page picks it up (one refresh — not a polling loop).

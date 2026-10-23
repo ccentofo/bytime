@@ -16,6 +16,7 @@ import {
 } from './gusto-api';
 import { getDbForWrite } from '@/db';
 import { integrationSyncRecords } from '@/db/schema';
+import { safeErrorMessage } from '@/server/internal/import-errors';
 import dayjs from 'dayjs';
 import {
   aggregateEntriesByEmployee,
@@ -205,7 +206,8 @@ export const gustoConnector: IntegrationConnector = {
         result.failed++;
         result.errors.push({
           bytimeEntityId: bytimeUserId,
-          error: String(error),
+          // Audit R7: shown in the admin sync log and the export — never a raw DB error (SQL + params).
+          error: safeErrorMessage(error, { fallback: 'Could not sync this employee.', logLabel: 'Gusto sync record failed:' }),
         });
       }
     }

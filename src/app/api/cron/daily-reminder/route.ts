@@ -122,6 +122,6 @@ async function sendReminders(): Promise<Record<string, unknown>> {
     failedTenants: sweep.failedTenants,
     failedTenantCount: sweep.failedTenants.length,
     cursor: sweep.cursor, // P6 §4: the next run starts after this slug
-    resume: sweep.resume, // audit A10: the tenant a stopped run resumes mid-way, after this employee
+    resumes: sweep.resumes, // audit A10/R1: per tenant, where a stopped run resumes (after this employee)
   };
 }

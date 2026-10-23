@@ -84,6 +84,12 @@ export async function updateUser(id: string, data: {
     if (data.flsaExempt !== undefined && typeof data.flsaExempt !== 'boolean') {
       throw new UserFacingError('FLSA exempt must be true or false.');
     }
+    // Audit R4: role and active status change in separate calls (the UI never sends both). Together, e.g.
+    // `{ isActive: true, role: 'employee' }`, the reactivation branch would lock the target before the admin rows —
+    // the opposite order to the last-admin lock below, which can deadlock (A3).
+    if (data.role !== undefined && data.isActive !== undefined) {
+      throw new UserFacingError('Change the role and the active status separately.');
+    }
 
     // An admin cannot change their own role or deactivate themselves.
     if (actor.id === id) {

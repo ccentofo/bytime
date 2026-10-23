@@ -2,8 +2,9 @@
  * A scriptable stand-in for the drizzle control-plane client in unit tests (no Postgres in the unit runner).
  * - `select(...)`: any chain (`.from().where().orderBy().limit()…`) resolves to the next scripted result for the table
  *   passed to `.from(table)` (FIFO per table), or [] when none is scripted.
- * - `insert/update/delete`: recorded (table, values / set); `.returning()` resolves to the next scripted result for
- *   that table + operation, or [].
+ * - `insert/update/delete`: recorded (table, values / set; an update also records its `.where()` condition, so a test
+ *   can render it with drizzle's PgDialect); `.returning()` resolves to the next scripted result for that table +
+ *   operation, or [].
  */
 
 type Row = Record<string, unknown>;
@@ -18,7 +19,7 @@ export interface FakeControlDb {
   /** Script the next `.returning()` result of an insert/update/delete on a table. */
   onReturning(op: 'insert' | 'update' | 'delete', table: unknown, rows: Row[]): void;
   inserts: Array<{ table: unknown; values: Row }>;
-  updates: Array<{ table: unknown; set: Row }>;
+  updates: Array<{ table: unknown; set: Row; where?: unknown }>;
   deletes: Array<{ table: unknown }>;
   reset(): void;
 }
@@ -48,12 +49,12 @@ export function createFakeControlDb(): FakeControlDb {
     return proxy;
   }
 
-  function writeResult(op: 'insert' | 'update' | 'delete', table: unknown): unknown {
+  function writeResult(op: 'insert' | 'update' | 'delete', table: unknown, record?: { where?: unknown }): unknown {
     const promise = Promise.resolve(undefined);
     const self: Record<string, unknown> = {
       onConflictDoUpdate: () => self,
       onConflictDoNothing: () => self,
-      where: () => self,
+      where: (condition: unknown) => { if (record) record.where = condition; return self; },
       returning: async () => next(returnings, keyOf(op, table), []),
       then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => promise.then(res, rej),
     };
@@ -64,7 +65,7 @@ export function createFakeControlDb(): FakeControlDb {
     inserts: [], updates: [], deletes: [],
     select: () => chain(() => []),
     insert: (table) => ({ values: (values: Row) => { db.inserts.push({ table, values }); return writeResult('insert', table); } }),
-    update: (table) => ({ set: (set: Row) => { db.updates.push({ table, set }); return writeResult('update', table); } }),
+    update: (table) => ({ set: (set: Row) => { const record: { table: unknown; set: Row; where?: unknown } = { table, set }; db.updates.push(record); return writeResult('update', table, record); } }),
     delete: (table) => { db.deletes.push({ table }); return writeResult('delete', table); },
     onSelect: (table, rows) => { selects.set(table, [...(selects.get(table) ?? []), rows]); },
     onReturning: (op, table, rows) => { const k = keyOf(op, table); returnings.set(k, [...(returnings.get(k) ?? []), rows]); },

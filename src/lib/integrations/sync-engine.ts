@@ -18,6 +18,7 @@ import {
 } from '@/db/schema';
 import { eq, and, gte, lt, sql } from 'drizzle-orm';
 import { decrypt } from '@/lib/encryption';
+import { safeErrorMessage } from '@/server/internal/import-errors';
 import { getConnector } from './registry';
 import { existingPeriodLength } from '@/server/internal/pay-period-config';
 import { addDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -263,7 +264,9 @@ export async function executeSyncOperation(
     await db.update(integrationSyncLogs)
       .set({
         status: 'failed',
-        errorSummary: String(error),
+        // Audit R7: error_summary is shown in the admin UI and the export — never a raw DB error (SQL + params). The
+        // error itself is rethrown below (and reported by the caller).
+        errorSummary: safeErrorMessage(error, { fallback: 'The sync failed.', logLabel: 'Integration sync failed:', report: false }),
         completedAt: new Date(),
       })
       .where(eq(integrationSyncLogs.id, syncLog.id));

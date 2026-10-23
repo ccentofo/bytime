@@ -18,7 +18,7 @@ dotenv.config({ path: ['.env.local', '.env'] });
 import { provisionTenant } from '../src/lib/tenant/provision';
 import { getTenantBySlug } from '../src/lib/tenant/registry';
 import { recordProvisionTerms } from '../src/lib/tenant/admin-commands';
-import { parseProvisionArgs } from './lib/provision-args';
+import { parseProvisionArgs, provisionRecordFailedMessage } from './lib/provision-args';
 import { localDevAdminUrl } from '../src/lib/tenant/neon';
 import { printTargetBanner } from './lib/target';
 import { provisionWithoutNeonRefusal } from './lib/provision-guard';
@@ -39,22 +39,34 @@ if (refusal) {
   process.exit(1);
 }
 
-provisionTenant({
-  slug, name, adminEmail, adminName,
-  ...(terms === 'none' ? {} : { termsVersion: terms.version, termsAcceptedAt: terms.acceptedAt }),
-})
-  .then(async (r) => {
-    const tenant = await getTenantBySlug(r.slug);
-    if (!tenant) throw new Error(`Provisioned "${r.slug}" but it is not in the registry — check tenant:admin show.`);
-    await recordProvisionTerms(tenant.id, terms, 'founder (provision:tenant)');
-    console.log(`✓ Provisioned tenant "${r.slug}" (admin user ${r.adminUserId}).`);
-    console.log(terms === 'none'
-      ? '  ⚠ No Terms record — noted on the workspace audit trail ("provisioned without a Terms record").'
-      : `  Terms ${terms.version} accepted ${terms.acceptedAt.toISOString()} recorded on the workspace and audited.`);
-    console.log('  The admin must set their password via the invite link (signup/onboarding flow).');
-    process.exit(0);
-  })
-  .catch((err) => {
+async function main() {
+  let r: Awaited<ReturnType<typeof provisionTenant>>;
+  try {
+    r = await provisionTenant({
+      slug, name, adminEmail, adminName,
+      ...(terms === 'none' ? {} : { termsVersion: terms.version, termsAcceptedAt: terms.acceptedAt }),
+    });
+  } catch (err) {
     console.error('Provisioning failed:', err);
     process.exit(1);
-  });
+  }
+
+  // Audit R8: from here on the workspace exists — a failure here is reported as "created, but not recorded".
+  try {
+    const tenant = await getTenantBySlug(r.slug);
+    if (!tenant) throw new Error(`"${r.slug}" is not in the registry — check tenant:admin show`);
+    await recordProvisionTerms(tenant.id, terms, 'founder (provision:tenant)');
+  } catch (err) {
+    console.error(`✗ ${provisionRecordFailedMessage(r.slug, terms, err)}`);
+    process.exit(1);
+  }
+
+  console.log(`✓ Provisioned tenant "${r.slug}" (admin user ${r.adminUserId}).`);
+  console.log(terms === 'none'
+    ? '  ⚠ No Terms record — noted on the workspace audit trail ("provisioned without a Terms record").'
+    : `  Terms ${terms.version} accepted ${terms.acceptedAt.toISOString()} recorded on the workspace and audited.`);
+  console.log('  The admin must set their password via the invite link (signup/onboarding flow).');
+  process.exit(0);
+}
+
+main();
