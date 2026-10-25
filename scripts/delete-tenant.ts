@@ -20,6 +20,7 @@ import dotenv from 'dotenv';
 dotenv.config({ path: ['.env.local', '.env'] });
 
 import { deleteTenant, type DeletionReceipt } from '../src/lib/tenant/delete-tenant';
+import { printTargetBanner } from './lib/target';
 
 function fail(msg: string): never {
   console.error(`✗ ${msg}`);
@@ -53,6 +54,7 @@ function printReceipt(r: DeletionReceipt) {
 }
 
 async function main() {
+  printTargetBanner();
   const args = process.argv.slice(2);
   const valueFlags = new Set(['--force-with-reason']);
   const slug = args.find((a, i) => !a.startsWith('--') && !valueFlags.has(args[i - 1]));

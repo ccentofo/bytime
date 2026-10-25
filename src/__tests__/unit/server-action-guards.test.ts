@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import {
+  stripComments,
+  parseExportedFunctions,
+  parameterNames,
+  writePayloads,
+} from '../helpers/source-scanner';
 
 // ---------------------------------------------------------------------------
 // Guard-coverage test.
@@ -32,21 +38,8 @@ const DB_QUERY_PATTERN = /\b(db|tx)\.(select|insert|update|delete|execute|transa
 const DB_WRITE_PATTERN = /\b(?:db|tx)\s*\.\s*(?:insert|update|delete)\s*\(|\.execute\(\s*sql`\s*(?:insert|update|delete)\b/i;
 const WRITE_GATE_PATTERN = /\bgetDbForWrite\s*\(/;
 const AUTH_GATE_PATTERN = /\bgetDbForAuth\s*\(/;
-// R2-6: start of a DB write's payload — `.values(` or `.set(`. Its argument must never be a
-// caller-supplied parameter, whole or spread, or the caller can set columns the form never offered.
-const DB_WRITE_CALL_PATTERN = /\.(values|set)\s*\(/g;
 const SRC_DIR = path.resolve(__dirname, '../..');
 
-/**
- * R2-12: strip comments before matching, so a comment that happens to mention a guard name or
- * a banned identity parameter can't fool these checks into thinking real code is present.
- * Doesn't special-case comment-like text inside string/template literals — none of the guard
- * calls, DB queries, or spreads this file looks for occur inside this codebase's string
- * literals, so that's an acceptable simplification.
- */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
-}
 
 /**
  * Explicit allowlist of exported server actions that intentionally run without
@@ -62,17 +55,26 @@ const PUBLIC_ACTIONS: Record<string, { names: string[]; reason: string }> = {
       'supplied id — equivalent to a session for this purpose. Rate-limited.',
   },
   'signup.ts': {
-    names: ['checkSlugAvailable', 'startSignup'],
+    names: ['checkSlugAvailable', 'startSignup', 'resendSignupVerification'],
     reason:
       'Unauthenticated new-tenant signup flow — there is no session to require before a ' +
       'workspace exists. IP rate-limited; startSignup only mints a verification email, it ' +
-      'does not provision anything.',
+      'does not provision anything. resendSignupVerification (feature-plan-launch-blockers.md P5, ' +
+      'flag-gated) is Turnstile-gated, re-mails only a pending row matching email + slug, and ' +
+      'always answers the same generic message (no enumeration).',
   },
   'login-attempts.ts': {
     names: ['checkLockout'],
     reason:
       'Pre-login lockout banner: the client calls this before any authentication has ' +
       'happened, so there is no session yet. Read-only, keyed by email, no sensitive data.',
+  },
+  'workspace-finder.ts': {
+    names: ['goToWorkspace'],
+    reason:
+      'Apex "Find your workspace" (launch-blockers P2): runs on the apex, where no session exists. ' +
+      'Read-only registry lookup; redirects only to <isValidSlug label>.<APP_ROOT_DOMAIN> + an exact ' +
+      'allowlisted path; shares the signup availability check\'s rate-limit budget.',
   },
 };
 
@@ -106,124 +108,125 @@ const WRITE_GATE_AUTH_ALLOWLIST: Record<string, { names: string[]; reason: strin
   },
 };
 
-// ---------------------------------------------------------------------------
-// Minimal brace-matching source scanner. We can't pull in a real TS parser
-// dependency just for this, and regex-per-line is too fragile given multi-line
-// parameter object types — so walk the source char-by-char.
-// ---------------------------------------------------------------------------
+/**
+ * feature-plan-launch-blockers.md P3 (LB-D4): the cached `requireAdmin()` trusts the JWT role, which can be up to
+ * 60 s stale — a demoted admin keeps admin powers until it refreshes. So `requireAdmin()` is BANNED in exported
+ * actions; anything that writes uses `requireAdminFresh()`. The only exceptions are listed here: actions that
+ * perform NO write and call NO writing helper (any DB write — including credential/token bookkeeping such as an
+ * OAuth refresh or a login-attempt reset — disqualifies an action). Each entry is checked below: it must still be
+ * exported, still use requireAdmin(), and contain no write.
+ */
+const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
+  'api-keys.ts': { getApiKeys: 'lists key metadata (name/prefix/dates); no write' },
+  'assignments.ts': {
+    getAssignments: 'reads CLIN assignments for the admin table; no write',
+    getAssignmentsForUser: 'reads one user\'s CLIN assignments; no write',
+  },
+  'billing.ts': { getTenantBillingInfo: 'reads the control-plane billing fields; no write' },
+  'charge-codes.ts': {
+    listCostClasses: 'reads cost classes; no write',
+    listChargeCodes: 'reads charge codes with joined labels; no write',
+    getUserChargeCodeIds: 'reads one user\'s active charge-code ids; no write',
+    getChargeCodeAssignments: 'reads user↔charge-code assignments; no write',
+  },
+  'clins.ts': { getClinsByContract: 'reads CLINs of a contract; no write' },
+  'contracts.ts': {
+    getContracts: 'reads contracts; no write',
+    getContractById: 'reads one contract; no write',
+  },
+  'dashboard.ts': {
+    getContractSummaries: 'aggregates hours/cost per contract; read-only queries',
+    getPeriodCostReport: 'aggregates a period\'s cost; read-only queries',
+  },
+  'gusto.ts': { getBytimeEmployeesForGustoMapping: 'reads active employees for the mapping UI; no token refresh, no write' },
+  'indirect-codes.ts': {
+    getIndirectChargeCodes: 'reads indirect codes; no write',
+    getActiveIndirectCodes: 'reads active indirect codes; no write',
+  },
+  'integrations.ts': {
+    getAvailableConnectors: 'returns static connector metadata; no DB access',
+    getConnections: 'reads connection rows (no tokens selected); no write',
+    getMappings: 'reads entity mappings; no write',
+    getSyncLogs: 'reads sync logs; no write',
+    getSyncRecords: 'reads sync records; no write',
+  },
+  'labor-categories.ts': {
+    getAllLaborCategories: 'reads labor categories; no write',
+    getAssignableLaborCategories: 'reads assignable labor categories; no write',
+    getLaborCategoriesByClin: 'reads a CLIN\'s labor categories; no write',
+    getUserLaborCategoryAssignments: 'reads one user\'s LCAT assignments; no write',
+  },
+  'migration.ts': { validateMigrationData: 'validates uploaded rows against existing records; read-only lookups' },
+  'pay-period-config.ts': {
+    getConfigHistory: 'reads schedule history; no write',
+    getPendingConfigChange: 'reads the pending schedule change; no write',
+    getValidScheduleChangeDates: 'computes valid change dates from reads; no write',
+  },
+  'payroll-export.ts': {
+    getPayrollFormats: 'returns static format metadata; no DB access',
+    getPayrollExportPreview: 'reads approved entries (getApprovedEntriesForSync is read-only); no write',
+    generatePayrollExportCSV: 'builds a CSV from read-only approved entries; no write',
+  },
+  'qbo.ts': {
+    getBytimeEmployeesForMapping: 'reads active employees; no token refresh, no write',
+    getBytimeContractsForMapping: 'reads active contracts; no token refresh, no write',
+    getBytimeClinsForMapping: 'reads active CLINs; no token refresh, no write',
+  },
+  'reports.ts': { getDetailedCostReport: 'reads cost report rows via the read-only internal reader; no write' },
+  'setup.ts': { getSetupStatus: 'reads setup-checklist counts; no write' },
+  'slins.ts': { getSlinsByClin: 'reads a CLIN\'s SLINs; no write' },
+  'users.ts': { getUsers: 'reads users (SAFE_USER_COLUMNS); no write' },
+};
 
-interface ParsedFunction {
-  name: string;
-  paramText: string;
-  bodyText: string;
+/** Matches the cached guard only — `requireAdminFresh(` does not match (an "F" follows "requireAdmin"). */
+const CACHED_ADMIN_PATTERN = /\brequireAdmin\s*\(/;
+
+/**
+ * Launch-blockers audit A1: in a userAction-wrapped action the FIRST awaited call must be the session guard. Anything
+ * awaited before it (getDbForWrite above all) can throw a state-specific error — "suspended", "read-only", "on hold" —
+ * that userAction returns to the caller, letting an anonymous POST to victim.<root> learn the workspace's billing state.
+ */
+const SESSION_GUARD_CALLEE = /^(?:requireSession|requireAdmin|requireApprover|requireAdminFresh|requireApproverFresh)$/;
+const FIRST_AWAIT = /\bawait\s+([\w.]+)/;
+
+function guardNotFirstAwait(fns: Array<{ name: string; bodyText: string }>, publicNames: string[]): string[] {
+  return fns
+    .filter((fn) => /\buserAction\s*\(/.test(fn.bodyText) && !publicNames.includes(fn.name))
+    .map((fn) => ({ name: fn.name, first: FIRST_AWAIT.exec(fn.bodyText)?.[1] ?? '(no await)' }))
+    .filter(({ first }) => !SESSION_GUARD_CALLEE.test(first))
+    .map(({ name, first }) => `${name} (first await: ${first})`);
 }
+/** Helpers known to write (DB or credential bookkeeping) — calling one disqualifies a read-only allowlist entry. */
+const WRITING_HELPER_PATTERN = /\b(?:getDbForWrite|getDbForAuth|executeSyncOperation|unlockAccount|ensureValidToken|ensureValidGustoToken)\s*\(/;
 
-function parseExportedFunctions(source: string): ParsedFunction[] {
-  const results: ParsedFunction[] = [];
-  const fnRegex = /export\s+async\s+function\s+(\w+)\s*\(/g;
-  let match: RegExpExecArray | null;
-
-  while ((match = fnRegex.exec(source)) !== null) {
-    const name = match[1];
-    const parenStart = match.index + match[0].length - 1; // index of the opening '('
-
-    // Find the matching close paren for the parameter list.
-    let depth = 0;
-    let i = parenStart;
-    for (; i < source.length; i++) {
-      if (source[i] === '(') depth++;
-      else if (source[i] === ')') {
-        depth--;
-        if (depth === 0) break;
-      }
+/**
+ * Violations of the cached-admin ban in one actions file: an exported action using requireAdmin() without an
+ * allowlist entry, or an allowlisted action that writes / calls a writing helper / calls a non-allowlisted action
+ * of the same file.
+ */
+function cachedAdminViolations(source: string, allowed: Record<string, string>): string[] {
+  const fns = parseExportedFunctions(source);
+  const exported = new Set(fns.map((f) => f.name));
+  const out: string[] = [];
+  for (const fn of fns) {
+    if (!CACHED_ADMIN_PATTERN.test(fn.bodyText)) continue;
+    if (!(fn.name in allowed)) {
+      out.push(`${fn.name}: uses cached requireAdmin() — use requireAdminFresh(), or allowlist a provably read-only action`);
+      continue;
     }
-    const paramText = source.slice(parenStart + 1, i);
-
-    // Find the function body's opening brace. Can't just take the first '{' after the
-    // param list — a return type like `Promise<{ secret: string }>` has its own braces.
-    // Walk forward tracking <>/()/[] nesting so a brace is only "the body" when none of
-    // those are open and we're not already inside a nested {} from the type annotation.
-    let angleDepth = 0;
-    let parenDepth2 = 0;
-    let bracketDepth = 0;
-    let typeBraceDepth = 0;
-    let bodyStart = -1;
-    for (let k = i + 1; k < source.length; k++) {
-      const ch = source[k];
-      if (ch === '<') angleDepth++;
-      else if (ch === '>') {
-        if (angleDepth > 0) angleDepth--;
-      } else if (ch === '(') parenDepth2++;
-      else if (ch === ')') parenDepth2--;
-      else if (ch === '[') bracketDepth++;
-      else if (ch === ']') bracketDepth--;
-      else if (ch === '{') {
-        if (angleDepth === 0 && parenDepth2 === 0 && bracketDepth === 0 && typeBraceDepth === 0) {
-          bodyStart = k;
-          break;
-        }
-        typeBraceDepth++;
-      } else if (ch === '}') {
-        typeBraceDepth--;
-      }
+    if (DB_WRITE_PATTERN.test(fn.bodyText) || WRITING_HELPER_PATTERN.test(fn.bodyText)) {
+      out.push(`${fn.name}: allowlisted as read-only but writes (or calls a writing helper)`);
+      continue;
     }
-    if (bodyStart === -1) continue;
-
-    // Find the matching close brace for the body.
-    let braceDepth = 0;
-    let j = bodyStart;
-    for (; j < source.length; j++) {
-      if (source[j] === '{') braceDepth++;
-      else if (source[j] === '}') {
-        braceDepth--;
-        if (braceDepth === 0) break;
-      }
-    }
-    const bodyText = source.slice(bodyStart, j + 1);
-
-    results.push({ name, paramText, bodyText });
+    const calledWriter = [...exported].find((other) => other !== fn.name && !(other in allowed) && new RegExp(`\\b${other}\\s*\\(`).test(fn.bodyText));
+    if (calledWriter) out.push(`${fn.name}: allowlisted as read-only but calls ${calledWriter}`);
   }
-
-  return results;
+  return out;
 }
 
 
-/** Top-level parameter names of a function's parameter list (`a: T, b?: { x: U } = {}` → a, b). */
-function parameterNames(paramText: string): string[] {
-  const names: string[] = [];
-  let depth = 0;
-  let current = '';
-  for (const ch of paramText + ',') {
-    if ('({[<'.includes(ch)) depth++;
-    else if (')}]>'.includes(ch)) depth--;
-    if (ch === ',' && depth === 0) {
-      const m = current.trim().match(/^(\w+)/);
-      if (m) names.push(m[1]);
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-  return names;
-}
 
-/** The argument text of every `.values(...)` / `.set(...)` call in a function body. */
-function writePayloads(bodyText: string): string[] {
-  const payloads: string[] = [];
-  let match: RegExpExecArray | null;
-  DB_WRITE_CALL_PATTERN.lastIndex = 0;
-  while ((match = DB_WRITE_CALL_PATTERN.exec(bodyText)) !== null) {
-    const open = match.index + match[0].length - 1;
-    let depth = 0;
-    let i = open;
-    for (; i < bodyText.length; i++) {
-      if (bodyText[i] === '(') depth++;
-      else if (bodyText[i] === ')' && --depth === 0) break;
-    }
-    payloads.push(bodyText.slice(open + 1, i));
-  }
-  return payloads;
-}
+
 
 /**
  * Every file under src/ whose first statement is the 'use server' directive. All of them must
@@ -255,6 +258,11 @@ describe('Server action guard coverage', () => {
     const fns = parseExportedFunctions(source);
     const allowlist = PUBLIC_ACTIONS[file]?.names ?? [];
 
+    it(`${file}: no exported action uses the cached requireAdmin() unless allowlisted as read-only (P3)`, () => {
+      const violations = cachedAdminViolations(source, ADMIN_READ_ONLY_ALLOWLIST[file] ?? {});
+      expect(violations, `${file}: ${violations.join('; ')}`).toEqual([]);
+    });
+
     it(`${file}: every exported action is guarded or explicitly public`, () => {
       const unguarded = fns
         .filter((fn) => !GUARD_PATTERN.test(fn.bodyText) && !allowlist.includes(fn.name))
@@ -264,6 +272,11 @@ describe('Server action guard coverage', () => {
         unguarded,
         `${file} has exported action(s) with no session guard and no PUBLIC_ACTIONS entry: ${unguarded.join(', ')}`
       ).toEqual([]);
+    });
+
+    it(`${file}: in every userAction callback the first await is the session guard (audit A1)`, () => {
+      const late = guardNotFirstAwait(fns, allowlist);
+      expect(late, `${file}: ${late.join('; ')}`).toEqual([]);
     });
 
     it(`${file}: no exported action accepts an acting-identity parameter`, () => {
@@ -390,6 +403,109 @@ describe('Server action guard coverage', () => {
       }
     }
     expect(staleEntries, `Stale PUBLIC_ACTIONS entries: ${staleEntries.join(', ')}`).toEqual([]);
+  });
+
+  it('a missing guard inside userAction(...) is still caught (fixture, launch-blockers P4)', () => {
+    const fixture = `
+      export async function unguarded(id: string) {
+        return userAction(async () => {
+          const db = await getDbForWrite();
+          await db.delete(contracts).where(eq(contracts.id, id));
+        });
+      }
+      export async function guarded(id: string) {
+        return userAction(async () => {
+          await requireAdminFresh();
+          const db = await getDbForWrite();
+          await db.delete(contracts).where(eq(contracts.id, id));
+        });
+      }
+      export async function queryFirst(id: string) {
+        return userAction(async () => {
+          const db = await getDbForWrite();
+          const rows = await db.select().from(contracts).where(eq(contracts.id, id));
+          await requireAdminFresh();
+          return rows;
+        });
+      }`;
+    const fns = parseExportedFunctions(stripComments(fixture));
+    expect(fns.map((f) => f.name)).toEqual(['unguarded', 'guarded', 'queryFirst']);
+    expect(fns.filter((fn) => !GUARD_PATTERN.test(fn.bodyText)).map((f) => f.name)).toEqual(['unguarded']);
+    // The guard-before-first-query rule sees inside the callback too.
+    const late = fns.filter((fn) => {
+      const g = GUARD_PATTERN.exec(fn.bodyText);
+      const q = DB_QUERY_PATTERN.exec(fn.bodyText);
+      return Boolean(g && q && q.index < g.index);
+    }).map((f) => f.name);
+    expect(late).toEqual(['queryFirst']);
+  });
+
+  it('guard-first rule: getDbForWrite() (or any call) awaited before the guard is flagged (fixture, audit A1)', () => {
+    const fixture = `
+      export async function dbFirst(id: string) {
+        return userAction(async () => {
+          const db = await getDbForWrite();
+          await requireAdminFresh();
+          await db.delete(apiKeys).where(eq(apiKeys.id, id));
+        });
+      }
+      export async function guardFirst(id: string) {
+        return userAction(async () => {
+          const actor = await requireApproverFresh();
+          const db = await getDbForWrite();
+          await db.delete(apiKeys).where(eq(apiKeys.id, actor.id));
+        });
+      }
+      export async function parallel(id: string) {
+        return userAction(async () => {
+          const [actor, db] = await Promise.all([requireAdminFresh(), getDbForWrite()]);
+          await db.delete(apiKeys).where(eq(apiKeys.id, actor.id + id));
+        });
+      }
+      export async function publicOne(id: string) {
+        return userAction(async () => {
+          const db = await getDbForAuth();
+          return db.select().from(apiKeys).where(eq(apiKeys.id, id));
+        });
+      }`;
+    const fns = parseExportedFunctions(stripComments(fixture));
+    expect(guardNotFirstAwait(fns, ['publicOne'])).toEqual(['dbFirst (first await: getDbForWrite)', 'parallel (first await: Promise.all)']);
+  });
+
+  it('cached-admin ban: adding requireAdmin() to a writer fails (mutation check)', () => {
+    const writer = `
+      export async function evilWriter(id: string) {
+        await requireAdmin();
+        const db = await getDbForWrite();
+        await db.update(contracts).set({ name: 'x' }).where(eq(contracts.id, id));
+      }`;
+    expect(cachedAdminViolations(writer, {})).toEqual([expect.stringContaining('evilWriter: uses cached requireAdmin()')]);
+    // Allowlisting a writer doesn't help: an allowlisted action that writes is still a violation.
+    expect(cachedAdminViolations(writer, { evilWriter: 'claims read-only' })).toEqual([expect.stringContaining('allowlisted as read-only but writes')]);
+    // …nor one that writes through a helper, or by calling a writing action in the same file.
+    const viaHelper = `export async function refresher() { await requireAdmin(); return ensureValidToken('c'); }`;
+    expect(cachedAdminViolations(viaHelper, { refresher: 'x' })).toHaveLength(1);
+    const viaAction = `
+      export async function bulk() { await requireAdmin(); await writeOne(); }
+      export async function writeOne() { await requireAdminFresh(); }`;
+    expect(cachedAdminViolations(viaAction, { bulk: 'x' })).toEqual([expect.stringContaining('calls writeOne')]);
+    // The fresh guard is not matched.
+    expect(cachedAdminViolations(`export async function ok() { await requireAdminFresh(); }`, {})).toEqual([]);
+  });
+
+  it('ADMIN_READ_ONLY_ALLOWLIST has no stale entries (must be exported and still use requireAdmin())', () => {
+    const stale: string[] = [];
+    for (const [file, entries] of Object.entries(ADMIN_READ_ONLY_ALLOWLIST)) {
+      const fullPath = path.join(ACTIONS_DIR, file);
+      if (!fs.existsSync(fullPath)) { stale.push(`${file} (file does not exist)`); continue; }
+      const byName = new Map(parseExportedFunctions(stripComments(fs.readFileSync(fullPath, 'utf-8'))).map((fn) => [fn.name, fn]));
+      for (const name of Object.keys(entries)) {
+        const fn = byName.get(name);
+        if (!fn) stale.push(`${file}: ${name} (not exported)`);
+        else if (!CACHED_ADMIN_PATTERN.test(fn.bodyText)) stale.push(`${file}: ${name} (no longer uses requireAdmin() — remove)`);
+      }
+    }
+    expect(stale, `Stale ADMIN_READ_ONLY_ALLOWLIST entries: ${stale.join(', ')}`).toEqual([]);
   });
 
   it('WRITE_GATE_AUTH_ALLOWLIST has no stale entries (file/name must still exist, be exported, write, and call getDbForAuth)', () => {

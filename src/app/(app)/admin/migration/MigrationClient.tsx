@@ -23,15 +23,16 @@ import {
   IconAlertCircle,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { runAction } from '@/lib/run-action';
 import Papa from 'papaparse';
 import {
   validateMigrationData,
   importMigrationData,
   importMigrationPeriods,
-  type MigrationEntryRow,
-  type MigrationValidationResult,
 } from '@/server/actions/migration';
+import type { MigrationEntryRow, MigrationValidationResult } from '@/types/migration';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 export function MigrationClient() {
   const [isPending, startTransition] = useTransition();
@@ -122,32 +123,28 @@ export function MigrationClient() {
   async function handleImportEntries() {
     if (!entryValidated || entryRows.length === 0) return;
     startTransition(async () => {
-      try {
-        const result = await importMigrationData(entryRows);
-        notifications.show({
-          title: 'Import complete',
-          message: `${result.imported} imported, ${result.skipped} skipped, ${result.errors.length} errors`,
-          color: result.errors.length === 0 ? 'success' : 'warning',
-        });
-      } catch (error) {
-        notifications.show({ title: 'Import failed', message: String(error), color: 'red' });
-      }
+      const outcome = await runAction(importMigrationData(entryRows), { errorTitle: 'Import failed' });
+      if (!outcome.ok) return;
+      const result = outcome.data;
+      notifications.show({
+        title: 'Import complete',
+        message: `${result.imported} imported, ${result.skipped} skipped, ${result.errors.length} errors`,
+        color: result.errors.length === 0 ? 'success' : 'warning',
+      });
     });
   }
 
   async function handleImportPeriods() {
     if (periodRows.length === 0) return;
     startTransition(async () => {
-      try {
-        const result = await importMigrationPeriods(periodRows);
-        notifications.show({
-          title: 'Period import complete',
-          message: `${result.imported} imported, ${result.errors.length} errors`,
-          color: result.errors.length === 0 ? 'success' : 'warning',
-        });
-      } catch (error) {
-        notifications.show({ title: 'Import failed', message: String(error), color: 'red' });
-      }
+      const outcome = await runAction(importMigrationPeriods(periodRows), { errorTitle: 'Import failed' });
+      if (!outcome.ok) return;
+      const result = outcome.data;
+      notifications.show({
+        title: 'Period import complete',
+        message: `${result.imported} imported, ${result.errors.length} errors`,
+        color: result.errors.length === 0 ? 'success' : 'warning',
+      });
     });
   }
 
@@ -215,14 +212,14 @@ export function MigrationClient() {
                 </Button>
               )}
               {entryValidated && validCount > 0 && (
-                <Button
+                <WriteButton
                   variant="filled"
                   size="sm"
                   onClick={handleImportEntries}
                   loading={isPending}
                 >
                   Import {validCount} Valid Rows
-                </Button>
+                </WriteButton>
               )}
             </Group>
 
@@ -308,14 +305,14 @@ export function MigrationClient() {
                 <input type="file" accept=".csv" hidden onChange={handlePeriodFileUpload} />
               </Button>
               {periodRows.length > 0 && (
-                <Button
+                <WriteButton
                   variant="filled"
                   size="sm"
                   onClick={handleImportPeriods}
                   loading={isPending}
                 >
                   Import {periodRows.length} Period Records
-                </Button>
+                </WriteButton>
               )}
             </Group>
 

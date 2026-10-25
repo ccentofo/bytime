@@ -199,6 +199,35 @@ export async function recordFounderExportDisposal(tenantId: string, legalHold: s
   return taken.detail ?? '';
 }
 
+/**
+ * A free-text founder note on the workspace's audit trail (feature-plan-launch-blockers.md P6 §2, LB-D6): e.g. the
+ * written record of what an in-place restore erased and why, referencing the customer's consent. Append-only;
+ * changes no lifecycle state.
+ */
+export async function recordFounderNote(tenantId: string, note: string, actor: string): Promise<string> {
+  if (!note.trim()) throw new AdminCommandError('audit-note requires --note "<text>".');
+  return withLockedPool((db) => recordAudit(db, { tenantId, kind: 'founder-note', actor, detail: note.trim() }));
+}
+
+/**
+ * `provision:tenant` (launch-blockers audit §5): audit where a founder-provisioned workspace's Terms record came from —
+ * the customer's signed agreement (version + acceptance time, also written to the tenant row by provisionTenant) — or
+ * that it was provisioned without one (a founder note, as `tenant:admin audit-note` would write).
+ */
+export async function recordProvisionTerms(
+  tenantId: string,
+  terms: { version: string; acceptedAt: Date } | 'none',
+  actor: string,
+): Promise<string> {
+  if (terms === 'none') return recordFounderNote(tenantId, 'provisioned without a Terms record', actor);
+  return withLockedPool((db) => recordAudit(db, {
+    tenantId,
+    kind: 'terms-recorded',
+    actor,
+    detail: `Terms ${terms.version} accepted ${terms.acceptedAt.toISOString()} (from the customer's signed agreement; provision:tenant)`,
+  }));
+}
+
 /** Manual resolution (bookkeeping only — never changes lifecycle state). */
 export async function resolveAlertById(alertId: string, note: string, actor: string): Promise<void> {
   if (!note.trim()) throw new AdminCommandError('resolve-alert requires --note.');

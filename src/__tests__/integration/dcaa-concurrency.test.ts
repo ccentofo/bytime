@@ -6,7 +6,14 @@ import * as schema from '@/db/schema';
 import { getPeriodStartForDate, navigatePeriod, DEFAULT_PERIOD_CONFIG } from '@/lib/date-utils';
 import { todayIn, diffDays, type CalendarDate } from '@/lib/calendar-date';
 import {
-  getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, cleanupTestData,
+  getTestDb,
+  createTestUser,
+  createTestContract,
+  createTestClin,
+  createTestChargeCode,
+  cleanupTestData,
+  expectOk,
+  expectFailure,
 } from './helpers';
 
 /**
@@ -62,12 +69,12 @@ vi.mock('@/lib/session', async (importOriginal) => {
 });
 
 vi.mock('@/lib/email/send', () => ({
-  sendTimesheetSubmittedEmail: vi.fn(async () => undefined),
-  sendTimesheetApprovedEmail: vi.fn(async () => undefined),
-  sendTimesheetRejectedEmail: vi.fn(async () => undefined),
-  sendDailyReminderEmail: vi.fn(async () => undefined),
-  sendSubmissionDeadlineEmail: vi.fn(async () => undefined),
-  sendPasswordResetEmail: vi.fn(async () => undefined),
+  sendTimesheetSubmittedEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendTimesheetApprovedEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendTimesheetRejectedEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendDailyReminderEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendSubmissionDeadlineEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendPasswordResetEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
 }));
 
 import { saveTimesheetBatch } from '@/server/actions/timesheet';
@@ -116,14 +123,14 @@ describe('DCAA integrity under concurrency (§5.5)', () => {
 
   it('a save is all-or-nothing: a failing cell leaves nothing written', async () => {
     const todayIndex = diffDays(currentStart, todayIn('America/New_York'));
-    await expect(saveTimesheetBatch({
+    await expectFailure(saveTimesheetBatch({
       periodStart: currentStart,
       cells: [
         { chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 4, isEdit: false, isLateEntry: false },
         // Same cell again: an edit within the batch, which needs a reason code that isn't given → throws mid-transaction.
         { chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 6, isEdit: true, isLateEntry: false },
       ],
-    })).rejects.toThrow(/reason code is required/);
+    }), 'validation', /reason code is required/);
     const rows = await getTestDb().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.userId, employee.id));
     expect(rows).toHaveLength(0);
   });
@@ -133,7 +140,8 @@ describe('DCAA integrity under concurrency (§5.5)', () => {
     await getTestDb().insert(schema.timesheetEntries).values({
       userId: employee.id, chargeCodeId: chargeCode.id, clinId: chargeCode.clinId, entryDate: previousStart, hours: '8', revisionNumber: 1, createdBy: employee.id,
     });
-    const [save, submit] = await Promise.allSettled([
+    // Both resolve to ActionResults (launch-blockers P4); an unexpected throw fails the test.
+    const [save, submit] = await Promise.all([
       saveTimesheetBatch({
         periodStart: previousStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: 1, hours: 2, isEdit: false, isLateEntry: true }],
@@ -141,7 +149,7 @@ describe('DCAA integrity under concurrency (§5.5)', () => {
       }),
       submitPeriod({ periodStart: previousStart }),
     ]);
-    expect(submit.status, `submit rejected: ${submit.status === 'rejected' ? String(submit.reason) : ''}`).toBe('fulfilled');
+    expect(submit.ok, `submit failed: ${submit.ok ? '' : submit.error}`).toBe(true);
     // Both transactions write only after taking the lock, so transaction-id order = lock order (now() is the
     // transaction START time and can't be used for this).
     const rows = await getTestDb().execute(sql`
@@ -149,19 +157,20 @@ describe('DCAA integrity under concurrency (§5.5)', () => {
         (SELECT max(xmin::text::bigint) FROM timesheet_entries WHERE user_id = ${employee.id} AND revision_number = 1 AND entry_date <> ${previousStart}) AS save_xid,
         (SELECT max(xmin::text::bigint) FROM period_events WHERE user_id = ${employee.id} AND event = 'submitted') AS submit_xid`);
     const { save_xid, submit_xid } = (rows as unknown as Array<{ save_xid: string | null; submit_xid: string | null }>)[0];
-    if (save.status === 'fulfilled') {
+    if (save.ok) {
       expect(save_xid).not.toBeNull();
       expect(BigInt(save_xid!)).toBeLessThan(BigInt(submit_xid!)); // the save committed BEFORE the submission
     } else {
-      expect(String(save.reason)).toMatch(/submitted|locked/i);
+      expect(save.code).toBe('validation');
+      expect(save.error).toMatch(/submitted|locked/i);
       expect(save_xid).toBeNull();
     }
     // After submission, any save into the period is refused.
-    await expect(saveTimesheetBatch({
+    await expectFailure(saveTimesheetBatch({
       periodStart: previousStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: 2, hours: 2, isEdit: false, isLateEntry: true }],
       changeReasonCode: 'LATE_ENTRY',
-    })).rejects.toThrow(/submitted|locked/i);
+    }), 'validation', /submitted|locked/i);
   });
 
   it('two reviewers deciding the same submitted period: exactly one wins, one history row', async () => {
@@ -169,16 +178,19 @@ describe('DCAA integrity under concurrency (§5.5)', () => {
     await getTestDb().insert(schema.timesheetEntries).values({
       userId: employee.id, chargeCodeId: chargeCode.id, clinId: chargeCode.clinId, entryDate: previousStart, hours: '8', revisionNumber: 1, createdBy: employee.id,
     });
-    await submitPeriod({ periodStart: previousStart });
+    await expectOk(submitPeriod({ periodStart: previousStart }));
     const [period] = await getTestDb().select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.userId, employee.id));
     actingAs(admin);
-    const results = await Promise.allSettled([
+    const results = await Promise.all([
       approvePeriod({ periodId: period.id }),
       rejectPeriod({ periodId: period.id, comment: 'fix hours' }),
     ]);
-    expect(results.filter((r) => r.status === 'fulfilled'), results.map((r) => r.status === 'rejected' ? String(r.reason) : 'ok').join(' | ')).toHaveLength(1);
-    const loser = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
-    expect(String(loser.reason)).toMatch(/refresh|Only submitted periods/i);
+    expect(results.filter((r) => r.ok), results.map((r) => (r.ok ? 'ok' : `${r.code}: ${r.error}`)).join(' | ')).toHaveLength(1);
+    const loser = results.find((r) => !r.ok);
+    if (!loser || loser.ok) throw new Error('expected one loser');
+    // Lost the race on the conditional update (conflict) or saw the period already decided (validation).
+    expect(['conflict', 'validation']).toContain(loser.code);
+    expect(loser.error).toMatch(/refresh|Only submitted periods/i);
     const decisions = await getTestDb().select().from(schema.periodEvents)
       .where(and(eq(schema.periodEvents.periodId, period.id), sql`${schema.periodEvents.event} IN ('approved','rejected')`));
     expect(decisions).toHaveLength(1);

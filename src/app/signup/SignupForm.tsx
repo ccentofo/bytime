@@ -6,10 +6,16 @@ import {
 } from '@mantine/core';
 import { IconAlertCircle, IconCheck } from '@tabler/icons-react';
 import { Logo } from '@/components/brand/Logo';
-import { startSignup } from '@/server/actions/signup';
+import { resendSignupVerification, startSignup } from '@/server/actions/signup';
+import { runAction } from '@/lib/run-action';
 import { slugify } from '@/lib/tenant/slugify';
+import { TurnstileWidget, type TurnstileHandle } from '@/components/auth/TurnstileWidget';
 
-export function SignupForm({ errorParam }: { errorParam?: string }) {
+/**
+ * `controls` comes from the server page (feature-plan-launch-blockers.md P5): null when SIGNUP_CONTROLS_ENABLED is off —
+ * then no Turnstile script or widget and no resend action, exactly as before.
+ */
+export function SignupForm({ errorParam, controls = null }: { errorParam?: string; controls?: { turnstileSiteKey: string } | null }) {
   const [companyName, setCompanyName] = useState('');
   const [email, setEmail] = useState('');
   const [slug, setSlug] = useState('');
@@ -20,6 +26,9 @@ export function SignupForm({ errorParam }: { errorParam?: string }) {
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState(errorParam ?? '');
   const checkTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const turnstile = useRef<TurnstileHandle>(null);
+  const [signedUpSlug, setSignedUpSlug] = useState('');
 
   // Auto-derive slug from company name unless user has edited it manually
   useEffect(() => {
@@ -54,13 +63,22 @@ export function SignupForm({ errorParam }: { errorParam?: string }) {
     // D8: capture the signer's browser timezone so the new tenant's workspace starts configured
     // for the right zone instead of the generic default. Best-effort — undefined if unsupported.
     const timezone = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined;
-    const result = await startSignup({ companyName, email, slug: slug || undefined, timezone, termsAccepted });
+    const result = await runAction(startSignup({
+      companyName, email, slug: slug || undefined, timezone, termsAccepted,
+      ...(controls ? { turnstileToken: turnstileToken ?? undefined } : {}),
+    }), { silent: true });
     setLoading(false);
-    if (result.success) {
+    if (result.ok) {
+      setSignedUpSlug(result.data.slug);
       setSuccess(true);
     } else {
-      setError(result.error ?? 'Something went wrong. Please try again.');
+      setError(result.error);
+      turnstile.current?.reset(); // tokens are single use: a retry needs a fresh one
     }
+  }
+
+  if (success && controls) {
+    return <CheckEmailWithResend email={email} slug={signedUpSlug} siteKey={controls.turnstileSiteKey} onStartOver={() => setSuccess(false)} />;
   }
 
   if (success) {
@@ -156,12 +174,16 @@ export function SignupForm({ errorParam }: { errorParam?: string }) {
                 }
               />
 
+              {controls && (
+                <TurnstileWidget ref={turnstile} siteKey={controls.turnstileSiteKey} onToken={setTurnstileToken} />
+              )}
+
               <Button
                 type="submit"
                 fullWidth
                 size="md"
                 loading={loading}
-                disabled={slugStatus === 'taken' || slugStatus === 'invalid' || !termsAccepted}
+                disabled={slugStatus === 'taken' || slugStatus === 'invalid' || !termsAccepted || (!!controls && !turnstileToken)}
               >
                 Create workspace
               </Button>
@@ -172,6 +194,47 @@ export function SignupForm({ errorParam }: { errorParam?: string }) {
             Already have an account?{' '}
             <Anchor href="/login" size="xs">Sign in</Anchor>
           </Text>
+        </Stack>
+      </Paper>
+    </Center>
+  );
+}
+
+/** P5 check-email screen with "send a new link" (Turnstile-gated; always a generic answer). */
+function CheckEmailWithResend({ email, slug, siteKey, onStartOver }: { email: string; slug: string; siteKey: string; onStartOver: () => void }) {
+  const [token, setToken] = useState<string | null>(null);
+  const widget = useRef<TurnstileHandle>(null);
+  const [sending, setSending] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  async function resend() {
+    setSending(true);
+    setMessage('');
+    setError('');
+    const result = await runAction(resendSignupVerification({ email, slug, turnstileToken: token ?? undefined }), { silent: true });
+    setSending(false);
+    if (result.ok) setMessage(result.data.message);
+    else setError(result.error);
+    widget.current?.reset(); // every attempt spends the token
+  }
+
+  return (
+    <Center mih="100vh">
+      <Paper withBorder shadow="sm" p={40} radius="md" w="100%" maw={440}>
+        <Stack align="center" gap="md">
+          <IconCheck size={48} color="var(--mantine-color-success-6)" />
+          <Title order={2} ta="center">Check your email</Title>
+          <Text c="dimmed" ta="center" size="sm">
+            We sent a confirmation link to <strong>{email}</strong>. Click it to finish creating your workspace.
+            The link expires in 24 hours.
+          </Text>
+          {message && <Alert color="success" variant="light" w="100%">{message}</Alert>}
+          {error && <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light" w="100%">{error}</Alert>}
+          <Text size="xs" c="dimmed" ta="center">Didn&apos;t receive it? Check your spam folder, or send a new link:</Text>
+          <TurnstileWidget ref={widget} siteKey={siteKey} onToken={setToken} />
+          <Button variant="light" onClick={resend} loading={sending} disabled={!token}>Send a new link</Button>
+          <Anchor onClick={onStartOver} size="xs">Start over</Anchor>
         </Stack>
       </Paper>
     </Center>

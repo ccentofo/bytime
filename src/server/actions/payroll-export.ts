@@ -11,6 +11,7 @@ import {
 } from '@/lib/integrations/connectors/payroll-export';
 import dayjs from 'dayjs'; // still used for the export filename's INSTANT timestamp — see D5
 import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { UserFacingError } from '@/lib/errors';
 
 /**
  * Get available payroll export formats.
@@ -85,7 +86,7 @@ export async function generatePayrollExportCSV(data: {
 
   const formatConfig = PAYROLL_FORMATS.find((f) => f.id === data.format);
   if (!formatConfig) {
-    throw new Error(`Unknown payroll format: ${data.format}`);
+    throw new UserFacingError(`Unknown payroll format: ${data.format}`);
   }
 
   const entries = await getApprovedEntriesForSync(parseCalendarDate(data.periodStart), parseCalendarDate(data.periodEnd));

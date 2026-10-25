@@ -29,6 +29,7 @@ import type { ConnectorMetadata } from '@/lib/integrations/types';
 import { formatDateTime } from '@/lib/format';
 import { SYNC_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 interface Connection {
   id: string;
@@ -62,6 +63,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 
 export function IntegrationsClient({ initialConnections, availableConnectors, workspaceTimezone }: Props) {
+  const canWrite = useCanWrite();
   const activeConnections = initialConnections.filter((c) => c.isActive);
 
   // Group connectors by category
@@ -171,15 +173,20 @@ export function IntegrationsClient({ initialConnections, availableConnectors, wo
                       ))}
                     </Group>
                     {!isConnected && connector.id === 'quickbooks_online' && (
-                      <Button
-                        component="a"
-                        href={`/api/integrations/qbo-connect`}
-                        size="sm"
-                        variant="light"
-                        fullWidth
-                      >
-                        Connect to QuickBooks
-                      </Button>
+                      canWrite ? (
+                        <Button
+                          component="a"
+                          href={`/api/integrations/qbo-connect`}
+                          size="sm"
+                          variant="light"
+                          fullWidth
+                        >
+                          Connect to QuickBooks
+                        </Button>
+                      ) : (
+                        // Connecting stores a connection (a write): read-only workspaces get the disabled control.
+                        <WriteButton size="sm" variant="light" fullWidth>Connect to QuickBooks</WriteButton>
+                      )
                     )}
                     {!isConnected && connector.id === 'csv_export' && (
                       <Button
@@ -193,15 +200,20 @@ export function IntegrationsClient({ initialConnections, availableConnectors, wo
                       </Button>
                     )}
                     {!isConnected && connector.id === 'gusto' && (
-                      <Button
-                        component="a"
-                        href="/api/integrations/gusto-connect"
-                        size="sm"
-                        variant="light"
-                        fullWidth
-                      >
-                        Connect to Gusto
-                      </Button>
+                      canWrite ? (
+                        <Button
+                          component="a"
+                          href="/api/integrations/gusto-connect"
+                          size="sm"
+                          variant="light"
+                          fullWidth
+                        >
+                          Connect to Gusto
+                        </Button>
+                      ) : (
+                        // Connecting stores a connection (a write): read-only workspaces get the disabled control.
+                        <WriteButton size="sm" variant="light" fullWidth>Connect to Gusto</WriteButton>
+                      )
                     )}
                     {!isConnected && connector.id !== 'quickbooks_online' && connector.id !== 'csv_export' && connector.id !== 'gusto' && (
                       <Button

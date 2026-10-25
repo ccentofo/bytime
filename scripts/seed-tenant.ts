@@ -30,6 +30,7 @@ import bcrypt from 'bcryptjs';
 import * as schema from '../src/db/schema';
 import { registerTenant } from './register-tenant';
 import { encrypt } from '../src/lib/encryption';
+import { printTargetBanner } from './lib/target';
 
 const [
   slug,
@@ -60,6 +61,7 @@ if (!process.env.ENCRYPTION_KEY) {
 }
 
 async function main() {
+  printTargetBanner();
   const email = adminEmail.toLowerCase().trim();
 
   // 1. Migrate the tenant DB to the current schema. Tolerate a DB that already has the schema

@@ -100,7 +100,7 @@ never acme/globex/initech, never a remote database):
 
 ```bash
 # 1. Provision a throwaway local tenant (no NEON_API_KEY in your local env → a local database).
-npm run provision:tenant -- delete-test "Delete Test" test@example.com "Test Admin"
+npm run provision:tenant -- delete-test "Delete Test" test@example.com "Test Admin" --no-terms-record  # throwaway: no signed agreement
 
 # 2. Make it eligible directly in the LOCAL control-plane DB: a lapsed trial, a past deletion date, and a
 #    deletion notice for that same anchor delivered 20 days before the deletion date.
@@ -134,6 +134,10 @@ Confirmed against Neon's own documentation (fetched 2026-10-21):
   still exists, and does not extend how long a *deleted* project's data survives. Source:
   [neon.com/docs/introduction/history-window](https://neon.com/docs/introduction/history-window),
   [neon.com/docs/introduction/plans](https://neon.com/docs/introduction/plans).
+- **CadenzPoint's setting** (LB-D1, `feature-plan-launch-blockers.md`): every tenant project keeps **7 days** of
+  history (`history_retention_seconds = 604800`, set at creation; `npm run backfill:neon-retention` for existing
+  projects). Restoring lost data from that history — into a copy, never rewinding the live database — is in
+  [`RESTORE.md`](RESTORE.md).
 
 `BACKUP_RETENTION_DAYS = 30` in `src/lib/tenant/lifecycle-config.ts` (D11) matches the longest
 window on any currently-published Neon plan (Scale's 30-day history window). **If CadenzPoint ends

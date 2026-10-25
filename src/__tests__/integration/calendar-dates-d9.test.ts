@@ -10,6 +10,8 @@ import {
   createTestChargeCode,
   assignUserToClin,
   cleanupTestData,
+  expectOk,
+  expectFailure,
 } from './helpers';
 
 // ---------------------------------------------------------------------------
@@ -52,12 +54,12 @@ vi.mock('@/auth', () => ({
 }));
 
 vi.mock('@/lib/email/send', () => ({
-  sendTimesheetSubmittedEmail: vi.fn(async () => undefined),
-  sendTimesheetApprovedEmail: vi.fn(async () => undefined),
-  sendTimesheetRejectedEmail: vi.fn(async () => undefined),
-  sendDailyReminderEmail: vi.fn(async () => undefined),
-  sendSubmissionDeadlineEmail: vi.fn(async () => undefined),
-  sendPasswordResetEmail: vi.fn(async () => undefined),
+  sendTimesheetSubmittedEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendTimesheetApprovedEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendTimesheetRejectedEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendDailyReminderEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendSubmissionDeadlineEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendPasswordResetEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
 }));
 
 import { saveTimesheetBatch } from '@/server/actions/timesheet';
@@ -132,11 +134,11 @@ describe('D9 — calendar-date correctness regardless of clock/timezone', () => 
       for (const o of options) expect(o.numDays).toBe(14);
       expect(options.map((o) => o.start)).toContain(periodStart);
 
-      await saveTimesheetBatch({
+      await expectOk(saveTimesheetBatch({
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: 13, hours: 8, isEdit: false, isLateEntry: false }],
-      });
-      await submitPeriod({ periodStart });
+      }));
+      await expectOk(submitPeriod({ periodStart }));
 
       const [period] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.userId, employee.id));
       expect(period.status).toBe('submitted');
@@ -165,10 +167,10 @@ describe('D9 — calendar-date correctness regardless of clock/timezone', () => 
 
       actingAs(employee);
       const periodStart = '2026-01-01' as CalendarDate; // semimonthly default, 1st–15th
-      await saveTimesheetBatch({
+      await expectOk(saveTimesheetBatch({
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: 14, hours: 8, isEdit: false, isLateEntry: false }], // day 14 = Jan 15
-      });
+      }));
 
       const [row] = await db.select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.chargeCodeId, chargeCode.id));
       expect(row.entryDate).toBe('2026-01-15');
@@ -198,17 +200,15 @@ describe('D9 — calendar-date correctness regardless of clock/timezone', () => 
       actingAs(employee);
       const periodStart = '2026-01-01' as CalendarDate;
 
-      await expect(
-        saveTimesheetBatch({
+      await expectFailure(saveTimesheetBatch({
           periodStart,
           cells: [{ chargeCodeId: chargeCode.id, dayIndex: 14, hours: 8, isEdit: false, isLateEntry: false }], // day 14 = Jan 15 (tomorrow)
-        })
-      ).rejects.toThrow(/future date/i);
+        }), 'validation', /future date/i);
 
-      await saveTimesheetBatch({
+      await expectOk(saveTimesheetBatch({
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: 13, hours: 8, isEdit: false, isLateEntry: false }], // day 13 = Jan 14 (today)
-      });
+      }));
       const rows = await db.select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.chargeCodeId, chargeCode.id));
       expect(rows).toHaveLength(1);
     } finally {
@@ -233,15 +233,15 @@ describe('D9 — calendar-date correctness regardless of clock/timezone', () => 
 
     actingAs(employee);
     const periodStart = '2026-01-01' as CalendarDate;
-    await saveTimesheetBatch({
+    await expectOk(saveTimesheetBatch({
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: 4, hours: 8, isEdit: false, isLateEntry: false }],
-    });
-    await saveTimesheetBatch({
+    }));
+    await expectOk(saveTimesheetBatch({
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: 4, hours: 5, isEdit: true, isLateEntry: false }],
       changeReasonCode: 'CORRECTION',
-    });
+    }));
 
     actingAs(admin);
     const report = await getDetailedCostReport('2026-01-01' as CalendarDate, '2026-01-31' as CalendarDate);

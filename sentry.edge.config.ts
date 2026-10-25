@@ -3,6 +3,9 @@ import * as Sentry from '@sentry/nextjs';
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
 
+  // 'production' / 'staging' / 'development' (feature-plan-launch-blockers.md P6 §7). Unset → Sentry's default.
+  environment: process.env.SENTRY_ENVIRONMENT,
+
   // Trace sampling. Defaults to 0.1 in production; override via SENTRY_TRACES_SAMPLE_RATE.
   // Set to 1 only in dev/staging when you need full traces.
   tracesSampleRate: process.env.SENTRY_TRACES_SAMPLE_RATE

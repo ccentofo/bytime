@@ -1,5 +1,6 @@
 import { Center, Stack, Title, Text, ThemeIcon, Anchor } from '@mantine/core';
 import { IconClockPause } from '@tabler/icons-react';
+import { SignOutButton } from '@/components/auth/SignOutButton';
 
 /**
  * Shown to a non-admin signed-in user on a `billing_only` (suspended for non-payment) tenant.
@@ -24,6 +25,7 @@ export function OnHoldScreen() {
         <Text size="sm" c="dimmed">
           Need help? Contact <Anchor href="mailto:support@cadenzpoint.com">support</Anchor>.
         </Text>
+        <SignOutButton />
       </Stack>
     </Center>
   );

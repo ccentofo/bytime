@@ -1,9 +1,17 @@
 'use server';
 
 import { getDb, getDbForWrite } from '@/db';
-import { chargeCodes, costClasses, userChargeCodes, userAssignments, clins, contracts, slins, laborCategories, users } from '@/db/schema';
+import { chargeCodes, costClasses, userChargeCodes, clins, contracts, slins, laborCategories, users } from '@/db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
-import { requireAdmin } from '@/lib/session';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
+import { UserFacingError } from '@/lib/errors';
+import {
+  assignChargeCodeToUserInternal,
+  createChargeCodeInternal,
+  createCostClassInternal,
+  type ChargeCodeInput,
+} from '@/server/internal/charge-codes';
+import { userAction } from '@/lib/action-result';
 
 // ---------------------------------------------------------------------------
 // Cost Classes
@@ -16,10 +24,11 @@ export async function listCostClasses() {
 }
 
 export async function createCostClass(name: string) {
-  await requireAdmin();
-  const db = await getDbForWrite();
-  const [row] = await db.insert(costClasses).values({ name: name.trim() }).onConflictDoNothing().returning();
-  return row;
+  return userAction(async () => {
+    await requireAdminFresh();
+    const db = await getDbForWrite();
+    return createCostClassInternal(db, name);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -55,31 +64,12 @@ export async function listChargeCodes() {
     .orderBy(contracts.name, clins.clinNumber, chargeCodes.code);
 }
 
-export async function createChargeCode(data: {
-  code: string;
-  name: string;
-  description?: string;
-  clinId: string;
-  slinId?: string;
-  laborCategoryId?: string;
-  classId?: string;
-  workLocation?: 'onsite' | 'telework' | 'other';
-  billable?: boolean;
-}) {
-  await requireAdmin();
-  const db = await getDbForWrite();
-  const [row] = await db.insert(chargeCodes).values({
-    code: data.code.trim(),
-    name: data.name.trim(),
-    description: data.description ?? null,
-    clinId: data.clinId,
-    slinId: data.slinId ?? null,
-    laborCategoryId: data.laborCategoryId ?? null,
-    classId: data.classId ?? null,
-    workLocation: data.workLocation ?? null,
-    billable: data.billable ?? true,
-  }).returning();
-  return row;
+export async function createChargeCode(data: ChargeCodeInput) {
+  return userAction(async () => {
+    await requireAdminFresh();
+    const db = await getDbForWrite();
+    return createChargeCodeInternal(db, data);
+  });
 }
 
 export async function updateChargeCode(id: string, data: {
@@ -93,36 +83,40 @@ export async function updateChargeCode(id: string, data: {
   workLocation?: 'onsite' | 'telework' | 'other' | null;
   billable?: boolean;
 }) {
-  await requireAdmin();
-  const db = await getDbForWrite();
-  // R2-6: explicit allowlist — never spread the caller's object into .set(). `isActive` in
-  // particular is a real column not in this form's type; deactivation has its own action
-  // (deactivateChargeCode) and must not be settable through this one.
-  const updateData: Record<string, unknown> = { updatedAt: new Date() };
-  if (data.code !== undefined) updateData.code = data.code;
-  if (data.name !== undefined) updateData.name = data.name;
-  if (data.description !== undefined) updateData.description = data.description;
-  if (data.clinId !== undefined) updateData.clinId = data.clinId;
-  if (data.slinId !== undefined) updateData.slinId = data.slinId;
-  if (data.laborCategoryId !== undefined) updateData.laborCategoryId = data.laborCategoryId;
-  if (data.classId !== undefined) updateData.classId = data.classId;
-  if (data.workLocation !== undefined) updateData.workLocation = data.workLocation;
-  if (data.billable !== undefined) updateData.billable = data.billable;
+  return userAction(async () => {
+    await requireAdminFresh();
+    const db = await getDbForWrite();
+    // R2-6: explicit allowlist — never spread the caller's object into .set(). `isActive` in
+    // particular is a real column not in this form's type; deactivation has its own action
+    // (deactivateChargeCode) and must not be settable through this one.
+    const updateData: Record<string, unknown> = { updatedAt: new Date() };
+    if (data.code !== undefined) updateData.code = data.code;
+    if (data.name !== undefined) updateData.name = data.name;
+    if (data.description !== undefined) updateData.description = data.description;
+    if (data.clinId !== undefined) updateData.clinId = data.clinId;
+    if (data.slinId !== undefined) updateData.slinId = data.slinId;
+    if (data.laborCategoryId !== undefined) updateData.laborCategoryId = data.laborCategoryId;
+    if (data.classId !== undefined) updateData.classId = data.classId;
+    if (data.workLocation !== undefined) updateData.workLocation = data.workLocation;
+    if (data.billable !== undefined) updateData.billable = data.billable;
 
-  const [row] = await db.update(chargeCodes)
-    .set(updateData)
-    .where(eq(chargeCodes.id, id))
-    .returning();
-  return row;
+    const [row] = await db.update(chargeCodes)
+      .set(updateData)
+      .where(eq(chargeCodes.id, id))
+      .returning();
+    return row;
+  });
 }
 
 /**
  * Soft-delete a charge code. Never hard-delete — historical entries reference it.
  */
 export async function deactivateChargeCode(id: string) {
-  await requireAdmin();
-  const db = await getDbForWrite();
-  await db.update(chargeCodes).set({ isActive: false, updatedAt: new Date() }).where(eq(chargeCodes.id, id));
+  return userAction(async () => {
+    await requireAdminFresh();
+    const db = await getDbForWrite();
+    await db.update(chargeCodes).set({ isActive: false, updatedAt: new Date() }).where(eq(chargeCodes.id, id));
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -135,39 +129,21 @@ export async function deactivateChargeCode(id: string) {
  * approval routing and LCAT rates remain intact.
  */
 export async function assignChargeCodeToUser(userId: string, chargeCodeId: string) {
-  const actor = await requireAdmin();
-  const db = await getDbForWrite();
-
-  // Look up the charge code's CLIN (needed for user_assignments sync)
-  const [cc] = await db.select({ clinId: chargeCodes.clinId, slinId: chargeCodes.slinId })
-    .from(chargeCodes).where(eq(chargeCodes.id, chargeCodeId)).limit(1);
-  if (!cc) throw new Error(`Charge code ${chargeCodeId} not found.`);
-
-  // Upsert user_charge_codes
-  await db.insert(userChargeCodes).values({
-    userId, chargeCodeId, isActive: true, assignedBy: actor.id,
-  }).onConflictDoUpdate({
-    target: [userChargeCodes.userId, userChargeCodes.chargeCodeId],
-    set: { isActive: true, assignedBy: actor.id },
+  return userAction(async () => {
+    const actor = await requireAdminFresh();
+    const db = await getDbForWrite();
+    await assignChargeCodeToUserInternal(db, actor.id, userId, chargeCodeId);
+    return { success: true };
   });
-
-  // CRITICAL: also ensure the user has a user_assignments row for the CLIN
-  // so supervisor scope and LCAT lookups work correctly.
-  await db.insert(userAssignments).values({
-    userId, clinId: cc.clinId, slinId: cc.slinId ?? null, isActive: true, assignedBy: actor.id,
-  }).onConflictDoUpdate({
-    target: [userAssignments.userId, userAssignments.clinId],
-    set: { isActive: true },
-  });
-
-  return { success: true };
 }
 
 export async function unassignChargeCodeFromUser(userId: string, chargeCodeId: string) {
-  await requireAdmin();
-  const db = await getDbForWrite();
-  await db.update(userChargeCodes).set({ isActive: false })
-    .where(and(eq(userChargeCodes.userId, userId), eq(userChargeCodes.chargeCodeId, chargeCodeId)));
+  return userAction(async () => {
+    await requireAdminFresh();
+    const db = await getDbForWrite();
+    await db.update(userChargeCodes).set({ isActive: false })
+      .where(and(eq(userChargeCodes.userId, userId), eq(userChargeCodes.chargeCodeId, chargeCodeId)));
+  });
 }
 
 /**
@@ -175,16 +151,27 @@ export async function unassignChargeCodeFromUser(userId: string, chargeCodeId: s
  * Convenience for onboarding: "assign all codes under this CLIN."
  */
 export async function assignAllUnderClin(userId: string, clinId: string) {
-  await requireAdmin();
-  const db = await getDb();
-  const codes = await db.select({ id: chargeCodes.id })
-    .from(chargeCodes)
-    .where(and(eq(chargeCodes.clinId, clinId), eq(chargeCodes.isActive, true)));
+  return userAction(async () => {
+    const actor = await requireAdminFresh();
+    const db = await getDbForWrite();
+    const codes = await db.select({ id: chargeCodes.id })
+      .from(chargeCodes)
+      .where(and(eq(chargeCodes.clinId, clinId), eq(chargeCodes.isActive, true)));
 
-  for (const code of codes) {
-    await assignChargeCodeToUser(userId, code.id);
-  }
-  return { assigned: codes.length };
+    // Real per-code results: one code failing (e.g. deleted meanwhile) doesn't hide the others' outcome.
+    let assigned = 0;
+    const failed: Array<{ chargeCodeId: string; error: string }> = [];
+    for (const code of codes) {
+      try {
+        await assignChargeCodeToUserInternal(db, actor.id, userId, code.id);
+        assigned++;
+      } catch (err) {
+        if (!(err instanceof UserFacingError)) throw err;
+        failed.push({ chargeCodeId: code.id, error: err.message });
+      }
+    }
+    return { assigned, failed };
+  });
 }
 
 export async function getUserChargeCodeIds(userId: string): Promise<string[]> {
@@ -235,34 +222,36 @@ export async function getChargeCodeAssignments() {
  * Idempotent — skips CLINs that already have at least one charge code.
  */
 export async function autobridgeChargeCodesFromClins() {
-  await requireAdmin();
-  const db = await getDbForWrite();
+  return userAction(async () => {
+    await requireAdminFresh();
+    const db = await getDbForWrite();
 
-  // Get all active CLINs with their contract info
-  const activeclins = await db
-    .select({
-      id: clins.id,
-      clinNumber: clins.clinNumber,
-      description: clins.description,
-      contractNumber: contracts.contractNumber,
-    })
-    .from(clins)
-    .innerJoin(contracts, eq(clins.contractId, contracts.id))
-    .where(and(eq(clins.status, 'active'), eq(contracts.status, 'active')));
+    // Get all active CLINs with their contract info
+    const activeclins = await db
+      .select({
+        id: clins.id,
+        clinNumber: clins.clinNumber,
+        description: clins.description,
+        contractNumber: contracts.contractNumber,
+      })
+      .from(clins)
+      .innerJoin(contracts, eq(clins.contractId, contracts.id))
+      .where(and(eq(clins.status, 'active'), eq(contracts.status, 'active')));
 
-  // Find which CLINs already have at least one charge code
-  const existingClinIds = new Set(
-    (await db.select({ clinId: chargeCodes.clinId }).from(chargeCodes)).map((r) => r.clinId)
-  );
+    // Find which CLINs already have at least one charge code
+    const existingClinIds = new Set(
+      (await db.select({ clinId: chargeCodes.clinId }).from(chargeCodes)).map((r) => r.clinId)
+    );
 
-  let created = 0;
-  for (const clin of activeclins) {
-    if (existingClinIds.has(clin.id)) continue;
-    const code = `${clin.contractNumber}-${clin.clinNumber}`;
-    const name = clin.description ?? `${clin.contractNumber} / ${clin.clinNumber}`;
-    await db.insert(chargeCodes).values({ code, name, clinId: clin.id }).onConflictDoNothing();
-    created++;
-  }
+    let created = 0;
+    for (const clin of activeclins) {
+      if (existingClinIds.has(clin.id)) continue;
+      const code = `${clin.contractNumber}-${clin.clinNumber}`;
+      const name = clin.description ?? `${clin.contractNumber} / ${clin.clinNumber}`;
+      await db.insert(chargeCodes).values({ code, name, clinId: clin.id }).onConflictDoNothing();
+      created++;
+    }
 
-  return { created, total: activeclins.length };
+    return { created, total: activeclins.length };
+  });
 }

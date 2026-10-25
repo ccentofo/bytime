@@ -8,7 +8,6 @@ import {
   Paper,
   Group,
   Badge,
-  Button,
   Stack,
   Table,
   Select,
@@ -29,6 +28,7 @@ import {
   IconWand,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { runAction, type RunResult } from '@/lib/run-action';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import {
@@ -40,8 +40,12 @@ import { formatDateTime } from '@/lib/format';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { SYNC_STATUS_COLOR } from '@/lib/ui/status-colors';
 import type { CalendarDate } from '@/lib/calendar-date';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 dayjs.extend(relativeTime);
+
+/** A refusal with one of these codes will refuse every remaining save too — the auto-match loop stops (audit A7). */
+const STOP_AUTO_MATCH_CODES = new Set(['unauthenticated', 'forbidden', 'read_only']);
 
 interface Connection {
   id: string;
@@ -108,15 +112,12 @@ export function GustoConfigClient({
 
   async function loadGustoEmployees() {
     setLoadingGusto(true);
-    try {
-      const employees = await fetchGustoEmployeesForMapping(connection.id);
-      setGustoEmployees(employees);
-      notifications.show({ title: 'Gusto data loaded', message: `${employees.length} employees fetched`, color: 'success' });
-    } catch (error) {
-      notifications.show({ title: 'Failed to load Gusto data', message: String(error), color: 'red' });
-    } finally {
-      setLoadingGusto(false);
-    }
+    const result = await runAction(fetchGustoEmployeesForMapping(connection.id), { errorTitle: 'Failed to load Gusto data' });
+    setLoadingGusto(false);
+    if (!result.ok) return;
+    const employees = result.data;
+    setGustoEmployees(employees);
+    notifications.show({ title: 'Gusto data loaded', message: `${employees.length} employees fetched`, color: 'success' });
   }
 
   async function handleAutoMatch() {
@@ -125,7 +126,10 @@ export function GustoConfigClient({
       return;
     }
 
+    // Launch-blockers audit A7: count only saves that succeeded, and stop at the first refusal that will refuse
+    // every remaining save too (signed out, no longer an admin, workspace read-only).
     let matched = 0;
+    let failed = 0;
     for (const btEmp of bytimeEmployees) {
       // Check if already mapped
       const existing = mappings.find((m) => m.entityType === 'employee' && m.bytimeEntityId === btEmp.id);
@@ -137,84 +141,85 @@ export function GustoConfigClient({
       );
 
       if (gustoMatch) {
-        await handleSaveMapping('employee', btEmp.id, btEmp.fullName, gustoMatch.id, gustoMatch.name);
-        matched++;
+        const saved = await handleSaveMapping('employee', btEmp.id, btEmp.fullName, gustoMatch.id, gustoMatch.name);
+        if (saved.ok) {
+          matched++;
+        } else {
+          failed++;
+          if (STOP_AUTO_MATCH_CODES.has(saved.code)) break;
+        }
       }
     }
 
+    if (matched === 0 && failed > 0) return; // each failure already showed its error; nothing to celebrate
     notifications.show({
       title: 'Auto-match complete',
-      message: `${matched} employees matched by email. Review and adjust any remaining unmapped employees.`,
-      color: matched > 0 ? 'success' : 'warning',
+      message: `${matched} employees matched by email.${failed > 0 ? ` ${failed} could not be saved.` : ''} Review and adjust any remaining unmapped employees.`,
+      color: matched > 0 && failed === 0 ? 'success' : 'warning',
     });
   }
 
-  async function handleSaveMapping(entityType: string, bytimeId: string, bytimeName: string, externalId: string, externalName: string) {
-    try {
-      await saveMapping({
+  async function handleSaveMapping(entityType: string, bytimeId: string, bytimeName: string, externalId: string, externalName: string): Promise<RunResult<unknown>> {
+    const saved = await runAction(saveMapping({
         connectionId: connection.id,
         entityType,
         bytimeEntityId: bytimeId,
         bytimeEntityName: bytimeName,
         externalEntityId: externalId,
         externalEntityName: externalName,
-      });
+    }), { errorTitle: 'Failed to save mapping' });
+    if (!saved.ok) return saved;
 
-      setMappings((prev) => {
-        const existing = prev.findIndex(
-          (m) => m.entityType === entityType && m.bytimeEntityId === bytimeId
-        );
-        const newMapping: Mapping = {
-          id: 'temp-' + Date.now(),
-          connectionId: connection.id,
-          entityType,
-          bytimeEntityId: bytimeId,
-          bytimeEntityName: bytimeName,
-          externalEntityId: externalId,
-          externalEntityName: externalName,
-          metadata: null,
-        };
-        if (existing >= 0) {
-          const updated = [...prev];
-          updated[existing] = newMapping;
-          return updated;
-        }
-        return [...prev, newMapping];
-      });
-    } catch (error) {
-      notifications.show({ title: 'Failed to save mapping', message: String(error), color: 'red' });
-    }
+    setMappings((prev) => {
+      const existing = prev.findIndex(
+        (m) => m.entityType === entityType && m.bytimeEntityId === bytimeId
+      );
+      const newMapping: Mapping = {
+        id: 'temp-' + Date.now(),
+        connectionId: connection.id,
+        entityType,
+        bytimeEntityId: bytimeId,
+        bytimeEntityName: bytimeName,
+        externalEntityId: externalId,
+        externalEntityName: externalName,
+        metadata: null,
+      };
+      if (existing >= 0) {
+        const updated = [...prev];
+        updated[existing] = newMapping;
+        return updated;
+      }
+      return [...prev, newMapping];
+    });
+    return saved;
   }
 
   async function handleSync() {
     // Default window (two months back through this month) is computed on the server in the
     // workspace's calendar, not from this browser's clock.
     startTransition(async () => {
-      try {
-        const result = await triggerGustoSync({
-          connectionId: connection.id,
-        });
-        notifications.show({
-          title: 'Sync complete',
-          message: `Pushed: ${result.result.pushed}, Failed: ${result.result.failed}, Skipped: ${result.result.skipped}`,
-          color: result.result.failed === 0 ? 'success' : 'warning',
-        });
-      } catch (error) {
-        notifications.show({ title: 'Sync failed', message: String(error), color: 'red' });
-      }
+      const outcome = await runAction(triggerGustoSync({
+        connectionId: connection.id,
+      }), { errorTitle: 'Sync failed' });
+      if (!outcome.ok) return;
+      const result = outcome.data;
+      notifications.show({
+        title: 'Sync complete',
+        message: `Pushed: ${result.result.pushed}, Failed: ${result.result.failed}, Skipped: ${result.result.skipped}`,
+        color: result.result.failed === 0 ? 'success' : 'warning',
+      });
     });
   }
 
   async function handleDisconnect() {
     setDisconnecting(true);
-    try {
-      await disconnectIntegration(connection.id);
-      window.location.href = '/admin/integrations';
-    } catch (error) {
-      notifications.show({ title: 'Failed to disconnect', message: String(error), color: 'red' });
+    const result = await runAction(disconnectIntegration(connection.id), { errorTitle: 'Failed to disconnect' });
+    if (!result.ok) {
       setDisconnecting(false);
       setConfirmDisconnectOpen(false);
+      return;
     }
+    window.location.href = '/admin/integrations';
   }
 
   const employeeMappingCount = mappings.filter((m) => m.entityType === 'employee').length;
@@ -242,18 +247,18 @@ export function GustoConfigClient({
           </Text>
         </div>
         <Group>
-          <Button variant="light" size="sm" leftSection={<IconRefresh size={14} />} onClick={loadGustoEmployees} loading={loadingGusto}>
+          <WriteButton variant="light" size="sm" leftSection={<IconRefresh size={14} />} onClick={loadGustoEmployees} loading={loadingGusto}>
             Load Gusto Employees
-          </Button>
-          <Button variant="light" size="sm" color="signal" leftSection={<IconWand size={14} />} onClick={handleAutoMatch} disabled={gustoEmployees.length === 0}>
+          </WriteButton>
+          <WriteButton variant="light" size="sm" color="signal" leftSection={<IconWand size={14} />} onClick={handleAutoMatch} disabled={gustoEmployees.length === 0}>
             Auto-Match by Email
-          </Button>
-          <Button variant="filled" size="sm" leftSection={<IconPlayerPlay size={14} />} onClick={handleSync} loading={isPending} disabled={employeeMappingCount === 0}>
+          </WriteButton>
+          <WriteButton variant="filled" size="sm" leftSection={<IconPlayerPlay size={14} />} onClick={handleSync} loading={isPending} disabled={employeeMappingCount === 0}>
             Sync Now
-          </Button>
-          <Button variant="subtle" color="red" size="sm" onClick={() => setConfirmDisconnectOpen(true)}>
+          </WriteButton>
+          <WriteButton variant="subtle" color="red" size="sm" onClick={() => setConfirmDisconnectOpen(true)}>
             Disconnect
-          </Button>
+          </WriteButton>
         </Group>
       </Group>
 

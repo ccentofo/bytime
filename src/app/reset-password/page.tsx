@@ -16,6 +16,7 @@ import {
 } from '@mantine/core';
 import { IconCheck, IconAlertCircle, IconArrowLeft, IconLock } from '@tabler/icons-react';
 import { verifyResetToken, resetPassword } from '@/server/actions/password-reset';
+import { runAction } from '@/lib/run-action';
 import { Logo } from '@/components/brand/Logo';
 
 function ResetPasswordForm() {
@@ -38,9 +39,15 @@ function ResetPasswordForm() {
         setVerifying(false);
         return;
       }
-      const result = await verifyResetToken(email, token);
-      setTokenValid(result.valid);
-      setVerifying(false);
+      try {
+        const result = await verifyResetToken(email, token);
+        setTokenValid(result.valid);
+      } catch {
+        // Unknown/closed workspace or a server error: show the invalid-link state, never an endless spinner.
+        setTokenValid(false);
+      } finally {
+        setVerifying(false);
+      }
     }
     verify();
   }, [token, email]);
@@ -61,14 +68,12 @@ function ResetPasswordForm() {
 
     setLoading(true);
 
-    const result = await resetPassword({ email, token, newPassword: password });
-
+    const result = await runAction(resetPassword({ email, token, newPassword: password }), { silent: true });
     setLoading(false);
-
-    if (result.success) {
+    if (result.ok) {
       setSuccess(true);
     } else {
-      setError(result.error ?? 'An error occurred. Please try again.');
+      setError(result.error);
     }
   }
 
@@ -115,7 +120,7 @@ function ResetPasswordForm() {
               </Alert>
             )}
             <Text size="sm" c="dimmed">
-              Resetting password for <strong>{decodeURIComponent(email)}</strong>
+              Resetting password for <strong>{email}</strong>
             </Text>
             <PasswordInput
               label="New Password"

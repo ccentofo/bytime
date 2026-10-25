@@ -3,6 +3,7 @@ import { requireAdminFresh, AuthorizationError } from '@/lib/session';
 import { getTenantSlug } from '@/lib/tenant/context';
 import { getConnector } from '@/lib/integrations/registry';
 import { saveIntegrationConnection } from '@/server/internal/integrations';
+import { getDbForWrite } from '@/db';
 import { verifyOAuthState, safeEqual } from '@/lib/integrations/oauth-state';
 
 const NONCE_COOKIES: Record<string, string> = {
@@ -73,7 +74,7 @@ async function complete(request: NextRequest, provider: string, cookieNonce: str
   try {
     const tokens = await connector.exchangeCodeForTokens(code, realmId);
 
-    await saveIntegrationConnection(actor.id, {
+    await saveIntegrationConnection(await getDbForWrite(), actor.id, {
       provider,
       displayName: `${connector.metadata.name}${tokens.companyName ? ` — ${tokens.companyName}` : ''}`,
       externalCompanyId: tokens.realmId,

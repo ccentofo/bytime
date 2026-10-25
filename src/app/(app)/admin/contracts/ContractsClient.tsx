@@ -26,12 +26,14 @@ import {
   createContract,
   updateContract,
 } from '@/server/actions/contracts';
+import { runAction } from '@/lib/run-action';
 import { getClinsByContract, createClin, updateClin } from '@/server/actions/clins';
 import { getSlinsByClin, createSlin, updateSlin } from '@/server/actions/slins';
 import { formatDate } from '@/lib/format';
 import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 type Contract = {
   id: string;
@@ -97,6 +99,7 @@ const EMPTY_FORM: ContractForm = {
 };
 
 export function ContractsClient({ initialContracts }: Props) {
+  const canWrite = useCanWrite();
   const [contracts, setContracts] = useState<Contract[]>(initialContracts);
   const [isPending, startTransition] = useTransition();
 
@@ -162,14 +165,18 @@ export function ContractsClient({ initialContracts }: Props) {
       };
 
       if (editingContract) {
-        const updated = await updateContract(editingContract.id, payload);
+        const updatedResult = await runAction(updateContract(editingContract.id, payload), { errorTitle: 'Couldn’t update contract' });
+        if (!updatedResult.ok) return;
+        const updated = updatedResult.data;
         if (updated) {
           setContracts((prev) =>
             prev.map((c) => (c.id === updated.id ? (updated as Contract) : c))
           );
         }
       } else {
-        const created = await createContract(payload);
+        const createdResult = await runAction(createContract(payload), { errorTitle: 'Couldn’t create contract' });
+        if (!createdResult.ok) return;
+        const created = createdResult.data;
         if (created) {
           setContracts((prev) => [...prev, created as Contract]);
         }
@@ -181,12 +188,14 @@ export function ContractsClient({ initialContracts }: Props) {
   function handleClinSubmit() {
     if (!selectedContract) return;
     startTransition(async () => {
-      const created = await createClin({
+      const createdResult = await runAction(createClin({
         contractId: selectedContract.id,
         clinNumber: clinForm.clinNumber,
         description: clinForm.description || undefined,
         fundedAmount: clinForm.fundedAmount || undefined,
-      });
+      }), { errorTitle: 'Couldn’t create CLIN' });
+      if (!createdResult.ok) return;
+      const created = createdResult.data;
       if (created) {
         setClins((prev) => [...prev, created as Clin]);
         setClinForm({ clinNumber: '', description: '', fundedAmount: '' });
@@ -197,7 +206,9 @@ export function ContractsClient({ initialContracts }: Props) {
   function handleClinStatusToggle(clin: Clin) {
     const newStatus = clin.status === 'active' ? 'inactive' : 'active';
     startTransition(async () => {
-      const updated = await updateClin(clin.id, { status: newStatus });
+      const updatedResult = await runAction(updateClin(clin.id, { status: newStatus }), { errorTitle: 'Couldn’t update CLIN' });
+      if (!updatedResult.ok) return;
+      const updated = updatedResult.data;
       if (updated) {
         setClins((prev) => prev.map((c) => (c.id === updated.id ? (updated as Clin) : c)));
       }
@@ -220,12 +231,14 @@ export function ContractsClient({ initialContracts }: Props) {
 
   function handleSlinSubmit(clinId: string) {
     startTransition(async () => {
-      const created = await createSlin({
+      const createdResult = await runAction(createSlin({
         clinId,
         slinNumber: slinForm.slinNumber,
         description: slinForm.description || undefined,
         fundedAmount: slinForm.fundedAmount || undefined,
-      });
+      }), { errorTitle: 'Couldn’t create SLIN' });
+      if (!createdResult.ok) return;
+      const created = createdResult.data;
       if (created) {
         setSlinsByClin((prev) => ({
           ...prev,
@@ -239,7 +252,9 @@ export function ContractsClient({ initialContracts }: Props) {
   function handleSlinStatusToggle(slin: Slin) {
     const newStatus = slin.status === 'active' ? 'inactive' : 'active';
     startTransition(async () => {
-      const updated = await updateSlin(slin.id, { status: newStatus });
+      const updatedResult = await runAction(updateSlin(slin.id, { status: newStatus }), { errorTitle: 'Couldn’t update SLIN' });
+      if (!updatedResult.ok) return;
+      const updated = updatedResult.data;
       if (updated) {
         setSlinsByClin((prev) => ({
           ...prev,
@@ -305,7 +320,7 @@ export function ContractsClient({ initialContracts }: Props) {
     renderRowActions: ({ row }) => (
       <Group gap="xs" wrap="nowrap" justify="center">
         <Tooltip label="Edit">
-          <ActionIcon variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit contract">
+          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit contract">
             <IconEdit size={16} />
           </ActionIcon>
         </Tooltip>
@@ -336,9 +351,9 @@ export function ContractsClient({ initialContracts }: Props) {
       <PageHeader
         title="Contracts & CLINs"
         actions={
-          <Button leftSection={<IconPlus size={16} />} onClick={openAddModal}>
+          <WriteButton leftSection={<IconPlus size={16} />} onClick={openAddModal}>
             Add Contract
-          </Button>
+          </WriteButton>
         }
       />
       <MantineReactTable table={table} />
@@ -405,9 +420,9 @@ export function ContractsClient({ initialContracts }: Props) {
             <Button variant="default" onClick={() => setModalOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleContractSubmit} loading={isPending}>
+            <WriteButton onClick={handleContractSubmit} loading={isPending}>
               {editingContract ? 'Save Changes' : 'Create Contract'}
-            </Button>
+            </WriteButton>
           </Group>
         </Stack>
       </Modal>
@@ -447,9 +462,9 @@ export function ContractsClient({ initialContracts }: Props) {
               onChange={(e) => setClinForm((f) => ({ ...f, fundedAmount: e.target.value }))}
               style={{ minWidth: 150 }}
             />
-            <Button onClick={handleClinSubmit} loading={isPending} leftSection={<IconPlus size={14} />}>
+            <WriteButton onClick={handleClinSubmit} loading={isPending} leftSection={<IconPlus size={14} />}>
               Add
-            </Button>
+            </WriteButton>
           </Group>
 
           {/* CLINs list */}
@@ -487,14 +502,14 @@ export function ContractsClient({ initialContracts }: Props) {
                           <Badge color={RECORD_STATUS_COLOR[clin.status] ?? 'gray'}>{clin.status}</Badge>
                         </Table.Td>
                         <Table.Td>
-                          <Button
+                          <WriteButton
                             size="xs"
                             variant="subtle"
                             onClick={() => handleClinStatusToggle(clin)}
                             loading={isPending}
                           >
                             {clin.status === 'active' ? 'Deactivate' : 'Activate'}
-                          </Button>
+                          </WriteButton>
                         </Table.Td>
                       </Table.Tr>
                     </Table.Tbody>
@@ -532,7 +547,7 @@ export function ContractsClient({ initialContracts }: Props) {
                           size="xs"
                           style={{ minWidth: 120 }}
                         />
-                        <Button
+                        <WriteButton
                           size="xs"
                           onClick={() => handleSlinSubmit(clin.id)}
                           loading={isPending}
@@ -540,7 +555,7 @@ export function ContractsClient({ initialContracts }: Props) {
                           disabled={!slinForm.slinNumber.trim()}
                         >
                           Add SLIN
-                        </Button>
+                        </WriteButton>
                       </Group>
 
                       {/* SLINs table */}
@@ -572,14 +587,14 @@ export function ContractsClient({ initialContracts }: Props) {
                                   <Badge size="xs" color={RECORD_STATUS_COLOR[slin.status] ?? 'gray'}>{slin.status}</Badge>
                                 </Table.Td>
                                 <Table.Td>
-                                  <Button
+                                  <WriteButton
                                     size="xs"
                                     variant="subtle"
                                     onClick={() => handleSlinStatusToggle(slin)}
                                     loading={isPending}
                                   >
                                     {slin.status === 'active' ? 'Deactivate' : 'Activate'}
-                                  </Button>
+                                  </WriteButton>
                                 </Table.Td>
                               </Table.Tr>
                             ))}

@@ -71,10 +71,21 @@ SPOOFED=$(status "$TENANT_URL/login" "x-tenant-slug: nonexistent-tenant-xyz")
 check "forged x-tenant-slug yields same status as baseline" "$SPOOFED" "$TENANT_BASELINE"
 
 if [[ -n "$CRON_SECRET" ]]; then
-  echo "== Cron auth =="
-  check "cron WITHOUT secret is 401" "$(status "$APEX_URL/api/cron/daily-reminder")" "401"
-  check "cron WITH secret is 200" \
-    "$(status "$APEX_URL/api/cron/daily-reminder" "x-cron-secret: $CRON_SECRET")" "200"
+  echo "== Cron auth (smoke probe: ?probe=1 does no work and sends no mail) =="
+  # feature-plan-launch-blockers.md P6 §6: the probe is answered only AFTER auth, so the 401 check still proves the
+  # secret is enforced, and the 200 checks never run the real cron (no reminders, no cron_runs heartbeat write).
+  # Audit R12: only FAILED auth attempts are rate-limited (2/minute per IP), so one unauthenticated request here, then
+  # every cron with the secret.
+  check "cron probe WITHOUT secret is 401" "$(status "$APEX_URL/api/cron/daily-reminder?probe=1")" "401"
+  for CRON in notice-delivery tenant-lifecycle submission-deadline daily-reminder; do
+    PROBE=$(curl -s -w $'\n%{http_code}' -H "x-cron-secret: $CRON_SECRET" "$APEX_URL/api/cron/$CRON?probe=1")
+    check "cron $CRON probe WITH secret is 200" "${PROBE##*$'\n'}" "200"
+    if [[ "${PROBE%$'\n'*}" == *'"probe":"ok"'* ]]; then
+      echo "  ✓ cron $CRON probe body is {\"probe\":\"ok\"}"; PASS=$((PASS+1))
+    else
+      echo "  ✗ cron $CRON probe body is not {\"probe\":\"ok\"} (did it run the real cron?)"; FAIL=$((FAIL+1))
+    fi
+  done
 else
   echo "== Cron auth =="
   echo "  • skipped (no CRON_SECRET passed)"

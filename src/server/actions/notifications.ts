@@ -9,6 +9,8 @@ import {
   DEFAULT_NOTIFICATION_PREFS,
   type NotificationPrefs,
 } from '@/server/internal/notifications';
+import { UserFacingError } from '@/lib/errors';
+import { userAction, type ActionResult } from '@/lib/action-result';
 
 /** Get the session user's own notification preferences. */
 export async function getNotificationPreferences(): Promise<NotificationPrefs> {
@@ -35,33 +37,35 @@ const NOTIFICATION_PREF_KEYS = [
  */
 export async function updateNotificationPreferences(
   prefs: Partial<NotificationPrefs>
-): Promise<void> {
-  const actor = await requireSession();
-  const db = await getDbForAuth();
+): Promise<ActionResult<void>> {
+  return userAction(async () => {
+    const actor = await requireSession();
+    const db = await getDbForAuth();
 
-  const allowedUpdates: Partial<NotificationPrefs> = {};
-  for (const key of NOTIFICATION_PREF_KEYS) {
-    if (prefs[key] !== undefined) {
-      // A real boolean only: Boolean("false") would be true.
-      if (typeof prefs[key] !== 'boolean') throw new Error(`Invalid value for ${key}.`);
-      allowedUpdates[key] = prefs[key];
+    const allowedUpdates: Partial<NotificationPrefs> = {};
+    for (const key of NOTIFICATION_PREF_KEYS) {
+      if (prefs[key] !== undefined) {
+        // A real boolean only: Boolean("false") would be true.
+        if (typeof prefs[key] !== 'boolean') throw new UserFacingError(`Invalid value for ${key}.`);
+        allowedUpdates[key] = prefs[key];
+      }
     }
-  }
 
-  const existing = await db
-    .select({ userId: notificationPreferences.userId })
-    .from(notificationPreferences)
-    .where(eq(notificationPreferences.userId, actor.id));
-
-  if (existing.length === 0) {
-    await db.insert(notificationPreferences).values({
-      ...DEFAULT_NOTIFICATION_PREFS,
-      ...allowedUpdates,
-      userId: actor.id,
-    });
-  } else {
-    await db.update(notificationPreferences)
-      .set({ ...allowedUpdates, updatedAt: new Date() })
+    const existing = await db
+      .select({ userId: notificationPreferences.userId })
+      .from(notificationPreferences)
       .where(eq(notificationPreferences.userId, actor.id));
-  }
+
+    if (existing.length === 0) {
+      await db.insert(notificationPreferences).values({
+        ...DEFAULT_NOTIFICATION_PREFS,
+        ...allowedUpdates,
+        userId: actor.id,
+      });
+    } else {
+      await db.update(notificationPreferences)
+        .set({ ...allowedUpdates, updatedAt: new Date() })
+        .where(eq(notificationPreferences.userId, actor.id));
+    }
+  });
 }

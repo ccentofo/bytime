@@ -8,6 +8,7 @@ import { getDbForUrl } from '@/db';
 import { users, workspaceSettings } from '@/db/schema';
 import { decrypt } from '@/lib/encryption';
 import { resend, EMAIL_FROM, isEmailEnabled } from '@/lib/email/client';
+import { CRON_SEND_INTERVAL_MS } from '@/lib/email/rate';
 import { calendarDayOf, canonicalTimeZone, formatCalendarDate } from '@/lib/calendar-date';
 import { tenantBaseUrl } from './host';
 import { addDays, isNoticeSuperseded, type NoticeKind } from './lifecycle';
@@ -34,7 +35,8 @@ import { PolicySuspendedEmail } from '@/lib/email/templates/policy-suspended';
 
 const LEASE_MINUTES = 10;
 const REFREEZE_AFTER_HOURS = 23; // Resend remembers an idempotency key for 24 h
-const timing = { sendTimeoutMs: 10_000, backoffBaseMs: 1000, throttleMs: 125 };
+// throttleMs: the shared cron send budget (≤ 2 sends/second, src/lib/email/rate.ts).
+const timing = { sendTimeoutMs: 10_000, backoffBaseMs: 1000, throttleMs: CRON_SEND_INTERVAL_MS };
 
 /** Integration tests only: shrink the send timeout / retry backoff / throttle so failure paths run quickly. */
 export function setNoticeTimingForTests(t: Partial<typeof timing>): void {
@@ -292,7 +294,12 @@ export async function deliverPendingNotices(budgetMs: number, now?: Date, onlyTe
       console.error(`Notice ${id} delivery error:`, err);
       counts.failed++;
     }
-    await new Promise((r) => setTimeout(r, timing.throttleMs)); // ≤ 8 sends/second
+    await new Promise((r) => setTimeout(r, timing.throttleMs)); // ≤ 2 sends/second
   }
   return counts;
+}
+
+/** Unit tests only: the current delivery timing (default throttle is the shared 500 ms budget). */
+export function getNoticeTimingForTests(): Readonly<typeof timing> {
+  return { ...timing };
 }

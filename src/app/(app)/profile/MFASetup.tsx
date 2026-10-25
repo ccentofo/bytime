@@ -19,6 +19,7 @@ import {
 import { IconShieldCheck, IconShieldOff, IconAlertCircle, IconCheck, IconQrcode } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { initMFASetup, completeMFASetup, disableMFA } from '@/server/actions/mfa';
+import { runAction } from '@/lib/run-action';
 import Image from 'next/image';
 
 interface Props {
@@ -32,6 +33,7 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
   const [pendingSecret, setPendingSecret] = useState('');
   const [qrUri, setQrUri] = useState('');
   const [verifyCode, setVerifyCode] = useState('');
+  const [setupPassword, setSetupPassword] = useState('');
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [disablePassword, setDisablePassword] = useState('');
   const [error, setError] = useState('');
@@ -39,27 +41,28 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
   async function handleStartSetup() {
     setError('');
     startTransition(async () => {
-      try {
-        const result = await initMFASetup();
-        setPendingSecret(result.secret);
-        setQrUri(result.uri);
-        setStep('setup');
-      } catch (err) {
-        setError(String(err));
+      const result = await runAction(initMFASetup(), { silent: true });
+      if (!result.ok) {
+        setError(result.error);
+        return;
       }
+      setPendingSecret(result.data.secret);
+      setQrUri(result.data.uri);
+      setStep('setup');
     });
   }
 
   async function handleVerify() {
     setError('');
     startTransition(async () => {
-      const result = await completeMFASetup({ pendingSecret, code: verifyCode });
-      if (result.success && result.recoveryCodes) {
-        setRecoveryCodes(result.recoveryCodes);
+      const result = await runAction(completeMFASetup({ pendingSecret, code: verifyCode, currentPassword: setupPassword }), { silent: true });
+      if (result.ok) {
+        setRecoveryCodes(result.data.recoveryCodes);
+        setSetupPassword('');
         setStep('recovery');
         notifications.show({ title: '2FA Enabled', message: 'Two-factor authentication is now active.', color: 'success' });
       } else {
-        setError(result.error ?? 'Verification failed.');
+        setError(result.error);
         setVerifyCode('');
       }
     });
@@ -68,14 +71,14 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
   async function handleDisable() {
     setError('');
     startTransition(async () => {
-      const result = await disableMFA(disablePassword);
-      if (result.success) {
+      const result = await runAction(disableMFA(disablePassword), { silent: true });
+      if (result.ok) {
         setStep('idle');
         setDisablePassword('');
         notifications.show({ title: '2FA Disabled', message: 'Two-factor authentication has been disabled.', color: 'warning' });
         window.location.reload();
       } else {
-        setError(result.error ?? 'Failed to disable 2FA.');
+        setError(result.error);
       }
     });
   }
@@ -166,13 +169,20 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
             value={verifyCode}
             onChange={setVerifyCode}
             autoFocus
-            onComplete={handleVerify}
+          />
+          {/* Re-authentication (launch-blockers P3). No auto-submit on PIN completion: an empty password would
+              count as a failed attempt toward the sign-in lockout. */}
+          <PasswordInput
+            label="3. Confirm with your current password"
+            value={setupPassword}
+            onChange={(e) => setSetupPassword(e.currentTarget.value)}
+            autoComplete="current-password"
           />
           <Group>
-            <Button onClick={handleVerify} loading={isPending} disabled={verifyCode.length !== 6}>
+            <Button onClick={handleVerify} loading={isPending} disabled={verifyCode.length !== 6 || !setupPassword}>
               Verify & Enable
             </Button>
-            <Button variant="subtle" onClick={() => setStep('idle')}>Cancel</Button>
+            <Button variant="subtle" onClick={() => { setSetupPassword(''); setStep('idle'); }}>Cancel</Button>
           </Group>
         </Stack>
       )}

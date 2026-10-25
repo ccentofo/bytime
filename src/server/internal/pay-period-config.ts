@@ -1,7 +1,8 @@
 import 'server-only';
 import { payPeriodConfig } from '@/db/schema';
 import { desc, lte } from 'drizzle-orm';
-import type { getDb } from '@/db';
+import { getDb } from '@/db';
+import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import {
   DEFAULT_PERIOD_CONFIG,
   getNumDaysInPeriod,
@@ -9,7 +10,7 @@ import {
   type PeriodConfig,
   type PeriodType,
 } from '@/lib/date-utils';
-import { addDays, compare, type CalendarDate } from '@/lib/calendar-date';
+import { addDays, compare, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 
 /**
  * Pay-period schedule resolution WITHOUT a session check. INTERNAL — not a server action.
@@ -97,4 +98,18 @@ export async function existingPeriodLength(
 ): Promise<number> {
   if (snapshot != null && snapshot > 0) return snapshot;
   return getNumDaysInPeriod(start, await configAt(db, start));
+}
+
+/**
+ * The schedule in effect on `date` (feature-plan-launch-blockers.md P4 §2: shared by the exported
+ * getEffectiveConfigAt/getCurrentEffectiveConfig/getPayPeriodConfig actions and employee-dashboard, which must not
+ * call each other). Session-free like everything here — callers authorize first.
+ */
+export async function getEffectiveConfigAtInternal(date: CalendarDate): Promise<PeriodConfig> {
+  return configAt(await getDb(), parseCalendarDate(date));
+}
+
+/** The schedule in effect on the workspace's "today". */
+export async function getCurrentEffectiveConfigInternal(): Promise<PeriodConfig> {
+  return getEffectiveConfigAtInternal(await getWorkspaceToday());
 }

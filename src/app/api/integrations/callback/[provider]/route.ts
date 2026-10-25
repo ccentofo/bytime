@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyOAuthState } from '@/lib/integrations/oauth-state';
-import { isValidSlug } from '@/lib/tenant/provision';
+import { isValidSlug } from '@/lib/tenant/slug-rules';
+import { tenantBaseUrl } from '@/lib/tenant/host';
 
 /**
  * Apex OAuth callback — the single redirect URI registered with Intuit/Gusto.
@@ -30,11 +31,7 @@ export async function GET(
     return NextResponse.json({ error: 'Invalid or expired authorization request. Please try connecting again.' }, { status: 400 });
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
-  const rootDomain = process.env.APP_ROOT_DOMAIN ?? 'localhost';
-  const u = new URL(appUrl);
-  const port = u.port ? `:${u.port}` : '';
-  const tenantBase = `${u.protocol}//${payload.tenantSlug}.${rootDomain}${port}`;
+  const tenantBase = tenantBaseUrl(payload.tenantSlug);
 
   // The user declined consent (or the provider failed): send them back to their own workspace
   // with a fixed error code. The provider's error text is never reflected.

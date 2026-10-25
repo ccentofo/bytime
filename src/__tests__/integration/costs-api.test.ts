@@ -14,11 +14,19 @@ import {
 // R2-4: /api/v1/costs regressed to a 500 for every API client after round 1 made
 // getDetailedCostReport require an admin SESSION — API-key requests have none.
 // The route now calls the internal query (getDetailedCostReportData) directly,
-// after validateApiKey() succeeds, same as every other /api/v1/* route.
+// after handleApiRequest() authenticates, same as every other /api/v1/* route.
 // ---------------------------------------------------------------------------
+
+// feature-plan-launch-blockers.md P4 §6: the route resolves the workspace (getTenantState) and validates the key
+// against getDbForUrl(tenant.dbUrl) — both pointed at the test database here.
+vi.mock('@/lib/tenant/context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tenant/context')>()),
+  getTenantState: async () => ({ kind: 'full', tenant: { slug: 'test-tenant', dbUrl: 'test-db' } }),
+}));
 
 vi.mock('@/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/db')>()),
+  getDbForUrl: () => getTestDb(),
   getDb: async () => getTestDb(),
   // Write actions obtain their client through the write gate (feature-plan-terms-compliance-fixes.md §5.1).
   getDbForWrite: async () => getTestDb(),
@@ -103,6 +111,7 @@ describe('/api/v1/costs (R2-4)', () => {
 
     const response = await GET(request as any);
     expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: 'Invalid API key.' });
   });
 
   it('returns 401 for an invalid API key', async () => {
@@ -113,6 +122,7 @@ describe('/api/v1/costs (R2-4)', () => {
 
     const response = await GET(request as any);
     expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: 'Invalid API key.' });
   });
 
   // R2-12 ---------------------------------------------------------------

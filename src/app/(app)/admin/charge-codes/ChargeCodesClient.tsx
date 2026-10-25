@@ -6,6 +6,7 @@ import {
   Badge, Switch, ActionIcon, Tooltip,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
+import { runAction } from '@/lib/run-action';
 import { IconPlus, IconPencil, IconBan, IconBolt } from '@tabler/icons-react';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
@@ -16,6 +17,7 @@ import {
 import { RECORD_STATUS_COLOR, WORK_LOCATION_COLOR } from '@/lib/ui/status-colors';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 type ChargeCodeRow = {
   id: string;
@@ -71,6 +73,7 @@ const WORK_LOCATION_OPTIONS = [
 
 
 export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Props) {
+  const canWrite = useCanWrite();
   const [codes, setCodes] = useState(initialCodes);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -114,37 +117,32 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
       return;
     }
     startTransition(async () => {
-      try {
-        if (editingId) {
-          await updateChargeCode(editingId, {
+      const result = editingId
+        ? await runAction(updateChargeCode(editingId, {
             code: form.code.trim(), name: form.name.trim(),
             description: form.description || undefined,
             clinId: form.clinId, classId: form.classId || null,
             workLocation: (form.workLocation as 'onsite' | 'telework' | 'other') || null,
             billable: form.billable,
-          });
-          notifications.show({ title: 'Updated', message: `${form.code} updated.`, color: 'success' });
-        } else {
-          await createChargeCode({
+          }), { errorTitle: 'Couldn’t update charge code' })
+        : await runAction(createChargeCode({
             code: form.code.trim(), name: form.name.trim(),
             description: form.description || undefined,
             clinId: form.clinId, classId: form.classId || undefined,
             workLocation: (form.workLocation as 'onsite' | 'telework' | 'other') || undefined,
             billable: form.billable,
-          });
-          notifications.show({ title: 'Created', message: `${form.code} created.`, color: 'success' });
-        }
-        setModalOpen(false);
-        await refreshCodes();
-      } catch (e) {
-        notifications.show({ title: 'Error', message: String(e), color: 'red' });
-      }
+          }), { errorTitle: 'Couldn’t create charge code' });
+      if (!result.ok) return; // the server's message is shown; the form stays open with the user's input
+      notifications.show({ title: editingId ? 'Updated' : 'Created', message: `${form.code} ${editingId ? 'updated' : 'created'}.`, color: 'success' });
+      setModalOpen(false);
+      await refreshCodes();
     });
   }
 
   async function handleDeactivate(id: string, code: string) {
     startTransition(async () => {
-      await deactivateChargeCode(id);
+      const result = await runAction(deactivateChargeCode(id), { errorTitle: 'Couldn’t deactivate' });
+      if (!result.ok) return;
       notifications.show({ title: 'Deactivated', message: `${code} deactivated.`, color: 'warning' });
       setConfirmTarget(null);
       await refreshCodes();
@@ -153,20 +151,19 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
 
   async function handleAutobridge() {
     startTransition(async () => {
-      try {
-        const result = await autobridgeChargeCodesFromClins();
-        notifications.show({ title: 'Auto-generated', message: `Created ${result.created} charge code(s) from ${result.total} active CLINs.`, color: 'success' });
-        await refreshCodes();
-      } catch (e) {
-        notifications.show({ title: 'Error', message: String(e), color: 'red' });
-      }
+      const result = await runAction(autobridgeChargeCodesFromClins(), { errorTitle: 'Couldn’t auto-generate codes' });
+      if (!result.ok) return;
+      notifications.show({ title: 'Auto-generated', message: `Created ${result.data.created} charge code(s) from ${result.data.total} active CLINs.`, color: 'success' });
+      await refreshCodes();
     });
   }
 
   async function handleAddClass() {
     if (!newClassName.trim()) return;
     startTransition(async () => {
-      const created = await createCostClass(newClassName.trim());
+      const result = await runAction(createCostClass(newClassName.trim()), { errorTitle: 'Couldn’t add class' });
+      if (!result.ok) return;
+      const created = result.data;
       if (created) {
         setClassList([...classList, { id: created.id, name: created.name }]);
         setForm((f) => ({ ...f, classId: created.id }));
@@ -223,13 +220,13 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
     renderRowActions: ({ row }) => (
       <Group gap="xs" justify="center">
         <Tooltip label="Edit">
-          <ActionIcon variant="subtle" onClick={() => openEdit(row.original)} aria-label="Edit charge code">
+          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEdit(row.original)} aria-label="Edit charge code">
             <IconPencil size={16} />
           </ActionIcon>
         </Tooltip>
         {row.original.isActive && (
           <Tooltip label="Deactivate">
-            <ActionIcon
+            <ActionIcon disabled={!canWrite}
               variant="subtle"
               color="red"
               onClick={() => setConfirmTarget(row.original)}
@@ -256,10 +253,10 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
         description={'Direct charge codes that employees charge to. Each code rolls up to a CLIN → Contract. Use "Auto-generate from CLINs" to create one code per active CLIN, or create custom codes (e.g. Onsite/Telework variants).'}
         actions={
           <Group gap="sm">
-            <Button leftSection={<IconPlus size={16} />} onClick={openCreate} size="sm">New Charge Code</Button>
-            <Button leftSection={<IconBolt size={16} />} variant="default" onClick={handleAutobridge} loading={isPending} size="sm">
+            <WriteButton leftSection={<IconPlus size={16} />} onClick={openCreate} size="sm">New Charge Code</WriteButton>
+            <WriteButton leftSection={<IconBolt size={16} />} variant="default" onClick={handleAutobridge} loading={isPending} size="sm">
               Auto-generate from CLINs
-            </Button>
+            </WriteButton>
           </Group>
         }
       />
@@ -296,7 +293,7 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
               style={{ flex: 1 }} />
             <TextInput placeholder="New class name" value={newClassName}
               onChange={(e) => setNewClassName(e.target.value)} style={{ flex: 1 }} />
-            <Button variant="default" onClick={handleAddClass} loading={isPending}>Add</Button>
+            <WriteButton variant="default" onClick={handleAddClass} loading={isPending}>Add</WriteButton>
           </Group>
 
           <Switch label="Billable" checked={form.billable}
@@ -304,7 +301,7 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
 
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button onClick={handleSave} loading={isPending}>Save</Button>
+            <WriteButton onClick={handleSave} loading={isPending}>Save</WriteButton>
           </Group>
         </Stack>
       </Modal>

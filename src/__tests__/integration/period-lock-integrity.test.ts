@@ -10,6 +10,8 @@ import {
   createTestClin,
   createTestChargeCode,
   cleanupTestData,
+  expectOk,
+  expectFailure,
 } from './helpers';
 
 // ---------------------------------------------------------------------------
@@ -95,40 +97,32 @@ describe('Period-lock integrity (R2-2)', () => {
   });
 
   it('rejects dayIndex = -1', async () => {
-    await expect(
-      saveTimesheetBatch({
+    await expectFailure(saveTimesheetBatch({
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: -1, hours: 4, isEdit: false, isLateEntry: false }],
-      })
-    ).rejects.toThrow(/Invalid day index/i);
+      }), 'validation', /Invalid day index/i);
   });
 
   it('rejects dayIndex = numDays (one past the last valid index)', async () => {
-    await expect(
-      saveTimesheetBatch({
+    await expectFailure(saveTimesheetBatch({
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: numDays, hours: 4, isEdit: false, isLateEntry: false }],
-      })
-    ).rejects.toThrow(/Invalid day index/i);
+      }), 'validation', /Invalid day index/i);
   });
 
   it('rejects a fractional dayIndex', async () => {
-    await expect(
-      saveTimesheetBatch({
+    await expectFailure(saveTimesheetBatch({
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: 1.5, hours: 4, isEdit: false, isLateEntry: false }],
-      })
-    ).rejects.toThrow(/Invalid day index/i);
+      }), 'validation', /Invalid day index/i);
   });
 
   it('rejects a periodStart that is not a real period boundary', async () => {
     const bogusPeriodStart = addDays(periodStart, 3); // mid-period, not a boundary
-    await expect(
-      saveTimesheetBatch({
+    await expectFailure(saveTimesheetBatch({
         periodStart: bogusPeriodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: 0, hours: 4, isEdit: false, isLateEntry: false }],
-      })
-    ).rejects.toThrow(/Invalid period start/i);
+      }), 'validation', /Invalid period start/i);
   });
 
   it('rejects writing into an approved prior period via a neighboring draft period (dayIndex underflow)', async () => {
@@ -142,14 +136,12 @@ describe('Period-lock integrity (R2-2)', () => {
       reviewedAt: new Date(),
     });
 
-    await expect(
-      saveTimesheetBatch({
+    await expectFailure(saveTimesheetBatch({
         periodStart, // current period — draft (no row)
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: -1, hours: 4, isEdit: false, isLateEntry: true }],
         // A valid reason code, so the late-entry rule can't be what rejects this.
         changeReasonCode: 'LATE_ENTRY',
-      })
-    ).rejects.toThrow(/Invalid day index/i);
+      }), 'validation', /Invalid day index/i);
 
     // Confirm nothing was written into the approved prior period.
     const rows = await db.select().from(schema.timesheetEntries).where(
@@ -177,13 +169,11 @@ describe('Period-lock integrity (R2-2)', () => {
       periodNumDays: getNumDaysInPeriod(previousPeriodStart, DEFAULT_PERIOD_CONFIG),
     });
 
-    await expect(
-      saveTimesheetBatch({
+    await expectFailure(saveTimesheetBatch({
         periodStart: previousPeriodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: 2, hours: 4, isEdit: false, isLateEntry: true }],
         changeReasonCode: 'LATE_ENTRY',
-      })
-    ).rejects.toThrow(/locked/i);
+      }), 'validation', /locked/i);
 
     const rows = await db.select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.userId, employee.id));
     expect(rows).toHaveLength(0);
@@ -211,14 +201,12 @@ describe('Period-lock integrity (R2-2)', () => {
       // A biweekly schedule anchored on a date whose 14-day cycle does NOT line up with the
       // proposed effective_from — i.e. effective_from is a semimonthly boundary (the current
       // default schedule) but not a boundary of this new biweekly schedule.
-      await expect(
-        updatePayPeriodConfig({
+      await expectFailure(updatePayPeriodConfig({
           periodType: 'biweekly',
           anchorDate: '2025-01-06' as CalendarDate, // a Monday
           weekStartDay: 1,
           effectiveFrom: '2026-03-01' as CalendarDate, // semimonthly boundary, not a Jan-6-anchored biweekly one
-        })
-      ).rejects.toThrow(/boundary under both/i);
+        }), 'validation', /boundary under both/i);
     });
 
     it('getValidScheduleChangeDates only offers dates valid under both schedules, and updatePayPeriodConfig accepts one', async () => {
@@ -232,12 +220,12 @@ describe('Period-lock integrity (R2-2)', () => {
       expect(validDates.dates.length).toBeGreaterThan(0);
 
       const chosen = validDates.dates[0];
-      const result = await updatePayPeriodConfig({
+      const result = await expectOk(updatePayPeriodConfig({
         periodType: 'biweekly',
         anchorDate: '2025-01-06' as CalendarDate,
         weekStartDay: 1,
         effectiveFrom: chosen,
-      });
+      }));
       expect(result.effectiveFrom).toBe(chosen);
 
       // No gap, no overlap: the day before effective_from resolves under the OLD (semimonthly)
@@ -254,24 +242,22 @@ describe('Period-lock integrity (R2-2)', () => {
 
     it('rejects a weekly/biweekly anchor that does not fall on the selected week start day', async () => {
       actingAs(admin);
-      await expect(
-        updatePayPeriodConfig({
+      await expectFailure(updatePayPeriodConfig({
           periodType: 'biweekly',
           anchorDate: '2025-01-07' as CalendarDate, // a Tuesday
           weekStartDay: 1, // Monday
           effectiveFrom: '2026-02-16' as CalendarDate,
-        })
-      ).rejects.toThrow(/week start day/i);
+        }), 'validation', /week start day/i);
     });
 
     it('rejects an unknown period type or week start day', async () => {
       actingAs(admin);
-      await expect(updatePayPeriodConfig({
+      await expectFailure(updatePayPeriodConfig({
         periodType: 'fortnightly' as never, anchorDate: '2026-01-05' as CalendarDate, weekStartDay: 1, effectiveFrom: '2026-02-16' as CalendarDate,
-      })).rejects.toThrow(/Period type must be one of/);
-      await expect(updatePayPeriodConfig({
+      }), 'validation', /Period type must be one of/);
+      await expectFailure(updatePayPeriodConfig({
         periodType: 'weekly', anchorDate: '2026-01-05' as CalendarDate, weekStartDay: 9, effectiveFrom: '2026-02-16' as CalendarDate,
-      })).rejects.toThrow(/Week start day/);
+      }), 'validation', /Week start day/);
     });
 
     it('a workspace with no timesheets can apply a schedule immediately; once timesheets exist it cannot', async () => {
@@ -280,7 +266,7 @@ describe('Period-lock integrity (R2-2)', () => {
 
       const before = await getValidScheduleChangeDates(sundayWeekly);
       expect(before.immediate).toBe(true);
-      expect(await updatePayPeriodConfig({ ...sundayWeekly, effectiveFrom: null })).toEqual({ effectiveFrom: null });
+      expect(await expectOk(updatePayPeriodConfig({ ...sundayWeekly, effectiveFrom: null }))).toEqual({ effectiveFrom: null });
       const applied = await resolvePeriod('2026-01-11' as CalendarDate);
       expect(applied.config.periodType).toBe('weekly');
       expect(applied.numDays).toBe(7);
@@ -291,8 +277,7 @@ describe('Period-lock integrity (R2-2)', () => {
       });
       const after = await getValidScheduleChangeDates(sundayWeekly);
       expect(after.immediate).toBe(false);
-      await expect(updatePayPeriodConfig({ ...sundayWeekly, effectiveFrom: null }))
-        .rejects.toThrow(/must start on a future date/);
+      await expectFailure(updatePayPeriodConfig({ ...sundayWeekly, effectiveFrom: null }), 'validation', /must start on a future date/);
     });
 
     it('explains a change that can never be scheduled instead of offering nothing silently', async () => {
@@ -345,10 +330,10 @@ describe('Period-lock integrity (R2-2)', () => {
   it('a normal, in-bounds save still succeeds', async () => {
     // Today's cell: neither late nor an edit, so no reason code is needed.
     const todayIndex = diffDays(periodStart, todayIn('America/New_York'));
-    const result = await saveTimesheetBatch({
+    const result = await expectOk(saveTimesheetBatch({
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 6, isEdit: false, isLateEntry: false }],
-    });
+    }));
     expect(Object.keys(result)).toHaveLength(1);
 
     const db = getTestDb();

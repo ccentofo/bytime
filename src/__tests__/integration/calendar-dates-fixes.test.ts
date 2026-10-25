@@ -10,6 +10,8 @@ import {
   createTestClin,
   createTestChargeCode,
   cleanupTestData,
+  expectFailure,
+  expectOk,
 } from './helpers';
 
 // ---------------------------------------------------------------------------
@@ -24,10 +26,13 @@ vi.mock('@/db', async (importOriginal) => ({
   // Write actions obtain their client through the write gate (feature-plan-terms-compliance-fixes.md §5.1).
   getDbForWrite: async () => getTestDb(),
   getDbForAuth: async () => getTestDb(),
+  // The v1 API validates the key against getDbForUrl(tenant.dbUrl) (feature-plan-launch-blockers.md P4 §6).
+  getDbForUrl: () => getTestDb(),
 }));
 
 vi.mock('@/lib/tenant/context', () => ({
   getTenantSlug: async () => 'test-tenant',
+  getTenantState: async () => ({ kind: 'full', tenant: { slug: 'test-tenant', dbUrl: 'test-db' } }),
 }));
 
 type FakeSessionUser = { id: string; role: string; email: string; fullName: string };
@@ -98,11 +103,11 @@ describe('calendar-dates audit fixes', () => {
       const unassignedCode = await createTestChargeCode(otherClin.id);
       actingAs(employee);
 
-      await expect(saveTimesheetBatch({
+      await expectFailure(saveTimesheetBatch({
         periodStart,
         changeReasonCode: 'LATE_ENTRY',
         cells: [{ indirectCodeId: indirect.id, chargeCodeId: unassignedCode.id, clinId: otherClin.id, dayIndex: 1, hours: 8, isEdit: false, isLateEntry: true }],
-      })).rejects.toThrow(/exactly one charge code, CLIN, or indirect code/);
+      }), 'validation', /exactly one charge code, CLIN, or indirect code/);
 
       const rows = await db.select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.userId, employee.id));
       expect(rows).toHaveLength(0);
@@ -113,15 +118,15 @@ describe('calendar-dates audit fixes', () => {
       const [inactive] = await db.insert(schema.indirectChargeCodes).values({ code: 'OLD', name: 'Retired', category: 'overhead', isActive: false }).returning();
       actingAs(employee);
 
-      await expect(saveTimesheetBatch({
+      await expectFailure(saveTimesheetBatch({
         periodStart, changeReasonCode: 'LATE_ENTRY',
         cells: [{ indirectCodeId: inactive.id, dayIndex: 1, hours: 8, isEdit: false, isLateEntry: true }],
-      })).rejects.toThrow(/is not available/);
+      }), 'validation', /is not available/);
 
-      await expect(saveTimesheetBatch({
+      await expectFailure(saveTimesheetBatch({
         periodStart, changeReasonCode: 'LATE_ENTRY',
         cells: [{ chargeCodeId, slinId: crypto.randomUUID(), dayIndex: 1, hours: 8, isEdit: false, isLateEntry: true }],
-      })).rejects.toThrow(/SLIN can only be given with a legacy CLIN/);
+      }), 'validation', /SLIN can only be given with a legacy CLIN/);
     });
   });
 
@@ -174,10 +179,10 @@ describe('calendar-dates audit fixes', () => {
 
   it('importMigrationPeriods stores the length snapshot and reports off-schedule starts clearly', async () => {
     actingAs(admin);
-    const result = await importMigrationPeriods([
+    const result = await expectOk(importMigrationPeriods([
       { employeeEmail: employee.email, periodStart: '2026-01-16', status: 'approved', submittedAt: '', reviewedAt: '', reviewedByEmail: '', reviewComment: '' },
       { employeeEmail: employee.email, periodStart: '2026-01-05', status: 'approved', submittedAt: '', reviewedAt: '', reviewedByEmail: '', reviewComment: '' },
-    ]);
+    ]));
     expect(result.imported).toBe(1);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].message).toMatch(/not a period start under this workspace's pay schedule/);
@@ -189,9 +194,9 @@ describe('calendar-dates audit fixes', () => {
 
   it('updateWorkspaceTimezone stores the canonical IANA name and rejects abbreviations and non-strings', async () => {
     actingAs(admin);
-    await expect(updateWorkspaceTimezone('america/new_york')).resolves.toBe('America/New_York');
-    await expect(updateWorkspaceTimezone('EST')).rejects.toThrow(/Choose a timezone/);
-    await expect(updateWorkspaceTimezone(['UTC'] as unknown as string)).rejects.toThrow(/Choose a timezone/);
+    expect(await expectOk(updateWorkspaceTimezone('america/new_york'))).toBe('America/New_York');
+    await expectFailure(updateWorkspaceTimezone('EST'), 'validation', /Choose a timezone/);
+    await expectFailure(updateWorkspaceTimezone(['UTC'] as unknown as string), 'validation', /Choose a timezone/);
     const [row] = await getTestDb().select().from(schema.workspaceSettings);
     expect(row.timezone).toBe('America/New_York');
   });

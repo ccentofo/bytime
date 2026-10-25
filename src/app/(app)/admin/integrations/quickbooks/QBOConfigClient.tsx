@@ -8,7 +8,6 @@ import {
   Paper,
   Group,
   Badge,
-  Button,
   Stack,
   Table,
   Select,
@@ -32,6 +31,7 @@ import {
   IconHistory,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { runAction } from '@/lib/run-action';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { formatDateTime } from '@/lib/format';
@@ -46,6 +46,7 @@ import {
 import { saveMapping, disconnectIntegration, toggleAutoSync } from '@/server/actions/integrations';
 import { SYNC_STATUS_COLOR } from '@/lib/ui/status-colors';
 import type { CalendarDate } from '@/lib/calendar-date';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 dayjs.extend(relativeTime);
 
@@ -122,94 +123,89 @@ export function QBOConfigClient({
 
   async function loadQBOEntities() {
     setLoadingQBO(true);
-    try {
-      const [employees, vendors, customers, items] = await Promise.all([
-        fetchQBOEmployeesForMapping(connection.id),
-        fetchQBOVendorsForMapping(connection.id),
-        fetchQBOCustomersForMapping(connection.id),
-        fetchQBOServiceItemsForMapping(connection.id),
-      ]);
-      setQboEmployees(employees);
-      setQboVendors(vendors);
-      setQboCustomers(customers);
-      setQboItems(items);
-      notifications.show({ title: 'QBO data loaded', message: `${employees.length} employees, ${vendors.length} vendors, ${customers.length} customers, ${items.length} service items`, color: 'success' });
-    } catch (error) {
-      notifications.show({ title: 'Failed to load QBO data', message: String(error), color: 'red' });
-    } finally {
-      setLoadingQBO(false);
+    const [e, v, c, i] = await Promise.all([
+      runAction(fetchQBOEmployeesForMapping(connection.id), { silent: true }),
+      runAction(fetchQBOVendorsForMapping(connection.id), { silent: true }),
+      runAction(fetchQBOCustomersForMapping(connection.id), { silent: true }),
+      runAction(fetchQBOServiceItemsForMapping(connection.id), { silent: true }),
+    ]);
+    setLoadingQBO(false);
+    if (!e.ok || !v.ok || !c.ok || !i.ok) {
+      const failed = [e, v, c, i].find((r) => !r.ok);
+      notifications.show({ title: 'Failed to load QBO data', message: failed && !failed.ok ? failed.error : '', color: 'red' });
+      return;
     }
+    const [employees, vendors, customers, items] = [e.data, v.data, c.data, i.data];
+    setQboEmployees(employees);
+    setQboVendors(vendors);
+    setQboCustomers(customers);
+    setQboItems(items);
+    notifications.show({ title: 'QBO data loaded', message: `${employees.length} employees, ${vendors.length} vendors, ${customers.length} customers, ${items.length} service items`, color: 'success' });
   }
 
   async function handleSaveMapping(entityType: string, bytimeId: string, bytimeName: string, externalId: string, externalName: string) {
-    try {
-      await saveMapping({
+    const saved = await runAction(saveMapping({
         connectionId: connection.id,
         entityType,
         bytimeEntityId: bytimeId,
         bytimeEntityName: bytimeName,
         externalEntityId: externalId,
         externalEntityName: externalName,
-      });
+    }), { errorTitle: 'Failed to save mapping' });
+    if (!saved.ok) return;
 
-      // Update local state
-      setMappings((prev) => {
-        const existing = prev.findIndex(
-          (m) => m.entityType === entityType && m.bytimeEntityId === bytimeId
-        );
-        const newMapping: Mapping = {
-          id: 'temp-' + Date.now(),
-          connectionId: connection.id,
-          entityType,
-          bytimeEntityId: bytimeId,
-          bytimeEntityName: bytimeName,
-          externalEntityId: externalId,
-          externalEntityName: externalName,
-          metadata: null,
-        };
-        if (existing >= 0) {
-          const updated = [...prev];
-          updated[existing] = newMapping;
-          return updated;
-        }
-        return [...prev, newMapping];
-      });
+    // Update local state
+    setMappings((prev) => {
+      const existing = prev.findIndex(
+        (m) => m.entityType === entityType && m.bytimeEntityId === bytimeId
+      );
+      const newMapping: Mapping = {
+        id: 'temp-' + Date.now(),
+        connectionId: connection.id,
+        entityType,
+        bytimeEntityId: bytimeId,
+        bytimeEntityName: bytimeName,
+        externalEntityId: externalId,
+        externalEntityName: externalName,
+        metadata: null,
+      };
+      if (existing >= 0) {
+        const updated = [...prev];
+        updated[existing] = newMapping;
+        return updated;
+      }
+      return [...prev, newMapping];
+    });
 
-      notifications.show({ title: 'Mapping saved', message: `${bytimeName} → ${externalName}`, color: 'success' });
-    } catch (error) {
-      notifications.show({ title: 'Failed to save mapping', message: String(error), color: 'red' });
-    }
+    notifications.show({ title: 'Mapping saved', message: `${bytimeName} → ${externalName}`, color: 'success' });
   }
 
   async function handleSync() {
     // Default window (two months back through this month) is computed on the server in the
     // workspace's calendar, not from this browser's clock.
     startTransition(async () => {
-      try {
-        const result = await triggerQBOSync({
-          connectionId: connection.id,
-        });
-        notifications.show({
-          title: 'Sync complete',
-          message: `Pushed: ${result.result.pushed}, Failed: ${result.result.failed}, Skipped: ${result.result.skipped}`,
-          color: result.result.failed === 0 ? 'success' : 'warning',
-        });
-      } catch (error) {
-        notifications.show({ title: 'Sync failed', message: String(error), color: 'red' });
-      }
+      const outcome = await runAction(triggerQBOSync({
+        connectionId: connection.id,
+      }), { errorTitle: 'Sync failed' });
+      if (!outcome.ok) return;
+      const result = outcome.data;
+      notifications.show({
+        title: 'Sync complete',
+        message: `Pushed: ${result.result.pushed}, Failed: ${result.result.failed}, Skipped: ${result.result.skipped}`,
+        color: result.result.failed === 0 ? 'success' : 'warning',
+      });
     });
   }
 
   async function handleDisconnect() {
     setDisconnecting(true);
-    try {
-      await disconnectIntegration(connection.id);
-      window.location.href = '/admin/integrations';
-    } catch (error) {
-      notifications.show({ title: 'Failed to disconnect', message: String(error), color: 'red' });
+    const result = await runAction(disconnectIntegration(connection.id), { errorTitle: 'Failed to disconnect' });
+    if (!result.ok) {
       setDisconnecting(false);
       setConfirmDisconnectOpen(false);
+      return;
     }
+    window.location.href = '/admin/integrations';
   }
 
   function getMappingForEntity(entityType: string, bytimeId: string): Mapping | undefined {
@@ -240,7 +236,7 @@ export function QBOConfigClient({
           </Text>
         </div>
         <Group>
-          <Button
+          <WriteButton
             variant="light"
             size="sm"
             leftSection={<IconRefresh size={14} />}
@@ -248,8 +244,8 @@ export function QBOConfigClient({
             loading={loadingQBO}
           >
             Load QBO Data
-          </Button>
-          <Button
+          </WriteButton>
+          <WriteButton
             variant="filled"
             size="sm"
             leftSection={<IconPlayerPlay size={14} />}
@@ -258,15 +254,15 @@ export function QBOConfigClient({
             disabled={mappings.filter((m) => m.entityType === 'employee' || m.entityType === 'vendor').length === 0}
           >
             Sync Now
-          </Button>
-          <Button
+          </WriteButton>
+          <WriteButton
             variant="subtle"
             color="red"
             size="sm"
             onClick={() => setConfirmDisconnectOpen(true)}
           >
             Disconnect
-          </Button>
+          </WriteButton>
         </Group>
       </Group>
 

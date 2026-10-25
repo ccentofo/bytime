@@ -117,6 +117,13 @@ export const signups = pgTable('signups', {
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   consumedAt: timestamp('consumed_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  // feature-plan-launch-blockers.md P5 (LB-D2, LB-D5). ip_hash = sha256(SIGNUP_IP_SALT + ip or IPv6 /64) — the raw IP
+  // is never stored — nulled after 24 h. A waitlisted signup IS a verified row (verified_at + waitlisted_at set,
+  // consumed_at null) until the founder provisions it (provisioned_at).
+  ipHash: varchar('ip_hash', { length: 64 }),
+  verifiedAt: timestamp('verified_at', { withTimezone: true }),
+  waitlistedAt: timestamp('waitlisted_at', { withTimezone: true }),
+  provisionedAt: timestamp('provisioned_at', { withTimezone: true }),
 });
 
 /** §4.3: founder-facing alerts, deduplicated while unresolved; read by the daily digest. */
@@ -160,3 +167,25 @@ export const paymentPendingObservations = pgTable('payment_pending_observations'
 }, (table) => [
   primaryKey({ columns: [table.tenantId, table.invoiceId, table.kind] }),
 ]);
+
+/**
+ * LB-D7 (feature-plan-launch-blockers.md P6 §3): the free cron heartbeat — one row per cron, written at start and on
+ * success. The daily digest lists any cron whose last success is older than its limit, or that has no row (never ran).
+ * `last_summary` holds the run's JSON summary, including the reminder crons' fair-rotation `cursor`.
+ */
+export const cronRuns = pgTable('cron_runs', {
+  name: varchar('name', { length: 60 }).primaryKey(),
+  lastStartedAt: timestamp('last_started_at', { withTimezone: true }),
+  lastSucceededAt: timestamp('last_succeeded_at', { withTimezone: true }),
+  lastSummary: jsonb('last_summary'),
+});
+
+/**
+ * feature-plan-launch-blockers.md P5: small windowed counters (e.g. Turnstile outage signals per hour), shared by every
+ * serverless instance — the in-memory limiter can't see across instances.
+ */
+export const signalCounters = pgTable('signal_counters', {
+  key: varchar('key', { length: 100 }).primaryKey(),
+  windowStart: timestamp('window_start', { withTimezone: true }).notNull(),
+  count: integer('count').notNull().default(0),
+});

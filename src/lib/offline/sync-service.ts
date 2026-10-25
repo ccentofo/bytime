@@ -17,6 +17,13 @@ const BATCH_SIZE = 50;               // Max entries per sync batch
 
 let syncTimer: ReturnType<typeof setInterval> | null = null;
 let isSyncing = false;
+/**
+ * Set when the server refuses for a reason retrying can't fix (read_only / forbidden / unauthenticated):
+ * the loop stops until the next app load (module state resets), and the queued hours stay queued.
+ */
+let syncPaused = false;
+let lastSyncError: string | null = null;
+const PAUSE_CODES = new Set(['read_only', 'forbidden', 'unauthenticated']);
 
 type SyncStatusCallback = (status: {
   pendingCount: number;
@@ -87,7 +94,7 @@ export async function triggerSync(): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 async function syncPendingEntries(): Promise<boolean> {
-  if (isSyncing) return false;
+  if (isSyncing || syncPaused) return false;
   isSyncing = true;
   notifyStatus();
 
@@ -152,8 +159,12 @@ async function syncPendingEntries(): Promise<boolean> {
       const hasEditsOrLate = items.some((i) => i.isEdit || i.isLateEntry);
       const firstReason = items.find((i) => i.changeReasonCode);
 
+      // A rejection (network failure, server error) keeps the existing retry path below. A RETURNED failure
+      // never deletes anything (feature-plan-launch-blockers.md P4 §3): offline sync must never drop unsynced hours.
+      let result: Awaited<ReturnType<typeof saveTimesheetBatch>> | null = null;
+      let failure: string | null = null;
       try {
-        const newRevisions = await saveTimesheetBatch({
+        result = await saveTimesheetBatch({
           periodStart,
           cells: items.map((item) => {
             const dayIndex = dayjs(item.entryDate).diff(dayjs(periodStartStr), 'day');
@@ -171,8 +182,13 @@ async function syncPendingEntries(): Promise<boolean> {
           comment: hasEditsOrLate ? (firstReason?.comment ?? 'Synced from offline entry') : undefined,
           skipConflictCheck: true, // Offline entries use last-write-wins policy
         });
+      } catch (error) {
+        failure = String(error);
+      }
 
+      if (result?.ok) {
         // On success: remove from queue, update local entries to synced
+        const newRevisions = result.data;
         const itemIds = items.map((i) => i.id!).filter(Boolean);
         await offlineDb.syncQueue.bulkDelete(itemIds);
 
@@ -188,23 +204,34 @@ async function syncPendingEntries(): Promise<boolean> {
               serverRevision: newRev ?? 0,
             });
         }
-      } catch (error) {
-        // On failure: increment attempt counter
-        for (const item of items) {
-          if (item.id) {
-            await offlineDb.syncQueue.update(item.id, {
-              attempts: (item.attempts ?? 0) + 1,
-              lastError: String(error),
-            });
-          }
-        }
+        continue;
+      }
 
-        // Update entries to error status
-        for (const item of items) {
-          await offlineDb.entries
-            .where({ clinId: item.clinId, entryDate: item.entryDate })
-            .modify({ syncStatus: 'error' });
+      if (result && !result.ok && PAUSE_CODES.has(result.code)) {
+        // Retrying can't fix this (read-only workspace, lost permission, signed out): keep every item queued
+        // untouched and stop syncing until the next app load.
+        syncPaused = true;
+        lastSyncError = result.error;
+        break;
+      }
+
+      // conflict / validation / not_found (the user must resolve) or a network failure: keep the items, count the
+      // attempt (the MAX_RETRY_ATTEMPTS cap stops endless 30 s retries), and flag the local entries.
+      const message = result && !result.ok ? result.error : failure ?? 'Sync failed';
+      for (const item of items) {
+        if (item.id) {
+          await offlineDb.syncQueue.update(item.id, {
+            attempts: (item.attempts ?? 0) + 1,
+            lastError: message,
+          });
         }
+      }
+
+      // Update entries to error status
+      for (const item of items) {
+        await offlineDb.entries
+          .where({ clinId: item.clinId, entryDate: item.entryDate })
+          .modify({ syncStatus: 'error' });
       }
     }
 
@@ -249,4 +276,14 @@ async function notifyStatus() {
       isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
     });
   }
+}
+
+/** Unit tests only: whether the loop is paused, and reset module state between tests. */
+export function getSyncStateForTests(): { paused: boolean; lastError: string | null } {
+  return { paused: syncPaused, lastError: lastSyncError };
+}
+export function resetSyncStateForTests(): void {
+  syncPaused = false;
+  lastSyncError = null;
+  isSyncing = false;
 }

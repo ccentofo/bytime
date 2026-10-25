@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/nextjs';
 import { resend, EMAIL_FROM, isEmailEnabled } from './client';
 import { TimesheetSubmittedEmail } from './templates/timesheet-submitted';
 import { TimesheetApprovedEmail } from './templates/timesheet-approved';
@@ -7,15 +8,59 @@ import { SubmissionDeadlineEmail } from './templates/submission-deadline';
 import { PasswordResetEmail } from './templates/password-reset';
 import React from 'react';
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
-
-// ---------------------------------------------------------------------------
-// Email Send Functions (fire-and-forget — never await in user-facing actions)
-// ---------------------------------------------------------------------------
-
 /**
- * Send notification to supervisor(s) when an employee submits their timesheet.
+ * Every sender returns a SendOutcome and never throws. Success is recorded only when Resend returns a message id
+ * (Resend 6.x reports API failures as `{ error }`, it does not throw). Server actions schedule sends with
+ * `scheduleEmail` (`after()`); crons await them. Links are passed in as `appUrl` by the caller — a tenant's own
+ * host (`tenantBaseUrl(slug)`) for workspace emails, the apex only for signup.
  */
+export type SendOutcome = { ok: true; id: string } | { ok: false; reason: 'disabled' | 'error' };
+
+const RATE_LIMIT_RETRY_DELAY_MS = 2000;
+
+function recipientDomain(to: string): string {
+  const at = to.lastIndexOf('@');
+  return at >= 0 ? to.slice(at + 1) : 'unknown';
+}
+
+function reportFailure(label: string, to: string, errorName: string): SendOutcome {
+  const domain = recipientDomain(to);
+  // Recipient DOMAIN only — never the full address in logs or Sentry.
+  console.error(`Email send failed (${label}): ${errorName} [recipient domain: ${domain}]`);
+  Sentry.captureMessage(`Email send failed: ${label}`, { level: 'error', extra: { errorName, recipientDomain: domain } });
+  return { ok: false, reason: 'error' };
+}
+
+type Attempt = { kind: 'ok'; id: string } | { kind: 'rate_limited' } | { kind: 'failed'; errorName: string };
+
+async function attemptSend(to: string, subject: string, react: React.ReactElement): Promise<Attempt> {
+  try {
+    const result = await resend!.emails.send({ from: EMAIL_FROM, to, subject, react });
+    if (result.error) {
+      if (result.error.statusCode === 429 || result.error.name === 'rate_limit_exceeded') return { kind: 'rate_limited' };
+      return { kind: 'failed', errorName: result.error.name };
+    }
+    const id = result.data?.id;
+    return id ? { kind: 'ok', id } : { kind: 'failed', errorName: 'missing_message_id' };
+  } catch (err) {
+    return { kind: 'failed', errorName: err instanceof Error ? err.name : 'unknown_error' };
+  }
+}
+
+/** Send one email. A 429 is retried once after 2 s; anything else unsuccessful is a failure. */
+export async function deliverEmail(label: string, to: string, subject: string, react: React.ReactElement): Promise<SendOutcome> {
+  if (!isEmailEnabled() || !resend) return { ok: false, reason: 'disabled' };
+
+  let attempt = await attemptSend(to, subject, react);
+  if (attempt.kind === 'rate_limited') {
+    await new Promise((r) => setTimeout(r, RATE_LIMIT_RETRY_DELAY_MS));
+    attempt = await attemptSend(to, subject, react);
+  }
+  if (attempt.kind === 'ok') return { ok: true, id: attempt.id };
+  return reportFailure(label, to, attempt.kind === 'rate_limited' ? 'rate_limit_exceeded' : attempt.errorName);
+}
+
+/** Notify a reviewer that an employee submitted their timesheet. */
 export async function sendTimesheetSubmittedEmail(data: {
   supervisorEmail: string;
   supervisorName: string;
@@ -23,61 +68,47 @@ export async function sendTimesheetSubmittedEmail(data: {
   employeeEmail: string;
   periodLabel: string;
   submittedAt: string;
-}): Promise<void> {
-  if (!isEmailEnabled() || !resend) return;
-
-  try {
-    await resend.emails.send({
-      from: EMAIL_FROM,
-      to: data.supervisorEmail,
-      subject: `Timesheet Submitted — ${data.employeeName} — ${data.periodLabel}`,
-      react: React.createElement(TimesheetSubmittedEmail, {
-        supervisorName: data.supervisorName,
-        employeeName: data.employeeName,
-        employeeEmail: data.employeeEmail,
-        periodLabel: data.periodLabel,
-        submittedAt: data.submittedAt,
-        appUrl: APP_URL,
-      }),
-    });
-  } catch (error) {
-    console.error('Failed to send timesheet submitted email:', error);
-  }
+  appUrl: string;
+}): Promise<SendOutcome> {
+  return deliverEmail(
+    'timesheet-submitted',
+    data.supervisorEmail,
+    `Timesheet Submitted — ${data.employeeName} — ${data.periodLabel}`,
+    React.createElement(TimesheetSubmittedEmail, {
+      supervisorName: data.supervisorName,
+      employeeName: data.employeeName,
+      employeeEmail: data.employeeEmail,
+      periodLabel: data.periodLabel,
+      submittedAt: data.submittedAt,
+      appUrl: data.appUrl,
+    }),
+  );
 }
 
-/**
- * Send notification to employee when their timesheet is approved.
- */
+/** Notify an employee that their timesheet was approved. */
 export async function sendTimesheetApprovedEmail(data: {
   employeeEmail: string;
   employeeName: string;
   periodLabel: string;
   approvedBy: string;
   approvedAt: string;
-}): Promise<void> {
-  if (!isEmailEnabled() || !resend) return;
-
-  try {
-    await resend.emails.send({
-      from: EMAIL_FROM,
-      to: data.employeeEmail,
-      subject: `Timesheet Approved — ${data.periodLabel}`,
-      react: React.createElement(TimesheetApprovedEmail, {
-        employeeName: data.employeeName,
-        periodLabel: data.periodLabel,
-        approvedBy: data.approvedBy,
-        approvedAt: data.approvedAt,
-        appUrl: APP_URL,
-      }),
-    });
-  } catch (error) {
-    console.error('Failed to send timesheet approved email:', error);
-  }
+  appUrl: string;
+}): Promise<SendOutcome> {
+  return deliverEmail(
+    'timesheet-approved',
+    data.employeeEmail,
+    `Timesheet Approved — ${data.periodLabel}`,
+    React.createElement(TimesheetApprovedEmail, {
+      employeeName: data.employeeName,
+      periodLabel: data.periodLabel,
+      approvedBy: data.approvedBy,
+      approvedAt: data.approvedAt,
+      appUrl: data.appUrl,
+    }),
+  );
 }
 
-/**
- * Send notification to employee when their timesheet is rejected.
- */
+/** Notify an employee that their timesheet was returned for corrections. */
 export async function sendTimesheetRejectedEmail(data: {
   employeeEmail: string;
   employeeName: string;
@@ -85,106 +116,80 @@ export async function sendTimesheetRejectedEmail(data: {
   rejectedBy: string;
   rejectedAt: string;
   rejectionComment: string;
-}): Promise<void> {
-  if (!isEmailEnabled() || !resend) return;
-
-  try {
-    await resend.emails.send({
-      from: EMAIL_FROM,
-      to: data.employeeEmail,
-      subject: `Timesheet Returned for Corrections — ${data.periodLabel}`,
-      react: React.createElement(TimesheetRejectedEmail, {
-        employeeName: data.employeeName,
-        periodLabel: data.periodLabel,
-        rejectedBy: data.rejectedBy,
-        rejectedAt: data.rejectedAt,
-        rejectionComment: data.rejectionComment,
-        appUrl: APP_URL,
-      }),
-    });
-  } catch (error) {
-    console.error('Failed to send timesheet rejected email:', error);
-  }
+  appUrl: string;
+}): Promise<SendOutcome> {
+  return deliverEmail(
+    'timesheet-rejected',
+    data.employeeEmail,
+    `Timesheet Returned for Corrections — ${data.periodLabel}`,
+    React.createElement(TimesheetRejectedEmail, {
+      employeeName: data.employeeName,
+      periodLabel: data.periodLabel,
+      rejectedBy: data.rejectedBy,
+      rejectedAt: data.rejectedAt,
+      rejectionComment: data.rejectionComment,
+      appUrl: data.appUrl,
+    }),
+  );
 }
 
-/**
- * Send daily time entry reminder to an employee.
- */
+/** Daily time-entry reminder. */
 export async function sendDailyReminderEmail(data: {
   employeeEmail: string;
   employeeName: string;
   todayDate: string;
-}): Promise<void> {
-  if (!isEmailEnabled() || !resend) return;
-
-  try {
-    await resend.emails.send({
-      from: EMAIL_FROM,
-      to: data.employeeEmail,
-      subject: `Reminder: Enter Your Time for ${data.todayDate}`,
-      react: React.createElement(DailyReminderEmail, {
-        employeeName: data.employeeName,
-        todayDate: data.todayDate,
-        appUrl: APP_URL,
-      }),
-    });
-  } catch (error) {
-    console.error('Failed to send daily reminder email:', error);
-  }
+  appUrl: string;
+}): Promise<SendOutcome> {
+  return deliverEmail(
+    'daily-reminder',
+    data.employeeEmail,
+    `Reminder: Enter Your Time for ${data.todayDate}`,
+    React.createElement(DailyReminderEmail, {
+      employeeName: data.employeeName,
+      todayDate: data.todayDate,
+      appUrl: data.appUrl,
+    }),
+  );
 }
 
-/**
- * Send submission deadline reminder to an employee.
- */
+/** Submission-deadline reminder. */
 export async function sendSubmissionDeadlineEmail(data: {
   employeeEmail: string;
   employeeName: string;
   periodLabel: string;
   deadlineDate: string;
-}): Promise<void> {
-  if (!isEmailEnabled() || !resend) return;
-
-  try {
-    await resend.emails.send({
-      from: EMAIL_FROM,
-      to: data.employeeEmail,
-      subject: `Submit Your Timesheet — Due ${data.deadlineDate}`,
-      react: React.createElement(SubmissionDeadlineEmail, {
-        employeeName: data.employeeName,
-        periodLabel: data.periodLabel,
-        deadlineDate: data.deadlineDate,
-        appUrl: APP_URL,
-      }),
-    });
-  } catch (error) {
-    console.error('Failed to send submission deadline email:', error);
-  }
+  appUrl: string;
+}): Promise<SendOutcome> {
+  return deliverEmail(
+    'submission-deadline',
+    data.employeeEmail,
+    `Submit Your Timesheet — Due ${data.deadlineDate}`,
+    React.createElement(SubmissionDeadlineEmail, {
+      employeeName: data.employeeName,
+      periodLabel: data.periodLabel,
+      deadlineDate: data.deadlineDate,
+      appUrl: data.appUrl,
+    }),
+  );
 }
 
-/**
- * Send password reset email with a secure reset link.
- */
+/** Password reset link. `resetUrl` is on the tenant's own host. */
 export async function sendPasswordResetEmail(data: {
   employeeEmail: string;
   employeeName: string;
   resetUrl: string;
   expiresIn: string;
-}): Promise<void> {
-  if (!isEmailEnabled() || !resend) return;
-
-  try {
-    await resend.emails.send({
-      from: EMAIL_FROM,
-      to: data.employeeEmail,
-      subject: 'Reset Your CadenzPoint Password',
-      react: React.createElement(PasswordResetEmail, {
-        employeeName: data.employeeName,
-        resetUrl: data.resetUrl,
-        expiresIn: data.expiresIn,
-        appUrl: APP_URL,
-      }),
-    });
-  } catch (error) {
-    console.error('Failed to send password reset email:', error);
-  }
+  appUrl: string;
+}): Promise<SendOutcome> {
+  return deliverEmail(
+    'password-reset',
+    data.employeeEmail,
+    'Reset Your CadenzPoint Password',
+    React.createElement(PasswordResetEmail, {
+      employeeName: data.employeeName,
+      resetUrl: data.resetUrl,
+      expiresIn: data.expiresIn,
+      appUrl: data.appUrl,
+    }),
+  );
 }

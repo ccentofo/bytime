@@ -2,6 +2,7 @@ import { getDb, getDbForWrite } from '@/db';
 import { integrationConnections } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { decrypt, encrypt } from '@/lib/encryption';
+import { connectionExpiredError, providerHttpError, providerRefreshError } from '../provider-errors';
 
 // ---------------------------------------------------------------------------
 // QBO API Configuration
@@ -116,10 +117,7 @@ export async function refreshQBOToken(refreshToken: string): Promise<{
     }),
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`QBO token refresh failed: ${response.status} ${errorBody}`);
-  }
+  if (!response.ok) throw await providerRefreshError('QuickBooks', response); // audit R9
 
   const data = await response.json();
 
@@ -147,7 +145,7 @@ export async function ensureValidToken(connectionId: string): Promise<string> {
     .where(eq(integrationConnections.id, connectionId));
 
   if (!connection?.accessTokenEncrypted || !connection?.refreshTokenEncrypted) {
-    throw new Error('Connection has no stored tokens.');
+    throw connectionExpiredError('QuickBooks'); // audit R9: no stored tokens → reconnect
   }
 
   const expiresAt = connection.tokenExpiresAt ? new Date(connection.tokenExpiresAt).getTime() : 0;
@@ -203,10 +201,7 @@ async function qboQuery<T>(
     },
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`QBO query failed: ${response.status} ${errorBody}`);
-  }
+  if (!response.ok) throw await providerHttpError('QuickBooks', 'query', response); // audit R9: 401 → reconnect
 
   const data = await response.json();
   const queryResponse = data.QueryResponse;
@@ -242,10 +237,7 @@ async function qboCreate<T>(
     body: JSON.stringify(data),
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`QBO create ${entityType} failed: ${response.status} ${errorBody}`);
-  }
+  if (!response.ok) throw await providerHttpError('QuickBooks', `create ${entityType}`, response); // audit R9
 
   const result = await response.json();
   return result[entityType.charAt(0).toUpperCase() + entityType.slice(1)] as T;
@@ -275,10 +267,7 @@ async function qboBatch(
     body: JSON.stringify({ BatchItemRequest: batchItems }),
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`QBO batch failed: ${response.status} ${errorBody}`);
-  }
+  if (!response.ok) throw await providerHttpError('QuickBooks', 'batch', response); // audit R9
 
   const result = await response.json();
   const batchResponses = result.BatchItemResponse ?? [];

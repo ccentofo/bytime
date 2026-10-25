@@ -4,14 +4,16 @@ import { getDb, getDbForAuth } from '@/db';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireSession } from '@/lib/session';
-import bcrypt from 'bcryptjs';
 import { encrypt, decrypt } from '@/lib/encryption';
+import { verifyCurrentPassword } from '@/server/internal/login-attempts';
 import {
   generateTOTPSecret,
   verifyTOTPCode,
   generateRecoveryCodes,
   hashRecoveryCode,
 } from '@/lib/totp';
+import { UserFacingError } from '@/lib/errors';
+import { userAction, type ActionResult } from '@/lib/action-result';
 
 // ---------------------------------------------------------------------------
 // MFA Setup — all self-only. MFA login verification itself lives in auth.ts's
@@ -24,83 +26,95 @@ import {
  * The secret is NOT saved until the user verifies a code.
  * Returns the secret (to be stored temporarily in session/state) and the QR URI.
  */
-export async function initMFASetup(): Promise<{
-  secret: string;
-  uri: string;
-}> {
-  const actor = await requireSession();
-  return generateTOTPSecret(actor.email);
+export async function initMFASetup(): Promise<ActionResult<{ secret: string; uri: string }>> {
+  // Launch-blockers audit A12: a result, so a refusal (e.g. signed out) reaches the page instead of a redacted digest.
+  return userAction(async () => {
+    const actor = await requireSession();
+    return generateTOTPSecret(actor.email);
+  });
 }
 
 /**
- * Complete MFA setup — verifies the code against the pending secret,
- * then saves the encrypted secret + hashed recovery codes to the DB.
+ * Complete MFA setup — re-authenticates with the current password (a stolen session alone must not be able to
+ * bind its own authenticator to the account — feature-plan-launch-blockers.md P3), verifies the code against the
+ * pending secret, then saves the encrypted secret + hashed recovery codes to the DB.
  * Returns the plaintext recovery codes (shown once to the user).
  */
 export async function completeMFASetup(data: {
   pendingSecret: string;
   code: string;
-}): Promise<{ success: boolean; recoveryCodes?: string[]; error?: string }> {
-  const actor = await requireSession();
-  const db = await getDbForAuth();
+  currentPassword: string;
+}): Promise<ActionResult<{ recoveryCodes: string[] }>> {
+  return userAction(async () => {
+    const actor = await requireSession();
+    const db = await getDbForAuth();
 
-  // Verify the code against the pending secret
-  const isValid = verifyTOTPCode(data.pendingSecret, data.code);
-  if (!isValid) {
-    return { success: false, error: 'Invalid code. Please try again.' };
-  }
+    const [user] = await db
+      .select({ passwordHash: users.passwordHash })
+      .from(users)
+      .where(eq(users.id, actor.id));
+    const reauth = await verifyCurrentPassword(db, actor.email, user?.passwordHash ?? null, data.currentPassword);
+    if (!reauth.ok) {
+      throw new UserFacingError(reauth.error);
+    }
 
-  // Generate recovery codes
-  const plainCodes = generateRecoveryCodes();
-  const hashedCodes = plainCodes.map(hashRecoveryCode);
+    // Verify the code against the pending secret
+    const isValid = verifyTOTPCode(data.pendingSecret, data.code);
+    if (!isValid) {
+      throw new UserFacingError('Invalid code. Please try again.');
+    }
 
-  // Encrypt and save
-  const encryptedSecret = encrypt(data.pendingSecret);
-  const encryptedRecoveryCodes = encrypt(JSON.stringify(hashedCodes));
+    // Generate recovery codes
+    const plainCodes = generateRecoveryCodes();
+    const hashedCodes = plainCodes.map(hashRecoveryCode);
 
-  await db.update(users)
-    .set({
-      totpSecret: encryptedSecret,
-      totpEnabled: true,
-      totpRecoveryCodes: encryptedRecoveryCodes,
-      updatedAt: new Date(),
-    })
-    .where(eq(users.id, actor.id));
+    // Encrypt and save
+    const encryptedSecret = encrypt(data.pendingSecret);
+    const encryptedRecoveryCodes = encrypt(JSON.stringify(hashedCodes));
 
-  return { success: true, recoveryCodes: plainCodes };
+    await db.update(users)
+      .set({
+        totpSecret: encryptedSecret,
+        totpEnabled: true,
+        totpRecoveryCodes: encryptedRecoveryCodes,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, actor.id));
+
+    return { recoveryCodes: plainCodes };
+  });
 }
 
 /**
  * Disable MFA — requires current password confirmation.
  */
-export async function disableMFA(currentPassword: string): Promise<{ success: boolean; error?: string }> {
-  const actor = await requireSession();
-  const db = await getDbForAuth();
+export async function disableMFA(currentPassword: string): Promise<ActionResult<void>> {
+  return userAction(async () => {
+    const actor = await requireSession();
+    const db = await getDbForAuth();
 
-  const [user] = await db
-    .select({ passwordHash: users.passwordHash })
-    .from(users)
-    .where(eq(users.id, actor.id));
+    const [user] = await db
+      .select({ passwordHash: users.passwordHash })
+      .from(users)
+      .where(eq(users.id, actor.id));
 
-  if (!user?.passwordHash) {
-    return { success: false, error: 'No password set on this account.' };
-  }
+    // Lockout checked before bcrypt; a wrong password counts toward the sign-in lockout (shared counter, intended).
+    const reauth = await verifyCurrentPassword(db, actor.email, user?.passwordHash ?? null, currentPassword);
+    if (!reauth.ok) {
+      throw new UserFacingError(reauth.error);
+    }
 
-  const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
-  if (!isValid) {
-    return { success: false, error: 'Incorrect password.' };
-  }
+    await db.update(users)
+      .set({
+        totpSecret: null,
+        totpEnabled: false,
+        totpRecoveryCodes: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, actor.id));
 
-  await db.update(users)
-    .set({
-      totpSecret: null,
-      totpEnabled: false,
-      totpRecoveryCodes: null,
-      updatedAt: new Date(),
-    })
-    .where(eq(users.id, actor.id));
-
-  return { success: true };
+    return;
+  });
 }
 
 /**

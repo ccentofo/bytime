@@ -17,6 +17,7 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
+import { runAction } from '@/lib/run-action';
 import { IconPlus, IconTrash, IconBan, IconCheck, IconCopy, IconKey } from '@tabler/icons-react';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
@@ -25,6 +26,7 @@ import { formatDateTime } from '@/lib/format';
 import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 type ApiKey = {
   id: string;
@@ -45,6 +47,7 @@ type Props = {
 type PendingAction = { key: ApiKey; action: 'revoke' | 'delete' };
 
 export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
+  const canWrite = useCanWrite();
   const [keys, setKeys] = useState<ApiKey[]>(initialKeys);
   const [isPending, startTransition] = useTransition();
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -56,31 +59,32 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
 
   function handleCreate() {
     startTransition(async () => {
-      try {
-        setFormError(null);
-        if (!form.name.trim()) {
-          setFormError('Name is required.');
-          return;
-        }
-        const result = await createApiKey({
-          name: form.name.trim(),
-          permissions: form.permissions as 'read' | 'read-write',
-        });
-        setNewKeyValue(result.key);
-        setCreateModalOpen(false);
-        setNewKeyModalOpen(true);
-        setForm({ name: '', permissions: 'read' });
-        const refreshed = await getApiKeys();
-        setKeys(refreshed as ApiKey[]);
-      } catch (error) {
-        setFormError(String(error));
+      setFormError(null);
+      if (!form.name.trim()) {
+        setFormError('Name is required.');
+        return;
       }
+      const result = await runAction(createApiKey({
+        name: form.name.trim(),
+        permissions: form.permissions as 'read' | 'read-write',
+      }), { silent: true });
+      if (!result.ok) {
+        setFormError(result.error);
+        return;
+      }
+      setNewKeyValue(result.data.key);
+      setCreateModalOpen(false);
+      setNewKeyModalOpen(true);
+      setForm({ name: '', permissions: 'read' });
+      const refreshed = await getApiKeys();
+      setKeys(refreshed as ApiKey[]);
     });
   }
 
   function handleRevoke(key: ApiKey) {
     startTransition(async () => {
-      await revokeApiKey(key.id);
+      const result = await runAction(revokeApiKey(key.id), { errorTitle: 'Couldn’t revoke key' });
+      if (!result.ok) return;
       const refreshed = await getApiKeys();
       setKeys(refreshed as ApiKey[]);
       notifications.show({ title: 'Key Revoked', message: `"${key.name}" has been revoked.`, color: 'warning' });
@@ -90,7 +94,8 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
 
   function handleDelete(key: ApiKey) {
     startTransition(async () => {
-      await deleteApiKey(key.id);
+      const result = await runAction(deleteApiKey(key.id), { errorTitle: 'Couldn’t delete key' });
+      if (!result.ok) return;
       const refreshed = await getApiKeys();
       setKeys(refreshed as ApiKey[]);
       notifications.show({ title: 'Key Deleted', message: `"${key.name}" has been deleted.`, color: 'red' });
@@ -164,7 +169,7 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
               variant="subtle"
               color="warning"
               onClick={() => setPendingAction({ key: row.original, action: 'revoke' })}
-              disabled={isPending}
+              disabled={!canWrite || (isPending)}
               aria-label="Revoke key"
             >
               <IconBan size={16} />
@@ -176,7 +181,7 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
             variant="subtle"
             color="red"
             onClick={() => setPendingAction({ key: row.original, action: 'delete' })}
-            disabled={isPending}
+            disabled={!canWrite || (isPending)}
             aria-label="Delete key"
           >
             <IconTrash size={16} />
@@ -197,9 +202,9 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
       <PageHeader
         title="API Keys"
         actions={
-          <Button leftSection={<IconPlus size={16} />} onClick={() => setCreateModalOpen(true)}>
+          <WriteButton leftSection={<IconPlus size={16} />} onClick={() => setCreateModalOpen(true)}>
             Create API Key
-          </Button>
+          </WriteButton>
         }
       />
       <MantineReactTable table={table} />
@@ -233,9 +238,9 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
           )}
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setCreateModalOpen(false)}>Cancel</Button>
-            <Button onClick={handleCreate} loading={isPending} leftSection={<IconKey size={16} />}>
+            <WriteButton onClick={handleCreate} loading={isPending} leftSection={<IconKey size={16} />}>
               Generate Key
-            </Button>
+            </WriteButton>
           </Group>
         </Stack>
       </Modal>
@@ -267,6 +272,10 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
               )}
             </CopyButton>
           </Group>
+          {/* The API's 401 no longer carries a usage hint (one identical body for every auth failure), so it lives here. */}
+          <Text size="sm" c="dimmed">
+            Send it on every request as the header <Code>Authorization: Bearer {'<key>'}</Code>.
+          </Text>
           <Button onClick={() => { setNewKeyModalOpen(false); setNewKeyValue(''); }} color="success">
             I've Copied the Key
           </Button>

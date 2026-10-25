@@ -2,7 +2,6 @@
 
 import { useMemo, useState, useTransition } from 'react';
 import {
-  Button,
   Select,
   Group,
   Title,
@@ -25,10 +24,13 @@ import {
   getChargeCodeAssignments,
 } from '@/server/actions/charge-codes';
 import { formatDateTime } from '@/lib/format';
+import { runAction } from '@/lib/run-action';
+import { notifications } from '@mantine/notifications';
 import { RECORD_STATUS_COLOR, WORK_LOCATION_COLOR } from '@/lib/ui/status-colors';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
 import type { CalendarDate } from '@/lib/calendar-date';
+import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 type User = {
   id: string;
@@ -122,6 +124,7 @@ type Props = {
 };
 
 export function AssignmentsClient({ initialAssignments, users, contracts, chargeCodes, initialChargeCodeAssignments, workspaceTimezone }: Props) {
+  const canWrite = useCanWrite();
   const [isPending, startTransition] = useTransition();
   const [assignments, setAssignments] = useState<Assignment[]>(initialAssignments);
 
@@ -173,7 +176,8 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
   function handleAssignChargeCode() {
     if (!ccUserId || !ccChargeCodeId) return;
     startCcTransition(async () => {
-      await assignChargeCodeToUser(ccUserId, ccChargeCodeId);
+      const result = await runAction(assignChargeCodeToUser(ccUserId, ccChargeCodeId), { errorTitle: 'Couldn’t assign charge code' });
+      if (!result.ok) return;
       const refreshed = await getChargeCodeAssignments();
       setCcAssignments(refreshed as ChargeCodeAssignment[]);
       setCcUserId(null);
@@ -186,7 +190,15 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
   function handleAssignAllUnderClin() {
     if (!ccUserId || !ccClinId) return;
     startCcTransition(async () => {
-      await assignAllUnderClin(ccUserId, ccClinId);
+      const result = await runAction(assignAllUnderClin(ccUserId, ccClinId), { errorTitle: 'Couldn’t assign charge codes' });
+      if (!result.ok) return;
+      if (result.data.failed.length > 0) {
+        notifications.show({
+          title: `Assigned ${result.data.assigned}; ${result.data.failed.length} failed`,
+          message: result.data.failed.map((f) => f.error).join(' '),
+          color: 'warning',
+        });
+      }
       const refreshed = await getChargeCodeAssignments();
       setCcAssignments(refreshed as ChargeCodeAssignment[]);
       setCcUserId(null);
@@ -198,7 +210,8 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
 
   function handleDeactivateChargeCode(assignment: ChargeCodeAssignment) {
     startCcTransition(async () => {
-      await unassignChargeCodeFromUser(assignment.userId, assignment.chargeCodeId);
+      const result = await runAction(unassignChargeCodeFromUser(assignment.userId, assignment.chargeCodeId), { errorTitle: 'Couldn’t remove assignment' });
+      if (!result.ok) return;
       const refreshed = await getChargeCodeAssignments();
       setCcAssignments(refreshed as ChargeCodeAssignment[]);
       setConfirmCcTarget(null);
@@ -251,7 +264,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
           variant="subtle"
           color="red"
           onClick={() => setConfirmCcTarget(row.original)}
-          disabled={!row.original.isActive}
+          disabled={!canWrite || (!row.original.isActive)}
           aria-label="Deactivate charge code assignment"
         >
           <IconBan size={16} />
@@ -285,7 +298,8 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
   function handleAssign() {
     if (!selectedUserId || !selectedClinId) return;
     startTransition(async () => {
-      await assignUserToClin({ userId: selectedUserId, clinId: selectedClinId });
+      const result = await runAction(assignUserToClin({ userId: selectedUserId, clinId: selectedClinId }), { errorTitle: 'Couldn’t assign CLIN' });
+      if (!result.ok) return;
       const refreshed = await getAssignments();
       setAssignments(refreshed as Assignment[]);
       // Reset form
@@ -298,7 +312,8 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
 
   function handleDeactivate(assignment: Assignment) {
     startTransition(async () => {
-      await unassignUserFromClin(assignment.userId, assignment.clinId);
+      const result = await runAction(unassignUserFromClin(assignment.userId, assignment.clinId), { errorTitle: 'Couldn’t remove assignment' });
+      if (!result.ok) return;
       const refreshed = await getAssignments();
       setAssignments(refreshed as Assignment[]);
       setConfirmClinTarget(null);
@@ -360,7 +375,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
           variant="subtle"
           color="red"
           onClick={() => setConfirmClinTarget(row.original)}
-          disabled={!row.original.isActive}
+          disabled={!canWrite || (!row.original.isActive)}
           aria-label="Deactivate supervisor assignment"
         >
           <IconBan size={16} />
@@ -433,21 +448,21 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
                 searchable
                 style={{ minWidth: 240 }}
               />
-              <Button
+              <WriteButton
                 onClick={handleAssignChargeCode}
                 loading={ccIsPending}
                 disabled={!ccUserId || !ccChargeCodeId}
               >
                 Assign Code
-              </Button>
-              <Button
+              </WriteButton>
+              <WriteButton
                 variant="default"
                 onClick={handleAssignAllUnderClin}
                 loading={ccIsPending}
                 disabled={!ccUserId || !ccClinId}
               >
                 Assign all codes under CLIN
-              </Button>
+              </WriteButton>
             </Group>
           </Paper>
 
@@ -493,13 +508,13 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
                 searchable
                 style={{ minWidth: 220 }}
               />
-              <Button
+              <WriteButton
                 onClick={handleAssign}
                 loading={isPending}
                 disabled={!selectedUserId || !selectedClinId}
               >
                 Assign
-              </Button>
+              </WriteButton>
             </Group>
           </Paper>
 

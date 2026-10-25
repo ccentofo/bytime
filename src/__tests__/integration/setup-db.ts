@@ -10,6 +10,18 @@ import * as schema from '@/db/schema';
 vi.mock('server-only', () => ({}));
 vi.mock('client-only', () => ({}));
 
+// Next 16 `after()` throws outside a request scope, and server actions schedule their emails with it
+// (feature-plan-launch-blockers.md P1). Run each callback immediately and keep its promise so a test can
+// `await flushAfter()` (helpers.ts) before asserting on sends. A test file's own `next/server` mock overrides this.
+(globalThis as Record<string, unknown>).__AFTER_PROMISES__ = [];
+vi.mock('next/server', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/server')>()),
+  after: (task: unknown) => {
+    const run = Promise.resolve().then(() => (typeof task === 'function' ? (task as () => unknown)() : task));
+    ((globalThis as Record<string, unknown>).__AFTER_PROMISES__ as Promise<unknown>[]).push(run);
+  },
+}));
+
 // ALWAYS use a separate test database — NEVER the dev database.
 // The dev DB fallback was removed because cleanupTestData() deletes ALL rows,
 // which previously wiped all seed users from the dev database.

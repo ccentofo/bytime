@@ -19,6 +19,7 @@ import {
 import { DateInput } from '@mantine/dates';
 import { IconEdit, IconPlus, IconToggleLeft, IconBan } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { runAction } from '@/lib/run-action';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import {
@@ -35,6 +36,7 @@ import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 // ---------------------------------------------------------------------------
 // Types (derived from server action return types)
@@ -158,6 +160,7 @@ export function LaborCategoriesClient({
   users,
   assignableLcats: initialAssignableLcats,
 }: Props) {
+  const canWrite = useCanWrite();
   const [isPending, startTransition] = useTransition();
   const [laborCats, setLaborCats] = useState<LaborCategory[]>(initialLaborCategories);
   const [assignments, setAssignments] = useState<UserLcatAssignment[]>(initialAssignments);
@@ -220,12 +223,13 @@ export function LaborCategoriesClient({
     startTransition(async () => {
       try {
         if (editingLcat) {
-          await updateLaborCategory(editingLcat.id, {
+          const result = await runAction(updateLaborCategory(editingLcat.id, {
             lcatCode: lcatForm.lcatCode.trim(),
             title: lcatForm.title.trim(),
             hourlyRate: lcatForm.hourlyRate.trim(),
             ceilingRate: lcatForm.ceilingRate.trim() || undefined,
-          });
+          }), { errorTitle: 'Couldn’t update labor category' });
+          if (!result.ok) return;
           notifications.show({
             title: 'Labor Category Updated',
             message: `${lcatForm.lcatCode} has been updated.`,
@@ -233,13 +237,14 @@ export function LaborCategoriesClient({
           });
         } else {
           if (!lcatForm.clinId) return;
-          await createLaborCategory({
+          const result = await runAction(createLaborCategory({
             clinId: lcatForm.clinId,
             lcatCode: lcatForm.lcatCode.trim(),
             title: lcatForm.title.trim(),
             hourlyRate: lcatForm.hourlyRate.trim(),
             ceilingRate: lcatForm.ceilingRate.trim() || undefined,
-          });
+          }), { errorTitle: 'Couldn’t create labor category' });
+          if (!result.ok) return;
           notifications.show({
             title: 'Labor Category Created',
             message: `${lcatForm.lcatCode} has been created.`,
@@ -250,10 +255,10 @@ export function LaborCategoriesClient({
         const refreshed = await getAllLaborCategories();
         setLaborCats(refreshed as LaborCategory[]);
         setLcatModalOpen(false);
-      } catch (error) {
+      } catch {
         notifications.show({
           title: 'Error',
-          message: String(error),
+          message: 'Something went wrong. Please refresh and try again.',
           color: 'red',
         });
       }
@@ -264,7 +269,8 @@ export function LaborCategoriesClient({
     const newStatus = lcat.status === 'active' ? 'inactive' : 'active';
     startTransition(async () => {
       try {
-        await updateLaborCategory(lcat.id, { status: newStatus });
+        const result = await runAction(updateLaborCategory(lcat.id, { status: newStatus }), { errorTitle: 'Couldn’t update status' });
+        if (!result.ok) return;
         const refreshed = await getAllLaborCategories();
         setLaborCats(refreshed as LaborCategory[]);
         notifications.show({
@@ -273,10 +279,10 @@ export function LaborCategoriesClient({
           color: newStatus === 'active' ? 'success' : 'gray',
         });
         setConfirmDeactivateLcat(null);
-      } catch (error) {
+      } catch {
         notifications.show({
           title: 'Error',
-          message: String(error),
+          message: 'Something went wrong. Please refresh and try again.',
           color: 'red',
         });
       }
@@ -291,12 +297,13 @@ export function LaborCategoriesClient({
       try {
         if (!isCalendarDate(assignEffectiveDate)) return;
         const endDate: CalendarDate | undefined = assignEndDate && isCalendarDate(assignEndDate) ? assignEndDate : undefined;
-        await assignUserToLaborCategory({
+        const result = await runAction(assignUserToLaborCategory({
           userId: assignUserId,
           laborCategoryId: assignLcatId,
           effectiveDate: assignEffectiveDate,
           endDate,
-        });
+        }), { errorTitle: 'Assignment Failed' });
+        if (!result.ok) return;
         const refreshed = await getUserLaborCategoryAssignments();
         setAssignments(refreshed);
         setAssignUserId(null);
@@ -308,10 +315,10 @@ export function LaborCategoriesClient({
           message: 'User has been assigned to the labor category.',
           color: 'success',
         });
-      } catch (error) {
+      } catch {
         notifications.show({
           title: 'Assignment Failed',
-          message: String(error),
+          message: 'Something went wrong. Please refresh and try again.',
           color: 'red',
         });
       }
@@ -321,7 +328,8 @@ export function LaborCategoriesClient({
   function handleEndAssignment(assignment: UserLcatAssignment) {
     startTransition(async () => {
       try {
-        await endUserLaborCategoryAssignment(assignment.id);
+        const result = await runAction(endUserLaborCategoryAssignment(assignment.id), { errorTitle: 'Couldn’t end assignment' });
+        if (!result.ok) return;
         const refreshed = await getUserLaborCategoryAssignments();
         setAssignments(refreshed);
         notifications.show({
@@ -330,10 +338,10 @@ export function LaborCategoriesClient({
           color: 'warning',
         });
         setConfirmEndAssignment(null);
-      } catch (error) {
+      } catch {
         notifications.show({
           title: 'Error',
-          message: String(error),
+          message: 'Something went wrong. Please refresh and try again.',
           color: 'red',
         });
       }
@@ -388,12 +396,12 @@ export function LaborCategoriesClient({
     renderRowActions: ({ row }) => (
       <Group gap="xs" wrap="nowrap" justify="center">
         <Tooltip label="Edit">
-          <ActionIcon variant="subtle" onClick={() => openEditLcatModal(row.original)} aria-label="Edit labor category">
+          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEditLcatModal(row.original)} aria-label="Edit labor category">
             <IconEdit size={16} />
           </ActionIcon>
         </Tooltip>
         <Tooltip label={row.original.status === 'active' ? 'Deactivate' : 'Activate'}>
-          <ActionIcon
+          <ActionIcon disabled={!canWrite}
             variant="subtle"
             color={row.original.status === 'active' ? 'red' : 'success'}
             onClick={() =>
@@ -463,7 +471,7 @@ export function LaborCategoriesClient({
           variant="subtle"
           color="warning"
           onClick={() => setConfirmEndAssignment(row.original)}
-          disabled={row.original.endDate !== null}
+          disabled={!canWrite || (row.original.endDate !== null)}
           aria-label="End labor category assignment"
         >
           <IconBan size={16} />
@@ -484,9 +492,9 @@ export function LaborCategoriesClient({
       <PageHeader
         title="Labor Categories"
         actions={
-          <Button leftSection={<IconPlus size={16} />} onClick={openAddLcatModal}>
+          <WriteButton leftSection={<IconPlus size={16} />} onClick={openAddLcatModal}>
             Add Labor Category
-          </Button>
+          </WriteButton>
         }
       />
       <MantineReactTable table={lcatTable} />
@@ -559,7 +567,7 @@ export function LaborCategoriesClient({
             <Button variant="default" onClick={() => setLcatModalOpen(false)}>
               Cancel
             </Button>
-            <Button
+            <WriteButton
               onClick={handleLcatSubmit}
               loading={isPending}
               disabled={
@@ -570,7 +578,7 @@ export function LaborCategoriesClient({
               }
             >
               {editingLcat ? 'Save Changes' : 'Create'}
-            </Button>
+            </WriteButton>
           </Group>
         </Stack>
       </Modal>
@@ -617,13 +625,13 @@ export function LaborCategoriesClient({
             clearable
             style={{ minWidth: 160 }}
           />
-          <Button
+          <WriteButton
             onClick={handleAssignSubmit}
             loading={isPending}
             disabled={!assignUserId || !assignLcatId || !assignEffectiveDate}
           >
             Assign
-          </Button>
+          </WriteButton>
         </Group>
       </Paper>
 

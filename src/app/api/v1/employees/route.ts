@@ -2,29 +2,27 @@ import { NextRequest } from 'next/server';
 import { getDb } from '@/db';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { validateApiKey, apiResponse, apiError } from '@/lib/api-auth';
+import { handleApiRequest, apiResponse } from '@/lib/api-auth';
 
 export async function GET(request: NextRequest) {
+  return handleApiRequest(request, () => listEmployees(request));
+}
+
+async function listEmployees(request: NextRequest): Promise<Response> {
   const db = await getDb();
-  const authResult = await validateApiKey(request);
-  if (authResult instanceof Response) return authResult;
 
-  try {
-    const rows = await db
-      .select({
-        id: users.id,
-        email: users.email,
-        fullName: users.fullName,
-        role: users.role,
-        isActive: users.isActive,
-        flsaExempt: users.flsaExempt,
-      })
-      .from(users)
-      .where(eq(users.isActive, true))
-      .orderBy(users.fullName);
+  const rows = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      fullName: users.fullName,
+      role: users.role,
+      isActive: users.isActive,
+      flsaExempt: users.flsaExempt,
+    })
+    .from(users)
+    .where(eq(users.isActive, true))
+    .orderBy(users.fullName);
 
-    return apiResponse(rows, { total: rows.length });
-  } catch (error) {
-    return apiError('Internal server error', 500);
-  }
+  return apiResponse(rows, { total: rows.length });
 }

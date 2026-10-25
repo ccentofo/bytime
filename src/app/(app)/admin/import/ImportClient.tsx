@@ -20,6 +20,8 @@ import {
   Divider,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
+import { runAction } from '@/lib/run-action';
+import type { ActionResult } from '@/lib/action-result';
 import {
   IconUpload,
   IconDownload,
@@ -38,6 +40,7 @@ import {
   bulkImportAssignments,
   type ImportResult,
 } from '@/server/actions/import';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 // ---------------------------------------------------------------------------
 // Shared ImportWizard component
@@ -49,7 +52,8 @@ interface ImportWizardProps {
   templateUrl: string;
   templateName: string;
   requiredColumns: string[];
-  onImport: (rows: Record<string, string>[]) => Promise<ImportResult>;
+  /** Returns the action's result; the wizard checks it (launch-blockers P4). */
+  onImport: (rows: Record<string, string>[]) => Promise<ActionResult<ImportResult>>;
   importOrderNote?: string;
 }
 
@@ -88,21 +92,15 @@ function ImportWizard({
     if (validRows.length === 0) return;
 
     startTransition(async () => {
-      try {
-        const result = await onImport(validRows);
-        setImportResult(result);
-        notifications.show({
-          title: 'Import Complete',
-          message: `Created: ${result.created}, Skipped: ${result.skipped}, Errors: ${result.errors.length}`,
-          color: result.errors.length > 0 ? 'warning' : 'success',
-        });
-      } catch (error) {
-        notifications.show({
-          title: 'Import Failed',
-          message: String(error),
-          color: 'red',
-        });
-      }
+      const outcome = await runAction(onImport(validRows), { errorTitle: 'Import Failed' });
+      if (!outcome.ok) return;
+      const result = outcome.data;
+      setImportResult(result);
+      notifications.show({
+        title: 'Import Complete',
+        message: `Created: ${result.created}, Skipped: ${result.skipped}, Errors: ${result.errors.length}`,
+        color: result.errors.length > 0 ? 'warning' : 'success',
+      });
     });
   }
 
@@ -189,7 +187,7 @@ function ImportWizard({
             </Paper>
           )}
 
-          <Button
+          <WriteButton
             onClick={handleImport}
             loading={isPending}
             disabled={validCount === 0}
@@ -197,7 +195,7 @@ function ImportWizard({
             color="signal"
           >
             Import {validCount} Valid Row{validCount !== 1 ? 's' : ''}
-          </Button>
+          </WriteButton>
         </>
       )}
 
@@ -258,18 +256,16 @@ function EmployeeImportWizard() {
     if (validRows.length === 0) return;
 
     startTransition(async () => {
-      try {
-        const result = await bulkImportEmployees(validRows);
-        setImportResult(result);
-        if (result.created > 0) setPasswordModalOpen(true);
-        notifications.show({
-          title: 'Employee Import Complete',
-          message: `Created: ${result.created}, Skipped: ${result.skipped}`,
-          color: result.errors.length > 0 ? 'warning' : 'success',
-        });
-      } catch (error) {
-        notifications.show({ title: 'Import Failed', message: String(error), color: 'red' });
-      }
+      const outcome = await runAction(bulkImportEmployees(validRows), { errorTitle: 'Import Failed' });
+      if (!outcome.ok) return; // e.g. the batch would exceed the plan's seat limit — shown verbatim
+      const result = outcome.data;
+      setImportResult(result);
+      if (result.created > 0) setPasswordModalOpen(true);
+      notifications.show({
+        title: 'Employee Import Complete',
+        message: `Created: ${result.created}, Skipped: ${result.skipped}`,
+        color: result.errors.length > 0 ? 'warning' : 'success',
+      });
     });
   }
 
@@ -341,9 +337,9 @@ function EmployeeImportWizard() {
             </Paper>
           )}
 
-          <Button onClick={handleImport} loading={isPending} disabled={validCount === 0} leftSection={<IconUpload size={16} />} color="signal">
+          <WriteButton onClick={handleImport} loading={isPending} disabled={validCount === 0} leftSection={<IconUpload size={16} />} color="signal">
             Import {validCount} Employee{validCount !== 1 ? 's' : ''}
-          </Button>
+          </WriteButton>
         </>
       )}
 

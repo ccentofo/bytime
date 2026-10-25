@@ -1,13 +1,16 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { getDbForUrl } from '@/db';
 import { controlDb } from '@/db/control-plane';
 import { tenants } from '@/db/control-plane/schema';
 import { decrypt } from '@/lib/encryption';
 import { users, timesheetPeriods, notificationPreferences, workspaceSettings } from '@/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, gt } from 'drizzle-orm';
 import { sendSubmissionDeadlineEmail } from '@/lib/email/send';
+import { createSendThrottle } from '@/lib/email/rate';
+import { tenantBaseUrl } from '@/lib/tenant/host';
 import { getCurrentPeriodStart, getLastWeekdayInPeriod, getNumDaysInPeriod } from '@/lib/date-utils';
-import { checkCronRateLimit } from '@/lib/rate-limit';
+import { runCron } from '@/lib/cron/run-cron';
+import { isSeedRecipient, sweepTenants } from '@/lib/cron/tenant-sweep';
 import { getTenantAccess } from '@/lib/tenant/lifecycle';
 import { toLifecycleFacts } from '@/lib/tenant/registry';
 import { configAt } from '@/server/internal/pay-period-config';
@@ -23,21 +26,15 @@ const FALLBACK_TIMEZONE = 'America/New_York';
  *
  * Protect this endpoint with a CRON_SECRET header in production.
  */
+// Audit R10: a literal — Next reads route segment config statically (an imported constant fails the build). Must
+// equal REMINDER_CRON_MAX_DURATION_S (checked by unit/route-segment-config).
+export const maxDuration = 300;
+
 export async function GET(request: NextRequest) {
-  const rateLimited = checkCronRateLimit(request);
-  if (rateLimited) return rateLimited;
+  return runCron(request, 'submission-deadline', sendReminders, { maxRuntimeMinutes: 5 });
+}
 
-  // Verify cron secret — accepts x-cron-secret (GitHub Actions) or
-  // Authorization: Bearer (Vercel native crons).
-  const cronSecret = request.headers.get('x-cron-secret')
-    ?? request.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-  if (process.env.NODE_ENV === 'production' && !process.env.CRON_SECRET) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-  if (process.env.CRON_SECRET && cronSecret !== process.env.CRON_SECRET) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
+async function sendReminders(): Promise<Record<string, unknown>> {
   // Load all active tenants from the control plane
   // Only workspaces in `full` mode get reminders (read-only / billing-only / closed can't enter time).
   const now = new Date();
@@ -45,12 +42,17 @@ export async function GET(request: NextRequest) {
     .filter((t) => getTenantAccess(toLifecycleFacts(t), now) === 'full');
 
   let totalSent = 0;
+  let totalFailed = 0;
+  // Shared Resend budget: ≤ 2 sends/second for this cron (feature-plan-launch-blockers.md P1 §5).
+  const sendThrottle = createSendThrottle();
 
-  // One unreachable or unmigrated tenant must not stop reminders for every tenant after it.
-  const failedTenants: string[] = [];
+  let skippedSeedRecipients = 0;
 
-  for (const tenant of activeTenants) {
-    try {
+  // feature-plan-launch-blockers.md P6 §4: time budget, fair rotation, per-tenant failures isolated + reported.
+  const sweep = await sweepTenants({
+    name: 'submission-deadline',
+    tenants: activeTenants,
+    processTenant: async (tenant, { outOfTime, resumeAfter }) => {
       // T7: dbUrlEncrypted is only null for a tombstoned ('deleted') tenant; this query is
       // filtered to status='active', which a deleted tenant never has.
       const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted!));
@@ -70,7 +72,7 @@ export async function GET(request: NextRequest) {
       const daysUntilDeadline = diffDays(today, lastWeekday);
 
       // Only send reminders 2 days before and on the deadline itself
-      if (daysUntilDeadline !== 2 && daysUntilDeadline !== 0) continue;
+      if (daysUntilDeadline !== 2 && daysUntilDeadline !== 0) return 'done';
 
       const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(periodEnd, 'MMM D, YYYY')}`;
       const deadlineDate = formatCalendarDate(lastWeekday, 'dddd, MMM D, YYYY');
@@ -78,9 +80,18 @@ export async function GET(request: NextRequest) {
       const allEmployees = await db
         .select({ id: users.id, fullName: users.fullName, email: users.email })
         .from(users)
-        .where(and(eq(users.isActive, true), eq(users.role, 'employee')));
+        // Audit A10: id order, resuming after the last employee a stopped run finished in this tenant.
+        .where(and(eq(users.isActive, true), eq(users.role, 'employee'), resumeAfter ? gt(users.id, resumeAfter) : undefined))
+        .orderBy(users.id);
 
+      let lastDone: string | null = resumeAfter;
       for (const emp of allEmployees) {
+        // Audit A10: the budget is checked before EVERY employee (a big tenant with nothing to send still costs time);
+        // past the check, this employee is handled completely.
+        if (outOfTime()) return { stoppedAfter: lastDone };
+        lastDone = emp.id;
+        if (isSeedRecipient(emp.email)) { skippedSeedRecipients++; continue; } // P6 §4: demo domains we don't own
+
         const periods = await db
           .select({ status: timesheetPeriods.status })
           .from(timesheetPeriods)
@@ -104,20 +115,33 @@ export async function GET(request: NextRequest) {
         const enabled = prefs.length === 0 ? true : prefs[0].enabled;
 
         if (enabled) {
-          await sendSubmissionDeadlineEmail({
+          await sendThrottle();
+          const outcome = await sendSubmissionDeadlineEmail({
             employeeEmail: emp.email,
             employeeName: emp.fullName,
             periodLabel,
             deadlineDate,
+            appUrl: tenantBaseUrl(tenant.slug),
           });
-          totalSent++;
+          if (outcome.ok) totalSent++;
+          else if (outcome.reason === 'error') totalFailed++;
         }
       }
-    } catch (err) {
-      failedTenants.push(tenant.slug);
-      console.error(`Cron: tenant ${tenant.slug} failed:`, err);
-    }
-  }
+      return 'done';
+    },
+  });
 
-  return NextResponse.json({ message: 'Submission deadline reminders sent', sent: totalSent, failedTenants });
+  return {
+    message: 'Submission deadline reminders sent',
+    sent: totalSent,
+    failedSends: totalFailed,
+    skippedSeedRecipients,
+    processed: sweep.processed,
+    candidates: sweep.candidates,
+    incomplete: sweep.incomplete,
+    failedTenants: sweep.failedTenants,
+    failedTenantCount: sweep.failedTenants.length,
+    cursor: sweep.cursor, // P6 §4: the next run starts after this slug
+    resumes: sweep.resumes, // audit A10/R1: per tenant, where a stopped run resumes (after this employee)
+  };
 }

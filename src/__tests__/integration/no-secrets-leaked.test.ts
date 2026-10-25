@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { getTestDb, createTestUser, cleanupTestData } from './helpers';
+import { getTestDb, createTestUser, cleanupTestData, expectOk } from './helpers';
 
 // ---------------------------------------------------------------------------
 // R2-3: never send secrets to the browser. getUsers() previously did a bare
@@ -90,17 +90,17 @@ describe('No secrets sent to the browser (R2-3)', () => {
 
   it('updateUser() result has no secret columns', async () => {
     const employee = await createTestUser({ role: 'employee' });
-    const result = await updateUser(employee.id, { fullName: 'Updated Name' });
+    const result = await expectOk(updateUser(employee.id, { fullName: 'Updated Name' }));
     assertNoSecretKeys(result as any);
   });
 
   it('createUserWithPassword() result has no secret columns', async () => {
-    const result = await createUserWithPassword({
+    const result = await expectOk(createUserWithPassword({
       email: `new-${Date.now()}@bytime.dev`,
       fullName: 'New Hire',
       role: 'employee',
       password: 'SomeStrongPass123!',
-    });
+    }));
     assertNoSecretKeys(result as any);
   });
 });

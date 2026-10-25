@@ -51,6 +51,55 @@ export const DELETION_SLA_DAYS = 7;
  */
 export const BACKUP_RETENTION_DAYS = 30;
 
+/**
+ * LB-D1 (feature-plan-launch-blockers.md §0): point-in-time history kept on every tenant Neon project — 7 days, the
+ * Launch plan maximum. Mistake-undo backups (restore into a branch, RESTORE.md), not DCAA retention. Revisit on Scale.
+ * Sent at project creation; existing projects via `npm run backfill:neon-retention`.
+ */
+export const TENANT_DB_HISTORY_RETENTION_SECONDS = 604_800;
+
+/** Bounds for the NEON_HISTORY_RETENTION_SECONDS override (launch-blockers audit A12): at least an hour of history, never
+ * more than the LB-D1 policy. 0 would silently turn point-in-time restore off. */
+export const MIN_HISTORY_RETENTION_SECONDS = 3_600;
+export const MAX_HISTORY_RETENTION_SECONDS = TENANT_DB_HISTORY_RETENTION_SECONDS;
+
+/**
+ * The retention actually requested: `NEON_HISTORY_RETENTION_SECONDS` overrides the policy value (a Free-plan staging
+ * org rejects anything above 21600). A set-but-invalid or out-of-range value throws rather than silently falling back.
+ */
+export function tenantDbHistoryRetentionSeconds(): number {
+  const raw = process.env.NEON_HISTORY_RETENTION_SECONDS?.trim();
+  if (!raw) return TENANT_DB_HISTORY_RETENTION_SECONDS;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < MIN_HISTORY_RETENTION_SECONDS || n > MAX_HISTORY_RETENTION_SECONDS) {
+    throw new Error(`NEON_HISTORY_RETENTION_SECONDS must be a whole number of seconds from ${MIN_HISTORY_RETENTION_SECONDS} to ${MAX_HISTORY_RETENTION_SECONDS} (got "${raw}").`);
+  }
+  return n;
+}
+
+// ── Signup abuse controls and retention (LB-D2, LB-D5 — feature-plan-launch-blockers.md P5) ─────────
+
+/** LB-D2: at most this many new workspaces per rolling 24 h; past it, verified signups are waitlisted. */
+export const SIGNUP_DAILY_WORKSPACE_CAP = 20;
+
+/** LB-D2: verified workspaces per IP hash per rolling 24 h. */
+export const SIGNUP_PER_IP_WORKSPACES_PER_DAY = 3;
+
+/** LB-D2: ops alert when the Neon account holds this many projects. */
+export const NEON_PROJECT_ALERT_THRESHOLD = 80;
+
+/** LB-D5 (Privacy §7): never-verified signup rows are deleted after this many days. */
+export const UNVERIFIED_SIGNUP_RETENTION_DAYS = 7;
+
+/** LB-D5: consumed signup rows — only once the tenant row holds the Terms version AND acceptance time. */
+export const CONSUMED_SIGNUP_RETENTION_DAYS = 30;
+
+/** LB-D5: verified signups that were never provisioned (e.g. waitlisted and never followed up). */
+export const VERIFIED_UNPROVISIONED_RETENTION_DAYS = 30;
+
+/** LB-D5: the signup IP hash is kept at most ~25 h (nulled after 24 h by the 10-minute notice-delivery cron). */
+export const SIGNUP_IP_HASH_RETENTION_HOURS = 24;
+
 // ── Read-only mode and export (Terms §3.2, §9.1, §9.2) ──────────────────────
 
 /**

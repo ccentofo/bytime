@@ -11,8 +11,10 @@ import { validateEnum } from '@/lib/validation';
 
 /** effective_from for the first schedule row (matches the migration-0008 backfill sentinel). */
 const SCHEDULE_HISTORY_START = '1900-01-01' as CalendarDate;
-import { configAt, loadScheduleResolver } from '@/server/internal/pay-period-config';
+import { configAt, getCurrentEffectiveConfigInternal, getEffectiveConfigAtInternal, loadScheduleResolver } from '@/server/internal/pay-period-config';
 import { eq, desc, gt } from 'drizzle-orm';
+import { UserFacingError } from '@/lib/errors';
+import { userAction, type ActionResult } from '@/lib/action-result';
 
 // ---------------------------------------------------------------------------
 // Resolution layer
@@ -25,7 +27,7 @@ import { eq, desc, gt } from 'drizzle-orm';
  */
 export async function getEffectiveConfigAt(date: CalendarDate): Promise<PeriodConfig> {
   await requireSession();
-  return configAt(await getDb(), parseCalendarDate(date));
+  return getEffectiveConfigAtInternal(date);
 }
 
 /**
@@ -34,7 +36,7 @@ export async function getEffectiveConfigAt(date: CalendarDate): Promise<PeriodCo
  */
 export async function getCurrentEffectiveConfig(): Promise<PeriodConfig> {
   await requireSession();
-  return getEffectiveConfigAt(await getWorkspaceToday());
+  return getCurrentEffectiveConfigInternal();
 }
 
 /**
@@ -42,7 +44,7 @@ export async function getCurrentEffectiveConfig(): Promise<PeriodConfig> {
  */
 export async function getPayPeriodConfig(): Promise<PeriodConfig> {
   await requireSession();
-  return getCurrentEffectiveConfig();
+  return getCurrentEffectiveConfigInternal();
 }
 
 // ---------------------------------------------------------------------------
@@ -62,7 +64,7 @@ export async function getNeighborPeriod(
 ): Promise<{ periodStart: CalendarDate; periodConfig: PeriodConfig; numDays: number }> {
   await requireSession();
   const start = parseCalendarDate(currentPeriodStart);
-  if (direction !== 'prev' && direction !== 'next') throw new Error('Invalid direction.');
+  if (direction !== 'prev' && direction !== 'next') throw new UserFacingError('Invalid direction.');
   const schedule = await loadScheduleResolver(await getDb());
   const neighbor = schedule.neighbor(start, direction);
   return { periodStart: neighbor.start, periodConfig: neighbor.config, numDays: neighbor.numDays };
@@ -143,7 +145,7 @@ function parseScheduleInput(input: { periodType: unknown; anchorDate: unknown; w
   const periodType = validateEnum(input.periodType, 'Period type', PERIOD_TYPES);
   const weekStartDay = input.weekStartDay;
   if (!Number.isInteger(weekStartDay) || (weekStartDay as number) < 0 || (weekStartDay as number) > 6) {
-    throw new Error('Week start day must be an integer from 0 (Sunday) to 6 (Saturday).');
+    throw new UserFacingError('Week start day must be an integer from 0 (Sunday) to 6 (Saturday).');
   }
   const anchorDate = parseCalendarDate(input.anchorDate as string);
   return { periodType, anchorDate, weekStartDay: weekStartDay as number };
@@ -245,48 +247,50 @@ export async function updatePayPeriodConfig(data: {
   anchorDate: CalendarDate;
   weekStartDay: number;
   effectiveFrom: CalendarDate | null;
-}): Promise<UpdatePayPeriodConfigResult> {
-  const db = await getDbForWrite();
-  await requireAdminFresh();
-  const candidateConfig = parseScheduleInput(data);
-  const problem = anchorProblem(candidateConfig);
-  if (problem) throw new Error(problem);
+}): Promise<ActionResult<UpdatePayPeriodConfigResult>> {
+  return userAction(async () => {
+    await requireAdminFresh();
+    const db = await getDbForWrite();
+    const candidateConfig = parseScheduleInput(data);
+    const problem = anchorProblem(candidateConfig);
+    if (problem) throw new UserFacingError(problem);
 
-  const values = {
-    periodType: candidateConfig.periodType,
-    anchorDate: candidateConfig.anchorDate,
-    weekStartDay: candidateConfig.weekStartDay,
-  };
+    const values = {
+      periodType: candidateConfig.periodType,
+      anchorDate: candidateConfig.anchorDate,
+      weekStartDay: candidateConfig.weekStartDay,
+    };
 
-  if (data.effectiveFrom === null) {
-    if (!(await workspaceHasNoTimesheetData(db))) {
-      throw new Error('Timesheets already exist, so a schedule change must start on a future date.');
+    if (data.effectiveFrom === null) {
+      if (!(await workspaceHasNoTimesheetData(db))) {
+        throw new UserFacingError('Timesheets already exist, so a schedule change must start on a future date.');
+      }
+      // No periods exist to keep consistent: the new schedule becomes the whole history.
+      await db.transaction(async (tx) => {
+        await tx.delete(payPeriodConfig);
+        await tx.insert(payPeriodConfig).values({ ...values, effectiveFrom: SCHEDULE_HISTORY_START });
+      });
+      return { effectiveFrom: null };
     }
-    // No periods exist to keep consistent: the new schedule becomes the whole history.
+
+    const effectiveFrom = parseCalendarDate(data.effectiveFrom);
+    const today = await getWorkspaceToday();
+    if (!isAfter(effectiveFrom, today)) {
+      throw new UserFacingError('Cannot set effective_from to a past or current period. Changes are future-effective only.');
+    }
+
+    const currentConfig = await configAt(db, today);
+    if (!isCommonBoundary(effectiveFrom, currentConfig, candidateConfig)) {
+      throw new UserFacingError('effective_from must be a period boundary under both the current and new schedules — use getValidScheduleChangeDates for valid choices.');
+    }
+
+    // Replace any pending (future) row and insert the new one atomically, so a failed insert
+    // can't leave the pending change deleted.
     await db.transaction(async (tx) => {
-      await tx.delete(payPeriodConfig);
-      await tx.insert(payPeriodConfig).values({ ...values, effectiveFrom: SCHEDULE_HISTORY_START });
+      await tx.delete(payPeriodConfig).where(gt(payPeriodConfig.effectiveFrom, today));
+      await tx.insert(payPeriodConfig).values({ ...values, effectiveFrom });
     });
-    return { effectiveFrom: null };
-  }
 
-  const effectiveFrom = parseCalendarDate(data.effectiveFrom);
-  const today = await getWorkspaceToday();
-  if (!isAfter(effectiveFrom, today)) {
-    throw new Error('Cannot set effective_from to a past or current period. Changes are future-effective only.');
-  }
-
-  const currentConfig = await configAt(db, today);
-  if (!isCommonBoundary(effectiveFrom, currentConfig, candidateConfig)) {
-    throw new Error('effective_from must be a period boundary under both the current and new schedules — use getValidScheduleChangeDates for valid choices.');
-  }
-
-  // Replace any pending (future) row and insert the new one atomically, so a failed insert
-  // can't leave the pending change deleted.
-  await db.transaction(async (tx) => {
-    await tx.delete(payPeriodConfig).where(gt(payPeriodConfig.effectiveFrom, today));
-    await tx.insert(payPeriodConfig).values({ ...values, effectiveFrom });
+    return { effectiveFrom };
   });
-
-  return { effectiveFrom };
 }

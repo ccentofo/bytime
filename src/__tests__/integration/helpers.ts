@@ -1,11 +1,38 @@
 import * as schema from '@/db/schema';
 import { clearTenantData } from '@/db/clear-tenant-data';
 import bcrypt from 'bcryptjs';
+import type { ActionResult, ActionErrorCode } from '@/lib/action-result';
 
 type TestDb = ReturnType<typeof import('drizzle-orm/postgres-js').drizzle>;
 
 export function getTestDb(): TestDb {
   return (globalThis as any).__TEST_DB__;
+}
+
+/**
+ * Converted server actions return ActionResult (feature-plan-launch-blockers.md P4). On a success path, unwrap with
+ * expectOk — a returned failure must fail the test, not be silently ignored the way an unawaited result would be.
+ */
+export async function expectOk<T>(promise: Promise<ActionResult<T>>): Promise<T> {
+  const result = await promise;
+  if (!result.ok) throw new Error(`Expected ok, got ${result.code}: ${result.error}`);
+  return result.data;
+}
+
+/** Assert a converted action returned `{ ok: false, code }` (and, optionally, a message matching `message`). */
+export async function expectFailure<T>(promise: Promise<ActionResult<T>>, code: ActionErrorCode, message?: RegExp): Promise<string> {
+  const result = await promise;
+  if (result.ok) throw new Error(`Expected failure (${code}), got ok`);
+  if (result.code !== code) throw new Error(`Expected code ${code}, got ${result.code}: ${result.error}`);
+  if (message && !message.test(result.error)) throw new Error(`Expected message ${message}, got: ${result.error}`);
+  return result.error;
+}
+
+/** Await every `after()` callback scheduled so far (setup-db.ts runs them immediately and records the promise). */
+export async function flushAfter(): Promise<void> {
+  const pending = (globalThis as any).__AFTER_PROMISES__ as Promise<unknown>[] | undefined;
+  if (!pending) return;
+  while (pending.length > 0) await Promise.all(pending.splice(0));
 }
 
 // ---------------------------------------------------------------------------

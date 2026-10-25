@@ -17,6 +17,7 @@ import {
   Text,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
+import { runAction } from '@/lib/run-action';
 import { IconPlus, IconEdit, IconKey, IconAlertCircle, IconLockOpen } from '@tabler/icons-react';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
@@ -24,6 +25,7 @@ import { createUserWithPassword, updateUser, getUsers, unlockUserAccount } from 
 import { adminResetPassword } from '@/server/actions/password';
 import { ROLE_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 type User = {
   id: string;
@@ -62,6 +64,7 @@ const EMPTY_FORM: UserForm = {
 };
 
 export function UsersClient({ initialUsers, currentUserId }: Props) {
+  const canWrite = useCanWrite();
   const [users, setUsers] = useState<User[]>(initialUsers);
   const [isPending, startTransition] = useTransition();
 
@@ -98,58 +101,57 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
 
   function handleSubmit() {
     startTransition(async () => {
-      try {
-        setFormError(null);
-        if (editingUser) {
-          // Update existing user
-          const updateData: { fullName?: string; email?: string; role?: 'admin' | 'supervisor' | 'employee' } = {};
-          if (form.fullName !== editingUser.fullName) updateData.fullName = form.fullName;
-          if (form.email !== editingUser.email) updateData.email = form.email;
-          if (form.role !== editingUser.role) updateData.role = form.role as 'admin' | 'supervisor' | 'employee';
+      setFormError(null);
+      if (editingUser) {
+        // Update existing user
+        const updateData: { fullName?: string; email?: string; role?: 'admin' | 'supervisor' | 'employee' } = {};
+        if (form.fullName !== editingUser.fullName) updateData.fullName = form.fullName;
+        if (form.email !== editingUser.email) updateData.email = form.email;
+        if (form.role !== editingUser.role) updateData.role = form.role as 'admin' | 'supervisor' | 'employee';
 
-          if (Object.keys(updateData).length > 0) {
-            await updateUser(editingUser.id, updateData);
-          }
-          notifications.show({
-            title: 'User Updated',
-            message: `${form.fullName} has been updated successfully.`,
-            color: 'success',
-          });
-        } else {
-          // Create new user
-          if (!form.email || !form.fullName || !form.password) {
-            setFormError('All fields are required for new users.');
+        if (Object.keys(updateData).length > 0) {
+          const result = await runAction(updateUser(editingUser.id, updateData), { silent: true });
+          if (!result.ok) {
+            setFormError(result.error);
             return;
           }
-          if (form.password.length < 8) {
-            setFormError('Password must be at least 8 characters.');
-            return;
-          }
-          await createUserWithPassword({
-            email: form.email,
-            fullName: form.fullName,
-            role: form.role as 'admin' | 'supervisor' | 'employee',
-            password: form.password,
-          });
-          notifications.show({
-            title: 'User Created',
-            message: `${form.fullName} has been created successfully.`,
-            color: 'success',
-          });
         }
-
-        // Refresh user list
-        const refreshed = await getUsers();
-        setUsers(refreshed as User[]);
-        setModalOpen(false);
-      } catch (error) {
-        setFormError(String(error));
         notifications.show({
-          title: 'Action Failed',
-          message: 'Something went wrong. Please try again.',
-          color: 'red',
+          title: 'User Updated',
+          message: `${form.fullName} has been updated successfully.`,
+          color: 'success',
+        });
+      } else {
+        // Create new user
+        if (!form.email || !form.fullName || !form.password) {
+          setFormError('All fields are required for new users.');
+          return;
+        }
+        if (form.password.length < 8) {
+          setFormError('Password must be at least 8 characters.');
+          return;
+        }
+        const result = await runAction(createUserWithPassword({
+          email: form.email,
+          fullName: form.fullName,
+          role: form.role as 'admin' | 'supervisor' | 'employee',
+          password: form.password,
+        }), { silent: true });
+        if (!result.ok) {
+          setFormError(result.error); // e.g. the plan's seat limit, verbatim
+          return;
+        }
+        notifications.show({
+          title: 'User Created',
+          message: `${form.fullName} has been created successfully.`,
+          color: 'success',
         });
       }
+
+      // Refresh user list
+      const refreshed = await getUsers();
+      setUsers(refreshed as User[]);
+      setModalOpen(false);
     });
   }
 
@@ -162,7 +164,8 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
 
   function handleUnlockAccount(user: User) {
     startTransition(async () => {
-      await unlockUserAccount(user.email);
+      const result = await runAction(unlockUserAccount(user.email), { errorTitle: 'Couldn’t unlock account' });
+      if (!result.ok) return;
       notifications.show({
         title: 'Account Unlocked',
         message: `${user.fullName}'s account has been unlocked. They can now log in.`,
@@ -174,61 +177,51 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
   function handleResetPassword() {
     if (!resetTarget || !resetPassword) return;
     startTransition(async () => {
-      try {
-        setResetError(null);
-        const result = await adminResetPassword({
-          targetUserId: resetTarget.id,
-          newPassword: resetPassword,
-        });
-        if (result.success) {
-          setResetModalOpen(false);
-          notifications.show({
-            title: 'Password Reset',
-            message: `Password for ${resetTarget.fullName} has been reset.`,
-            color: 'success',
-          });
-        } else {
-          setResetError(result.error ?? 'Failed to reset password.');
-        }
-      } catch (error) {
-        setResetError(String(error));
+      setResetError(null);
+      const result = await runAction(adminResetPassword({
+        targetUserId: resetTarget.id,
+        newPassword: resetPassword,
+      }), { silent: true });
+      if (!result.ok) {
+        setResetError(result.error);
+        return;
       }
+      setResetModalOpen(false);
+      notifications.show({
+        title: 'Password Reset',
+        message: `Password for ${resetTarget.fullName} has been reset.`,
+        color: 'success',
+      });
     });
   }
 
   function handleToggleFlsaExempt(user: User) {
     startTransition(async () => {
-      try {
-        const newExempt = !user.flsaExempt;
-        await updateUser(user.id, { flsaExempt: newExempt });
-        const refreshed = await getUsers();
-        setUsers(refreshed as User[]);
-        notifications.show({
-          title: newExempt ? 'FLSA Exempt' : 'FLSA Non-Exempt',
-          message: `${user.fullName} is now ${newExempt ? 'FLSA Exempt (salaried)' : 'FLSA Non-Exempt (hourly)'}.`,
-          color: newExempt ? 'signal' : 'gray',
-        });
-      } catch (error) {
-        notifications.show({ title: 'Action Failed', message: String(error), color: 'red' });
-      }
+      const newExempt = !user.flsaExempt;
+      const result = await runAction(updateUser(user.id, { flsaExempt: newExempt }), { errorTitle: 'Action Failed' });
+      if (!result.ok) return;
+      const refreshed = await getUsers();
+      setUsers(refreshed as User[]);
+      notifications.show({
+        title: newExempt ? 'FLSA Exempt' : 'FLSA Non-Exempt',
+        message: `${user.fullName} is now ${newExempt ? 'FLSA Exempt (salaried)' : 'FLSA Non-Exempt (hourly)'}.`,
+        color: newExempt ? 'signal' : 'gray',
+      });
     });
   }
 
   function handleToggleActive(user: User) {
     startTransition(async () => {
-      try {
-        const newActive = !user.isActive;
-        await updateUser(user.id, { isActive: newActive });
-        const refreshed = await getUsers();
-        setUsers(refreshed as User[]);
-        notifications.show({
-          title: newActive ? 'User Activated' : 'User Deactivated',
-          message: `${user.fullName} has been ${newActive ? 'activated' : 'deactivated'}.`,
-          color: newActive ? 'success' : 'warning',
-        });
-      } catch (error) {
-        notifications.show({ title: 'Action Failed', message: String(error), color: 'red' });
-      }
+      const newActive = !user.isActive;
+      const result = await runAction(updateUser(user.id, { isActive: newActive }), { errorTitle: 'Action Failed' });
+      if (!result.ok) return;
+      const refreshed = await getUsers();
+      setUsers(refreshed as User[]);
+      notifications.show({
+        title: newActive ? 'User Activated' : 'User Deactivated',
+        message: `${user.fullName} has been ${newActive ? 'activated' : 'deactivated'}.`,
+        color: newActive ? 'success' : 'warning',
+      });
     });
   }
 
@@ -256,7 +249,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
           <Switch
             checked={row.original.isActive}
             onChange={() => handleToggleActive(row.original)}
-            disabled={isPending || row.original.id === currentUserId}
+            disabled={!canWrite || (isPending || row.original.id === currentUserId)}
             size="sm"
           />
         </Tooltip>
@@ -270,7 +263,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
         <Switch
           checked={row.original.flsaExempt}
           onChange={() => handleToggleFlsaExempt(row.original)}
-          disabled={isPending}
+          disabled={!canWrite || (isPending)}
           size="sm"
           label={row.original.flsaExempt ? 'Exempt' : 'Non-Exempt'}
         />
@@ -286,7 +279,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
     renderRowActions: ({ row }) => (
       <Group gap="xs" wrap="nowrap" justify="center">
         <Tooltip label="Edit User">
-          <ActionIcon variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit user">
+          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit user">
             <IconEdit size={16} />
           </ActionIcon>
         </Tooltip>
@@ -326,9 +319,9 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
       <PageHeader
         title="User Management"
         actions={
-          <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
+          <WriteButton leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
             Add User
-          </Button>
+          </WriteButton>
         }
       />
       <MantineReactTable table={table} />
@@ -419,9 +412,9 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
             <Button variant="default" onClick={() => setModalOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleSubmit} loading={isPending}>
+            <WriteButton onClick={handleSubmit} loading={isPending}>
               {editingUser ? 'Save Changes' : 'Create User'}
-            </Button>
+            </WriteButton>
           </Group>
         </Stack>
       </Modal>

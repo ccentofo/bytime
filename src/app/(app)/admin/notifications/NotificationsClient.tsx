@@ -13,6 +13,7 @@ import {
 } from '@mantine/core';
 import { IconBell, IconCheck } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
+import { runAction } from '@/lib/run-action';
 import { updateNotificationPreferences } from '@/server/actions/notifications';
 import type { NotificationPrefs } from '@/server/internal/notifications';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -30,7 +31,11 @@ export function NotificationsClient({ initialPrefs }: Props) {
     setPrefs(updated);
 
     startTransition(async () => {
-      await updateNotificationPreferences({ [key]: value });
+      const result = await runAction(updateNotificationPreferences({ [key]: value }), { errorTitle: 'Couldn’t save preferences' });
+      if (!result.ok) {
+        setPrefs((current) => ({ ...current, [key]: !value })); // revert the optimistic toggle
+        return;
+      }
       notifications.show({
         title: 'Preferences Saved',
         message: 'Your notification settings have been updated.',

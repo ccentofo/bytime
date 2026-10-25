@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
@@ -15,6 +16,8 @@ import {
   createTestChargeCode,
   assignUserToClin,
   cleanupTestData,
+  expectOk,
+  expectFailure,
 } from './helpers';
 
 // ---------------------------------------------------------------------------
@@ -24,11 +27,22 @@ import {
 // assertCanAccessEmployee/getEmployeeScope) runs for real.
 // ---------------------------------------------------------------------------
 
+// Launch-blockers audit A3: while `writeClients.perCall` is on (case 5b), every getDbForWrite call gets its OWN
+// one-connection client, so two concurrent demotions run truly concurrent transactions (the shared test client is
+// `max: 1` and would serialise them, hiding a deadlock).
+const writeClients = vi.hoisted(() => ({ perCall: false, open: [] as Array<{ end: () => Promise<void> }> }));
 vi.mock('@/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/db')>()),
   getDb: async () => getTestDb(),
   // Write actions obtain their client through the write gate (feature-plan-terms-compliance-fixes.md §5.1).
-  getDbForWrite: async () => getTestDb(),
+  getDbForWrite: async () => {
+    if (!writeClients.perCall) return getTestDb();
+    const postgres = (await import('postgres')).default;
+    const { drizzle } = await import('drizzle-orm/postgres-js');
+    const client = postgres(process.env.TEST_DATABASE_URL ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime_test', { max: 1 });
+    writeClients.open.push(client);
+    return drizzle(client, { schema: await import('@/db/schema') });
+  },
   // requireAdminFresh/requireApproverFresh (R2-8) re-read the role through getDbForAuth.
   getDbForAuth: async () => getTestDb(),
 }));
@@ -42,34 +56,46 @@ vi.mock('@/lib/tenant/context', () => ({
   getTenantSlug: async () => tenantState.requestSlug,
 }));
 
+// vitest 2.1.9 quirk (see dcaa-concurrency.test.ts): when two calls dynamically import() the same MOCKED module at the
+// same moment, the overlapping one receives the REAL module. getSessionUser lazily imports the tenant context, so in
+// the concurrent case (5b) one call runs the REAL getTenantSlug, which reads request headers. Give it headers that
+// resolve to the same workspace, so the real guards stay under test whichever module a call receives.
+vi.mock('next/headers', () => ({
+  headers: async () => new Headers({ host: `${tenantState.requestSlug}.${process.env.APP_ROOT_DOMAIN ?? 'localhost'}` }),
+}));
+
 type FakeSessionUser = { id: string; role: string; email: string; fullName: string; tenantSlug?: string };
 
 const sessionState = vi.hoisted(() => ({
   user: null as null | FakeSessionUser,
+  /** Set below: when a call runs inside `als.run(actor, …)`, auth() returns that actor wherever it awaits. */
+  als: null as null | { getStore(): FakeSessionUser | undefined },
 }));
 
 vi.mock('@/auth', () => ({
-  auth: async () =>
-    sessionState.user
+  auth: async () => {
+    const user = sessionState.als?.getStore() ?? sessionState.user;
+    return user
       ? {
           user: {
-            id: sessionState.user.id,
-            email: sessionState.user.email,
-            fullName: sessionState.user.fullName,
-            role: sessionState.user.role,
-            tenantSlug: sessionState.user.tenantSlug ?? tenantState.requestSlug,
+            id: user.id,
+            email: user.email,
+            fullName: user.fullName,
+            role: user.role,
+            tenantSlug: user.tenantSlug ?? tenantState.requestSlug,
           },
         }
-      : null,
+      : null;
+  },
 }));
 
 vi.mock('@/lib/email/send', () => ({
-  sendTimesheetSubmittedEmail: vi.fn(async () => undefined),
-  sendTimesheetApprovedEmail: vi.fn(async () => undefined),
-  sendTimesheetRejectedEmail: vi.fn(async () => undefined),
-  sendDailyReminderEmail: vi.fn(async () => undefined),
-  sendSubmissionDeadlineEmail: vi.fn(async () => undefined),
-  sendPasswordResetEmail: vi.fn(async () => undefined),
+  sendTimesheetSubmittedEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendTimesheetApprovedEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendTimesheetRejectedEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendDailyReminderEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendSubmissionDeadlineEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendPasswordResetEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
 }));
 
 import { getUsers, updateUser, createUser } from '@/server/actions/users';
@@ -82,6 +108,9 @@ import { approvePeriod, rejectPeriod } from '@/server/actions/periods';
 import { getTimesheetForReview, saveTimesheetBatch } from '@/server/actions/timesheet';
 import { getTimesheetReportData } from '@/server/actions/reports';
 import { getAuditEntries } from '@/server/actions/audit';
+
+const actorStore = new AsyncLocalStorage<FakeSessionUser>();
+sessionState.als = actorStore;
 
 function actingAs(user: FakeSessionUser | null) {
   sessionState.user = user;
@@ -129,7 +158,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     }).returning();
 
     actingAs(asFake(employee));
-    await expect(approvePeriod({ periodId: period.id })).rejects.toThrow(/Approver role required/);
+    await expectFailure(approvePeriod({ periodId: period.id }), 'forbidden', /Approver role required/);
   });
 
   // 3. ---------------------------------------------------------------------
@@ -162,19 +191,16 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
 
     actingAs(asFake(supervisor));
 
-    await approvePeriod({ periodId: inScopePeriod.id });
+    await expectOk(approvePeriod({ periodId: inScopePeriod.id }));
     const [approved] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, inScopePeriod.id));
     expect(approved.status).toBe('approved');
 
     // R2-12: an out-of-scope period must look exactly like a missing one, not disclose that it exists.
-    await expect(rejectPeriod({ periodId: outOfScopePeriod.id, comment: 'nope' }))
-      .rejects.toThrow(/Period not found/);
+    await expectFailure(rejectPeriod({ periodId: outOfScopePeriod.id, comment: 'nope' }), 'not_found', /Period not found/);
 
     // R2-7: a supervisor's own period is refused outright (Forbidden) — nothing to mask.
-    await expect(approvePeriod({ periodId: ownPeriod.id }))
-      .rejects.toThrow(/Forbidden: You cannot approve your own timesheet/);
-    await expect(rejectPeriod({ periodId: ownPeriod.id, comment: 'x' }))
-      .rejects.toThrow(/Forbidden: You cannot reject your own timesheet/);
+    await expectFailure(approvePeriod({ periodId: ownPeriod.id }), 'forbidden', /Forbidden: You cannot approve your own timesheet/);
+    await expectFailure(rejectPeriod({ periodId: ownPeriod.id, comment: 'x' }), 'forbidden', /Forbidden: You cannot reject your own timesheet/);
   });
 
   // R2-7. -------------------------------------------------------------------
@@ -188,7 +214,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     }).returning();
 
     actingAs(asFake(admin));
-    await approvePeriod({ periodId: ownPeriod.id });
+    await expectOk(approvePeriod({ periodId: ownPeriod.id }));
 
     const [approved] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, ownPeriod.id));
     expect(approved.status).toBe('approved');
@@ -198,7 +224,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const [ownPeriod2] = await db.insert(schema.timesheetPeriods).values({
       userId: admin.id, periodStart: addMonths(periodStart, -1), status: 'submitted', submittedAt: new Date(),
     }).returning();
-    await rejectPeriod({ periodId: ownPeriod2.id, comment: 'self-correction needed' });
+    await expectOk(rejectPeriod({ periodId: ownPeriod2.id, comment: 'self-correction needed' }));
     const [rejected] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, ownPeriod2.id));
     expect(rejected.status).toBe('rejected');
     expect(rejected.reviewedBy).toBe(admin.id);
@@ -210,11 +236,11 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const target = await createTestUser({ role: 'employee' });
     actingAs(asFake(supervisor));
 
-    await expect(updateUser(target.id, { fullName: 'New Name' })).rejects.toThrow(/Admin role required/);
-    await expect(createUser({ email: `new-${Date.now()}@bytime.dev`, fullName: 'New User' })).rejects.toThrow(/Admin role required/);
-    await expect(createApiKey({ name: 'test key' })).rejects.toThrow(/Admin role required/);
-    await expect(bulkImportEmployees([])).rejects.toThrow(/Admin role required/);
-    await expect(startCheckout('starter')).rejects.toThrow(/Admin role required/);
+    await expectFailure(updateUser(target.id, { fullName: 'New Name' }), 'forbidden', /Admin role required/);
+    await expectFailure(createUser({ email: `new-${Date.now()}@bytime.dev`, fullName: 'New User' }), 'forbidden', /Admin role required/);
+    await expectFailure(createApiKey({ name: 'test key' }), 'forbidden', /Admin role required/);
+    await expectFailure(bulkImportEmployees([]), 'forbidden', /Admin role required/);
+    await expectFailure(startCheckout('starter'), 'forbidden', /Admin role required/);
     await expect(listChargeCodes()).rejects.toThrow(/Admin role required/);
   });
 
@@ -223,8 +249,8 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const admin = await createTestUser({ role: 'admin' });
     actingAs(asFake(admin));
 
-    await expect(updateUser(admin.id, { role: 'employee' })).rejects.toThrow(/cannot change your own role/i);
-    await expect(updateUser(admin.id, { isActive: false })).rejects.toThrow(/cannot deactivate your own account/i);
+    await expectFailure(updateUser(admin.id, { role: 'employee' }), 'forbidden', /cannot change your own role/i);
+    await expectFailure(updateUser(admin.id, { isActive: false }), 'forbidden', /cannot deactivate your own account/i);
   });
 
   it('5b. nobody can demote the last active admin — enforced from DB truth, not the session', async () => {
@@ -238,22 +264,37 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const soleAdmin = await createTestUser({ role: 'admin' });
     const staleActor = await createTestUser({ role: 'employee' });
     actingAs({ id: staleActor.id, role: 'admin', email: staleActor.email, fullName: staleActor.fullName });
-    await expect(updateUser(soleAdmin.id, { role: 'employee' })).rejects.toThrow(/access has changed/i);
-    await expect(updateUser(soleAdmin.id, { isActive: false })).rejects.toThrow(/access has changed/i);
+    await expectFailure(updateUser(soleAdmin.id, { role: 'employee' }), 'forbidden', /access has changed/i);
+    await expectFailure(updateUser(soleAdmin.id, { isActive: false }), 'forbidden', /access has changed/i);
     expect(await activeAdminCount()).toBe(1);
 
-    // (b) With the fresh check in front, the last-admin count only matters when two admins demote
-    // each other at the same moment. Exactly one may win; an active admin must always remain.
-    const otherAdmin = await createTestUser({ role: 'admin' });
-    // auth() reads the session synchronously when each call starts, so each call gets its own actor.
-    actingAs(asFake(soleAdmin));
-    const first = updateUser(otherAdmin.id, { role: 'employee' });
-    actingAs(asFake(otherAdmin));
-    const second = updateUser(soleAdmin.id, { role: 'employee' });
-    const results = await Promise.allSettled([first, second]);
+    // (b) Two admins demote each other at the same moment, on separate connections (audit A3). Exactly one wins; the
+    // other gets the last-admin refusal — never a deadlock (40P01 would surface as a thrown, unexpected error and
+    // reject Promise.all). Several rounds, so an opposite-order lock shows up reliably.
+    writeClients.perCall = true;
+    try {
+      for (let round = 0; round < 5; round++) {
+        await cleanupTestData();
+        const adminA = await createTestUser({ role: 'admin' });
+        const adminB = await createTestUser({ role: 'admin' });
+        // Each call carries its own actor through every await (AsyncLocalStorage) — never a shared, mutable session.
+        const first = actorStore.run(asFake(adminA), () => updateUser(adminB.id, { role: 'employee' }));
+        const second = actorStore.run(asFake(adminB), () => updateUser(adminA.id, { role: 'employee' }));
+        const results = await Promise.all([first, second]); // ActionResults; a thrown error (deadlock) fails the test
 
-    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
-    expect(await activeAdminCount()).toBe(1);
+        const tag = `round ${round}: ${JSON.stringify(results)}`;
+        expect(results.filter((r) => r.ok), tag).toHaveLength(1);
+        expect(results.find((r) => !r.ok), tag).toMatchObject({
+          ok: false,
+          code: 'forbidden',
+          error: expect.stringMatching(/last active admin|access has changed/i),
+        });
+        expect(await activeAdminCount(), tag).toBe(1);
+      }
+    } finally {
+      writeClients.perCall = false;
+      await Promise.all(writeClients.open.splice(0).map((c) => c.end()));
+    }
   });
 
   // 6. ---------------------------------------------------------------------
@@ -271,13 +312,13 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const todayIndex = diffDays(periodStart, todayFixture());
 
     actingAs(asFake(employee));
-    await saveTimesheetBatch({
+    await expectOk(saveTimesheetBatch({
       // @ts-expect-error — simulating a malicious/legacy client that still sends userId;
       // the action no longer declares this param, so it must be silently ignored.
       userId: otherEmployee.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 4, isEdit: false, isLateEntry: false }],
-    });
+    }));
 
     const rows = await db.select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.chargeCodeId, chargeCode.id));
     expect(rows).toHaveLength(1);
@@ -369,8 +410,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const db = getTestDb();
 
     actingAs(asFake(admin));
-    const result = await adminResetPassword({ targetUserId: target.id, newPassword: 'BrandNewPass123!' });
-    expect(result.success).toBe(true);
+    await expectOk(adminResetPassword({ targetUserId: target.id, newPassword: 'BrandNewPass123!' }));
 
     const [updated] = await db.select({ sessionVersion: schema.users.sessionVersion }).from(schema.users).where(eq(schema.users.id, target.id));
     expect(updated.sessionVersion).toBe((target.sessionVersion ?? 1) + 1);

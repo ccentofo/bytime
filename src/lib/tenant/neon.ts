@@ -1,6 +1,8 @@
 import 'server-only';
 import postgres from 'postgres';
 import { tenantDatabaseName } from './db-name';
+import { tenantDbHistoryRetentionSeconds } from './lifecycle-config';
+import { isLoopbackUrl } from './loopback';
 
 const NEON_API_BASE = 'https://console.neon.tech/api/v2';
 // How long to wait for Neon to finish creating the project's branch/role/database/compute.
@@ -33,6 +35,8 @@ type NeonCreateProjectResponse = {
  *    through a transaction-mode pooler).
  *  - Waits for the returned operations to finish before returning, as Neon requires before the
  *    first connection (the caller immediately connects to run migrations).
+ *  - `project.history_retention_seconds` (LB-D1, feature-plan-launch-blockers.md P6): 7 days of point-in-time
+ *    history unless NEON_HISTORY_RETENTION_SECONDS overrides it. Neon's own default is 1 day.
  */
 export interface CreatedTenantDatabase {
   dbUrl: string;
@@ -67,6 +71,7 @@ export async function createNeonDatabase(slug: string): Promise<CreatedTenantDat
         pg_version: 16,
         ...(regionId ? { region_id: regionId } : {}),
         branch: { database_name: tenantDatabaseName(slug) },
+        history_retention_seconds: tenantDbHistoryRetentionSeconds(),
       },
     }),
   });
@@ -132,6 +137,14 @@ function withHost(connectionUri: string, host: string): string {
 }
 
 /**
+ * The admin connection createLocalDevDatabase actually uses (DEV_TENANT_ADMIN_DATABASE_URL takes precedence over
+ * CONTROL_PLANE_DATABASE_URL). Exported so `provision:tenant` checks the SAME URL before running without a Neon key.
+ */
+export function localDevAdminUrl(env: Record<string, string | undefined> = process.env): string {
+  return env.DEV_TENANT_ADMIN_DATABASE_URL ?? env.CONTROL_PLANE_DATABASE_URL ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime';
+}
+
+/**
  * DEV-ONLY: create a local Postgres database for a tenant and return its connection URL.
  * Used when NEON_API_KEY is absent in non-production, so signup/provisioning can be exercised
  * against local Postgres. The admin connection comes from DEV_TENANT_ADMIN_DATABASE_URL, else
@@ -139,10 +152,13 @@ function withHost(connectionUri: string, host: string): string {
  * provisionTenant (isValidSlug), so the derived identifier is safe to interpolate.
  */
 async function createLocalDevDatabase(slug: string): Promise<CreatedTenantDatabase> {
-  const adminUrl =
-    process.env.DEV_TENANT_ADMIN_DATABASE_URL ??
-    process.env.CONTROL_PLANE_DATABASE_URL ??
-    'postgresql://bytime:bytime_dev@localhost:5432/bytime';
+  const adminUrl = localDevAdminUrl();
+  // feature-plan-launch-blockers.md P5: covers every caller (provision:tenant, waitlist provision, signup in a
+  // misconfigured env) — a tenant database is never created on a non-local server without a Neon project.
+  if (!isLoopbackUrl(adminUrl)) {
+    throw new Error('Refusing to create a local tenant database on a non-loopback server (NEON_API_KEY is not set). '
+      + 'Set NEON_API_KEY, or point DEV_TENANT_ADMIN_DATABASE_URL at a local Postgres.');
+  }
 
   const dbName = tenantDatabaseName(slug); // same naming rule as production (see db-name.ts)
 
@@ -278,4 +294,59 @@ export async function findNeonProjectIdByName(name: string): Promise<string | nu
   const data = (await res.json()) as { projects?: Array<{ id: string; name: string }> };
   const match = (data.projects ?? []).find((p) => p.name === name);
   return match?.id ?? null;
+}
+
+/**
+ * LB-D1 backfill (feature-plan-launch-blockers.md P6): read a project's `history_retention_seconds`. 404 → 'not-found'
+ * (the caller decides whether that is a confirmed absence); any other failure throws.
+ */
+export async function getNeonHistoryRetention(projectId: string): Promise<number | 'not-found'> {
+  const apiKey = process.env.NEON_API_KEY;
+  if (!apiKey) throw new Error('NEON_API_KEY is not set — cannot read Neon projects.');
+  const res = await fetch(`${NEON_API_BASE}/projects/${encodeURIComponent(projectId)}`, {
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+  });
+  if (res.status === 404) return 'not-found';
+  if (!res.ok) throw new Error(`Neon project lookup failed: ${res.status} ${await res.text()}`);
+  const data = (await res.json()) as { project?: { history_retention_seconds?: number } };
+  return data.project?.history_retention_seconds ?? 0;
+}
+
+/** LB-D1 backfill: `PATCH /projects/{id}` with `project.history_retention_seconds`. 404 → 'not-found'; else throws. */
+export async function setNeonHistoryRetention(projectId: string, seconds: number): Promise<'updated' | 'not-found'> {
+  const apiKey = process.env.NEON_API_KEY;
+  if (!apiKey) throw new Error('NEON_API_KEY is not set — cannot update Neon projects.');
+  const res = await fetch(`${NEON_API_BASE}/projects/${encodeURIComponent(projectId)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ project: { history_retention_seconds: seconds } }),
+  });
+  if (res.status === 404) return 'not-found';
+  if (!res.ok) throw new Error(`Neon retention update failed: ${res.status} ${await res.text()}`);
+  return 'updated';
+}
+
+const NEON_LIST_PAGE_LIMIT = 400; // GET /projects `limit` max (api-docs.neon.tech listprojects, confirmed 2026-10-22)
+const NEON_LIST_MAX_PAGES = 100;
+
+/**
+ * LB-D2 quota check (feature-plan-launch-blockers.md P5): how many projects the Neon account holds. Paginates
+ * `GET /projects?limit=400` with the returned `pagination.cursor` until a short page. Any failure throws.
+ */
+export async function countNeonProjects(): Promise<number> {
+  const apiKey = process.env.NEON_API_KEY;
+  if (!apiKey) throw new Error('NEON_API_KEY is not set — cannot count Neon projects.');
+  let total = 0;
+  let cursor: string | undefined;
+  for (let page = 0; page < NEON_LIST_MAX_PAGES; page++) {
+    const qs = new URLSearchParams({ limit: String(NEON_LIST_PAGE_LIMIT), ...(cursor ? { cursor } : {}) });
+    const res = await fetch(`${NEON_API_BASE}/projects?${qs}`, { headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' } });
+    if (!res.ok) throw new Error(`Neon project list failed: ${res.status} ${await res.text()}`);
+    const data = (await res.json()) as { projects?: unknown[]; pagination?: { cursor?: string } };
+    const n = data.projects?.length ?? 0;
+    total += n;
+    if (n < NEON_LIST_PAGE_LIMIT || !data.pagination?.cursor || data.pagination.cursor === cursor) return total;
+    cursor = data.pagination.cursor;
+  }
+  throw new Error(`Neon project list did not end after ${NEON_LIST_MAX_PAGES} pages.`);
 }

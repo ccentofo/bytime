@@ -5,6 +5,9 @@ import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import { requireSession, requireAdminFresh } from '@/lib/session';
+import { verifyCurrentPassword } from '@/server/internal/login-attempts';
+import { UserFacingError } from '@/lib/errors';
+import { userAction, type ActionResult } from '@/lib/action-result';
 
 // ---------------------------------------------------------------------------
 // Password Validation
@@ -33,60 +36,63 @@ function validatePassword(password: string): string | null {
 export async function changePassword(data: {
   currentPassword: string;
   newPassword: string;
-}): Promise<{ success: boolean; error?: string }> {
-  const actor = await requireSession();
-  const db = await getDbForAuth();
-  // Validate new password
-  const validationError = validatePassword(data.newPassword);
-  if (validationError) {
-    return { success: false, error: validationError };
-  }
+}): Promise<ActionResult<void>> {
+  return userAction(async () => {
+    const actor = await requireSession();
+    const db = await getDbForAuth();
+    // Validate new password
+    const validationError = validatePassword(data.newPassword);
+    if (validationError) {
+      throw new UserFacingError(validationError);
+    }
 
-  // Get current user
-  const [user] = await db
-    .select({ id: users.id, passwordHash: users.passwordHash })
-    .from(users)
-    .where(eq(users.id, actor.id));
+    // Get current user
+    const [user] = await db
+      .select({ id: users.id, passwordHash: users.passwordHash })
+      .from(users)
+      .where(eq(users.id, actor.id));
 
-  if (!user) {
-    return { success: false, error: 'User not found.' };
-  }
+    if (!user) {
+      throw new UserFacingError('User not found.', 'not_found');
+    }
 
-  if (!user.passwordHash) {
-    return { success: false, error: 'Account has no password set. Contact your administrator.' };
-  }
+    if (!user.passwordHash) {
+      throw new UserFacingError('Account has no password set. Contact your administrator.');
+    }
 
-  // Verify current password
-  const isValid = await bcrypt.compare(data.currentPassword, user.passwordHash);
-  if (!isValid) {
-    return { success: false, error: 'Current password is incorrect.' };
-  }
+    // Verify current password — lockout checked before bcrypt; a wrong password counts toward the sign-in lockout
+    // (shared login_attempts counter, intended: a stolen session can't be used to guess the password freely).
+    const reauth = await verifyCurrentPassword(db, actor.email, user.passwordHash, data.currentPassword);
+    if (!reauth.ok) {
+      throw new UserFacingError(reauth.error);
+    }
 
-  // Check new password is different from current
-  const isSame = await bcrypt.compare(data.newPassword, user.passwordHash);
-  if (isSame) {
-    return { success: false, error: 'New password must be different from your current password.' };
-  }
+    // Check new password is different from current
+    const isSame = await bcrypt.compare(data.newPassword, user.passwordHash);
+    if (isSame) {
+      throw new UserFacingError('New password must be different from your current password.');
+    }
 
-  // Hash and save new password + increment session version
-  const newHash = await bcrypt.hash(data.newPassword, 12);
+    // Hash and save new password + increment session version
+    const newHash = await bcrypt.hash(data.newPassword, 12);
 
-  // Get current session version
-  const [currentUser] = await db
-    .select({ sessionVersion: users.sessionVersion })
-    .from(users)
-    .where(eq(users.id, actor.id));
+    // Get current session version
+    const [currentUser] = await db
+      .select({ sessionVersion: users.sessionVersion })
+      .from(users)
+      .where(eq(users.id, actor.id));
 
-  await db.update(users)
-    .set({
-      passwordHash: newHash,
-      passwordChangedAt: new Date(),
-      updatedAt: new Date(),
-      sessionVersion: (currentUser?.sessionVersion ?? 1) + 1,
-    })
-    .where(eq(users.id, actor.id));
+    await db.update(users)
+      .set({
+        passwordHash: newHash,
+        passwordChangedAt: new Date(),
+        updatedAt: new Date(),
+        sessionVersion: (currentUser?.sessionVersion ?? 1) + 1,
+      })
+      .where(eq(users.id, actor.id));
 
-  return { success: true };
+    return;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -100,38 +106,40 @@ export async function changePassword(data: {
 export async function adminResetPassword(data: {
   targetUserId: string;
   newPassword: string;
-}): Promise<{ success: boolean; error?: string }> {
-  await requireAdminFresh();
-  const db = await getDbForAuth();
-  // Validate new password
-  const validationError = validatePassword(data.newPassword);
-  if (validationError) {
-    return { success: false, error: validationError };
-  }
+}): Promise<ActionResult<void>> {
+  return userAction(async () => {
+    await requireAdminFresh();
+    const db = await getDbForAuth();
+    // Validate new password
+    const validationError = validatePassword(data.newPassword);
+    if (validationError) {
+      throw new UserFacingError(validationError);
+    }
 
-  // Verify target user exists
-  const [target] = await db
-    .select({ id: users.id, sessionVersion: users.sessionVersion })
-    .from(users)
-    .where(eq(users.id, data.targetUserId));
+    // Verify target user exists
+    const [target] = await db
+      .select({ id: users.id, sessionVersion: users.sessionVersion })
+      .from(users)
+      .where(eq(users.id, data.targetUserId));
 
-  if (!target) {
-    return { success: false, error: 'User not found.' };
-  }
+    if (!target) {
+      throw new UserFacingError('User not found.', 'not_found');
+    }
 
-  // Hash and save new password + increment session version (invalidates all existing sessions)
-  const newHash = await bcrypt.hash(data.newPassword, 12);
+    // Hash and save new password + increment session version (invalidates all existing sessions)
+    const newHash = await bcrypt.hash(data.newPassword, 12);
 
-  await db.update(users)
-    .set({
-      passwordHash: newHash,
-      passwordChangedAt: new Date(),
-      updatedAt: new Date(),
-      sessionVersion: (target.sessionVersion ?? 1) + 1,
-    })
-    .where(eq(users.id, data.targetUserId));
+    await db.update(users)
+      .set({
+        passwordHash: newHash,
+        passwordChangedAt: new Date(),
+        updatedAt: new Date(),
+        sessionVersion: (target.sessionVersion ?? 1) + 1,
+      })
+      .where(eq(users.id, data.targetUserId));
 
-  return { success: true };
+    return;
+  });
 }
 
 // ---------------------------------------------------------------------------

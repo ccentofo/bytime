@@ -1,14 +1,16 @@
 'use server';
 
-import { getDb, getDbForWrite } from '@/db';
+import { getDb, getDbForAuth, getDbForWrite } from '@/db';
 import { users } from '@/db/schema';
 import bcrypt from 'bcryptjs';
-import { eq, and, ne, sql } from 'drizzle-orm';
-import { requireAdmin, requireAdminFresh } from '@/lib/session';
+import { eq, and, sql } from 'drizzle-orm';
+import { requireAdmin, requireAdminFresh, AuthorizationError } from '@/lib/session';
 import { unlockAccount } from '@/server/internal/login-attempts';
 import { SAFE_USER_COLUMNS } from '@/server/internal/users';
 import { assertSeatsAvailable } from '@/server/internal/seats';
 import { validateEmail, validateRequired, validateStringLength, validateEnum } from '@/lib/validation';
+import { UserFacingError } from '@/lib/errors';
+import { userAction, type ActionResult } from '@/lib/action-result';
 
 async function assertSeatAvailable(): Promise<void> {
   await assertSeatsAvailable(1);
@@ -28,61 +30,26 @@ export async function createUser(data: {
   fullName: string;
   role?: 'admin' | 'supervisor' | 'employee';
 }) {
-  const db = await getDbForWrite();
-  await requireAdminFresh();
-  await assertSeatAvailable();
-  const validatedData = {
-    email: validateEmail(data.email),
-    fullName: validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255),
-    role: data.role ? validateEnum(data.role, 'Role', USER_ROLES) : 'employee' as const,
-  };
-  const rows = await db.insert(users).values(validatedData).returning(SAFE_USER_COLUMNS);
-  return rows[0];
+  return userAction(async () => {
+    await requireAdminFresh();
+    const db = await getDbForWrite();
+    await assertSeatAvailable();
+    const validatedData = {
+      email: validateEmail(data.email),
+      fullName: validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255),
+      role: data.role ? validateEnum(data.role, 'Role', USER_ROLES) : 'employee' as const,
+    };
+    const rows = await db.insert(users).values(validatedData).returning(SAFE_USER_COLUMNS);
+    return rows[0];
+  });
 }
 
-export async function unlockUserAccount(email: string): Promise<void> {
-  await requireAdmin();
-  await unlockAccount(email);
-}
-
-/**
- * Seed demo users with a known default password. Development/demo convenience only —
- * refuses outright in production so a known-password account can never be created there (F12).
- */
-export async function seedUsers() {
-  await requireAdmin();
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('seedUsers is disabled in production.');
-  }
-  const db = await getDbForWrite();
-  // Hash the default dev password for all seed users
-  const defaultPassword = 'Password123!';
-  const hash = await bcrypt.hash(defaultPassword, 12);
-
-  const seedData = [
-    { email: 'admin@cadenzpoint.dev', fullName: 'Admin User', role: 'admin' as const, passwordHash: hash },
-    { email: 'jane.smith@cadenzpoint.dev', fullName: 'Jane Smith', role: 'employee' as const, passwordHash: hash },
-    { email: 'john.doe@cadenzpoint.dev', fullName: 'John Doe', role: 'employee' as const, passwordHash: hash },
-    { email: 'sarah.wilson@cadenzpoint.dev', fullName: 'Sarah Wilson', role: 'supervisor' as const, passwordHash: hash },
-  ];
-
-  // Upsert: update password_hash for existing users, insert new ones
-  const results = [];
-  for (const user of seedData) {
-    const existing = await db.select({ id: users.id }).from(users).where(eq(users.email, user.email));
-    if (existing.length > 0) {
-      const updated = await db.update(users)
-        .set({ passwordHash: user.passwordHash })
-        .where(eq(users.email, user.email))
-        .returning(SAFE_USER_COLUMNS);
-      results.push(updated[0]);
-    } else {
-      const inserted = await db.insert(users).values(user).returning(SAFE_USER_COLUMNS);
-      results.push(inserted[0]);
-    }
-  }
-
-  return results;
+export async function unlockUserAccount(email: string): Promise<ActionResult<void>> {
+  return userAction(async () => {
+    await requireAdminFresh();
+    // Credential bookkeeping through the auth client, as before: an admin can unlock a user in any non-closed mode.
+    await unlockAccount(await getDbForAuth(), email);
+  });
 }
 
 /**
@@ -104,93 +71,105 @@ export async function updateUser(id: string, data: {
   isActive?: boolean;
   flsaExempt?: boolean;
 }) {
-  const actor = await requireAdminFresh();
-  const db = await getDbForWrite();
+  return userAction(async () => {
+    const actor = await requireAdminFresh();
+    const db = await getDbForWrite();
 
-  // Server-action arguments are untrusted JSON. The last-admin and self-deactivation checks
-  // below key on `isActive === false`, and Postgres would happily coerce "false" or 0 to false,
-  // so anything that isn't a real boolean is rejected up front.
-  if (data.isActive !== undefined && typeof data.isActive !== 'boolean') {
-    throw new Error('Active status must be true or false.');
-  }
-  if (data.flsaExempt !== undefined && typeof data.flsaExempt !== 'boolean') {
-    throw new Error('FLSA exempt must be true or false.');
-  }
-
-  // An admin cannot change their own role or deactivate themselves.
-  if (actor.id === id) {
-    if (data.role !== undefined && data.role !== actor.role) {
-      throw new Error('Forbidden: You cannot change your own role.');
+    // Server-action arguments are untrusted JSON. The last-admin and self-deactivation checks
+    // below key on `isActive === false`, and Postgres would happily coerce "false" or 0 to false,
+    // so anything that isn't a real boolean is rejected up front.
+    if (data.isActive !== undefined && typeof data.isActive !== 'boolean') {
+      throw new UserFacingError('Active status must be true or false.');
     }
-    if (data.isActive === false) {
-      throw new Error('Forbidden: You cannot deactivate your own account.');
+    if (data.flsaExempt !== undefined && typeof data.flsaExempt !== 'boolean') {
+      throw new UserFacingError('FLSA exempt must be true or false.');
     }
-  }
-
-  const updateData: Record<string, unknown> = { updatedAt: new Date() };
-  if (data.fullName !== undefined) {
-    updateData.fullName = validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255);
-  }
-  if (data.email !== undefined) {
-    updateData.email = validateEmail(data.email);
-  }
-  if (data.role !== undefined) {
-    updateData.role = validateEnum(data.role, 'Role', USER_ROLES);
-  }
-  if (data.isActive !== undefined) {
-    updateData.isActive = data.isActive;
-  }
-  if (data.flsaExempt !== undefined) {
-    updateData.flsaExempt = data.flsaExempt;
-  }
-
-  const shouldInvalidateSession = data.role !== undefined || data.isActive !== undefined;
-  const demotingRole = data.role !== undefined && data.role !== 'admin';
-  const deactivating = data.isActive === false;
-  const activating = data.isActive === true;
-
-  const result = await db.transaction(async (tx) => {
-    if (activating) {
-      // Reactivating a user takes a seat, same as creating one (R2-11).
-      const [target] = await tx.select({ isActive: users.isActive }).from(users).where(eq(users.id, id)).for('update');
-      if (target && !target.isActive) await assertSeatsAvailable(1, tx);
+    // Audit R4: role and active status change in separate calls (the UI never sends both). Together, e.g.
+    // `{ isActive: true, role: 'employee' }`, the reactivation branch would lock the target before the admin rows —
+    // the opposite order to the last-admin lock below, which can deadlock (A3).
+    if (data.role !== undefined && data.isActive !== undefined) {
+      throw new UserFacingError('Change the role and the active status separately.');
     }
 
-    if (demotingRole || deactivating) {
-      const [target] = await tx
-        .select({ role: users.role, isActive: users.isActive })
-        .from(users)
-        .where(eq(users.id, id))
-        .for('update');
-
-      if (target?.role === 'admin' && target.isActive) {
-        // Lock the OTHER active admin rows too, so a concurrent transaction demoting one of
-        // THEM has to wait for this one to finish before it can (correctly) see the new count.
-        const otherActiveAdmins = await tx
-          .select({ id: users.id })
-          .from(users)
-          .where(and(eq(users.role, 'admin'), eq(users.isActive, true), ne(users.id, id)))
-          .for('update');
-        if (otherActiveAdmins.length === 0) {
-          throw new Error(
-            demotingRole
-              ? 'Forbidden: Cannot change the role of the last active admin.'
-              : 'Forbidden: Cannot deactivate the last active admin.'
-          );
-        }
+    // An admin cannot change their own role or deactivate themselves.
+    if (actor.id === id) {
+      if (data.role !== undefined && data.role !== actor.role) {
+        throw new AuthorizationError('forbidden', 'Forbidden: You cannot change your own role.');
+      }
+      if (data.isActive === false) {
+        throw new AuthorizationError('forbidden', 'Forbidden: You cannot deactivate your own account.');
       }
     }
 
-    if (shouldInvalidateSession) {
-      // Increment in SQL so two concurrent edits can't both write the same bumped value.
-      updateData.sessionVersion = sql`${users.sessionVersion} + 1`;
+    const updateData: Record<string, unknown> = { updatedAt: new Date() };
+    if (data.fullName !== undefined) {
+      updateData.fullName = validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255);
+    }
+    if (data.email !== undefined) {
+      updateData.email = validateEmail(data.email);
+    }
+    if (data.role !== undefined) {
+      updateData.role = validateEnum(data.role, 'Role', USER_ROLES);
+    }
+    if (data.isActive !== undefined) {
+      updateData.isActive = data.isActive;
+    }
+    if (data.flsaExempt !== undefined) {
+      updateData.flsaExempt = data.flsaExempt;
     }
 
-    const rows = await tx.update(users).set(updateData).where(eq(users.id, id)).returning(SAFE_USER_COLUMNS);
-    return rows[0];
-  });
+    const shouldInvalidateSession = data.role !== undefined || data.isActive !== undefined;
+    const demotingRole = data.role !== undefined && data.role !== 'admin';
+    const deactivating = data.isActive === false;
+    const activating = data.isActive === true;
 
-  return result;
+    const result = await db.transaction(async (tx) => {
+      if (activating) {
+        // Reactivating a user takes a seat, same as creating one (R2-11).
+        const [target] = await tx.select({ isActive: users.isActive }).from(users).where(eq(users.id, id)).for('update');
+        if (target && !target.isActive) await assertSeatsAvailable(1, tx);
+      }
+
+      if (demotingRole || deactivating) {
+        // Lock EVERY active admin row in one statement, in id order (launch-blockers audit A3). Two admins demoting
+        // each other then queue on the same rows in the same order — never the opposite-order deadlock (40P01) of
+        // "lock the target, then the others" — and the waiter re-reads under READ COMMITTED, so it no longer counts
+        // the admin the first transaction just demoted and gets the last-admin refusal.
+        const activeAdmins = await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(and(eq(users.role, 'admin'), eq(users.isActive, true)))
+          .orderBy(users.id)
+          .for('update');
+        const [target] = await tx
+          .select({ role: users.role, isActive: users.isActive })
+          .from(users)
+          .where(eq(users.id, id))
+          .for('update');
+
+        if (target?.role === 'admin' && target.isActive) {
+          const otherActiveAdmins = activeAdmins.filter((a) => a.id !== id);
+          if (otherActiveAdmins.length === 0) {
+            throw new AuthorizationError('forbidden', 
+              demotingRole
+                ? 'Forbidden: Cannot change the role of the last active admin.'
+                : 'Forbidden: Cannot deactivate the last active admin.'
+            );
+          }
+        }
+      }
+
+      if (shouldInvalidateSession) {
+        // Increment in SQL so two concurrent edits can't both write the same bumped value.
+        updateData.sessionVersion = sql`${users.sessionVersion} + 1`;
+      }
+
+      const rows = await tx.update(users).set(updateData).where(eq(users.id, id)).returning(SAFE_USER_COLUMNS);
+      return rows[0];
+    });
+
+    return result;
+  });
 }
 
 export async function createUserWithPassword(data: {
@@ -199,18 +178,20 @@ export async function createUserWithPassword(data: {
   role: 'admin' | 'supervisor' | 'employee';
   password: string;
 }) {
-  const db = await getDbForWrite();
-  await requireAdminFresh();
-  await assertSeatAvailable();
-  const validatedEmail = validateEmail(data.email);
-  const validatedName = validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255);
-  const validatedRole = validateEnum(data.role, 'Role', USER_ROLES);
-  const hash = await bcrypt.hash(data.password, 12);
-  const rows = await db.insert(users).values({
-    email: validatedEmail,
-    fullName: validatedName,
-    role: validatedRole,
-    passwordHash: hash,
-  }).returning(SAFE_USER_COLUMNS);
-  return rows[0];
+  return userAction(async () => {
+    await requireAdminFresh();
+    const db = await getDbForWrite();
+    await assertSeatAvailable();
+    const validatedEmail = validateEmail(data.email);
+    const validatedName = validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255);
+    const validatedRole = validateEnum(data.role, 'Role', USER_ROLES);
+    const hash = await bcrypt.hash(data.password, 12);
+    const rows = await db.insert(users).values({
+      email: validatedEmail,
+      fullName: validatedName,
+      role: validatedRole,
+      passwordHash: hash,
+    }).returning(SAFE_USER_COLUMNS);
+    return rows[0];
+  });
 }

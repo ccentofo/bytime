@@ -15,12 +15,14 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
+import { runAction } from '@/lib/run-action';
 import { IconPlus, IconEdit } from '@tabler/icons-react';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import { createIndirectCode, updateIndirectCode, getIndirectChargeCodes, seedIndirectCodes } from '@/server/actions/indirect-codes';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { INDIRECT_CATEGORY_COLOR } from '@/lib/ui/status-colors';
+import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 type IndirectCode = {
   id: string;
@@ -73,6 +75,7 @@ const EMPTY_FORM: CodeForm = {
 };
 
 export function IndirectCodesClient({ initialCodes }: Props) {
+  const canWrite = useCanWrite();
   const [codes, setCodes] = useState<IndirectCode[]>(initialCodes);
   const [isPending, startTransition] = useTransition();
   const [modalOpen, setModalOpen] = useState(false);
@@ -102,45 +105,41 @@ export function IndirectCodesClient({ initialCodes }: Props) {
 
   function handleSubmit() {
     startTransition(async () => {
-      try {
-        setFormError(null);
-        if (!form.code || !form.name || !form.category) {
-          setFormError('Code, Name, and Category are required.');
-          return;
-        }
-
-        if (editingCode) {
-          await updateIndirectCode(editingCode.id, {
-            code: form.code,
-            name: form.name,
-            category: form.category as IndirectCode['category'],
-            description: form.description || undefined,
-            availableToAll: form.availableToAll,
-          });
-          notifications.show({ title: 'Code Updated', message: `${form.name} has been updated.`, color: 'success' });
-        } else {
-          await createIndirectCode({
-            code: form.code,
-            name: form.name,
-            category: form.category as IndirectCode['category'],
-            description: form.description || undefined,
-            availableToAll: form.availableToAll,
-          });
-          notifications.show({ title: 'Code Created', message: `${form.name} has been created.`, color: 'success' });
-        }
-
-        const refreshed = await getIndirectChargeCodes();
-        setCodes(refreshed as IndirectCode[]);
-        setModalOpen(false);
-      } catch (error) {
-        setFormError(String(error));
+      setFormError(null);
+      if (!form.code || !form.name || !form.category) {
+        setFormError('Code, Name, and Category are required.');
+        return;
       }
+
+      const fields = {
+        code: form.code,
+        name: form.name,
+        category: form.category as IndirectCode['category'],
+        description: form.description || undefined,
+        availableToAll: form.availableToAll,
+      };
+      // silent: the error is shown inside the form.
+      const result = editingCode
+        ? await runAction(updateIndirectCode(editingCode.id, fields), { silent: true })
+        : await runAction(createIndirectCode(fields), { silent: true });
+      if (!result.ok) {
+        setFormError(result.error);
+        return;
+      }
+      notifications.show(editingCode
+        ? { title: 'Code Updated', message: `${form.name} has been updated.`, color: 'success' }
+        : { title: 'Code Created', message: `${form.name} has been created.`, color: 'success' });
+
+      const refreshed = await getIndirectChargeCodes();
+      setCodes(refreshed as IndirectCode[]);
+      setModalOpen(false);
     });
   }
 
   function handleToggleActive(code: IndirectCode) {
     startTransition(async () => {
-      await updateIndirectCode(code.id, { isActive: !code.isActive });
+      const result = await runAction(updateIndirectCode(code.id, { isActive: !code.isActive }), { errorTitle: 'Couldn’t update code' });
+      if (!result.ok) return;
       const refreshed = await getIndirectChargeCodes();
       setCodes(refreshed as IndirectCode[]);
       notifications.show({
@@ -153,7 +152,8 @@ export function IndirectCodesClient({ initialCodes }: Props) {
 
   function handleSeedDefaults() {
     startTransition(async () => {
-      await seedIndirectCodes();
+      const result = await runAction(seedIndirectCodes(), { errorTitle: 'Couldn’t seed defaults' });
+      if (!result.ok) return;
       const refreshed = await getIndirectChargeCodes();
       setCodes(refreshed as IndirectCode[]);
       notifications.show({ title: 'Defaults Seeded', message: 'Default indirect charge codes have been created.', color: 'success' });
@@ -180,7 +180,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
         <Switch
           checked={row.original.isActive}
           onChange={() => handleToggleActive(row.original)}
-          disabled={isPending}
+          disabled={!canWrite || (isPending)}
           size="sm"
         />
       ),
@@ -200,7 +200,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
     enableRowActions: true,
     renderRowActions: ({ row }) => (
       <Tooltip label="Edit">
-        <ActionIcon variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit indirect code">
+        <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit indirect code">
           <IconEdit size={16} />
         </ActionIcon>
       </Tooltip>
@@ -219,12 +219,12 @@ export function IndirectCodesClient({ initialCodes }: Props) {
         title="Indirect Charge Codes"
         actions={
           <Group>
-            <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
+            <WriteButton leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
               Add Code
-            </Button>
-            <Button variant="default" onClick={handleSeedDefaults} loading={isPending}>
+            </WriteButton>
+            <WriteButton variant="default" onClick={handleSeedDefaults} loading={isPending}>
               Seed Defaults
-            </Button>
+            </WriteButton>
           </Group>
         }
       />
@@ -277,9 +277,9 @@ export function IndirectCodesClient({ initialCodes }: Props) {
           )}
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button onClick={handleSubmit} loading={isPending}>
+            <WriteButton onClick={handleSubmit} loading={isPending}>
               {editingCode ? 'Save Changes' : 'Create Code'}
-            </Button>
+            </WriteButton>
           </Group>
         </Stack>
       </Modal>

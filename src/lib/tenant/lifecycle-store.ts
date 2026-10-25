@@ -49,10 +49,13 @@ export interface AlertInput {
   detail?: Record<string, unknown>;
 }
 
-/** Raise (or bump) an unresolved alert. Deduplicated on (scope, kind, dedup_key) while unresolved. */
-export async function raiseAlert(db: AlertExecutor, alert: AlertInput, now: Date): Promise<void> {
+/**
+ * Raise (or bump) an unresolved alert. Deduplicated on (scope, kind, dedup_key) while unresolved. `opened` is true when
+ * this call created the alert (a new incident) rather than bumping an open one — immediate-email alerts send only then.
+ */
+export async function raiseAlert(db: AlertExecutor, alert: AlertInput, now: Date): Promise<{ opened: boolean }> {
   const scope = alert.tenantId ?? 'global';
-  await db.insert(opsAlerts).values({
+  const rows = await db.insert(opsAlerts).values({
     scope,
     tenantId: alert.tenantId,
     kind: alert.kind,
@@ -64,7 +67,8 @@ export async function raiseAlert(db: AlertExecutor, alert: AlertInput, now: Date
     target: [opsAlerts.scope, opsAlerts.kind, opsAlerts.dedupKey],
     targetWhere: isNull(opsAlerts.resolvedAt),
     set: { lastSeenAt: now, occurrences: sql`${opsAlerts.occurrences} + 1`, detail: alert.detail ?? null },
-  });
+  }).returning({ occurrences: opsAlerts.occurrences });
+  return { opened: rows[0]?.occurrences === 1 };
 }
 
 /** Auto-resolve a condition-based alert once its condition has cleared. */

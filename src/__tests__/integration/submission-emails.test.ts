@@ -8,7 +8,10 @@ import {
   createTestClin,
   assignUserToClin,
   cleanupTestData,
+  flushAfter,
+  expectOk,
 } from './helpers';
+import { tenantBaseUrl } from '@/lib/tenant/host';
 
 // ---------------------------------------------------------------------------
 // R2-10: submitPeriod previously emailed EVERY supervisor and admin in the
@@ -21,9 +24,23 @@ vi.mock('@/db', async (importOriginal) => ({
   getDb: async () => getTestDb(),
   // Write actions obtain their client through the write gate (feature-plan-terms-compliance-fixes.md §5.1).
   getDbForWrite: async () => getTestDb(),
+  // approve/reject use requireApproverFresh, which re-reads the role through getDbForAuth.
+  getDbForAuth: async () => getTestDb(),
 }));
 
-const tenantState = vi.hoisted(() => ({ requestSlug: 'test-tenant' }));
+const tenantState = vi.hoisted(() => ({ requestSlug: 'test-tenant', failNotificationPrep: false }));
+
+// Audit A12: lets a test make the post-commit notification preparation fail (a transient DB error).
+vi.mock('@/server/internal/notifications', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/server/internal/notifications')>();
+  return {
+    ...real,
+    isNotificationEnabled: async (...args: Parameters<typeof real.isNotificationEnabled>) => {
+      if (tenantState.failNotificationPrep) throw new Error('connection reset while preparing the email');
+      return real.isNotificationEnabled(...args);
+    },
+  };
+});
 
 vi.mock('@/lib/tenant/context', () => ({
   getTenantSlug: async () => tenantState.requestSlug,
@@ -51,19 +68,21 @@ vi.mock('@/auth', () => ({
 }));
 
 const emailState = vi.hoisted(() => ({
-  sendTimesheetSubmittedEmail: vi.fn(async (args: { supervisorEmail: string }) => { void args; }),
+  sendTimesheetSubmittedEmail: vi.fn(async (args: { supervisorEmail: string; appUrl: string }) => { void args; return { ok: true as const, id: 'test-message-id' }; }),
+  sendTimesheetApprovedEmail: vi.fn(async (args: { appUrl: string }) => { void args; return { ok: true as const, id: 'test-message-id' }; }),
+  sendTimesheetRejectedEmail: vi.fn(async (args: { appUrl: string }) => { void args; return { ok: true as const, id: 'test-message-id' }; }),
 }));
 
 vi.mock('@/lib/email/send', () => ({
   sendTimesheetSubmittedEmail: emailState.sendTimesheetSubmittedEmail,
-  sendTimesheetApprovedEmail: vi.fn(async () => undefined),
-  sendTimesheetRejectedEmail: vi.fn(async () => undefined),
-  sendDailyReminderEmail: vi.fn(async () => undefined),
-  sendSubmissionDeadlineEmail: vi.fn(async () => undefined),
-  sendPasswordResetEmail: vi.fn(async () => undefined),
+  sendTimesheetApprovedEmail: emailState.sendTimesheetApprovedEmail,
+  sendTimesheetRejectedEmail: emailState.sendTimesheetRejectedEmail,
+  sendDailyReminderEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendSubmissionDeadlineEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
+  sendPasswordResetEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
 }));
 
-import { submitPeriod } from '@/server/actions/periods';
+import { submitPeriod, approvePeriod, rejectPeriod } from '@/server/actions/periods';
 
 function actingAs(user: Awaited<ReturnType<typeof createTestUser>>) {
   sessionState.user = { id: user.id, role: user.role, email: user.email, fullName: user.fullName };
@@ -74,6 +93,8 @@ describe('Submission notifications are scoped (R2-10)', () => {
     sessionState.user = null;
     await cleanupTestData();
     emailState.sendTimesheetSubmittedEmail.mockClear();
+    emailState.sendTimesheetApprovedEmail.mockClear();
+    emailState.sendTimesheetRejectedEmail.mockClear();
   });
 
   it('notifies only an in-scope, active supervisor — not an out-of-scope or inactive one', async () => {
@@ -111,9 +132,14 @@ describe('Submission notifications are scoped (R2-10)', () => {
     });
 
     actingAs(employee);
-    await submitPeriod({ periodStart });
+    await expectOk(submitPeriod({ periodStart }));
+    await flushAfter(); // sends are scheduled with after() (feature-plan-launch-blockers.md P1)
 
     const notifiedEmails = emailState.sendTimesheetSubmittedEmail.mock.calls.map((call) => call[0].supervisorEmail);
+    // Every link goes to the submitter's workspace host, never the apex.
+    for (const call of emailState.sendTimesheetSubmittedEmail.mock.calls) {
+      expect(call[0].appUrl).toBe(tenantBaseUrl('test-tenant'));
+    }
     expect(notifiedEmails).toContain(inScopeSupervisor.email);
     expect(notifiedEmails).toContain(activeAdmin.email);
     expect(notifiedEmails).not.toContain(outOfScopeSupervisor.email);
@@ -139,9 +165,59 @@ describe('Submission notifications are scoped (R2-10)', () => {
     await db.insert(schema.timesheetPeriods).values({ userId: submittingAdmin.id, periodStart, status: 'rejected' });
 
     actingAs(submittingAdmin);
-    await submitPeriod({ periodStart });
+    await expectOk(submitPeriod({ periodStart }));
+    await flushAfter();
 
     const notifiedEmails = emailState.sendTimesheetSubmittedEmail.mock.calls.map((call) => call[0].supervisorEmail);
     expect(notifiedEmails).toEqual([otherAdmin.email]);
+  });
+  it('approval and rejection emails link to the workspace host (tenantBaseUrl), not the apex', async () => {
+    await cleanupTestData();
+    const db = getTestDb();
+    const contract = await createTestContract();
+    const clin = await createTestClin(contract.id);
+    const employee = await createTestUser({ role: 'employee' });
+    await assignUserToClin(employee.id, clin.id);
+    const admin = await createTestUser({ role: 'admin' });
+
+    const [approveMe] = await db.insert(schema.timesheetPeriods)
+      .values({ userId: employee.id, periodStart: '2020-01-01', status: 'submitted', submittedAt: new Date() }).returning();
+    const [rejectMe] = await db.insert(schema.timesheetPeriods)
+      .values({ userId: employee.id, periodStart: '2020-01-16', status: 'submitted', submittedAt: new Date() }).returning();
+
+    actingAs(admin);
+    await expectOk(approvePeriod({ periodId: approveMe.id }));
+    await expectOk(rejectPeriod({ periodId: rejectMe.id, comment: 'Please fix Tuesday.' }));
+    await flushAfter();
+
+    expect(emailState.sendTimesheetApprovedEmail).toHaveBeenCalledTimes(1);
+    expect(emailState.sendTimesheetApprovedEmail.mock.calls[0][0].appUrl).toBe(tenantBaseUrl('test-tenant'));
+    expect(emailState.sendTimesheetRejectedEmail).toHaveBeenCalledTimes(1);
+    expect(emailState.sendTimesheetRejectedEmail.mock.calls[0][0].appUrl).toBe(tenantBaseUrl('test-tenant'));
+  });
+
+  it('audit A12: a failure preparing the approve/reject email still reports the committed decision as done', async () => {
+    await cleanupTestData();
+    const db = getTestDb();
+    const employee = await createTestUser({ role: 'employee' });
+    const admin = await createTestUser({ role: 'admin' });
+    const [approveMe] = await db.insert(schema.timesheetPeriods)
+      .values({ userId: employee.id, periodStart: '2020-02-01', status: 'submitted', submittedAt: new Date() }).returning();
+    const [rejectMe] = await db.insert(schema.timesheetPeriods)
+      .values({ userId: employee.id, periodStart: '2020-02-16', status: 'submitted', submittedAt: new Date() }).returning();
+
+    actingAs(admin);
+    tenantState.failNotificationPrep = true;
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expectOk(approvePeriod({ periodId: approveMe.id }));
+      await expectOk(rejectPeriod({ periodId: rejectMe.id, comment: 'Please fix Tuesday.' }));
+    } finally {
+      tenantState.failNotificationPrep = false;
+      logged.mockRestore();
+    }
+    const rows = await db.select({ id: schema.timesheetPeriods.id, status: schema.timesheetPeriods.status }).from(schema.timesheetPeriods);
+    expect(rows.find((r) => r.id === approveMe.id)?.status).toBe('approved');
+    expect(rows.find((r) => r.id === rejectMe.id)?.status).toBe('rejected');
   });
 });

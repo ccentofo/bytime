@@ -2,6 +2,7 @@ import { Center, Stack, Title, Text, Alert, ThemeIcon, Container, Button } from 
 import { IconCreditCard, IconDownload } from '@tabler/icons-react';
 import { getTenantBillingInfo } from '@/server/actions/billing';
 import { BillingClient } from './admin/billing/BillingClient';
+import { SignOutButton } from '@/components/auth/SignOutButton';
 
 /**
  * Billing wall shown to an ADMIN on a `billing_only` (suspended for NON-PAYMENT) tenant — the
@@ -39,6 +40,9 @@ export async function BillingWall() {
           <Button component="a" href="/api/export/workspace" variant="subtle" leftSection={<IconDownload size={16} />}>
             Export all workspace data
           </Button>
+        </Center>
+        <Center mt="xs">
+          <SignOutButton />
         </Center>
       </Container>
     </Center>

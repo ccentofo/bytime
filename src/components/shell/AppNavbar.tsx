@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { Stack, NavLink, Divider, Text, Tooltip } from '@mantine/core';
-import { IconClock, IconFileText, IconUsers, IconChecklist, IconUserCog, IconCategory, IconHistory, IconChartBar, IconReportAnalytics, IconReceipt, IconApi, IconUpload, IconRocket, IconPlug, IconSettings, IconDatabaseImport, IconTag } from '@tabler/icons-react';
+import { IconClock, IconFileText, IconUsers, IconChecklist, IconUserCog, IconCategory, IconHistory, IconChartBar, IconReportAnalytics, IconReceipt, IconApi, IconUpload, IconRocket, IconPlug, IconSettings, IconDatabaseImport, IconTag, IconCreditCard } from '@tabler/icons-react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 
@@ -40,6 +40,7 @@ const ADMIN_ITEMS: NavItem[] = [
   { label: 'Integrations', href: '/admin/integrations', icon: <IconPlug size={18} /> },
   { label: 'Data Migration', href: '/admin/migration', icon: <IconDatabaseImport size={18} /> },
   { label: 'Settings', href: '/admin/settings', icon: <IconSettings size={18} /> },
+  { label: 'Billing', href: '/admin/billing', icon: <IconCreditCard size={18} /> },
 ];
 
 export function AppNavbar({ userRole, collapsed = false }: AppNavbarProps) {
