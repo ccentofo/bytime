@@ -349,3 +349,15 @@ the allowlisted lock keys / heartbeat `name`; `unit/sql-template-params` passes 
 1023 unit tests pass. Accepted: the wider scan of raw clients later wrapped by `drizzle()`; `scripts/register-tenant.ts`
 left alone (its client is never drizzle-wrapped, so postgres-js serializes the Date itself). Backlog: clients wrapped
 via `Object.assign` (`workspace-export.ts:73`) aren't recognized by the scan — no interpolations there today.
+
+## 12. CI finding (PR run, 2026-10-25) — R12, required before merge
+
+`cron-heartbeat.test.ts` "a failed run advances last_started_at only" and "?probe=1 writes nothing" fail in CI with
+**429**: `rejectUnauthorizedCron` (`src/lib/cron-auth.ts:10`) applies the 2/min/IP cron rate limit **before** the secret
+check, so authenticated calls consume the budget (passed locally by timing). Same root cause as the P6 backlog item:
+three crons at 20:00 UTC on one instance → the third is refused and that day's run is lost.
+**Fix:** check the secret first; only a **failed** auth attempt counts toward (and is refused by) the rate limit; a
+correct secret is never rate-limited. Compare the secret with `crypto.timingSafeEqual` (length-checked). Optionally let
+`smoke-tenancy.sh` probe all four crons now (dev's deviation #7 existed only because of this limit).
+**Tests:** unit — 5 authorized calls in a row from one IP all pass; 3 wrong-secret calls → the third is 429; a correct
+call after that still passes. The two `cron-heartbeat` integration tests pass unchanged.
