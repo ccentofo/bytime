@@ -8,13 +8,12 @@ import {
   slins,
   timesheetEntries,
   timesheetPeriods,
-  laborCategories,
-  userLaborCategories,
   userAssignments,
 } from '@/db/schema';
 import { eq, and, gte, lt, sql, inArray } from 'drizzle-orm';
 import { existingPeriodLength } from '@/server/internal/pay-period-config';
 import { approvalLabels } from '@/server/internal/approval-label';
+import { COST_BASIS_LATERAL, COST_LC_ON, costLaborCategory, pricedCostSum, unpricedHoursSum } from '@/server/internal/cost-basis';
 import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { requireSession, requireAdmin, requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
 import { getDetailedCostReportData, type CostReportEntry } from '@/server/internal/reports';
@@ -59,6 +58,8 @@ export interface EmployeeSummaryEntry {
   clinNumber: string;
   totalHours: number;
   totalCost?: number; // R2-5: omitted entirely (not 0) for non-admins — dollar data is admin-only
+  /** certified-outputs C3 (CO-D17): hours with no applicable labor category (no cost). Admins only, like totalCost. */
+  unpricedHours?: number;
   flsaExempt: boolean;
 }
 
@@ -260,31 +261,16 @@ export async function getEmployeeSummaryReport(
       contractNumber: contracts.contractNumber,
       clinNumber: clins.clinNumber,
       totalHours: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
-      totalCost: sql<number>`COALESCE(SUM(
-        CAST(${timesheetEntries.hours} AS NUMERIC) *
-        COALESCE(CAST(${laborCategories.hourlyRate} AS NUMERIC), 0)
-      ), 0)`,
+      totalCost: pricedCostSum,
+      unpricedHours: unpricedHoursSum,
     })
     .from(timesheetEntries)
     .innerJoin(users, eq(timesheetEntries.userId, users.id))
     .innerJoin(clins, eq(timesheetEntries.clinId, clins.id))
     .innerJoin(contracts, eq(clins.contractId, contracts.id))
-    .leftJoin(
-      userLaborCategories,
-      and(
-        eq(userLaborCategories.userId, timesheetEntries.userId),
-        sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-        sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} >= ${timesheetEntries.entryDate})`,
-      )
-    )
-    .leftJoin(
-      laborCategories,
-      and(
-        eq(laborCategories.id, userLaborCategories.laborCategoryId),
-        eq(laborCategories.clinId, timesheetEntries.clinId),
-        eq(laborCategories.status, 'active'),
-      )
-    )
+    // certified-outputs C3: one cost-basis row per entry, so hours are never multiplied by overlapping assignments.
+    .leftJoinLateral(COST_BASIS_LATERAL, sql`true`)
+    .leftJoin(costLaborCategory, COST_LC_ON)
     .where(
       and(
         gte(timesheetEntries.entryDate, start),
@@ -314,7 +300,10 @@ export async function getEmployeeSummaryReport(
     totalHours: Math.round(Number(row.totalHours) * 100) / 100,
     // R2-5: the totalCost KEY is absent entirely for supervisors — dollar figures are
     // admin-only — not present-but-zero, which previously rendered a fake "$0" column.
-    ...(isAdmin ? { totalCost: Math.round(Number(row.totalCost) * 100) / 100 } : {}),
+    ...(isAdmin ? {
+      totalCost: Math.round(Number(row.totalCost) * 100) / 100,
+      unpricedHours: Math.round(Number(row.unpricedHours) * 100) / 100,
+    } : {}),
     flsaExempt: row.flsaExempt,
   }));
 }

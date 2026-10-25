@@ -2,7 +2,7 @@
 
 import { getDb, getDbForWrite } from '@/db';
 import { timesheetEntries, userAssignments, clins, contracts, slins, indirectChargeCodes, chargeCodes, userChargeCodes, costClasses, timesheetPeriods } from '@/db/schema';
-import { eq, and, gte, lt, desc, sql, isNull } from 'drizzle-orm';
+import { eq, and, gte, lt, desc, sql, isNull, inArray } from 'drizzle-orm';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
 import { validateUUID, validateHours } from '@/lib/validation';
 import { requireSession, assertCanAccessEmployee, AuthorizationError } from '@/lib/session';
@@ -318,6 +318,17 @@ export async function saveTimesheetBatch(data: {
           async (periodStart) => getNumDaysInPeriod(periodStart, await configAt(tx, periodStart)),
           tx,
         );
+
+        // certified-outputs C3: re-read each charge code's CLIN/SLIN INSIDE the transaction, FOR SHARE, and use those
+        // values for the insert — a concurrent updateChargeCode (FOR UPDATE) either finishes first (we see the new CLIN
+        // and its "used code" check sees no entries yet) or waits for us (and then sees this save's entries).
+        const chargeCodeIds = [...chargeCodeCache.keys()];
+        if (chargeCodeIds.length) {
+          const fresh = await tx.select({ id: chargeCodes.id, clinId: chargeCodes.clinId, slinId: chargeCodes.slinId })
+            .from(chargeCodes).where(inArray(chargeCodes.id, chargeCodeIds)).for('share');
+          for (const cc of fresh) chargeCodeCache.set(cc.id, { clinId: cc.clinId, slinId: cc.slinId ?? null });
+          if (fresh.length !== chargeCodeIds.length) throw new UserFacingError('A charge code on this timesheet no longer exists. Refresh and try again.', 'not_found');
+        }
 
         // Optimistic concurrency control
         if (!data.skipConflictCheck) {

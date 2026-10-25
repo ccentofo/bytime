@@ -276,6 +276,12 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
           <Text size="sm" c="dimmed">
             Send it on every request as the header <Code>Authorization: Bearer {'<key>'}</Code>.
           </Text>
+          {/* certified-outputs C3 (ruling Q6): the additive cost-basis fields, so integrations don't under-report. */}
+          <Text size="sm" c="dimmed">
+            <Code>/api/v1/costs</Code> returns <Code>costBasis</Code> and <Code>unpricedHours</Code> on every row and the
+            total <Code>unpricedHours</Code> in <Code>meta</Code>: hours with no applicable labor category carry no cost,
+            so add them to your checks rather than reading the cost alone.
+          </Text>
           <Button onClick={() => { setNewKeyModalOpen(false); setNewKeyValue(''); }} color="success">
             I've Copied the Key
           </Button>

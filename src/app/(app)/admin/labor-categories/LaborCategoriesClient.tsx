@@ -179,6 +179,8 @@ export function LaborCategoriesClient({
   const [assignEndDate, setAssignEndDate] = useState<string | null>(null);
   const [confirmDeactivateLcat, setConfirmDeactivateLcat] = useState<LaborCategory | null>(null);
   const [confirmEndAssignment, setConfirmEndAssignment] = useState<UserLcatAssignment | null>(null);
+  // certified-outputs C3: optional INCLUSIVE end date (default today) — a promotion can end yesterday and start today.
+  const [endAssignmentDate, setEndAssignmentDate] = useState<CalendarDate | null>(null);
 
   // --- LCAT Modal handlers ---
 
@@ -328,7 +330,7 @@ export function LaborCategoriesClient({
   function handleEndAssignment(assignment: UserLcatAssignment) {
     startTransition(async () => {
       try {
-        const result = await runAction(endUserLaborCategoryAssignment(assignment.id), { errorTitle: 'Couldn’t end assignment' });
+        const result = await runAction(endUserLaborCategoryAssignment(assignment.id, endAssignmentDate ?? undefined), { errorTitle: 'Couldn’t end assignment' });
         if (!result.ok) return;
         const refreshed = await getUserLaborCategoryAssignments();
         setAssignments(refreshed);
@@ -338,6 +340,7 @@ export function LaborCategoriesClient({
           color: 'warning',
         });
         setConfirmEndAssignment(null);
+        setEndAssignmentDate(null);
       } catch {
         notifications.show({
           title: 'Error',
@@ -647,19 +650,30 @@ export function LaborCategoriesClient({
         onCancel={() => setConfirmDeactivateLcat(null)}
       />
 
-      <ConfirmModal
+      <Modal
         opened={!!confirmEndAssignment}
+        onClose={() => { setConfirmEndAssignment(null); setEndAssignmentDate(null); }}
         title="End assignment?"
-        message={
-          confirmEndAssignment
-            ? `This ends ${confirmEndAssignment.userName}'s assignment to ${confirmEndAssignment.lcatCode} effective today.`
-            : ''
-        }
-        confirmLabel="End Assignment"
-        loading={isPending}
-        onConfirm={() => confirmEndAssignment && handleEndAssignment(confirmEndAssignment)}
-        onCancel={() => setConfirmEndAssignment(null)}
-      />
+      >
+        {confirmEndAssignment && (
+          <Stack>
+            <Text size="sm">
+              This ends {confirmEndAssignment.userName}&apos;s assignment to {confirmEndAssignment.lcatCode}. The last day is
+              included; leave the date empty to end it today. It can&apos;t be before the assignment&apos;s effective date.
+            </Text>
+            <DateInput
+              label="Last day (optional)"
+              value={endAssignmentDate}
+              onChange={(d) => setEndAssignmentDate(d && isCalendarDate(d) ? d : null)}
+              clearable
+            />
+            <Group justify="flex-end">
+              <Button variant="default" onClick={() => { setConfirmEndAssignment(null); setEndAssignmentDate(null); }}>Cancel</Button>
+              <WriteButton color="warning" loading={isPending} onClick={() => handleEndAssignment(confirmEndAssignment)}>End Assignment</WriteButton>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
     </>
   );
 }

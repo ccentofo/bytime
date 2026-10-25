@@ -1,6 +1,7 @@
 import ExcelJS from 'exceljs';
 import type { EmployeeSummaryEntry } from '@/server/actions/reports';
 import type { CostReportEntry } from '@/server/internal/reports';
+import { CURRENT_RATES_NOTE } from '@/lib/cost-labels';
 
 /**
  * Generate an Excel workbook with detailed cost report data.
@@ -69,6 +70,10 @@ export async function generateCostReportExcel(
     Math.round(totalCost * 100) / 100,
   ]);
   totalsRow.font = { bold: true };
+  // certified-outputs C3 (CO-D17 / ruling Q6): the unpriced count travels with every cost total, plus the CO-D7 note.
+  const unpriced = Math.round(data.reduce((sum, e) => sum + e.unpricedHours, 0) * 100) / 100;
+  detailSheet.addRow(['UNPRICED HOURS (no applicable labor category — no cost)', '', '', '', '', '', '', '', '', unpriced, '']).font = { italic: true };
+  detailSheet.addRow([CURRENT_RATES_NOTE]).font = { italic: true, color: { argb: '666666' } };
 
   // Column widths
   detailSheet.columns = [
@@ -142,6 +147,12 @@ export async function generateEmployeeSummaryExcel(
   }
   const totalsRow = sheet.addRow(totalsRowValues);
   totalsRow.font = { bold: true };
+  if (includeCost) {
+    // certified-outputs C3 (CO-D17 / ruling Q6): unpriced hours beside the cost total, plus the CO-D7 note.
+    const unpriced = Math.round(data.reduce((sum, e) => sum + (e.unpricedHours ?? 0), 0) * 100) / 100;
+    sheet.addRow(['UNPRICED HOURS (no applicable labor category — no cost)', '', '', '', unpriced, '']).font = { italic: true };
+    sheet.addRow([CURRENT_RATES_NOTE]).font = { italic: true, color: { argb: '666666' } };
+  }
 
   // Widths
   sheet.columns = includeCost

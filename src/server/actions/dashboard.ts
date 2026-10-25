@@ -6,10 +6,9 @@ import {
   clins,
   slins,
   timesheetEntries,
-  laborCategories,
-  userLaborCategories,
   users,
 } from '@/db/schema';
+import { COST_BASIS_LATERAL, COST_LC_ON, costLaborCategory, pricedCostSum, unpricedHoursSum } from '@/server/internal/cost-basis';
 import { eq, and, sql, gte, lt } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
 import { addDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -25,7 +24,9 @@ export interface SlinSummary {
   fundedAmount: string | null;
   status: string;
   totalHours: number;
+  /** certified-outputs C3: PRICED cost only (CO-D10); unpricedHours carry no cost and are shown beside it (CO-D17). */
   totalCost: number;
+  unpricedHours: number;
 }
 
 export interface ContractSummary {
@@ -38,6 +39,7 @@ export interface ContractSummary {
   ceilingValue: string | null;
   totalHours: number;
   totalCost: number;
+  unpricedHours: number;
   clinSummaries: ClinSummary[];
 }
 
@@ -49,6 +51,7 @@ export interface ClinSummary {
   status: string;
   totalHours: number;
   totalCost: number;
+  unpricedHours: number;
   slinSummaries: SlinSummary[];
 }
 
@@ -63,6 +66,9 @@ export interface PeriodCostEntry {
   hourlyRate: string;
   totalHours: number;
   totalCost: number;
+  /** certified-outputs C3: 'unpriced' rows group the hours with no applicable labor category (no cost). */
+  costBasis: 'priced' | 'unpriced';
+  unpricedHours: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -79,9 +85,10 @@ export interface PeriodCostEntry {
  *   3. All hours by CLIN — latest revision only (1 query)
  *   4. All costs by CLIN — latest revision with effective-date rate lookup (1 query)
  *
- * RATE ACCURACY: Rate lookups now respect effective_date and end_date on
- * user_labor_categories, ensuring costs reflect the rate in effect when hours
- * were worked (CAS 418 compliance).
+ * COST BASIS (feature-plan-certified-outputs.md C3): every cost goes through src/server/internal/cost-basis.ts —
+ * the labor category is resolved per entry (charge code → SLIN assignment → CLIN assignment, effective on the entry
+ * date); entries with none or with conflicting categories are UNPRICED (hours counted, no cost, reported beside the
+ * cost). Rates are the categories' CURRENT rates (CO-D7 interim — effective-dated rates are a separate blueprint).
  */
 export async function getContractSummaries(): Promise<ContractSummary[]> {
   await requireAdmin();
@@ -125,28 +132,13 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
     db
       .select({
         clinId: timesheetEntries.clinId,
-        totalCost: sql<number>`COALESCE(SUM(
-          CAST(${timesheetEntries.hours} AS NUMERIC) *
-          CAST(${laborCategories.hourlyRate} AS NUMERIC)
-        ), 0)`,
+        totalCost: pricedCostSum,
+        unpricedHours: unpricedHoursSum,
       })
       .from(timesheetEntries)
-      .innerJoin(
-        userLaborCategories,
-        and(
-          eq(userLaborCategories.userId, timesheetEntries.userId),
-          sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-          sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} >= ${timesheetEntries.entryDate})`,
-        )
-      )
-      .innerJoin(
-        laborCategories,
-        and(
-          eq(laborCategories.id, userLaborCategories.laborCategoryId),
-          eq(laborCategories.clinId, timesheetEntries.clinId),
-          eq(laborCategories.status, 'active'),
-        )
-      )
+      // certified-outputs C3: the one cost-basis resolution (CO-D10) — never doubles on overlapping assignments.
+      .leftJoinLateral(COST_BASIS_LATERAL, sql`true`)
+      .leftJoin(costLaborCategory, COST_LC_ON)
       .where(
         and(
           sql`${timesheetEntries.clinId} IS NOT NULL`,
@@ -192,28 +184,13 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
     db
       .select({
         slinId: timesheetEntries.slinId,
-        totalCost: sql<number>`COALESCE(SUM(
-          CAST(${timesheetEntries.hours} AS NUMERIC) *
-          CAST(${laborCategories.hourlyRate} AS NUMERIC)
-        ), 0)`,
+        totalCost: pricedCostSum,
+        unpricedHours: unpricedHoursSum,
       })
       .from(timesheetEntries)
-      .innerJoin(
-        userLaborCategories,
-        and(
-          eq(userLaborCategories.userId, timesheetEntries.userId),
-          sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-          sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} >= ${timesheetEntries.entryDate})`,
-        )
-      )
-      .innerJoin(
-        laborCategories,
-        and(
-          eq(laborCategories.id, userLaborCategories.laborCategoryId),
-          eq(laborCategories.clinId, timesheetEntries.clinId),
-          eq(laborCategories.status, 'active'),
-        )
-      )
+      // certified-outputs C3: the one cost-basis resolution (CO-D10) — never doubles on overlapping assignments.
+      .leftJoinLateral(COST_BASIS_LATERAL, sql`true`)
+      .leftJoin(costLaborCategory, COST_LC_ON)
       .where(
         and(
           sql`${timesheetEntries.slinId} IS NOT NULL`,
@@ -241,9 +218,11 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
   }
 
   const costMap = new Map<string, number>();
+  const unpricedMap = new Map<string, number>();
   for (const row of costData) {
     if (row.clinId) {
       costMap.set(row.clinId, Math.round(Number(row.totalCost) * 100) / 100);
+      unpricedMap.set(row.clinId, Math.round(Number(row.unpricedHours) * 100) / 100);
     }
   }
 
@@ -255,9 +234,11 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
   }
 
   const slinCostMap = new Map<string, number>();
+  const slinUnpricedMap = new Map<string, number>();
   for (const row of slinCostData) {
     if (row.slinId) {
       slinCostMap.set(row.slinId, Math.round(Number(row.totalCost) * 100) / 100);
+      slinUnpricedMap.set(row.slinId, Math.round(Number(row.unpricedHours) * 100) / 100);
     }
   }
 
@@ -294,6 +275,7 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
         status: slin.status,
         totalHours: slinHoursMap.get(slin.id) ?? 0,
         totalCost: slinCostMap.get(slin.id) ?? 0,
+        unpricedHours: slinUnpricedMap.get(slin.id) ?? 0,
       }));
 
       return {
@@ -304,12 +286,14 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
         status: clin.status,
         totalHours: hoursMap.get(clin.id) ?? 0,
         totalCost: costMap.get(clin.id) ?? 0,
+        unpricedHours: unpricedMap.get(clin.id) ?? 0,
         slinSummaries,
       };
     });
 
     const totalHours = clinSummaries.reduce((sum, c) => sum + c.totalHours, 0);
     const totalCost = clinSummaries.reduce((sum, c) => sum + c.totalCost, 0);
+    const unpricedHours = clinSummaries.reduce((sum, c) => sum + c.unpricedHours, 0);
 
     summaries.push({
       contractId: contract.id,
@@ -321,6 +305,7 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
       ceilingValue: contract.ceilingValue,
       totalHours: Math.round(totalHours * 100) / 100,
       totalCost: Math.round(totalCost * 100) / 100,
+      unpricedHours: Math.round(unpricedHours * 100) / 100,
       clinSummaries,
     });
   }
@@ -336,9 +321,8 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
  * approach of fetching all entries, aggregating in memory, then issuing
  * per-aggregate queries for user/CLIN/LCAT context.
  *
- * RATE ACCURACY: Uses effective-date-aware rate lookup via user_labor_categories
- * JOIN conditions, ensuring each hour is costed at the rate that was in effect
- * on the date the work was performed.
+ * COST BASIS: the one resolution in src/server/internal/cost-basis.ts (C3); unpriced hours form their own rows.
+ * Rates are current rates (CO-D7 interim).
  */
 export async function getPeriodCostReport(
   startDate: CalendarDate,
@@ -357,36 +341,22 @@ export async function getPeriodCostReport(
       contractNumber: contracts.contractNumber,
       clinNumber: clins.clinNumber,
       slinNumber: slins.slinNumber,
-      lcatCode: sql<string>`COALESCE(${laborCategories.lcatCode}, '—')`,
-      lcatTitle: sql<string>`COALESCE(${laborCategories.title}, 'No LCAT')`,
-      hourlyRate: sql<string>`COALESCE(${laborCategories.hourlyRate}, '0')`,
+      basis: sql<string>`CASE WHEN cost_basis.basis = 'priced' THEN 'priced' ELSE 'unpriced' END`,
+      lcatCode: sql<string>`COALESCE("cost_lc"."lcat_code", '—')`,
+      lcatTitle: sql<string>`COALESCE("cost_lc"."title", 'Unpriced')`,
+      hourlyRate: sql<string>`COALESCE("cost_lc"."hourly_rate", '0')`,
       totalHours: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
-      totalCost: sql<number>`COALESCE(SUM(
-        CAST(${timesheetEntries.hours} AS NUMERIC) *
-        COALESCE(CAST(${laborCategories.hourlyRate} AS NUMERIC), 0)
-      ), 0)`,
+      totalCost: pricedCostSum,
+      unpricedHours: unpricedHoursSum,
     })
     .from(timesheetEntries)
     .innerJoin(users, eq(timesheetEntries.userId, users.id))
     .innerJoin(clins, eq(timesheetEntries.clinId, clins.id))
     .innerJoin(contracts, eq(clins.contractId, contracts.id))
     .leftJoin(slins, eq(timesheetEntries.slinId, slins.id))
-    .leftJoin(
-      userLaborCategories,
-      and(
-        eq(userLaborCategories.userId, timesheetEntries.userId),
-        sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-        sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} >= ${timesheetEntries.entryDate})`,
-      )
-    )
-    .leftJoin(
-      laborCategories,
-      and(
-        eq(laborCategories.id, userLaborCategories.laborCategoryId),
-        eq(laborCategories.clinId, timesheetEntries.clinId),
-        eq(laborCategories.status, 'active'),
-      )
-    )
+    // certified-outputs C3: the one cost-basis resolution; unpriced hours group into their own 'Unpriced' rows.
+    .leftJoinLateral(COST_BASIS_LATERAL, sql`true`)
+    .leftJoin(costLaborCategory, COST_LC_ON)
     .where(
       and(
         gte(timesheetEntries.entryDate, start),
@@ -409,9 +379,10 @@ export async function getPeriodCostReport(
       contracts.contractNumber,
       clins.clinNumber,
       slins.slinNumber,
-      laborCategories.lcatCode,
-      laborCategories.title,
-      laborCategories.hourlyRate,
+      sql`CASE WHEN cost_basis.basis = 'priced' THEN 'priced' ELSE 'unpriced' END`,
+      costLaborCategory.lcatCode,
+      costLaborCategory.title,
+      costLaborCategory.hourlyRate,
     )
     .orderBy(contracts.name, clins.clinNumber, users.fullName);
 
@@ -426,5 +397,7 @@ export async function getPeriodCostReport(
     hourlyRate: row.hourlyRate,
     totalHours: Math.round(Number(row.totalHours) * 100) / 100,
     totalCost: Math.round(Number(row.totalCost) * 100) / 100,
+    costBasis: row.basis === 'priced' ? 'priced' : 'unpriced',
+    unpricedHours: Math.round(Number(row.unpricedHours) * 100) / 100,
   }));
 }
