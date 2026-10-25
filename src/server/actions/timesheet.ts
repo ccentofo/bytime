@@ -3,6 +3,7 @@
 import { getDb, getDbForWrite } from '@/db';
 import { timesheetEntries, clins, contracts, slins, indirectChargeCodes, chargeCodes, userChargeCodes, costClasses, timesheetPeriods, importBatches, users } from '@/db/schema';
 import { provenanceText } from '@/lib/provenance';
+import { INDIRECT_CATEGORY_LABELS } from '@/lib/indirect-categories';
 import { eq, and, gte, lt, desc, sql, isNull, inArray } from 'drizzle-orm';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
 import { validateUUID, validateHours } from '@/lib/validation';
@@ -536,15 +537,6 @@ async function getChargeCodesForEmployee(userId: string): Promise<ChargeCode[]> 
 
   return [...directCodes, ...indirectCodes];
 }
-
-const INDIRECT_CATEGORY_LABELS: Record<string, string> = {
-  overhead: 'Overhead',
-  ga: 'G&A',
-  irad: 'IR&D',
-  bp: 'Bid & Proposal',
-  leave: 'Leave',
-  unallowable: 'Unallowable',
-};
 
 /**
  * feature-plan-certified-outputs.md C4: the period's code list = the assignable codes ∪ every code (charge code, legacy
