@@ -18,6 +18,8 @@ type Props = {
   periodLabel: string;
   submittedAt: string;
   appUrl: string;
+  /** certified-outputs C2 (ruling Q8): e.g. "Its designated approver is no longer available." */
+  note?: string;
 };
 
 export function TimesheetSubmittedEmail({
@@ -27,6 +29,7 @@ export function TimesheetSubmittedEmail({
   periodLabel,
   submittedAt,
   appUrl,
+  note,
 }: Props) {
   return (
     <Html>
@@ -40,6 +43,7 @@ export function TimesheetSubmittedEmail({
             for the pay period <strong>{periodLabel}</strong>.
           </Text>
           <Text style={textStyle}>Submitted at: {submittedAt}</Text>
+          {note && <Text style={textStyle}><strong>{note}</strong></Text>}
           <Section style={ctaStyle}>
             <Link href={`${appUrl}/admin/approvals`} style={buttonStyle}>
               Review Timesheet

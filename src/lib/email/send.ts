@@ -69,6 +69,7 @@ export async function sendTimesheetSubmittedEmail(data: {
   periodLabel: string;
   submittedAt: string;
   appUrl: string;
+  note?: string;
 }): Promise<SendOutcome> {
   return deliverEmail(
     'timesheet-submitted',
@@ -81,6 +82,7 @@ export async function sendTimesheetSubmittedEmail(data: {
       periodLabel: data.periodLabel,
       submittedAt: data.submittedAt,
       appUrl: data.appUrl,
+      note: data.note,
     }),
   );
 }

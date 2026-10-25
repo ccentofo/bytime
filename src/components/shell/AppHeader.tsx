@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Logo } from '@/components/brand/Logo';
 import { IconSun, IconMoon, IconLogout, IconUser, IconKey, IconBell } from '@tabler/icons-react';
 import { signOut } from 'next-auth/react';
+import { clearDesigneeNoticeDismissals } from '@/components/approvals/ApprovalNotices';
 import { SyncStatusIndicator } from '@/components/shell/SyncStatusIndicator';
 
 type AppHeaderProps = {
@@ -87,7 +88,7 @@ export function AppHeader({ user, mobileNavOpened, onMobileNavToggle, isDemo = f
               <Menu.Item
                 color="red"
                 leftSection={<IconLogout size={14} />}
-                onClick={() => signOut({ callbackUrl: '/login' })}
+                onClick={() => { clearDesigneeNoticeDismissals(); signOut({ callbackUrl: '/login' }); }}
               >
                 Sign Out
               </Menu.Item>

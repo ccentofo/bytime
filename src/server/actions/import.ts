@@ -5,6 +5,8 @@ import { users, contracts, clins, slins, laborCategories, userAssignments } from
 import { eq, and, inArray } from 'drizzle-orm';
 import { requireAdminFresh } from '@/lib/session';
 import { assertSeatsAvailable } from '@/server/internal/seats';
+import { newlyEligible, recomputeSelfApproval, snapshotSubmittedEligibility } from '@/server/internal/approval-rules';
+import { notifyReroutedApprovals } from '@/server/internal/submission-notify';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { importRowMessage, parseImportDate } from '@/server/internal/import-errors';
@@ -30,7 +32,7 @@ export interface ImportResult {
 
 export async function bulkImportEmployees(rows: EmployeeImportRow[]): Promise<ActionResult<ImportResult>> {
   return userAction(async () => {
-    await requireAdminFresh();
+    const actor = await requireAdminFresh();
     const db = await getDbForWrite();
 
     // R2-11: count genuinely NEW rows (excluding ones matching an existing user by email) and
@@ -42,52 +44,63 @@ export async function bulkImportEmployees(rows: EmployeeImportRow[]): Promise<Ac
     const incomingEmails = [...new Set(
       rows.map((row) => (typeof row.email === 'string' ? row.email.toLowerCase().trim() : '')).filter(Boolean)
     )];
-    const existingRows = incomingEmails.length > 0
-      ? await db.select({ email: users.email }).from(users).where(inArray(users.email, incomingEmails))
-      : [];
-    const existingEmails = new Set(existingRows.map((r) => r.email.toLowerCase()));
-    const newRowCount = incomingEmails.filter((email) => !existingEmails.has(email)).length;
-    if (newRowCount > 0) {
-      await assertSeatsAvailable(newRowCount);
-    }
-
-    const result: ImportResult = { created: 0, skipped: 0, errors: [], generatedPasswords: [] };
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      try {
-        const email = row.email.toLowerCase().trim();
-
-        // Check if user already exists
-        const existing = await db.select({ id: users.id }).from(users).where(eq(users.email, email));
-        if (existing.length > 0) {
-          result.skipped++;
-          continue;
-        }
-
-        // Generate password
-        const password = generateRandomPassword();
-        const hash = await bcrypt.hash(password, 4); // Low cost for bulk
-
-        const role = (['admin', 'supervisor', 'employee'].includes(row.role?.toLowerCase()))
-          ? row.role.toLowerCase() as 'admin' | 'supervisor' | 'employee'
-          : 'employee';
-
-        await db.insert(users).values({
-          email,
-          fullName: row.name.trim(),
-          role,
-          passwordHash: hash,
-          isActive: true,
-          flsaExempt: row.flsaExempt?.toLowerCase() === 'yes' || row.flsaExempt?.toLowerCase() === 'true',
-        });
-
-        result.created++;
-        result.generatedPasswords!.push({ email, password });
-      } catch (error) {
-        result.errors.push({ row: i + 1, message: importRowMessage(error, 'That employee already exists.') });
+    // certified-outputs C2 (CO-D19, ruling Q5): one transaction with the self-approval recompute and the re-routing
+    // snapshot. Each row runs in its own savepoint, so a failing row is reported and the others still import.
+    const { result, rerouted } = await db.transaction(async (tx) => {
+      const existingRows = incomingEmails.length > 0
+        ? await tx.select({ email: users.email }).from(users).where(inArray(users.email, incomingEmails))
+        : [];
+      const existingEmails = new Set(existingRows.map((r) => r.email.toLowerCase()));
+      const newRowCount = incomingEmails.filter((email) => !existingEmails.has(email)).length;
+      if (newRowCount > 0) {
+        await assertSeatsAvailable(newRowCount, tx);
       }
-    }
+
+      const result: ImportResult = { created: 0, skipped: 0, errors: [], generatedPasswords: [] };
+      const before = await snapshotSubmittedEligibility(tx);
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        try {
+          const email = row.email.toLowerCase().trim();
+
+          // Check if user already exists
+          const existing = await tx.select({ id: users.id }).from(users).where(eq(users.email, email));
+          if (existing.length > 0) {
+            result.skipped++;
+            continue;
+          }
+
+          // Generate password
+          const password = generateRandomPassword();
+          const hash = await bcrypt.hash(password, 4); // Low cost for bulk
+
+          const role = (['admin', 'supervisor', 'employee'].includes(row.role?.toLowerCase()))
+            ? row.role.toLowerCase() as 'admin' | 'supervisor' | 'employee'
+            : 'employee';
+
+          await tx.transaction(async (sp) => {
+            await sp.insert(users).values({
+              email,
+              fullName: row.name.trim(),
+              role,
+              passwordHash: hash,
+              isActive: true,
+              flsaExempt: row.flsaExempt?.toLowerCase() === 'yes' || row.flsaExempt?.toLowerCase() === 'true',
+            });
+          });
+
+          result.created++;
+          result.generatedPasswords!.push({ email, password });
+        } catch (error) {
+          result.errors.push({ row: i + 1, message: importRowMessage(error, 'That employee already exists.') });
+        }
+      }
+
+      if (result.created > 0) await recomputeSelfApproval(tx, actor.id, `${result.created} user(s) imported`);
+      return { result, rerouted: result.created > 0 ? newlyEligible(before, await snapshotSubmittedEligibility(tx)) : [] };
+    });
+    await notifyReroutedApprovals(rerouted);
 
     return result;
   });

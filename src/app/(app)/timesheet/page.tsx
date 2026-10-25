@@ -43,6 +43,7 @@ export default async function TimesheetPage() {
     today,
     revisions: period.revisions,
     periodStatus: period.periodStatus,
+    approvalBadge: period.approvalBadge,
     flsaExempt: fullUser?.flsaExempt ?? false,
     dashboardData,
     periodConfig: period.periodConfig,

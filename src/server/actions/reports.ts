@@ -14,6 +14,8 @@ import {
 } from '@/db/schema';
 import { eq, and, gte, lt, sql, inArray } from 'drizzle-orm';
 import { existingPeriodLength } from '@/server/internal/pay-period-config';
+import { approvalLabels } from '@/server/internal/approval-label';
+import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { requireSession, requireAdmin, requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
 import { getDetailedCostReportData, type CostReportEntry } from '@/server/internal/reports';
 import { addDays, diffDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -33,7 +35,10 @@ export interface TimesheetReportData {
   periodStatus: string;
   submittedAt: Date | null;
   approvedAt: Date | null;
+  /** The approver field: the in-app approver's name, the "Self-approved" badge, or the imported line (approvalLabel). */
   approvedBy: string | null;
+  /** certified-outputs C1/C2: the full approval line from approvalLabel (in-app, self-approved or imported), or null. */
+  approvalLine: string | null;
   chargeCodes: Array<{
     clinNumber: string;
     contractName: string;
@@ -97,23 +102,14 @@ export async function getTimesheetReportData(
   const numDays = await existingPeriodLength(db, start, period?.periodNumDays);
   const periodEnd = addDays(start, numDays - 1);
 
-  // Get approved-by name if applicable. R2-7: an admin may approve/reject their own period —
-  // show "Self-approved" rather than their own name, so self-approval stays visibly auditable.
-  // Only an APPROVED period prints an approval line; rejecting also sets reviewedBy/reviewedAt,
-  // and a rejected timesheet must never read as approved.
+  // The approval line comes from the one helper (certified-outputs C2): an in-app approver's name, "Self-approved"
+  // (R2-7/CO-D6 — self-approval stays visibly auditable), or an imported approval (C1). Only an APPROVED period prints
+  // an approval line; rejecting also sets reviewedBy/reviewedAt, and a rejected timesheet must never read as approved.
   const isApproved = period?.status === 'approved';
-  let approvedByName: string | null = null;
-  if (isApproved && period?.reviewedBy) {
-    if (period.reviewedBy === userId) {
-      approvedByName = 'Self-approved';
-    } else {
-      const [reviewer] = await db
-        .select({ fullName: users.fullName })
-        .from(users)
-        .where(eq(users.id, period.reviewedBy));
-      approvedByName = reviewer?.fullName ?? null;
-    }
-  }
+  const label = isApproved && period
+    ? (await approvalLabels(db, [{ id: period.id, userId, status: period.status, reviewedBy: period.reviewedBy, reviewedAt: period.reviewedAt }], await getWorkspaceTimezone())).get(period.id)
+    : undefined;
+  const approvedByName = label ? (label.badge ?? label.approverName ?? label.text) : null;
 
   // Get user's charge codes
   const assignments = await db
@@ -211,6 +207,7 @@ export async function getTimesheetReportData(
     submittedAt: period?.submittedAt ?? null,
     approvedAt: isApproved ? period?.reviewedAt ?? null : null,
     approvedBy: approvedByName,
+    approvalLine: label?.text ?? null,
     chargeCodes,
     dailyTotals,
     grandTotal: Math.round(grandTotal * 100) / 100,

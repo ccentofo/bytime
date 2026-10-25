@@ -6,6 +6,8 @@ import { handleApiRequest, apiResponse, apiError } from '@/lib/api-auth';
 import { addDays, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { existingPeriodLength } from '@/server/internal/pay-period-config';
 import { importedPeriodIds } from '@/server/internal/import-provenance';
+import { approvalLabels } from '@/server/internal/approval-label';
+import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 
 // Date format: `startDate`/`endDate` query params and every `periodStart`/`entryDate` in the
 // response are plain 'YYYY-MM-DD' calendar-date strings — never an ISO instant/timestamp.
@@ -36,6 +38,7 @@ async function listApprovedTimesheets(request: NextRequest): Promise<Response> {
       periodStart: timesheetPeriods.periodStart,
       periodNumDays: timesheetPeriods.periodNumDays,
       approvedAt: timesheetPeriods.reviewedAt,
+      status: timesheetPeriods.status,
     })
     .from(timesheetPeriods)
     .where(
@@ -48,6 +51,7 @@ async function listApprovedTimesheets(request: NextRequest): Promise<Response> {
 
   // feature-plan-certified-outputs.md C1: imported approvals are labelled, never attributed to a CadenzPoint user.
   const imported = await importedPeriodIds(db, approvedPeriods.map((p) => p.id));
+  const labels = await approvalLabels(db, approvedPeriods.map((p) => ({ ...p, reviewedAt: p.approvedAt })), await getWorkspaceTimezone());
 
   // For each approved period, get the latest-revision entries
   const results = [];
@@ -102,6 +106,7 @@ async function listApprovedTimesheets(request: NextRequest): Promise<Response> {
       approvedAt: period.approvedAt,
       approvedBy: isImported ? null : period.reviewedBy,
       approvalSource: isImported ? 'migration' : 'app',
+      selfApproved: labels.get(period.id)?.selfApproved ?? false, // certified-outputs C2 (CO-D6)
       entries,
     });
   }

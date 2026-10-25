@@ -19,6 +19,7 @@ import postgres from 'postgres';
 import * as schema from '../src/db/schema';
 import { eq } from 'drizzle-orm';
 import { clearTenantData, SEED_EMAIL_DOMAINS } from '../src/db/clear-tenant-data';
+import { recomputeSelfApproval } from '../src/server/internal/approval-rules';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import dayjs from 'dayjs';
@@ -89,6 +90,9 @@ export async function seedRichData(
     { id: userIds.lisa, email: `lisa.anderson@${ED}`, fullName: 'Lisa Anderson', role: 'employee', passwordHash: hash, isActive: false, flsaExempt: true },
   ]);
   console.log('    ✓ 8 users created');
+  // feature-plan-certified-outputs.md C2 (CO-D19, ruling Q5): record the self-approval switch state once, so demo data
+  // has the same admin_change_log history as a real workspace.
+  await db.transaction(async (tx) => { await recomputeSelfApproval(tx as never, userIds.admin, 'demo workspace seeded'); });
 
   // ── 2. Contracts ──
   console.log('  Creating contracts...');

@@ -48,6 +48,7 @@ export interface TimesheetState {
   isSaving: boolean;
   isLoadingPeriod: boolean; // true while fetching data for a new period
   periodStatus: PeriodStatus; // current period's approval status
+  approvalBadge: string | null; // certified-outputs C2: "Self-approved" / "Self-rejected" (approvalLabel), else null
   flsaExempt: boolean; // true if user is FLSA exempt (salaried)
   periodConfig: PeriodConfig; // pay period configuration
   today: CalendarDate; // workspace "today" (server-resolved, never the browser's clock)
@@ -64,7 +65,7 @@ export type TimesheetAction =
   | { type: 'CLOSE_NOTE_MODAL' }
   | { type: 'BEGIN_PERIOD_LOAD' }
   | { type: 'PERIOD_LOAD_FAILED' }
-  | { type: 'SET_PERIOD_DATA'; periodStart: CalendarDate; numDays: number; entries: TimesheetEntry[]; revisions: Record<string, number>; periodStatus: PeriodStatus; periodConfig: PeriodConfig }
+  | { type: 'SET_PERIOD_DATA'; periodStart: CalendarDate; numDays: number; entries: TimesheetEntry[]; revisions: Record<string, number>; periodStatus: PeriodStatus; periodConfig: PeriodConfig; approvalBadge?: string | null }
   | { type: 'SET_SAVING'; isSaving: boolean }
   | { type: 'MARK_SAVED'; periodStart: CalendarDate; entries: TimesheetEntry[]; revisions: Record<string, number> }
   | { type: 'DISCARD_CHANGES' }
@@ -92,6 +93,7 @@ export interface TimesheetPageData {
   today: CalendarDate;
   revisions?: Record<string, number>;
   periodStatus?: PeriodStatus;
+  approvalBadge?: string | null;
   flsaExempt?: boolean;
   dashboardData?: EmployeeDashboardData;
   periodConfig: PeriodConfig;

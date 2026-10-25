@@ -21,11 +21,12 @@ import { runAction } from '@/lib/run-action';
 import { IconPlus, IconEdit, IconKey, IconAlertCircle, IconLockOpen } from '@tabler/icons-react';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
-import { createUserWithPassword, updateUser, getUsers, unlockUserAccount } from '@/server/actions/users';
+import { createUserWithPassword, updateUser, getUsers, unlockUserAccount, setUserApprover } from '@/server/actions/users';
 import { adminResetPassword } from '@/server/actions/password';
 import { ROLE_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
+import { approverSelectOptions } from '@/lib/approvals/approver-options';
 
 type User = {
   id: string;
@@ -34,6 +35,7 @@ type User = {
   role: 'admin' | 'supervisor' | 'employee';
   isActive: boolean;
   flsaExempt: boolean;
+  approverId: string | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -54,6 +56,8 @@ type UserForm = {
   fullName: string;
   role: string;
   password: string;
+  /** certified-outputs C2: designated approver ('' = none — admins approve). Supervisor/admin users only. */
+  approverId: string;
 };
 
 const EMPTY_FORM: UserForm = {
@@ -61,6 +65,7 @@ const EMPTY_FORM: UserForm = {
   fullName: '',
   role: 'employee',
   password: '',
+  approverId: '',
 };
 
 export function UsersClient({ initialUsers, currentUserId }: Props) {
@@ -94,6 +99,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
       fullName: user.fullName,
       role: user.role,
       password: '', // Don't pre-fill password
+      approverId: user.approverId ?? '',
     });
     setFormError(null);
     setModalOpen(true);
@@ -111,6 +117,14 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
 
         if (Object.keys(updateData).length > 0) {
           const result = await runAction(updateUser(editingUser.id, updateData), { silent: true });
+          if (!result.ok) {
+            setFormError(result.error);
+            return;
+          }
+        }
+        // C2 (CO-D12): the approver is designated separately, and only for supervisor/admin users.
+        if ((form.role === 'supervisor' || form.role === 'admin') && form.approverId !== (editingUser.approverId ?? '')) {
+          const result = await runAction(setUserApprover(editingUser.id, form.approverId || null), { silent: true });
           if (!result.ok) {
             setFormError(result.error);
             return;
@@ -394,6 +408,19 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
             disabled={editingUser?.id === currentUserId}
             required
           />
+          {(() => {
+            const approverOptions = editingUser ? approverSelectOptions({ id: editingUser.id, role: form.role }, users) : null;
+            return approverOptions && (
+              <Select
+                label="Approver"
+                description="Who approves this person's timesheets. Without one, admins approve. Auditors prefer an independent reviewer."
+                data={approverOptions}
+                value={form.approverId}
+                onChange={(val) => setForm((f) => ({ ...f, approverId: val ?? '' }))}
+                allowDeselect={false}
+              />
+            );
+          })()}
           {!editingUser && (
             <PasswordInput
               label="Password"

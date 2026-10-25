@@ -71,6 +71,7 @@ function timesheetReducer(
         savedCellRevisions: action.revisions,
         notes: {},
         periodStatus: action.periodStatus,
+        approvalBadge: action.approvalBadge ?? null,
         periodConfig: action.periodConfig,
         isLoadingPeriod: false,
       };
@@ -100,7 +101,7 @@ function timesheetReducer(
     }
 
     case 'SET_PERIOD_STATUS': {
-      return { ...state, periodStatus: action.status };
+      return { ...state, periodStatus: action.status, approvalBadge: null };
     }
 
     case 'SET_TODAY': {
@@ -158,6 +159,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
     isSaving: false,
     isLoadingPeriod: false,
     periodStatus: initialData.periodStatus ?? 'draft',
+    approvalBadge: initialData.approvalBadge ?? null,
     flsaExempt: initialData.flsaExempt ?? false,
     periodConfig: initialData.periodConfig,
     today: initialData.today,

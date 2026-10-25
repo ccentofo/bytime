@@ -2,6 +2,7 @@ import 'server-only';
 import { getDb } from '@/db';
 import { userAssignments } from '@/db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
+import { effectiveDesignee, loadApprovalFacts, reviewScopeFrom } from './approval-rules';
 
 /**
  * Get the list of employee IDs that a supervisor is authorized to review.
@@ -14,8 +15,8 @@ import { eq, and, inArray } from 'drizzle-orm';
  *
  * Admin users bypass this entirely — they can review all employees.
  *
- * INTERNAL — not a server action. Call via src/lib/session.ts's getEmployeeScope() /
- * assertCanAccessEmployee(), which resolve the actor from the session first.
+ * INTERNAL — not a server action. The app's review scope is src/server/internal/approval-rules.ts (reviewScope:
+ * these CLIN sharers plus designations); this CLIN-only derivation is kept for its integration test.
  */
 export async function getSupervisedEmployeeIds(
   supervisorId: string,
@@ -61,54 +62,24 @@ export async function getSupervisedEmployeeIds(
 }
 
 /**
- * Get the contracts shared between a supervisor and their supervised employees.
- * Used for displaying scope context in the UI.
- *
- * INTERNAL — not a server action. Exposed to the client via getMyScopeInfo() in
- * src/server/actions/periods.ts, which calls this for the SESSION user only.
+ * The Approvals page banner counts for a supervisor (INTERNAL — exposed via getMyScopeInfo() for the SESSION user
+ * only). feature-plan-certified-outputs.md C2: the employee count is the review scope (CLIN sharers + the users who
+ * designated this supervisor as approver), so a designee with no CLINs isn't told "no employees in your scope".
  */
 export async function getSupervisorScopeInfo(supervisorId: string): Promise<{
   assignedContractCount: number;
   assignedClinCount: number;
   supervisedEmployeeCount: number;
+  designatedByCount: number;
 }> {
-  const db = await getDb();
-  // Count supervisor's CLIN assignments
-  const clinAssignments = await db
-    .select({ clinId: userAssignments.clinId })
-    .from(userAssignments)
-    .where(
-      and(
-        eq(userAssignments.userId, supervisorId),
-        eq(userAssignments.isActive, true),
-      )
-    );
-
-  const clinIds = clinAssignments.map((r) => r.clinId);
-
-  if (clinIds.length === 0) {
-    return { assignedContractCount: 0, assignedClinCount: 0, supervisedEmployeeCount: 0 };
-  }
-
-  // Count unique employees on those CLINs
-  const employees = await db
-    .select({ userId: userAssignments.userId })
-    .from(userAssignments)
-    .where(
-      and(
-        inArray(userAssignments.clinId, clinIds),
-        eq(userAssignments.isActive, true),
-      )
-    );
-
-  const uniqueEmployees = new Set(employees.map((r) => r.userId));
-  uniqueEmployees.delete(supervisorId); // Don't count self
-
-  // Count unique contracts (via CLINs)
-  // For simplicity, we count unique CLINs; contract count would require a join
+  const facts = await loadApprovalFacts(await getDb());
+  const scope = reviewScopeFrom(facts, supervisorId);
+  const others = scope === 'all' ? [...facts.users.keys()] : scope;
+  const designatedBy = [...facts.users.values()].filter((u) => effectiveDesignee(facts, u.id) === supervisorId).length;
   return {
     assignedContractCount: 0, // Will be enriched in Phase B if needed
-    assignedClinCount: clinIds.length,
-    supervisedEmployeeCount: uniqueEmployees.size,
+    assignedClinCount: facts.clinsByUser.get(supervisorId)?.size ?? 0,
+    supervisedEmployeeCount: others.filter((id) => id !== supervisorId).length,
+    designatedByCount: designatedBy,
   };
 }

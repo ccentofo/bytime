@@ -44,7 +44,7 @@ export function TimesheetPdfDocument({ data, workspaceTimezone }: Props) {
           <Text style={styles.subtitle}>
             Status: {data.periodStatus.toUpperCase()}
             {data.submittedAt && ` | Submitted: ${instant(data.submittedAt)}`}
-            {data.approvedAt && ` | Approved: ${instant(data.approvedAt)} by ${data.approvedBy}`}
+            {data.approvalLine && ` | ${data.approvalLine}`}
           </Text>
         </View>
 

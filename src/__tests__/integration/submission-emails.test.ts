@@ -186,8 +186,8 @@ describe('Submission notifications are scoped (R2-10)', () => {
       .values({ userId: employee.id, periodStart: '2020-01-16', status: 'submitted', submittedAt: new Date() }).returning();
 
     actingAs(admin);
-    await expectOk(approvePeriod({ periodId: approveMe.id }));
-    await expectOk(rejectPeriod({ periodId: rejectMe.id, comment: 'Please fix Tuesday.' }));
+    await expectOk(approvePeriod({ periodId: approveMe.id, seen: 0 }));
+    await expectOk(rejectPeriod({ periodId: rejectMe.id, comment: 'Please fix Tuesday.', seen: 0 }));
     await flushAfter();
 
     expect(emailState.sendTimesheetApprovedEmail).toHaveBeenCalledTimes(1);
@@ -210,8 +210,8 @@ describe('Submission notifications are scoped (R2-10)', () => {
     tenantState.failNotificationPrep = true;
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      await expectOk(approvePeriod({ periodId: approveMe.id }));
-      await expectOk(rejectPeriod({ periodId: rejectMe.id, comment: 'Please fix Tuesday.' }));
+      await expectOk(approvePeriod({ periodId: approveMe.id, seen: 0 }));
+      await expectOk(rejectPeriod({ periodId: rejectMe.id, comment: 'Please fix Tuesday.', seen: 0 }));
     } finally {
       tenantState.failNotificationPrep = false;
       logged.mockRestore();

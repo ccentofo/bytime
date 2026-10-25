@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 import { getDbForAuth } from '@/db';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { getSupervisedEmployeeIds } from '@/server/internal/supervisor-scope';
+import { reviewScope } from '@/server/internal/approval-rules';
 
 export type SessionUser = {
   id: string;
@@ -119,29 +119,24 @@ export async function requireApproverFresh(): Promise<SessionUser> {
 }
 
 /**
- * Employee ids the actor may see in approver contexts: 'all' for admins, scoped ids (employees
- * sharing an active CLIN assignment with the actor, PLUS the supervisor themselves — R2-12:
- * their own audit entries/reports should be visible here too, consistent with
- * assertCanAccessEmployee's self-access rule) for supervisors, empty for employees.
+ * Employee ids the actor may see in approver contexts — the ONE review scope (feature-plan-certified-outputs.md C2,
+ * CO-D18; src/server/internal/approval-rules.ts): 'all' for admins; for supervisors the users sharing an active CLIN,
+ * the users who effectively designated them as approver, and themselves (R2-12: their own entries/reports are visible
+ * too); empty for employees. Roles and designations come from the database, not the session token.
  */
 export async function getEmployeeScope(actor: SessionUser): Promise<'all' | string[]> {
-  if (actor.role === 'admin') return 'all';
-  if (actor.role === 'supervisor') {
-    const scope = await getSupervisedEmployeeIds(actor.id, actor.role);
-    return scope.includes(actor.id) ? scope : [...scope, actor.id];
-  }
-  return [];
+  if (actor.role !== 'admin' && actor.role !== 'supervisor') return [];
+  return reviewScope(actor);
 }
 
 /**
- * Throws unless the actor is the employee themselves, an admin, or a supervisor with the
- * employee in scope. Use in front of any read/write that targets a specific employee's data.
+ * Throws unless the actor is the employee themselves, or the employee is in the actor's review scope (above). Use in
+ * front of any read/write that targets a specific employee's data.
  */
 export async function assertCanAccessEmployee(actor: SessionUser, employeeId: string): Promise<void> {
   if (actor.id === employeeId) return;
-  if (actor.role === 'admin') return;
-  if (actor.role === 'supervisor') {
-    const scope = await getSupervisedEmployeeIds(actor.id, actor.role);
+  if (actor.role === 'admin' || actor.role === 'supervisor') {
+    const scope = await reviewScope(actor);
     if (scope === 'all' || scope.includes(employeeId)) return;
   }
   throw new AuthorizationError('forbidden', 'Forbidden: You are not authorized to access this employee\'s data.');

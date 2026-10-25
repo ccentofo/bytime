@@ -12,6 +12,7 @@ import { TRIAL_DAYS } from './lifecycle-config';
 import { addDays } from './lifecycle';
 import { withTenantLock } from '@/db/control-plane/locked';
 import { readTenant, updateTenantGuarded } from './lifecycle-store';
+import { recomputeSelfApproval } from '@/server/internal/approval-rules';
 
 // The slug rules live in a pure module (usable outside 'server-only' code); re-exported for existing importers.
 export { isValidSlug } from './slug-rules';
@@ -85,14 +86,20 @@ export async function provisionTenant(input: ProvisionInput): Promise<ProvisionR
 
   let [admin] = await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.email, email));
   if (!admin) {
-    [admin] = await db.insert(schema.users).values({
-      email,
-      fullName: input.adminName.trim(),
-      role: 'admin',
-      isActive: true,
-      // passwordHash intentionally omitted — set via the invite flow (signup blueprint).
-    }).returning({ id: schema.users.id });
-    await db.insert(schema.notificationPreferences).values({ userId: admin.id });
+    admin = await db.transaction(async (tx) => {
+      const [created] = await tx.insert(schema.users).values({
+        email,
+        fullName: input.adminName.trim(),
+        role: 'admin',
+        isActive: true,
+        // passwordHash intentionally omitted — set via the invite flow (signup blueprint).
+      }).returning({ id: schema.users.id });
+      await tx.insert(schema.notificationPreferences).values({ userId: created.id });
+      // feature-plan-certified-outputs.md C2 (CO-D19, ruling Q5): the baseline self_approval/enabled row, written only
+      // when this admin is inserted (a resumed provisioning finds the admin and never writes a second one).
+      await recomputeSelfApproval(tx, created.id, 'workspace created');
+      return created;
+    });
   }
 
   // D8: seed workspace_settings with the signer's captured timezone (validated; the column's

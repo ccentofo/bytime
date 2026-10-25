@@ -174,7 +174,10 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
   'reports.ts': { getDetailedCostReport: 'reads cost report rows via the read-only internal reader; no write' },
   'setup.ts': { getSetupStatus: 'reads setup-checklist counts; no write' },
   'slins.ts': { getSlinsByClin: 'reads a CLIN\'s SLINs; no write' },
-  'users.ts': { getUsers: 'reads users (SAFE_USER_COLUMNS); no write' },
+  'users.ts': {
+    getUsers: 'reads users (SAFE_USER_COLUMNS); no write',
+    getApprovalNotices: 'certified-outputs C2: reads the approval rules + admin_change_log for the notices; no write',
+  },
 };
 
 /** Matches the cached guard only — `requireAdminFresh(` does not match (an "F" follows "requireAdmin"). */

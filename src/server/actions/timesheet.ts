@@ -11,7 +11,9 @@ import { assertEntryDatesEditable, lockEmployeeTimesheet, resolvePeriod } from '
 import { configAt, existingPeriodLength } from '@/server/internal/pay-period-config';
 import { getPeriodStatusFor, type PeriodStatus } from '@/server/internal/periods';
 import type { PeriodConfig } from '@/lib/date-utils';
-import { getWorkspaceToday } from '@/server/internal/workspace-settings';
+import { getWorkspaceTimezone, getWorkspaceToday } from '@/server/internal/workspace-settings';
+import { canApprove, loadApprovalFacts } from '@/server/internal/approval-rules';
+import { approvalLabels } from '@/server/internal/approval-label';
 import { getNumDaysInPeriod } from '@/lib/date-utils';
 import { addDays, diffDays, isAfter, isBefore, formatCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { ConflictError, UserFacingError } from '@/lib/errors';
@@ -113,6 +115,8 @@ export async function getTimesheetPeriod(periodStart: CalendarDate): Promise<{
   entries: TimesheetEntry[];
   revisions: Record<string, number>;
   periodStatus: PeriodStatus;
+  /** certified-outputs C2: "Self-approved"/"Self-rejected" for this period (approvalLabel), else null. */
+  approvalBadge: string | null;
 }> {
   const actor = await requireSession();
   const start = parseCalendarDate(periodStart);
@@ -127,7 +131,10 @@ export async function getTimesheetPeriod(periodStart: CalendarDate): Promise<{
     getTimesheetEntriesForEmployee(actor.id, start, chargeCodes),
     revisionMapFor(actor.id, start, numDays),
   ]);
-  return { periodStart: start, numDays, periodConfig, entries, revisions, periodStatus: periodInfo.status };
+  const approvalBadge = periodInfo.id
+    ? (await approvalLabels(db, [{ id: periodInfo.id, userId: actor.id, status: periodInfo.status, reviewedBy: periodInfo.reviewedBy, reviewedAt: periodInfo.reviewedAt }], await getWorkspaceTimezone())).get(periodInfo.id)?.badge ?? null
+    : null;
+  return { periodStart: start, numDays, periodConfig, entries, revisions, periodStatus: periodInfo.status, approvalBadge };
 }
 
 /** This employee's length for the period at `start`: their stored snapshot, else the schedule. */
@@ -420,17 +427,48 @@ export async function saveTimesheetBatch(data: {
 }
 
 /**
- * Get a read-only view of an employee's timesheet for supervisor/admin review.
+ * Get a read-only view of an employee's timesheet for supervisor/admin review. Scope: the review scope
+ * (feature-plan-certified-outputs.md C2 — designees see the people who designated them).
+ *
+ * C2 "approve exactly what was reviewed": `submissionCount` is read BEFORE the entries. Entries only change while the
+ * period is draft/rejected, so if anything changed after this read the period was resubmitted, the count moved past the
+ * value returned here, and approve/reject with `seen = submissionCount` is refused ("resubmitted").
  */
 export async function getTimesheetForReview(
   employeeId: string,
   periodStart: CalendarDate
-): Promise<{ chargeCodes: ChargeCode[]; entries: TimesheetEntry[] }> {
+): Promise<{
+  chargeCodes: ChargeCode[];
+  entries: TimesheetEntry[];
+  periodStatus: PeriodStatus;
+  submissionCount: number;
+  canApprove: boolean;
+  approvalBadge: string | null;
+  approvalText: string | null;
+}> {
   const actor = await requireSession();
   await assertCanAccessEmployee(actor, employeeId);
+  const start = parseCalendarDate(periodStart);
+  const db = await getDb();
+  const [period] = await db.select({
+    id: timesheetPeriods.id, status: timesheetPeriods.status, submissionCount: timesheetPeriods.submissionCount,
+    reviewedBy: timesheetPeriods.reviewedBy, reviewedAt: timesheetPeriods.reviewedAt,
+  }).from(timesheetPeriods).where(and(eq(timesheetPeriods.userId, employeeId), eq(timesheetPeriods.periodStart, start)));
   const codes = await getChargeCodesForEmployee(employeeId);
-  const entries = await getTimesheetEntriesForEmployee(employeeId, parseCalendarDate(periodStart), codes);
-  return { chargeCodes: codes, entries };
+  const entries = await getTimesheetEntriesForEmployee(employeeId, start, codes);
+  const facts = await loadApprovalFacts(db);
+  const label = period
+    ? (await approvalLabels(db, [{ id: period.id, userId: employeeId, status: period.status, reviewedBy: period.reviewedBy, reviewedAt: period.reviewedAt }], await getWorkspaceTimezone())).get(period.id)
+    : undefined;
+  return {
+    chargeCodes: codes,
+    entries,
+    periodStatus: period?.status ?? 'draft',
+    submissionCount: period?.submissionCount ?? 0,
+    canApprove: period?.status === 'submitted' && canApprove(facts, actor.id, employeeId),
+    approvalBadge: label?.badge ?? null,
+    approvalText: label?.text ?? null,
+  };
 }
 
 // ---------------------------------------------------------------------------
