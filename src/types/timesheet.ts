@@ -77,7 +77,7 @@ export type TimesheetAction =
   | { type: 'CLOSE_NOTE_MODAL' }
   | { type: 'BEGIN_PERIOD_LOAD' }
   | { type: 'PERIOD_LOAD_FAILED' }
-  | { type: 'SET_PERIOD_DATA'; periodStart: CalendarDate; numDays: number; entries: TimesheetEntry[]; revisions: Record<string, number>; periodStatus: PeriodStatus; periodConfig: PeriodConfig; approvalBadge?: string | null; chargeCodes?: ChargeCode[] }
+  | { type: 'SET_PERIOD_DATA'; periodStart: CalendarDate; numDays: number; entries: TimesheetEntry[]; revisions: Record<string, number>; periodStatus: PeriodStatus; periodConfig: PeriodConfig; approvalBadge?: string | null; chargeCodes: ChargeCode[] }
   | { type: 'SET_SAVING'; isSaving: boolean }
   | { type: 'MARK_SAVED'; periodStart: CalendarDate; entries: TimesheetEntry[]; revisions: Record<string, number> }
   | { type: 'DISCARD_CHANGES' }

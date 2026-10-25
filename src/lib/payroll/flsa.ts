@@ -11,8 +11,8 @@ import { addDays, compare, dayOfWeek, isAfter, isBefore, type CalendarDate } fro
  *   (29 CFR 778.218–219). Unpaid leave is never in a paid column.
  * - Exempt employees: overtime is 0; the hours beyond 40 are reported as uncompensated overtime.
  * - The walk uses EVERY day given (so an unapproved day earlier in a workweek still counts toward its 40); only the
- *   days the caller marks `output` are reported. An employee whose reported days relied on unapproved earlier days
- *   in the same workweek is flagged.
+ *   days the caller marks `output` are reported. An employee is flagged when a reported day has overtime and
+ *   unapproved worked hours earlier in the same workweek counted toward its 40.
  */
 
 export const OVERTIME_THRESHOLD_CENTS = 4000;
@@ -123,8 +123,8 @@ export function computeFlsa(input: {
       const inRange = !isBefore(date, rangeStart) && !isAfter(date, rangeEnd);
       if (inRange && approved) {
         reported = true;
-        // The 40 for this day was reached using unapproved days earlier in the same workweek.
-        if (unapprovedWorkedSoFar > 0 && b.worked > 0) totals.otBasisIncludesUnapprovedDays = true;
+        // Fix round 1 (F10): flag only when this day's OVERTIME depends on unapproved days earlier in the workweek.
+        if (unapprovedWorkedSoFar > 0 && beyond > 0) totals.otBasisIncludesUnapprovedDays = true;
         const day: FlsaDay = {
           userId, date, workweekStart: wk, worked: b.worked, regular,
           overtime: exempt ? 0 : beyond, uncompensatedOvertime: exempt ? beyond : 0,

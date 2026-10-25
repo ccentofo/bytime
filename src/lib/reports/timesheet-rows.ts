@@ -28,6 +28,15 @@ export interface TimesheetRowEntry extends ProvenanceInput {
   indirectCode: string | null;
   indirectName: string | null;
   indirectCategory: string | null;
+  /**
+   * Charge-code rows (fix round 1, F9): the charge code's OWN CLIN / contract / SLIN — identical for every entry of the
+   * code, so the label never depends on which entry the database returned first (an entry's denormalized clin_id can
+   * predate a CLIN change).
+   */
+  codeClinNumber?: string | null;
+  codeContractName?: string | null;
+  codeContractNumber?: string | null;
+  codeSlinNumber?: string | null;
 }
 
 export interface TimesheetRow {
@@ -83,12 +92,13 @@ export function buildTimesheetRows(entries: TimesheetRowEntry[], numDays: number
   const rows = [...groups.values()].map((g) => {
     const e = g.first;
     const slin = g.slins.size === 1 ? [...g.slins][0] : null;
+    const charge = g.kind === 'charge';
     const base = {
       kind: g.kind,
-      contractName: g.kind === 'indirect' ? null : e.contractName,
-      contractNumber: g.kind === 'indirect' ? null : e.contractNumber,
-      clinNumber: g.kind === 'indirect' ? null : e.clinNumber,
-      slinNumber: g.kind === 'indirect' ? null : slin,
+      contractName: g.kind === 'indirect' ? null : charge ? e.codeContractName ?? null : e.contractName,
+      contractNumber: g.kind === 'indirect' ? null : charge ? e.codeContractNumber ?? null : e.contractNumber,
+      clinNumber: g.kind === 'indirect' ? null : charge ? e.codeClinNumber ?? null : e.clinNumber,
+      slinNumber: g.kind === 'indirect' ? null : charge ? e.codeSlinNumber ?? null : slin,
       dailyHours: g.cents.map((c) => c / 100),
       totalHours: g.cents.reduce((s, c) => s + c, 0) / 100,
       provenance: [...g.provenance].sort(cmp),
@@ -97,7 +107,7 @@ export function buildTimesheetRows(entries: TimesheetRowEntry[], numDays: number
     let row: TimesheetRow;
     if (g.kind === 'charge') {
       row = { ...base, code: e.chargeCode ?? '', description: e.chargeCodeName ?? '', category: null };
-      sortKey.push(e.contractName ?? '', e.clinNumber ?? '', row.code);
+      sortKey.push(base.contractName ?? '', base.clinNumber ?? '', row.code);
     } else if (g.kind === 'clin') {
       row = { ...base, code: `CLIN ${e.clinNumber ?? ''}`, description: e.clinDescription ?? '', category: null };
       sortKey.push(e.contractName ?? '', e.clinNumber ?? '');

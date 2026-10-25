@@ -128,6 +128,19 @@ describe('grid corrections (certified-outputs C4)', () => {
     expect((await saveTimesheetBatch({ periodStart: start, cells: [{ indirectCodeId: ind.id, dayIndex: 0, hours: 2, isEdit: true, isLateEntry: false }], ...fix })).ok).toBe(true);
   });
 
+  it('F7: a charge cell whose revisions carry two clin_ids (pre-C3 CLIN change) — the revision map gives the latest, the save succeeds', async () => {
+    const contract = await createTestContract();
+    const clinB = await createTestClin(contract.id);
+    const code = await createTestChargeCode(clin.id);
+    await db().insert(schema.userChargeCodes).values({ userId: emp.id, chargeCodeId: code.id, isActive: true });
+    await entry({ chargeCodeId: code.id, clinId: clinB.id, hours: '4' });                                  // rev 1 under the old CLIN
+    await entry({ chargeCodeId: code.id, clinId: clin.id, hours: '6', revisionNumber: 2, changeReasonCode: 'CORRECTION', comment: 'x' });
+    const period = await getTimesheetPeriod(start);
+    expect(period.revisions[`${code.id}-0`]).toBe(2);
+    const r = await saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 7, isEdit: true, isLateEntry: false, expectedRevision: period.revisions[`${code.id}-0`] }], ...fix });
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+  });
+
   it('the review shows every recorded hour (unassigned and legacy CLIN rows included) with provenance on imported cells', async () => {
     const code = await createTestChargeCode(clin.id);
     await db().insert(schema.userChargeCodes).values({ userId: emp.id, chargeCodeId: code.id, isActive: false });

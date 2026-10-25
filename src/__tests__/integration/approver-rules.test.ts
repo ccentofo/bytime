@@ -282,6 +282,14 @@ describe('approver rules (certified-outputs C2)', () => {
     expect((event.approvalContext as { selfApprovalEnabledAt: string }).selfApprovalEnabledAt).toBeTruthy();
   });
 
+  it('F2: a workspace with two admins and NO prior self_approval rows → deactivate one → the notice shows for the other', async () => {
+    const admin2 = await createTestUser({ role: 'admin' });
+    expect(await logRows('self_approval')).toEqual([]);
+    actingAs(admin);
+    await expectOk(updateUser(admin2.id, { isActive: false }));
+    expect((await getApprovalNotices()).selfApprovalBackOn).not.toBeNull();
+  });
+
   it('with an active designee nothing is enabled; reactivating the admin / designating writes disabled', async () => {
     const admin2 = await createTestUser({ role: 'admin' });
     const book = await createTestUser({ role: 'supervisor' });
@@ -344,7 +352,7 @@ describe('approver rules (certified-outputs C2)', () => {
     await expect(getTimesheetForReview(other.id, prevStart(1))).rejects.toThrow(/not authorized/);
     await expect(getCellRevisionHistory(X.id, clin.id, d)).resolves.not.toBeNull();
     await expect(getCellRevisionHistory(other.id, clin.id, d)).rejects.toThrow(/not authorized/);
-    const audit = await getAuditEntries({});
+    const audit = (await getAuditEntries({})).entries;
     expect(new Set(audit.map((a) => a.userId))).toEqual(new Set([book.id, X.id]));
     const summary = await getEmployeeSummaryReport(prevStart(1), addDays(prevStart(1), 14));
     expect(summary.map((s) => s.employeeName).sort()).toEqual([book.fullName, X.fullName].sort());

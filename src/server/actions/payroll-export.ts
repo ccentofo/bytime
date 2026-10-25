@@ -11,7 +11,8 @@ import {
   type PayrollFormat,
 } from '@/lib/integrations/connectors/payroll-export';
 import { fromCents } from '@/lib/payroll/flsa';
-import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import type { CalendarDate } from '@/lib/calendar-date';
+import { validateCalendarDate } from '@/lib/validation';
 import { UserFacingError } from '@/lib/errors';
 import { loadPayrollData, PayrollNotReadyError } from '@/server/internal/payroll-data';
 
@@ -19,18 +20,6 @@ import { loadPayrollData, PayrollNotReadyError } from '@/server/internal/payroll
  * Payroll export — FLSA weekly overtime (feature-plan-certified-outputs.md C7). All figures come from
  * src/server/internal/payroll-data.ts + src/lib/payroll/flsa.ts. Admin-only reads (no write).
  */
-
-/**
- * Get available payroll export formats.
- */
-export async function getPayrollFormats() {
-  await requireAdmin();
-  return PAYROLL_FORMATS.map((f) => ({
-    id: f.id,
-    name: f.name,
-    description: f.description,
-  }));
-}
 
 export interface PayrollPreviewEmployee {
   employeeName: string;
@@ -65,7 +54,7 @@ export async function getPayrollExportPreview(data: {
     await requireAdmin();
     const db = await getDb();
     try {
-      const payroll = await loadPayrollData(db, parseCalendarDate(data.periodStart), parseCalendarDate(data.periodEnd));
+      const payroll = await loadPayrollData(db, validateCalendarDate(data.periodStart, 'Start date'), validateCalendarDate(data.periodEnd, 'End date'));
       return {
         status: 'ready' as const,
         workweekStartDay: payroll.workweekStartDay,
@@ -105,8 +94,8 @@ export async function generatePayrollExportCSV(data: {
     await requireAdmin();
     const formatConfig = data.format === 'daily-hours' ? null : PAYROLL_FORMATS.find((f) => f.id === data.format);
     if (data.format !== 'daily-hours' && !formatConfig) throw new UserFacingError(`Unknown payroll format: ${data.format}`);
-    const start = parseCalendarDate(data.periodStart);
-    const end = parseCalendarDate(data.periodEnd);
+    const start = validateCalendarDate(data.periodStart, 'Start date');
+    const end = validateCalendarDate(data.periodEnd, 'End date');
     const db = await getDb();
     const payroll = await loadPayrollData(db, start, end);
     const csvContent = formatConfig ? generatePayrollCSV(payroll.employees, formatConfig, start, end) : generateDailyDetailCSV(payroll.days);

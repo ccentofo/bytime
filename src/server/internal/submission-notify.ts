@@ -26,6 +26,8 @@ export async function notifySubmissionRecipients(opts: {
   only?: string[];
   /** An extra line in the email (ruling Q8: the designated approver is no longer available). */
   note?: string;
+  /** When the timesheet was SUBMITTED (fix round 1, F15) — a re-route email must not print the re-route time. */
+  submittedAt: Date | null;
 }): Promise<void> {
   const db = await getDb();
   const facts = await loadApprovalFacts(db);
@@ -42,7 +44,7 @@ export async function notifySubmissionRecipients(opts: {
 
   const periodEnd = addDays(opts.periodStart, opts.numDays - 1);
   const periodLabel = `${formatCalendarDate(opts.periodStart, 'MMM D')} – ${formatCalendarDate(periodEnd, 'MMM D, YYYY')}`;
-  const submittedAt = formatInstant(new Date(), await getWorkspaceTimezone(), 'MMM D, YYYY h:mm A');
+  const submittedAt = opts.submittedAt ? formatInstant(opts.submittedAt, await getWorkspaceTimezone(), 'MMM D, YYYY h:mm A') : 'an unknown time';
   const appUrl = tenantBaseUrl(await getTenantSlug());
   scheduleEmail('timesheet-submitted', async () => {
     for (const reviewer of recipients) {
@@ -68,7 +70,7 @@ export async function notifyReroutedApprovals(list: ReroutedApproval[]): Promise
   if (list.length === 0) return;
   try {
     const db = await getDb();
-    const periods = await db.select({ id: timesheetPeriods.id, periodStart: timesheetPeriods.periodStart, periodNumDays: timesheetPeriods.periodNumDays })
+    const periods = await db.select({ id: timesheetPeriods.id, periodStart: timesheetPeriods.periodStart, periodNumDays: timesheetPeriods.periodNumDays, submittedAt: timesheetPeriods.submittedAt })
       .from(timesheetPeriods).where(inArray(timesheetPeriods.id, list.map((l) => l.periodId)));
     const byId = new Map(periods.map((p) => [p.id, p]));
     for (const item of list) {
@@ -77,7 +79,7 @@ export async function notifyReroutedApprovals(list: ReroutedApproval[]): Promise
       const start = p.periodStart as CalendarDate;
       await notifySubmissionRecipients({
         employeeId: item.userId, periodStart: start, numDays: await existingPeriodLength(db, start, p.periodNumDays),
-        only: item.recipients, ...(item.designeeLost ? { note: DESIGNEE_LOST_NOTE } : {}),
+        only: item.recipients, ...(item.designeeLost ? { note: DESIGNEE_LOST_NOTE } : {}), submittedAt: p.submittedAt,
       });
     }
   } catch (err) {

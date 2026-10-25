@@ -156,7 +156,9 @@ export async function getChargeCodeReactivationInfo(id: string): Promise<{ still
     .from(chargeCodes).innerJoin(clins, eq(chargeCodes.clinId, clins.id)).innerJoin(contracts, eq(clins.contractId, contracts.id))
     .where(eq(chargeCodes.id, id));
   const assigned = await db.select({ id: userChargeCodes.id }).from(userChargeCodes)
-    .where(and(eq(userChargeCodes.chargeCodeId, id), eq(userChargeCodes.isActive, true)));
+    .innerJoin(users, eq(userChargeCodes.userId, users.id))
+    // F11: only ACTIVE employees get the code back — a deactivated user's assignment is not counted.
+    .where(and(eq(userChargeCodes.chargeCodeId, id), eq(userChargeCodes.isActive, true), eq(users.isActive, true)));
   return { stillAssigned: assigned.length, assignable: code?.clinActive === 'active' && code?.contractActive === 'active' };
 }
 
@@ -173,7 +175,9 @@ export async function reactivateChargeCode(id: string) {
       const [current] = await tx.select({ isActive: chargeCodes.isActive }).from(chargeCodes).where(eq(chargeCodes.id, id)).for('update');
       if (!current) throw new UserFacingError('Charge code not found.', 'not_found');
       const assigned = await tx.select({ id: userChargeCodes.id }).from(userChargeCodes)
-        .where(and(eq(userChargeCodes.chargeCodeId, id), eq(userChargeCodes.isActive, true)));
+        .innerJoin(users, eq(userChargeCodes.userId, users.id))
+        // F11: count active employees only (they are the ones who see the code again).
+        .where(and(eq(userChargeCodes.chargeCodeId, id), eq(userChargeCodes.isActive, true), eq(users.isActive, true)));
       if (current.isActive) return { stillAssigned: assigned.length };
       await tx.update(chargeCodes).set({ isActive: true, updatedAt: new Date() }).where(eq(chargeCodes.id, id));
       await tx.insert(adminChangeLog).values({

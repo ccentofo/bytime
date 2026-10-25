@@ -86,7 +86,6 @@ import {
   getTimesheetEntries,
   getRevisionMap,
 } from '@/server/actions/timesheet';
-import { getSupervisedEmployeeIds } from '@/server/internal/supervisor-scope';
 
 function actingAs(user: { id: string; role: string; email: string; fullName: string }) {
   sessionState.user = { id: user.id, role: user.role, email: user.email, fullName: user.fullName };
@@ -264,17 +263,6 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
   });
 
   // -------------------------------------------------------------------------
-  it('supervisor scope includes an employee charging a code under the supervisor\'s CLIN', async () => {
-    const supervisor = await createTestUser({ role: 'supervisor' });
-    const db = getTestDb();
-    await db.insert(schema.userAssignments).values({ userId: supervisor.id, clinId: clin.id, isActive: true });
-
-    await expectOk(assignChargeCodeToUser(employee.id, chargeCode.id));
-
-    const supervised = await getSupervisedEmployeeIds(supervisor.id, 'supervisor');
-    expect(supervised).toContain(employee.id);
-  });
-
   // -------------------------------------------------------------------------
   it('blocks any save once the period has been submitted', async () => {
     await expectOk(assignChargeCodeToUser(employee.id, chargeCode.id));

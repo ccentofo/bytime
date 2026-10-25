@@ -64,7 +64,7 @@ describe('audit trail (certified-outputs C6)', () => {
     await entry({ chargeCodeId: b.id, clinId: clin.id, hours: '5' });
     await entry({ indirectCodeId: leave.id });
 
-    const rows = await getAuditEntries({ userId: emp.id });
+    const rows = (await getAuditEntries({ userId: emp.id })).entries;
     expect(rows).toHaveLength(4);
     expect(rows.find((r) => r.kind === 'indirect')).toMatchObject({ codeLabel: 'LV-PTO (Leave)', contractName: null, cellCode: leave.id });
 
@@ -83,7 +83,7 @@ describe('audit trail (certified-outputs C6)', () => {
     await entry({ clinId: clin.id, source: 'migration', importBatchId: batch.id, originalMetadata: { enteredBy: null }, createdBy: admin.id });
     await entry({ clinId: legacyClin.id, changeReasonCode: 'MIGRATION' });
 
-    const rows = await getAuditEntries({ userId: emp.id });
+    const rows = (await getAuditEntries({ userId: emp.id })).entries;
     expect(rows.find((r) => r.cellCode === clin.id)?.provenance).toMatch(/^Imported from Deltek on \d{4}-\d{2}-\d{2} by Ann Admin — originally entered by author not recorded$/);
     expect(rows.find((r) => r.cellCode === legacyClin.id)).toMatchObject({ provenance: 'Legacy import — details not recorded', changeReasonCode: 'MIGRATION' });
     expect((await getCellRevisionHistory(emp.id, clin.id, D))!.revisions[0].provenance).toMatch(/^Imported from Deltek/);
@@ -99,16 +99,19 @@ describe('audit trail (certified-outputs C6)', () => {
         approvalContext: { selfApproved: true, activeAdminCount: 1, effectiveDesignee: null, selfApprovalEnabledAt: '2026-03-01T10:00:00Z', selfApprovalEnabledBy: bo.id } },
     ]);
     const [batch] = await db().insert(schema.importBatches).values({ kind: 'periods', sourceSystem: 'Deltek', importedBy: admin.id, rowCount: 1, importedCount: 1, skippedCount: 0 }).returning();
-    const [imp] = await db().insert(schema.timesheetPeriods).values({ userId: emp.id, periodStart: '2026-02-01', status: 'approved' }).returning();
+    const [imp] = await db().insert(schema.timesheetPeriods).values({ userId: emp.id, periodStart: '2026-02-01', status: 'approved', periodNumDays: 15 }).returning();
     await db().insert(schema.periodEvents).values({ periodId: imp.id, userId: emp.id, event: 'approved', actorId: admin.id, source: 'migration', importBatchId: batch.id, originalMetadata: { reviewer: 'boss@old.example', reviewedAt: '2026-02-17' } });
 
-    const events = await getAuditPeriodEvents({});
+    const events = (await getAuditPeriodEvents({})).events;
     const self = events.find((e) => e.userId === admin.id && e.event === 'approved')!;
     expect(self).toMatchObject({ selfApproved: true, text: expect.stringMatching(/^Self-approved on Mar 20, 2026/) });
     expect(self.context).toMatch(/^1 active admin at the time; self-approval on since Mar 1, 2026.* \(switched on by Bo Boss\)$/);
     expect(events.find((e) => e.userId === admin.id && e.event === 'submitted')?.text).toMatch(/^Submitted by Ann Admin/);
     expect(events.find((e) => e.userId === emp.id)?.text).toMatch(/^Approved in Deltek by boss@old\.example on 2026-02-17 \(imported \d{4}-\d{2}-\d{2}\)$/);
-    expect((await getAuditPeriodEvents({ userId: emp.id })).map((e) => e.userId)).toEqual([emp.id]);
-    expect(await getAuditPeriodEvents({ startDate: '2026-03-01' as CalendarDate, endDate: '2026-03-31' as CalendarDate })).toHaveLength(2);
+    expect(((await getAuditPeriodEvents({ userId: emp.id })).events).map((e) => e.userId)).toEqual([emp.id]);
+    expect((await getAuditPeriodEvents({ startDate: '2026-03-01' as CalendarDate, endDate: '2026-03-31' as CalendarDate })).events).toHaveLength(2);
+    // F12: a period that STARTED before the range but overlaps it is included (the import period 2026-02-01, 15 days).
+    expect((await getAuditPeriodEvents({ startDate: '2026-02-10' as CalendarDate, endDate: '2026-02-28' as CalendarDate })).events.map((e) => e.userId)).toEqual([emp.id]);
+    expect((await getAuditPeriodEvents({ startDate: '2026-02-16' as CalendarDate, endDate: '2026-02-28' as CalendarDate })).events).toEqual([]);
   });
 });

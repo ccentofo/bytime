@@ -3,6 +3,7 @@ import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import * as schema from '@/db/schema';
+import { controlPlaneBehindMessage, controlPlaneJournalWhens, controlPlaneMigrationGap } from '../helpers/control-plane-migrations';
 
 // Server-only modules (src/lib/tenant/context.ts, registry.ts, provision.ts, neon.ts) import
 // the `server-only` guard, which the integration runner can't resolve. Stub it (and client-only)
@@ -49,6 +50,20 @@ beforeAll(async () => {
     // If types/tables already exist, that's fine — we're using the dev DB
     if (err?.cause?.code !== '42710' && err?.cause?.code !== '42P07') {
       throw err;
+    }
+  }
+
+  // Fix round 1 (F16): the control plane is migrated by `npm run db:migrate:cp`, not here. A local control plane behind
+  // the journal fails every control-plane suite with cryptic "column … does not exist" errors — say so once instead.
+  if (process.env.CONTROL_PLANE_DATABASE_URL) {
+    const cp = postgres(process.env.CONTROL_PLANE_DATABASE_URL, { max: 1 });
+    try {
+      const [{ exists }] = await cp<{ exists: boolean }[]>`SELECT to_regclass('drizzle.__drizzle_migrations') IS NOT NULL AS exists`;
+      const [row] = exists ? await cp<{ last: string | null }[]>`SELECT max(created_at)::text AS last FROM drizzle.__drizzle_migrations` : [{ last: null }];
+      const gap = controlPlaneMigrationGap(controlPlaneJournalWhens(), row?.last ? Number(row.last) : null);
+      if (gap.behind) throw new Error(controlPlaneBehindMessage(gap));
+    } finally {
+      await cp.end({ timeout: 1 });
     }
   }
 

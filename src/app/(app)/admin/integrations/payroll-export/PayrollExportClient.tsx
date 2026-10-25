@@ -53,7 +53,12 @@ export function PayrollExportClient({ today }: { today: CalendarDate }) {
     startOfMonth(today),
     withDayOfMonth(today, daysInMonth(today)),
   ]);
-  const [preview, setPreview] = useState<PayrollPreview | null>(null);
+  // Fix round 1 (F4): a preview belongs to the range it was generated for. Downloads need a READY preview of the
+  // CURRENT range, so the flagged employees are always seen before a file is downloaded.
+  const [previewState, setPreviewState] = useState<{ range: string; data: PayrollPreview } | null>(null);
+  const rangeKey = `${dateRange[0] ?? ''}|${dateRange[1] ?? ''}`;
+  const preview = previewState && previewState.range === rangeKey ? previewState.data : null;
+  const canDownload = preview?.status === 'ready';
   const [isPending, startTransition] = useTransition();
   const [isDownloading, setIsDownloading] = useState(false);
 
@@ -64,9 +69,10 @@ export function PayrollExportClient({ today }: { today: CalendarDate }) {
     }
 
     startTransition(async () => {
+      const requested = rangeKey;
       const result = await runAction(getPayrollExportPreview({ periodStart: dateRange[0]!, periodEnd: dateRange[1]! }), { errorTitle: 'Preview failed' });
       if (!result.ok) return;
-      setPreview(result.data);
+      setPreviewState({ range: requested, data: result.data }); // ignored at render if the range changed meanwhile
       if (result.data.status === 'ready' && result.data.employees.length === 0) {
         notifications.show({ title: 'No approved data', message: 'No approved timesheet entries found for this date range.', color: 'warning' });
       }
@@ -155,10 +161,13 @@ export function PayrollExportClient({ today }: { today: CalendarDate }) {
               label="Date Range"
               placeholder="Select period..."
               value={dateRange}
-              onChange={(value) => setDateRange([
-                value[0] && isCalendarDate(value[0]) ? value[0] : null,
-                value[1] && isCalendarDate(value[1]) ? value[1] : null,
-              ])}
+              onChange={(value) => {
+                setDateRange([
+                  value[0] && isCalendarDate(value[0]) ? value[0] : null,
+                  value[1] && isCalendarDate(value[1]) ? value[1] : null,
+                ]);
+                setPreviewState(null); // a new range needs a new preview
+              }}
               leftSection={<IconCalendar size={16} />}
             />
           </Group>
@@ -187,6 +196,19 @@ export function PayrollExportClient({ today }: { today: CalendarDate }) {
             </Alert>
           )}
 
+          {flagged.length > 0 && (
+            <Alert color="warning" variant="light" icon={<IconAlertTriangle size={16} />} title="Overtime uses unapproved days" data-testid="payroll-flagged">
+              <Text size="sm">
+                These employees&apos; overtime counts hours from unapproved days earlier in the same workweek. Their
+                figures may change once those timesheets are approved:
+              </Text>
+              <Text size="sm" fw={600} mt={4}>{flagged.map((e) => e.employeeName).join(', ')}</Text>
+            </Alert>
+          )}
+          {!canDownload && (
+            <Text size="xs" c="dimmed" data-testid="payroll-preview-first">Preview the data for this date range to enable downloads.</Text>
+          )}
+
           <Group>
             <Button
               variant="light"
@@ -202,7 +224,8 @@ export function PayrollExportClient({ today }: { today: CalendarDate }) {
               leftSection={<IconDownload size={16} />}
               onClick={() => format && download(format)}
               loading={isDownloading}
-              disabled={!format || !dateRange[0] || !dateRange[1]}
+              disabled={!format || !canDownload}
+              data-testid="payroll-download"
             >
               Download CSV
             </Button>
@@ -211,7 +234,8 @@ export function PayrollExportClient({ today }: { today: CalendarDate }) {
               leftSection={<IconDownload size={16} />}
               onClick={() => download('daily-hours')}
               loading={isDownloading}
-              disabled={!dateRange[0] || !dateRange[1]}
+              disabled={!canDownload}
+              data-testid="payroll-download-daily"
             >
               Daily hours detail
             </Button>
@@ -232,16 +256,6 @@ export function PayrollExportClient({ today }: { today: CalendarDate }) {
       {/* Preview Table */}
       {preview?.status === 'ready' && (
         <>
-          {flagged.length > 0 && (
-            <Alert color="warning" variant="light" icon={<IconAlertTriangle size={16} />} title="Overtime uses unapproved days" mb="md" data-testid="payroll-flagged">
-              <Text size="sm">
-                These employees&apos; overtime counts hours from unapproved days earlier in the same workweek. Their
-                figures may change once those timesheets are approved:
-              </Text>
-              <Text size="sm" fw={600} mt={4}>{flagged.map((e) => e.employeeName).join(', ')}</Text>
-            </Alert>
-          )}
-
           {/* Summary Stats */}
           <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="md" mb="md">
             <Paper withBorder p="md" radius="md">

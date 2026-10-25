@@ -113,6 +113,22 @@ describe('deactivate / reactivate (CO-D8, ruling Q2)', () => {
   });
 });
 
+describe('F11 — small cost-view fixes', () => {
+  it('the reactivation count (dialog + action) counts ACTIVE employees only', () => {
+    const cc = readFileSync(path.join(ROOT, 'src/server/actions/charge-codes.ts'), 'utf8');
+    const counts = cc.match(/eq\(userChargeCodes\.chargeCodeId, id\), eq\(userChargeCodes\.isActive, true\), eq\(users\.isActive, true\)/g) ?? [];
+    expect(counts).toHaveLength(2);
+    expect(cc.match(/\.innerJoin\(users, eq\(userChargeCodes\.userId, users\.id\)\)\s*\/\/ F11/g)).toHaveLength(2);
+  });
+
+  it('the period-report note scopes by the GENERATED range; the API-key dialog documents lcatTitle "Unpriced"', () => {
+    const dash = readFileSync(path.join(ROOT, 'src/app/(app)/admin/dashboard/DashboardClient.tsx'), 'utf8');
+    expect(dash).toMatch(/<UnpricedNote hours=\{reportUnpriced\} size="sm" scope=\{generatedRange \?\? \{\}\} \/>/);
+    expect(dash).toMatch(/setGeneratedRange\(\{ startDate: reportStartDate, endDate: reportEndDate \}\)/);
+    expect(readFileSync(path.join(ROOT, 'src/app/(app)/admin/api-keys/ApiKeysClient.tsx'), 'utf8')).toMatch(/<Code>lcatTitle<\/Code> is\{' '\}\s*<Code>Unpriced<\/Code>/);
+  });
+});
+
 describe('endUserLaborCategoryAssignment — optional end date (promotion: end yesterday, start today)', () => {
   it('an explicit end date on/after the effective date is used; before it is refused; default is today', async () => {
     db.onSelect(userLaborCategories, [{ effectiveDate: '2026-01-01' }]);
@@ -155,7 +171,7 @@ describe('cost exports carry the unpriced count (ruling Q6)', () => {
   });
 
   it('the summary XLSX adds them only with the cost column (admins)', async () => {
-    const data = [{ employeeName: 'Pat', contractName: 'C', contractNumber: 'N', clinNumber: '0001', totalHours: 10, totalCost: 600, unpricedHours: 4, flsaExempt: false }];
+    const data = [{ employeeId: 'u1', employeeName: 'Pat', contractName: 'C', contractNumber: 'N', clinNumber: '0001', totalHours: 10, totalCost: 600, unpricedHours: 4, flsaExempt: false }];
     expect((await rows(await generateEmployeeSummaryExcel(data, 'Sep', true))).find((x) => String(x[0]).startsWith('UNPRICED HOURS'))?.[4]).toBe(4);
     expect((await rows(await generateEmployeeSummaryExcel(data, 'Sep', false))).some((x) => String(x[0]).startsWith('UNPRICED HOURS'))).toBe(false);
   });

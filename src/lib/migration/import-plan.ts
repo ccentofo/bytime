@@ -18,6 +18,28 @@ export const MIGRATION_INSERT_CHUNK = 1000;
 export const IMPORT_WINDOW_CLOSED_MESSAGE =
   'Timesheet history can only be imported before your first submitted timesheet. Contact support if you need to import a missed period.';
 
+const utf8 = new TextEncoder();
+/** Serialized size in UTF-8 BYTES (what the request body actually weighs — fix round 1, F14), not UTF-16 chars. */
+export const serializedBytes = (value: unknown): number => utf8.encode(JSON.stringify(value)).length;
+
+/**
+ * Import hours (fix round 1, F3): the whole trimmed value must be a number — "7,5" and "8h" are row errors, never
+ * truncated to 7 / 8 — between 0 and 24, rounded to 2 decimals (validateHours' rule). Null = invalid.
+ */
+export function parseImportHours(value: unknown): number | null {
+  const text = String(value ?? '').trim();
+  if (text === '') return null;
+  const n = Number(text);
+  if (!Number.isFinite(n) || n < 0 || n > 24) return null;
+  return Math.round(n * 100) / 100;
+}
+export const IMPORT_HOURS_ERROR = 'Hours must be a number between 0 and 24 (for example 7.5)';
+
+/** Every field as a string (fix round 1, F14): spreadsheet parsers hand over numbers, dates and nulls. */
+export function coerceImportRow<T extends object>(row: T): T {
+  return Object.fromEntries(Object.entries(row ?? {}).map(([k, v]) => [k, String(v ?? '')])) as T;
+}
+
 /** Refuse a batch over the server limits (a validation error the admin sees). */
 export function assertMigrationBatchWithinLimits<T>(rows: T[], employeeOf: (row: T) => string): void {
   if (rows.length > MIGRATION_BATCH_MAX_ROWS) {
@@ -40,7 +62,7 @@ export function splitMigrationBatches<T>(rows: T[], employeeOf: (row: T) => stri
   let bytes = 2; // the enclosing [ ]
   for (const row of rows) {
     const employee = employeeOf(row).trim().toLowerCase();
-    const size = JSON.stringify(row).length + 1;
+    const size = serializedBytes(row) + 1;
     const overRows = current.length + 1 > MIGRATION_BATCH_MAX_ROWS;
     const overEmployees = !employees.has(employee) && employees.size + 1 > MIGRATION_BATCH_MAX_EMPLOYEES;
     const overBytes = bytes + size > MIGRATION_BATCH_MAX_BYTES;

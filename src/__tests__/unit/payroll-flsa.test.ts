@@ -93,6 +93,13 @@ describe('FLSA weekly overtime (pure)', () => {
     expect(r.employees[0]).toMatchObject({ regular: 2200, overtime: 500, otBasisIncludesUnapprovedDays: true });
   });
 
+  it('F10: unapproved earlier days with NO overtime on the reported days → not flagged', () => {
+    const r = run(week(['8', '8', '8', '8', '8']), { unapproved: ['2026-10-05', '2026-10-06'] });
+    expect(r.employees[0]).toMatchObject({ regular: 2400, overtime: 0, otBasisIncludesUnapprovedDays: false });
+    const exempt = run(week(['9', '9', '9', '9', '9']), { unapproved: ['2026-10-05'], exempt: true });
+    expect(exempt.employees[0]).toMatchObject({ uncompensatedOvertime: 500, otBasisIncludesUnapprovedDays: true });
+  });
+
   it('an unapproved day AFTER the reported days does not flag (it cannot change their split)', () => {
     const r = run(week(['9', '9', '9', '9', '9']), { unapproved: ['2026-10-09'] });
     expect(r.employees[0]).toMatchObject({ regular: 3600, overtime: 0, otBasisIncludesUnapprovedDays: false });

@@ -20,6 +20,7 @@ vi.mock('@/lib/session', () => {
   return { requireApprover: sup, getEmployeeScope: async () => 'all', assertCanAccessEmployee: async () => {} };
 });
 vi.mock('@/server/internal/workspace-settings', () => ({ getWorkspaceTimezone: async () => 'UTC' }));
+vi.mock('@/server/internal/pay-period-config', () => ({ existingPeriodLength: async (_db: unknown, _s: unknown, n: number | null) => n ?? 15 }));
 
 import * as dbModule from '@/db';
 import { periodEvents, timesheetEntries, users } from '@/db/schema';
@@ -32,6 +33,7 @@ import { reasonLabel } from '@/lib/reason-codes';
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
 const ROOT = path.resolve(__dirname, '../../..');
 const CELL = '22222222-2222-4222-8222-222222222222';
+const USER = '33333333-3333-4333-8333-333333333333';
 beforeEach(() => db.reset());
 
 const row = (o: Record<string, unknown>) => ({
@@ -65,7 +67,7 @@ describe('getAuditEntries', () => {
       row({ id: 'b', chargeCodeId: 'cc-1', clinId: 'clin-1', chargeCode: 'NAV-1', clinNumber: '0001', contractName: 'NAVAIR', contractNumber: 'N1' }),
       row({ id: 'c', clinId: 'clin-9', clinNumber: '0009', contractName: 'DISA', contractNumber: 'D1' }),
     ]);
-    const out = await getAuditEntries({});
+    const out = (await getAuditEntries({})).entries;
     expect(out.map((e) => [e.id, e.kind, e.cellCode, e.codeLabel, e.contractName, e.indirectCategory])).toEqual([
       ['a', 'indirect', 'ind-1', 'LV-PTO (Leave)', null, 'Leave'],
       ['b', 'charge', 'cc-1', 'NAV-1', 'NAVAIR', null],
@@ -79,7 +81,7 @@ describe('getAuditEntries', () => {
       row({ id: 'l', clinId: 'c', changeReasonCode: 'MIGRATION' }),
       row({ id: 'p', clinId: 'c' }),
     ]);
-    expect((await getAuditEntries({})).map((e) => e.provenance)).toEqual([
+    expect(((await getAuditEntries({})).entries).map((e) => e.provenance)).toEqual([
       'Imported from Deltek on 2026-01-05 by Ann — originally entered by Pat', 'Legacy import — details not recorded', null,
     ]);
   });
@@ -92,13 +94,13 @@ describe('getCellRevisionHistory(userId, cellCode, entryDate)', () => {
       { ...row({ id: 'r2', chargeCodeId: CELL, chargeCode: 'NAV-1', clinNumber: '0001', contractName: 'NAVAIR', revisionNumber: 2, changeReasonCode: 'CORRECTION' }) },
     ]);
     db.onSelect(users, [{ userName: 'Pat' }]);
-    const h = (await getCellRevisionHistory('u1', CELL, '2026-09-01' as never))!;
+    const h = (await getCellRevisionHistory(USER, CELL, '2026-09-01' as never))!;
     expect(h).toMatchObject({ cellCode: CELL, kind: 'charge', codeLabel: 'NAV-1', clinNumber: '0001', contractName: 'NAVAIR' });
     expect(h.revisions.map((r) => [r.revisionNumber, r.provenance === null])).toEqual([[1, false], [2, true]]);
   });
 
   it('a malformed cell code is refused before any query', async () => {
-    await expect(getCellRevisionHistory('u1', 'not-a-uuid', '2026-09-01' as never)).rejects.toThrow(/not a valid identifier/);
+    await expect(getCellRevisionHistory(USER, 'not-a-uuid', '2026-09-01' as never)).rejects.toThrow(/not a valid identifier/);
   });
 });
 
@@ -137,8 +139,48 @@ describe('period events in the audit trail (one helper)', () => {
       approvalContext: { activeAdminCount: 1, selfApprovalEnabledAt: '2026-09-01T10:00:00Z', selfApprovalEnabledBy: 'boss' },
     }]);
     db.onSelect(users, [{ id: 'adm', fullName: 'Ann Admin' }, { id: 'boss', fullName: 'Bo Boss' }]);
-    const [e] = await getAuditPeriodEvents({});
+    const [e] = (await getAuditPeriodEvents({})).events;
     expect(e).toMatchObject({ selfApproved: true, text: expect.stringMatching(/^Self-approved/), context: expect.stringMatching(/switched on by Bo Boss/) });
+  });
+});
+
+describe('F12 — audit reads', () => {
+  const ev = (id: string, periodStart: string, periodNumDays: number | null) => ({
+    id, periodId: `p-${id}`, userId: 'adm', userName: 'Ann', periodStart, periodNumDays, event: 'submitted', actorId: 'adm', comment: null,
+    createdAt: new Date('2026-09-20T14:00:00Z'), source: 'app', originalMetadata: null, importSourceSystem: null, importedAt: null, approvalContext: null,
+  });
+
+  it('entries: 501 rows fetched → 500 shown and truncated = true; 500 → not truncated', async () => {
+    db.onSelect(timesheetEntries, Array.from({ length: 501 }, (_, i) => row({ id: `e${i}`, clinId: 'c' })));
+    const capped = await getAuditEntries({});
+    expect(capped.entries).toHaveLength(500);
+    expect(capped.truncated).toBe(true);
+    db.reset();
+    db.onSelect(timesheetEntries, Array.from({ length: 500 }, (_, i) => row({ id: `e${i}`, clinId: 'c' })));
+    expect((await getAuditEntries({})).truncated).toBe(false);
+  });
+
+  it('period events: a period that STARTED before the range but overlaps it is included; one that ended before is not', async () => {
+    db.onSelect(periodEvents, [ev('in', '2026-09-16', 15), ev('overlap', '2026-08-25', 15), ev('before', '2026-08-01', 15), ev('nosnap', '2026-08-28', null)]);
+    const { events } = await getAuditPeriodEvents({ startDate: '2026-09-05' as never, endDate: '2026-09-30' as never });
+    expect(events.map((e) => e.id)).toEqual(['in', 'overlap', 'nosnap']); // 08-25 + 15 days covers 09-05..09-08; 08-28 + 15 → 09-11
+  });
+
+  it('every id / date input is validated after the guard', async () => {
+    await expect(getAuditEntries({ userId: 'x' })).rejects.toThrow(/Employee is not a valid identifier/);
+    await expect(getAuditEntries({ clinId: 'x' })).rejects.toThrow(/CLIN is not a valid identifier/);
+    await expect(getAuditEntries({ contractId: 'x' })).rejects.toThrow(/Contract is not a valid identifier/);
+    await expect(getAuditPeriodEvents({ userId: 'x' })).rejects.toThrow(/Employee is not a valid identifier/);
+    await expect(getAuditEntries({ startDate: '2026-02-30' as never })).rejects.toThrow(/not a valid date/);
+    await expect(getCellRevisionHistory('x', CELL, '2026-09-01' as never)).rejects.toThrow(/Employee is not a valid identifier/);
+  });
+
+  it('static: stable order (created_at, then id) on both queries', () => {
+    const audit = readFileSync(path.join(ROOT, 'src/server/actions/audit.ts'), 'utf8');
+    expect(audit).toMatch(/\.orderBy\(desc\(timesheetEntries\.createdAt\), desc\(timesheetEntries\.id\)\)/);
+    expect(audit).toMatch(/\.orderBy\(desc\(periodEvents\.createdAt\), desc\(periodEvents\.id\)\)/);
+    const client = readFileSync(path.join(ROOT, 'src/app/(app)/admin/audit-trail/AuditTrailClient.tsx'), 'utf8');
+    expect(client).toMatch(/\{hasSearched && entriesTruncated && \(/);
   });
 });
 

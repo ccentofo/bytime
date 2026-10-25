@@ -14,7 +14,8 @@ import { seedOfflineStore } from '@/lib/offline/offline-store';
 // Reducer
 // ---------------------------------------------------------------------------
 
-function timesheetReducer(
+/** Exported for tests (fix round 1, F8). */
+export function timesheetReducer(
   state: TimesheetState,
   action: TimesheetAction
 ): TimesheetState {
@@ -73,7 +74,7 @@ function timesheetReducer(
         periodStatus: action.periodStatus,
         approvalBadge: action.approvalBadge ?? null,
         // certified-outputs C4: each period has its own code list (assignable ∪ codes with recorded hours).
-        chargeCodes: action.chargeCodes ?? state.chargeCodes,
+        chargeCodes: action.chargeCodes,
         periodConfig: action.periodConfig,
         isLoadingPeriod: false,
       };
@@ -274,7 +275,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
           seedOfflineStore({
             userId: state.userId,
             periodStart: period.periodStart,
-            chargeCodes: state.chargeCodes,
+            chargeCodes: period.chargeCodes, // F8: THIS period's list, not the one being left
             entries: period.entries,
             revisions: period.revisions,
             periodStatus: period.periodStatus,
@@ -296,7 +297,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
         });
       }
     },
-    [state.userId, state.chargeCodes]
+    [state.userId]
   );
 
   const loadPeriod = useCallback(

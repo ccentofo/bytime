@@ -110,11 +110,13 @@ async function revisionMapFor(userId: string, start: CalendarDate, numDays: numb
   const db = await getDb();
   const endDateExclusive = addDays(start, numDays);
 
+  // Fix round 1 (F7): group by the database's cell identity COALESCE(charge_code_id, indirect_code_id, clin_id) — the
+  // same identity the save's conflict check uses. Grouping by (charge, clin, indirect) split a charge cell whose
+  // revisions carry two clin_ids (a pre-C3 CLIN change) and could hand the client a stale revision forever.
+  const cellId = sql<string>`COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})`;
   const rows = await db
     .select({
-      chargeCodeId: timesheetEntries.chargeCodeId,
-      clinId: timesheetEntries.clinId,
-      indirectCodeId: timesheetEntries.indirectCodeId,
+      cellId,
       entryDate: timesheetEntries.entryDate,
       maxRevision: sql<number>`MAX(${timesheetEntries.revisionNumber})`,
     })
@@ -126,15 +128,12 @@ async function revisionMapFor(userId: string, start: CalendarDate, numDays: numb
         lt(timesheetEntries.entryDate, endDateExclusive),
       )
     )
-    .groupBy(timesheetEntries.chargeCodeId, timesheetEntries.clinId, timesheetEntries.indirectCodeId, timesheetEntries.entryDate);
+    .groupBy(cellId, timesheetEntries.entryDate);
 
   const revisionMap: Record<string, number> = {};
   for (const row of rows) {
     const dayIndex = diffDays(start, row.entryDate as CalendarDate);
-    // Cell identity = COALESCE(charge_code_id, indirect_code_id, clin_id), as everywhere else.
-    const entryId = row.chargeCodeId ?? row.indirectCodeId ?? row.clinId ?? '';
-    const key = `${entryId}-${dayIndex}`;
-    revisionMap[key] = row.maxRevision;
+    revisionMap[`${row.cellId}-${dayIndex}`] = Number(row.maxRevision);
   }
   return revisionMap;
 }

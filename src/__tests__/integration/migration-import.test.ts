@@ -154,6 +154,19 @@ describe.skipIf(!cpReady)('migration import (certified-outputs C1)', () => {
     await cleanupLifecycleTenants();
   });
 
+  it('F3: "7,5", "8h" and "" are row errors (never truncated); "7.5" imports as 7.50', async () => {
+    const day = (n: number) => addDays(prevStart(4), n);
+    const r = await expectOk(importEntries([
+      entryRow({ hours: '7,5', entryDate: day(1) }), entryRow({ hours: '8h', entryDate: day(2) }), entryRow({ hours: '', entryDate: day(3) }),
+      entryRow({ hours: '7.5', entryDate: day(4) }),
+    ]));
+    expect(r.imported).toBe(1);
+    expect(r.errors.map((e) => e.row).sort()).toEqual([1, 2, 3]);
+    for (const e of r.errors) expect(e.message).toMatch(/Hours must be a number between 0 and 24/);
+    const rows = await entriesOf(employee.id);
+    expect(rows.map((x) => [x.entryDate, Number(x.hours).toFixed(2)])).toEqual([[day(4), '7.50']]);
+  });
+
   // ── Window ──────────────────────────────────────────────────────────────────
   describe('window', () => {
     it('open before any submission', async () => {

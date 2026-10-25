@@ -42,7 +42,7 @@ import * as dbModule from '@/db';
 import { adminChangeLog, periodEvents, timesheetPeriods, userAssignments, users } from '@/db/schema';
 import type { FakeControlDb } from '../helpers/fake-control-db';
 import { approvalLabel, type ApprovalLabelEvent } from '@/server/internal/approval-label';
-import { recomputeSelfApproval } from '@/server/internal/approval-rules';
+import { currentSelfApprovalOn, recomputeSelfApproval } from '@/server/internal/approval-rules';
 import { approvePeriod, rejectPeriod } from '@/server/actions/periods';
 
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
@@ -238,6 +238,33 @@ describe('approve / reject order and "approve exactly what was reviewed"', () =>
     expect(event).toMatchObject({ event: 'approved', actorId: 'adm', approvalContext: {
       selfApproved: true, activeAdminCount: 1, effectiveDesignee: null, selfApprovalEnabledAt: T.toISOString(), selfApprovalEnabledBy: 'adm',
     } });
+  });
+});
+
+describe('F2 — "self-approval is back on" notice', () => {
+  const sole = () => db.onSelect(users, [{ id: 'adm', role: 'admin', isActive: true, approverId: null }]);
+  const log = (...rows: Array<{ action: string; reason: string }>) => db.onSelect(adminChangeLog, rows.map((r, i) => ({ id: `l${i}`, action: r.action, createdAt: T, newValue: { enabled: r.action === 'enabled', reason: r.reason } })));
+
+  it('shows when the latest row is enabled and not a baseline — no earlier "disabled" row needed (pre-C2 workspaces)', async () => {
+    sole();
+    log({ action: 'enabled', reason: 'Second Admin deactivated' });
+    expect(await currentSelfApprovalOn(db as never, 'adm')).toEqual({ logId: 'l0', at: T });
+  });
+
+  it('hidden for a baseline row (provisioning / demo seed), a latest "disabled" row, or when self-approval is not available', async () => {
+    for (const reason of ['workspace created', 'demo workspace seeded']) {
+      db.reset();
+      sole();
+      log({ action: 'enabled', reason });
+      expect(await currentSelfApprovalOn(db as never, 'adm'), reason).toBeNull();
+    }
+    db.reset();
+    sole();
+    log({ action: 'enabled', reason: 'x deactivated' }, { action: 'disabled', reason: 'y added' });
+    expect(await currentSelfApprovalOn(db as never, 'adm')).toBeNull();
+    db.reset();
+    db.onSelect(users, [{ id: 'adm', role: 'admin', isActive: true, approverId: null }, { id: 'adm2', role: 'admin', isActive: true, approverId: null }]);
+    expect(await currentSelfApprovalOn(db as never, 'adm')).toBeNull();
   });
 });
 

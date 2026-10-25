@@ -158,6 +158,14 @@ describe('cost basis (certified-outputs C3)', () => {
     expect(dash).toMatchObject({ totalCost: 1200, unpricedHours: 0 });
   });
 
+  it('F6: two employees with the SAME name are two summary rows (grouped by id, not name)', async () => {
+    const twin = await createTestUser({ role: 'employee', fullName: emp.fullName });
+    await entry({ clinId: clinA.id, entryDate: D1, hours: '8' });
+    await entry({ clinId: clinA.id, entryDate: D1, hours: '5', userId: twin.id, createdBy: twin.id });
+    const summary = (await getEmployeeSummaryReport(...RANGE)).filter((r) => r.employeeName === emp.fullName);
+    expect(summary.map((r) => [r.employeeId, r.totalHours]).sort()).toEqual([[emp.id, 8], [twin.id, 5]].sort());
+  });
+
   it('a deactivated labor category keeps its historical cost (no status filter)', async () => {
     const old = await lcat(clinA.id, 'OLD', '90.00', { status: 'inactive' });
     await assign(emp.id, old.id, '2026-01-01', '2026-03-31');
@@ -239,6 +247,9 @@ describe('cost basis (certified-outputs C3)', () => {
   it('reactivateChargeCode logs, gives the code back to still-assigned employees, but only while its CLIN and contract are active', async () => {
     const code = await createTestChargeCode(clinA.id);
     await db().insert(schema.userChargeCodes).values({ userId: emp.id, chargeCodeId: code.id, isActive: true });
+    // F11: a deactivated employee's assignment is not counted (they don't see the code again).
+    const gone = await createTestUser({ role: 'employee', isActive: false });
+    await db().insert(schema.userChargeCodes).values({ userId: gone.id, chargeCodeId: code.id, isActive: true });
     await expectOk(deactivateChargeCode(code.id));
     session.user = as(emp);
     expect((await getChargeCodesForUser()).map((c) => c.id)).not.toContain(code.id);

@@ -376,12 +376,12 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     });
 
     actingAs(asFake(supervisor));
-    const scoped = await getAuditEntries({});
+    const scoped = (await getAuditEntries({})).entries;
     expect(scoped.map((e) => e.userId)).toEqual([inScopeEmployee.id]);
 
     const admin = await createTestUser({ role: 'admin' });
     actingAs(asFake(admin));
-    const all = await getAuditEntries({});
+    const all = (await getAuditEntries({})).entries;
     expect(all.map((e) => e.userId).sort()).toEqual([inScopeEmployee.id, outOfScopeEmployee.id].sort());
   });
 
@@ -399,7 +399,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     });
 
     actingAs(asFake(supervisor));
-    const scoped = await getAuditEntries({});
+    const scoped = (await getAuditEntries({})).entries;
     expect(scoped.map((e) => e.userId)).toContain(supervisor.id);
   });
 

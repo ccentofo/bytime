@@ -114,6 +114,14 @@ describe('actions (ActionResult)', () => {
     expect(r.data).toMatchObject({ filename: 'payroll-gusto-flsa-weekly-overtime-2026-10-01-to-2026-10-15.csv', employeeCount: 1, totalPaidHours: 45, flaggedCount: 0 });
   });
 
+  it('F10: user dates are validated with a user-facing message (never a thrown plain Error); getPayrollFormats is gone', async () => {
+    expect(await getPayrollExportPreview({ periodStart: 'nope' as never, periodEnd: d('2026-10-15') }))
+      .toEqual({ ok: false, code: 'validation', error: 'Start date must be a valid date (YYYY-MM-DD).' });
+    expect(await generatePayrollExportCSV({ periodStart: d('2026-10-01'), periodEnd: '2026-13-40' as never, format: 'adp' }))
+      .toEqual({ ok: false, code: 'validation', error: 'End date must be a valid date (YYYY-MM-DD).' });
+    expect(readFileSync(path.join(ROOT, 'src/server/actions/payroll-export.ts'), 'utf8')).not.toMatch(/getPayrollFormats/);
+  });
+
   it('static: the guard is the first await in each action; the old 80-hour aggregation is gone', () => {
     const src = stripComments(readFileSync(path.join(ROOT, 'src/server/actions/payroll-export.ts'), 'utf8'));
     for (const fn of ['getPayrollExportPreview', 'generatePayrollExportCSV']) {
@@ -219,6 +227,8 @@ describe('docs/payroll-overtime-method.md (required before production)', () => {
   it('states the method, leave exclusion, boundary-week rule, columns, the exempt deduction note and current-value limits', () => {
     const doc = readFileSync(path.join(ROOT, 'docs/payroll-overtime-method.md'), 'utf8');
     for (const s of ['29 CFR 778.103', '29 CFR 778.218', '29 CFR 778.105', 'boundary week', 'PTO column', 'uncompensated overtime',
-      'partial days of unpaid leave', 'flsa_exempt', 'not effective-dated', 'not been verified']) expect(doc, s).toContain(s);
+      'partial days of unpaid leave', 'flsa_exempt', 'not effective-dated', 'not been verified',
+      // F10
+      'has overtime', 're-exporting the range that contains it', "leave code's pay type, or an indirect code's category"]) expect(doc, s).toContain(s);
   });
 });

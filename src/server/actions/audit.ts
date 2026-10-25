@@ -8,11 +8,12 @@ import {
 import { eq, and, gte, lt, lte, desc, sql, inArray } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
-import { addDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { addDays, isBefore, type CalendarDate } from '@/lib/calendar-date';
+import { existingPeriodLength } from '@/server/internal/pay-period-config';
 import { cellCodeLabel, cellKind, type CellKind } from '@/lib/cell-code';
 import { indirectCategoryLabel } from '@/lib/indirect-categories';
 import { provenanceText } from '@/lib/provenance';
-import { validateUUID } from '@/lib/validation';
+import { validateCalendarDate, validateOptionalCalendarDate, validateUUID } from '@/lib/validation';
 import { periodEventLabel } from '@/server/internal/approval-label';
 import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 
@@ -112,10 +113,19 @@ export interface AuditPeriodEvent {
  * the provided filter criteria, ordered by most recent first.
  * Limits to 500 rows to prevent overwhelming the UI.
  */
-export async function getAuditEntries(filters: AuditFilters): Promise<AuditEntry[]> {
+/** Rows shown per audit search; one more is fetched so a capped result says so (fix round 1, F12). */
+const AUDIT_ROW_LIMIT = 500;
+
+export async function getAuditEntries(filters: AuditFilters): Promise<{ entries: AuditEntry[]; truncated: boolean }> {
   const actor = await requireApprover();
+  // F12: every id / date input validated after the guard.
+  if (filters.userId) validateUUID(filters.userId, 'Employee');
+  if (filters.contractId) validateUUID(filters.contractId, 'Contract');
+  if (filters.clinId) validateUUID(filters.clinId, 'CLIN');
+  const startDate = validateOptionalCalendarDate(filters.startDate, 'Start date');
+  const endDate = validateOptionalCalendarDate(filters.endDate, 'End date');
   const scope = await getEmployeeScope(actor);
-  if (scope !== 'all' && scope.length === 0) return [];
+  if (scope !== 'all' && scope.length === 0) return { entries: [], truncated: false };
 
   const db = await getDb();
 
@@ -130,12 +140,12 @@ export async function getAuditEntries(filters: AuditFilters): Promise<AuditEntry
   if (filters.clinId) {
     conditions.push(eq(timesheetEntries.clinId, filters.clinId));
   }
-  if (filters.startDate) {
-    conditions.push(gte(timesheetEntries.entryDate, parseCalendarDate(filters.startDate)));
+  if (startDate) {
+    conditions.push(gte(timesheetEntries.entryDate, startDate));
   }
-  if (filters.endDate) {
+  if (endDate) {
     // endDate is inclusive, so add 1 day for lt comparison
-    conditions.push(lt(timesheetEntries.entryDate, addDays(parseCalendarDate(filters.endDate), 1)));
+    conditions.push(lt(timesheetEntries.entryDate, addDays(endDate, 1)));
   }
   if (filters.reasonCode) {
     conditions.push(eq(timesheetEntries.changeReasonCode, filters.reasonCode));
@@ -188,10 +198,12 @@ export async function getAuditEntries(filters: AuditFilters): Promise<AuditEntry
     .leftJoin(importBatches, eq(timesheetEntries.importBatchId, importBatches.id))
     .leftJoin(importer, eq(importBatches.importedBy, importer.id))
     .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .orderBy(desc(timesheetEntries.createdAt))
-    .limit(500);
+    // F12: a stable order — rows written in one transaction share created_at.
+    .orderBy(desc(timesheetEntries.createdAt), desc(timesheetEntries.id))
+    .limit(AUDIT_ROW_LIMIT + 1);
 
-  return rows.map((r) => {
+  const truncated = rows.length > AUDIT_ROW_LIMIT;
+  const entries = rows.slice(0, AUDIT_ROW_LIMIT).map((r) => {
     const kind = cellKind(r);
     return {
       id: r.id, userId: r.userId, userName: r.userName, userEmail: r.userEmail,
@@ -205,6 +217,7 @@ export async function getAuditEntries(filters: AuditFilters): Promise<AuditEntry
       createdById: r.createdById, createdByName: r.createdByName,
     };
   });
+  return { entries, truncated };
 }
 
 /**
@@ -218,11 +231,12 @@ export async function getCellRevisionHistory(
   entryDate: CalendarDate,
 ): Promise<CellRevisionHistory | null> {
   const actor = await requireApprover();
-  await assertCanAccessEmployee(actor, userId);
+  validateUUID(userId, 'Employee');
   validateUUID(cellCode, 'Cell code');
+  await assertCanAccessEmployee(actor, userId);
 
   const db = await getDb();
-  const day = parseCalendarDate(entryDate);
+  const day = validateCalendarDate(entryDate, 'Entry date');
 
   const rows = await db
     .select({
@@ -295,16 +309,19 @@ export async function getCellRevisionHistory(
  * and by period start within the date range. Each is labelled by the one approval helper (C2: "Self-approved" with its
  * recorded context; imported events labelled with their source system).
  */
-export async function getAuditPeriodEvents(filters: Pick<AuditFilters, 'userId' | 'startDate' | 'endDate'>): Promise<AuditPeriodEvent[]> {
+export async function getAuditPeriodEvents(filters: Pick<AuditFilters, 'userId' | 'startDate' | 'endDate'>): Promise<{ events: AuditPeriodEvent[]; truncated: boolean }> {
   const actor = await requireApprover();
+  if (filters.userId) validateUUID(filters.userId, 'Employee');
+  const startDate = validateOptionalCalendarDate(filters.startDate, 'Start date');
+  const endDate = validateOptionalCalendarDate(filters.endDate, 'End date');
   const scope = await getEmployeeScope(actor);
-  if (scope !== 'all' && scope.length === 0) return [];
+  if (scope !== 'all' && scope.length === 0) return { events: [], truncated: false };
 
   const db = await getDb();
-  const rows = await db
+  const candidates = await db
     .select({
       id: periodEvents.id, periodId: periodEvents.periodId, userId: periodEvents.userId, userName: users.fullName,
-      periodStart: timesheetPeriods.periodStart, event: periodEvents.event, actorId: periodEvents.actorId,
+      periodStart: timesheetPeriods.periodStart, periodNumDays: timesheetPeriods.periodNumDays, event: periodEvents.event, actorId: periodEvents.actorId,
       comment: periodEvents.comment, createdAt: periodEvents.createdAt, source: periodEvents.source,
       originalMetadata: periodEvents.originalMetadata, approvalContext: periodEvents.approvalContext,
       importSourceSystem: importBatches.sourceSystem, importedAt: importBatches.importedAt,
@@ -316,11 +333,27 @@ export async function getAuditPeriodEvents(filters: Pick<AuditFilters, 'userId' 
     .where(and(
       scope === 'all' ? undefined : inArray(periodEvents.userId, scope),
       filters.userId ? eq(periodEvents.userId, filters.userId) : undefined,
-      filters.startDate ? gte(timesheetPeriods.periodStart, parseCalendarDate(filters.startDate)) : undefined,
-      filters.endDate ? lte(timesheetPeriods.periodStart, parseCalendarDate(filters.endDate)) : undefined,
+      // F12: the period OVERLAPS the range. No period is longer than 31 days, so a period that ends on/after the start
+      // began at most 31 days before it; the exact end is checked below with the period's real length.
+      startDate ? gte(timesheetPeriods.periodStart, addDays(startDate, -31)) : undefined,
+      endDate ? lte(timesheetPeriods.periodStart, endDate) : undefined,
     ))
-    .orderBy(desc(periodEvents.createdAt))
-    .limit(500);
+    .orderBy(desc(periodEvents.createdAt), desc(periodEvents.id))
+    .limit(startDate ? 5000 : AUDIT_ROW_LIMIT + 1);
+
+  const lengths = new Map<string, number>();
+  const overlapping = [];
+  for (const r of candidates) {
+    if (startDate) {
+      const start = r.periodStart as CalendarDate;
+      const key = `${start}|${r.periodNumDays ?? ''}`;
+      if (!lengths.has(key)) lengths.set(key, await existingPeriodLength(db, start, r.periodNumDays));
+      if (isBefore(addDays(start, lengths.get(key)! - 1), startDate)) continue; // ended before the range
+    }
+    overlapping.push(r);
+  }
+  const truncated = overlapping.length > AUDIT_ROW_LIMIT;
+  const rows = overlapping.slice(0, AUDIT_ROW_LIMIT);
 
   // Names for actors and for whoever switched self-approval on (approval_context).
   const ids = new Set<string>();
@@ -333,13 +366,14 @@ export async function getAuditPeriodEvents(filters: Pick<AuditFilters, 'userId' 
   const nameById = new Map(names.map((n) => [n.id, n.fullName]));
   const timeZone = await getWorkspaceTimezone();
 
-  return rows.map((r) => {
+  const events = rows.map((r) => {
     const label = periodEventLabel(r, r.userId, (id) => nameById.get(id) ?? null, timeZone);
     return {
       id: r.id, userId: r.userId, userName: r.userName, periodStart: r.periodStart as CalendarDate, event: r.event,
       text: label.text, selfApproved: label.selfApproved, context: label.context, comment: r.comment, createdAt: r.createdAt,
     };
   });
+  return { events, truncated };
 }
 
 /**
@@ -412,6 +446,7 @@ export async function getContractsForFilter() {
  */
 export async function getClinsForFilter(contractId: string) {
   const actor = await requireApprover();
+  validateUUID(contractId, 'Contract');
   const db = await getDb();
 
   if (actor.role === 'admin') {

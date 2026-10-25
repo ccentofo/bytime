@@ -18,6 +18,7 @@ import { validateMigrationDataInternal, validateMigrationPeriodsInternal } from 
 import {
   MIGRATION_INSERT_CHUNK,
   assertMigrationBatchWithinLimits,
+  parseImportHours,
   planEntryImport,
   planPeriodImport,
   type EntryCandidate,
@@ -101,7 +102,7 @@ export async function importMigrationData(input: {
           clinId: v.clinId ?? null,
           indirectCodeId: v.indirectCodeId ?? null,
           entryDate: parseCalendarDate(v.data.entryDate.trim()),
-          hours: Math.round(parseFloat(v.data.hours) * 100) / 100, // validateHours' 2-decimal rule
+          hours: parseImportHours(v.data.hours)!, // validated above (F3: never parseFloat-truncated)
         }));
         if (candidates.length === 0) return { imported: 0, skipped: 0, errors, batchId: null };
 

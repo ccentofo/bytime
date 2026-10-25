@@ -196,19 +196,25 @@ export async function selfApprovalContext(tx: TenantWriter, adminId: string): Pr
   };
 }
 
+/** Reasons written by a baseline recompute (provisioning, the demo seeder) — not a switch the admin needs to hear about. */
+export const BASELINE_SELF_APPROVAL_REASONS = ['workspace created', 'demo workspace seeded'];
+
 /**
- * For the "Self-approval is back on" notice: the log row that switched this admin's self-approval ON, when it is on now
- * AND it came back on after being off (the "workspace created" baseline alone is not "back on").
+ * For the "Self-approval is back on" notice: the log row that switched this admin's self-approval ON, when it is on now,
+ * the latest self_approval row for the admin is `enabled`, and that row is not a baseline (fix round 1, F2: no earlier
+ * "disabled" row is needed — workspaces from before C2 have none).
  */
 export async function currentSelfApprovalOn(db: Pick<ReadDb, 'select'>, adminId: string): Promise<{ logId: string; at: Date } | null> {
   const facts = await loadApprovalFacts(db);
   if (!selfApprovalAvailable(facts, adminId)) return null;
-  const rows = await db.select({ id: adminChangeLog.id, action: adminChangeLog.action, createdAt: adminChangeLog.createdAt }).from(adminChangeLog)
+  const rows = await db.select({ id: adminChangeLog.id, action: adminChangeLog.action, createdAt: adminChangeLog.createdAt, newValue: adminChangeLog.newValue })
+    .from(adminChangeLog)
     .where(and(eq(adminChangeLog.entity, 'self_approval'), eq(adminChangeLog.entityId, adminId)))
     .orderBy(asc(adminChangeLog.createdAt), asc(adminChangeLog.id));
   const last = rows[rows.length - 1];
   if (!last || last.action !== 'enabled') return null;
-  return rows.slice(0, -1).some((r) => r.action === 'disabled') ? { logId: last.id, at: last.createdAt } : null;
+  const reason = (last.newValue as { reason?: unknown } | null)?.reason;
+  return typeof reason === 'string' && BASELINE_SELF_APPROVAL_REASONS.includes(reason) ? null : { logId: last.id, at: last.createdAt };
 }
 
 // ── Re-routing (CO-D19) ───────────────────────────────────────────────────────

@@ -46,7 +46,8 @@ import { listWaitlist, provisionWaitlistedSignup, WaitlistError } from '../src/l
 import { apexBaseUrl } from '../src/lib/tenant/host';
 import { SIGNUP_DAILY_WORKSPACE_CAP } from '../src/lib/tenant/lifecycle-config';
 import { getDbForUrl } from '../src/db';
-import { workspaceSettings } from '../src/db/schema';
+import { periodEvents, workspaceSettings } from '../src/db/schema';
+import { describeImportWindowState } from './lib/import-window-state';
 import { decrypt } from '../src/lib/encryption';
 
 const ACTOR = `founder:${process.env.USER ?? 'unknown'}`;
@@ -98,7 +99,9 @@ async function printImportWindow(t: TenantRow) {
     if (!process.env.ENCRYPTION_KEY || !t.dbUrlEncrypted) throw new Error('ENCRYPTION_KEY not set or no database');
     const db = getDbForUrl(decrypt(t.dbUrlEncrypted));
     const [row] = await db.select({ closedAt: workspaceSettings.historyImportClosedAt }).from(workspaceSettings).where(eq(workspaceSettings.id, 1)).limit(1);
-    closed = !row ? 'no workspace_settings row (treated as CLOSED)' : row.closedAt ? `closed ${iso(row.closedAt)} (first submission)` : 'open (no submission yet)';
+    const [submitted] = await db.select({ id: periodEvents.id }).from(periodEvents)
+      .where(and(eq(periodEvents.event, 'submitted'), eq(periodEvents.source, 'app'))).limit(1);
+    closed = describeImportWindowState({ settingsRowExists: !!row, closedAt: row?.closedAt ?? null, hasAppSubmittedEvent: !!submitted });
   } catch (err) {
     closed = `unknown (tenant DB not reachable: ${err instanceof Error ? err.message : String(err)})`;
   }

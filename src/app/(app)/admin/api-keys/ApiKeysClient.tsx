@@ -280,7 +280,8 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
           <Text size="sm" c="dimmed">
             <Code>/api/v1/costs</Code> returns <Code>costBasis</Code> and <Code>unpricedHours</Code> on every row and the
             total <Code>unpricedHours</Code> in <Code>meta</Code>: hours with no applicable labor category carry no cost,
-            so add them to your checks rather than reading the cost alone.
+            so add them to your checks rather than reading the cost alone. On those rows <Code>lcatTitle</Code> is{' '}
+            <Code>Unpriced</Code> (no labor category applied) and <Code>totalCost</Code> is 0.
           </Text>
           <Button onClick={() => { setNewKeyModalOpen(false); setNewKeyValue(''); }} color="success">
             I've Copied the Key

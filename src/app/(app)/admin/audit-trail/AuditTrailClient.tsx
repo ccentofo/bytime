@@ -87,6 +87,9 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
   const [summary] = useState<AuditSummary>(initialSummary);
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [periodEvents, setPeriodEvents] = useState<AuditPeriodEvent[]>([]);
+  // F12: the server fetches one row past the cap, so "capped" is known, not guessed from a length of 500.
+  const [entriesTruncated, setEntriesTruncated] = useState(false);
+  const [eventsTruncated, setEventsTruncated] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
 
   // Filter state
@@ -136,8 +139,10 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
           getAuditEntries(filters),
           getAuditPeriodEvents({ userId: filters.userId, startDate: filters.startDate, endDate: filters.endDate }),
         ]);
-        setEntries(results);
-        setPeriodEvents(events);
+        setEntries(results.entries);
+        setEntriesTruncated(results.truncated);
+        setPeriodEvents(events.events);
+        setEventsTruncated(events.truncated);
         setHasSearched(true);
       } catch (error) {
         // R2-12: don't crash to the error page on a search failure — show an inline
@@ -443,9 +448,9 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
 
       {hasSearched && <MantineReactTable table={table} />}
 
-      {hasSearched && entries.length === 500 && (
-        <Text size="sm" c="dimmed" mt="xs" ta="center">
-          Results limited to 500 entries. Narrow your filters for more specific results.
+      {hasSearched && entriesTruncated && (
+        <Text size="sm" c="dimmed" mt="xs" ta="center" data-testid="audit-entries-truncated">
+          Showing the first 500 entries. Narrow your filters for more specific results.
         </Text>
       )}
 
@@ -453,7 +458,10 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
       {hasSearched && (
         <Paper withBorder p="md" mt="xl">
           <Title order={4} mb={4}>Timesheet events</Title>
-          <Text size="xs" c="dimmed" mb="sm">Employee and date filters apply (by period start).</Text>
+          <Text size="xs" c="dimmed" mb="sm">Employee and date filters apply (periods overlapping the dates).</Text>
+          {eventsTruncated && (
+            <Text size="xs" c="dimmed" mb="xs" data-testid="audit-events-truncated">Showing the first 500 events. Narrow your filters for more.</Text>
+          )}
           {periodEvents.length === 0 ? (
             <Text size="sm" c="dimmed">No timesheet events match.</Text>
           ) : (

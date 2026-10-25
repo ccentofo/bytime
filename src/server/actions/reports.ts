@@ -25,6 +25,10 @@ import { addDays, diffDays, parseCalendarDate, type CalendarDate } from '@/lib/c
 import { buildTimesheetRows, type TimesheetRow } from '@/lib/reports/timesheet-rows';
 
 const importer = alias(users, 'importer');
+// F9: a charge-code row is labelled by the charge code's own CLIN / contract / SLIN.
+const codeClin = alias(clins, 'code_clin');
+const codeContract = alias(contracts, 'code_contract');
+const codeSlin = alias(slins, 'code_slin');
 
 // ---------------------------------------------------------------------------
 // Types
@@ -52,6 +56,8 @@ export interface TimesheetReportData {
 }
 
 export interface EmployeeSummaryEntry {
+  /** Fix round 1 (F6): rows are grouped by the employee's id — two people with the same name stay separate. */
+  employeeId: string;
   employeeName: string;
   contractName: string;
   contractNumber: string;
@@ -131,6 +137,10 @@ export async function getTimesheetReportData(
       indirectCode: indirectChargeCodes.code,
       indirectName: indirectChargeCodes.name,
       indirectCategory: indirectChargeCodes.category,
+      codeClinNumber: codeClin.clinNumber,
+      codeContractName: codeContract.name,
+      codeContractNumber: codeContract.contractNumber,
+      codeSlinNumber: codeSlin.slinNumber,
       source: timesheetEntries.source,
       changeReasonCode: timesheetEntries.changeReasonCode,
       originalMetadata: timesheetEntries.originalMetadata,
@@ -140,6 +150,9 @@ export async function getTimesheetReportData(
     })
     .from(timesheetEntries)
     .leftJoin(chargeCodes, eq(timesheetEntries.chargeCodeId, chargeCodes.id))
+    .leftJoin(codeClin, eq(chargeCodes.clinId, codeClin.id))
+    .leftJoin(codeContract, eq(codeClin.contractId, codeContract.id))
+    .leftJoin(codeSlin, eq(chargeCodes.slinId, codeSlin.id))
     .leftJoin(clins, eq(timesheetEntries.clinId, clins.id))
     .leftJoin(contracts, eq(clins.contractId, contracts.id))
     .leftJoin(slins, eq(timesheetEntries.slinId, slins.id))
@@ -221,6 +234,7 @@ export async function getEmployeeSummaryReport(
 
   const rows = await db
     .select({
+      employeeId: users.id,
       employeeName: users.fullName,
       flsaExempt: users.flsaExempt,
       contractName: contracts.name,
@@ -254,11 +268,12 @@ export async function getEmployeeSummaryReport(
         scope === 'all' ? undefined : inArray(timesheetEntries.userId, scope),
       )
     )
-    .groupBy(users.fullName, users.flsaExempt, contracts.name, contracts.contractNumber, clins.clinNumber)
-    .orderBy(users.fullName, contracts.name, clins.clinNumber);
+    .groupBy(users.id, users.fullName, users.flsaExempt, contracts.name, contracts.contractNumber, clins.clinNumber)
+    .orderBy(users.fullName, users.id, contracts.name, clins.clinNumber);
 
   const isAdmin = actor.role === 'admin';
   return rows.map((row) => ({
+    employeeId: row.employeeId,
     employeeName: row.employeeName,
     contractName: row.contractName,
     contractNumber: row.contractNumber,

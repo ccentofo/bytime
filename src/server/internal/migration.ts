@@ -4,6 +4,7 @@ import { users, contracts, clins, indirectChargeCodes } from '@/db/schema';
 import type { MigrationEntryRow, MigrationPeriodRow, MigrationPeriodValidationResult, MigrationValidationResult } from '@/types/migration';
 import { isCalendarDate, parseCalendarDate } from '@/lib/calendar-date';
 import { resolvePeriod } from '@/server/internal/periods';
+import { coerceImportRow, IMPORT_HOURS_ERROR, parseImportHours } from '@/lib/migration/import-plan';
 
 /**
  * Validate migration rows against existing data and resolve their ids (feature-plan-launch-blockers.md P4 §2:
@@ -25,7 +26,8 @@ export async function validateMigrationDataInternal(
   const contractMap = new Map(allContracts.map((c) => [c.contractNumber, c.id]));
   const indirectMap = new Map(allIndirect.map((ic) => [ic.code, ic.id]));
 
-  return rows.map((row, index) => {
+  return rows.map((raw, index) => {
+    const row = coerceImportRow(raw);
     const errors: string[] = [];
     let userId: string | undefined;
     let clinId: string | undefined;
@@ -47,10 +49,7 @@ export async function validateMigrationDataInternal(
     }
 
     // Validate hours
-    const hours = parseFloat(row.hours);
-    if (isNaN(hours) || hours < 0 || hours > 24) {
-      errors.push('Hours must be between 0 and 24');
-    }
+    if (parseImportHours(row.hours) === null) errors.push(IMPORT_HOURS_ERROR);
 
     // Validate charge code (either direct or indirect, not both)
     const hasDirect = row.contractNumber?.trim() && row.clinNumber?.trim();
@@ -112,7 +111,8 @@ export async function validateMigrationPeriodsInternal(
   const startOk = new Map<string, boolean>();
 
   const results: MigrationPeriodValidationResult[] = [];
-  for (const [index, row] of rows.entries()) {
+  for (const [index, raw] of rows.entries()) {
+    const row = coerceImportRow(raw);
     const errors: string[] = [];
     const userId = row.employeeEmail?.trim() ? userMap.get(row.employeeEmail.toLowerCase().trim()) : undefined;
     if (!row.employeeEmail?.trim()) errors.push('Employee Email is required');

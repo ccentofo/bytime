@@ -32,7 +32,7 @@ import {
 import { isCalendarDate } from '@/lib/calendar-date';
 import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { UnpricedNote } from '@/components/costs/UnpricedNote';
+import { PricedBasisNote, UnpricedNote } from '@/components/costs/UnpricedNote';
 import { CURRENT_RATES_NOTE } from '@/lib/cost-labels';
 
 type Props = {
@@ -62,6 +62,8 @@ export function DashboardClient({ initialSummaries }: Props) {
   // Period cost report state
   const [reportStartDate, setReportStartDate] = useState<string | null>(null);
   const [reportEndDate, setReportEndDate] = useState<string | null>(null);
+  // F11: the unpriced note scopes by the range the report was GENERATED for, not whatever the inputs say now.
+  const [generatedRange, setGeneratedRange] = useState<{ startDate: string; endDate: string } | null>(null);
   const [costReport, setCostReport] = useState<PeriodCostEntry[]>([]);
   const [hasGeneratedReport, setHasGeneratedReport] = useState(false);
 
@@ -78,6 +80,7 @@ export function DashboardClient({ initialSummaries }: Props) {
     startTransition(async () => {
       const report = await getPeriodCostReport(reportStartDate, reportEndDate);
       setCostReport(report);
+      setGeneratedRange({ startDate: reportStartDate, endDate: reportEndDate });
       setHasGeneratedReport(true);
     });
   }
@@ -138,10 +141,15 @@ export function DashboardClient({ initialSummaries }: Props) {
         const funded = parseFloat(row.fundedValue ?? '0') || 0;
         return funded - row.totalCost;
       },
-      Cell: ({ cell }) => {
+      Cell: ({ cell, row }) => {
         const remaining = cell.getValue<number>();
         const color = remaining < 0 ? 'red' : remaining < 10000 ? 'warning' : 'success';
-        return <Text size="sm" c={color} fw={600}>{formatCurrency(remaining)}</Text>;
+        return (
+          <Stack gap={0}>
+            <Text size="sm" c={color} fw={600}>{formatCurrency(remaining)}</Text>
+            <PricedBasisNote hours={row.original.unpricedHours} scope={{ contractId: row.original.contractId }} />
+          </Stack>
+        );
       },
       size: 130,
     },
@@ -221,6 +229,7 @@ export function DashboardClient({ initialSummaries }: Props) {
                         <Text size="sm" c={remaining < 0 ? 'red' : 'success'} fw={600}>
                           {clin.fundedAmount ? formatCurrency(remaining) : '—'}
                         </Text>
+                        {clin.fundedAmount && <PricedBasisNote hours={clin.unpricedHours} scope={{ clinId: clin.clinId }} />}
                       </Table.Td>
                       <Table.Td>
                         <Badge color={clin.status === 'active' ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive} size="sm">
@@ -247,6 +256,7 @@ export function DashboardClient({ initialSummaries }: Props) {
                             <Text size="xs" c={slinRemaining < 0 ? 'red' : 'success'} fw={600}>
                               {slin.fundedAmount ? formatCurrency(slinRemaining) : '—'}
                             </Text>
+                            {slin.fundedAmount && <PricedBasisNote hours={slin.unpricedHours} scope={{ slinId: slin.slinId }} />}
                           </Table.Td>
                           <Table.Td>
                             <Badge size="xs" color={slin.status === 'active' ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive}>
@@ -366,6 +376,7 @@ export function DashboardClient({ initialSummaries }: Props) {
               <Text size="xl" fw={700} c={totalRemaining < 0 ? 'red' : undefined}>
                 {formatCurrency(totalRemaining)}
               </Text>
+              <PricedBasisNote hours={totalUnpriced} />
             </div>
             <ThemeIcon color={totalRemaining < 0 ? 'red' : 'signal'} variant="light" size="lg" radius="md">
               <IconChartBar size={20} />
@@ -428,7 +439,7 @@ export function DashboardClient({ initialSummaries }: Props) {
                   <Text fw={600}>{reportHours.toFixed(2)} hrs</Text>
                   <Stack gap={0} align="flex-end">
                     <Text fw={700} size="lg">{formatCurrency(reportTotal)}</Text>
-                    <UnpricedNote hours={reportUnpriced} size="sm" scope={{ startDate: reportStartDate ?? undefined, endDate: reportEndDate ?? undefined }} />
+                    <UnpricedNote hours={reportUnpriced} size="sm" scope={generatedRange ?? {}} />
                   </Stack>
                 </Group>
               </Group>

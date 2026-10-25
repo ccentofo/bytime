@@ -14,10 +14,10 @@
  * or it cannot decrypt the tenant URL). Reads .env.local then .env (Next.js precedence).
  *
  * Usage:
- *   npx tsx scripts/seed-demo.ts <slug> <tenantDbUrl> [displayName] [emailDomain]
+ *   npm run seed:demo -- <slug> <tenantDbUrl> [displayName] [emailDomain]   (runs with --conditions=react-server)
  *
  * Example (Neon single-project demo — one DB per tenant inside one project):
- *   npx tsx scripts/seed-demo.ts acme \
+ *   npm run seed:demo -- acme \
  *     'postgresql://USER:PASS@ep-xxx.neon.tech/tenant_acme?sslmode=require' \
  *     'Acme Defense'
  *
@@ -49,7 +49,7 @@ function fail(msg: string): never {
 }
 
 if (!slug || !tenantDbUrl) {
-  fail('Usage: tsx scripts/seed-demo.ts <slug> <tenantDbUrl> [displayName] [emailDomain] [--wipe-demo-data]');
+  fail('Usage: npm run seed:demo -- <slug> <tenantDbUrl> [displayName] [emailDomain] [--wipe-demo-data]');
 }
 if (!controlUrl) fail('CONTROL_PLANE_DATABASE_URL is not set (checked .env.local and .env).');
 if (!process.env.ENCRYPTION_KEY) {

@@ -20,8 +20,11 @@ const none = {
   contractName: null, contractNumber: null, slinNumber: null, indirectCode: null, indirectName: null, indirectCategory: null,
   source: 'app', changeReasonCode: null, originalMetadata: null, importSourceSystem: null, importedAt: null, importedByName: null,
 };
-const charge = (id: string, code: string, dayIndex: number, hours: string, o: Partial<TimesheetRowEntry> = {}): TimesheetRowEntry =>
-  ({ ...none, chargeCodeId: id, clinId: 'clin-1', chargeCode: code, chargeCodeName: `${code} work`, clinNumber: '0001', contractName: 'NAVAIR', contractNumber: 'N1', dayIndex, hours, ...o });
+const charge = (id: string, code: string, dayIndex: number, hours: string, o: Partial<TimesheetRowEntry> = {}): TimesheetRowEntry => {
+  const e = { ...none, chargeCodeId: id, clinId: 'clin-1', chargeCode: code, chargeCodeName: `${code} work`, clinNumber: '0001', contractName: 'NAVAIR', contractNumber: 'N1', dayIndex, hours, ...o };
+  // The charge code's own CLIN / contract (F9) — by default the same as the entry's.
+  return { codeClinNumber: e.clinNumber, codeContractName: e.contractName, codeContractNumber: e.contractNumber, codeSlinNumber: e.slinNumber, ...e };
+};
 const indirect = (id: string, code: string, category: string, dayIndex: number, hours: string): TimesheetRowEntry =>
   ({ ...none, indirectCodeId: id, indirectCode: code, indirectName: `${code} name`, indirectCategory: category, dayIndex, hours });
 const legacyClin = (dayIndex: number, hours: string, slinNumber: string | null = null): TimesheetRowEntry =>
@@ -50,6 +53,15 @@ describe('buildTimesheetRows', () => {
     expect(r.rows.find((x) => x.code === 'A')!.totalHours).toBe(1.42);
     expect(r.dailyTotals).toEqual([0.29, 8.83]);
     expect(r.grandTotal).toBe(9.12);
+  });
+
+  it('F9: a charge row is labelled by the charge code\'s own CLIN, whichever entry comes first (old entries keep an old clin_id)', () => {
+    const code = { codeClinNumber: '0002', codeContractName: 'DISA', codeContractNumber: 'D1', codeSlinNumber: null };
+    const old = charge('cc-a', 'A', 0, '8', { clinNumber: '0001', contractName: 'NAVAIR', ...code });
+    const fresh = charge('cc-a', 'A', 1, '8', { clinNumber: '0002', contractName: 'DISA', ...code });
+    for (const order of [[old, fresh], [fresh, old]]) {
+      expect(buildTimesheetRows(order, 2).rows[0]).toMatchObject({ clinNumber: '0002', contractName: 'DISA', contractNumber: 'D1' });
+    }
   });
 
   it('days outside the period are ignored', () => {

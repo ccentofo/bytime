@@ -40,7 +40,7 @@ import { chargeCodes, indirectChargeCodes, timesheetEntries, userChargeCodes } f
 import type { FakeControlDb } from '../helpers/fake-control-db';
 import { saveTimesheetBatch } from '@/server/actions/timesheet';
 import { isCellEditable, newCellRefusal } from '@/lib/timesheet/cell-rules';
-import { cellRefForKind } from '@/components/timesheet/TimesheetContext';
+import { cellRefForKind, timesheetReducer } from '@/components/timesheet/TimesheetContext';
 import { queueItemCellRef } from '@/lib/offline/sync-service';
 
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
@@ -147,6 +147,24 @@ describe('saveTimesheetBatch — per cell, inside the transaction, after the pri
   });
 });
 
+describe('F8 — navigation replaces the code list', () => {
+  it('SET_PERIOD_DATA replaces chargeCodes with the new period\'s list (no fallback to the old one)', () => {
+    const old = [{ id: 'a', projectName: 'P', clin: 'A', description: 'A', kind: 'charge', assignable: true }];
+    const next = [{ id: 'b', projectName: 'P', clin: 'B', description: 'B', kind: 'charge', assignable: false }];
+    const state = { chargeCodes: old, entries: [], savedEntries: [], savedCellRevisions: {}, notes: {} } as never;
+    const out = timesheetReducer(state, {
+      type: 'SET_PERIOD_DATA', periodStart: '2026-10-16' as never, numDays: 16, entries: [], revisions: {}, periodStatus: 'draft',
+      periodConfig: { periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1 } as never, chargeCodes: next as never,
+    }) as unknown as { chargeCodes: unknown };
+    expect(out.chargeCodes).toBe(next);
+    const empty = timesheetReducer(state, {
+      type: 'SET_PERIOD_DATA', periodStart: '2026-10-16' as never, numDays: 16, entries: [], revisions: {}, periodStatus: 'draft',
+      periodConfig: { periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1 } as never, chargeCodes: [],
+    }) as unknown as { chargeCodes: unknown[] };
+    expect(empty.chargeCodes).toEqual([]);
+  });
+});
+
 describe('save mapping by kind (client and offline queue)', () => {
   it('charge → chargeCodeId, clin → clinId, indirect → indirectCodeId', () => {
     expect(cellRefForKind('charge', 'x')).toEqual({ chargeCodeId: 'x' });
@@ -167,7 +185,10 @@ describe('save mapping by kind (client and offline queue)', () => {
     expect(readFileSync(path.join(ROOT, 'src/components/timesheet/cells/ChargeCodeCell.tsx'), 'utf8'))
       .toContain('No longer assigned — you can correct existing hours, not add new ones');
     const ctx = readFileSync(path.join(ROOT, 'src/components/timesheet/TimesheetContext.tsx'), 'utf8');
-    expect(ctx).toMatch(/chargeCodes: action\.chargeCodes \?\? state\.chargeCodes/);
+    expect(ctx).toMatch(/chargeCodes: action\.chargeCodes,/);
+    // F8: offline seeding uses the NEW period's list.
+    expect(ctx).toMatch(/seedOfflineStore\(\{[\s\S]*?chargeCodes: period\.chargeCodes,/);
+    expect(ctx).not.toMatch(/chargeCodes: state\.chargeCodes/);
     expect(ctx).toMatch(/\.\.\.cellRefForKind\(chargeCode\?\.kind/);
     expect(readFileSync(path.join(ROOT, 'src/app/(app)/timesheet/page.tsx'), 'utf8')).toMatch(/chargeCodes: period\.chargeCodes,/);
     const ts = readFileSync(path.join(ROOT, 'src/server/actions/timesheet.ts'), 'utf8');

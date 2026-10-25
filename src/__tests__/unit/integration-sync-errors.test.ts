@@ -66,6 +66,7 @@ describe('integration sync errors are sanitised (audit R7)', () => {
     const payroll = { periodStart: '2026-10-01', periodEnd: '2026-10-15', employees: [{ userId: 'u1', employeeName: 'Pat Doe', regularHours: 8, overtimeHours: 0, ptoHours: 0, sickHours: 0, holidayHours: 0, uncompensatedOvertimeHours: 0, flagged: false }] } as unknown as PayrollSyncInput;
     const result = await gustoConnector.pushPayroll!(context, payroll);
     expect(result.failed).toBe(1);
+    expect(result.pushed).toBe(0); // fix round 1 F10: a failed record is not also counted as pushed
     expect(result.errors).toEqual([{ bytimeEntityId: 'u1', error: 'Could not sync this employee.' }]);
     expect(result.errors.some((e) => leaks(e.error))).toBe(false);
   });

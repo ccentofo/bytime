@@ -163,8 +163,6 @@ export const gustoConnector: IntegrationConnector = {
       }
 
       try {
-        result.pushed++;
-
         await db.insert(integrationSyncRecords).values({
           syncLogId: context.syncLogId,
           bytimeEntityType: 'employee_hours',
@@ -187,6 +185,7 @@ export const gustoConnector: IntegrationConnector = {
           }),
           responsePayload: null,
         });
+        result.pushed++; // F10: counted only once the record is written (a failed insert counts as failed, not both)
       } catch (error) {
         result.failed++;
         result.errors.push({

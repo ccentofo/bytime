@@ -46,9 +46,14 @@ Implementation:
   pay period is approved. The containing period is the one whose dates cover that day, so a period that started before
   the range still contributes its in-range days.
 - **Unapproved days still count toward the 40.** An unapproved day earlier in the same workweek is included in the
-  overtime calculation, because the hours were recorded. If a reported day's split relied on such a day, the employee
-  is **flagged** ("Overtime uses unapproved days"). Flagged employees are listed on screen before download, and the
-  flag is on the Gusto payroll record.
+  overtime calculation, because the hours were recorded. If a reported day **has overtime** and unapproved worked
+  hours earlier in the same workweek counted toward its 40, the employee is **flagged** ("Overtime uses unapproved
+  days"). A reported day without overtime is never flagged, since the unapproved days didn't change its pay. Flagged
+  employees are listed on screen before download (downloads need a preview of the current range), and the flag is on
+  the Gusto payroll record.
+- **Skipped unapproved days need a re-export.** A day whose timesheet was not approved when a range was exported is
+  left out of that file. Approving it later does not add it to a later export of a different range. It is picked up
+  only by **re-exporting the range that contains it**.
 
 ## 3. Exempt employees
 
@@ -79,5 +84,7 @@ Gusto import specifications. Verify them in staging before marketing payroll exp
   The Settings page warns before an admin changes it, and every change is recorded in the admin change log (who, when,
   old, new). Exports always use the current setting, including exports of past ranges.
 - **`flsa_exempt` is also a current value.** A past range is computed with each employee's exempt status as of today.
+- **Code changes alter past exports.** Changing a used leave code's pay type, or an indirect code's category, changes
+  how its past hours are classified in any later export, including re-exports of past ranges.
 - **Corrections show up on re-export.** Each figure uses the latest revision of every entry at export time, so a later
   correction changes a re-export of the same range.

@@ -105,8 +105,8 @@ export async function getPeriodOptions(aroundDay: CalendarDate, before: number, 
  * it now (feature-plan-certified-outputs.md C2 — admins, the effective designee, CLIN-sharing supervisors for an
  * employee-role submitter), never the submitter, each only if opted in. See src/server/internal/submission-notify.ts.
  */
-async function notifyReviewersOfSubmission(userId: string, periodStart: CalendarDate, numDays: number): Promise<void> {
-  await notifySubmissionRecipients({ employeeId: userId, periodStart, numDays });
+async function notifyReviewersOfSubmission(userId: string, periodStart: CalendarDate, numDays: number, submittedAt: Date | null): Promise<void> {
+  await notifySubmissionRecipients({ employeeId: userId, periodStart, numDays, submittedAt });
 }
 
 /**
@@ -234,7 +234,7 @@ export async function submitPeriod(data: {
     };
 
     // The submission is already committed; a notification failure must not report it as failed.
-    await notifyReviewersOfSubmission(userId, periodStart, numDays).catch((err) => console.error('Submission notification failed:', err));
+    await notifyReviewersOfSubmission(userId, periodStart, numDays, row.submittedAt).catch((err) => console.error('Submission notification failed:', err));
 
     return result;
   });

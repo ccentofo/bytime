@@ -165,7 +165,6 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getValidScheduleChangeDates: 'computes valid change dates from reads; no write',
   },
   'payroll-export.ts': {
-    getPayrollFormats: 'returns static format metadata; no DB access',
     getPayrollExportPreview: 'reads approved entries (getApprovedEntriesForSync is read-only); no write',
     generatePayrollExportCSV: 'builds a CSV from read-only approved entries; no write',
   },
