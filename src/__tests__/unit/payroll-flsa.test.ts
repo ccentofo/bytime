@@ -56,6 +56,18 @@ describe('FLSA weekly overtime (pure)', () => {
     expect(['8.29', '8.29', '8.29', '8.29', '6.84'].reduce((s, h) => s + toCents(h), 0)).toBe(4000);
   });
 
+  it('T4: 5.83 + 5.83 + 5.83 + 10.88 + 11.63 (not 40 as floats) → exactly 40.00 regular, 0 OT', () => {
+    const hours = ['5.83', '5.83', '5.83', '10.88', '11.63'];
+    expect(hours.reduce((s, h) => s + parseFloat(h), 0)).not.toBe(40);
+    const { employees } = run(week(hours));
+    expect(employees[0]).toMatchObject({ regular: 4000, overtime: 0, totalPaid: 4000 });
+  });
+
+  it('T4: a day corrected to 0 h is omitted from the output (no 0-hour day rows)', () => {
+    const { days } = run([...week(['8', '8']), e('2026-10-07', '0')]);
+    expect(days.map((x) => x.date)).toEqual(['2026-10-05', '2026-10-06']);
+  });
+
   it('leave never counts toward the 40: 40 h worked + 8 h holiday → 0 OT, holiday 8 in its own column', () => {
     // The holiday comes FIRST in the week, so counting it would push Saturday's hours into overtime.
     const { employees } = run([e('2026-10-05', '8', 'holiday'), ...week(['8', '8', '8', '8', '8'], 6)]);

@@ -70,9 +70,13 @@ describe('audit trail (certified-outputs C6)', () => {
 
     const histA = (await getCellRevisionHistory(emp.id, a.id, D))!;
     const histB = (await getCellRevisionHistory(emp.id, b.id, D))!;
-    expect(histA.revisions.map((r) => r.hours)).toEqual(['3.00', '4.00']);
-    expect(histB.revisions.map((r) => r.hours)).toEqual(['5.00']);
-    expect((await getCellRevisionHistory(emp.id, leave.id, D))!).toMatchObject({ kind: 'indirect', codeLabel: 'LV-PTO (Leave)', revisions: [expect.objectContaining({ hours: '8.00' })] });
+    // T7: the database stores hours as saved ("3", not "3.00") — compare numerically.
+    const hrs = (h: { revisions: Array<{ hours: string }> }) => h.revisions.map((r) => Number(r.hours).toFixed(2));
+    expect(hrs(histA)).toEqual(['3.00', '4.00']);
+    expect(hrs(histB)).toEqual(['5.00']);
+    const histL = (await getCellRevisionHistory(emp.id, leave.id, D))!;
+    expect(histL).toMatchObject({ kind: 'indirect', codeLabel: 'LV-PTO (Leave)' });
+    expect(hrs(histL)).toEqual(['8.00']);
   });
 
   it('imported and legacy-imported (MIGRATION) rows are labelled in the list and the revision history', async () => {

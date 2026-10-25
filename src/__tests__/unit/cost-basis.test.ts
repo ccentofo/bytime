@@ -103,11 +103,18 @@ const LCAT_IMPORT_ALLOWLIST = new Set([
   'src/server/actions/charge-codes.ts',          // CRUD
   'src/server/actions/import.ts',                // bulk import
   'src/server/internal/setup.ts',                // setup checklist counts
+  'src/db/clear-tenant-data.ts',                 // test / seed cleanup (namespace import)
 ]);
 
 export function lcatImporters(src: string): boolean {
-  for (const m of stripComments(src).matchAll(/import\s*\{([^}]*)\}\s*from\s*['"][^'"]*db\/schema['"]/g)) {
+  const code = stripComments(src);
+  for (const m of code.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"][^'"]*db\/schema['"]/g)) {
     if (m[1].split(',').map((s) => s.trim()).some((n) => n === 'userLaborCategories' || n === 'laborCategories')) return true;
+  }
+  // Fix round 1 (T5): a namespace import used as schema.laborCategories, or the raw table names inside a sql template.
+  if (/\bschema\.(userLaborCategories|laborCategories)\b/.test(code)) return true;
+  for (const m of code.matchAll(/\bsql(?:<[^>`]*>)?`((?:[^`\\]|\\.)*)`/g)) {
+    if (/\b(user_)?labor_categories\b/.test(m[1])) return true;
   }
   return false;
 }
@@ -130,6 +137,14 @@ describe('static: labor categories are resolved for costs only through cost-basi
   it('fixture: a report importing laborCategories directly is flagged', () => {
     expect(lcatImporters("import { users, laborCategories } from '@/db/schema';")).toBe(true);
     expect(lcatImporters("import { users } from '@/db/schema';")).toBe(false);
+  });
+
+  it('T5 fixture: schema.laborCategories via a namespace import, and raw table names in sql, are flagged', () => {
+    expect(lcatImporters("import * as schema from '@/db/schema'; db.select().from(schema.userLaborCategories);")).toBe(true);
+    expect(lcatImporters("import * as schema from '@/db/schema'; db.select().from(schema.users);")).toBe(false);
+    expect(lcatImporters('const q = sql`SELECT hourly_rate FROM labor_categories WHERE id = ${x.id}`;')).toBe(true);
+    expect(lcatImporters('const q = sql<number>`(SELECT 1 FROM user_labor_categories ulc)`;')).toBe(true);
+    expect(lcatImporters("const label = 'labor_categories.csv id';")).toBe(false); // a plain string is not a query
   });
 
   it('all five former join sites use the lateral resolution (detailed, summary, CLIN, SLIN, period report)', () => {

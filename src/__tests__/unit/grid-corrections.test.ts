@@ -53,10 +53,10 @@ const START = '2026-10-01';
 beforeEach(() => { db.reset(); h.locked = false; });
 
 /** Script the in-transaction reads for one charge-code cell, in the order the save makes them. */
-function chargeCodeFacts(o: { assigned: boolean; codeActive: boolean; clinActive?: boolean; priorRevision: number }) {
+function chargeCodeFacts(o: { assigned: boolean; codeActive: boolean; clinActive?: boolean; contractActive?: boolean; priorRevision: number }) {
   db.onSelect(chargeCodes, [{ id: CODE, clinId: CLIN, slinId: null }]);                                   // FOR SHARE re-read
   db.onSelect(userChargeCodes, o.assigned ? [{ id: CODE }] : []);                                          // active assignment
-  db.onSelect(chargeCodes, [{ id: CODE, codeActive: o.codeActive, clinStatus: o.clinActive === false ? 'inactive' : 'active', contractStatus: 'active' }]);
+  db.onSelect(chargeCodes, [{ id: CODE, codeActive: o.codeActive, clinStatus: o.clinActive === false ? 'inactive' : 'active', contractStatus: o.contractActive === false ? 'inactive' : 'active' }]);
   db.onSelect(timesheetEntries, [{ maxRevision: o.priorRevision }]);                                       // prior revision
 }
 const save = (cell: Record<string, unknown>, reason = true) => saveTimesheetBatch({
@@ -105,6 +105,19 @@ describe('saveTimesheetBatch — per cell, inside the transaction, after the pri
     db.reset();
     chargeCodeFacts({ assigned: false, codeActive: true, priorRevision: 1 });
     expect((await save({ chargeCodeId: CODE, isEdit: true })).ok).toBe(true);
+  });
+
+  it('T1: assigned, active code, but its CLIN — or its contract — inactive: a NEW day is refused, an existing day is correctable', async () => {
+    for (const facts of [{ clinActive: false }, { contractActive: false }]) {
+      db.reset();
+      chargeCodeFacts({ assigned: true, codeActive: true, ...facts, priorRevision: 0 });
+      expect(await save({ chargeCodeId: CODE }), JSON.stringify(facts)).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/no longer active \(or its CLIN or contract isn't\)/) });
+      expect(inserted()).toEqual([]);
+      db.reset();
+      chargeCodeFacts({ assigned: true, codeActive: true, ...facts, priorRevision: 1 });
+      expect((await save({ chargeCodeId: CODE, isEdit: true })).ok, JSON.stringify(facts)).toBe(true);
+      expect(inserted()).toEqual([expect.objectContaining({ chargeCodeId: CODE, revisionNumber: 2 })]);
+    }
   });
 
   it('a correction still needs a reason code', async () => {

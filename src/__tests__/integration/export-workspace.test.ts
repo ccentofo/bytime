@@ -208,6 +208,37 @@ describe('workspace export (§5.2)', () => {
     expect(files['README.md']).toContain('### admin_change_log.csv');
   });
 
+  it('T6: export self_approved matches approvalLabel — legacy period (no events, reviewed_by = user) and reject → resubmit → approve', async () => {
+    const db = getTestDb();
+    const other = await createTestUser({ role: 'admin' });
+    const t = (m: number) => new Date(Date.UTC(2026, 0, 10, 12, m));
+    // Legacy: approved before period_events existed, reviewed by the employee themselves → self-approved.
+    const [legacy] = await db.insert(schema.timesheetPeriods).values({ userId: admin.id, periodStart: '2025-11-01', status: 'approved', reviewedBy: admin.id, reviewedAt: t(0) }).returning();
+    // Rejected by someone else, resubmitted, then approved by the employee (sole-admin self-approval) → true.
+    const [selfLast] = await db.insert(schema.timesheetPeriods).values({ userId: admin.id, periodStart: '2025-11-16', status: 'approved', reviewedBy: admin.id, reviewedAt: t(3) }).returning();
+    // Self-rejected first, resubmitted, then approved by another admin → false (the LATEST approval decides).
+    const [otherLast] = await db.insert(schema.timesheetPeriods).values({ userId: admin.id, periodStart: '2025-12-01', status: 'approved', reviewedBy: other.id, reviewedAt: t(3) }).returning();
+    await db.insert(schema.periodEvents).values([
+      { periodId: selfLast.id, userId: admin.id, event: 'submitted', actorId: admin.id, createdAt: t(0) },
+      { periodId: selfLast.id, userId: admin.id, event: 'rejected', actorId: other.id, createdAt: t(1) },
+      { periodId: selfLast.id, userId: admin.id, event: 'submitted', actorId: admin.id, createdAt: t(2) },
+      { periodId: selfLast.id, userId: admin.id, event: 'approved', actorId: admin.id, createdAt: t(3) },
+      { periodId: otherLast.id, userId: admin.id, event: 'submitted', actorId: admin.id, createdAt: t(0) },
+      { periodId: otherLast.id, userId: admin.id, event: 'rejected', actorId: admin.id, createdAt: t(1) },
+      { periodId: otherLast.id, userId: admin.id, event: 'submitted', actorId: admin.id, createdAt: t(2) },
+      { periodId: otherLast.id, userId: admin.id, event: 'approved', actorId: other.id, createdAt: t(3) },
+    ]);
+
+    const files = await unzipBytes(await (await GET(exportRequest())).arrayBuffer());
+    const periods = parse(files['timesheet_periods.csv']);
+    const exported = (id: string) => periods.find((r) => r[0] === id)![periods[0].indexOf('self_approved')];
+    const { approvalLabels } = await import('@/server/internal/approval-label');
+    const rows = await db.select().from(schema.timesheetPeriods);
+    const labels = await approvalLabels(db as never, rows.map((r) => ({ id: r.id, userId: r.userId, status: r.status, reviewedBy: r.reviewedBy, reviewedAt: r.reviewedAt })), 'UTC');
+    for (const p of [legacy, selfLast, otherLast]) expect(exported(p.id), p.periodStart).toBe(String(labels.get(p.id)!.selfApproved));
+    expect([exported(legacy.id), exported(selfLast.id), exported(otherLast.id)]).toEqual(['true', 'true', 'false']);
+  });
+
   it('F5: a blocked export (policy hold) is a 403 with a reason, never a 500 or a partial archive', async () => {
     tenantState.blocked = true;
     try {

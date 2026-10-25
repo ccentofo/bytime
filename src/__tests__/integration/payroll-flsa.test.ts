@@ -136,6 +136,18 @@ describe('payroll export — FLSA weekly overtime (certified-outputs C7)', () =>
     expect(custom).toMatch(/Ex Empt,.*,5\.00,/);
   });
 
+  it('T4: only the LATEST revision counts — rev 1 = 10 h, rev 2 = 8 h → 8 h; a correction to 0 h omits the day', async () => {
+    await expectOk(updateWorkweekStartDay(1));
+    await period('2026-03-01', 15, 'approved');
+    await work('2026-03-02', '10');
+    await db().insert(schema.timesheetEntries).values({ userId: emp.id, clinId, entryDate: '2026-03-02', hours: '8', revisionNumber: 2, createdBy: emp.id, changeReasonCode: 'CORRECTION', comment: 'x' });
+    await work('2026-03-03', '6');
+    await db().insert(schema.timesheetEntries).values({ userId: emp.id, clinId, entryDate: '2026-03-03', hours: '0', revisionNumber: 2, createdBy: emp.id, changeReasonCode: 'CORRECTION', comment: 'x' });
+    expect((await preview('2026-03-01', '2026-03-15')).employees[0]).toMatchObject({ regularHours: 8, overtimeHours: 0, totalPaidHours: 8 });
+    const daily = (await expectOk(generatePayrollExportCSV({ periodStart: d('2026-03-01'), periodEnd: d('2026-03-15'), format: 'daily-hours' }))).csvContent.split('\n');
+    expect(daily.slice(1).map((l) => l.split(',')[2])).toEqual(['2026-03-02']);
+  });
+
   it('a leave code without a pay type in the range refuses the export (codes listed); a new workspace\'s built-in codes never do', async () => {
     await expectOk(updateWorkweekStartDay(1));
     await period('2026-03-01', 15, 'approved');

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import crypto from 'crypto';
+import postgres from 'postgres';
 import { and, eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
 import { getPeriodStartForDate, navigatePeriod, DEFAULT_PERIOD_CONFIG } from '@/lib/date-utils';
@@ -44,7 +45,7 @@ vi.mock('@/lib/email/send', () => ({
 import { approvePeriod, rejectPeriod, getScopedPeriods, submitPeriod } from '@/server/actions/periods';
 import { getTimesheetForReview, getTimesheetPeriod } from '@/server/actions/timesheet';
 import { setUserApprover, updateUser, getApprovalNotices, getUsers } from '@/server/actions/users';
-import { getCellRevisionHistory, getAuditEntries } from '@/server/actions/audit';
+import { getCellRevisionHistory, getAuditEntries, getAuditPeriodEvents } from '@/server/actions/audit';
 import { getTimesheetReportData, getEmployeeSummaryReport } from '@/server/actions/reports';
 import { GET as getV1Periods } from '@/app/api/v1/periods/route';
 
@@ -242,6 +243,43 @@ describe('approver rules (certified-outputs C2)', () => {
     await expectFailure(rejectPeriod({ periodId: period.id, seen: 1, comment: 'x' }), 'validation', /Only submitted periods/);
   });
 
+  it('T8: decided by someone else AFTER the status pre-check → the conditional UPDATE matches no row → re-read → "just changed"', async () => {
+    const admin2 = await createTestUser({ role: 'admin' });
+    const emp = await createTestUser({ role: 'employee' });
+    const period = await submittedPeriod(emp);
+    const url = process.env.TEST_DATABASE_URL ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime_test';
+    const r = postgres(url, { max: 1 });
+    const observer = postgres(url, { max: 1 });
+    try {
+      actingAs(admin);
+      let decision!: Promise<Awaited<ReturnType<typeof rejectPeriod>>>;
+      await r.begin(async (tx) => {
+        // Hold the user-rules lock (F1) so the decision passes its pre-checks (still "submitted") and then waits
+        // inside its transaction, BEFORE its UPDATE …
+        await tx`SELECT pg_advisory_xact_lock(hashtext('user-rules'))`;
+        decision = rejectPeriod({ periodId: period.id, seen: 1, comment: 'x' });
+        for (let i = 0; ; i++) {
+          const [{ n }] = await observer<{ n: number }[]>`SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE datname = current_database() AND wait_event_type = 'Lock' AND wait_event = 'advisory'`;
+          if (n > 0) break;
+          if (i > 400) throw new Error('the decision never waited on the user-rules lock');
+          await new Promise((res) => setTimeout(res, 25));
+        }
+        // … while another reviewer approves it.
+        await tx`UPDATE timesheet_periods SET status = 'approved', reviewed_by = ${admin2.id}, reviewed_at = now() WHERE id = ${period.id}`;
+      });
+      expect(await decision).toEqual({ ok: false, code: 'conflict', error: expect.stringMatching(/just changed by someone else/) });
+      const [after] = await getTestDb().select({ status: schema.timesheetPeriods.status, reviewedBy: schema.timesheetPeriods.reviewedBy })
+        .from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, period.id));
+      expect(after).toEqual({ status: 'approved', reviewedBy: admin2.id });
+      const events = await getTestDb().select().from(schema.periodEvents).where(eq(schema.periodEvents.periodId, period.id));
+      expect(events.filter((e) => e.event === 'rejected')).toEqual([]);
+    } finally {
+      await r.end({ timeout: 1 });
+      await observer.end({ timeout: 1 });
+    }
+  });
+
   // ── Approval rows ─────────────────────────────────────────────────────────
   it('draft / approved / rejected → refused; employee-role with no shared CLIN, not designated → not found; non-admin self → explicit', async () => {
     const emp = await createTestUser({ role: 'employee' });
@@ -343,7 +381,8 @@ describe('approver rules (certified-outputs C2)', () => {
     const d = addDays(prevStart(1), 1);
     for (const u of [book, X, other]) {
       await getTestDb().insert(schema.timesheetEntries).values({ userId: u.id, clinId: clin.id, entryDate: d, hours: '8', revisionNumber: 1, createdBy: u.id });
-      await submittedPeriod(u);
+      const p = await submittedPeriod(u);
+      await getTestDb().insert(schema.periodEvents).values({ periodId: p.id, userId: u.id, event: 'submitted', actorId: u.id });
     }
 
     actingAs(book);
@@ -354,6 +393,9 @@ describe('approver rules (certified-outputs C2)', () => {
     await expect(getCellRevisionHistory(other.id, clin.id, d)).rejects.toThrow(/not authorized/);
     const audit = (await getAuditEntries({})).entries;
     expect(new Set(audit.map((a) => a.userId))).toEqual(new Set([book.id, X.id]));
+    // T2: the audit trail's period events are scoped the same way.
+    expect(new Set((await getAuditPeriodEvents({})).events.map((e) => e.userId))).toEqual(new Set([book.id, X.id]));
+    expect((await getAuditPeriodEvents({ userId: other.id })).events).toEqual([]);
     const summary = await getEmployeeSummaryReport(prevStart(1), addDays(prevStart(1), 14));
     expect(summary.map((s) => s.employeeName).sort()).toEqual([book.fullName, X.fullName].sort());
     await expect(getTimesheetReportData(X.id, prevStart(1))).resolves.not.toBeNull();

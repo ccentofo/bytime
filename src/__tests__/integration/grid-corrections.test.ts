@@ -79,7 +79,9 @@ describe('grid corrections (certified-outputs C4)', () => {
     await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 1, hours: 4, isEdit: false, isLateEntry: true }], ...fix }), 'validation', /no longer active/);
     const r = await saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 0, isEdit: true, isLateEntry: false }], ...fix });
     expect(r.ok, JSON.stringify(r)).toBe(true);
-    expect(await latest(and(eq(schema.timesheetEntries.chargeCodeId, code.id), eq(schema.timesheetEntries.entryDate, start)))).toMatchObject({ hours: '0.00', revisionNumber: 2, changeReasonCode: 'CORRECTION', clinId: clin.id });
+    const zeroed = await latest(and(eq(schema.timesheetEntries.chargeCodeId, code.id), eq(schema.timesheetEntries.entryDate, start)));
+    expect(zeroed).toMatchObject({ revisionNumber: 2, changeReasonCode: 'CORRECTION', clinId: clin.id });
+    expect(Number(zeroed.hours).toFixed(2)).toBe('0.00'); // T7: the database stores hours as saved
     // The 0-hour row is still in the period's list (recorded), so the correction stays visible.
     expect((await getTimesheetPeriod(start)).chargeCodes.map((c) => c.id)).toContain(code.id);
   });
@@ -96,6 +98,26 @@ describe('grid corrections (certified-outputs C4)', () => {
     await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 6, isEdit: true, isLateEntry: false }] }), 'validation', /reason code is required/);
     const r = await saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 6, isEdit: true, isLateEntry: false }], ...fix });
     expect(r.ok, JSON.stringify(r)).toBe(true);
+  });
+
+  it('T1: assigned, active charge code whose CLIN — then whose contract — is inactive: new day refused, existing day correctable', async () => {
+    const contract = await createTestContract();
+    const c2 = await createTestClin(contract.id);
+    const code = await createTestChargeCode(c2.id);
+    await db().insert(schema.userChargeCodes).values({ userId: emp.id, chargeCodeId: code.id, isActive: true });
+    await entry({ chargeCodeId: code.id, clinId: c2.id });
+    for (const deactivate of [
+      () => db().update(schema.clins).set({ status: 'inactive' }).where(eq(schema.clins.id, c2.id)),
+      async () => {
+        await db().update(schema.clins).set({ status: 'active' }).where(eq(schema.clins.id, c2.id));
+        await db().update(schema.contracts).set({ status: 'inactive' }).where(eq(schema.contracts.id, contract.id));
+      },
+    ]) {
+      await deactivate();
+      await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 3, hours: 2, isEdit: false, isLateEntry: true }], ...fix }), 'validation', /no longer active/);
+      const r = await saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 3, isEdit: true, isLateEntry: false }], ...fix });
+      expect(r.ok, JSON.stringify(r)).toBe(true);
+    }
   });
 
   it('a correction in a submitted period is refused (the period lock is unchanged)', async () => {
@@ -116,7 +138,9 @@ describe('grid corrections (certified-outputs C4)', () => {
     await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [{ clinId: clin.id, slinId: slinB.id, dayIndex: 0, hours: 5, isEdit: true, isLateEntry: false }], ...fix }), 'validation', /keeps the SLIN/);
     const r = await saveTimesheetBatch({ periodStart: start, cells: [{ clinId: clin.id, dayIndex: 0, hours: 5, isEdit: true, isLateEntry: false }], ...fix });
     expect(r.ok, JSON.stringify(r)).toBe(true);
-    expect(await latest(and(eq(schema.timesheetEntries.clinId, clin.id), eq(schema.timesheetEntries.entryDate, start)))).toMatchObject({ hours: '5.00', revisionNumber: 2, slinId: slin.id, chargeCodeId: null });
+    const corrected = await latest(and(eq(schema.timesheetEntries.clinId, clin.id), eq(schema.timesheetEntries.entryDate, start)));
+    expect(corrected).toMatchObject({ revisionNumber: 2, slinId: slin.id, chargeCodeId: null });
+    expect(Number(corrected.hours).toFixed(2)).toBe('5.00'); // T7
   });
 
   it('inactive indirect code with hours: listed, corrected; new day refused', async () => {

@@ -166,6 +166,43 @@ describe('cost basis (certified-outputs C3)', () => {
     expect(summary.map((r) => [r.employeeId, r.totalHours]).sort()).toEqual([[emp.id, 8], [twin.id, 5]].sort());
   });
 
+  // ── T5 ───────────────────────────────────────────────────────────────────
+  it('T5: two different categories on the entry\'s SLIN, same date → unpriced "conflict" at the SLIN level', async () => {
+    const [s1] = await db().insert(schema.slins).values({ clinId: clinA.id, slinNumber: 'SA' }).returning();
+    const a = await lcat(clinA.id, 'SA1', '100.00', { slinId: s1.id });
+    const b = await lcat(clinA.id, 'SA2', '120.00', { slinId: s1.id });
+    await assign(emp.id, a.id, '2026-01-01');
+    await assign(emp.id, b.id, '2026-02-01');
+    await entry({ clinId: clinA.id, slinId: s1.id });
+    expect((await getDetailedCostReport(...RANGE))[0]).toMatchObject({ costBasis: 'unpriced', unpricedReason: 'conflict', totalCost: 0 });
+    expect((await getUnpricedHoursReport({})).rows[0]).toMatchObject({ reason: 'conflict', level: 'slin' });
+  });
+
+  it('T5: SLIN beats CLIN — a CLIN-level category A and a SLIN-level category B on the entry\'s SLIN → B', async () => {
+    const [s1] = await db().insert(schema.slins).values({ clinId: clinA.id, slinNumber: 'SB' }).returning();
+    const a = await lcat(clinA.id, 'CLINA', '100.00');
+    const b = await lcat(clinA.id, 'SLINB', '150.00', { slinId: s1.id });
+    await assign(emp.id, a.id, '2026-01-01');
+    await assign(emp.id, b.id, '2026-01-01');
+    await entry({ clinId: clinA.id, slinId: s1.id });
+    expect((await getDetailedCostReport(...RANGE))[0]).toMatchObject({ lcatCode: 'SLINB', hourlyRate: 150, totalCost: 1200, costBasis: 'priced' });
+  });
+
+  it('T5: dashboard SLIN summaries carry the exact priced cost and unpriced hours; the employee summary carries unpricedHours', async () => {
+    const [s1] = await db().insert(schema.slins).values({ clinId: clinA.id, slinNumber: 'SC', fundedAmount: '10000' }).returning();
+    const priced = await lcat(clinA.id, 'SC1', '90.00', { slinId: s1.id });
+    await assign(emp.id, priced.id, '2026-01-01');
+    await entry({ clinId: clinA.id, slinId: s1.id, entryDate: D1, hours: '8' });             // priced: 8 × 90 = 720
+    const [s2] = await db().insert(schema.slins).values({ clinId: clinA.id, slinNumber: 'SD' }).returning();
+    await entry({ clinId: clinA.id, slinId: s2.id, entryDate: D2, hours: '3' });             // unpriced (no category on SD, none at CLIN level)
+    const c = (await getContractSummaries()).find((x) => x.contractId === contract.id)!;
+    const clin = c.clinSummaries.find((x) => x.clinId === clinA.id)!;
+    expect(clin.slinSummaries.find((x) => x.slinId === s1.id)).toMatchObject({ totalCost: 720, unpricedHours: 0, totalHours: 8 });
+    expect(clin.slinSummaries.find((x) => x.slinId === s2.id)).toMatchObject({ totalCost: 0, unpricedHours: 3, totalHours: 3 });
+    const summary = (await getEmployeeSummaryReport(...RANGE)).find((r) => r.employeeId === emp.id)!;
+    expect(summary).toMatchObject({ totalHours: 11, totalCost: 720, unpricedHours: 3 });
+  });
+
   it('a deactivated labor category keeps its historical cost (no status filter)', async () => {
     const old = await lcat(clinA.id, 'OLD', '90.00', { status: 'inactive' });
     await assign(emp.id, old.id, '2026-01-01', '2026-03-31');

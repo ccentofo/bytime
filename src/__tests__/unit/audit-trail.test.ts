@@ -175,6 +175,13 @@ describe('F12 — audit reads', () => {
     await expect(getCellRevisionHistory('x', CELL, '2026-09-01' as never)).rejects.toThrow(/Employee is not a valid identifier/);
   });
 
+  it('T2 (static; Postgres case in approver-rules): period events are filtered by the caller\'s review scope, empty scope → []', () => {
+    const audit = readFileSync(path.join(ROOT, 'src/server/actions/audit.ts'), 'utf8');
+    const fn = audit.slice(audit.indexOf('export async function getAuditPeriodEvents'), audit.indexOf('export async function getAuditSummary'));
+    expect(fn).toMatch(/const scope = await getEmployeeScope\(actor\);\s*if \(scope !== 'all' && scope\.length === 0\) return \{ events: \[\], truncated: false \};/);
+    expect(fn).toMatch(/scope === 'all' \? undefined : inArray\(periodEvents\.userId, scope\)/);
+  });
+
   it('static: stable order (created_at, then id) on both queries', () => {
     const audit = readFileSync(path.join(ROOT, 'src/server/actions/audit.ts'), 'utf8');
     expect(audit).toMatch(/\.orderBy\(desc\(timesheetEntries\.createdAt\), desc\(timesheetEntries\.id\)\)/);
