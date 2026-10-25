@@ -12,7 +12,7 @@ import { TRIAL_DAYS } from './lifecycle-config';
 import { addDays } from './lifecycle';
 import { withTenantLock } from '@/db/control-plane/locked';
 import { readTenant, updateTenantGuarded } from './lifecycle-store';
-import { recomputeSelfApproval } from '@/server/internal/approval-rules';
+import { lockUserRulesExclusive, recomputeSelfApproval } from '@/server/internal/approval-rules';
 
 // The slug rules live in a pure module (usable outside 'server-only' code); re-exported for existing importers.
 export { isValidSlug } from './slug-rules';
@@ -87,6 +87,7 @@ export async function provisionTenant(input: ProvisionInput): Promise<ProvisionR
   let [admin] = await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.email, email));
   if (!admin) {
     admin = await db.transaction(async (tx) => {
+      await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
       const [created] = await tx.insert(schema.users).values({
         email,
         fullName: input.adminName.trim(),

@@ -5,7 +5,7 @@ import { users, contracts, clins, slins, laborCategories, userAssignments } from
 import { eq, and, inArray } from 'drizzle-orm';
 import { requireAdminFresh } from '@/lib/session';
 import { assertSeatsAvailable } from '@/server/internal/seats';
-import { newlyEligible, recomputeSelfApproval, snapshotSubmittedEligibility } from '@/server/internal/approval-rules';
+import { lockUserRulesExclusive, newlyEligible, recomputeSelfApproval, snapshotSubmittedEligibility } from '@/server/internal/approval-rules';
 import { notifyReroutedApprovals } from '@/server/internal/submission-notify';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
@@ -47,6 +47,7 @@ export async function bulkImportEmployees(rows: EmployeeImportRow[]): Promise<Ac
     // certified-outputs C2 (CO-D19, ruling Q5): one transaction with the self-approval recompute and the re-routing
     // snapshot. Each row runs in its own savepoint, so a failing row is reported and the others still import.
     const { result, rerouted } = await db.transaction(async (tx) => {
+      await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
       const existingRows = incomingEmails.length > 0
         ? await tx.select({ email: users.email }).from(users).where(inArray(users.email, incomingEmails))
         : [];

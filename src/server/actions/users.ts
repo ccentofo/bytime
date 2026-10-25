@@ -8,7 +8,7 @@ import { requireAdmin, requireAdminFresh, AuthorizationError } from '@/lib/sessi
 import { unlockAccount } from '@/server/internal/login-attempts';
 import { SAFE_USER_COLUMNS } from '@/server/internal/users';
 import { assertSeatsAvailable } from '@/server/internal/seats';
-import { activeAdminIds, currentSelfApprovalOn, effectiveDesignee, loadApprovalFacts, newlyEligible, recomputeSelfApproval, snapshotSubmittedEligibility } from '@/server/internal/approval-rules';
+import { activeAdminIds, currentSelfApprovalOn, effectiveDesignee, loadApprovalFacts, lockUserRulesExclusive, newlyEligible, recomputeSelfApproval, snapshotSubmittedEligibility } from '@/server/internal/approval-rules';
 import { notifyReroutedApprovals } from '@/server/internal/submission-notify';
 import { adminChangeLog } from '@/db/schema';
 import { validateEmail, validateRequired, validateStringLength, validateEnum } from '@/lib/validation';
@@ -40,6 +40,7 @@ export async function createUser(data: {
     // certified-outputs C2 (CO-D19, ruling Q5): the insert, the self-approval recompute and the re-routing snapshot run
     // in one transaction; the waiting timesheets' newly eligible approvers are emailed after it commits.
     const { user, rerouted } = await db.transaction(async (tx) => {
+      await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
       await assertSeatsAvailable(1, tx);
       const before = await snapshotSubmittedEligibility(tx);
       const [row] = await tx.insert(users).values(validatedData).returning(SAFE_USER_COLUMNS);
@@ -131,6 +132,7 @@ export async function updateUser(id: string, data: {
     const activating = data.isActive === true;
 
     const result = await db.transaction(async (tx) => {
+      await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
       if (activating) {
         // Reactivating a user takes a seat, same as creating one (R2-11).
         const [target] = await tx.select({ isActive: users.isActive }).from(users).where(eq(users.id, id)).for('update');
@@ -204,6 +206,7 @@ export async function createUserWithPassword(data: {
     const hash = await bcrypt.hash(data.password, 12);
     // certified-outputs C2 (ruling Q5): one transaction with the self-approval recompute and re-routing snapshot.
     const { user, rerouted } = await db.transaction(async (tx) => {
+      await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
       await assertSeatsAvailable(1, tx);
       const before = await snapshotSubmittedEligibility(tx);
       const [row] = await tx.insert(users).values({
@@ -234,6 +237,7 @@ export async function setUserApprover(userId: string, approverId: string | null)
     if (approverId === userId) throw new UserFacingError('A user cannot be their own approver.');
 
     const rerouted = await db.transaction(async (tx) => {
+      await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
       const [target] = await tx.select({ id: users.id, fullName: users.fullName, role: users.role, approverId: users.approverId })
         .from(users).where(eq(users.id, userId)).for('update');
       if (!target) throw new UserFacingError('User not found.', 'not_found');

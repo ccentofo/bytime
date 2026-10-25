@@ -1,6 +1,6 @@
 import 'server-only';
-import { and, asc, eq } from 'drizzle-orm';
-import { getDb, type ReadDb, type TenantWriter } from '@/db';
+import { and, asc, eq, sql } from 'drizzle-orm';
+import { getDb, type DbTx, type ReadDb, type TenantWriter } from '@/db';
 import { adminChangeLog, timesheetPeriods, userAssignments, users } from '@/db/schema';
 
 /**
@@ -30,6 +30,23 @@ export interface ApprovalFacts {
   users: Map<string, ApprovalUser>;
   /** Active CLIN assignments: userId → CLIN ids. */
   clinsByUser: Map<string, Set<string>>;
+}
+
+/**
+ * certified-outputs fix round 1 (F1): the user-rules lock. Every writer of users.role / users.is_active /
+ * users.approver_id takes it EXCLUSIVELY as the FIRST statement of its transaction (before any row lock), so those
+ * writers serialize — no opposite-order row-lock deadlocks, and recomputeSelfApproval always sees the previous writer's
+ * committed result (every switch is logged, CO-D19). approve/reject take it SHARED inside the decision transaction and
+ * re-run canApprove there, so a decision never lands on rules that changed while it waited.
+ */
+const USER_RULES_LOCK = 'user-rules';
+
+export async function lockUserRulesExclusive(tx: Pick<DbTx, 'execute'>): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${USER_RULES_LOCK}))`);
+}
+
+export async function lockUserRulesShared(tx: Pick<DbTx, 'execute'>): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock_shared(hashtext(${USER_RULES_LOCK}))`);
 }
 
 export async function loadApprovalFacts(db: Pick<ReadDb, 'select'> | TenantWriter): Promise<ApprovalFacts> {

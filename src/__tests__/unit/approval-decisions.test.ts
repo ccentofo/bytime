@@ -152,6 +152,7 @@ describe('approve / reject order and "approve exactly what was reviewed"', () =>
     h.actor = { id: 'adm', role: 'admin', email: 'a@x', fullName: 'A' };
     db.onSelect(timesheetPeriods, [submitted()]);
     facts({ id: 'adm', role: 'admin' }, { id: 'emp', role: 'employee' });
+    facts({ id: 'adm', role: 'admin' }, { id: 'emp', role: 'employee' }); // F1: re-read under the shared lock
     db.onReturning('update', timesheetPeriods, []);                       // conditional UPDATE matched nothing
     db.onSelect(timesheetPeriods, [{ status: 'submitted', submissionCount: 3 }]); // re-read: resubmitted
     expect(await approvePeriod({ periodId: 'p1', seen: 2 })).toEqual({ ok: false, code: 'conflict', error: 'This timesheet was resubmitted after you opened it — refresh to review the new version.' });
@@ -159,6 +160,7 @@ describe('approve / reject order and "approve exactly what was reviewed"', () =>
     db.reset();
     db.onSelect(timesheetPeriods, [submitted()]);
     facts({ id: 'adm', role: 'admin' }, { id: 'emp', role: 'employee' });
+    facts({ id: 'adm', role: 'admin' }, { id: 'emp', role: 'employee' }); // F1: re-read under the shared lock
     db.onReturning('update', timesheetPeriods, []);
     db.onSelect(timesheetPeriods, [{ status: 'approved', submissionCount: 2 }]);
     expect(await rejectPeriod({ periodId: 'p1', seen: 2, comment: 'x' })).toMatchObject({ ok: false, code: 'conflict', error: expect.stringMatching(/just changed by someone else/) });
@@ -168,6 +170,7 @@ describe('approve / reject order and "approve exactly what was reviewed"', () =>
     h.actor = { id: 'adm', role: 'admin', email: 'a@x', fullName: 'A' };
     db.onSelect(timesheetPeriods, [submitted()]);
     facts({ id: 'adm', role: 'admin' }, { id: 'emp', role: 'employee' });
+    facts({ id: 'adm', role: 'admin' }, { id: 'emp', role: 'employee' }); // F1: re-read under the shared lock
     db.onReturning('update', timesheetPeriods, [{ id: 'p1' }]);
     expect(await approvePeriod({ periodId: 'p1', seen: 2 })).toEqual({ ok: true, data: undefined });
     const { PgDialect } = await import('drizzle-orm/pg-core');
@@ -202,10 +205,31 @@ describe('approve / reject order and "approve exactly what was reviewed"', () =>
     expect(await approvePeriod({ periodId: 'p1', seen: 2 })).toEqual({ ok: false, code: 'not_found', error: 'Period not found' });
   });
 
+  it('F1: the decision transaction takes the user-rules lock SHARED first and re-checks canApprove under it', async () => {
+    h.actor = { id: 'book', role: 'supervisor', email: 'b@x', fullName: 'B' };
+    db.onSelect(timesheetPeriods, [submitted({ userId: 'X' })]);
+    facts({ id: 'book', role: 'supervisor' }, { id: 'X', role: 'supervisor', approverId: 'book' });   // fail-fast: book is X's designee
+    facts({ id: 'book', role: 'employee' }, { id: 'X', role: 'supervisor', approverId: 'book' });     // under the lock: book was demoted meanwhile
+    db.onReturning('update', timesheetPeriods, [{ id: 'p1' }]);
+    expect(await approvePeriod({ periodId: 'p1', seen: 2 })).toEqual({ ok: false, code: 'not_found', error: 'Period not found' });
+    expect(db.updates.filter((u) => u.table === timesheetPeriods)).toEqual([]);
+    const { PgDialect } = await import('drizzle-orm/pg-core');
+    expect(db.executes.map((q) => { const r = new PgDialect().sqlToQuery(q as never); return { sql: r.sql, params: r.params }; })).toEqual([{ sql: 'SELECT pg_advisory_xact_lock_shared(hashtext($1))', params: ['user-rules'] }]);
+  });
+
+  it('F1: an admin whose self-approval switched off while waiting is refused under the lock', async () => {
+    h.actor = { id: 'adm', role: 'admin', email: 'a@x', fullName: 'A' };
+    db.onSelect(timesheetPeriods, [submitted({ userId: 'adm' })]);
+    facts({ id: 'adm', role: 'admin' });
+    facts({ id: 'adm', role: 'admin' }, { id: 'adm2', role: 'admin' });
+    expect(await approvePeriod({ periodId: 'p1', seen: 2 })).toMatchObject({ ok: false, code: 'forbidden', error: 'Your timesheet must be approved by another admin or your designated approver.' });
+  });
+
   it('a self-approval event carries approval_context (activeAdminCount, enabledAt/By)', async () => {
     h.actor = { id: 'adm', role: 'admin', email: 'a@x', fullName: 'A' };
     db.onSelect(timesheetPeriods, [submitted({ userId: 'adm' })]);
-    facts({ id: 'adm', role: 'admin' });                                // decide: facts
+    facts({ id: 'adm', role: 'admin' });                                // decide: facts (fail fast)
+    facts({ id: 'adm', role: 'admin' });                                // decide: facts under the shared lock (F1)
     db.onReturning('update', timesheetPeriods, [{ id: 'p1' }]);
     facts({ id: 'adm', role: 'admin' });                                // selfApprovalContext: facts
     db.onSelect(adminChangeLog, [{ createdAt: T, actorId: 'adm' }]);

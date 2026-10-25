@@ -8,7 +8,7 @@ import { requireSession, requireApprover, requireApproverFresh, getEmployeeScope
 import { getPeriodStatusFor, lockEmployeeTimesheet, resolvePeriod, type PeriodInfo, type PeriodStatus } from '@/server/internal/periods';
 import { closeImportWindowOnSubmit, lockImportWindowShared } from '@/server/internal/import-window';
 import { getSupervisorScopeInfo } from '@/server/internal/supervisor-scope';
-import { canApprove, loadApprovalFacts, selfApprovalAvailable, selfApprovalContext } from '@/server/internal/approval-rules';
+import { canApprove, loadApprovalFacts, lockUserRulesShared, selfApprovalAvailable, selfApprovalContext } from '@/server/internal/approval-rules';
 import { approvalLabels } from '@/server/internal/approval-label';
 import { notifySubmissionRecipients } from '@/server/internal/submission-notify';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
@@ -355,6 +355,12 @@ async function decidePeriod(
   }
 
   await db.transaction(async (tx) => {
+    // F1: wait for any in-flight user-rules writer (role / is_active / approver_id), then decide on the rules as they
+    // are NOW — the checks above only fail fast; these are the ones that count.
+    await lockUserRulesShared(tx);
+    const current = await loadApprovalFacts(tx);
+    if (self && !selfApprovalAvailable(current, actor.id)) throw new AuthorizationError('forbidden', SELF_APPROVAL_OFF_MESSAGE);
+    if (!canApprove(current, actor.id, period.userId)) throw new UserFacingError('Period not found', 'not_found');
     const updated = await tx.update(timesheetPeriods)
       .set({
         status: decision,
