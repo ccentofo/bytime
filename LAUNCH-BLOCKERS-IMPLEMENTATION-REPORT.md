@@ -2,13 +2,13 @@
 
 **Blueprint:** `feature-plan-launch-blockers.md` (FINAL v5) · **Branch:** `launch-blockers` (not pushed, no PR) ·
 **Date:** 2026-10-23 · **For:** lead systems architect (post-implementation audit) ·
-**Updated:** after R11 (`LAUNCH-BLOCKERS-AUDIT.md` §7–§11) — see §11 (round 1) and §12 (round 2, R9–R11)
+**Updated:** after R12 (`LAUNCH-BLOCKERS-AUDIT.md` §7–§12) — see §11 (round 1) and §12 (round 2, R9–R12)
 
 ## 1. Summary
 
 All six phases are implemented and committed, in the order P1 → P2 → P3 → P4 (8 commits) → P6 → P5, plus two
 integration-test fix commits: 15 commits, 208 files, +13,075 / −4,087 lines. Fix round 1 added three commits (A1 alone;
-A2–A12; S1–S9 + `provision:tenant`) plus one test-only fix — §11. Fix round 2 (R1–R8) is one commit, `4210dc1`, R9 `2220945`, R10 `63dd52c` and R11 `7015229` — §12. P5 ships behind `SIGNUP_CONTROLS_ENABLED`,
+A2–A12; S1–S9 + `provision:tenant`) plus one test-only fix — §11. Fix round 2 (R1–R8) is one commit, `4210dc1`, R9 `2220945`, R10 `63dd52c`, R11 `7015229` and R12 (§12) — §12. P5 ships behind `SIGNUP_CONTROLS_ENABLED`,
 which is off by default and turned on nowhere. The hard rules were followed:
 
 - No raw IP is stored.
@@ -17,12 +17,12 @@ which is off by default and turned on nowhere. The hard rules were followed:
 - No destructive commands were run against acme/globex/initech or any remote database.
 - `business/` and the Privacy Policy are untouched.
 
-| Gate | Result (at `7015229`, after R11) |
+| Gate | Result (after R12) |
 |---|---|
 | `npx tsc --noEmit` | clean |
 | `npm run lint` | 0 errors, 65 warnings (baseline 69; P4 removed 4) |
-| `npm run test` | 1023 passed / 67 files |
-| `npm run test:tz` (UTC, Los Angeles, Auckland) | 1023 passed in each |
+| `npm run test` | 1028 passed / 68 files |
+| `npm run test:tz` (UTC, Los Angeles, Auckland) | 1028 passed in each |
 | `npm run db:safety` | passes; migrations `0007_cron_runs` and `0008_signup_controls` are additive (no new migrations in either fix round) |
 | `npm run test:integration` | **passes** on the product owner's machine, including the control-plane suites and every test added or changed in fix round 1 (2026-10-23). The audit's two break-it checks (A2, A3) were run by the product owner and fail as expected — §11. **Fix round 2 changed two integration tests (`cron-heartbeat`, `signup-cleanup`); not yet run** — §12 |
 
@@ -156,7 +156,7 @@ as PR #7. #6 needed A11's follow-up.
 4. **P6 `tenant:admin audit-note`** (new, append-only). RESTORE.md's in-place condition (3) needs a `tenant:admin` audit note, and none existed.
 5. **P6 immediate-email alerts** (new mechanism). `raiseAlert` now reports `{ opened }`, and `raiseAlertWithEmail` emails only when an incident is newly opened. P5 reuses it.
 6. **P6 `db:migrate:all` / `db:migrate:check`** now use `--conditions=react-server`, like the other founder scripts, so the deleted-database check can reuse `classifyDatabase`. The deploy workflows call the npm scripts and are unchanged.
-7. **P6 smoke test** probes daily-reminder only: two requests, because of the 2-per-minute cron rate limit. The other crons use the same `runCron` path, which unit tests cover.
+7. **P6 smoke test** probed daily-reminder only: two requests, because of the 2-per-minute cron rate limit. The other crons use the same `runCron` path, which unit tests cover. *Resolved by R12 (§12): only failed attempts are rate-limited now, so the smoke test probes all four crons.*
 8. **P5 waitlist copy.** The LB-D2 sentence is shown word for word ("…Leave your email and we'll have yours ready…"), followed by a line saying the person is already on the list. Their email is already known by then.
 9. **P5 env names chosen:** `NEXT_PUBLIC_TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY`.
 10. **P5 dev convenience.** Outside production, a missing Turnstile secret skips verification, and Cloudflare's test secrets skip the hostname check.
@@ -422,3 +422,41 @@ templates are included.
   `workspace-export.ts:73` wraps `Object.assign(conn, …)`, so its `conn` templates are not checked. They have no
   interpolations today.
 - **Product owner:** reopen the same verify link (its `verified_at` was never written) and continue the manual checks.
+
+### R12 (audit §12, CI finding) — the commit that adds this section
+
+**Cause:** `rejectUnauthorizedCron` applied the 2/min/IP cron rate limit before checking the secret, so authenticated
+calls used up the budget. In CI, two `cron-heartbeat` tests got 429 (they passed locally only because of timing). In
+production, the third cron at 20:00 UTC on one instance would have been refused, and that day's run lost.
+
+**Fix** (`src/lib/cron-auth.ts`):
+- the secret is checked first, with `crypto.timingSafeEqual`; lengths are compared first, because `timingSafeEqual`
+  throws on unequal lengths;
+- a correct secret returns at once and never touches the rate limiter;
+- only a failed attempt calls `checkCronRateLimit`: within the limit it gets 401, past it 429. Failed attempts include a
+  missing or wrong secret, and any call in production when `CRON_SECRET` is unset (still fail-closed);
+- local dev without `CRON_SECRET` stays open. It is no longer rate-limited either, because it isn't a failed attempt.
+
+**Smoke test (optional item, done):** `scripts/smoke-tenancy.sh` sends one unauthenticated probe (expects 401), then
+probes all four crons (`notice-delivery`, `tenant-lifecycle`, `submission-deadline`, `daily-reminder`) with the secret.
+Each must return 200 with body `{"probe":"ok"}`. `bash -n` passes. It was not run against a deployment.
+
+**Tests:** new `unit/cron-auth`, with the real in-memory rate limiter and one IP per test:
+- 5 authorized calls in a row from one IP (`x-cron-secret` and `Bearer`) all pass;
+- 3 wrong-secret calls → 401, 401, 429, and a correct call after that still passes (a further wrong one stays 429);
+- a wrong secret of a different length, or of the same length → 401, with no throw;
+- production without `CRON_SECRET` → 401, 401, 429;
+- local dev without `CRON_SECRET` → open.
+
+The two `cron-heartbeat` integration tests are unchanged.
+
+**Break-it:**
+- rate limit restored before the secret check → all 5 tests fail;
+- successful calls counted too → 2 fail;
+- length check removed (`timingSafeEqual` throws) → 2 fail;
+- the file restored → all pass.
+
+**Gates:** tsc clean; lint 0 errors / 65 warnings; 1028 unit tests / 68 files, ×4 runs; db:safety passes.
+
+**CI:** the branch was pushed after this commit so CI re-runs the integration suite, including the two `cron-heartbeat`
+tests.

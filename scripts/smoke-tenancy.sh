@@ -73,16 +73,19 @@ check "forged x-tenant-slug yields same status as baseline" "$SPOOFED" "$TENANT_
 if [[ -n "$CRON_SECRET" ]]; then
   echo "== Cron auth (smoke probe: ?probe=1 does no work and sends no mail) =="
   # feature-plan-launch-blockers.md P6 §6: the probe is answered only AFTER auth, so the 401 check still proves the
-  # secret is enforced, and the 200 check never runs the real cron (no reminders, no cron_runs heartbeat write).
-  # Exactly two requests: the cron rate limit is 2/minute per IP.
+  # secret is enforced, and the 200 checks never run the real cron (no reminders, no cron_runs heartbeat write).
+  # Audit R12: only FAILED auth attempts are rate-limited (2/minute per IP), so one unauthenticated request here, then
+  # every cron with the secret.
   check "cron probe WITHOUT secret is 401" "$(status "$APEX_URL/api/cron/daily-reminder?probe=1")" "401"
-  PROBE=$(curl -s -w $'\n%{http_code}' -H "x-cron-secret: $CRON_SECRET" "$APEX_URL/api/cron/daily-reminder?probe=1")
-  check "cron probe WITH secret is 200" "${PROBE##*$'\n'}" "200"
-  if [[ "${PROBE%$'\n'*}" == *'"probe":"ok"'* ]]; then
-    echo "  ✓ cron probe body is {\"probe\":\"ok\"}"; PASS=$((PASS+1))
-  else
-    echo "  ✗ cron probe body is not {\"probe\":\"ok\"} (did it run the real cron?)"; FAIL=$((FAIL+1))
-  fi
+  for CRON in notice-delivery tenant-lifecycle submission-deadline daily-reminder; do
+    PROBE=$(curl -s -w $'\n%{http_code}' -H "x-cron-secret: $CRON_SECRET" "$APEX_URL/api/cron/$CRON?probe=1")
+    check "cron $CRON probe WITH secret is 200" "${PROBE##*$'\n'}" "200"
+    if [[ "${PROBE%$'\n'*}" == *'"probe":"ok"'* ]]; then
+      echo "  ✓ cron $CRON probe body is {\"probe\":\"ok\"}"; PASS=$((PASS+1))
+    else
+      echo "  ✗ cron $CRON probe body is not {\"probe\":\"ok\"} (did it run the real cron?)"; FAIL=$((FAIL+1))
+    fi
+  done
 else
   echo "== Cron auth =="
   echo "  • skipped (no CRON_SECRET passed)"
