@@ -27,9 +27,11 @@ import {
   integrationSyncLogs,
   integrationSyncRecords,
   workspaceSettings,
+  importBatches,
+  adminChangeLog,
 } from '@/db/schema';
 import type { PgTable } from 'drizzle-orm/pg-core';
-import type { InferSelectModel } from 'drizzle-orm';
+import { sql, type InferSelectModel, type SQL } from 'drizzle-orm';
 
 export interface ExportColumn<T extends PgTable> {
   key: keyof InferSelectModel<T>;
@@ -47,7 +49,15 @@ export interface ExportTableConfig {
   /** CSV filename, without extension. */
   file: string;
   table: PgTable;
-  columns: { key: string; header: string; description: string }[];
+  /** `expr`: a DERIVED column (computed in the export query, not stored) — its `key` is the header. */
+  columns: { key: string; header: string; description: string; expr?: SQL }[];
+}
+
+/** A derived (computed, read-only) column appended after a table's real columns. */
+export interface DerivedColumn {
+  header: string;
+  description: string;
+  expr: SQL;
 }
 
 /** Shared meanings for columns that recur across tables. A per-column `description` overrides these. */
@@ -69,17 +79,36 @@ const COMMON_DESCRIPTIONS: Record<string, string> = {
   completeness_snapshot: 'JSON snapshot of the completeness / total-time warnings shown at submission (advisory only; blank if none).',
 };
 
-function table<T extends PgTable>(file: string, t: T, columns: ExportColumn<T>[]): ExportTableConfig {
+function table<T extends PgTable>(file: string, t: T, columns: ExportColumn<T>[], derived: DerivedColumn[] = []): ExportTableConfig {
   return {
     file,
     table: t,
-    columns: columns.map((c) => ({
-      key: String(c.key),
-      header: c.header,
-      description: c.description ?? COMMON_DESCRIPTIONS[c.header] ?? '',
-    })),
+    columns: [
+      ...columns.map((c) => ({
+        key: String(c.key),
+        header: c.header,
+        description: c.description ?? COMMON_DESCRIPTIONS[c.header] ?? '',
+      })),
+      ...derived.map((d) => ({ key: d.header, header: d.header, description: d.description, expr: d.expr })),
+    ],
   };
 }
+
+/**
+ * certified-outputs C2/C8: "Self-approved" as a derived column — the same rule as approvalLabel
+ * (src/server/internal/approval-label.ts): the period's latest decision event matching its status (else
+ * reviewed_by) was made by the employee themselves, and was not an imported approval.
+ */
+const PERIOD_SELF_APPROVED = sql<boolean>`COALESCE(${timesheetPeriods.status} = 'approved'
+  AND COALESCE((SELECT pe.source FROM period_events pe WHERE pe.period_id = ${timesheetPeriods.id} AND pe.event = 'approved'
+    ORDER BY pe.created_at DESC LIMIT 1), 'app') <> 'migration'
+  AND COALESCE((SELECT pe.actor_id FROM period_events pe WHERE pe.period_id = ${timesheetPeriods.id} AND pe.event = 'approved'
+    ORDER BY pe.created_at DESC LIMIT 1), ${timesheetPeriods.reviewedBy}) = ${timesheetPeriods.userId}, false)`;
+const EVENT_SELF_APPROVED = sql<boolean>`COALESCE(${periodEvents.event} = 'approved' AND ${periodEvents.source} <> 'migration'
+  AND ${periodEvents.actorId} = ${periodEvents.userId}, false)`;
+const SELF_APPROVED_DESCRIPTION = 'Derived: true when the employee approved their own timesheet (sole-admin self-approval, shown as Self-approved in the app). Never true for an imported approval.';
+const SOURCE_DESCRIPTION = 'app = recorded in CadenzPoint; migration = imported from another system during onboarding (never typed here by the employee).';
+const IMPORT_BATCH_DESCRIPTION = 'For imported rows: the import (import_batches.csv id); blank otherwise.';
 
 /**
  * Tables per T6 §1 baseline + D12 EXPORT_EXTRA_TABLES, exported via the simple
@@ -96,6 +125,7 @@ export const EXPORT_TABLES: ExportTableConfig[] = [
     { key: 'role', header: 'role', description: 'Permission level: admin, supervisor or employee.' },
     { key: 'isActive', header: 'is_active' },
     { key: 'flsaExempt', header: 'flsa_exempt', description: 'true for FLSA-exempt (salaried) employees, who must still record all hours worked.' },
+    { key: 'approverId', header: 'approver_id', description: 'Supervisors and admins only: their designated approver (users.csv id); blank if none.' },
     { key: 'totpEnabled', header: 'totp_enabled', description: 'true if the user turned on two-factor authentication (the secret itself is never exported).' },
     { key: 'passwordChangedAt', header: 'password_changed_at', description: 'When the user last changed their password (UTC). The password itself is never exported.' },
     { key: 'createdAt', header: 'created_at' },
@@ -165,6 +195,7 @@ export const EXPORT_TABLES: ExportTableConfig[] = [
     { key: 'description', header: 'description' },
     { key: 'isActive', header: 'is_active' },
     { key: 'availableToAll', header: 'available_to_all', description: 'true if every employee may charge it; false if only assigned employees may.' },
+    { key: 'leavePayType', header: 'leave_pay_type', description: 'Leave codes only: how the hours are paid in payroll exports — pto, sick, holiday or unpaid.' },
     { key: 'createdAt', header: 'created_at' },
     { key: 'updatedAt', header: 'updated_at' },
   ]),
@@ -229,22 +260,50 @@ export const EXPORT_TABLES: ExportTableConfig[] = [
     { key: 'periodType', header: 'period_type', description: 'The pay-period type in force when the period was created.' },
     { key: 'periodNumDays', header: 'period_num_days', description: 'Number of days in this period.' },
     { key: 'completenessSnapshot', header: 'completeness_snapshot' },
+    { key: 'submissionCount', header: 'submission_count', description: 'How many times this timesheet has been submitted (an approval applies to the version the reviewer saw).' },
     { key: 'createdAt', header: 'created_at' },
     { key: 'updatedAt', header: 'updated_at' },
-  ]),
+  ], [{ header: 'self_approved', description: SELF_APPROVED_DESCRIPTION, expr: PERIOD_SELF_APPROVED }]),
   table('period_events', periodEvents, [
     { key: 'id', header: 'id' },
     { key: 'periodId', header: 'period_id', description: 'The timesheet period (timesheet_periods.csv id).' },
     { key: 'userId', header: 'user_id', description: 'The employee whose period this event is about (users.csv id).' },
     { key: 'event', header: 'event', description: 'submitted, approved or rejected. This file is the full, append-only approval history.' },
-    { key: 'actorId', header: 'actor_id', description: 'Who performed the action (users.csv id).' },
+    { key: 'actorId', header: 'actor_id', description: 'Who performed the action (users.csv id). For imported rows (source = migration) this is the admin who ran the import; the original reviewer is in original_metadata.' },
     { key: 'comment', header: 'comment', description: 'Comment entered with the action.' },
     { key: 'completenessSnapshot', header: 'completeness_snapshot' },
     { key: 'createdAt', header: 'created_at', description: 'When the action happened (UTC).' },
+    { key: 'source', header: 'source', description: SOURCE_DESCRIPTION },
+    { key: 'importBatchId', header: 'import_batch_id', description: IMPORT_BATCH_DESCRIPTION },
+    { key: 'originalMetadata', header: 'original_metadata', description: 'For imported rows: the original reviewer, dates and comment from the source file, as data (JSON).' },
+    { key: 'approvalContext', header: 'approval_context', description: 'Self-approvals only: the active-admin count at that moment and when self-approval was last switched on (JSON).' },
+  ], [{ header: 'self_approved', description: SELF_APPROVED_DESCRIPTION, expr: EVENT_SELF_APPROVED }]),
+  table('import_batches', importBatches, [
+    { key: 'id', header: 'id' },
+    { key: 'kind', header: 'kind', description: 'entries (time entries) or periods (timesheet periods and their approvals).' },
+    { key: 'sourceSystem', header: 'source_system', description: 'The system the history was imported from, as entered by the admin.' },
+    { key: 'importedBy', header: 'imported_by', description: 'The admin who ran the import (users.csv id).' },
+    { key: 'importedAt', header: 'imported_at', description: 'When the import ran (UTC).' },
+    { key: 'fileName', header: 'file_name', description: 'The uploaded file name, if given.' },
+    { key: 'rowCount', header: 'row_count', description: 'Rows in this batch.' },
+    { key: 'importedCount', header: 'imported_count', description: 'Rows inserted.' },
+    { key: 'skippedCount', header: 'skipped_count', description: 'Rows not inserted.' },
+  ]),
+  table('admin_change_log', adminChangeLog, [
+    { key: 'id', header: 'id' },
+    { key: 'actorId', header: 'actor_id', description: 'Who made the change (users.csv id).' },
+    { key: 'entity', header: 'entity', description: 'What was changed: charge_code, user, self_approval, workspace_settings.' },
+    { key: 'entityId', header: 'entity_id', description: 'Which record (its id in the matching file; all zeros for workspace_settings).' },
+    { key: 'action', header: 'action', description: 'The change, e.g. labor_category_changed, deactivated, reactivated, approver_changed, enabled, disabled, workweek_start_day_changed.' },
+    { key: 'oldValue', header: 'old_value', description: 'The value before the change (JSON).' },
+    { key: 'newValue', header: 'new_value', description: 'The value after the change (JSON).' },
+    { key: 'createdAt', header: 'created_at', description: 'When the change was made (UTC). This file is append-only.' },
   ]),
   table('workspace_settings', workspaceSettings, [
     { key: 'id', header: 'id', description: 'Always 1 (single settings row).' },
     { key: 'timezone', header: 'timezone', description: 'The workspace time zone (IANA name, e.g. America/New_York). Calendar dates in this export are days in this zone.' },
+    { key: 'historyImportClosedAt', header: 'history_import_closed_at', description: 'When timesheet-history import closed (the first submitted timesheet), UTC; blank while still open.' },
+    { key: 'workweekStartDay', header: 'workweek_start_day', description: 'FLSA workweek start (0 = Sunday … 6 = Saturday) used by payroll exports; blank if not set.' },
     { key: 'updatedAt', header: 'updated_at' },
   ]),
   // D12 EXPORT_EXTRA_TABLES

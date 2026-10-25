@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Modal, Select, Textarea, Button, Group, Stack, Text, Table, Badge } from '@mantine/core';
 import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
-import { REASON_CODES } from '@/lib/reason-codes';
+import { REASON_CODES, reasonNeedsComment, OTHER_REASON_COMMENT_REQUIRED } from '@/lib/reason-codes';
 import type { DirtyCell, ChargeCode } from '@/types/timesheet';
 
 type Props = {
@@ -41,7 +41,8 @@ export function ReasonModal({
     }
   }, [opened, onlyLateEntries]);
 
-  const canSubmit = reasonCode !== null && comment.trim().length > 0;
+  // Every reason needs a comment here; "Other" always does (C8 — the server enforces it too).
+  const canSubmit = reasonCode !== null && comment.trim().length > 0 && !reasonNeedsComment(reasonCode, comment);
 
   // Dynamic title based on what types of cells are in the batch
   let modalTitle = 'DCAA Compliance — Reason Required';
@@ -153,6 +154,7 @@ export function ReasonModal({
           onChange={(e) => setComment(e.currentTarget.value)}
           required
           withAsterisk
+          error={reasonNeedsComment(reasonCode, comment) && comment.length > 0 ? OTHER_REASON_COMMENT_REQUIRED : undefined}
         />
 
         <Group justify="flex-end" mt="md">

@@ -4,7 +4,8 @@ import { alias } from 'drizzle-orm/pg-core';
 import { and, asc, eq, gt, sql, type SQL } from 'drizzle-orm';
 import Papa from 'papaparse';
 import { Zip, ZipDeflate } from 'fflate';
-import { users, chargeCodes, clins, slins, indirectChargeCodes, timesheetEntries } from '@/db/schema';
+import { users, chargeCodes, clins, slins, indirectChargeCodes, timesheetEntries, importBatches } from '@/db/schema';
+import { provenanceText } from '@/lib/provenance';
 import { EXPORT_TABLES, type ExportTableConfig } from './allowlists';
 import { buildManifest, buildReadme, TIMESHEET_COLUMNS } from './manifest';
 import { FORMULA_PATTERN } from '@/lib/csv/escape';
@@ -104,7 +105,7 @@ function tableSource(db: ExportDb, config: ExportTableConfig, counts: Record<str
       const tableColumns = config.table as unknown as Record<string, Parameters<typeof gt>[0]>;
       const idColumn = tableColumns.id;
       // Read only the allowlisted columns: secret columns never even leave the database.
-      const projection = Object.fromEntries(config.columns.map((c) => [c.key, tableColumns[c.key]]));
+      const projection = Object.fromEntries(config.columns.map((c) => [c.key, c.expr ?? tableColumns[c.key]]));
       counts[config.file] = 0;
       yield csvHeader(config.columns.map((c) => c.header));
       let cursor: unknown = null;
@@ -124,6 +125,7 @@ function tableSource(db: ExportDb, config: ExportTableConfig, counts: Record<str
 }
 
 const createdByUsers = alias(users, 'created_by_users');
+const importerUsers = alias(users, 'importer_users');
 
 function timesheetSource(db: ExportDb, file: string, currentOnly: boolean, counts: Record<string, number>): CsvSource {
   const projection = {
@@ -149,8 +151,27 @@ function timesheetSource(db: ExportDb, file: string, currentOnly: boolean, count
     indirectCodeId: timesheetEntries.indirectCodeId,
     indirectCode: indirectChargeCodes.code,
     indirectCodeName: indirectChargeCodes.name,
+    // certified-outputs C1/C8: provenance (insert-time) + the display label; the import batch columns only feed the label.
+    source: timesheetEntries.source,
+    importBatchId: timesheetEntries.importBatchId,
+    originalMetadata: timesheetEntries.originalMetadata,
+    importSourceSystem: importBatches.sourceSystem,
+    importedAt: importBatches.importedAt,
+    importedByName: importerUsers.fullName,
   };
-  const keys = Object.keys(projection) as (keyof typeof projection)[];
+  type Row = { [K in keyof typeof projection]: unknown };
+  // Output order = TIMESHEET_COLUMNS; `provenance` is derived from the row (src/lib/provenance.ts).
+  const out: Array<(row: Row) => unknown> = [
+    (r) => r.id, (r) => r.userId, (r) => r.userEmail, (r) => r.userFullName, (r) => r.entryDate, (r) => r.hours,
+    (r) => r.revisionNumber, (r) => r.changeReasonCode, (r) => r.comment, (r) => r.createdAt, (r) => r.createdBy,
+    (r) => r.createdByEmail, (r) => r.chargeCodeId, (r) => r.chargeCode, (r) => r.chargeCodeName, (r) => r.clinId,
+    (r) => r.clinNumber, (r) => r.slinId, (r) => r.slinNumber, (r) => r.indirectCodeId, (r) => r.indirectCode,
+    (r) => r.indirectCodeName, (r) => r.source, (r) => r.importBatchId, (r) => r.originalMetadata,
+    (r) => provenanceText({
+      source: r.source as string, changeReasonCode: r.changeReasonCode as string | null, originalMetadata: r.originalMetadata,
+      importSourceSystem: r.importSourceSystem as string | null, importedAt: r.importedAt as Date | null, importedByName: r.importedByName as string | null,
+    }),
+  ];
   // Latest revision per cell; cell identity matches entries_user_code_date_rev_unique_idx.
   const currentRevisionOnly = eq(
     timesheetEntries.revisionNumber,
@@ -179,11 +200,13 @@ function timesheetSource(db: ExportDb, file: string, currentOnly: boolean, count
           .leftJoin(clins, eq(timesheetEntries.clinId, clins.id))
           .leftJoin(slins, eq(timesheetEntries.slinId, slins.id))
           .leftJoin(indirectChargeCodes, eq(timesheetEntries.indirectCodeId, indirectChargeCodes.id))
+          .leftJoin(importBatches, eq(timesheetEntries.importBatchId, importBatches.id))
+          .leftJoin(importerUsers, eq(importBatches.importedBy, importerUsers.id))
           .where(conditions.length ? and(...conditions) : undefined)
           .orderBy(asc(timesheetEntries.id))
           .limit(BATCH_SIZE);
         if (rows.length === 0) break;
-        yield csvRows(rows.map((row) => keys.map((k) => serializeValue((row as Record<string, unknown>)[k]))));
+        yield csvRows(rows.map((row) => out.map((f) => serializeValue(f(row as Row)))));
         counts[file] += rows.length;
         cursor = String(rows[rows.length - 1].id);
         if (rows.length < BATCH_SIZE) break;

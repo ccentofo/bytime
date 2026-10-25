@@ -359,9 +359,10 @@ export async function saveTimesheetBatch(data: {
                   : `A reason code is required to edit the entry on ${label}.`
               );
             }
-            const { REASON_CODES } = await import('@/lib/reason-codes');
+            const { REASON_CODES, reasonNeedsComment, OTHER_REASON_COMMENT_REQUIRED } = await import('@/lib/reason-codes');
             const valid = REASON_CODES.some((rc) => rc.value === code);
             if (!valid) throw new UserFacingError(`Invalid change reason code: ${code}`);
+            if (reasonNeedsComment(code, data.comment)) throw new UserFacingError(OTHER_REASON_COMMENT_REQUIRED);
           }
 
           // The new unique index (user, code, day, revision) can reject a genuine race — two

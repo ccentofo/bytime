@@ -20,3 +20,10 @@ export function reasonLabel(code: string | null | undefined): string {
   if (!code) return '';
   return REASON_LABELS[code] ?? code;
 }
+
+/** certified-outputs C8: the "Other" reason must be explained (server and client). */
+export const OTHER_REASON_COMMENT_REQUIRED = 'Add a comment explaining the change — a comment is required when the reason is Other.';
+
+export function reasonNeedsComment(code: string | null | undefined, comment: string | null | undefined): boolean {
+  return code === 'OTHER' && !(comment ?? '').trim();
+}
