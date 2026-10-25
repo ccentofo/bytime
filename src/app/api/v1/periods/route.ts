@@ -4,6 +4,7 @@ import { timesheetPeriods, users } from '@/db/schema';
 import { eq, and, gte, lt } from 'drizzle-orm';
 import { handleApiRequest, apiResponse, apiError } from '@/lib/api-auth';
 import { addDays, isCalendarDate } from '@/lib/calendar-date';
+import { importedPeriodIds } from '@/server/internal/import-provenance';
 
 // Date format: `startDate`/`endDate` query params and every `periodStart` in the response are
 // plain 'YYYY-MM-DD' calendar-date strings — never an ISO instant/timestamp.
@@ -55,5 +56,13 @@ async function listPeriods(request: NextRequest): Promise<Response> {
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(timesheetPeriods.periodStart);
 
-  return apiResponse(rows, { total: rows.length });
+  // feature-plan-certified-outputs.md C1: an imported approval is never attributed to a CadenzPoint user —
+  // approvedBy null + approvalSource 'migration'. Additive fields; reviewedBy is unchanged.
+  const imported = await importedPeriodIds(db, rows.map((r) => r.id));
+  const decided = (s: string) => s === 'approved' || s === 'rejected';
+  return apiResponse(rows.map((r) => ({
+    ...r,
+    approvalSource: decided(r.status) ? (imported.has(r.id) ? 'migration' : 'app') : null,
+    approvedBy: r.status === 'approved' && !imported.has(r.id) ? r.reviewedBy : null,
+  })), { total: rows.length });
 }

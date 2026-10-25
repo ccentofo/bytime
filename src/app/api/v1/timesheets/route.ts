@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getDb } from '@/db';
-import { timesheetEntries, users, clins, contracts, indirectChargeCodes } from '@/db/schema';
+import { timesheetEntries, users, clins, contracts, indirectChargeCodes, importBatches } from '@/db/schema';
 import { eq, and, gte, lt, sql } from 'drizzle-orm';
 import { handleApiRequest, apiResponse, apiError } from '@/lib/api-auth';
 import { addDays, isCalendarDate } from '@/lib/calendar-date';
@@ -64,12 +64,17 @@ async function listTimesheetEntries(request: NextRequest): Promise<Response> {
       hours: timesheetEntries.hours,
       revisionNumber: timesheetEntries.revisionNumber,
       createdAt: timesheetEntries.createdAt,
+      // feature-plan-certified-outputs.md C1: provenance ('app' | 'migration'); imported rows say where from and when.
+      source: timesheetEntries.source,
+      importedFrom: importBatches.sourceSystem,
+      importedAt: importBatches.importedAt,
     })
     .from(timesheetEntries)
     .innerJoin(users, eq(timesheetEntries.userId, users.id))
     .leftJoin(clins, eq(timesheetEntries.clinId, clins.id))
     .leftJoin(contracts, eq(clins.contractId, contracts.id))
     .leftJoin(indirectChargeCodes, eq(timesheetEntries.indirectCodeId, indirectChargeCodes.id))
+    .leftJoin(importBatches, eq(timesheetEntries.importBatchId, importBatches.id))
     .where(and(...conditions))
     .orderBy(users.fullName, timesheetEntries.entryDate)
     .limit(pageSize)

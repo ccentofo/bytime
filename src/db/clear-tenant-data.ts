@@ -17,6 +17,10 @@ export async function clearTenantData(db: PostgresJsDatabase<any>): Promise<void
     await tx.delete(schema.periodEvents);
     await tx.delete(schema.timesheetEntries);
     await tx.delete(schema.timesheetPeriods);
+    // feature-plan-certified-outputs.md C1/C8: append-only like the two above (same trigger function, same bypass);
+    // referenced by entries/period_events (deleted above) and referencing users (deleted below).
+    await tx.delete(schema.importBatches);
+    await tx.delete(schema.adminChangeLog);
     await tx.delete(schema.userChargeCodes);
     await tx.delete(schema.chargeCodes);
     await tx.delete(schema.costClasses);
@@ -36,9 +40,11 @@ export async function clearTenantData(db: PostgresJsDatabase<any>): Promise<void
     await tx.delete(schema.users);
     await tx.delete(schema.payPeriodConfig);
     // Single-row table seeded by migration 0011: reset to the default rather than delete.
+    // certified-outputs C1/C7: the history-import window reopens and the workweek setting is cleared with it.
+    const reset = { timezone: 'America/New_York', historyImportClosedAt: null, workweekStartDay: null, updatedAt: new Date() };
     await tx.insert(schema.workspaceSettings)
-      .values({ id: 1, timezone: 'America/New_York', updatedAt: new Date() })
-      .onConflictDoUpdate({ target: schema.workspaceSettings.id, set: { timezone: 'America/New_York', updatedAt: new Date() } });
+      .values({ id: 1, ...reset })
+      .onConflictDoUpdate({ target: schema.workspaceSettings.id, set: reset });
   });
 }
 

@@ -1,7 +1,9 @@
 import 'server-only';
 import type { ReadDb, TenantWriter } from '@/db';
 import { users, contracts, clins, indirectChargeCodes } from '@/db/schema';
-import type { MigrationEntryRow, MigrationValidationResult } from '@/types/migration';
+import type { MigrationEntryRow, MigrationPeriodRow, MigrationPeriodValidationResult, MigrationValidationResult } from '@/types/migration';
+import { isCalendarDate, parseCalendarDate } from '@/lib/calendar-date';
+import { resolvePeriod } from '@/server/internal/periods';
 
 /**
  * Validate migration rows against existing data and resolve their ids (feature-plan-launch-blockers.md P4 §2:
@@ -40,8 +42,8 @@ export async function validateMigrationDataInternal(
     // Validate date
     if (!row.entryDate?.trim()) {
       errors.push('Entry Date is required');
-    } else if (!/^\d{4}-\d{2}-\d{2}$/.test(row.entryDate.trim())) {
-      errors.push('Entry Date must be YYYY-MM-DD format');
+    } else if (!isCalendarDate(row.entryDate.trim())) {
+      errors.push('Entry Date must be a real date in YYYY-MM-DD format');
     }
 
     // Validate hours
@@ -94,4 +96,42 @@ export async function validateMigrationDataInternal(
       indirectCodeId,
     };
   });
+}
+
+/**
+ * Validate period-status rows (feature-plan-certified-outputs.md C1): employee exists, the period start is a real period
+ * start under the workspace's pay schedule. Status/date/overlap rules are decided under the locks at import
+ * (planPeriodImport); this gives the admin the row-level answer before Import. INTERNAL, read-only.
+ */
+export async function validateMigrationPeriodsInternal(
+  db: Pick<ReadDb, 'select'> | TenantWriter,
+  rows: MigrationPeriodRow[],
+): Promise<MigrationPeriodValidationResult[]> {
+  const allUsers = await db.select({ id: users.id, email: users.email }).from(users);
+  const userMap = new Map(allUsers.map((u) => [u.email.toLowerCase(), u.id]));
+  const startOk = new Map<string, boolean>();
+
+  const results: MigrationPeriodValidationResult[] = [];
+  for (const [index, row] of rows.entries()) {
+    const errors: string[] = [];
+    const userId = row.employeeEmail?.trim() ? userMap.get(row.employeeEmail.toLowerCase().trim()) : undefined;
+    if (!row.employeeEmail?.trim()) errors.push('Employee Email is required');
+    else if (!userId) errors.push(`Employee "${row.employeeEmail}" not found in CadenzPoint`);
+
+    const start = row.periodStart?.trim() ?? '';
+    if (!isCalendarDate(start)) {
+      errors.push('Period Start must be a real date in YYYY-MM-DD format');
+    } else {
+      if (!startOk.has(start)) startOk.set(start, await resolvePeriod(parseCalendarDate(start)).then(() => true, () => false));
+      if (!startOk.get(start)) {
+        errors.push(`${start} is not a period start under this workspace's pay schedule. Set the pay schedule in Settings before importing periods.`);
+      }
+    }
+    const status = row.status?.trim().toLowerCase() ?? '';
+    if (status === 'draft') errors.push('Draft periods are not imported — only submitted, approved or rejected periods.');
+    else if (!['submitted', 'approved', 'rejected'].includes(status)) errors.push(`Status "${row.status}" is not importable. Use submitted, approved or rejected.`);
+
+    results.push({ rowIndex: index + 1, data: row, errors, isValid: errors.length === 0, userId });
+  }
+  return results;
 }

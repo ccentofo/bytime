@@ -435,6 +435,10 @@ export async function seedRichData(
   console.log(`    ✓ ${entryCount} timesheet entries created`);
   console.log(`    ✓ ${periodCount} period records created`);
 
+  // feature-plan-certified-outputs.md C1 (CO-D1): the demo has submitted timesheets, so it is past onboarding — the
+  // timesheet-history import window is closed (clearTenantData reopened it).
+  await db.update(schema.workspaceSettings).set({ historyImportClosedAt: new Date(), updatedAt: new Date() }).where(eq(schema.workspaceSettings.id, 1));
+
   // ── 10. Notification Preferences ──
   console.log('  Creating notification preferences...');
   const allUserIds = Object.values(userIds);

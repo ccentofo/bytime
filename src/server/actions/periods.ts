@@ -6,6 +6,7 @@ import { timesheetPeriods, users, timesheetEntries, periodEvents } from '@/db/sc
 import { eq, and, inArray, gte, lt, sql } from 'drizzle-orm';
 import { requireSession, requireApprover, requireApproverFresh, getEmployeeScope, assertCanAccessEmployee, AuthorizationError } from '@/lib/session';
 import { getPeriodStatusFor, lockEmployeeTimesheet, resolvePeriod, type PeriodInfo, type PeriodStatus } from '@/server/internal/periods';
+import { closeImportWindowOnSubmit, lockImportWindowShared } from '@/server/internal/import-window';
 import { getSupervisorScopeInfo, getSupervisedEmployeeIds } from '@/server/internal/supervisor-scope';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { existingPeriodLength, loadScheduleResolver } from '@/server/internal/pay-period-config';
@@ -194,6 +195,9 @@ export async function submitPeriod(data: {
     let row: typeof timesheetPeriods.$inferSelect;
     try {
       row = await db.transaction(async (tx) => {
+        // feature-plan-certified-outputs.md §3 lock order: the import-window lock (shared here, exclusive in an import
+        // batch) FIRST, then the employee lock — so an import and a first submission serialize and never deadlock.
+        await lockImportWindowShared(tx);
         await lockEmployeeTimesheet(tx, userId);
 
         // Server-side validation: cannot submit a completely empty timesheet
@@ -256,6 +260,8 @@ export async function submitPeriod(data: {
           periodId: saved.id, userId, event: 'submitted', actorId: userId,
           comment: data.comment ?? null, completenessSnapshot: data.completeness ?? null,
         });
+        // CO-D1: the first submission closes the timesheet-history import window (a no-op once closed).
+        await closeImportWindowOnSubmit(tx);
         return saved;
       });
     } catch (err) {

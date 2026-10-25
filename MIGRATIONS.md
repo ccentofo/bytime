@@ -75,6 +75,15 @@ Concretely, this means:
   above the statement: `-- migration-safety: allow <reason>`. The reason is printed in CI output —
   use it to explain *why* it's safe, not just to silence the check.
 
+### Note: tenant migration 0014 (certified outputs)
+
+`0014_certified_outputs` is additive (new tables, nullable/defaulted columns, triggers, backfills), so the old code
+keeps working against it — but **deploy the new code immediately after running it**. In the window between the two,
+the old migration importer can still write history without the new provenance (those rows are labelled "Legacy
+import" by their `MIGRATION` reason code), and the old `submitPeriod` doesn't set `history_import_closed_at`. The new
+import-window check also treats any app-sourced `submitted` period event as "closed", so a submission made by the old
+code still closes the window once the new code is live.
+
 ## Production Deployment
 
 ### Automated (CI/CD)

@@ -156,7 +156,6 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getLaborCategoriesByClin: 'reads a CLIN\'s labor categories; no write',
     getUserLaborCategoryAssignments: 'reads one user\'s LCAT assignments; no write',
   },
-  'migration.ts': { validateMigrationData: 'validates uploaded rows against existing records; read-only lookups' },
   'pay-period-config.ts': {
     getConfigHistory: 'reads schedule history; no write',
     getPendingConfigChange: 'reads the pending schedule change; no write',

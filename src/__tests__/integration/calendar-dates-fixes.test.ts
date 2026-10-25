@@ -32,6 +32,8 @@ vi.mock('@/db', async (importOriginal) => ({
 
 vi.mock('@/lib/tenant/context', () => ({
   getTenantSlug: async () => 'test-tenant',
+  // certified-outputs C1: the migration import reads the import window's reopen state by tenant id.
+  getTenantOrThrow: async () => ({ id: '00000000-0000-4000-8000-000000000001', slug: 'test-tenant', plan: 'trial', status: 'active', dbUrl: 'test-db' }),
   getTenantState: async () => ({ kind: 'full', tenant: { slug: 'test-tenant', dbUrl: 'test-db' } }),
 }));
 
@@ -179,10 +181,10 @@ describe('calendar-dates audit fixes', () => {
 
   it('importMigrationPeriods stores the length snapshot and reports off-schedule starts clearly', async () => {
     actingAs(admin);
-    const result = await expectOk(importMigrationPeriods([
+    const result = await expectOk(importMigrationPeriods({ sourceSystem: 'Legacy', rows: [
       { employeeEmail: employee.email, periodStart: '2026-01-16', status: 'approved', submittedAt: '', reviewedAt: '', reviewedByEmail: '', reviewComment: '' },
       { employeeEmail: employee.email, periodStart: '2026-01-05', status: 'approved', submittedAt: '', reviewedAt: '', reviewedByEmail: '', reviewComment: '' },
-    ]));
+    ] }));
     expect(result.imported).toBe(1);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].message).toMatch(/not a period start under this workspace's pay schedule/);

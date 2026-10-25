@@ -62,6 +62,9 @@ export const tenants = pgTable('tenants', {
   lifecycleFailures: integer('lifecycle_failures').notNull().default(0),
   // THE concurrency guard for every lifecycle write (never compare timestamps for equality).
   lifecycleVersion: integer('lifecycle_version').notNull().default(0),
+  // feature-plan-certified-outputs.md C1 (CO-D1 escape hatch): the founder reopened timesheet-history import for this
+  // workspace until this instant (`tenant:admin reopen-import-window`). Read fresh inside every import batch.
+  importWindowUntil: timestamp('import_window_until', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [

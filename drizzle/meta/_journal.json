@@ -99,6 +99,13 @@
       "when": 1792623607830,
       "tag": "0013_truncate_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1792954118453,
+      "tag": "0014_certified_outputs",
+      "breakpoints": true
     }
   ]
 }

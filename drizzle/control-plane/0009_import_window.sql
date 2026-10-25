@@ -1,0 +1,1 @@
+ALTER TABLE "tenants" ADD COLUMN "import_window_until" timestamp with time zone;
