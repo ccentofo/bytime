@@ -24,6 +24,9 @@ export interface OfflineChargeCode {
   description: string;
   slinId?: string;
   slinNumber?: string;
+  /** certified-outputs C4 — absent on rows stored before C4 (read as 'charge' / assignable). */
+  kind?: 'charge' | 'clin' | 'indirect';
+  assignable?: boolean;
   lastFetchedAt: string;          // ISO timestamp
 }
 
@@ -36,8 +39,10 @@ export interface OfflinePeriodMeta {
 
 export interface OfflineSyncQueueItem {
   id?: number;                    // auto-increment
-  clinId?: string;                // set for direct entries (nullable for indirect)
+  clinId?: string;                // the row's code id for direct entries (a charge-code id, or a CLIN id for kind 'clin')
   indirectCodeId?: string;        // set for indirect entries
+  /** certified-outputs C4: which column the sync writes; items queued before C4 have none and are treated as 'charge'. */
+  kind?: 'charge' | 'clin' | 'indirect';
   entryDate: string;
   hours: number;
   changeReasonCode?: string;

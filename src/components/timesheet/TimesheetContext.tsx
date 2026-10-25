@@ -72,6 +72,8 @@ function timesheetReducer(
         notes: {},
         periodStatus: action.periodStatus,
         approvalBadge: action.approvalBadge ?? null,
+        // certified-outputs C4: each period has its own code list (assignable ∪ codes with recorded hours).
+        chargeCodes: action.chargeCodes ?? state.chargeCodes,
         periodConfig: action.periodConfig,
         isLoadingPeriod: false,
       };
@@ -145,6 +147,13 @@ type ProviderProps = {
   children: React.ReactNode;
 };
 
+/** certified-outputs C4: the save cell's column for a row of this kind. */
+export function cellRefForKind(kind: 'charge' | 'clin' | 'indirect', id: string): { chargeCodeId?: string; clinId?: string; indirectCodeId?: string } {
+  if (kind === 'indirect') return { indirectCodeId: id };
+  if (kind === 'clin') return { clinId: id };
+  return { chargeCodeId: id };
+}
+
 export function TimesheetProvider({ initialData, children }: ProviderProps) {
   const initialState: TimesheetState = {
     chargeCodes: initialData.chargeCodes,
@@ -216,10 +225,9 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
           const chargeCode = state.chargeCodes.find((cc) => cc.id === c.chargeCodeId);
           const revisionKey = `${c.chargeCodeId}-${c.dayIndex}`;
           return {
-            // Direct entries: send chargeCodeId; server denormalizes clinId/slinId from the charge code.
-            // Indirect entries: send indirectCodeId as before.
-            chargeCodeId: chargeCode?.isIndirect ? undefined : c.chargeCodeId,
-            indirectCodeId: chargeCode?.isIndirect ? c.chargeCodeId : undefined,
+            // certified-outputs C4: the column follows the row's kind — 'charge' → chargeCodeId (the server denormalizes
+            // CLIN/SLIN from the code), 'clin' (a legacy CLIN-only row) → clinId, 'indirect' → indirectCodeId.
+            ...cellRefForKind(chargeCode?.kind ?? (chargeCode?.isIndirect ? 'indirect' : 'charge'), c.chargeCodeId),
             dayIndex: c.dayIndex,
             hours: c.hours,
             isEdit: c.isEdit,

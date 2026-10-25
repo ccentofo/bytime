@@ -1,6 +1,6 @@
 import { auth } from '@/auth';
 import { redirect } from 'next/navigation';
-import { getChargeCodesForUser, getTimesheetPeriod } from '@/server/actions/timesheet';
+import { getTimesheetPeriod } from '@/server/actions/timesheet';
 import { getCurrentPeriodStart } from '@/lib/date-utils';
 import { BiWeeklyTimesheetClient } from '@/components/timesheet/BiWeeklyTimesheetClient';
 import type { TimesheetPageData } from '@/types/timesheet';
@@ -26,8 +26,7 @@ export default async function TimesheetPage() {
 
   // Fetch ALL independent data in parallel (single await). getTimesheetPeriod resolves the
   // period's length and schedule on the server, the same way navigation does.
-  const [chargeCodes, period, fullUser, dashboardData, tenantState] = await Promise.all([
-    getChargeCodesForUser(),
+  const [period, fullUser, dashboardData, tenantState] = await Promise.all([
     getTimesheetPeriod(periodStart),
     getUserByEmail(session.user.email!),
     getEmployeeDashboardData(),
@@ -36,7 +35,8 @@ export default async function TimesheetPage() {
 
   const pageData: TimesheetPageData = {
     userId,
-    chargeCodes,
+    // certified-outputs C4: this period's code list (assignable ∪ codes with recorded hours, kind + assignable).
+    chargeCodes: period.chargeCodes,
     entries: period.entries,
     periodStart: period.periodStart,
     numDays: period.numDays,

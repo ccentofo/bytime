@@ -2,7 +2,17 @@ import type { PeriodConfig } from '@/lib/date-utils';
 import type { CalendarDate } from '@/lib/calendar-date';
 
 export interface ChargeCode {
-  id: string;             // chargeCodeId for DIRECT codes; indirectChargeCodes.id for indirect
+  id: string;             // chargeCodeId for DIRECT codes; clins.id for a legacy CLIN row; indirectChargeCodes.id for indirect
+  /**
+   * feature-plan-certified-outputs.md C4: which column a save writes — `charge` → chargeCodeId, `clin` (a legacy
+   * CLIN-only row) → clinId, `indirect` → indirectCodeId.
+   */
+  kind: 'charge' | 'clin' | 'indirect';
+  /**
+   * New hours may be added (empty days editable). False for a code no longer assigned or no longer active, and always for
+   * a legacy CLIN row (ruling Q1): such rows are correction-only — days with a prior revision stay correctable (CO-D8).
+   */
+  assignable: boolean;
   projectName: string;    // contracts.name for direct; indirect category label for indirect
   clin: string;           // charge_codes.code for direct (the charge code string); indirect code for indirect
   description: string;    // charge_codes.name or description; indirect description
@@ -21,6 +31,8 @@ export interface ChargeCode {
 export interface TimesheetEntry {
   chargeCodeId: string;
   hours: number[]; // variable length — matches the number of days in the active pay period
+  /** C1 display: per day, the label of an imported (or legacy-imported) latest revision, else null. */
+  provenance?: Array<string | null>;
 }
 
 export interface NoteData {
@@ -65,7 +77,7 @@ export type TimesheetAction =
   | { type: 'CLOSE_NOTE_MODAL' }
   | { type: 'BEGIN_PERIOD_LOAD' }
   | { type: 'PERIOD_LOAD_FAILED' }
-  | { type: 'SET_PERIOD_DATA'; periodStart: CalendarDate; numDays: number; entries: TimesheetEntry[]; revisions: Record<string, number>; periodStatus: PeriodStatus; periodConfig: PeriodConfig; approvalBadge?: string | null }
+  | { type: 'SET_PERIOD_DATA'; periodStart: CalendarDate; numDays: number; entries: TimesheetEntry[]; revisions: Record<string, number>; periodStatus: PeriodStatus; periodConfig: PeriodConfig; approvalBadge?: string | null; chargeCodes?: ChargeCode[] }
   | { type: 'SET_SAVING'; isSaving: boolean }
   | { type: 'MARK_SAVED'; periodStart: CalendarDate; entries: TimesheetEntry[]; revisions: Record<string, number> }
   | { type: 'DISCARD_CHANGES' }

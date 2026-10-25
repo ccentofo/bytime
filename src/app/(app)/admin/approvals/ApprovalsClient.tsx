@@ -266,12 +266,20 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
               const total = hours.reduce((a, b) => a + b, 0);
               return (
                 <Table.Tr key={cc.id}>
-                  <Table.Td>{cc.clin} — {cc.projectName}</Table.Td>
-                  {Array.from({ length: numDays }, (_, i) => (
-                    <Table.Td key={i} style={{ textAlign: 'center' }}>
-                      {(hours[i] ?? 0) === 0 ? '—' : (hours[i] ?? 0).toFixed(2)}
-                    </Table.Td>
-                  ))}
+                  <Table.Td>
+                    {cc.clin} — {cc.projectName}
+                    {!cc.assignable && <Text size="xs" c="dimmed">No longer assigned (recorded hours shown)</Text>}
+                  </Table.Td>
+                  {Array.from({ length: numDays }, (_, i) => {
+                    // certified-outputs C1 display: imported hours are labelled in the review too.
+                    const provenance = entry?.provenance?.[i] ?? null;
+                    return (
+                      <Table.Td key={i} style={{ textAlign: 'center' }} title={provenance ?? undefined}>
+                        {(hours[i] ?? 0) === 0 ? '—' : (hours[i] ?? 0).toFixed(2)}
+                        {provenance && <Text span size="xs" c="signal.6" data-testid="imported-indicator"> •</Text>}
+                      </Table.Td>
+                    );
+                  })}
                   <Table.Td style={{ textAlign: 'center', fontWeight: 700 }}>
                     {total.toFixed(2)}
                   </Table.Td>

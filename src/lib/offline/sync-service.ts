@@ -1,4 +1,4 @@
-import { offlineDb } from './db';
+import { offlineDb, type OfflineSyncQueueItem } from './db';
 import { saveTimesheetBatch } from '@/server/actions/timesheet';
 import dayjs from 'dayjs';
 import type { CalendarDate } from '@/lib/calendar-date';
@@ -169,8 +169,7 @@ async function syncPendingEntries(): Promise<boolean> {
           cells: items.map((item) => {
             const dayIndex = dayjs(item.entryDate).diff(dayjs(periodStartStr), 'day');
             return {
-              clinId: item.indirectCodeId ? undefined : item.clinId,
-              indirectCodeId: item.indirectCodeId,
+              ...queueItemCellRef(item),
               dayIndex,
               hours: item.hours,
               isEdit: item.isEdit,
@@ -286,4 +285,18 @@ export function resetSyncStateForTests(): void {
   syncPaused = false;
   lastSyncError = null;
   isSyncing = false;
+}
+
+/**
+ * certified-outputs C4: map a queued offline edit to the save cell's column by `kind` — 'charge' → chargeCodeId,
+ * 'clin' → clinId, 'indirect' → indirectCodeId. Items queued before C4 have no kind: indirect if they carry an
+ * indirectCodeId, otherwise 'charge' (the only direct rows the old offline grid could show).
+ */
+export function queueItemCellRef(item: Pick<OfflineSyncQueueItem, 'clinId' | 'indirectCodeId' | 'kind'>): {
+  chargeCodeId?: string; clinId?: string; indirectCodeId?: string;
+} {
+  const kind = item.kind ?? (item.indirectCodeId ? 'indirect' : 'charge');
+  if (kind === 'indirect') return { indirectCodeId: item.indirectCodeId ?? item.clinId };
+  if (kind === 'clin') return { clinId: item.clinId };
+  return { chargeCodeId: item.clinId };
 }

@@ -1,7 +1,8 @@
 'use server';
 
 import { getDb, getDbForWrite } from '@/db';
-import { timesheetEntries, userAssignments, clins, contracts, slins, indirectChargeCodes, chargeCodes, userChargeCodes, costClasses, timesheetPeriods } from '@/db/schema';
+import { timesheetEntries, clins, contracts, slins, indirectChargeCodes, chargeCodes, userChargeCodes, costClasses, timesheetPeriods, importBatches, users } from '@/db/schema';
+import { provenanceText } from '@/lib/provenance';
 import { eq, and, gte, lt, desc, sql, isNull, inArray } from 'drizzle-orm';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
 import { validateUUID, validateHours } from '@/lib/validation';
@@ -17,54 +18,8 @@ import { approvalLabels } from '@/server/internal/approval-label';
 import { getNumDaysInPeriod } from '@/lib/date-utils';
 import { addDays, diffDays, isAfter, isBefore, formatCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { ConflictError, UserFacingError } from '@/lib/errors';
+import { newCellRefusal } from '@/lib/timesheet/cell-rules';
 import { userAction, type ActionResult } from '@/lib/action-result';
-
-/**
- * Validate that a user has an active assignment to a specific charge code.
- * Throws if the user_charge_codes row is missing or inactive.
- * This enforces DCAA RBAC: employees can only charge to authorized codes.
- */
-async function validateChargeCodeAssignment(userId: string, chargeCodeId: string): Promise<void> {
-  const db = await getDb();
-  const assignment = await db
-    .select({ id: userChargeCodes.id })
-    .from(userChargeCodes)
-    .where(
-      and(
-        eq(userChargeCodes.userId, userId),
-        eq(userChargeCodes.chargeCodeId, chargeCodeId),
-        eq(userChargeCodes.isActive, true),
-      )
-    )
-    .limit(1);
-
-  if (assignment.length === 0) {
-    throw new AuthorizationError('forbidden', `Unauthorized: You are not assigned to charge code ${chargeCodeId}. Cannot save timesheet entry.`);
-  }
-}
-
-/**
- * Validate that a user has an active assignment to a specific CLIN.
- * Used for the legacy CLIN-based cell path (backward compat) and as a fallback check.
- */
-async function validateClinAssignment(userId: string, clinId: string): Promise<void> {
-  const db = await getDb();
-  const assignment = await db
-    .select({ id: userAssignments.id })
-    .from(userAssignments)
-    .where(
-      and(
-        eq(userAssignments.userId, userId),
-        eq(userAssignments.clinId, clinId),
-        eq(userAssignments.isActive, true),
-      )
-    )
-    .limit(1);
-
-  if (assignment.length === 0) {
-    throw new AuthorizationError('forbidden', `Unauthorized: You are not assigned to CLIN ${clinId}. Cannot save timesheet entry.`);
-  }
-}
 
 /**
  * Get the charge codes assigned to the session user, plus active indirect codes.
@@ -117,24 +72,26 @@ export async function getTimesheetPeriod(periodStart: CalendarDate): Promise<{
   periodStatus: PeriodStatus;
   /** certified-outputs C2: "Self-approved"/"Self-rejected" for this period (approvalLabel), else null. */
   approvalBadge: string | null;
+  /** certified-outputs C4: THIS period's code list (assignable ∪ recorded); the client replaces its list with it. */
+  chargeCodes: ChargeCode[];
 }> {
   const actor = await requireSession();
   const start = parseCalendarDate(periodStart);
   const db = await getDb();
-  const [numDays, periodConfig, chargeCodes, periodInfo] = await Promise.all([
+  const [numDays, periodConfig, periodInfo] = await Promise.all([
     periodLengthFor(actor.id, start),
     configAt(db, start),
-    getChargeCodesForEmployee(actor.id),
     getPeriodStatusFor(actor.id, start),
   ]);
+  const periodCodes = await getPeriodCodesForEmployee(actor.id, start, numDays);
   const [entries, revisions] = await Promise.all([
-    getTimesheetEntriesForEmployee(actor.id, start, chargeCodes),
+    getTimesheetEntriesForEmployee(actor.id, start, periodCodes),
     revisionMapFor(actor.id, start, numDays),
   ]);
   const approvalBadge = periodInfo.id
     ? (await approvalLabels(db, [{ id: periodInfo.id, userId: actor.id, status: periodInfo.status, reviewedBy: periodInfo.reviewedBy, reviewedAt: periodInfo.reviewedAt }], await getWorkspaceTimezone())).get(periodInfo.id)?.badge ?? null
     : null;
-  return { periodStart: start, numDays, periodConfig, entries, revisions, periodStatus: periodInfo.status, approvalBadge };
+  return { periodStart: start, numDays, periodConfig, entries, revisions, periodStatus: periodInfo.status, approvalBadge, chargeCodes: periodCodes };
 }
 
 /** This employee's length for the period at `start`: their stored snapshot, else the schedule. */
@@ -260,50 +217,9 @@ export async function saveTimesheetBatch(data: {
       }
     }
 
-    // Validate assignments and resolve denormalized clinId/slinId for direct entries
+    // CLIN/SLIN of each charge code, filled inside the transaction (FOR SHARE re-read, C3).
     const chargeCodeCache = new Map<string, { clinId: string; slinId: string | null }>();
-
-    const checkedIndirectCodes = new Set<string>();
-    for (const cell of data.cells) {
-      if (cell.indirectCodeId) {
-        // Indirect codes need no assignment, but must exist and be open to everyone — the same
-        // filter getChargeCodesForUser uses to offer them.
-        if (!checkedIndirectCodes.has(cell.indirectCodeId)) {
-          const [code] = await db.select({ id: indirectChargeCodes.id })
-            .from(indirectChargeCodes)
-            .where(and(
-              eq(indirectChargeCodes.id, cell.indirectCodeId),
-              eq(indirectChargeCodes.isActive, true),
-              eq(indirectChargeCodes.availableToAll, true),
-            ))
-            .limit(1);
-          if (!code) throw new UserFacingError(`Indirect code ${cell.indirectCodeId} is not available.`);
-          checkedIndirectCodes.add(cell.indirectCodeId);
-        }
-        continue;
-      }
-
-      if (cell.chargeCodeId) {
-        // New charge-code model: validate user_charge_codes assignment
-        await validateChargeCodeAssignment(userId, cell.chargeCodeId);
-        if (!chargeCodeCache.has(cell.chargeCodeId)) {
-          const [cc] = await db.select({ clinId: chargeCodes.clinId, slinId: chargeCodes.slinId })
-            .from(chargeCodes)
-            .where(eq(chargeCodes.id, cell.chargeCodeId))
-            .limit(1);
-          if (!cc) throw new UserFacingError(`Charge code ${cell.chargeCodeId} not found.`, 'not_found');
-          chargeCodeCache.set(cell.chargeCodeId, { clinId: cc.clinId, slinId: cc.slinId ?? null });
-        }
-      } else if (cell.clinId) {
-        // Legacy CLIN-based path (backward compat)
-        await validateClinAssignment(userId, cell.clinId);
-        if (cell.slinId) {
-          const [slin] = await db.select({ id: slins.id }).from(slins)
-            .where(and(eq(slins.id, cell.slinId), eq(slins.clinId, cell.clinId))).limit(1);
-          if (!slin) throw new UserFacingError(`SLIN ${cell.slinId} does not belong to CLIN ${cell.clinId}.`);
-        }
-      }
-    }
+    for (const cell of data.cells) if (cell.chargeCodeId) chargeCodeCache.set(cell.chargeCodeId, { clinId: '', slinId: null });
 
     // One transaction holding this employee's timesheet lock (shared with submitPeriod): the period-lock check,
     // the conflict check and every insert see the same state, so a save can't land in a period that's being
@@ -329,6 +245,21 @@ export async function saveTimesheetBatch(data: {
           for (const cc of fresh) chargeCodeCache.set(cc.id, { clinId: cc.clinId, slinId: cc.slinId ?? null });
           if (fresh.length !== chargeCodeIds.length) throw new UserFacingError('A charge code on this timesheet no longer exists. Refresh and try again.', 'not_found');
         }
+
+        // certified-outputs C4 (CO-D8/CO-D15, rulings Q1/Q4): the facts for NEW cells, read through this transaction.
+        // A cell with a prior revision is a correction and skips them (reason code + period lock still apply).
+        const assignedCodes = chargeCodeIds.length === 0 ? new Set<string>() : new Set((await tx
+          .select({ id: userChargeCodes.chargeCodeId }).from(userChargeCodes)
+          .where(and(eq(userChargeCodes.userId, userId), inArray(userChargeCodes.chargeCodeId, chargeCodeIds), eq(userChargeCodes.isActive, true))))
+          .map((r) => r.id));
+        const codeState = new Map((chargeCodeIds.length === 0 ? [] : await tx
+          .select({ id: chargeCodes.id, codeActive: chargeCodes.isActive, clinStatus: clins.status, contractStatus: contracts.status })
+          .from(chargeCodes).innerJoin(clins, eq(chargeCodes.clinId, clins.id)).innerJoin(contracts, eq(clins.contractId, contracts.id))
+          .where(inArray(chargeCodes.id, chargeCodeIds))).map((r) => [r.id, r]));
+        const indirectIds = [...new Set(data.cells.flatMap((c) => (c.indirectCodeId ? [c.indirectCodeId] : [])))];
+        const indirectState = new Map((indirectIds.length === 0 ? [] : await tx
+          .select({ id: indirectChargeCodes.id, isActive: indirectChargeCodes.isActive, availableToAll: indirectChargeCodes.availableToAll })
+          .from(indirectChargeCodes).where(inArray(indirectChargeCodes.id, indirectIds))).map((r) => [r.id, r]));
 
         // Optimistic concurrency control
         if (!data.skipConflictCheck) {
@@ -358,12 +289,6 @@ export async function saveTimesheetBatch(data: {
           const entryDate = addDays(start, cell.dayIndex);
           const entryKey = cell.chargeCodeId ?? cell.clinId ?? cell.indirectCodeId ?? '';
 
-          // Resolve denormalized ids for direct entries
-          const resolved = cell.chargeCodeId ? chargeCodeCache.get(cell.chargeCodeId) : null;
-          // Charge-code cells take CLIN/SLIN only from the charge code itself, never from the caller.
-          const effectiveClinId = cell.chargeCodeId ? resolved!.clinId : (cell.clinId ?? null);
-          const effectiveSlinId = cell.chargeCodeId ? resolved!.slinId : (cell.slinId ?? null);
-
           const whereClause = cellWhere(userId, cell, entryDate);
 
           const existing = await tx
@@ -373,6 +298,50 @@ export async function saveTimesheetBatch(data: {
 
           const priorRevision = existing[0]?.maxRevision ?? 0;
           const nextRevision = priorRevision + 1;
+
+          // C4: a NEW cell needs the full assignable rule; a cell with a prior revision is correctable on any code.
+          if (priorRevision === 0) {
+            const refusal = cell.chargeCodeId
+              ? newCellRefusal({
+                kind: 'charge',
+                assigned: assignedCodes.has(cell.chargeCodeId),
+                codeActive: codeState.get(cell.chargeCodeId)?.codeActive ?? false,
+                clinActive: codeState.get(cell.chargeCodeId)?.clinStatus === 'active',
+                contractActive: codeState.get(cell.chargeCodeId)?.contractStatus === 'active',
+              })
+              : cell.indirectCodeId
+                ? newCellRefusal({ kind: 'indirect', active: indirectState.get(cell.indirectCodeId)?.isActive ?? false, availableToAll: indirectState.get(cell.indirectCodeId)?.availableToAll ?? false })
+                : newCellRefusal({ kind: 'clin' });
+            const label = formatCalendarDate(entryDate, 'MMM D, YYYY');
+            if (refusal === 'not-assigned') {
+              throw new AuthorizationError('forbidden', `Unauthorized: You are not assigned to charge code ${cell.chargeCodeId}. Cannot save timesheet entry.`);
+            }
+            if (refusal === 'code-inactive') {
+              throw new UserFacingError(`This charge code is no longer active (or its CLIN or contract isn't), so new hours can't be added on ${label}. You can correct hours already recorded on it.`);
+            }
+            if (refusal === 'indirect-unavailable') throw new UserFacingError(`Indirect code ${cell.indirectCodeId} is not available.`);
+            if (refusal === 'clin-only') {
+              throw new UserFacingError(`New hours can't be added to a CLIN-only row (${label}). Use a charge code — hours already recorded on the CLIN can still be corrected.`);
+            }
+          }
+
+          // Charge-code cells take CLIN/SLIN only from the charge code itself (in-transaction re-read), never the caller.
+          // A legacy CLIN cell (always a correction here) keeps its prior revision's SLIN; a different client SLIN is refused.
+          let effectiveClinId: string | null = cell.clinId ?? null;
+          let effectiveSlinId: string | null = null;
+          if (cell.chargeCodeId) {
+            const resolved = chargeCodeCache.get(cell.chargeCodeId)!;
+            effectiveClinId = resolved.clinId;
+            effectiveSlinId = resolved.slinId;
+          } else if (cell.clinId) {
+            const [prior] = await tx.select({ slinId: timesheetEntries.slinId }).from(timesheetEntries)
+              .where(and(whereClause!, eq(timesheetEntries.revisionNumber, priorRevision))).limit(1);
+            const priorSlin = prior?.slinId ?? null;
+            if (cell.slinId && cell.slinId !== priorSlin) {
+              throw new UserFacingError('A correction on a CLIN-only row keeps the SLIN it was recorded on.');
+            }
+            effectiveSlinId = priorSlin;
+          }
 
           const serverIsEdit = priorRevision > 0;
           const serverIsLate = priorRevision === 0 && isBefore(entryDate, today);
@@ -465,7 +434,8 @@ export async function getTimesheetForReview(
     id: timesheetPeriods.id, status: timesheetPeriods.status, submissionCount: timesheetPeriods.submissionCount,
     reviewedBy: timesheetPeriods.reviewedBy, reviewedAt: timesheetPeriods.reviewedAt,
   }).from(timesheetPeriods).where(and(eq(timesheetPeriods.userId, employeeId), eq(timesheetPeriods.periodStart, start)));
-  const codes = await getChargeCodesForEmployee(employeeId);
+  // C4: the review shows every recorded hour (the same period code list as the employee's grid).
+  const codes = await getPeriodCodesForEmployee(employeeId, start, await periodLengthFor(employeeId, start));
   const entries = await getTimesheetEntriesForEmployee(employeeId, start, codes);
   const facts = await loadApprovalFacts(db);
   const label = period
@@ -538,6 +508,8 @@ async function getChargeCodesForEmployee(userId: string): Promise<ChargeCode[]> 
     billable: r.billable,
     className: r.className ?? undefined,
     isIndirect: false,
+    kind: 'charge' as const,
+    assignable: true,
   }));
 
   const indirectRows = await db
@@ -551,25 +523,83 @@ async function getChargeCodesForEmployee(userId: string): Promise<ChargeCode[]> 
     )
     .orderBy(indirectChargeCodes.category, indirectChargeCodes.code);
 
-  const CATEGORY_LABELS: Record<string, string> = {
-    overhead: 'Overhead',
-    ga: 'G&A',
-    irad: 'IR&D',
-    bp: 'Bid & Proposal',
-    leave: 'Leave',
-    unallowable: 'Unallowable',
-  };
-
   const indirectCodes: ChargeCode[] = indirectRows.map((r) => ({
     id: r.id,
-    projectName: CATEGORY_LABELS[r.category] ?? r.category,
+    projectName: INDIRECT_CATEGORY_LABELS[r.category] ?? r.category,
     clin: r.code,
     description: r.description ?? r.name,
     isIndirect: true,
     indirectCategory: r.category,
+    kind: 'indirect' as const,
+    assignable: true,
   }));
 
   return [...directCodes, ...indirectCodes];
+}
+
+const INDIRECT_CATEGORY_LABELS: Record<string, string> = {
+  overhead: 'Overhead',
+  ga: 'G&A',
+  irad: 'IR&D',
+  bp: 'Bid & Proposal',
+  leave: 'Leave',
+  unallowable: 'Unallowable',
+};
+
+/**
+ * feature-plan-certified-outputs.md C4: the period's code list = the assignable codes ∪ every code (charge code, legacy
+ * CLIN, indirect) with an entry in the period (0-hour rows included). Codes with recorded hours that are no longer
+ * assignable come back with `assignable: false` (correction-only, CO-D8); legacy CLIN rows always do (ruling Q1).
+ */
+async function getPeriodCodesForEmployee(userId: string, start: CalendarDate, numDays: number): Promise<ChargeCode[]> {
+  const db = await getDb();
+  const assignable = await getChargeCodesForEmployee(userId);
+  const known = new Set(assignable.map((c) => `${c.kind}:${c.id}`));
+  const recorded = await db
+    .selectDistinct({ chargeCodeId: timesheetEntries.chargeCodeId, clinId: timesheetEntries.clinId, indirectCodeId: timesheetEntries.indirectCodeId })
+    .from(timesheetEntries)
+    .where(and(eq(timesheetEntries.userId, userId), gte(timesheetEntries.entryDate, start), lt(timesheetEntries.entryDate, addDays(start, numDays))));
+  const chargeIds = [...new Set(recorded.flatMap((r) => (r.chargeCodeId && !known.has(`charge:${r.chargeCodeId}`) ? [r.chargeCodeId] : [])))];
+  const clinIds = [...new Set(recorded.flatMap((r) => (!r.chargeCodeId && !r.indirectCodeId && r.clinId ? [r.clinId] : [])))];
+  const indirectIds = [...new Set(recorded.flatMap((r) => (r.indirectCodeId && !known.has(`indirect:${r.indirectCodeId}`) ? [r.indirectCodeId] : [])))];
+
+  const extraCharge: ChargeCode[] = chargeIds.length === 0 ? [] : (await db
+    .select({
+      id: chargeCodes.id, code: chargeCodes.code, name: chargeCodes.name, clinId: chargeCodes.clinId, clinNumber: clins.clinNumber,
+      slinId: chargeCodes.slinId, slinNumber: slins.slinNumber, contractName: contracts.name, workLocation: chargeCodes.workLocation,
+      billable: chargeCodes.billable, className: costClasses.name,
+    })
+    .from(chargeCodes)
+    .innerJoin(clins, eq(chargeCodes.clinId, clins.id))
+    .innerJoin(contracts, eq(clins.contractId, contracts.id))
+    .leftJoin(slins, eq(chargeCodes.slinId, slins.id))
+    .leftJoin(costClasses, eq(chargeCodes.classId, costClasses.id))
+    .where(inArray(chargeCodes.id, chargeIds))
+    .orderBy(contracts.name, clins.clinNumber, chargeCodes.code))
+    .map((r) => ({
+      id: r.id, projectName: r.contractName, clin: r.code, description: r.name, clinId: r.clinId, clinNumber: r.clinNumber,
+      slinId: r.slinId ?? undefined, slinNumber: r.slinNumber ?? undefined, workLocation: r.workLocation ?? null, billable: r.billable,
+      className: r.className ?? undefined, isIndirect: false, kind: 'charge' as const, assignable: false,
+    }));
+  const extraClin: ChargeCode[] = clinIds.length === 0 ? [] : (await db
+    .select({ id: clins.id, clinNumber: clins.clinNumber, description: clins.description, contractName: contracts.name })
+    .from(clins).innerJoin(contracts, eq(clins.contractId, contracts.id))
+    .where(inArray(clins.id, clinIds))
+    .orderBy(contracts.name, clins.clinNumber))
+    .map((r) => ({
+      id: r.id, projectName: r.contractName, clin: `CLIN ${r.clinNumber}`, description: r.description ?? `CLIN ${r.clinNumber}`,
+      clinId: r.id, clinNumber: r.clinNumber, isIndirect: false, kind: 'clin' as const, assignable: false,
+    }));
+  const extraIndirect: ChargeCode[] = indirectIds.length === 0 ? [] : (await db
+    .select().from(indirectChargeCodes).where(inArray(indirectChargeCodes.id, indirectIds)).orderBy(indirectChargeCodes.category, indirectChargeCodes.code))
+    .map((r) => ({
+      id: r.id, projectName: INDIRECT_CATEGORY_LABELS[r.category] ?? r.category, clin: r.code, description: r.description ?? r.name,
+      isIndirect: true, indirectCategory: r.category, kind: 'indirect' as const, assignable: false,
+    }));
+
+  const direct = [...assignable.filter((c) => c.kind === 'charge'), ...extraCharge, ...extraClin];
+  const indirect = [...assignable.filter((c) => c.kind === 'indirect'), ...extraIndirect];
+  return [...direct, ...indirect];
 }
 
 async function getTimesheetEntriesForEmployee(
@@ -591,8 +621,17 @@ async function getTimesheetEntriesForEmployee(
       entryDate: timesheetEntries.entryDate,
       hours: timesheetEntries.hours,
       revisionNumber: timesheetEntries.revisionNumber,
+      // C1 display: provenance of the latest revision (imported rows are labelled in the grid and the review).
+      source: timesheetEntries.source,
+      changeReasonCode: timesheetEntries.changeReasonCode,
+      originalMetadata: timesheetEntries.originalMetadata,
+      importSourceSystem: importBatches.sourceSystem,
+      importedAt: importBatches.importedAt,
+      importedByName: users.fullName,
     })
     .from(timesheetEntries)
+    .leftJoin(importBatches, eq(timesheetEntries.importBatchId, importBatches.id))
+    .leftJoin(users, eq(importBatches.importedBy, users.id))
     .where(
       and(
         eq(timesheetEntries.userId, userId),
@@ -602,22 +641,24 @@ async function getTimesheetEntriesForEmployee(
     )
     .orderBy(timesheetEntries.chargeCodeId, timesheetEntries.entryDate, desc(timesheetEntries.revisionNumber));
 
-  const latestHours = new Map<string, number>();
+  // The cell identity matches COALESCE(charge_code_id, indirect_code_id, clin_id): a legacy CLIN-only row is keyed by
+  // its CLIN, which never collides with a charge-code or indirect id.
+  const latest = new Map<string, (typeof rows)[number]>();
   for (const row of rows) {
     const dayIndex = diffDays(periodStart, row.entryDate as CalendarDate);
-    const entryId = row.chargeCodeId ?? row.clinId ?? row.indirectCodeId ?? '';
+    const entryId = row.chargeCodeId ?? row.indirectCodeId ?? row.clinId ?? '';
     const key = `${entryId}-${dayIndex}`;
-    if (!latestHours.has(key)) {
-      latestHours.set(key, parseFloat(row.hours));
-    }
+    if (!latest.has(key)) latest.set(key, row);
   }
 
   return chargeCodes_param.map((cc) => {
     const hours: number[] = [];
+    const provenance: Array<string | null> = [];
     for (let i = 0; i < numDays; i++) {
-      const key = `${cc.id}-${i}`;
-      hours.push(latestHours.get(key) ?? 0);
+      const row = latest.get(`${cc.id}-${i}`);
+      hours.push(row ? parseFloat(row.hours) : 0);
+      provenance.push(row ? provenanceText(row) : null);
     }
-    return { chargeCodeId: cc.id, hours };
+    return provenance.some(Boolean) ? { chargeCodeId: cc.id, hours, provenance } : { chargeCodeId: cc.id, hours };
   });
 }

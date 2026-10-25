@@ -30,6 +30,8 @@ export async function seedOfflineStore(data: {
       description: cc.description,
       slinId: cc.slinId,
       slinNumber: cc.slinNumber,
+      kind: cc.kind,
+      assignable: cc.assignable,
       lastFetchedAt: new Date().toISOString(),
     }))
   );
@@ -152,6 +154,8 @@ export async function getOfflineChargeCodes(): Promise<ChargeCode[]> {
     description: c.description,
     slinId: c.slinId,
     slinNumber: c.slinNumber,
+    kind: c.kind ?? 'charge',
+    assignable: c.assignable ?? true,
   }));
 }
 
@@ -166,6 +170,7 @@ export async function getOfflineChargeCodes(): Promise<ChargeCode[]> {
 export async function saveOfflineEntry(data: {
   clinId?: string;
   indirectCodeId?: string;
+  kind?: 'charge' | 'clin' | 'indirect';
   dayIndex: number;
   hours: number;
   periodStart: CalendarDate;
@@ -209,6 +214,7 @@ export async function saveOfflineEntry(data: {
   await offlineDb.syncQueue.add({
     clinId: data.clinId,
     indirectCodeId: data.indirectCodeId,
+    kind: data.kind ?? (data.indirectCodeId ? 'indirect' : 'charge'),
     entryDate,
     hours: data.hours,
     changeReasonCode: data.changeReasonCode,

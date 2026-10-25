@@ -1,10 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { ActionIcon, NumberInput, Text } from '@mantine/core';
+import { ActionIcon, NumberInput, Text, Tooltip } from '@mantine/core';
 import { IconNote } from '@tabler/icons-react';
 import { useTimesheet } from '@/components/timesheet/TimesheetContext';
 import { addDays, isAfter } from '@/lib/calendar-date';
+import { isCellEditable } from '@/lib/timesheet/cell-rules';
 import type { Density } from '../BiWeeklyTable';
 
 interface HourCellProps {
@@ -28,7 +29,7 @@ export function HourCell({ chargeCodeId, dayIndex, density = 'comfortable' }: Ho
   const { state, dispatch } = useTimesheet();
   // Read-only while another period is loading: typing into the outgoing grid would save it
   // against whichever period ends up on screen.
-  const isEditable = (state.periodStatus === 'draft' || state.periodStatus === 'rejected') && !state.isLoadingPeriod && !state.readOnly;
+  const periodEditable = (state.periodStatus === 'draft' || state.periodStatus === 'rejected') && !state.isLoadingPeriod && !state.readOnly;
   const [isEditing, setIsEditing] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [localValue, setLocalValue] = useState<number | string>(0);
@@ -43,13 +44,21 @@ export function HourCell({ chargeCodeId, dayIndex, density = 'comfortable' }: Ho
   const cellDate = addDays(state.periodStart, dayIndex);
   // Uses the server's state.today (never the browser's clock) — the server remains authoritative.
   const isFutureDate = isAfter(cellDate, state.today);
+  // certified-outputs C4 (CO-D8, rulings Q1/Q4): a day with a prior revision is correctable on any row; an empty day only
+  // on an assignable row (never on a legacy CLIN row). The server applies the same rule.
+  const row = state.chargeCodes.find((cc) => cc.id === chargeCodeId);
+  const priorRevision = state.savedCellRevisions[`${chargeCodeId}-${dayIndex}`] ?? 0;
+  const isEditable = isCellEditable({ periodEditable, isFutureDate, assignable: row?.assignable ?? true, priorRevision });
+  const lockedForNewHours = periodEditable && !isFutureDate && !isEditable;
+  // C1 display: an imported latest revision is labelled (never shown as if the employee typed it).
+  const provenance = entry?.provenance?.[dayIndex] ?? null;
 
   const noteKey = `${chargeCodeId}-${dayIndex}`;
   const hasNote = Boolean(state.notes[noteKey]);
   const cellId = `cell-${chargeCodeId}-${dayIndex}`;
 
   const handleClick = () => {
-    if (!isEditable || isFutureDate) return;
+    if (!isEditable) return;
     setLocalValue(value);
     setIsEditing(true);
     requestAnimationFrame(() => {
@@ -85,7 +94,7 @@ export function HourCell({ chargeCodeId, dayIndex, density = 'comfortable' }: Ho
           ? 'light-dark(var(--mantine-color-warning-0), var(--mantine-color-warning-9))'
           : undefined,
         borderRadius: isDirty ? 2 : undefined,
-        cursor: isEditable && !isFutureDate ? 'text' : 'default',
+        cursor: isEditable ? 'text' : 'default',
         opacity: isFutureDate ? 0.4 : 1,
         display: 'flex',
         alignItems: 'center',
@@ -94,8 +103,17 @@ export function HourCell({ chargeCodeId, dayIndex, density = 'comfortable' }: Ho
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       onClick={handleClick}
-      title={isFutureDate ? 'Cannot enter hours for future dates' : undefined}
+      title={isFutureDate ? 'Cannot enter hours for future dates' : lockedForNewHours ? 'No longer assigned — you can correct existing hours, not add new ones' : undefined}
     >
+      {provenance && (
+        <Tooltip label={provenance} multiline maw={320} withArrow>
+          <span
+            aria-label={provenance}
+            data-testid="imported-indicator"
+            style={{ position: 'absolute', top: 2, left: 2, width: 6, height: 6, borderRadius: 3, background: 'var(--mantine-color-signal-6)' }}
+          />
+        </Tooltip>
+      )}
       {isEditing ? (
         <NumberInput
           value={localValue}
