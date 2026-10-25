@@ -32,13 +32,15 @@ import { notifications } from '@mantine/notifications';
 import { formatInstant, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import {
   getAuditEntries,
+  getAuditPeriodEvents,
   getCellRevisionHistory,
   getClinsForFilter,
   type AuditEntry,
   type AuditFilters,
+  type AuditPeriodEvent,
   type CellRevisionHistory,
 } from '@/server/actions/audit';
-import { REASON_CODES } from '@/lib/reason-codes';
+import { REASON_CODES, reasonLabel } from '@/lib/reason-codes';
 import { formatDate, formatDateTime } from '@/lib/format';
 import { PageHeader } from '@/components/ui/PageHeader';
 // Side-effect import only — this module's one remaining rule is a `:global()` dark-mode
@@ -80,16 +82,11 @@ type Props = {
   workspaceTimezone: string;
 };
 
-// Map reason codes to human-readable labels
-const REASON_LABEL_MAP: Record<string, string> = {};
-for (const rc of REASON_CODES) {
-  REASON_LABEL_MAP[rc.value] = rc.label;
-}
-
 export function AuditTrailClient({ initialSummary, contracts, users, workspaceTimezone }: Props) {
   const [isPending, startTransition] = useTransition();
   const [summary] = useState<AuditSummary>(initialSummary);
   const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const [periodEvents, setPeriodEvents] = useState<AuditPeriodEvent[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
 
   // Filter state
@@ -135,8 +132,12 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
         if (filterReasonCode) filters.reasonCode = filterReasonCode;
         if (filterRevisionsOnly) filters.revisionsOnly = true;
 
-        const results = await getAuditEntries(filters);
+        const [results, events] = await Promise.all([
+          getAuditEntries(filters),
+          getAuditPeriodEvents({ userId: filters.userId, startDate: filters.startDate, endDate: filters.endDate }),
+        ]);
         setEntries(results);
+        setPeriodEvents(events);
         setHasSearched(true);
       } catch (error) {
         // R2-12: don't crash to the error page on a search failure — show an inline
@@ -151,12 +152,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
     setRevisionHistory(null);
     startTransition(async () => {
       try {
-        const history = await getCellRevisionHistory(
-          entry.userId,
-          entry.clinId,
-          entry.entryDate,
-          entry.indirectCodeId ?? null,
-        );
+        const history = await getCellRevisionHistory(entry.userId, entry.cellCode, entry.entryDate);
         setRevisionHistory(history);
       } catch (error) {
         notifications.show({ title: 'Failed to load revision history', message: String(error), color: 'red' });
@@ -172,9 +168,25 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
     {
       id: 'contract',
       header: 'Contract',
-      accessorFn: (row) => `${row.contractName} (${row.contractNumber})`,
+      accessorFn: (row) => (row.contractName ? `${row.contractName} (${row.contractNumber})` : 'Indirect'),
     },
-    { accessorKey: 'clinNumber', header: 'CLIN' },
+    {
+      accessorKey: 'codeLabel',
+      header: 'Code',
+      Cell: ({ row }) => (
+        <Group gap={6} wrap="nowrap">
+          <Text size="sm">{row.original.codeLabel}</Text>
+          {row.original.kind === 'charge' && row.original.clinNumber && (
+            <Text size="xs" c="dimmed">CLIN {row.original.clinNumber}</Text>
+          )}
+          {row.original.provenance && (
+            <Tooltip label={row.original.provenance} multiline maw={360}>
+              <Badge color="grape" size="xs" variant="light" data-testid="audit-imported">Imported</Badge>
+            </Tooltip>
+          )}
+        </Group>
+      ),
+    },
     {
       accessorKey: 'entryDate',
       header: 'Entry Date',
@@ -221,7 +233,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
       Cell: ({ cell }) => {
         const code = cell.getValue<string | null>();
         if (!code) return <Text size="sm" c="dimmed">—</Text>;
-        const label = REASON_LABEL_MAP[code] ?? code;
+        const label = reasonLabel(code);
         return (
           <Tooltip label={label}>
             <Badge color="gray" size="sm" tt="none" style={{ maxWidth: '100%' }}>
@@ -252,7 +264,9 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
     {
       accessorKey: 'createdByName',
       header: 'Entered By',
-      Cell: ({ cell }) => {
+      Cell: ({ cell, row }) => {
+        // C1 "Display": an imported row is never shown as if someone typed it here.
+        if (row.original.provenance) return <Text size="sm" c="grape">{row.original.provenance}</Text>;
         const val = cell.getValue<string | null>();
         return val ?? <Text size="sm" c="dimmed">—</Text>;
       },
@@ -435,6 +449,31 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
         </Text>
       )}
 
+      {/* ---- Section D: Timesheet events (submitted / approved / rejected) ---- */}
+      {hasSearched && (
+        <Paper withBorder p="md" mt="xl">
+          <Title order={4} mb={4}>Timesheet events</Title>
+          <Text size="xs" c="dimmed" mb="sm">Employee and date filters apply (by period start).</Text>
+          {periodEvents.length === 0 ? (
+            <Text size="sm" c="dimmed">No timesheet events match.</Text>
+          ) : (
+            <Stack gap="xs">
+              {periodEvents.map((e) => (
+                <Group key={e.id} gap="sm" wrap="nowrap" align="flex-start">
+                  <Text size="sm" fw={600} style={{ minWidth: 160 }}>{e.userName}</Text>
+                  <Text size="sm" c="dimmed" style={{ minWidth: 110 }}>Period {formatDate(e.periodStart)}</Text>
+                  <Stack gap={0}>
+                    <Text size="sm">{e.text}</Text>
+                    {e.context && <Text size="xs" c="dimmed">{e.context}</Text>}
+                    {e.comment && <Text size="xs" c="dimmed">Comment: {e.comment}</Text>}
+                  </Stack>
+                </Group>
+              ))}
+            </Stack>
+          )}
+        </Paper>
+      )}
+
       {/* ---- Revision History Drawer ---- */}
       <Drawer
         opened={drawerOpen}
@@ -457,8 +496,11 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
               <Paper withBorder p="sm">
                 <Group>
                   <Text size="sm"><strong>Employee:</strong> {revisionHistory.userName}</Text>
-                  <Text size="sm"><strong>CLIN:</strong> {revisionHistory.clinNumber}</Text>
-                  <Text size="sm"><strong>Contract:</strong> {revisionHistory.contractName}</Text>
+                  <Text size="sm"><strong>Code:</strong> {revisionHistory.codeLabel}</Text>
+                  {revisionHistory.kind === 'charge' && revisionHistory.clinNumber && (
+                    <Text size="sm"><strong>CLIN:</strong> {revisionHistory.clinNumber}</Text>
+                  )}
+                  <Text size="sm"><strong>Contract:</strong> {revisionHistory.contractName ?? 'Indirect'}</Text>
                   <Text size="sm"><strong>Date:</strong> {formatDate(revisionHistory.entryDate)}</Text>
                 </Group>
               </Paper>
@@ -498,7 +540,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
                     <Stack gap={4} mt={4}>
                       {rev.changeReasonCode && (
                         <Text size="xs" c="dimmed">
-                          <strong>Reason:</strong> {REASON_LABEL_MAP[rev.changeReasonCode] ?? rev.changeReasonCode}
+                          <strong>Reason:</strong> {reasonLabel(rev.changeReasonCode)}
                         </Text>
                       )}
                       {rev.comment && (
@@ -506,10 +548,14 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
                           <strong>Comment:</strong> {rev.comment}
                         </Text>
                       )}
-                      <Text size="xs" c="dimmed">
-                        Entered at {formatInstant(rev.createdAt, workspaceTimezone, 'MMM D, YYYY h:mm:ss A')}
-                        {rev.createdByName ? ` by ${rev.createdByName}` : ''}
-                      </Text>
+                      {rev.provenance ? (
+                        <Text size="xs" c="grape" data-testid="revision-imported">{rev.provenance}</Text>
+                      ) : (
+                        <Text size="xs" c="dimmed">
+                          Entered at {formatInstant(rev.createdAt, workspaceTimezone, 'MMM D, YYYY h:mm:ss A')}
+                          {rev.createdByName ? ` by ${rev.createdByName}` : ''}
+                        </Text>
+                      )}
                     </Stack>
                   </Timeline.Item>
                 ))}

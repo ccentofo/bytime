@@ -131,7 +131,8 @@ async function revisionMapFor(userId: string, start: CalendarDate, numDays: numb
   const revisionMap: Record<string, number> = {};
   for (const row of rows) {
     const dayIndex = diffDays(start, row.entryDate as CalendarDate);
-    const entryId = row.chargeCodeId ?? row.clinId ?? row.indirectCodeId ?? '';
+    // Cell identity = COALESCE(charge_code_id, indirect_code_id, clin_id), as everywhere else.
+    const entryId = row.chargeCodeId ?? row.indirectCodeId ?? row.clinId ?? '';
     const key = `${entryId}-${dayIndex}`;
     revisionMap[key] = row.maxRevision;
   }
@@ -267,7 +268,7 @@ export async function saveTimesheetBatch(data: {
           for (const cell of data.cells) {
             if (cell.expectedRevision === undefined) continue;
             const entryDate = addDays(start, cell.dayIndex);
-            const entryId = cell.chargeCodeId ?? cell.clinId ?? cell.indirectCodeId;
+            const entryId = cell.chargeCodeId ?? cell.indirectCodeId ?? cell.clinId;
             if (!entryId) continue;
 
             const whereClause = cellWhere(userId, cell, entryDate);
@@ -288,7 +289,7 @@ export async function saveTimesheetBatch(data: {
 
         for (const cell of data.cells) {
           const entryDate = addDays(start, cell.dayIndex);
-          const entryKey = cell.chargeCodeId ?? cell.clinId ?? cell.indirectCodeId ?? '';
+          const entryKey = cell.chargeCodeId ?? cell.indirectCodeId ?? cell.clinId ?? '';
 
           const whereClause = cellWhere(userId, cell, entryDate);
 

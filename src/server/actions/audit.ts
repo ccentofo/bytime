@@ -1,10 +1,23 @@
 'use server';
 
 import { getDb } from '@/db';
-import { timesheetEntries, users, clins, contracts, slins, userAssignments } from '@/db/schema';
-import { eq, and, gte, lt, desc, sql, inArray } from 'drizzle-orm';
+import {
+  timesheetEntries, users, clins, contracts, slins, userAssignments, chargeCodes, indirectChargeCodes, importBatches,
+  periodEvents, timesheetPeriods,
+} from '@/db/schema';
+import { eq, and, gte, lt, lte, desc, sql, inArray } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
 import { addDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { cellCodeLabel, cellKind, type CellKind } from '@/lib/cell-code';
+import { indirectCategoryLabel } from '@/lib/indirect-categories';
+import { provenanceText } from '@/lib/provenance';
+import { validateUUID } from '@/lib/validation';
+import { periodEventLabel } from '@/server/internal/approval-label';
+import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
+
+/** The importing admin (import_batches.imported_by), for provenance labels. */
+const importer = alias(users, 'importer');
 
 // ---------------------------------------------------------------------------
 // Types
@@ -15,12 +28,22 @@ export interface AuditEntry {
   userId: string;
   userName: string;
   userEmail: string;
+  /** C6: the true cell code COALESCE(charge_code_id, indirect_code_id, clin_id), its kind and label. */
+  cellCode: string;
+  kind: CellKind;
+  codeLabel: string;
+  chargeCodeId: string | null;
   clinId: string | null;
   indirectCodeId: string | null;
-  clinNumber: string;
-  contractName: string;
-  contractNumber: string;
+  /** Null for indirect entries (no CLIN / contract). */
+  clinNumber: string | null;
+  contractName: string | null;
+  contractNumber: string | null;
   slinNumber: string | null;
+  /** Indirect entries: the category's display name. */
+  indirectCategory: string | null;
+  /** C1 "Display": the import label for migrated / legacy-imported rows, else null. */
+  provenance: string | null;
   entryDate: CalendarDate;
   hours: string;
   revisionNumber: number;
@@ -44,11 +67,12 @@ export interface AuditFilters {
 export interface CellRevisionHistory {
   userId: string;
   userName: string;
-  clinId: string | null;
-  clinNumber: string;
-  contractName: string;
-  indirectCodeId?: string | null;
-  indirectCode?: string | null;
+  cellCode: string;
+  kind: CellKind;
+  codeLabel: string;
+  clinNumber: string | null;
+  contractName: string | null;
+  indirectCategory: string | null;
   entryDate: CalendarDate;
   revisions: Array<{
     id: string;
@@ -58,7 +82,24 @@ export interface CellRevisionHistory {
     comment: string | null;
     createdAt: Date;
     createdByName: string | null;
+    /** C1 "Display": the import label, else null. */
+    provenance: string | null;
   }>;
+}
+
+/** A period event (submitted / approved / rejected) in the audit trail, labelled by the one approval helper. */
+export interface AuditPeriodEvent {
+  id: string;
+  userId: string;
+  userName: string;
+  periodStart: CalendarDate;
+  event: 'submitted' | 'approved' | 'rejected';
+  text: string;
+  selfApproved: boolean;
+  /** Self-approvals: the recorded context (active admins at the time, last switch-on). */
+  context: string | null;
+  comment: string | null;
+  createdAt: Date;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,18 +147,23 @@ export async function getAuditEntries(filters: AuditFilters): Promise<AuditEntry
     conditions.push(eq(contracts.id, filters.contractId));
   }
 
+  // C6: LEFT JOINs — indirect entries (no CLIN) are included; the code shown is the true cell code.
   const rows = await db
     .select({
       id: timesheetEntries.id,
       userId: timesheetEntries.userId,
       userName: users.fullName,
       userEmail: users.email,
+      chargeCodeId: timesheetEntries.chargeCodeId,
       clinId: timesheetEntries.clinId,
       indirectCodeId: timesheetEntries.indirectCodeId,
+      chargeCode: chargeCodes.code,
       clinNumber: clins.clinNumber,
       contractName: contracts.name,
       contractNumber: contracts.contractNumber,
       slinNumber: slins.slinNumber,
+      indirectCode: indirectChargeCodes.code,
+      indirectCategory: indirectChargeCodes.category,
       entryDate: timesheetEntries.entryDate,
       hours: timesheetEntries.hours,
       revisionNumber: timesheetEntries.revisionNumber,
@@ -126,31 +172,54 @@ export async function getAuditEntries(filters: AuditFilters): Promise<AuditEntry
       createdAt: timesheetEntries.createdAt,
       createdById: timesheetEntries.createdBy,
       createdByName: sql<string | null>`(SELECT full_name FROM users WHERE id = ${timesheetEntries.createdBy})`,
+      source: timesheetEntries.source,
+      originalMetadata: timesheetEntries.originalMetadata,
+      importSourceSystem: importBatches.sourceSystem,
+      importedAt: importBatches.importedAt,
+      importedByName: importer.fullName,
     })
     .from(timesheetEntries)
     .innerJoin(users, eq(timesheetEntries.userId, users.id))
-    .innerJoin(clins, eq(timesheetEntries.clinId, clins.id))
-    .innerJoin(contracts, eq(clins.contractId, contracts.id))
+    .leftJoin(chargeCodes, eq(timesheetEntries.chargeCodeId, chargeCodes.id))
+    .leftJoin(clins, eq(timesheetEntries.clinId, clins.id))
+    .leftJoin(contracts, eq(clins.contractId, contracts.id))
     .leftJoin(slins, eq(timesheetEntries.slinId, slins.id))
+    .leftJoin(indirectChargeCodes, eq(timesheetEntries.indirectCodeId, indirectChargeCodes.id))
+    .leftJoin(importBatches, eq(timesheetEntries.importBatchId, importBatches.id))
+    .leftJoin(importer, eq(importBatches.importedBy, importer.id))
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(timesheetEntries.createdAt))
     .limit(500);
 
-  return rows as AuditEntry[];
+  return rows.map((r) => {
+    const kind = cellKind(r);
+    return {
+      id: r.id, userId: r.userId, userName: r.userName, userEmail: r.userEmail,
+      cellCode: (r.chargeCodeId ?? r.indirectCodeId ?? r.clinId)!, kind, codeLabel: cellCodeLabel({ kind, ...r }),
+      chargeCodeId: r.chargeCodeId, clinId: r.clinId, indirectCodeId: r.indirectCodeId,
+      clinNumber: r.clinNumber, contractName: r.contractName, contractNumber: r.contractNumber, slinNumber: r.slinNumber,
+      indirectCategory: r.indirectCategory ? indirectCategoryLabel(r.indirectCategory) : null,
+      provenance: provenanceText(r),
+      entryDate: r.entryDate as CalendarDate, hours: r.hours, revisionNumber: r.revisionNumber,
+      changeReasonCode: r.changeReasonCode, comment: r.comment, createdAt: r.createdAt,
+      createdById: r.createdById, createdByName: r.createdByName,
+    };
+  });
 }
 
 /**
- * Get the full revision history for a specific cell (user + CLIN + date).
- * Returns all revisions ordered from oldest to newest.
+ * The full revision history of one cell (user + true cell code + date), oldest first. C6: the cell is
+ * COALESCE(charge_code_id, indirect_code_id, clin_id) = cellCode — sibling charge codes on one CLIN keep separate
+ * histories, and indirect cells work like any other.
  */
 export async function getCellRevisionHistory(
   userId: string,
-  clinId: string | null,
+  cellCode: string,
   entryDate: CalendarDate,
-  indirectCodeId?: string | null
 ): Promise<CellRevisionHistory | null> {
   const actor = await requireApprover();
   await assertCanAccessEmployee(actor, userId);
+  validateUUID(cellCode, 'Cell code');
 
   const db = await getDb();
   const day = parseCalendarDate(entryDate);
@@ -164,14 +233,30 @@ export async function getCellRevisionHistory(
       comment: timesheetEntries.comment,
       createdAt: timesheetEntries.createdAt,
       createdByName: sql<string | null>`(SELECT full_name FROM users WHERE id = ${timesheetEntries.createdBy})`,
+      chargeCodeId: timesheetEntries.chargeCodeId,
+      indirectCodeId: timesheetEntries.indirectCodeId,
+      chargeCode: chargeCodes.code,
+      clinNumber: clins.clinNumber,
+      contractName: contracts.name,
+      indirectCode: indirectChargeCodes.code,
+      indirectCategory: indirectChargeCodes.category,
+      source: timesheetEntries.source,
+      originalMetadata: timesheetEntries.originalMetadata,
+      importSourceSystem: importBatches.sourceSystem,
+      importedAt: importBatches.importedAt,
+      importedByName: importer.fullName,
     })
     .from(timesheetEntries)
+    .leftJoin(chargeCodes, eq(timesheetEntries.chargeCodeId, chargeCodes.id))
+    .leftJoin(clins, eq(timesheetEntries.clinId, clins.id))
+    .leftJoin(contracts, eq(clins.contractId, contracts.id))
+    .leftJoin(indirectChargeCodes, eq(timesheetEntries.indirectCodeId, indirectChargeCodes.id))
+    .leftJoin(importBatches, eq(timesheetEntries.importBatchId, importBatches.id))
+    .leftJoin(importer, eq(importBatches.importedBy, importer.id))
     .where(
       and(
         eq(timesheetEntries.userId, userId),
-        clinId
-          ? eq(timesheetEntries.clinId, clinId)
-          : eq(timesheetEntries.indirectCodeId, indirectCodeId!),
+        eq(sql<string>`COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})`, cellCode),
         eq(timesheetEntries.entryDate, day),
       )
     )
@@ -179,7 +264,6 @@ export async function getCellRevisionHistory(
 
   if (rows.length === 0) return null;
 
-  // Get user context
   const [userRow] = await db
     .select({ userName: users.fullName })
     .from(users)
@@ -187,56 +271,75 @@ export async function getCellRevisionHistory(
 
   if (!userRow) return null;
 
-  let clinNumber = '—';
-  let contractName = '—';
-  let indirectCode: string | null = null;
-
-  if (clinId) {
-    // Direct entry — get CLIN/contract context
-    const clinContext = await db
-      .select({
-        clinNumber: clins.clinNumber,
-        contractName: contracts.name,
-      })
-      .from(clins)
-      .innerJoin(contracts, eq(clins.contractId, contracts.id))
-      .where(eq(clins.id, clinId))
-      .limit(1);
-
-    if (clinContext.length > 0) {
-      clinNumber = clinContext[0].clinNumber;
-      contractName = clinContext[0].contractName;
-    }
-  } else if (indirectCodeId) {
-    // Indirect entry — get indirect code context
-    const { indirectChargeCodes } = await import('@/db/schema');
-    const indirectContext = await db
-      .select({
-        code: indirectChargeCodes.code,
-        name: indirectChargeCodes.name,
-      })
-      .from(indirectChargeCodes)
-      .where(eq(indirectChargeCodes.id, indirectCodeId))
-      .limit(1);
-
-    if (indirectContext.length > 0) {
-      clinNumber = indirectContext[0].code;
-      contractName = indirectContext[0].name;
-      indirectCode = indirectContext[0].code;
-    }
-  }
-
+  const first = rows[0];
+  const kind = cellKind(first);
   return {
     userId,
     userName: userRow.userName,
-    clinId,
-    clinNumber,
-    contractName,
-    indirectCodeId: indirectCodeId ?? null,
-    indirectCode,
+    cellCode,
+    kind,
+    codeLabel: cellCodeLabel({ kind, ...first }),
+    clinNumber: kind === 'indirect' ? null : first.clinNumber,
+    contractName: kind === 'indirect' ? null : first.contractName,
+    indirectCategory: first.indirectCategory ? indirectCategoryLabel(first.indirectCategory) : null,
     entryDate: day,
-    revisions: rows,
+    revisions: rows.map((r) => ({
+      id: r.id, hours: r.hours, revisionNumber: r.revisionNumber, changeReasonCode: r.changeReasonCode, comment: r.comment,
+      createdAt: r.createdAt, createdByName: r.createdByName, provenance: provenanceText(r),
+    })),
   };
+}
+
+/**
+ * Period events (submitted / approved / rejected) for the audit trail, scoped like the entries, filtered by employee
+ * and by period start within the date range. Each is labelled by the one approval helper (C2: "Self-approved" with its
+ * recorded context; imported events labelled with their source system).
+ */
+export async function getAuditPeriodEvents(filters: Pick<AuditFilters, 'userId' | 'startDate' | 'endDate'>): Promise<AuditPeriodEvent[]> {
+  const actor = await requireApprover();
+  const scope = await getEmployeeScope(actor);
+  if (scope !== 'all' && scope.length === 0) return [];
+
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: periodEvents.id, periodId: periodEvents.periodId, userId: periodEvents.userId, userName: users.fullName,
+      periodStart: timesheetPeriods.periodStart, event: periodEvents.event, actorId: periodEvents.actorId,
+      comment: periodEvents.comment, createdAt: periodEvents.createdAt, source: periodEvents.source,
+      originalMetadata: periodEvents.originalMetadata, approvalContext: periodEvents.approvalContext,
+      importSourceSystem: importBatches.sourceSystem, importedAt: importBatches.importedAt,
+    })
+    .from(periodEvents)
+    .innerJoin(users, eq(periodEvents.userId, users.id))
+    .innerJoin(timesheetPeriods, eq(periodEvents.periodId, timesheetPeriods.id))
+    .leftJoin(importBatches, eq(periodEvents.importBatchId, importBatches.id))
+    .where(and(
+      scope === 'all' ? undefined : inArray(periodEvents.userId, scope),
+      filters.userId ? eq(periodEvents.userId, filters.userId) : undefined,
+      filters.startDate ? gte(timesheetPeriods.periodStart, parseCalendarDate(filters.startDate)) : undefined,
+      filters.endDate ? lte(timesheetPeriods.periodStart, parseCalendarDate(filters.endDate)) : undefined,
+    ))
+    .orderBy(desc(periodEvents.createdAt))
+    .limit(500);
+
+  // Names for actors and for whoever switched self-approval on (approval_context).
+  const ids = new Set<string>();
+  for (const r of rows) {
+    if (r.actorId) ids.add(r.actorId);
+    const by = (r.approvalContext as { selfApprovalEnabledBy?: unknown } | null)?.selfApprovalEnabledBy;
+    if (typeof by === 'string') ids.add(by);
+  }
+  const names = ids.size === 0 ? [] : await db.select({ id: users.id, fullName: users.fullName }).from(users).where(inArray(users.id, [...ids]));
+  const nameById = new Map(names.map((n) => [n.id, n.fullName]));
+  const timeZone = await getWorkspaceTimezone();
+
+  return rows.map((r) => {
+    const label = periodEventLabel(r, r.userId, (id) => nameById.get(id) ?? null, timeZone);
+    return {
+      id: r.id, userId: r.userId, userName: r.userName, periodStart: r.periodStart as CalendarDate, event: r.event,
+      text: label.text, selfApproved: label.selfApproved, context: label.context, comment: r.comment, createdAt: r.createdAt,
+    };
+  });
 }
 
 /**

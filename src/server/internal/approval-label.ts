@@ -61,15 +61,11 @@ export function approvalLabel(
     .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
 
   if (decision?.source === 'migration') {
-    const m = meta(decision.originalMetadata);
-    const reviewer = str(m.reviewer) ?? 'reviewer not recorded';
-    const reviewedAt = str(m.reviewedAt) ?? 'an unknown date';
-    const imported = decision.importedAt ? decision.importedAt.toISOString().slice(0, 10) : decision.createdAt.toISOString().slice(0, 10);
     return {
       kind: period.status === 'approved' ? 'imported-approved' : 'imported-rejected',
       selfApproved: false,
       badge: null,
-      text: `${verb} in ${decision.importSourceSystem ?? 'another system'} by ${reviewer} on ${reviewedAt} (imported ${imported})`,
+      text: importedDecisionText(verb, decision),
       approverName: null,
     };
   }
@@ -78,7 +74,7 @@ export function approvalLabel(
   const at = decision?.createdAt ?? period.reviewedAt;
   const when = at ? ` on ${formatInstant(at, timeZone, 'MMM D, YYYY')}` : '';
   if (deciderId && deciderId === period.userId) {
-    const badge = period.status === 'approved' ? 'Self-approved' : 'Self-rejected';
+    const badge = selfBadge(period.status);
     return { kind: period.status === 'approved' ? 'self-approved' : 'self-rejected', selfApproved: period.status === 'approved', badge, text: `${badge}${when}`, approverName: null };
   }
   const name = deciderId ? nameOf(deciderId) : null;
@@ -89,6 +85,49 @@ export function approvalLabel(
     text: `${verb} by ${name ?? 'an unknown user'}${when}`,
     approverName: name,
   };
+}
+
+const selfBadge = (status: string) => (status === 'approved' ? 'Self-approved' : 'Self-rejected');
+const importDay = (e: ApprovalLabelEvent) => (e.importedAt ?? e.createdAt).toISOString().slice(0, 10);
+
+function importedDecisionText(verb: string, e: ApprovalLabelEvent): string {
+  const m = meta(e.originalMetadata);
+  return `${verb} in ${e.importSourceSystem ?? 'another system'} by ${str(m.reviewer) ?? 'reviewer not recorded'} on ${str(m.reviewedAt) ?? 'an unknown date'} (imported ${importDay(e)})`;
+}
+
+/**
+ * One period event's line for the audit trail (C2 "audit trail period events"; C6), with the approval context a
+ * self-approval recorded (CO-D19: active admins at that moment, the last switch-on). Same wording as approvalLabel.
+ */
+export function periodEventLabel(
+  e: ApprovalLabelEvent & { approvalContext?: unknown },
+  periodUserId: string,
+  nameOf: (userId: string) => string | null,
+  timeZone: string,
+): { text: string; selfApproved: boolean; context: string | null } {
+  const verb = e.event === 'approved' ? 'Approved' : e.event === 'rejected' ? 'Rejected' : 'Submitted';
+  if (e.source === 'migration') {
+    if (e.event === 'submitted') {
+      const at = str(meta(e.originalMetadata).submittedAt) ?? 'an unknown date';
+      return { text: `Submitted in ${e.importSourceSystem ?? 'another system'} on ${at} (imported ${importDay(e)})`, selfApproved: false, context: null };
+    }
+    return { text: importedDecisionText(verb, e), selfApproved: false, context: null };
+  }
+  const when = ` on ${formatInstant(e.createdAt, timeZone, 'MMM D, YYYY h:mm A')}`;
+  const actor = e.actorId ? nameOf(e.actorId) : null;
+  if (e.event === 'submitted') return { text: `Submitted by ${actor ?? 'an unknown user'}${when}`, selfApproved: false, context: null };
+  if (e.actorId && e.actorId === periodUserId) {
+    const c = meta(e.approvalContext);
+    const count = typeof c.activeAdminCount === 'number' ? c.activeAdminCount : null;
+    const enabledAt = str(c.selfApprovalEnabledAt);
+    const enabledBy = str(c.selfApprovalEnabledBy);
+    const parts = [
+      count === null ? null : `${count} active admin${count === 1 ? '' : 's'} at the time`,
+      enabledAt ? `self-approval on since ${formatInstant(new Date(enabledAt), timeZone, 'MMM D, YYYY')}${enabledBy ? ` (switched on by ${nameOf(enabledBy) ?? 'an unknown user'})` : ''}` : null,
+    ].filter(Boolean);
+    return { text: `${selfBadge(e.event)}${when}`, selfApproved: e.event === 'approved', context: parts.length ? parts.join('; ') : null };
+  }
+  return { text: `${verb} by ${actor ?? 'an unknown user'}${when}`, selfApproved: false, context: null };
 }
 
 /** Load what approvalLabel needs for a set of periods (events with their import batch, decider names). */
