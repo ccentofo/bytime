@@ -1,10 +1,7 @@
-import type {
-  IntegrationConnector,
-  ConnectorMetadata,
-  TimesheetSyncEntry,
-} from '../types';
-import dayjs from 'dayjs'; // only used for the export filename's INSTANT timestamp — see below
-import { max, min, formatCalendarDate } from '@/lib/calendar-date';
+import type { ConnectorMetadata, IntegrationConnector } from '../types';
+import { formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { escapeCsvField } from '@/lib/csv/escape';
+import { fromCents } from '@/lib/payroll/flsa';
 
 // ---------------------------------------------------------------------------
 // Connector Metadata
@@ -13,7 +10,7 @@ import { max, min, formatCalendarDate } from '@/lib/calendar-date';
 const metadata: ConnectorMetadata = {
   id: 'csv_export',
   name: 'Payroll Export',
-  description: 'Download approved timesheet data as CSV files formatted for ADP, Paychex, Gusto, or custom payroll systems.',
+  description: 'Download approved timesheet data as CSV files formatted for ADP, Paychex, Gusto, or custom payroll systems — FLSA weekly overtime.',
   icon: 'IconFileExport',
   color: 'orange',
   category: 'export',
@@ -23,10 +20,43 @@ const metadata: ConnectorMetadata = {
 };
 
 // ---------------------------------------------------------------------------
-// Export Format Types
+// Export formats (feature-plan-certified-outputs.md C7, CO-D2 / CO-D11 / CO-D14). Every hour figure comes from
+// src/lib/payroll/flsa.ts (integer hundredths): Regular = regular WORKED hours only; leave in its own columns; vendor
+// files carry no uncompensated-OT column (it lives in `custom` and the Daily hours detail). Vendor column names and
+// earnings codes are this layout's best guess — verified against the vendors' import specs in staging.
 // ---------------------------------------------------------------------------
 
 export type PayrollFormat = 'adp' | 'paychex' | 'gusto' | 'custom';
+
+export const FLSA_LABEL = 'FLSA weekly overtime';
+
+/** One employee's reported totals (hundredths of an hour) — PayrollEmployee from payroll-data.ts. */
+export interface PayrollRow {
+  employeeName: string;
+  employeeEmail: string;
+  employeeId?: string;
+  regular: number;
+  overtime: number;
+  uncompensatedOvertime: number;
+  pto: number;
+  sick: number;
+  holiday: number;
+  unpaidLeave: number;
+  billable: number;
+  totalPaid: number;
+  totalRecorded: number;
+}
+
+export interface PayrollColumnContext {
+  periodStart: string;
+  periodEnd: string;
+}
+
+export interface PayrollColumn {
+  key: string;
+  header: string;
+  getValue: (row: PayrollRow, ctx: PayrollColumnContext) => string;
+}
 
 export interface PayrollFormatConfig {
   id: PayrollFormat;
@@ -38,214 +68,156 @@ export interface PayrollFormatConfig {
   columns: PayrollColumn[];
 }
 
-export interface PayrollColumn {
-  key: string;
-  header: string;
-  getValue: (row: AggregatedEmployeeHours) => string;
-}
-
-export interface AggregatedEmployeeHours {
-  employeeName: string;
-  employeeEmail: string;
-  employeeId?: string;         // Optional payroll system ID (from mapping)
-  totalHours: number;
-  regularHours: number;        // Capped at 80 per semi-monthly period (or configurable)
-  overtimeHours: number;       // Hours beyond regular threshold
-  billableHours: number;
-  nonBillableHours: number;
-  periodStart: string;         // Formatted date string
-  periodEnd: string;           // Formatted date string
-  entries: TimesheetSyncEntry[]; // Raw entries for drill-down if needed
-}
-
-// ---------------------------------------------------------------------------
-// Pre-Built Format Templates
-// ---------------------------------------------------------------------------
+const h = (cents: number) => fromCents(cents).toFixed(2);
+const lastName = (r: PayrollRow) => r.employeeName.split(' ').slice(-1)[0] ?? '';
+const firstName = (r: PayrollRow) => r.employeeName.split(' ')[0] ?? '';
+const code = (cents: number, c: string) => (cents > 0 ? c : '');
 
 export const PAYROLL_FORMATS: PayrollFormatConfig[] = [
   {
     id: 'adp',
     name: 'ADP Workforce Now',
-    description: 'Standard ADP payroll import format with employee ID, hours, and earnings codes.',
+    description: 'ADP payroll import: regular worked hours, FLSA weekly overtime, and PTO / sick / holiday in their own columns.',
     fileExtension: 'csv',
     delimiter: ',',
     dateFormat: 'MM/DD/YYYY',
     columns: [
       { key: 'employeeId', header: 'Employee ID', getValue: (r) => r.employeeId ?? r.employeeEmail },
-      { key: 'lastName', header: 'Last Name', getValue: (r) => r.employeeName.split(' ').slice(-1)[0] ?? '' },
-      { key: 'firstName', header: 'First Name', getValue: (r) => r.employeeName.split(' ')[0] ?? '' },
-      { key: 'periodStart', header: 'Period Start', getValue: (r) => r.periodStart },
-      { key: 'periodEnd', header: 'Period End', getValue: (r) => r.periodEnd },
-      { key: 'regularHours', header: 'Regular Hours', getValue: (r) => r.regularHours.toFixed(2) },
-      { key: 'overtimeHours', header: 'OT Hours', getValue: (r) => r.overtimeHours.toFixed(2) },
-      { key: 'totalHours', header: 'Total Hours', getValue: (r) => r.totalHours.toFixed(2) },
+      { key: 'lastName', header: 'Last Name', getValue: lastName },
+      { key: 'firstName', header: 'First Name', getValue: firstName },
+      { key: 'periodStart', header: 'Period Start', getValue: (_, c) => c.periodStart },
+      { key: 'periodEnd', header: 'Period End', getValue: (_, c) => c.periodEnd },
+      { key: 'regularHours', header: 'Regular Hours', getValue: (r) => h(r.regular) },
+      { key: 'overtimeHours', header: 'OT Hours', getValue: (r) => h(r.overtime) },
+      { key: 'ptoHours', header: 'PTO Hours', getValue: (r) => h(r.pto) },
+      { key: 'sickHours', header: 'Sick Hours', getValue: (r) => h(r.sick) },
+      { key: 'holidayHours', header: 'Holiday Hours', getValue: (r) => h(r.holiday) },
+      // Paid hours only: Regular + OT + PTO + Sick + Holiday (no uncompensated OT, no unpaid leave).
+      { key: 'totalHours', header: 'Total Hours', getValue: (r) => h(r.totalPaid) },
       { key: 'earningsCode', header: 'Earnings Code', getValue: () => 'REG' },
     ],
   },
   {
     id: 'paychex',
     name: 'Paychex Flex',
-    description: 'Paychex payroll import format with SSN/Employee ID and earnings codes.',
+    description: 'Paychex payroll import: REG / OT / PTO / SICK / HOL hours with earnings codes.',
     fileExtension: 'csv',
     delimiter: ',',
     dateFormat: 'MM/DD/YYYY',
     columns: [
       { key: 'employeeId', header: 'Employee ID', getValue: (r) => r.employeeId ?? r.employeeEmail },
-      { key: 'lastName', header: 'Last Name', getValue: (r) => r.employeeName.split(' ').slice(-1)[0] ?? '' },
-      { key: 'firstName', header: 'First Name', getValue: (r) => r.employeeName.split(' ')[0] ?? '' },
-      { key: 'payDate', header: 'Pay Date', getValue: (r) => r.periodEnd },
-      { key: 'hours', header: 'Hours', getValue: (r) => r.regularHours.toFixed(2) },
+      { key: 'lastName', header: 'Last Name', getValue: lastName },
+      { key: 'firstName', header: 'First Name', getValue: firstName },
+      { key: 'payDate', header: 'Pay Date', getValue: (_, c) => c.periodEnd },
+      { key: 'hours', header: 'Hours', getValue: (r) => h(r.regular) },
       { key: 'earningsCode', header: 'Earnings Code', getValue: () => 'REG' },
-      { key: 'otHours', header: 'OT Hours', getValue: (r) => r.overtimeHours.toFixed(2) },
-      { key: 'otEarningsCode', header: 'OT Earnings Code', getValue: (r) => r.overtimeHours > 0 ? 'OT' : '' },
+      { key: 'otHours', header: 'OT Hours', getValue: (r) => h(r.overtime) },
+      { key: 'otEarningsCode', header: 'OT Earnings Code', getValue: (r) => code(r.overtime, 'OT') },
+      { key: 'ptoHours', header: 'PTO Hours', getValue: (r) => h(r.pto) },
+      { key: 'ptoEarningsCode', header: 'PTO Earnings Code', getValue: (r) => code(r.pto, 'PTO') },
+      { key: 'sickHours', header: 'Sick Hours', getValue: (r) => h(r.sick) },
+      { key: 'sickEarningsCode', header: 'Sick Earnings Code', getValue: (r) => code(r.sick, 'SICK') },
+      { key: 'holidayHours', header: 'Holiday Hours', getValue: (r) => h(r.holiday) },
+      { key: 'holidayEarningsCode', header: 'Holiday Earnings Code', getValue: (r) => code(r.holiday, 'HOL') },
     ],
   },
   {
     id: 'gusto',
     name: 'Gusto',
-    description: 'Gusto bulk hours import format — email-based employee matching.',
+    description: 'Gusto bulk hours import — email-based employee matching; regular, overtime, PTO, sick and holiday hours.',
     fileExtension: 'csv',
     delimiter: ',',
     dateFormat: 'YYYY-MM-DD',
     columns: [
       { key: 'employeeEmail', header: 'employee_email', getValue: (r) => r.employeeEmail },
       { key: 'employeeName', header: 'employee_name', getValue: (r) => r.employeeName },
-      { key: 'hours', header: 'hours', getValue: (r) => r.totalHours.toFixed(2) },
-      { key: 'periodStart', header: 'pay_period_start', getValue: (r) => r.periodStart },
-      { key: 'periodEnd', header: 'pay_period_end', getValue: (r) => r.periodEnd },
+      { key: 'regularHours', header: 'regular_hours', getValue: (r) => h(r.regular) },
+      { key: 'overtimeHours', header: 'overtime_hours', getValue: (r) => h(r.overtime) },
+      { key: 'ptoHours', header: 'pto_hours', getValue: (r) => h(r.pto) },
+      { key: 'sickHours', header: 'sick_hours', getValue: (r) => h(r.sick) },
+      { key: 'holidayHours', header: 'holiday_hours', getValue: (r) => h(r.holiday) },
+      { key: 'periodStart', header: 'pay_period_start', getValue: (_, c) => c.periodStart },
+      { key: 'periodEnd', header: 'pay_period_end', getValue: (_, c) => c.periodEnd },
     ],
   },
   {
     id: 'custom',
     name: 'Custom Format',
-    description: 'Configurable format — choose your own columns, headers, date format, and delimiter.',
+    description: 'Every column: billable split, regular, FLSA overtime, uncompensated overtime, leave, total paid and total recorded.',
     fileExtension: 'csv',
     delimiter: ',',
     dateFormat: 'YYYY-MM-DD',
     columns: [
       { key: 'employeeName', header: 'Employee Name', getValue: (r) => r.employeeName },
       { key: 'employeeEmail', header: 'Email', getValue: (r) => r.employeeEmail },
-      { key: 'totalHours', header: 'Total Hours', getValue: (r) => r.totalHours.toFixed(2) },
-      { key: 'billableHours', header: 'Billable Hours', getValue: (r) => r.billableHours.toFixed(2) },
-      { key: 'nonBillableHours', header: 'Non-Billable Hours', getValue: (r) => r.nonBillableHours.toFixed(2) },
-      { key: 'regularHours', header: 'Regular Hours', getValue: (r) => r.regularHours.toFixed(2) },
-      { key: 'overtimeHours', header: 'Overtime Hours', getValue: (r) => r.overtimeHours.toFixed(2) },
-      { key: 'periodStart', header: 'Period Start', getValue: (r) => r.periodStart },
-      { key: 'periodEnd', header: 'Period End', getValue: (r) => r.periodEnd },
+      { key: 'billableHours', header: 'Billable Hours', getValue: (r) => h(r.billable) },
+      { key: 'nonBillableHours', header: 'Non-Billable Hours', getValue: (r) => h(r.totalRecorded - r.billable) },
+      { key: 'regularHours', header: 'Regular Hours (worked)', getValue: (r) => h(r.regular) },
+      { key: 'overtimeHours', header: 'Overtime Hours (FLSA weekly)', getValue: (r) => h(r.overtime) },
+      { key: 'uncompensatedOvertime', header: 'Uncompensated Overtime (exempt)', getValue: (r) => h(r.uncompensatedOvertime) },
+      { key: 'ptoHours', header: 'PTO Hours', getValue: (r) => h(r.pto) },
+      { key: 'sickHours', header: 'Sick Hours', getValue: (r) => h(r.sick) },
+      { key: 'holidayHours', header: 'Holiday Hours', getValue: (r) => h(r.holiday) },
+      { key: 'unpaidLeave', header: 'Unpaid Leave Hours', getValue: (r) => h(r.unpaidLeave) },
+      { key: 'totalPaid', header: 'Total Paid Hours', getValue: (r) => h(r.totalPaid) },
+      { key: 'totalRecorded', header: 'Total Recorded Hours', getValue: (r) => h(r.totalRecorded) },
+      { key: 'periodStart', header: 'Period Start', getValue: (_, c) => c.periodStart },
+      { key: 'periodEnd', header: 'Period End', getValue: (_, c) => c.periodEnd },
     ],
   },
 ];
 
 // ---------------------------------------------------------------------------
-// Aggregation Logic
+// CSV generation
 // ---------------------------------------------------------------------------
 
-const DEFAULT_REGULAR_HOURS_THRESHOLD = 80; // Semi-monthly: 80 hours = full-time
+function csv(lines: string[][], delimiter: string): string {
+  return lines.map((cells) => cells.map((v) => escapeCsvField(v, delimiter)).join(delimiter)).join('\n');
+}
 
-/**
- * Aggregate raw timesheet entries into per-employee totals for a period.
- */
-export function aggregateEntriesByEmployee(
-  entries: TimesheetSyncEntry[],
-  dateFormat: string,
-  regularHoursThreshold: number = DEFAULT_REGULAR_HOURS_THRESHOLD
-): AggregatedEmployeeHours[] {
-  // Group entries by employee
-  const byEmployee = new Map<string, TimesheetSyncEntry[]>();
-  for (const entry of entries) {
-    const existing = byEmployee.get(entry.userId) ?? [];
-    existing.push(entry);
-    byEmployee.set(entry.userId, existing);
-  }
+/** A vendor/custom payroll CSV for the range [periodStart, periodEnd]. */
+export function generatePayrollCSV(rows: PayrollRow[], format: PayrollFormatConfig, periodStart: CalendarDate, periodEnd: CalendarDate): string {
+  const ctx = { periodStart: formatCalendarDate(periodStart, format.dateFormat), periodEnd: formatCalendarDate(periodEnd, format.dateFormat) };
+  return csv([format.columns.map((c) => c.header), ...rows.map((r) => format.columns.map((c) => c.getValue(r, ctx)))], format.delimiter);
+}
 
-  const aggregated: AggregatedEmployeeHours[] = [];
+export interface DailyDetailRow {
+  employeeName: string;
+  employeeEmail: string;
+  date: CalendarDate;
+  workweekStart: CalendarDate;
+  worked: number;
+  regular: number;
+  overtime: number;
+  uncompensatedOvertime: number;
+  pto: number;
+  sick: number;
+  holiday: number;
+  unpaidLeave: number;
+}
 
-  for (const [userId, empEntries] of byEmployee) {
-    const totalHours = empEntries.reduce((sum, e) => sum + e.hours, 0);
-    const billableHours = empEntries.filter((e) => e.isBillable).reduce((sum, e) => sum + e.hours, 0);
-    const nonBillableHours = totalHours - billableHours;
-    const regularHours = Math.min(totalHours, regularHoursThreshold);
-    const overtimeHours = Math.max(0, totalHours - regularHoursThreshold);
+export const DAILY_DETAIL_HEADERS = [
+  'Employee Name', 'Email', 'Date', 'Worked Hours', 'Regular Hours', 'Overtime Hours (FLSA weekly)',
+  'Uncompensated Overtime (exempt)', 'PTO Hours', 'Sick Hours', 'Holiday Hours', 'Unpaid Leave Hours', 'Workweek Start',
+];
 
-    // Find period boundaries from entries
-    const dates = empEntries.map((e) => e.entryDate);
-    const minDate = min(...dates);
-    const maxDate = max(...dates);
+/** The Daily hours detail CSV: one row per employee per reported date. */
+export function generateDailyDetailCSV(days: DailyDetailRow[]): string {
+  return csv([DAILY_DETAIL_HEADERS, ...days.map((d) => [
+    d.employeeName, d.employeeEmail, d.date, h(d.worked), h(d.regular), h(d.overtime), h(d.uncompensatedOvertime),
+    h(d.pto), h(d.sick), h(d.holiday), h(d.unpaidLeave), d.workweekStart,
+  ])], ',');
+}
 
-    aggregated.push({
-      employeeName: empEntries[0].employeeName,
-      employeeEmail: empEntries[0].employeeEmail,
-      totalHours: Math.round(totalHours * 100) / 100,
-      regularHours: Math.round(regularHours * 100) / 100,
-      overtimeHours: Math.round(overtimeHours * 100) / 100,
-      billableHours: Math.round(billableHours * 100) / 100,
-      nonBillableHours: Math.round(nonBillableHours * 100) / 100,
-      periodStart: formatCalendarDate(minDate, dateFormat),
-      periodEnd: formatCalendarDate(maxDate, dateFormat),
-      entries: empEntries,
-    });
-  }
-
-  // Sort by employee name
-  aggregated.sort((a, b) => a.employeeName.localeCompare(b.employeeName));
-
-  return aggregated;
+/** "payroll-adp-flsa-weekly-overtime-2026-10-01-to-2026-10-15.csv" */
+export function payrollFilename(kind: PayrollFormat | 'daily-hours', periodStart: CalendarDate, periodEnd: CalendarDate): string {
+  return `payroll-${kind}-flsa-weekly-overtime-${periodStart}-to-${periodEnd}.csv`;
 }
 
 // ---------------------------------------------------------------------------
-// CSV Generation
-// ---------------------------------------------------------------------------
-
-function escapeCSV(value: string, delimiter: string): string {
-  if (value.includes(delimiter) || value.includes('"') || value.includes('\n')) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
-}
-
-/**
- * Generate a CSV string from aggregated employee data using a format config.
- */
-export function generatePayrollCSV(
-  data: AggregatedEmployeeHours[],
-  format: PayrollFormatConfig
-): string {
-  const { columns, delimiter } = format;
-
-  // Header row
-  const header = columns.map((c) => escapeCSV(c.header, delimiter)).join(delimiter);
-
-  // Data rows
-  const rows = data.map((row) =>
-    columns.map((c) => escapeCSV(c.getValue(row), delimiter)).join(delimiter)
-  );
-
-  return [header, ...rows].join('\n');
-}
-
-// ---------------------------------------------------------------------------
-// Connector Implementation
+// Connector (catalog entry; the export itself runs through src/server/actions/payroll-export.ts)
 // ---------------------------------------------------------------------------
 
 export const payrollExportConnector: IntegrationConnector = {
   metadata,
-
-  async generateExportFile(entries: TimesheetSyncEntry[], format: string) {
-    const formatConfig = PAYROLL_FORMATS.find((f) => f.id === format);
-    if (!formatConfig) {
-      throw new Error(`Unknown payroll format: ${format}. Available: ${PAYROLL_FORMATS.map((f) => f.id).join(', ')}`);
-    }
-
-    const aggregated = aggregateEntriesByEmployee(entries, formatConfig.dateFormat);
-    const csvContent = generatePayrollCSV(aggregated, formatConfig);
-
-    const timestamp = dayjs().format('YYYY-MM-DD');
-    const filename = `payroll-export-${format}-${timestamp}.${formatConfig.fileExtension}`;
-
-    return {
-      content: csvContent,
-      filename,
-      mimeType: 'text/csv;charset=utf-8;',
-    };
-  },
 };

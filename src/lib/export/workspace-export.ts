@@ -7,6 +7,10 @@ import { Zip, ZipDeflate } from 'fflate';
 import { users, chargeCodes, clins, slins, indirectChargeCodes, timesheetEntries } from '@/db/schema';
 import { EXPORT_TABLES, type ExportTableConfig } from './allowlists';
 import { buildManifest, buildReadme, TIMESHEET_COLUMNS } from './manifest';
+import { FORMULA_PATTERN } from '@/lib/csv/escape';
+
+/** Formula-injection guard (one definition: src/lib/csv/escape.ts), re-exported for the export's callers and tests. */
+export { FORMULA_PATTERN };
 
 /**
  * Full workspace export builder (feature-plan-terms-compliance-fixes.md §5.2, R8). Used by the export route and
@@ -22,8 +26,6 @@ import { buildManifest, buildReadme, TIMESHEET_COLUMNS } from './manifest';
 const BATCH_SIZE = 5000;
 const BOM = '﻿';
 const CRLF = '\r\n';
-/** Formula-injection guard: prefix `'` to cells starting with = + @ tab CR, or `-` unless it's a plain number. */
-export const FORMULA_PATTERN = /^[=+@\t\r]|^-(?!\d+(\.\d+)?$)/;
 const MAX_ENTRIES = 65_000;            // zip limit 65,535 without Zip64
 const MAX_BYTES = 4 * 1024 ** 3 - 64 * 1024 ** 2; // stay under 4 GiB (no Zip64), with headroom for headers
 

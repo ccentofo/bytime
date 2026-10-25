@@ -1,6 +1,8 @@
+import { escapeCsvField as escapeCSV } from '@/lib/csv/escape';
+
 /**
  * Generate a CSV string from an array of objects.
- * Handles escaping commas, quotes, and newlines per RFC 4180.
+ * Escaping (RFC 4180, CR included) and the formula guard: src/lib/csv/escape.ts.
  */
 export function generateCsv<T extends object>(
   data: T[],
@@ -13,13 +15,6 @@ export function generateCsv<T extends object>(
   );
 
   return [header, ...rows].join('\n');
-}
-
-function escapeCSV(value: string): string {
-  if (value.includes(',') || value.includes('"') || value.includes('\n')) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
 }
 
 /**

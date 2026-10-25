@@ -2,9 +2,9 @@ import type {
   IntegrationConnector,
   ConnectorMetadata,
   OAuthConfig,
+  PayrollSyncInput,
   SyncContext,
   SyncResult,
-  TimesheetSyncEntry,
 } from '../types';
 import {
   exchangeGustoCode,
@@ -17,10 +17,7 @@ import {
 import { getDbForWrite } from '@/db';
 import { integrationSyncRecords } from '@/db/schema';
 import { safeErrorMessage } from '@/server/internal/import-errors';
-import dayjs from 'dayjs';
-import {
-  aggregateEntriesByEmployee,
-} from './payroll-export';
+import { FLSA_LABEL } from './payroll-export';
 
 // ---------------------------------------------------------------------------
 // Connector Metadata
@@ -143,69 +140,57 @@ export const gustoConnector: IntegrationConnector = {
     return fetchGustoEmployees(accessToken, companyId);
   },
 
-  async pushTimesheetEntries(context: SyncContext, entries: TimesheetSyncEntry[]): Promise<SyncResult> {
-  const db = await getDbForWrite();
+  /**
+   * certified-outputs C7: records each employee's FLSA weekly-overtime totals (from payroll-data, routed by
+   * executeSyncOperation) as a sync record for the payroll admin. Still no Gusto API call — a real integration is out
+   * of scope (none existed before).
+   */
+  async pushPayroll(context: SyncContext, payroll: PayrollSyncInput): Promise<SyncResult> {
+    const db = await getDbForWrite();
     const employeeMappings = context.mappings.get('employee') ?? new Map();
 
     const result: SyncResult = { pushed: 0, failed: 0, skipped: 0, errors: [] };
 
-    // Aggregate entries by employee (Gusto wants totals, not daily rows)
-    const aggregated = aggregateEntriesByEmployee(entries, 'YYYY-MM-DD');
-
-    for (const emp of aggregated) {
-      // Find the ByTime user ID from the first entry
-      const bytimeUserId = emp.entries[0]?.userId;
-      if (!bytimeUserId) {
-        result.skipped++;
-        continue;
-      }
-
-      const gustoEmployeeId = employeeMappings.get(bytimeUserId);
+    for (const emp of payroll.employees) {
+      const gustoEmployeeId = employeeMappings.get(emp.userId);
       if (!gustoEmployeeId) {
         result.skipped++;
         result.errors.push({
-          bytimeEntityId: bytimeUserId,
+          bytimeEntityId: emp.userId,
           error: `Employee "${emp.employeeName}" is not mapped to a Gusto employee. Skipping.`,
         });
         continue;
       }
 
-      // Note: Gusto's time tracking API varies by plan.
-      // For the MVP, we log the aggregated data as a sync record.
-      // The actual Gusto API call depends on whether the company has
-      // Gusto's time tracking module enabled. If not, the data is
-      // informational for the payroll admin to review.
-      //
-      // When Gusto's time tracking is enabled, use:
-      // POST /v1/companies/{company_id}/employees/{employee_id}/time_off_requests
-      // or the newer payrolls API to set hours.
-
       try {
-        // For now, record the sync as successful — the data is available
-        // in the sync log for the payroll admin to reference when running payroll.
         result.pushed++;
 
         await db.insert(integrationSyncRecords).values({
           syncLogId: context.syncLogId,
           bytimeEntityType: 'employee_hours',
-          bytimeEntityId: bytimeUserId,
+          bytimeEntityId: emp.userId,
           externalEntityId: gustoEmployeeId,
           status: 'success',
           errorMessage: null,
           requestPayload: JSON.stringify({
+            method: FLSA_LABEL,
             employeeName: emp.employeeName,
-            totalHours: emp.totalHours,
             regularHours: emp.regularHours,
             overtimeHours: emp.overtimeHours,
-            periodStart: emp.periodStart,
-            periodEnd: emp.periodEnd,
+            ptoHours: emp.ptoHours,
+            sickHours: emp.sickHours,
+            holidayHours: emp.holidayHours,
+            uncompensatedOvertimeHours: emp.uncompensatedOvertimeHours,
+            flagged: emp.flagged,
+            periodStart: payroll.periodStart,
+            periodEnd: payroll.periodEnd,
           }),
           responsePayload: null,
         });
       } catch (error) {
         result.failed++;
         result.errors.push({
-          bytimeEntityId: bytimeUserId,
+          bytimeEntityId: emp.userId,
           // Audit R7: shown in the admin sync log and the export — never a raw DB error (SQL + params).
           error: safeErrorMessage(error, { fallback: 'Could not sync this employee.', logLabel: 'Gusto sync record failed:' }),
         });

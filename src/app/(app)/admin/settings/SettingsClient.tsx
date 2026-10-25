@@ -13,13 +13,14 @@ import {
   Button,
   Alert,
   Badge,
+  Modal,
 } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
 import { IconAlertCircle, IconCheck, IconClock } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
 import { updatePayPeriodConfig, getValidScheduleChangeDates, type ConfigHistoryRow, type ScheduleChangeOptions, type UpdatePayPeriodConfigResult } from '@/server/actions/pay-period-config';
-import { updateWorkspaceTimezone } from '@/server/actions/workspace-settings';
+import { updateWorkspaceTimezone, updateWorkweekStartDay } from '@/server/actions/workspace-settings';
 import type { PeriodConfig, PeriodType } from '@/lib/date-utils';
 import { formatDate } from '@/lib/format';
 import { dayOfWeek, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -30,6 +31,8 @@ interface Props {
   initialConfig: PeriodConfig;
   pendingChange: ConfigHistoryRow | null;
   initialTimezone: string;
+  /** certified-outputs C7: FLSA workweek start day (0 = Sunday), null while unset. */
+  initialWorkweekStartDay: number | null;
 }
 
 const BROWSER_TIMEZONES: string[] = typeof Intl.supportedValuesOf === 'function'
@@ -66,7 +69,7 @@ const PERIOD_TYPE_LABELS: Record<string, string> = {
   monthly: 'Monthly',
 };
 
-export function SettingsClient({ initialConfig, pendingChange, initialTimezone }: Props) {
+export function SettingsClient({ initialConfig, pendingChange, initialTimezone, initialWorkweekStartDay }: Props) {
   const [periodType, setPeriodType] = useState<PeriodType>(initialConfig.periodType);
   const [anchorDate, setAnchorDate] = useState<CalendarDate | null>(initialConfig.anchorDate);
   const [weekStartDay, setWeekStartDay] = useState<string>(String(initialConfig.weekStartDay));
@@ -128,6 +131,22 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
         color: 'success',
         icon: <IconCheck size={16} />,
       });
+    });
+  }
+
+  const [workweekDay, setWorkweekDay] = useState<string | null>(initialWorkweekStartDay === null ? null : String(initialWorkweekStartDay));
+  const [savedWorkweekDay, setSavedWorkweekDay] = useState<number | null>(initialWorkweekStartDay);
+  const [confirmWorkweek, setConfirmWorkweek] = useState(false);
+  const [isWorkweekPending, startWorkweekTransition] = useTransition();
+
+  function saveWorkweek() {
+    if (workweekDay === null) return;
+    setConfirmWorkweek(false);
+    startWorkweekTransition(async () => {
+      const result = await runAction(updateWorkweekStartDay(parseInt(workweekDay, 10)), { errorTitle: 'Save failed' });
+      if (!result.ok) return;
+      setSavedWorkweekDay(result.data);
+      notifications.show({ title: 'Workweek start day saved', message: `FLSA workweeks now start on ${DAY_NAMES[result.data]}.`, color: 'success', icon: <IconCheck size={16} /> });
     });
   }
 
@@ -197,6 +216,42 @@ export function SettingsClient({ initialConfig, pendingChange, initialTimezone }
             Save Timezone
           </WriteButton>
         </Group>
+      </Paper>
+
+      <Paper withBorder p="lg" radius="md" mb="xl">
+        <Title order={4} mb="md">Workweek (FLSA overtime)</Title>
+        <Text size="sm" c="dimmed" mb="sm">
+          The day your fixed 7-day workweek starts. Payroll export computes FLSA weekly overtime (hours worked over 40
+          in a workweek) from it, and stays unavailable until it is set.
+        </Text>
+        <Group align="flex-end">
+          <Select
+            data={DAY_NAMES.map((d, i) => ({ value: String(i), label: d }))}
+            value={workweekDay}
+            onChange={setWorkweekDay}
+            placeholder="Not set"
+            allowDeselect={false}
+            w={200}
+            data-testid="workweek-start-day"
+          />
+          <WriteButton
+            onClick={() => (savedWorkweekDay === null ? saveWorkweek() : setConfirmWorkweek(true))}
+            loading={isWorkweekPending}
+            disabled={workweekDay === null || parseInt(workweekDay, 10) === savedWorkweekDay}
+          >
+            Save Workweek
+          </WriteButton>
+        </Group>
+        <Modal opened={confirmWorkweek} onClose={() => setConfirmWorkweek(false)} title="Change the workweek?">
+          <Text size="sm" mb="md" data-testid="workweek-change-warning">
+            Federal law (FLSA, 29 CFR 778.105) requires a fixed workweek. Change it only for a permanent business reason
+            — never to avoid overtime. The change is recorded in the admin change log.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setConfirmWorkweek(false)}>Cancel</Button>
+            <Button color="red" onClick={saveWorkweek}>Change workweek</Button>
+          </Group>
+        </Modal>
       </Paper>
 
       <Paper withBorder p="lg" radius="md" mb="xl">
