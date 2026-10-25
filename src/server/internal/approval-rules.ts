@@ -154,7 +154,13 @@ async function lastSelfApprovalState(db: Pick<ReadDb, 'select'> | TenantWriter):
  * change (`enabled`/`disabled`, with the reason and the active-admin count). Call in the SAME transaction as every write
  * that changes users.role, users.is_active or users.approver_id (a static test checks the writers).
  */
-export async function recomputeSelfApproval(tx: TenantWriter, actorId: string, reason: string): Promise<SelfApprovalChange[]> {
+export async function recomputeSelfApproval(
+  tx: TenantWriter,
+  actorId: string,
+  reason: string,
+  /** Fix round 2, R2: the facts BEFORE the write (writers pass them; baselines — provisioning, the seeder — don't). */
+  opts: { before?: ApprovalFacts } = {},
+): Promise<SelfApprovalChange[]> {
   const facts = await loadApprovalFacts(tx);
   const last = await lastSelfApprovalState(tx);
   const candidates = new Set<string>([
@@ -165,15 +171,19 @@ export async function recomputeSelfApproval(tx: TenantWriter, actorId: string, r
   const changes: SelfApprovalChange[] = [];
   for (const adminId of [...candidates].sort()) {
     const now = selfApprovalAvailable(facts, adminId);
-    const before = last.get(adminId)?.enabled ?? false;
+    const prior = last.get(adminId);
+    const before = prior?.enabled ?? false;
     if (now === before) continue;
+    // R2: an admin with NO record yet whose self-approval was already available before this write (a workspace from
+    // before C2) — this row records the existing state; it is not a switch, so it carries a baseline reason (no notice).
+    const existingState = !prior && now && opts.before !== undefined && selfApprovalAvailable(opts.before, adminId);
     const [row] = await tx.insert(adminChangeLog).values({
       actorId,
       entity: 'self_approval',
       entityId: adminId,
       action: now ? 'enabled' : 'disabled',
       oldValue: { enabled: before },
-      newValue: { enabled: now, reason, activeAdminCount },
+      newValue: { enabled: now, reason: existingState ? EXISTING_STATE_REASON : reason, activeAdminCount },
     }).returning({ id: adminChangeLog.id });
     changes.push({ adminId, enabled: now, logId: row.id });
   }
@@ -197,7 +207,9 @@ export async function selfApprovalContext(tx: TenantWriter, adminId: string): Pr
 }
 
 /** Reasons written by a baseline recompute (provisioning, the demo seeder) — not a switch the admin needs to hear about. */
-export const BASELINE_SELF_APPROVAL_REASONS = ['workspace created', 'demo workspace seeded'];
+/** R2: the first row for an admin whose self-approval was already on (pre-C2 workspace) — recorded, not switched. */
+export const EXISTING_STATE_REASON = 'existing state recorded';
+export const BASELINE_SELF_APPROVAL_REASONS = ['workspace created', 'demo workspace seeded', EXISTING_STATE_REASON];
 
 /**
  * For the "Self-approval is back on" notice: the log row that switched this admin's self-approval ON, when it is on now,
@@ -222,8 +234,8 @@ export async function currentSelfApprovalOn(db: Pick<ReadDb, 'select'>, adminId:
 export type EligibilitySnapshot = Map<string, { userId: string; approvers: Set<string>; designee: string | null }>;
 
 /** Who may decide each SUBMITTED period right now, and the submitter's effective designee. */
-export async function snapshotSubmittedEligibility(tx: Pick<ReadDb, 'select'> | TenantWriter): Promise<EligibilitySnapshot> {
-  const facts = await loadApprovalFacts(tx);
+export async function snapshotSubmittedEligibility(tx: Pick<ReadDb, 'select'> | TenantWriter, known?: ApprovalFacts): Promise<EligibilitySnapshot> {
+  const facts = known ?? await loadApprovalFacts(tx);
   const submitted = await tx.select({ id: timesheetPeriods.id, userId: timesheetPeriods.userId })
     .from(timesheetPeriods).where(eq(timesheetPeriods.status, 'submitted'));
   return new Map(submitted.map((p) => [p.id, {

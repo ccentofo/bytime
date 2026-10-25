@@ -42,9 +42,10 @@ export async function createUser(data: {
     const { user, rerouted } = await db.transaction(async (tx) => {
       await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
       await assertSeatsAvailable(1, tx);
-      const before = await snapshotSubmittedEligibility(tx);
+      const beforeFacts = await loadApprovalFacts(tx);
+      const before = await snapshotSubmittedEligibility(tx, beforeFacts);
       const [row] = await tx.insert(users).values(validatedData).returning(SAFE_USER_COLUMNS);
-      await recomputeSelfApproval(tx, actor.id, `${row.fullName} added (${row.role})`);
+      await recomputeSelfApproval(tx, actor.id, `${row.fullName} added (${row.role})`, { before: beforeFacts });
       return { user: row, rerouted: newlyEligible(before, await snapshotSubmittedEligibility(tx)) };
     });
     await notifyReroutedApprovals(rerouted);
@@ -174,7 +175,8 @@ export async function updateUser(id: string, data: {
       }
 
       // certified-outputs C2 (CO-D19): self-approval switch + re-routing, in this same transaction.
-      const before = await snapshotSubmittedEligibility(tx);
+      const beforeFacts = await loadApprovalFacts(tx);
+      const before = await snapshotSubmittedEligibility(tx, beforeFacts);
       const rows = await tx.update(users).set(updateData).where(eq(users.id, id)).returning(SAFE_USER_COLUMNS);
       const changed = rows[0];
       const reason = !changed ? 'user update'
@@ -182,7 +184,7 @@ export async function updateUser(id: string, data: {
         : data.isActive === true ? `${changed.fullName} reactivated`
         : data.role !== undefined ? `${changed.fullName}'s role changed to ${changed.role}`
         : `${changed.fullName} updated`;
-      await recomputeSelfApproval(tx, actor.id, reason);
+      await recomputeSelfApproval(tx, actor.id, reason, { before: beforeFacts });
       return { row: changed, rerouted: newlyEligible(before, await snapshotSubmittedEligibility(tx)) };
     });
 
@@ -208,14 +210,15 @@ export async function createUserWithPassword(data: {
     const { user, rerouted } = await db.transaction(async (tx) => {
       await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
       await assertSeatsAvailable(1, tx);
-      const before = await snapshotSubmittedEligibility(tx);
+      const beforeFacts = await loadApprovalFacts(tx);
+      const before = await snapshotSubmittedEligibility(tx, beforeFacts);
       const [row] = await tx.insert(users).values({
         email: validatedEmail,
         fullName: validatedName,
         role: validatedRole,
         passwordHash: hash,
       }).returning(SAFE_USER_COLUMNS);
-      await recomputeSelfApproval(tx, actor.id, `${row.fullName} added (${row.role})`);
+      await recomputeSelfApproval(tx, actor.id, `${row.fullName} added (${row.role})`, { before: beforeFacts });
       return { user: row, rerouted: newlyEligible(before, await snapshotSubmittedEligibility(tx)) };
     });
     await notifyReroutedApprovals(rerouted);
@@ -252,13 +255,14 @@ export async function setUserApprover(userId: string, approverId: string | null)
       }
       if (target.approverId === approverId) return [];
 
-      const before = await snapshotSubmittedEligibility(tx);
+      const beforeFacts = await loadApprovalFacts(tx);
+      const before = await snapshotSubmittedEligibility(tx, beforeFacts);
       await tx.update(users).set({ approverId, updatedAt: new Date() }).where(eq(users.id, userId));
       await tx.insert(adminChangeLog).values({
         actorId: actor.id, entity: 'user', entityId: userId, action: 'approver_changed',
         oldValue: { approverId: target.approverId }, newValue: { approverId },
       });
-      await recomputeSelfApproval(tx, actor.id, `${target.fullName}'s designated approver changed`);
+      await recomputeSelfApproval(tx, actor.id, `${target.fullName}'s designated approver changed`, { before: beforeFacts });
       return newlyEligible(before, await snapshotSubmittedEligibility(tx));
     });
     await notifyReroutedApprovals(rerouted);

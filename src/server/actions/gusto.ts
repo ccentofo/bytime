@@ -7,7 +7,8 @@ import { eq } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { ensureValidGustoToken, fetchGustoEmployees } from '@/lib/integrations/connectors/gusto-api';
 import { executeSyncOperation } from '@/lib/integrations/sync-engine';
-import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import type { CalendarDate } from '@/lib/calendar-date';
+import { validateCalendarDate } from '@/lib/validation';
 import { UserFacingError } from '@/lib/errors';
 import { userAction } from '@/lib/action-result';
 
@@ -56,7 +57,8 @@ export async function triggerGustoSync(data: {
   return userAction(async () => {
     const actor = await requireAdminFresh();
     const window = data.periodStart && data.periodEnd
-      ? { periodStart: parseCalendarDate(data.periodStart), periodEnd: parseCalendarDate(data.periodEnd) }
+      // R4: user dates → a user-facing validation error, never parseCalendarDate's plain Error.
+      ? { periodStart: validateCalendarDate(data.periodStart, 'Start date'), periodEnd: validateCalendarDate(data.periodEnd, 'End date') }
       : await getDefaultSyncWindow();
     return executeSyncOperation(
       data.connectionId,

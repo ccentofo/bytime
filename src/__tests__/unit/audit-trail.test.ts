@@ -166,6 +166,21 @@ describe('F12 — audit reads', () => {
     expect(events.map((e) => e.id)).toEqual(['in', 'overlap', 'nosnap']); // 08-25 + 15 days covers 09-05..09-08; 08-28 + 15 → 09-11
   });
 
+  it('R3: truncated when more than 500 events overlap, and when the 5,000-candidate prefetch itself caps', async () => {
+    db.onSelect(periodEvents, Array.from({ length: 501 }, (_, i) => ev(`e${i}`, '2026-09-16', 15)));
+    expect(await getAuditPeriodEvents({ startDate: '2026-09-05' as never })).toMatchObject({ truncated: true });
+    db.reset();
+    // 5,000 candidates, none overlapping (ended before the range): nothing shown, but more may exist beyond the cap.
+    db.onSelect(periodEvents, Array.from({ length: 5000 }, (_, i) => ev(`b${i}`, '2026-08-01', 15)));
+    expect(await getAuditPeriodEvents({ startDate: '2026-09-05' as never })).toEqual({ events: [], truncated: true });
+    db.reset();
+    db.onSelect(periodEvents, [ev('in', '2026-09-16', 15)]);
+    expect(await getAuditPeriodEvents({ startDate: '2026-09-05' as never })).toMatchObject({ truncated: false });
+    db.reset();
+    db.onSelect(periodEvents, Array.from({ length: 501 }, (_, i) => ev(`n${i}`, '2026-09-16', 15)));
+    expect(await getAuditPeriodEvents({})).toMatchObject({ truncated: true }); // no date filter: the 501-row fetch
+  });
+
   it('every id / date input is validated after the guard', async () => {
     await expect(getAuditEntries({ userId: 'x' })).rejects.toThrow(/Employee is not a valid identifier/);
     await expect(getAuditEntries({ clinId: 'x' })).rejects.toThrow(/CLIN is not a valid identifier/);

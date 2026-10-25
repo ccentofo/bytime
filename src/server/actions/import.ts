@@ -5,10 +5,10 @@ import { users, contracts, clins, slins, laborCategories, userAssignments } from
 import { eq, and, inArray } from 'drizzle-orm';
 import { requireAdminFresh } from '@/lib/session';
 import { assertSeatsAvailable } from '@/server/internal/seats';
-import { lockUserRulesExclusive, newlyEligible, recomputeSelfApproval, snapshotSubmittedEligibility } from '@/server/internal/approval-rules';
+import { loadApprovalFacts, lockUserRulesExclusive, newlyEligible, recomputeSelfApproval, snapshotSubmittedEligibility } from '@/server/internal/approval-rules';
+import { generateImportPassword } from '@/server/internal/generated-password';
 import { notifyReroutedApprovals } from '@/server/internal/submission-notify';
 import bcrypt from 'bcryptjs';
-import crypto from 'crypto';
 import { importRowMessage, parseImportDate } from '@/server/internal/import-errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
 
@@ -58,7 +58,8 @@ export async function bulkImportEmployees(rows: EmployeeImportRow[]): Promise<Ac
       }
 
       const result: ImportResult = { created: 0, skipped: 0, errors: [], generatedPasswords: [] };
-      const before = await snapshotSubmittedEligibility(tx);
+      const beforeFacts = await loadApprovalFacts(tx);
+      const before = await snapshotSubmittedEligibility(tx, beforeFacts);
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
@@ -73,7 +74,7 @@ export async function bulkImportEmployees(rows: EmployeeImportRow[]): Promise<Ac
           }
 
           // Generate password
-          const password = generateRandomPassword();
+          const password = generateImportPassword();
           const hash = await bcrypt.hash(password, 4); // Low cost for bulk
 
           const role = (['admin', 'supervisor', 'employee'].includes(row.role?.toLowerCase()))
@@ -98,7 +99,7 @@ export async function bulkImportEmployees(rows: EmployeeImportRow[]): Promise<Ac
         }
       }
 
-      if (result.created > 0) await recomputeSelfApproval(tx, actor.id, `${result.created} user(s) imported`);
+      if (result.created > 0) await recomputeSelfApproval(tx, actor.id, `${result.created} user(s) imported`, { before: beforeFacts });
       return { result, rerouted: result.created > 0 ? newlyEligible(before, await snapshotSubmittedEligibility(tx)) : [] };
     });
     await notifyReroutedApprovals(rerouted);
@@ -333,17 +334,4 @@ export async function bulkImportAssignments(rows: AssignmentImportRow[]): Promis
 
     return result;
   });
-}
-
-// ---------------------------------------------------------------------------
-// Helper
-// ---------------------------------------------------------------------------
-
-function generateRandomPassword(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$';
-  let password = '';
-  for (let i = 0; i < 12; i++) {
-    password += chars.charAt(crypto.randomInt(chars.length)); // CSPRNG, not Math.random
-  }
-  return password;
 }

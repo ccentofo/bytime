@@ -320,6 +320,16 @@ describe('approver rules (certified-outputs C2)', () => {
     expect((event.approvalContext as { selfApprovalEnabledAt: string }).selfApprovalEnabledAt).toBeTruthy();
   });
 
+  it('R2: a pre-C2 sole-admin workspace (no self_approval rows) — an unrelated user write records the state, no "back on" notice', async () => {
+    const emp = await createTestUser({ role: 'employee' });
+    expect(await logRows('self_approval')).toEqual([]);
+    actingAs(admin);
+    await expectOk(updateUser(emp.id, { fullName: 'Renamed Employee' }));
+    const rows = (await logRows('self_approval')).filter((r) => r.entityId === admin.id);
+    expect(rows).toEqual([expect.objectContaining({ action: 'enabled', newValue: expect.objectContaining({ reason: 'existing state recorded' }) })]);
+    expect((await getApprovalNotices()).selfApprovalBackOn).toBeNull();
+  });
+
   it('F2: a workspace with two admins and NO prior self_approval rows → deactivate one → the notice shows for the other', async () => {
     const admin2 = await createTestUser({ role: 'admin' });
     expect(await logRows('self_approval')).toEqual([]);

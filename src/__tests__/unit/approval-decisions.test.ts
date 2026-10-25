@@ -42,7 +42,7 @@ import * as dbModule from '@/db';
 import { adminChangeLog, periodEvents, timesheetPeriods, userAssignments, users } from '@/db/schema';
 import type { FakeControlDb } from '../helpers/fake-control-db';
 import { approvalLabel, type ApprovalLabelEvent } from '@/server/internal/approval-label';
-import { currentSelfApprovalOn, recomputeSelfApproval } from '@/server/internal/approval-rules';
+import { currentSelfApprovalOn, EXISTING_STATE_REASON, recomputeSelfApproval, type ApprovalFacts } from '@/server/internal/approval-rules';
 import { approvePeriod, rejectPeriod } from '@/server/actions/periods';
 
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
@@ -238,6 +238,43 @@ describe('approve / reject order and "approve exactly what was reviewed"', () =>
     expect(event).toMatchObject({ event: 'approved', actorId: 'adm', approvalContext: {
       selfApproved: true, activeAdminCount: 1, effectiveDesignee: null, selfApprovalEnabledAt: T.toISOString(), selfApprovalEnabledBy: 'adm',
     } });
+  });
+});
+
+describe('R2 — a pre-C2 workspace\'s first recorded state is not a switch', () => {
+  const facts = (...admins: string[]) => ({
+    users: new Map(admins.map((id) => [id, { id, role: 'admin', isActive: true, approverId: null }])),
+    clinsByUser: new Map(),
+  }) as unknown as ApprovalFacts;
+  const lastRow = () => db.inserts.filter((i) => i.table === adminChangeLog).at(-1)?.values as { action: string; newValue: { reason: string } } | undefined;
+
+  it('sole admin, NO prior self_approval row, an unrelated write → the row carries the baseline reason → no notice', async () => {
+    db.onSelect(users, [{ id: 'adm', role: 'admin', isActive: true, approverId: null }, { id: 'emp', role: 'employee', isActive: true, approverId: null }]);
+    db.onSelect(adminChangeLog, []);
+    db.onReturning('insert', adminChangeLog, [{ id: 'l0' }]);
+    await recomputeSelfApproval(db as never, 'adm', 'Pat Doe added (employee)', { before: facts('adm') });
+    expect(lastRow()).toMatchObject({ action: 'enabled', newValue: { reason: EXISTING_STATE_REASON } });
+    db.onSelect(users, [{ id: 'adm', role: 'admin', isActive: true, approverId: null }]);
+    db.onSelect(adminChangeLog, [{ id: 'l0', action: 'enabled', createdAt: T, newValue: lastRow()!.newValue }]);
+    expect(await currentSelfApprovalOn(db as never, 'adm')).toBeNull();
+  });
+
+  it('pre-C2 workspace, deactivating the SECOND admin → the real reason → the notice still shows', async () => {
+    db.onSelect(users, [{ id: 'adm', role: 'admin', isActive: true, approverId: null }, { id: 'adm2', role: 'admin', isActive: false, approverId: null }]);
+    db.onSelect(adminChangeLog, []);
+    db.onReturning('insert', adminChangeLog, [{ id: 'l0' }]);
+    await recomputeSelfApproval(db as never, 'adm', 'Second Admin deactivated', { before: facts('adm', 'adm2') });
+    expect(lastRow()).toMatchObject({ action: 'enabled', newValue: { reason: 'Second Admin deactivated' } });
+    db.onSelect(users, [{ id: 'adm', role: 'admin', isActive: true, approverId: null }]);
+    db.onSelect(adminChangeLog, [{ id: 'l0', action: 'enabled', createdAt: T, newValue: lastRow()!.newValue }]);
+    expect(await currentSelfApprovalOn(db as never, 'adm')).toEqual({ logId: 'l0', at: T });
+  });
+
+  it('every writer passes the facts from before its write (static)', async () => {
+    const users = readFileSync(path.join(ROOT, 'src/server/actions/users.ts'), 'utf8');
+    expect(users.match(/, \{ before: beforeFacts \}\);/g)).toHaveLength(4);
+    expect(users.match(/const before = await snapshotSubmittedEligibility\(tx, beforeFacts\);/g)).toHaveLength(4);
+    expect(readFileSync(path.join(ROOT, 'src/server/actions/import.ts'), 'utf8')).toMatch(/user\(s\) imported`, \{ before: beforeFacts \}\);/);
   });
 });
 

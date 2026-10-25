@@ -28,7 +28,8 @@ export const serializedBytes = (value: unknown): number => utf8.encode(JSON.stri
  */
 export function parseImportHours(value: unknown): number | null {
   const text = String(value ?? '').trim();
-  if (text === '') return null;
+  // R5: plain decimal only — Number() would also accept "0x8", "1e1", "Infinity".
+  if (!/^\d+(\.\d+)?$/.test(text)) return null;
   const n = Number(text);
   if (!Number.isFinite(n) || n < 0 || n > 24) return null;
   return Math.round(n * 100) / 100;

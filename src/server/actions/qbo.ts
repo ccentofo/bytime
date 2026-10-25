@@ -9,7 +9,8 @@ import { decrypt } from '@/lib/encryption';
 import { ensureValidToken, fetchQBOEmployees, fetchQBOCustomers, fetchQBOServiceItems, fetchQBOVendors, fetchQBOClasses } from '@/lib/integrations/connectors/qbo-api';
 import { executeSyncOperation } from '@/lib/integrations/sync-engine';
 import { createCostClassInternal, createChargeCodeInternal } from '@/server/internal/charge-codes';
-import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import type { CalendarDate } from '@/lib/calendar-date';
+import { validateCalendarDate } from '@/lib/validation';
 import { UserFacingError } from '@/lib/errors';
 import { userAction } from '@/lib/action-result';
 
@@ -155,7 +156,8 @@ export async function triggerQBOSync(data: {
   return userAction(async () => {
     const actor = await requireAdminFresh();
     const window = data.periodStart && data.periodEnd
-      ? { periodStart: parseCalendarDate(data.periodStart), periodEnd: parseCalendarDate(data.periodEnd) }
+      // R4: user dates → a user-facing validation error, never parseCalendarDate's plain Error.
+      ? { periodStart: validateCalendarDate(data.periodStart, 'Start date'), periodEnd: validateCalendarDate(data.periodEnd, 'End date') }
       : await getDefaultSyncWindow();
     return executeSyncOperation(
       data.connectionId,

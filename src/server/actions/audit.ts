@@ -115,6 +115,8 @@ export interface AuditPeriodEvent {
  */
 /** Rows shown per audit search; one more is fetched so a capped result says so (fix round 1, F12). */
 const AUDIT_ROW_LIMIT = 500;
+/** Candidate period events read for a date-filtered search before the exact overlap check (R3). */
+const EVENT_CANDIDATE_LIMIT = 5000;
 
 export async function getAuditEntries(filters: AuditFilters): Promise<{ entries: AuditEntry[]; truncated: boolean }> {
   const actor = await requireApprover();
@@ -339,7 +341,7 @@ export async function getAuditPeriodEvents(filters: Pick<AuditFilters, 'userId' 
       endDate ? lte(timesheetPeriods.periodStart, endDate) : undefined,
     ))
     .orderBy(desc(periodEvents.createdAt), desc(periodEvents.id))
-    .limit(startDate ? 5000 : AUDIT_ROW_LIMIT + 1);
+    .limit(startDate ? EVENT_CANDIDATE_LIMIT : AUDIT_ROW_LIMIT + 1);
 
   const lengths = new Map<string, number>();
   const overlapping = [];
@@ -352,7 +354,8 @@ export async function getAuditPeriodEvents(filters: Pick<AuditFilters, 'userId' 
     }
     overlapping.push(r);
   }
-  const truncated = overlapping.length > AUDIT_ROW_LIMIT;
+  // R3: also truncated when the candidate prefetch itself hit its cap (more events may exist beyond it).
+  const truncated = overlapping.length > AUDIT_ROW_LIMIT || candidates.length === EVENT_CANDIDATE_LIMIT;
   const rows = overlapping.slice(0, AUDIT_ROW_LIMIT);
 
   // Names for actors and for whoever switched self-approval on (approval_context).
