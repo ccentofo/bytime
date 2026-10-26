@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, timestamp, boolean, pgEnum, uniqueIndex, integer, index, jsonb, date, smallint, check } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, timestamp, boolean, pgEnum, uniqueIndex, integer, index, jsonb, date, smallint, check, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 // Date columns below use `date(..., { mode: 'string' })` — Drizzle maps these to a plain JS
@@ -35,6 +35,10 @@ export const users = pgTable('users', {
   // R2-12: last accepted TOTP time-step (30s window), so a code can never be replayed even
   // within its own validity window. Nullable — no value yet means no code has been accepted.
   totpLastUsedStep: integer('totp_last_used_step'),
+  // feature-plan-certified-outputs.md C2 (CO-D5/CO-D12): the explicitly designated approver of a supervisor- or
+  // admin-role user. Honoured only while this user's role is supervisor/admin and the designee is an active
+  // admin/supervisor (src/server/internal/approval-rules.ts); otherwise ineffective but kept.
+  approverId: uuid('approver_id').references((): AnyPgColumn => users.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -82,9 +86,14 @@ export const indirectChargeCodes = pgTable('indirect_charge_codes', {
   description: text('description'),
   isActive: boolean('is_active').notNull().default(true),
   availableToAll: boolean('available_to_all').notNull().default(true), // if true, all employees can charge to this
+  // feature-plan-certified-outputs.md C7 (CO-D11/CO-D16): how a LEAVE code is paid in the payroll export. Required by
+  // the app when category = 'leave'; null on other categories (and on pre-existing custom leave codes until set).
+  leavePayType: varchar('leave_pay_type', { length: 10 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => [
+  check('indirect_charge_codes_leave_pay_type_check', sql`${table.leavePayType} IS NULL OR ${table.leavePayType} IN ('pto', 'sick', 'holiday', 'unpaid')`),
+]);
 
 // ---------------------------------------------------------------------------
 // Login Attempts (brute-force protection — tracks failed login attempts)
@@ -199,6 +208,8 @@ export const userLaborCategories = pgTable('user_labor_categories', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex('user_lcat_effective_unique_idx').on(table.userId, table.laborCategoryId, table.effectiveDate),
+  // feature-plan-certified-outputs.md C3: the cost-basis lookup (employee's assignments effective on a date).
+  index('idx_user_lcat_user_effective').on(table.userId, table.effectiveDate),
 ]);
 
 // ---------------------------------------------------------------------------
@@ -274,6 +285,11 @@ export const timesheetEntries = pgTable('timesheet_entries', {
   comment: text('comment'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy: uuid('created_by').references(() => users.id),
+  // feature-plan-certified-outputs.md C1 (CO-D1): provenance, set ONLY at insert (the table is append-only).
+  // 'app' = recorded in CadenzPoint; 'migration' = bulk-imported history (createdBy = the importing admin).
+  source: varchar('source', { length: 20 }).notNull().default('app'),
+  importBatchId: uuid('import_batch_id').references(() => importBatches.id),
+  originalMetadata: jsonb('original_metadata'), // imported rows: { enteredBy, enteredAt, reason, comment } verbatim
 }, (table) => [
   // Performance index: speeds up the MAX(revision_number) correlated subquery
   // used in every timesheet read query. Without this, each lookup scans the full table.
@@ -313,6 +329,9 @@ export const timesheetPeriods = pgTable('timesheet_periods', {
   // Structured snapshot of completeness/total-time warnings captured at submission time.
   // Advisory only — never blocks submission. Null if the client sent no snapshot.
   completenessSnapshot: jsonb('completeness_snapshot'),
+  // feature-plan-certified-outputs.md C2: incremented by every submission, so an approval applies to exactly the
+  // version the reviewer saw (approve/reject are conditional on it).
+  submissionCount: integer('submission_count').notNull().default(0),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -334,8 +353,54 @@ export const periodEvents = pgTable('period_events', {
   comment: text('comment'),
   completenessSnapshot: jsonb('completeness_snapshot'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  // feature-plan-certified-outputs.md C1: provenance, insert-time only. For 'migration' rows actor_id is the
+  // importing admin; the original reviewer is in original_metadata.
+  source: varchar('source', { length: 20 }).notNull().default('app'),
+  importBatchId: uuid('import_batch_id').references(() => importBatches.id),
+  originalMetadata: jsonb('original_metadata'),
+  // C2 (CO-D19): written only on a self-approval event — { selfApproved, activeAdminCount, effectiveDesignee,
+  // selfApprovalEnabledAt, selfApprovalEnabledBy }.
+  approvalContext: jsonb('approval_context'),
 }, (table) => [
   index('idx_period_events_period').on(table.periodId),
+]);
+
+// ---------------------------------------------------------------------------
+// Import Batches (feature-plan-certified-outputs.md C1 — append-only; one row per migration import batch,
+// inserted first in the batch transaction with its final counts; entries/period events reference it)
+// ---------------------------------------------------------------------------
+
+export const importBatches = pgTable('import_batches', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  kind: varchar('kind', { length: 10 }).notNull(), // 'entries' | 'periods'
+  sourceSystem: varchar('source_system', { length: 100 }).notNull(),
+  importedBy: uuid('imported_by').notNull().references(() => users.id),
+  importedAt: timestamp('imported_at', { withTimezone: true }).notNull().defaultNow(),
+  fileName: varchar('file_name', { length: 255 }),
+  rowCount: integer('row_count').notNull(),
+  importedCount: integer('imported_count').notNull(),
+  skippedCount: integer('skipped_count').notNull(),
+}, (table) => [
+  check('import_batches_kind_check', sql`${table.kind} IN ('entries', 'periods')`),
+]);
+
+// ---------------------------------------------------------------------------
+// Admin Change Log (feature-plan-certified-outputs.md C1 — append-only; written in the same transaction as the
+// change it records: charge-code labor category / deactivate / reactivate, workweek start day, approver
+// designation, self-approval switched on/off)
+// ---------------------------------------------------------------------------
+
+export const adminChangeLog = pgTable('admin_change_log', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  actorId: uuid('actor_id').notNull().references(() => users.id),
+  entity: varchar('entity', { length: 40 }).notNull(),
+  entityId: uuid('entity_id').notNull(),
+  action: varchar('action', { length: 40 }).notNull(),
+  oldValue: jsonb('old_value'),
+  newValue: jsonb('new_value'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('idx_admin_change_log_entity').on(table.entity, table.entityId, table.createdAt),
 ]);
 
 // ---------------------------------------------------------------------------
@@ -504,7 +569,13 @@ export const payPeriodConfig = pgTable('pay_period_config', {
 export const workspaceSettings = pgTable('workspace_settings', {
   id: smallint('id').primaryKey().default(1),
   timezone: text('timezone').notNull().default('America/New_York'),
+  // feature-plan-certified-outputs.md C1 (CO-D1): set by the first app submission; while null (or while the
+  // founder's control-plane reopen is in force) timesheet history may be imported.
+  historyImportClosedAt: timestamp('history_import_closed_at', { withTimezone: true }),
+  // C7 (CO-D2): FLSA workweek start, 0 = Sunday (dayjs day()); no default — payroll export refuses until set.
+  workweekStartDay: smallint('workweek_start_day'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   check('workspace_settings_single_row_check', sql`${table.id} = 1`),
+  check('workspace_settings_workweek_start_day_check', sql`${table.workweekStartDay} IS NULL OR ${table.workweekStartDay} BETWEEN 0 AND 6`),
 ]);

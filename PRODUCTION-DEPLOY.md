@@ -162,7 +162,10 @@ can take 60 s to show in the app): `show <slug>`, `extend-trial <slug> <days>`, 
 `set-exempt <slug> on|off --reason "…"`,
 `force-notice-sent <slug> <kind> --reason "…"`, `export-destroyed <slug> [--legal-hold "…"]`,
 `resolve-alert <id> --note "…"`, `audit-note <slug> --note "…"` (append a note to the audit trail — used by
-[`RESTORE.md`](RESTORE.md)), `waitlist list` and `waitlist provision <signup-id>` (below).
+[`RESTORE.md`](RESTORE.md)), `waitlist list` and `waitlist provision <signup-id>` (below),
+`reopen-import-window <slug> --days <1-30> --reason "…"` (`feature-plan-certified-outputs.md` C1: lets one workspace
+import a missed period of timesheet history after its first submission — a support action; the period-lock and
+overlap guards still apply; `show` prints the window state, reading the workspace DB when `ENCRYPTION_KEY` is set).
 
 **Signup abuse controls** (`feature-plan-launch-blockers.md` P5, LB-D2): Cloudflare Turnstile on `/signup`, at most
 3 verified workspaces per network per day, a global cap of 20 new workspaces per day (past it, verified signups are

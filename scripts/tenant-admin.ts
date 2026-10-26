@@ -15,6 +15,8 @@
  *   export-destroyed <slug> [--legal-hold "<reason>"] --yes
  *   resolve-alert <alert-id> --note "<text>" --yes
  *   audit-note <slug> --note "<text>" --yes        (append a founder note to the audit trail, e.g. RESTORE.md)
+ *   reopen-import-window <slug> --days <1-30> --reason "<why>" --yes  (certified-outputs C1: let one workspace import a
+ *                                                   missed period of timesheet history; lock/overlap guards still apply)
  *   waitlist list                                   (LB-D2: verified signups held back by the daily cap)
  *   waitlist provision <signup-id> --yes            (provision one, bypassing the cap; emails the set-password link)
  *
@@ -22,7 +24,8 @@
  * registry for up to 60 seconds, so a change can take a minute to show in the app.
  *
  * Runs under Node's react-server condition (package.json) so server-only modules load.
- * Required env (.env.local then .env): CONTROL_PLANE_DATABASE_URL.
+ * Required env (.env.local then .env): CONTROL_PLANE_DATABASE_URL. `show` also reads the workspace's own database for
+ * the import-window state when ENCRYPTION_KEY is set (otherwise it prints "unknown").
  */
 import dotenv from 'dotenv';
 dotenv.config({ path: ['.env.local', '.env'] });
@@ -42,6 +45,10 @@ import { printTargetBanner } from './lib/target';
 import { listWaitlist, provisionWaitlistedSignup, WaitlistError } from '../src/lib/tenant/waitlist';
 import { apexBaseUrl } from '../src/lib/tenant/host';
 import { SIGNUP_DAILY_WORKSPACE_CAP } from '../src/lib/tenant/lifecycle-config';
+import { getDbForUrl } from '../src/db';
+import { periodEvents, workspaceSettings } from '../src/db/schema';
+import { describeImportWindowState } from './lib/import-window-state';
+import { decrypt } from '../src/lib/encryption';
 
 const ACTOR = `founder:${process.env.USER ?? 'unknown'}`;
 const CACHE_NOTE = 'Note: running app instances may show the old state for up to 60 seconds (registry cache).';
@@ -82,6 +89,23 @@ function printTenant(label: string, t: TenantRow) {
   console.log(`  deleted_at:                 ${iso(t.deletedAt)}`);
   console.log(`  lifecycle checked/failures: ${iso(t.lifecycleCheckedAt)} / ${t.lifecycleFailures}`);
   console.log(`  lifecycle_version:          ${t.lifecycleVersion}`);
+  console.log(`  import window reopened to:  ${t.importWindowUntil ? `${iso(t.importWindowUntil)}${t.importWindowUntil.getTime() > Date.now() ? ' (in force)' : ' (expired)'}` : '(never reopened)'}`);
+}
+
+/** C1: the workspace's own history-import state (tenant DB). Never fails `show`. */
+async function printImportWindow(t: TenantRow) {
+  let closed: string;
+  try {
+    if (!process.env.ENCRYPTION_KEY || !t.dbUrlEncrypted) throw new Error('ENCRYPTION_KEY not set or no database');
+    const db = getDbForUrl(decrypt(t.dbUrlEncrypted));
+    const [row] = await db.select({ closedAt: workspaceSettings.historyImportClosedAt }).from(workspaceSettings).where(eq(workspaceSettings.id, 1)).limit(1);
+    const [submitted] = await db.select({ id: periodEvents.id }).from(periodEvents)
+      .where(and(eq(periodEvents.event, 'submitted'), eq(periodEvents.source, 'app'))).limit(1);
+    closed = describeImportWindowState({ settingsRowExists: !!row, closedAt: row?.closedAt ?? null, hasAppSubmittedEvent: !!submitted });
+  } catch (err) {
+    closed = `unknown (tenant DB not reachable: ${err instanceof Error ? err.message : String(err)})`;
+  }
+  console.log(`  history import (tenant DB): ${closed}`);
 }
 
 async function loadBySlug(slug: string): Promise<TenantRow> {
@@ -116,6 +140,7 @@ function confirmOrExit(yes: boolean) {
 async function show(slug: string) {
   const t = await loadBySlug(slug);
   printTenant(`Tenant "${slug}"`, t);
+  await printImportWindow(t);
   await withLockedPool(async (db) => {
     const notices = await db.select().from(tenantNotices).where(eq(tenantNotices.tenantId, t.id)).orderBy(desc(tenantNotices.createdAt));
     console.log(`\nNotices (${notices.length}):`);
@@ -218,6 +243,13 @@ async function main() {
       confirmOrExit(yes);
       const id = await recordFounderNote(t.id, note, ACTOR);
       console.log(`✓ Recorded (audit event ${id}).`);
+      break;
+    }
+    case 'reopen-import-window': {
+      // Argument validation before any read or write: a missing/empty --reason or --days is refused, nothing audited.
+      const days = Number(flag(rest, '--days') ?? fail('reopen-import-window requires --days <1-30>.'));
+      const reason = flag(rest, '--reason') ?? fail('reopen-import-window requires --reason "<why>".');
+      await change(target, yes, plans.reopenImportWindow(days, reason));
       break;
     }
     case 'waitlist': {

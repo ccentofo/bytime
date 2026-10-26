@@ -99,6 +99,8 @@ export interface IntegrationConnector {
 
   // Sync operations
   pushTimesheetEntries?(context: SyncContext, entries: TimesheetSyncEntry[]): Promise<SyncResult>;
+  /** Payroll connectors (Gusto): per-employee FLSA weekly-overtime totals from payroll-data (certified-outputs C7). */
+  pushPayroll?(context: SyncContext, payroll: PayrollSyncInput): Promise<SyncResult>;
   pushInvoice?(context: SyncContext, invoiceData: unknown): Promise<SyncResult>;
 
   // File export (for file_export auth type)
@@ -127,4 +129,24 @@ export interface TimesheetSyncEntry {
   isBillable: boolean;           // true for direct, false for indirect
   periodStart: CalendarDate;
   approvedAt: Date | null;
+}
+
+/** One employee's payroll totals for a payroll push, in hours (src/server/internal/payroll-data.ts, flsa.ts). */
+export interface PayrollSyncEmployee {
+  userId: string;
+  employeeName: string;
+  regularHours: number;
+  overtimeHours: number;
+  ptoHours: number;
+  sickHours: number;
+  holidayHours: number;
+  uncompensatedOvertimeHours: number;
+  /** The overtime basis includes unapproved days earlier in a workweek. */
+  flagged: boolean;
+}
+
+export interface PayrollSyncInput {
+  periodStart: CalendarDate;
+  periodEnd: CalendarDate;
+  employees: PayrollSyncEmployee[];
 }

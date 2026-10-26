@@ -5,9 +5,14 @@ import { laborCategories, userLaborCategories, users, clins, contracts, slins } 
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { validateRequired, validateStringLength, validateOptionalString, validateRate } from '@/lib/validation';
-import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { isBefore, isCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { userAction } from '@/lib/action-result';
+import { UserFacingError } from '@/lib/errors';
+import {
+  overlappingAssignments, unpricedEntries, unpricedFixText,
+  type OverlapRow, type UnpricedEntryRow, type UnpricedFilters,
+} from '@/server/internal/cost-basis';
 
 // ---------------------------------------------------------------------------
 // Labor Category CRUD
@@ -190,20 +195,58 @@ export async function assignUserToLaborCategory(data: {
 }
 
 /**
- * End a user's labor category assignment: end_date (the INCLUSIVE last day) becomes the
- * workspace's today, so hours already entered today still count toward this labor category.
+ * End a user's labor category assignment. end_date is the INCLUSIVE last day: by default the workspace's today (hours
+ * already entered today still count toward this category); feature-plan-certified-outputs.md C3 allows an earlier or
+ * later date — never before the assignment's effective date — so a promotion can end yesterday and start today.
  */
-export async function endUserLaborCategoryAssignment(id: string) {
+export async function endUserLaborCategoryAssignment(id: string, endDate?: CalendarDate) {
   return userAction(async () => {
     await requireAdminFresh();
     const db = await getDbForWrite();
-    const endDate = await getWorkspaceToday();
+    const end = endDate !== undefined ? parseCalendarDate(endDate) : await getWorkspaceToday();
+    const [current] = await db.select({ effectiveDate: userLaborCategories.effectiveDate })
+      .from(userLaborCategories).where(eq(userLaborCategories.id, id));
+    if (!current) throw new UserFacingError('Assignment not found.', 'not_found');
+    if (isBefore(end, parseCalendarDate(current.effectiveDate))) {
+      throw new UserFacingError(`The end date can't be before the assignment's effective date (${current.effectiveDate}).`);
+    }
     const rows = await db.update(userLaborCategories)
-      .set({ endDate, updatedAt: new Date() })
+      .set({ endDate: end, updatedAt: new Date() })
       .where(eq(userLaborCategories.id, id))
       .returning();
     return rows[0];
   });
+}
+
+export interface UnpricedHoursReportRow extends UnpricedEntryRow {
+  /** How to fix it (CO-D17) — rendered with links to Charge Codes / this page / the overlap report. */
+  fix: string;
+}
+
+/**
+ * "Unpriced hours" (feature-plan-certified-outputs.md C3, CO-D10/CO-D17): latest-revision entries with no applicable
+ * labor category (`no-category`) or two at the deciding level (`conflict`), each with how to fix it. Admin only — it
+ * exists because of dollar views.
+ */
+export async function getUnpricedHoursReport(filters: UnpricedFilters = {}): Promise<{ rows: UnpricedHoursReportRow[]; truncated: boolean }> {
+  await requireAdmin();
+  // The filters come from the page URL: keep only well-formed ids and dates (anything else would fail in Postgres).
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const clean: UnpricedFilters = {
+    ...(filters.startDate && isCalendarDate(filters.startDate) ? { startDate: filters.startDate } : {}),
+    ...(filters.endDate && isCalendarDate(filters.endDate) ? { endDate: filters.endDate } : {}),
+    ...(filters.contractId && UUID.test(filters.contractId) ? { contractId: filters.contractId } : {}),
+    ...(filters.clinId && UUID.test(filters.clinId) ? { clinId: filters.clinId } : {}),
+    ...(filters.slinId && UUID.test(filters.slinId) ? { slinId: filters.slinId } : {}),
+  };
+  const { rows, truncated } = await unpricedEntries(await getDb(), clean);
+  return { truncated, rows: rows.map((r) => ({ ...r, fix: unpricedFixText(r) })) };
+}
+
+/** "Overlapping labor-category assignments" (C3): pairs that make the overlapped days' entries unpriced. Admin only. */
+export async function getOverlappingAssignmentsReport(): Promise<OverlapRow[]> {
+  await requireAdmin();
+  return overlappingAssignments(await getDb());
 }
 
 /**

@@ -9,11 +9,11 @@ import type { EmployeeSummaryEntry } from '@/server/actions/reports';
 // ---------------------------------------------------------------------------
 
 const ADMIN_DATA: EmployeeSummaryEntry[] = [
-  { employeeName: 'Alice', contractName: 'Contract A', contractNumber: 'C-1', clinNumber: '0001', totalHours: 10, totalCost: 500, flsaExempt: false },
+  { employeeId: 'u-alice', employeeName: 'Alice', contractName: 'Contract A', contractNumber: 'C-1', clinNumber: '0001', totalHours: 10, totalCost: 500, flsaExempt: false },
 ];
 
 const SUPERVISOR_DATA: EmployeeSummaryEntry[] = [
-  { employeeName: 'Alice', contractName: 'Contract A', contractNumber: 'C-1', clinNumber: '0001', totalHours: 10, flsaExempt: false },
+  { employeeId: 'u-alice', employeeName: 'Alice', contractName: 'Contract A', contractNumber: 'C-1', clinNumber: '0001', totalHours: 10, flsaExempt: false },
 ];
 
 describe('generateEmployeeSummaryExcel includeCost (R2-5)', () => {

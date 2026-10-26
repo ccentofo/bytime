@@ -1,6 +1,6 @@
 import { requirePageRole } from '@/lib/session';
 import { getCurrentEffectiveConfig, getPendingConfigChange } from '@/server/actions/pay-period-config';
-import { getWorkspaceTimezoneSetting } from '@/server/actions/workspace-settings';
+import { getWorkspaceTimezoneSetting, getWorkweekStartDaySetting } from '@/server/actions/workspace-settings';
 import { SettingsClient } from './SettingsClient';
 
 export const dynamic = 'force-dynamic';
@@ -8,11 +8,12 @@ export const dynamic = 'force-dynamic';
 export default async function SettingsPage() {
   await requirePageRole('admin');
 
-  const [config, pendingChange, workspaceTimezone] = await Promise.all([
+  const [config, pendingChange, workspaceTimezone, workweekStartDay] = await Promise.all([
     getCurrentEffectiveConfig(),
     getPendingConfigChange(),
     getWorkspaceTimezoneSetting(),
+    getWorkweekStartDaySetting(),
   ]);
 
-  return <SettingsClient initialConfig={config} pendingChange={pendingChange} initialTimezone={workspaceTimezone} />;
+  return <SettingsClient initialConfig={config} pendingChange={pendingChange} initialTimezone={workspaceTimezone} initialWorkweekStartDay={workweekStartDay} />;
 }

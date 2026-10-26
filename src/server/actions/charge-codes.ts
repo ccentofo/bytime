@@ -1,7 +1,7 @@
 'use server';
 
 import { getDb, getDbForWrite } from '@/db';
-import { chargeCodes, costClasses, userChargeCodes, clins, contracts, slins, laborCategories, users } from '@/db/schema';
+import { chargeCodes, costClasses, userChargeCodes, clins, contracts, slins, laborCategories, users, timesheetEntries, adminChangeLog } from '@/db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { UserFacingError } from '@/lib/errors';
@@ -84,7 +84,7 @@ export async function updateChargeCode(id: string, data: {
   billable?: boolean;
 }) {
   return userAction(async () => {
-    await requireAdminFresh();
+    const actor = await requireAdminFresh();
     const db = await getDbForWrite();
     // R2-6: explicit allowlist — never spread the caller's object into .set(). `isActive` in
     // particular is a real column not in this form's type; deactivation has its own action
@@ -100,22 +100,92 @@ export async function updateChargeCode(id: string, data: {
     if (data.workLocation !== undefined) updateData.workLocation = data.workLocation;
     if (data.billable !== undefined) updateData.billable = data.billable;
 
-    const [row] = await db.update(chargeCodes)
-      .set(updateData)
-      .where(eq(chargeCodes.id, id))
-      .returning();
-    return row;
+    // feature-plan-certified-outputs.md C3 (charge-code denormalization invariant, CO-D13): compared against the stored
+    // row, locked FOR UPDATE (saveTimesheetBatch re-reads FOR SHARE, so the two serialize). A used code's CLIN/SLIN never
+    // changes; a used code's labor category may change and is logged (who, when, old, new).
+    return db.transaction(async (tx) => {
+      const [current] = await tx.select().from(chargeCodes).where(eq(chargeCodes.id, id)).for('update');
+      if (!current) throw new UserFacingError('Charge code not found.', 'not_found');
+      const clinChanged = data.clinId !== undefined && data.clinId !== current.clinId;
+      const slinChanged = data.slinId !== undefined && (data.slinId ?? null) !== current.slinId;
+      const lcatChanged = data.laborCategoryId !== undefined && (data.laborCategoryId ?? null) !== current.laborCategoryId;
+      const used = clinChanged || slinChanged || lcatChanged
+        ? (await tx.select({ id: timesheetEntries.id }).from(timesheetEntries).where(eq(timesheetEntries.chargeCodeId, id)).limit(1)).length > 0
+        : false;
+      if (used && (clinChanged || slinChanged)) {
+        throw new UserFacingError('This charge code already has recorded hours, so its CLIN and SLIN can\'t change — the hours stay on the CLIN they were recorded against. Create a new charge code instead.');
+      }
+      const [row] = await tx.update(chargeCodes).set(updateData).where(eq(chargeCodes.id, id)).returning();
+      if (used && lcatChanged) {
+        await tx.insert(adminChangeLog).values({
+          actorId: actor.id, entity: 'charge_code', entityId: id, action: 'labor_category_changed',
+          oldValue: { laborCategoryId: current.laborCategoryId }, newValue: { laborCategoryId: data.laborCategoryId ?? null },
+        });
+      }
+      return row;
+    });
   });
 }
 
 /**
- * Soft-delete a charge code. Never hard-delete — historical entries reference it.
+ * Soft-delete a charge code. Never hard-delete — historical entries reference it. User assignments are kept (ruling Q2),
+ * so employees can still correct existing hours (C4) and a reactivation gives the code back. Logged (CO-D8).
  */
 export async function deactivateChargeCode(id: string) {
   return userAction(async () => {
-    await requireAdminFresh();
+    const actor = await requireAdminFresh();
     const db = await getDbForWrite();
-    await db.update(chargeCodes).set({ isActive: false, updatedAt: new Date() }).where(eq(chargeCodes.id, id));
+    await db.transaction(async (tx) => {
+      const [current] = await tx.select({ isActive: chargeCodes.isActive }).from(chargeCodes).where(eq(chargeCodes.id, id)).for('update');
+      if (!current) throw new UserFacingError('Charge code not found.', 'not_found');
+      if (!current.isActive) return;
+      await tx.update(chargeCodes).set({ isActive: false, updatedAt: new Date() }).where(eq(chargeCodes.id, id));
+      await tx.insert(adminChangeLog).values({
+        actorId: actor.id, entity: 'charge_code', entityId: id, action: 'deactivated',
+        oldValue: { isActive: true }, newValue: { isActive: false },
+      });
+    });
+  });
+}
+
+/** Employees still assigned to a charge code, and whether its CLIN and contract are active — for the reactivate dialog. */
+export async function getChargeCodeReactivationInfo(id: string): Promise<{ stillAssigned: number; assignable: boolean }> {
+  await requireAdmin();
+  const db = await getDb();
+  const [code] = await db.select({ clinActive: clins.status, contractActive: contracts.status })
+    .from(chargeCodes).innerJoin(clins, eq(chargeCodes.clinId, clins.id)).innerJoin(contracts, eq(clins.contractId, contracts.id))
+    .where(eq(chargeCodes.id, id));
+  const assigned = await db.select({ id: userChargeCodes.id }).from(userChargeCodes)
+    .innerJoin(users, eq(userChargeCodes.userId, users.id))
+    // F11: only ACTIVE employees get the code back — a deactivated user's assignment is not counted.
+    .where(and(eq(userChargeCodes.chargeCodeId, id), eq(userChargeCodes.isActive, true), eq(users.isActive, true)));
+  return { stillAssigned: assigned.length, assignable: code?.clinActive === 'active' && code?.contractActive === 'active' };
+}
+
+/**
+ * Reactivate a deactivated charge code (feature-plan-certified-outputs.md C3, CO-D8 — a mistake, an option year, an
+ * extension). Ruling Q2: user assignments were never removed, so everyone still assigned sees the code again; the log
+ * row records how many. The code is assignable again only while its CLIN and contract are active (the existing rule).
+ */
+export async function reactivateChargeCode(id: string) {
+  return userAction(async () => {
+    const actor = await requireAdminFresh();
+    const db = await getDbForWrite();
+    return db.transaction(async (tx) => {
+      const [current] = await tx.select({ isActive: chargeCodes.isActive }).from(chargeCodes).where(eq(chargeCodes.id, id)).for('update');
+      if (!current) throw new UserFacingError('Charge code not found.', 'not_found');
+      const assigned = await tx.select({ id: userChargeCodes.id }).from(userChargeCodes)
+        .innerJoin(users, eq(userChargeCodes.userId, users.id))
+        // F11: count active employees only (they are the ones who see the code again).
+        .where(and(eq(userChargeCodes.chargeCodeId, id), eq(userChargeCodes.isActive, true), eq(users.isActive, true)));
+      if (current.isActive) return { stillAssigned: assigned.length };
+      await tx.update(chargeCodes).set({ isActive: true, updatedAt: new Date() }).where(eq(chargeCodes.id, id));
+      await tx.insert(adminChangeLog).values({
+        actorId: actor.id, entity: 'charge_code', entityId: id, action: 'reactivated',
+        oldValue: { isActive: false }, newValue: { isActive: true, stillAssigned: assigned.length },
+      });
+      return { stillAssigned: assigned.length };
+    });
   });
 }
 

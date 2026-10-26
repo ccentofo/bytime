@@ -52,6 +52,10 @@ export const TIMESHEET_COLUMNS: { header: string; description: string }[] = [
   { header: 'indirect_code_id', description: 'Indirect charge code (indirect_charge_codes.csv id), if any.' },
   { header: 'indirect_code', description: 'Indirect code (convenience label).' },
   { header: 'indirect_code_name', description: 'Indirect code name (convenience label).' },
+  { header: 'source', description: 'app = recorded in CadenzPoint; migration = imported from another system during onboarding (never typed here by the employee).' },
+  { header: 'import_batch_id', description: 'For imported rows: the import (import_batches.csv id); blank otherwise.' },
+  { header: 'original_metadata', description: 'For imported rows: who originally entered the hours and when, from the source file, as data (JSON).' },
+  { header: 'provenance', description: 'Derived label for imported rows ("Imported from … on … by …" + the original author, or "Legacy import — details not recorded"); blank for rows recorded in the app.' },
 ];
 
 const EXTRA_FILES: { file: string; description: string }[] = [

@@ -41,6 +41,7 @@ import {
   type ImportResult,
 } from '@/server/actions/import';
 import { WriteButton } from '@/components/shell/WorkspaceMode';
+import { generateCsv } from '@/lib/reports/csv-generator';
 
 // ---------------------------------------------------------------------------
 // Shared ImportWizard component
@@ -270,8 +271,10 @@ function EmployeeImportWizard() {
   }
 
   const validCount = parseResult?.validRows ?? 0;
+  // Fix round 1 (F13): the shared CSV writer — RFC 4180 quoting and the formula guard (a password starting with "@"
+  // or "=" must not be evaluated by a spreadsheet).
   const passwordCsvContent = importResult?.generatedPasswords
-    ? 'Email,Password\n' + importResult.generatedPasswords.map((p) => `${p.email},${p.password}`).join('\n')
+    ? generateCsv(importResult.generatedPasswords, [{ key: 'email', header: 'Email' }, { key: 'password', header: 'Password' }])
     : '';
 
   return (

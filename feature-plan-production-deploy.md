@@ -195,8 +195,8 @@ export DATABASE_URL="postgresql://user:pass@ep-xxx.us-east-2.aws.neon.tech/bytim
 # Push schema to Neon
 npx drizzle-kit push
 
-# Seed demo data
-npx tsx scripts/seed-full.ts
+# Seed demo data (runs with --conditions=react-server)
+npm run db:seed:full
 ```
 
 #### E4. Deploy to Vercel

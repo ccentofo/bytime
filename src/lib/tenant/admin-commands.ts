@@ -136,7 +136,28 @@ export const plans = {
       auditDetail: `${reason}${D ? ` (deletion date ${D.toISOString()}, at least ${DELETION_NOTICE_DAYS} days out)` : ''}`,
     };
   },
+
+  /**
+   * feature-plan-certified-outputs.md C1 (CO-D1 escape hatch): reopen timesheet-history import for ONE workspace for
+   * 1–30 days, with a logged reason (a support action). The lock and overlap guards still apply while reopened.
+   */
+  reopenImportWindow: (days: number, reason: string): Planner => (row, _f, now) => {
+    if (!reason.trim()) throw new AdminCommandError('reopen-import-window requires --reason.');
+    if (!Number.isInteger(days) || days < 1 || days > MAX_IMPORT_WINDOW_REOPEN_DAYS) {
+      throw new AdminCommandError(`reopen-import-window requires --days between 1 and ${MAX_IMPORT_WINDOW_REOPEN_DAYS}.`);
+    }
+    requireLifecycleStatus(row);
+    const until = addDays(now, days);
+    return {
+      describe: `reopen timesheet-history import until ${until.toISOString()} (${days} day(s)): ${reason}`,
+      patch: { importWindowUntil: until },
+      auditKind: 'import-window-reopened',
+      auditDetail: `until=${until.toISOString()} previous=${iso(row.importWindowUntil)} reason=${reason}`,
+    };
+  },
 };
+
+export const MAX_IMPORT_WINDOW_REOPEN_DAYS = 30;
 
 /** Apply a plan under the tenant lock, re-planned from the re-read row (so a concurrent change is never lost). */
 export async function applyAdminPlan(tenantId: string, planner: Planner, actor: string): Promise<TenantRow> {

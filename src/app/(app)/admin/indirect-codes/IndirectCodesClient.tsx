@@ -13,6 +13,7 @@ import {
   Switch,
   ActionIcon,
   Tooltip,
+  Text,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
@@ -32,6 +33,7 @@ type IndirectCode = {
   description: string | null;
   isActive: boolean;
   availableToAll: boolean;
+  leavePayType: string | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -58,12 +60,22 @@ const CATEGORY_LABELS: Record<string, string> = {
   unallowable: 'Unallowable',
 };
 
+/** certified-outputs C7 (CO-D11): how a leave code's hours are paid; required for leave codes. */
+const LEAVE_PAY_TYPE_OPTIONS = [
+  { value: 'pto', label: 'PTO (paid time off)' },
+  { value: 'sick', label: 'Sick (paid)' },
+  { value: 'holiday', label: 'Holiday (paid)' },
+  { value: 'unpaid', label: 'Unpaid' },
+];
+const LEAVE_PAY_TYPE_LABELS: Record<string, string> = { pto: 'PTO', sick: 'Sick', holiday: 'Holiday', unpaid: 'Unpaid' };
+
 type CodeForm = {
   code: string;
   name: string;
   category: string;
   description: string;
   availableToAll: boolean;
+  leavePayType: string | null;
 };
 
 const EMPTY_FORM: CodeForm = {
@@ -72,6 +84,7 @@ const EMPTY_FORM: CodeForm = {
   category: 'overhead',
   description: '',
   availableToAll: true,
+  leavePayType: null,
 };
 
 export function IndirectCodesClient({ initialCodes }: Props) {
@@ -98,6 +111,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
       category: code.category,
       description: code.description ?? '',
       availableToAll: code.availableToAll,
+      leavePayType: code.leavePayType,
     });
     setFormError(null);
     setModalOpen(true);
@@ -110,6 +124,10 @@ export function IndirectCodesClient({ initialCodes }: Props) {
         setFormError('Code, Name, and Category are required.');
         return;
       }
+      if (form.category === 'leave' && !form.leavePayType) {
+        setFormError('Choose a pay type for a leave code — payroll export needs it.');
+        return;
+      }
 
       const fields = {
         code: form.code,
@@ -117,6 +135,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
         category: form.category as IndirectCode['category'],
         description: form.description || undefined,
         availableToAll: form.availableToAll,
+        leavePayType: form.category === 'leave' ? (form.leavePayType as 'pto' | 'sick' | 'holiday' | 'unpaid' | null) : null,
       };
       // silent: the error is shown inside the form.
       const result = editingCode
@@ -170,6 +189,16 @@ export function IndirectCodesClient({ initialCodes }: Props) {
         const cat = cell.getValue<string>();
         return <Badge color={INDIRECT_CATEGORY_COLOR[cat] ?? 'gray'}>{CATEGORY_LABELS[cat] ?? cat}</Badge>;
       },
+      size: 140,
+    },
+    {
+      accessorKey: 'leavePayType',
+      header: 'Pay type',
+      Cell: ({ row }) => row.original.category !== 'leave'
+        ? <Text size="sm" c="dimmed">—</Text>
+        : row.original.leavePayType
+          ? LEAVE_PAY_TYPE_LABELS[row.original.leavePayType]
+          : <Badge color="red" variant="light">Not set — blocks payroll export</Badge>,
       size: 140,
     },
     { accessorKey: 'description', header: 'Description', size: 250 },
@@ -258,6 +287,17 @@ export function IndirectCodesClient({ initialCodes }: Props) {
             onChange={(val) => setForm((f) => ({ ...f, category: val ?? 'overhead' }))}
             required
           />
+          {form.category === 'leave' && (
+            <Select
+              label="Pay type"
+              description="How these hours are paid in the payroll export (its own column; unpaid is never paid)."
+              data={LEAVE_PAY_TYPE_OPTIONS}
+              value={form.leavePayType}
+              onChange={(val) => setForm((f) => ({ ...f, leavePayType: val }))}
+              required
+              data-testid="leave-pay-type"
+            />
+          )}
           <Textarea
             label="Description"
             placeholder="Optional description"

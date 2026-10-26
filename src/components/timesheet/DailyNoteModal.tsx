@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { Button, Group, Modal, Select, Textarea } from '@mantine/core';
 import dayjs from 'dayjs';
 import { useTimesheet } from '@/components/timesheet/TimesheetContext';
-import { REASON_CODES } from '@/lib/reason-codes';
+import { REASON_CODES, reasonNeedsComment, OTHER_REASON_COMMENT_REQUIRED } from '@/lib/reason-codes';
 
 export function DailyNoteModal() {
   const { state, dispatch } = useTimesheet();
@@ -81,7 +81,7 @@ export function DailyNoteModal() {
         mb="md"
       />
       <Group justify="flex-end" mt="md">
-        <Button onClick={handleSave}>Save Note</Button>
+        <Button onClick={handleSave} disabled={reasonNeedsComment(reasonCode, comment)} title={reasonNeedsComment(reasonCode, comment) ? OTHER_REASON_COMMENT_REQUIRED : undefined}>Save Note</Button>
       </Group>
     </Modal>
   );

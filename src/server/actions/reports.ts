@@ -4,19 +4,31 @@ import { getDb } from '@/db';
 import {
   users,
   contracts,
+  chargeCodes,
   clins,
   slins,
+  importBatches,
+  indirectChargeCodes,
   timesheetEntries,
   timesheetPeriods,
-  laborCategories,
-  userLaborCategories,
   userAssignments,
 } from '@/db/schema';
+import { alias } from 'drizzle-orm/pg-core';
 import { eq, and, gte, lt, sql, inArray } from 'drizzle-orm';
 import { existingPeriodLength } from '@/server/internal/pay-period-config';
+import { approvalLabels } from '@/server/internal/approval-label';
+import { COST_BASIS_LATERAL, COST_LC_ON, costLaborCategory, pricedCostSum, unpricedHoursSum } from '@/server/internal/cost-basis';
+import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { requireSession, requireAdmin, requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
 import { getDetailedCostReportData, type CostReportEntry } from '@/server/internal/reports';
 import { addDays, diffDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { buildTimesheetRows, type TimesheetRow } from '@/lib/reports/timesheet-rows';
+
+const importer = alias(users, 'importer');
+// F9: a charge-code row is labelled by the charge code's own CLIN / contract / SLIN.
+const codeClin = alias(clins, 'code_clin');
+const codeContract = alias(contracts, 'code_contract');
+const codeSlin = alias(slins, 'code_slin');
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,27 +45,27 @@ export interface TimesheetReportData {
   periodStatus: string;
   submittedAt: Date | null;
   approvedAt: Date | null;
+  /** The approver field: the in-app approver's name, the "Self-approved" badge, or the imported line (approvalLabel). */
   approvedBy: string | null;
-  chargeCodes: Array<{
-    clinNumber: string;
-    contractName: string;
-    contractNumber: string;
-    slinNumber: string | null;
-    description: string;
-    dailyHours: number[]; // one per day in the period
-    totalHours: number;
-  }>;
-  dailyTotals: number[]; // sum of all charge codes per day
+  /** certified-outputs C1/C2: the full approval line from approvalLabel (in-app, self-approved or imported), or null. */
+  approvalLine: string | null;
+  /** C5: one row per true cell code from latest-revision entries (buildTimesheetRows). */
+  rows: TimesheetRow[];
+  dailyTotals: number[]; // sum of all entries per day
   grandTotal: number;
 }
 
 export interface EmployeeSummaryEntry {
+  /** Fix round 1 (F6): rows are grouped by the employee's id — two people with the same name stay separate. */
+  employeeId: string;
   employeeName: string;
   contractName: string;
   contractNumber: string;
   clinNumber: string;
   totalHours: number;
   totalCost?: number; // R2-5: omitted entirely (not 0) for non-admins — dollar data is admin-only
+  /** certified-outputs C3 (CO-D17): hours with no applicable labor category (no cost). Admins only, like totalCost. */
+  unpricedHours?: number;
   flsaExempt: boolean;
 }
 
@@ -97,55 +109,56 @@ export async function getTimesheetReportData(
   const numDays = await existingPeriodLength(db, start, period?.periodNumDays);
   const periodEnd = addDays(start, numDays - 1);
 
-  // Get approved-by name if applicable. R2-7: an admin may approve/reject their own period —
-  // show "Self-approved" rather than their own name, so self-approval stays visibly auditable.
-  // Only an APPROVED period prints an approval line; rejecting also sets reviewedBy/reviewedAt,
-  // and a rejected timesheet must never read as approved.
+  // The approval line comes from the one helper (certified-outputs C2): an in-app approver's name, "Self-approved"
+  // (R2-7/CO-D6 — self-approval stays visibly auditable), or an imported approval (C1). Only an APPROVED period prints
+  // an approval line; rejecting also sets reviewedBy/reviewedAt, and a rejected timesheet must never read as approved.
   const isApproved = period?.status === 'approved';
-  let approvedByName: string | null = null;
-  if (isApproved && period?.reviewedBy) {
-    if (period.reviewedBy === userId) {
-      approvedByName = 'Self-approved';
-    } else {
-      const [reviewer] = await db
-        .select({ fullName: users.fullName })
-        .from(users)
-        .where(eq(users.id, period.reviewedBy));
-      approvedByName = reviewer?.fullName ?? null;
-    }
-  }
+  const label = isApproved && period
+    ? (await approvalLabels(db, [{ id: period.id, userId, status: period.status, reviewedBy: period.reviewedBy, reviewedAt: period.reviewedAt }], await getWorkspaceTimezone())).get(period.id)
+    : undefined;
+  const approvedByName = label ? (label.badge ?? label.approverName ?? label.text) : null;
 
-  // Get user's charge codes
-  const assignments = await db
+  // C5: rows from the period's LATEST-revision entries, one per true cell code (charge code / legacy CLIN / indirect
+  // with category) — never from assignments. Imported cells carry their provenance (C1 "Display").
+  const rows = await db
     .select({
-      clinId: clins.id,
-      clinNumber: clins.clinNumber,
-      contractName: contracts.name,
-      contractNumber: contracts.contractNumber,
-      description: clins.description,
-      slinId: userAssignments.slinId,
-      slinNumber: slins.slinNumber,
-    })
-    .from(userAssignments)
-    .innerJoin(clins, eq(userAssignments.clinId, clins.id))
-    .innerJoin(contracts, eq(clins.contractId, contracts.id))
-    .leftJoin(slins, eq(userAssignments.slinId, slins.id))
-    .where(
-      and(
-        eq(userAssignments.userId, userId),
-        eq(userAssignments.isActive, true),
-      )
-    )
-    .orderBy(contracts.name, clins.clinNumber);
-
-  // Get all entries for this period (latest revision only)
-  const entries = await db
-    .select({
+      chargeCodeId: timesheetEntries.chargeCodeId,
       clinId: timesheetEntries.clinId,
+      indirectCodeId: timesheetEntries.indirectCodeId,
       entryDate: timesheetEntries.entryDate,
       hours: timesheetEntries.hours,
+      chargeCode: chargeCodes.code,
+      chargeCodeName: chargeCodes.name,
+      clinNumber: clins.clinNumber,
+      clinDescription: clins.description,
+      contractName: contracts.name,
+      contractNumber: contracts.contractNumber,
+      slinNumber: slins.slinNumber,
+      indirectCode: indirectChargeCodes.code,
+      indirectName: indirectChargeCodes.name,
+      indirectCategory: indirectChargeCodes.category,
+      codeClinNumber: codeClin.clinNumber,
+      codeContractName: codeContract.name,
+      codeContractNumber: codeContract.contractNumber,
+      codeSlinNumber: codeSlin.slinNumber,
+      source: timesheetEntries.source,
+      changeReasonCode: timesheetEntries.changeReasonCode,
+      originalMetadata: timesheetEntries.originalMetadata,
+      importSourceSystem: importBatches.sourceSystem,
+      importedAt: importBatches.importedAt,
+      importedByName: importer.fullName,
     })
     .from(timesheetEntries)
+    .leftJoin(chargeCodes, eq(timesheetEntries.chargeCodeId, chargeCodes.id))
+    .leftJoin(codeClin, eq(chargeCodes.clinId, codeClin.id))
+    .leftJoin(codeContract, eq(codeClin.contractId, codeContract.id))
+    .leftJoin(codeSlin, eq(chargeCodes.slinId, codeSlin.id))
+    .leftJoin(clins, eq(timesheetEntries.clinId, clins.id))
+    .leftJoin(contracts, eq(clins.contractId, contracts.id))
+    .leftJoin(slins, eq(timesheetEntries.slinId, slins.id))
+    .leftJoin(indirectChargeCodes, eq(timesheetEntries.indirectCodeId, indirectChargeCodes.id))
+    .leftJoin(importBatches, eq(timesheetEntries.importBatchId, importBatches.id))
+    .leftJoin(importer, eq(importBatches.importedBy, importer.id))
     .where(
       and(
         eq(timesheetEntries.userId, userId),
@@ -164,44 +177,7 @@ export async function getTimesheetReportData(
       )
     );
 
-  // Build hours map: "clinId-dayIndex" → hours
-  const hoursMap = new Map<string, number>();
-  for (const entry of entries) {
-    const dayIndex = diffDays(start, entry.entryDate as CalendarDate);
-    hoursMap.set(`${entry.clinId}-${dayIndex}`, parseFloat(entry.hours) || 0);
-  }
-
-  // Build charge code data
-  const chargeCodes = assignments.map((a) => {
-    const dailyHours: number[] = [];
-    let totalHours = 0;
-    for (let i = 0; i < numDays; i++) {
-      const h = hoursMap.get(`${a.clinId}-${i}`) ?? 0;
-      dailyHours.push(h);
-      totalHours += h;
-    }
-    return {
-      clinNumber: a.clinNumber,
-      contractName: a.contractName,
-      contractNumber: a.contractNumber,
-      slinNumber: a.slinNumber,
-      description: a.description ?? '',
-      dailyHours,
-      totalHours: Math.round(totalHours * 100) / 100,
-    };
-  });
-
-  // Daily totals
-  const dailyTotals: number[] = [];
-  for (let i = 0; i < numDays; i++) {
-    let dayTotal = 0;
-    for (const cc of chargeCodes) {
-      dayTotal += cc.dailyHours[i];
-    }
-    dailyTotals.push(Math.round(dayTotal * 100) / 100);
-  }
-
-  const grandTotal = chargeCodes.reduce((sum, cc) => sum + cc.totalHours, 0);
+  const built = buildTimesheetRows(rows.map((r) => ({ ...r, dayIndex: diffDays(start, r.entryDate as CalendarDate) })), numDays);
 
   return {
     employee: user,
@@ -211,9 +187,10 @@ export async function getTimesheetReportData(
     submittedAt: period?.submittedAt ?? null,
     approvedAt: isApproved ? period?.reviewedAt ?? null : null,
     approvedBy: approvedByName,
-    chargeCodes,
-    dailyTotals,
-    grandTotal: Math.round(grandTotal * 100) / 100,
+    approvalLine: label?.text ?? null,
+    rows: built.rows,
+    dailyTotals: built.dailyTotals,
+    grandTotal: built.grandTotal,
   };
 }
 
@@ -257,37 +234,23 @@ export async function getEmployeeSummaryReport(
 
   const rows = await db
     .select({
+      employeeId: users.id,
       employeeName: users.fullName,
       flsaExempt: users.flsaExempt,
       contractName: contracts.name,
       contractNumber: contracts.contractNumber,
       clinNumber: clins.clinNumber,
       totalHours: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
-      totalCost: sql<number>`COALESCE(SUM(
-        CAST(${timesheetEntries.hours} AS NUMERIC) *
-        COALESCE(CAST(${laborCategories.hourlyRate} AS NUMERIC), 0)
-      ), 0)`,
+      totalCost: pricedCostSum,
+      unpricedHours: unpricedHoursSum,
     })
     .from(timesheetEntries)
     .innerJoin(users, eq(timesheetEntries.userId, users.id))
     .innerJoin(clins, eq(timesheetEntries.clinId, clins.id))
     .innerJoin(contracts, eq(clins.contractId, contracts.id))
-    .leftJoin(
-      userLaborCategories,
-      and(
-        eq(userLaborCategories.userId, timesheetEntries.userId),
-        sql`${userLaborCategories.effectiveDate} <= ${timesheetEntries.entryDate}`,
-        sql`(${userLaborCategories.endDate} IS NULL OR ${userLaborCategories.endDate} >= ${timesheetEntries.entryDate})`,
-      )
-    )
-    .leftJoin(
-      laborCategories,
-      and(
-        eq(laborCategories.id, userLaborCategories.laborCategoryId),
-        eq(laborCategories.clinId, timesheetEntries.clinId),
-        eq(laborCategories.status, 'active'),
-      )
-    )
+    // certified-outputs C3: one cost-basis row per entry, so hours are never multiplied by overlapping assignments.
+    .leftJoinLateral(COST_BASIS_LATERAL, sql`true`)
+    .leftJoin(costLaborCategory, COST_LC_ON)
     .where(
       and(
         gte(timesheetEntries.entryDate, start),
@@ -305,11 +268,12 @@ export async function getEmployeeSummaryReport(
         scope === 'all' ? undefined : inArray(timesheetEntries.userId, scope),
       )
     )
-    .groupBy(users.fullName, users.flsaExempt, contracts.name, contracts.contractNumber, clins.clinNumber)
-    .orderBy(users.fullName, contracts.name, clins.clinNumber);
+    .groupBy(users.id, users.fullName, users.flsaExempt, contracts.name, contracts.contractNumber, clins.clinNumber)
+    .orderBy(users.fullName, users.id, contracts.name, clins.clinNumber);
 
   const isAdmin = actor.role === 'admin';
   return rows.map((row) => ({
+    employeeId: row.employeeId,
     employeeName: row.employeeName,
     contractName: row.contractName,
     contractNumber: row.contractNumber,
@@ -317,7 +281,10 @@ export async function getEmployeeSummaryReport(
     totalHours: Math.round(Number(row.totalHours) * 100) / 100,
     // R2-5: the totalCost KEY is absent entirely for supervisors — dollar figures are
     // admin-only — not present-but-zero, which previously rendered a fake "$0" column.
-    ...(isAdmin ? { totalCost: Math.round(Number(row.totalCost) * 100) / 100 } : {}),
+    ...(isAdmin ? {
+      totalCost: Math.round(Number(row.totalCost) * 100) / 100,
+      unpricedHours: Math.round(Number(row.unpricedHours) * 100) / 100,
+    } : {}),
     flsaExempt: row.flsaExempt,
   }));
 }

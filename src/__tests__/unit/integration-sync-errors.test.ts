@@ -43,10 +43,10 @@ vi.mock('@/db', () => {
   return { getDb: async () => db, getDbForWrite: async () => db, getDbForAuth: async () => db, getDbForUrl: () => db };
 });
 
-import { integrationConnections, integrationEntityMappings, integrationSyncLogs, integrationSyncRecords } from '@/db/schema';
+import { integrationConnections, integrationEntityMappings, integrationSyncLogs, integrationSyncRecords, workspaceSettings } from '@/db/schema';
 import { gustoConnector } from '@/lib/integrations/connectors/gusto';
 import { executeSyncOperation } from '@/lib/integrations/sync-engine';
-import type { SyncContext, TimesheetSyncEntry } from '@/lib/integrations/types';
+import type { PayrollSyncInput, SyncContext } from '@/lib/integrations/types';
 
 const leaks = (s: unknown) => /Failed query|params:|insert into|s3cr3t/i.test(String(s));
 
@@ -62,15 +62,18 @@ describe('integration sync errors are sanitised (audit R7)', () => {
   it('Gusto connector: a DB error writing a sync record → a generic per-record error, no SQL/params', async () => {
     h.failInsertInto = integrationSyncRecords;
     const context = { connectionId: 'c1', syncLogId: 'log-1', accessToken: '', externalCompanyId: 'co', mappings: new Map([['employee', new Map([['u1', 'g1']])]]) } as SyncContext;
-    const entries = [{ userId: 'u1', employeeName: 'Pat Doe', entryDate: '2026-10-19', hours: 8 }] as unknown as TimesheetSyncEntry[];
-    const result = await gustoConnector.pushTimesheetEntries!(context, entries);
+    // certified-outputs C7: the Gusto connector records FLSA payroll totals (pushPayroll), not raw entries.
+    const payroll = { periodStart: '2026-10-01', periodEnd: '2026-10-15', employees: [{ userId: 'u1', employeeName: 'Pat Doe', regularHours: 8, overtimeHours: 0, ptoHours: 0, sickHours: 0, holidayHours: 0, uncompensatedOvertimeHours: 0, flagged: false }] } as unknown as PayrollSyncInput;
+    const result = await gustoConnector.pushPayroll!(context, payroll);
     expect(result.failed).toBe(1);
+    expect(result.pushed).toBe(0); // fix round 1 F10: a failed record is not also counted as pushed
     expect(result.errors).toEqual([{ bytimeEntityId: 'u1', error: 'Could not sync this employee.' }]);
     expect(result.errors.some((e) => leaks(e.error))).toBe(false);
   });
 
   it('sync engine: a DB error mid-sync → error_summary is generic, no SQL/params (the error is still rethrown)', async () => {
     h.selects.set(integrationConnections, [{ id: 'c1', provider: 'gusto', isActive: true, accessTokenEncrypted: null, externalCompanyId: 'co' }]);
+    h.selects.set(workspaceSettings, [{ day: 1 }]); // C7: the workweek start day is set (else refused before any log)
     h.failSelectFrom = integrationEntityMappings;
     await expect(executeSyncOperation('c1', 'timesheet_push', '2026-10-01' as never, '2026-10-15' as never, 'admin-1')).rejects.toBe(DB_ERROR);
     const log = h.updates.find((u) => u.table === integrationSyncLogs);

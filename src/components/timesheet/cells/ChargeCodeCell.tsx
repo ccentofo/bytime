@@ -32,6 +32,10 @@ export function ChargeCodeCell({ chargeCode, density = 'comfortable' }: ChargeCo
 
   return (
     <Stack gap={isDense ? 2 : 4}>
+      {/* certified-outputs C4 (CO-D8): rows kept only because they have recorded hours in this period. */}
+      {!chargeCode.assignable && (
+        <Text size="xs" c="warning.7" fw={600}>No longer assigned — you can correct existing hours, not add new ones</Text>
+      )}
       <Text fw={700} size={isDense ? 'xs' : 'sm'}
         style={isDense ? { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } : undefined}>
         {primaryLabel}

@@ -158,7 +158,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     }).returning();
 
     actingAs(asFake(employee));
-    await expectFailure(approvePeriod({ periodId: period.id }), 'forbidden', /Approver role required/);
+    await expectFailure(approvePeriod({ periodId: period.id, seen: 0 }), 'forbidden', /Approver role required/);
   });
 
   // 3. ---------------------------------------------------------------------
@@ -191,16 +191,16 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
 
     actingAs(asFake(supervisor));
 
-    await expectOk(approvePeriod({ periodId: inScopePeriod.id }));
+    await expectOk(approvePeriod({ periodId: inScopePeriod.id, seen: 0 }));
     const [approved] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, inScopePeriod.id));
     expect(approved.status).toBe('approved');
 
     // R2-12: an out-of-scope period must look exactly like a missing one, not disclose that it exists.
-    await expectFailure(rejectPeriod({ periodId: outOfScopePeriod.id, comment: 'nope' }), 'not_found', /Period not found/);
+    await expectFailure(rejectPeriod({ periodId: outOfScopePeriod.id, comment: 'nope', seen: 0 }), 'not_found', /Period not found/);
 
     // R2-7: a supervisor's own period is refused outright (Forbidden) — nothing to mask.
-    await expectFailure(approvePeriod({ periodId: ownPeriod.id }), 'forbidden', /Forbidden: You cannot approve your own timesheet/);
-    await expectFailure(rejectPeriod({ periodId: ownPeriod.id, comment: 'x' }), 'forbidden', /Forbidden: You cannot reject your own timesheet/);
+    await expectFailure(approvePeriod({ periodId: ownPeriod.id, seen: 0 }), 'forbidden', /Forbidden: You cannot approve your own timesheet/);
+    await expectFailure(rejectPeriod({ periodId: ownPeriod.id, comment: 'x', seen: 0 }), 'forbidden', /Forbidden: You cannot reject your own timesheet/);
   });
 
   // R2-7. -------------------------------------------------------------------
@@ -214,7 +214,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     }).returning();
 
     actingAs(asFake(admin));
-    await expectOk(approvePeriod({ periodId: ownPeriod.id }));
+    await expectOk(approvePeriod({ periodId: ownPeriod.id, seen: 0 }));
 
     const [approved] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, ownPeriod.id));
     expect(approved.status).toBe('approved');
@@ -224,7 +224,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const [ownPeriod2] = await db.insert(schema.timesheetPeriods).values({
       userId: admin.id, periodStart: addMonths(periodStart, -1), status: 'submitted', submittedAt: new Date(),
     }).returning();
-    await expectOk(rejectPeriod({ periodId: ownPeriod2.id, comment: 'self-correction needed' }));
+    await expectOk(rejectPeriod({ periodId: ownPeriod2.id, comment: 'self-correction needed', seen: 0 }));
     const [rejected] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.id, ownPeriod2.id));
     expect(rejected.status).toBe('rejected');
     expect(rejected.reviewedBy).toBe(admin.id);
@@ -376,12 +376,12 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     });
 
     actingAs(asFake(supervisor));
-    const scoped = await getAuditEntries({});
+    const scoped = (await getAuditEntries({})).entries;
     expect(scoped.map((e) => e.userId)).toEqual([inScopeEmployee.id]);
 
     const admin = await createTestUser({ role: 'admin' });
     actingAs(asFake(admin));
-    const all = await getAuditEntries({});
+    const all = (await getAuditEntries({})).entries;
     expect(all.map((e) => e.userId).sort()).toEqual([inScopeEmployee.id, outOfScopeEmployee.id].sort());
   });
 
@@ -399,7 +399,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     });
 
     actingAs(asFake(supervisor));
-    const scoped = await getAuditEntries({});
+    const scoped = (await getAuditEntries({})).entries;
     expect(scoped.map((e) => e.userId)).toContain(supervisor.id);
   });
 

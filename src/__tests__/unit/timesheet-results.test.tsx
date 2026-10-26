@@ -49,7 +49,7 @@ beforeAll(() => {
 
 const initialData: TimesheetPageData = {
   userId: 'u1',
-  chargeCodes: [{ id: 'cc1', projectName: 'Proj', clin: 'CC-1', description: 'Code 1' }],
+  chargeCodes: [{ id: 'cc1', projectName: 'Proj', clin: 'CC-1', description: 'Code 1', kind: 'charge', assignable: true }],
   entries: [{ chargeCodeId: 'cc1', hours: Array(15).fill(0) }],
   periodStart: '2026-01-01' as CalendarDate,
   numDays: 15,

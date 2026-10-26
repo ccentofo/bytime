@@ -25,7 +25,9 @@ import { ensureValidToken } from './connectors/qbo-api';
 import { getConnector } from './registry';
 import { existingPeriodLength } from '@/server/internal/pay-period-config';
 import { addDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
-import type { SyncContext, TimesheetSyncEntry, SyncResult } from './types';
+import type { SyncContext, TimesheetSyncEntry, SyncResult, PayrollSyncInput } from './types';
+import { loadPayrollData, type PayrollData } from '@/server/internal/payroll-data';
+import { fromCents } from '@/lib/payroll/flsa';
 
 /**
  * Get approved timesheet entries for a date range, shaped for sync.
@@ -164,6 +166,13 @@ export async function executeSyncOperation(
     throw new Error(`No connector registered for provider: ${connection.provider}`);
   }
 
+  // certified-outputs C7: payroll connectors (Gusto) get FLSA weekly-overtime totals from payroll-data — QBO stays on
+  // getApprovedEntriesForSync. Loaded BEFORE the sync log, so a refusal (workweek start day unset, leave codes without
+  // a pay type) creates no log.
+  const payroll: PayrollData | null = connector.pushPayroll
+    ? await loadPayrollData(db, parseCalendarDate(periodStart), parseCalendarDate(periodEnd))
+    : null;
+
   // Create sync log
   const [syncLog] = await db.insert(integrationSyncLogs).values({
     connectionId,
@@ -209,10 +218,10 @@ export async function executeSyncOperation(
       mappings,
     };
 
-    // Get approved entries
-    const entries = await getApprovedEntriesForSync(periodStart, periodEnd);
+    // Get approved entries (QBO) or the payroll totals (Gusto)
+    const entries = payroll ? [] : await getApprovedEntriesForSync(periodStart, periodEnd);
 
-    if (entries.length === 0) {
+    if (payroll ? payroll.employees.length === 0 : entries.length === 0) {
       await db.update(integrationSyncLogs)
         .set({
           status: 'success',
@@ -228,7 +237,9 @@ export async function executeSyncOperation(
 
     // Execute the connector's push method
     let result: SyncResult;
-    if (syncType === 'timesheet_push' && connector.pushTimesheetEntries) {
+    if (syncType === 'timesheet_push' && payroll && connector.pushPayroll) {
+      result = await connector.pushPayroll(context, toPayrollSyncInput(payroll));
+    } else if (syncType === 'timesheet_push' && connector.pushTimesheetEntries) {
       result = await connector.pushTimesheetEntries(context, entries);
     } else {
       throw new Error(`Sync type "${syncType}" not supported by connector "${connection.provider}".`);
@@ -288,4 +299,22 @@ export async function executeSyncOperation(
 
     throw error;
   }
+}
+
+function toPayrollSyncInput(payroll: PayrollData): PayrollSyncInput {
+  return {
+    periodStart: payroll.rangeStart,
+    periodEnd: payroll.rangeEnd,
+    employees: payroll.employees.map((e) => ({
+      userId: e.userId,
+      employeeName: e.employeeName,
+      regularHours: fromCents(e.regular),
+      overtimeHours: fromCents(e.overtime),
+      ptoHours: fromCents(e.pto),
+      sickHours: fromCents(e.sick),
+      holidayHours: fromCents(e.holiday),
+      uncompensatedOvertimeHours: fromCents(e.uncompensatedOvertime),
+      flagged: e.otBasisIncludesUnapprovedDays,
+    })),
+  };
 }

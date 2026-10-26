@@ -19,6 +19,7 @@ import postgres from 'postgres';
 import * as schema from '../src/db/schema';
 import { eq } from 'drizzle-orm';
 import { clearTenantData, SEED_EMAIL_DOMAINS } from '../src/db/clear-tenant-data';
+import { lockUserRulesExclusive, recomputeSelfApproval } from '../src/server/internal/approval-rules';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import dayjs from 'dayjs';
@@ -80,8 +81,9 @@ export async function seedRichData(
 
   await db.insert(schema.users).values([
     { id: userIds.admin, email: `admin@${ED}`, fullName: 'Admin User', role: 'admin', passwordHash: hash, isActive: true, flsaExempt: false },
-    { id: userIds.sarah, email: `sarah.wilson@${ED}`, fullName: 'Sarah Wilson', role: 'supervisor', passwordHash: hash, isActive: true, flsaExempt: true },
-    { id: userIds.mike, email: `mike.chen@${ED}`, fullName: 'Mike Chen', role: 'supervisor', passwordHash: hash, isActive: true, flsaExempt: true },
+    // certified-outputs C8 (CO-D5): supervisors are approved by a designated approver (here the admin), never a peer.
+    { id: userIds.sarah, email: `sarah.wilson@${ED}`, fullName: 'Sarah Wilson', role: 'supervisor', passwordHash: hash, isActive: true, flsaExempt: true, approverId: userIds.admin },
+    { id: userIds.mike, email: `mike.chen@${ED}`, fullName: 'Mike Chen', role: 'supervisor', passwordHash: hash, isActive: true, flsaExempt: true, approverId: userIds.admin },
     { id: userIds.jane, email: `jane.smith@${ED}`, fullName: 'Jane Smith', role: 'employee', passwordHash: hash, isActive: true, flsaExempt: true },
     { id: userIds.john, email: `john.doe@${ED}`, fullName: 'John Doe', role: 'employee', passwordHash: hash, isActive: true, flsaExempt: false },
     { id: userIds.emily, email: `emily.davis@${ED}`, fullName: 'Emily Davis', role: 'employee', passwordHash: hash, isActive: true, flsaExempt: true },
@@ -89,6 +91,9 @@ export async function seedRichData(
     { id: userIds.lisa, email: `lisa.anderson@${ED}`, fullName: 'Lisa Anderson', role: 'employee', passwordHash: hash, isActive: false, flsaExempt: true },
   ]);
   console.log('    ✓ 8 users created');
+  // feature-plan-certified-outputs.md C2 (CO-D19, ruling Q5): record the self-approval switch state once, so demo data
+  // has the same admin_change_log history as a real workspace.
+  await db.transaction(async (tx) => { await lockUserRulesExclusive(tx as never); await recomputeSelfApproval(tx as never, userIds.admin, 'demo workspace seeded'); });
 
   // ── 2. Contracts ──
   console.log('  Creating contracts...');
@@ -289,19 +294,20 @@ export async function seedRichData(
     { code: 'GA-001', name: 'General & Administrative', category: 'ga' as const, description: 'G&A expenses — management, accounting, HR' },
     { code: 'IRAD-001', name: 'IR&D', category: 'irad' as const, description: 'Independent Research & Development' },
     { code: 'BP-001', name: 'Bid & Proposal', category: 'bp' as const, description: 'Proposal preparation and bid activities' },
-    { code: 'LV-AL', name: 'Annual Leave', category: 'leave' as const, description: 'Paid annual leave / vacation' },
-    { code: 'LV-SL', name: 'Sick Leave', category: 'leave' as const, description: 'Paid sick leave' },
-    { code: 'LV-HOL', name: 'Holiday', category: 'leave' as const, description: 'Company-observed holiday' },
-    { code: 'LV-LWOP', name: 'Leave Without Pay', category: 'leave' as const, description: 'Unpaid leave of absence' },
+    // CO-D16: built-in leave codes carry their pay type (payroll export needs it).
+    { code: 'LV-AL', name: 'Annual Leave', category: 'leave' as const, description: 'Paid annual leave / vacation', leavePayType: 'pto' as const },
+    { code: 'LV-SL', name: 'Sick Leave', category: 'leave' as const, description: 'Paid sick leave', leavePayType: 'sick' as const },
+    { code: 'LV-HOL', name: 'Holiday', category: 'leave' as const, description: 'Company-observed holiday', leavePayType: 'holiday' as const },
+    { code: 'LV-LWOP', name: 'Leave Without Pay', category: 'leave' as const, description: 'Unpaid leave of absence', leavePayType: 'unpaid' as const },
     { code: 'UA-001', name: 'Unallowable', category: 'unallowable' as const, description: 'Non-reimbursable activities (FAR 31.205)' },
-  ];
+  ] as Array<{ code: string; name: string; category: 'overhead' | 'ga' | 'irad' | 'bp' | 'leave' | 'unallowable'; description: string; leavePayType?: 'pto' | 'sick' | 'holiday' | 'unpaid' }>;
 
   for (const ic of indirects) {
     const id = uuid();
     indirectIds[ic.code] = id;
     await db.insert(schema.indirectChargeCodes).values({
       id, code: ic.code, name: ic.name, category: ic.category,
-      description: ic.description, isActive: true, availableToAll: true,
+      description: ic.description, isActive: true, availableToAll: true, leavePayType: ic.leavePayType ?? null,
     });
   }
   console.log('    ✓ 9 indirect charge codes created');
@@ -332,6 +338,18 @@ export async function seedRichData(
     }
   }
 
+  const supervisorIds: string[] = [userIds.sarah, userIds.mike];
+  const reviewerFor = (employeeId: string): string => {
+    if (supervisorIds.includes(employeeId)) return userIds.admin; // their designated approver
+    const clinsOf = (u: string) => new Set(assignments.filter((a) => a.userId === u).map((a) => a.clinId));
+    const mine = clinsOf(employeeId);
+    // Prefer Mike for Army work (as before), else Sarah — but only a supervisor who really shares a CLIN.
+    const preferred = [...mine].some((c) => c === clinIds.army01 || c === clinIds.army02) ? [userIds.mike, userIds.sarah] : [userIds.sarah, userIds.mike];
+    const reviewer = preferred.find((s) => [...clinsOf(s)].some((c) => mine.has(c)));
+    if (!reviewer) throw new Error(`seed: no supervisor shares a CLIN with ${employeeId}`);
+    return reviewer;
+  };
+
   let entryCount = 0;
   let periodCount = 0;
   const holidays = ['2025-12-25', '2026-01-01', '2026-01-19', '2026-02-16', '2026-05-25'];
@@ -352,16 +370,24 @@ export async function seedRichData(
       const periodId = uuid();
       const submittedAt = status !== 'draft' ? dayjs(periodStart).add(numDays, 'day').add(1, 'day').toDate() : null;
       const reviewedAt = status === 'approved' ? dayjs(periodStart).add(numDays + 2, 'day').toDate() : null;
-      const reviewedBy = status === 'approved'
-        ? (emp.entries.some((e) => e.clinId === clinIds.army01 || e.clinId === clinIds.army02) ? userIds.mike : userIds.sarah)
-        : null;
+      // certified-outputs C8 (C2 rules): a supervisor's timesheet is approved by their designated approver (the admin);
+      // an employee's by a supervisor sharing an active CLIN — never a peer, never themselves.
+      const reviewedBy = status === 'approved' ? reviewerFor(emp.id) : null;
 
       await db.insert(schema.timesheetPeriods).values({
         id: periodId, userId: emp.id, periodStart, status,
         submittedAt, reviewedAt, reviewedBy,
         submittedComment: status !== 'draft' ? 'Timesheet complete' : null,
         reviewComment: status === 'approved' ? 'Approved — looks good' : null,
+        submissionCount: status !== 'draft' ? 1 : 0,
       });
+      // The append-only approval history, as the app writes it (source 'app').
+      if (submittedAt) {
+        await db.insert(schema.periodEvents).values({ periodId, userId: emp.id, event: 'submitted', actorId: emp.id, comment: 'Timesheet complete', createdAt: submittedAt });
+      }
+      if (reviewedAt && reviewedBy) {
+        await db.insert(schema.periodEvents).values({ periodId, userId: emp.id, event: 'approved', actorId: reviewedBy, comment: 'Approved — looks good', createdAt: reviewedAt });
+      }
       periodCount++;
 
       // Create daily entries for this period
@@ -434,6 +460,11 @@ export async function seedRichData(
   }
   console.log(`    ✓ ${entryCount} timesheet entries created`);
   console.log(`    ✓ ${periodCount} period records created`);
+
+  // feature-plan-certified-outputs.md C1 (CO-D1): the demo has submitted timesheets, so it is past onboarding — the
+  // timesheet-history import window is closed (clearTenantData reopened it).
+  // C7 (CO-D2): demos have a workweek (Monday) so payroll export works out of the box.
+  await db.update(schema.workspaceSettings).set({ historyImportClosedAt: new Date(), workweekStartDay: 1, updatedAt: new Date() }).where(eq(schema.workspaceSettings.id, 1));
 
   // ── 10. Notification Preferences ──
   console.log('  Creating notification preferences...');

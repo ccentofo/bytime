@@ -167,6 +167,78 @@ describe('workspace export (§5.2)', () => {
     }
   });
 
+  it('certified-outputs C8: entry provenance + label, import_batches, admin_change_log, period-event provenance, self_approved', async () => {
+    const db = getTestDb();
+    const emp = await createTestUser({ role: 'employee' });
+    const clin = await createTestClin((await createTestContract()).id);
+    const [batch] = await db.insert(schema.importBatches).values({ kind: 'entries', sourceSystem: 'Deltek', importedBy: admin.id, rowCount: 1, importedCount: 1, skippedCount: 0 }).returning();
+    await db.insert(schema.timesheetEntries).values({ userId: emp.id, clinId: clin.id, entryDate: '2026-01-05', hours: '8', revisionNumber: 1, createdBy: admin.id, source: 'migration', importBatchId: batch.id, originalMetadata: { enteredBy: 'Pat (Deltek)' } });
+    await db.insert(schema.adminChangeLog).values({ actorId: admin.id, entity: 'workspace_settings', entityId: '00000000-0000-0000-0000-000000000000', action: 'workweek_start_day_changed', oldValue: { workweekStartDay: null }, newValue: { workweekStartDay: 1 } });
+    // Self-approved (admin's own), imported approval, and an ordinary approval.
+    const [own] = await db.insert(schema.timesheetPeriods).values({ userId: admin.id, periodStart: '2026-01-01', status: 'approved', reviewedBy: admin.id, reviewedAt: new Date() }).returning();
+    const [imp] = await db.insert(schema.timesheetPeriods).values({ userId: emp.id, periodStart: '2025-12-16', status: 'approved' }).returning();
+    const [ord] = await db.insert(schema.timesheetPeriods).values({ userId: emp.id, periodStart: '2026-01-01', status: 'approved', reviewedBy: admin.id, reviewedAt: new Date() }).returning();
+    await db.insert(schema.periodEvents).values([
+      { periodId: own.id, userId: admin.id, event: 'approved', actorId: admin.id, approvalContext: { selfApproved: true, activeAdminCount: 1 } },
+      { periodId: imp.id, userId: emp.id, event: 'approved', actorId: admin.id, source: 'migration', importBatchId: batch.id, originalMetadata: { reviewer: 'boss@old' } },
+      { periodId: ord.id, userId: emp.id, event: 'approved', actorId: admin.id },
+    ]);
+
+    const files = await unzipBytes(await (await GET(exportRequest())).arrayBuffer());
+    expect(Object.keys(files)).toEqual(expect.arrayContaining(['import_batches.csv', 'admin_change_log.csv']));
+    expect(parse(files['import_batches.csv'])[1]).toEqual(expect.arrayContaining([batch.id, 'Deltek']));
+    expect(parse(files['admin_change_log.csv'])[1]).toEqual(expect.arrayContaining(['workweek_start_day_changed', '{"workweekStartDay":null}', '{"workweekStartDay":1}']));
+
+    const [eh, er] = parse(files['timesheet_entries.csv']);
+    const col = (h: string[], r: string[], name: string) => r[h.indexOf(name)];
+    expect(col(eh, er, 'source')).toBe('migration');
+    expect(col(eh, er, 'import_batch_id')).toBe(batch.id);
+    expect(col(eh, er, 'original_metadata')).toBe('{"enteredBy":"Pat (Deltek)"}');
+    expect(col(eh, er, 'provenance')).toMatch(/^Imported from Deltek on \d{4}-\d{2}-\d{2} by .* — originally entered by Pat \(Deltek\)$/);
+
+    const periods = parse(files['timesheet_periods.csv']);
+    const selfOf = (id: string) => col(periods[0], periods.find((r) => r[0] === id)!, 'self_approved');
+    expect([selfOf(own.id), selfOf(imp.id), selfOf(ord.id)]).toEqual(['true', 'false', 'false']);
+    const events = parse(files['period_events.csv']);
+    const ev = (id: string) => events.find((r) => r[events[0].indexOf('period_id')] === id)!;
+    expect(col(events[0], ev(own.id), 'self_approved')).toBe('true');
+    expect(col(events[0], ev(own.id), 'approval_context')).toBe('{"selfApproved":true,"activeAdminCount":1}');
+    expect(col(events[0], ev(imp.id), 'source')).toBe('migration');
+    expect(col(events[0], ev(imp.id), 'self_approved')).toBe('false');
+    expect(files['README.md']).toContain('### admin_change_log.csv');
+  });
+
+  it('T6: export self_approved matches approvalLabel — legacy period (no events, reviewed_by = user) and reject → resubmit → approve', async () => {
+    const db = getTestDb();
+    const other = await createTestUser({ role: 'admin' });
+    const t = (m: number) => new Date(Date.UTC(2026, 0, 10, 12, m));
+    // Legacy: approved before period_events existed, reviewed by the employee themselves → self-approved.
+    const [legacy] = await db.insert(schema.timesheetPeriods).values({ userId: admin.id, periodStart: '2025-11-01', status: 'approved', reviewedBy: admin.id, reviewedAt: t(0) }).returning();
+    // Rejected by someone else, resubmitted, then approved by the employee (sole-admin self-approval) → true.
+    const [selfLast] = await db.insert(schema.timesheetPeriods).values({ userId: admin.id, periodStart: '2025-11-16', status: 'approved', reviewedBy: admin.id, reviewedAt: t(3) }).returning();
+    // Self-rejected first, resubmitted, then approved by another admin → false (the LATEST approval decides).
+    const [otherLast] = await db.insert(schema.timesheetPeriods).values({ userId: admin.id, periodStart: '2025-12-01', status: 'approved', reviewedBy: other.id, reviewedAt: t(3) }).returning();
+    await db.insert(schema.periodEvents).values([
+      { periodId: selfLast.id, userId: admin.id, event: 'submitted', actorId: admin.id, createdAt: t(0) },
+      { periodId: selfLast.id, userId: admin.id, event: 'rejected', actorId: other.id, createdAt: t(1) },
+      { periodId: selfLast.id, userId: admin.id, event: 'submitted', actorId: admin.id, createdAt: t(2) },
+      { periodId: selfLast.id, userId: admin.id, event: 'approved', actorId: admin.id, createdAt: t(3) },
+      { periodId: otherLast.id, userId: admin.id, event: 'submitted', actorId: admin.id, createdAt: t(0) },
+      { periodId: otherLast.id, userId: admin.id, event: 'rejected', actorId: admin.id, createdAt: t(1) },
+      { periodId: otherLast.id, userId: admin.id, event: 'submitted', actorId: admin.id, createdAt: t(2) },
+      { periodId: otherLast.id, userId: admin.id, event: 'approved', actorId: other.id, createdAt: t(3) },
+    ]);
+
+    const files = await unzipBytes(await (await GET(exportRequest())).arrayBuffer());
+    const periods = parse(files['timesheet_periods.csv']);
+    const exported = (id: string) => periods.find((r) => r[0] === id)![periods[0].indexOf('self_approved')];
+    const { approvalLabels } = await import('@/server/internal/approval-label');
+    const rows = await db.select().from(schema.timesheetPeriods);
+    const labels = await approvalLabels(db as never, rows.map((r) => ({ id: r.id, userId: r.userId, status: r.status, reviewedBy: r.reviewedBy, reviewedAt: r.reviewedAt })), 'UTC');
+    for (const p of [legacy, selfLast, otherLast]) expect(exported(p.id), p.periodStart).toBe(String(labels.get(p.id)!.selfApproved));
+    expect([exported(legacy.id), exported(selfLast.id), exported(otherLast.id)]).toEqual(['true', 'true', 'false']);
+  });
+
   it('F5: a blocked export (policy hold) is a 403 with a reason, never a 500 or a partial archive', async () => {
     tenantState.blocked = true;
     try {

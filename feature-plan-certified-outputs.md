@@ -1,6 +1,6 @@
 # Feature plan: Certified outputs (import integrity, approver rules, correct reports, PDF, audit trail, payroll overtime)
 
-Status: FINAL v6 (lead architect, 2026-10-22) — pre-mortem rounds 1–3 incorporated; business answers to CO-Q1–Q9
+Status: FINAL v6.2 (lead architect, 2026-10-25 — dev rulings Q1–Q8 recorded inline) — pre-mortem rounds 1–3 incorporated; business answers to CO-Q1–Q9
 and the follow-up conditions recorded (2026-10-22) and designed in. Remaining risk is caught at the post-implementation audit. Follows `BLUEPRINT-STANDARD.md`.
 Implemented by the dev agent **after `feature-plan-launch-blockers.md` P3 and P4 have landed** (C2 needs the fresh role
 checks; every action here uses P4's `ActionResult` contract). Source: the 2026-10-22 whole-codebase audit.
@@ -272,11 +272,21 @@ validation before any write (nothing audited).
   reactivate, bulk user import, designation change, …); a static test asserts each such function calls it. When a
   switch turns **on**, the admin sees a notice on the dashboard and Approvals page: "Self-approval is back on: you're
   now the only active admin and have no designated approver. Consider designating one." (shown until dismissed;
-  dismissal keyed by the log row id in `localStorage`).
+  dismissal keyed by the log row id in `localStorage`). **Ruling Q5:** `createUser`, `createUserWithPassword` and
+  `bulkImportEmployees` gain a transaction so the recompute runs inside it; `provisionTenant` writes the baseline
+  `self_approval`/`enabled` row (reason "workspace created", actor = the first admin) only when it inserts that admin
+  (a resumed provisioning never writes a second one); `scripts/**`, `clearTenantData` and test helpers are exempt from
+  the static "every writer calls it" check, but `seed-full.ts` calls `recomputeSelfApproval` once after seeding users so
+  demo data has the same history.
 - **Re-routing (CO-D19):** approval is never assigned to a person — `canApprove` is evaluated live — so a waiting
   timesheet is approvable by whoever qualifies now. After any change above commits, `after()` sends the existing
   "timesheet waiting for approval" email for every **submitted** period whose eligible-approver set gained someone,
   to the newly eligible recipients only (same submitter exclusion).
+  **Ruling Q8:** losing a timesheet's **effective designee** (deactivated, demoted, or the designation removed/changed)
+  is also a re-routing event: email that timesheet's **current** approvers (normally the admins), even though they were
+  eligible before — they reasonably assumed the designee would handle it. Same email template, same submitter exclusion
+  and admin notification opt-in, plus one line: "Its designated approver is no longer available." One email per waiting
+  timesheet per event.
 - **Setup recommendation:** while the workspace has exactly one active admin and that admin has no effective designee, the
   admin dashboard and the Users page show a dismissible notice: "Auditors prefer an independent reviewer. Designate
   another officer or your bookkeeper (supervisor role) to approve your timesheets." (Dismissal stored per admin in
@@ -325,20 +335,26 @@ validation before any write (nothing audited).
   before and after deploying C3 so the founder can tell the design partner what moved. `endUserLaborCategoryAssignment` gains an optional end date (≥ effective date; default today) so a
   promotion can end yesterday/start today.
 - `updateChargeCode`: compare against the stored row; refuse a **changed** `clinId`/`slinId` when entries reference the
-  code; changed `laborCategoryId` on a used code → allowed with the CO-D13 warning and an `admin_change_log` row (old,
-  new) in the same transaction. `SELECT … FOR UPDATE` the code in the
+  code; changed `laborCategoryId` on a used code → allowed and logged with an `admin_change_log` row (old, new) in the
+  same transaction (**ruling Q3:** the charge-code form has no labor-category field, so C3 adds **no** UI and no
+  warning; the UI arrives with `feature-plan-dated-rates.md` D3). `SELECT … FOR UPDATE` the code in the
   update; `saveTimesheetBatch` **re-reads** each charge code's `clin_id`/`slin_id` inside its transaction with
   `FOR SHARE` and uses those values for the insert (not the values cached before the transaction).
 - **Reactivate charge code** (CO-D8): new `reactivateChargeCode(id)` (`requireAdminFresh`, `ActionResult`) sets
-  `is_active = true` and logs to `admin_change_log`; `deactivateChargeCode` logs too. Reactivation does not restore user
-  assignments (admin re-assigns), and the code only becomes assignable again if its CLIN and contract are active (the
-  existing assignable rule; the UI says so).
+  `is_active = true` and logs to `admin_change_log`; `deactivateChargeCode` logs too. **Ruling Q2:** neither deactivation nor
+  reactivation touches user assignments (deactivation never removed them, `charge-codes.ts:114-120`), so reactivating
+  gives the code back to everyone still assigned — what CO-D8's cases (mistake, option year, extension) want. The
+  reactivate confirm dialog says "{N} employees are still assigned and will see this code again" and the log row
+  records N; the code is assignable again only if its CLIN and contract are active (existing rule; the UI says so).
 - Report UI/footers: "Costs use current labor-category rates." (CO-D7 interim.)
+- **Ruling Q6 (CO-D17 on exports and the API):** the CSV and XLSX cost exports carry the unpriced count (there is no
+  cost PDF); `/api/v1/costs` gains an **additive** `unpricedHours` field next to every cost total it returns (no field
+  removed or renamed, so existing integrations keep working); mention it in the "API key created" dialog text.
 
 ### C4 — Grid and review show every recorded hour; corrections on unassigned codes (CO-D8)
 - `ChargeCode` gains `kind: 'charge' | 'clin' | 'indirect'` and `assignable: boolean`. `assignable` = for `charge`:
-  in today's assignable set (`timesheet.ts:464-471`); for `indirect`: active; for `clin`: the employee has an active
-  `user_assignments` row on that CLIN (same rule as `validateClinAssignment`, `timesheet.ts:46-63`).
+  in today's assignable set (`timesheet.ts:464-471`); for `indirect`: active; for `clin`: **always `false`** (ruling Q1 — new
+  CLIN-only cells are always refused; legacy CLIN rows are correction-only).
 - **Correction rule (CO-D8, CO-D15), one rule for every kind:** in any row, a day **with a prior revision** is
   correctable — changed or **zeroed out** (a new revision with 0 hours) — (reason code required — existing rule, `timesheet.ts:356-372`) whether or not the code is still assigned or active;
   a day **without** a prior revision is editable only when the row is `assignable`. Submitted/approved periods stay
@@ -351,7 +367,10 @@ validation before any write (nothing audited).
   `indirect` → `indirectCodeId`).
 - Server (`saveTimesheetBatch`): the assignment / active-code checks run **per cell after `priorRevision` is read
   inside the transaction** and apply only to cells with `priorRevision = 0`; cells with `priorRevision > 0` skip them
-  (still reason-code + period-lock checked). **Legacy CLIN cells only where `priorRevision > 0`** (closes the existing
+  (still reason-code + period-lock checked). **Ruling Q4:** for a new charge-code cell the check is the full assignable
+  rule — active assignment **and** active code (and active CLIN/contract), using the in-transaction `FOR SHARE` re-read
+  from C3 — so new hours on a deactivated code are refused (intended, CO-D8/CO-D15). **Legacy CLIN cells only where
+  `priorRevision > 0`** (closes the existing
   path that creates new CLIN-only cells); for a legacy CLIN cell the server **copies `slin_id` from that cell's
   prior revision** and rejects a client-sent `slinId` that differs. UI: in legacy rows only days with a prior revision
   are editable (others read-only), so one stray value can't fail an all-or-nothing save. Offline queue items (dormant path) store `kind`; items without it are treated as `charge`.
@@ -359,7 +378,8 @@ validation before any write (nothing audited).
 
 ### C5 — Timesheet PDF from entries
 Rows from latest-revision entries grouped by true cell code (charge/CLIN/indirect, with category), summed per code-day;
-grand total = sum of entries; approval line per C1/C2 (in-app, "Self-approved", or imported); stable on reprint. Access
+grand total = sum of entries; approval line per C1/C2 (in-app, "Self-approved", or imported); stable on reprint
+(**ruling Q7:** rows, totals and the approval line are identical on every reprint; the footer's generation time stays). Access
 via `reviewScope`.
 
 ### C6 — Audit trail
@@ -524,7 +544,7 @@ existing tests needing updates: `authorization.test.ts`, `fresh-authorization.te
 | Periods import dates | period ending today or later → row error; `draft` row → row error; entries into an imported approved period → refused (import entries first) |
 | Batch limits | 2,001 rows or 201 employees → server validation error; validation of a large file is batched (no 1 MB failure); partial multi-batch close reports committed batches |
 | Gusto / exempt | Gusto CSV has `regular_hours`, `overtime_hours`, `pto_hours`, `sick_hours`, `holiday_hours`, no `hours`; columns sum to total paid; exempt employee: OT 0 in vendor files, uncompensated OT in custom + daily detail |
-| Grid assignable | legacy CLIN row: days with a prior revision correctable (assigned or not), empty days editable only with an active assignment; deactivated charge code row: existing days correctable, empty days read-only |
+| Grid assignable | legacy CLIN row: days with a prior revision correctable (assigned or not), empty days always read-only and a new CLIN-only cell refused by the server (ruling Q1); new hours on a deactivated charge code refused (ruling Q4); reactivating a code restores it to still-assigned employees (ruling Q2); deactivated charge code row: existing days correctable, empty days read-only |
 | Approver | supervisor demoted to employee: former designee can't approve (no shared CLIN); admin designates a supervisor (bookkeeper) → that supervisor lists, reviews and approves the admin's timesheet; admin with a designee → self-approve refused with the explicit message; second active admin created → first admin's pending self-approval refused, second admin approves; second admin deactivated → sole admin can self-approve again; Approver select shown for admin + supervisor users, hidden for employees; designation change logged |
 | Self-approved label | label present on approvals list, review, timesheet status, PDF, report, audit trail, v1 API, export (one helper; static test) |
 | Corrections (CO-D8) | unassigned charge code: existing day corrected with reason → saved; new day on that row → refused (server) and read-only (UI); deactivated code: correction allowed; correction in a submitted/approved period refused; `reactivateChargeCode` logs + code assignable again only with active CLIN/contract; deactivate logged |

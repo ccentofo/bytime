@@ -8,13 +8,12 @@ import { requireAdmin, requireAdminFresh, AuthorizationError } from '@/lib/sessi
 import { unlockAccount } from '@/server/internal/login-attempts';
 import { SAFE_USER_COLUMNS } from '@/server/internal/users';
 import { assertSeatsAvailable } from '@/server/internal/seats';
+import { activeAdminIds, currentSelfApprovalOn, effectiveDesignee, loadApprovalFacts, lockUserRulesExclusive, newlyEligible, recomputeSelfApproval, snapshotSubmittedEligibility } from '@/server/internal/approval-rules';
+import { notifyReroutedApprovals } from '@/server/internal/submission-notify';
+import { adminChangeLog } from '@/db/schema';
 import { validateEmail, validateRequired, validateStringLength, validateEnum } from '@/lib/validation';
 import { UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
-
-async function assertSeatAvailable(): Promise<void> {
-  await assertSeatsAvailable(1);
-}
 
 const USER_ROLES = ['admin', 'supervisor', 'employee'] as const;
 
@@ -31,16 +30,26 @@ export async function createUser(data: {
   role?: 'admin' | 'supervisor' | 'employee';
 }) {
   return userAction(async () => {
-    await requireAdminFresh();
+    const actor = await requireAdminFresh();
     const db = await getDbForWrite();
-    await assertSeatAvailable();
     const validatedData = {
       email: validateEmail(data.email),
       fullName: validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255),
       role: data.role ? validateEnum(data.role, 'Role', USER_ROLES) : 'employee' as const,
     };
-    const rows = await db.insert(users).values(validatedData).returning(SAFE_USER_COLUMNS);
-    return rows[0];
+    // certified-outputs C2 (CO-D19, ruling Q5): the insert, the self-approval recompute and the re-routing snapshot run
+    // in one transaction; the waiting timesheets' newly eligible approvers are emailed after it commits.
+    const { user, rerouted } = await db.transaction(async (tx) => {
+      await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
+      await assertSeatsAvailable(1, tx);
+      const beforeFacts = await loadApprovalFacts(tx);
+      const before = await snapshotSubmittedEligibility(tx, beforeFacts);
+      const [row] = await tx.insert(users).values(validatedData).returning(SAFE_USER_COLUMNS);
+      await recomputeSelfApproval(tx, actor.id, `${row.fullName} added (${row.role})`, { before: beforeFacts });
+      return { user: row, rerouted: newlyEligible(before, await snapshotSubmittedEligibility(tx)) };
+    });
+    await notifyReroutedApprovals(rerouted);
+    return user;
   });
 }
 
@@ -124,6 +133,7 @@ export async function updateUser(id: string, data: {
     const activating = data.isActive === true;
 
     const result = await db.transaction(async (tx) => {
+      await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
       if (activating) {
         // Reactivating a user takes a seat, same as creating one (R2-11).
         const [target] = await tx.select({ isActive: users.isActive }).from(users).where(eq(users.id, id)).for('update');
@@ -164,11 +174,22 @@ export async function updateUser(id: string, data: {
         updateData.sessionVersion = sql`${users.sessionVersion} + 1`;
       }
 
+      // certified-outputs C2 (CO-D19): self-approval switch + re-routing, in this same transaction.
+      const beforeFacts = await loadApprovalFacts(tx);
+      const before = await snapshotSubmittedEligibility(tx, beforeFacts);
       const rows = await tx.update(users).set(updateData).where(eq(users.id, id)).returning(SAFE_USER_COLUMNS);
-      return rows[0];
+      const changed = rows[0];
+      const reason = !changed ? 'user update'
+        : data.isActive === false ? `${changed.fullName} deactivated`
+        : data.isActive === true ? `${changed.fullName} reactivated`
+        : data.role !== undefined ? `${changed.fullName}'s role changed to ${changed.role}`
+        : `${changed.fullName} updated`;
+      await recomputeSelfApproval(tx, actor.id, reason, { before: beforeFacts });
+      return { row: changed, rerouted: newlyEligible(before, await snapshotSubmittedEligibility(tx)) };
     });
 
-    return result;
+    await notifyReroutedApprovals(result.rerouted);
+    return result.row;
   });
 }
 
@@ -179,19 +200,89 @@ export async function createUserWithPassword(data: {
   password: string;
 }) {
   return userAction(async () => {
-    await requireAdminFresh();
+    const actor = await requireAdminFresh();
     const db = await getDbForWrite();
-    await assertSeatAvailable();
     const validatedEmail = validateEmail(data.email);
     const validatedName = validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255);
     const validatedRole = validateEnum(data.role, 'Role', USER_ROLES);
     const hash = await bcrypt.hash(data.password, 12);
-    const rows = await db.insert(users).values({
-      email: validatedEmail,
-      fullName: validatedName,
-      role: validatedRole,
-      passwordHash: hash,
-    }).returning(SAFE_USER_COLUMNS);
-    return rows[0];
+    // certified-outputs C2 (ruling Q5): one transaction with the self-approval recompute and re-routing snapshot.
+    const { user, rerouted } = await db.transaction(async (tx) => {
+      await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
+      await assertSeatsAvailable(1, tx);
+      const beforeFacts = await loadApprovalFacts(tx);
+      const before = await snapshotSubmittedEligibility(tx, beforeFacts);
+      const [row] = await tx.insert(users).values({
+        email: validatedEmail,
+        fullName: validatedName,
+        role: validatedRole,
+        passwordHash: hash,
+      }).returning(SAFE_USER_COLUMNS);
+      await recomputeSelfApproval(tx, actor.id, `${row.fullName} added (${row.role})`, { before: beforeFacts });
+      return { user: row, rerouted: newlyEligible(before, await snapshotSubmittedEligibility(tx)) };
+    });
+    await notifyReroutedApprovals(rerouted);
+    return user;
   });
+}
+
+/**
+ * Designate (or clear) the approver of a supervisor- or admin-role user (feature-plan-certified-outputs.md C2,
+ * CO-D5/CO-D12). Options: an active admin or supervisor other than the user. Logged to admin_change_log, the
+ * self-approval switch recomputed and the waiting timesheets re-routed, all in one transaction. Demoting or
+ * deactivating the approver later leaves approver_id set but ineffective (approval-rules.ts effectiveDesignee).
+ */
+export async function setUserApprover(userId: string, approverId: string | null): Promise<ActionResult<{ approverId: string | null }>> {
+  return userAction(async () => {
+    const actor = await requireAdminFresh();
+    const db = await getDbForWrite();
+    if (approverId !== null && typeof approverId !== 'string') throw new UserFacingError('Choose an approver or none.');
+    if (approverId === userId) throw new UserFacingError('A user cannot be their own approver.');
+
+    const rerouted = await db.transaction(async (tx) => {
+      await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
+      const [target] = await tx.select({ id: users.id, fullName: users.fullName, role: users.role, approverId: users.approverId })
+        .from(users).where(eq(users.id, userId)).for('update');
+      if (!target) throw new UserFacingError('User not found.', 'not_found');
+      if (target.role !== 'supervisor' && target.role !== 'admin') {
+        throw new UserFacingError('Approvers can be designated for supervisors and admins only. Employees are approved by their CLIN supervisors and admins.');
+      }
+      if (approverId !== null) {
+        const [approver] = await tx.select({ role: users.role, isActive: users.isActive }).from(users).where(eq(users.id, approverId));
+        if (!approver || !approver.isActive || (approver.role !== 'admin' && approver.role !== 'supervisor')) {
+          throw new UserFacingError('The approver must be an active admin or supervisor.');
+        }
+      }
+      if (target.approverId === approverId) return [];
+
+      const beforeFacts = await loadApprovalFacts(tx);
+      const before = await snapshotSubmittedEligibility(tx, beforeFacts);
+      await tx.update(users).set({ approverId, updatedAt: new Date() }).where(eq(users.id, userId));
+      await tx.insert(adminChangeLog).values({
+        actorId: actor.id, entity: 'user', entityId: userId, action: 'approver_changed',
+        oldValue: { approverId: target.approverId }, newValue: { approverId },
+      });
+      await recomputeSelfApproval(tx, actor.id, `${target.fullName}'s designated approver changed`, { before: beforeFacts });
+      return newlyEligible(before, await snapshotSubmittedEligibility(tx));
+    });
+    await notifyReroutedApprovals(rerouted);
+    return { approverId };
+  });
+}
+
+/**
+ * Admin notices (feature-plan-certified-outputs.md C2, CO-D19): `selfApprovalBackOn` — self-approval came back on for
+ * this admin (the log row id keys the client-side dismissal); `recommendDesignee` — this admin is the only active admin
+ * and has no effective designee ("Auditors prefer an independent reviewer…"). Read-only.
+ */
+export async function getApprovalNotices(): Promise<{ selfApprovalBackOn: { logId: string } | null; recommendDesignee: boolean }> {
+  const actor = await requireAdmin();
+  const db = await getDb();
+  const facts = await loadApprovalFacts(db);
+  const on = await currentSelfApprovalOn(db, actor.id);
+  const admins = activeAdminIds(facts);
+  return {
+    selfApprovalBackOn: on ? { logId: on.logId } : null,
+    recommendDesignee: admins.length === 1 && admins[0] === actor.id && effectiveDesignee(facts, actor.id) === null,
+  };
 }

@@ -4,12 +4,16 @@ import { getDb, getDbForWrite } from '@/db';
 import { isUniqueViolation } from '@/lib/db-errors';
 import { timesheetPeriods, users, timesheetEntries, periodEvents } from '@/db/schema';
 import { eq, and, inArray, gte, lt, sql } from 'drizzle-orm';
-import { requireSession, requireApprover, requireApproverFresh, getEmployeeScope, assertCanAccessEmployee, AuthorizationError } from '@/lib/session';
+import { requireSession, requireApprover, requireApproverFresh, getEmployeeScope, AuthorizationError } from '@/lib/session';
 import { getPeriodStatusFor, lockEmployeeTimesheet, resolvePeriod, type PeriodInfo, type PeriodStatus } from '@/server/internal/periods';
-import { getSupervisorScopeInfo, getSupervisedEmployeeIds } from '@/server/internal/supervisor-scope';
+import { closeImportWindowOnSubmit, lockImportWindowShared } from '@/server/internal/import-window';
+import { getSupervisorScopeInfo } from '@/server/internal/supervisor-scope';
+import { canApprove, loadApprovalFacts, lockUserRulesShared, selfApprovalAvailable, selfApprovalContext } from '@/server/internal/approval-rules';
+import { approvalLabels } from '@/server/internal/approval-label';
+import { notifySubmissionRecipients } from '@/server/internal/submission-notify';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { existingPeriodLength, loadScheduleResolver } from '@/server/internal/pay-period-config';
-import { sendTimesheetSubmittedEmail, sendTimesheetApprovedEmail, sendTimesheetRejectedEmail } from '@/lib/email/send';
+import { sendTimesheetApprovedEmail, sendTimesheetRejectedEmail } from '@/lib/email/send';
 import { scheduleEmail } from '@/lib/email/schedule';
 import { getTenantSlug } from '@/lib/tenant/context';
 import { tenantBaseUrl } from '@/lib/tenant/host';
@@ -97,66 +101,12 @@ export async function getPeriodOptions(aroundDay: CalendarDate, before: number, 
 }
 
 /**
- * Email the reviewers of a just-submitted period: active admins plus active supervisors whose
- * scope includes the submitter, never the submitter, each only if they opted in (emailOnSubmit).
- * Called on both the first submission and a re-submission. Recipients are resolved now; the sends run after the
- * response (`scheduleEmail`), with links to this workspace's own host.
+ * Email the reviewers of a just-submitted period (first submission or re-submission): exactly the users who may approve
+ * it now (feature-plan-certified-outputs.md C2 — admins, the effective designee, CLIN-sharing supervisors for an
+ * employee-role submitter), never the submitter, each only if opted in. See src/server/internal/submission-notify.ts.
  */
-async function notifyReviewersOfSubmission(userId: string, periodStart: CalendarDate, numDays: number): Promise<void> {
-  const periodEnd = addDays(periodStart, numDays - 1);
-  const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(periodEnd, 'MMM D, YYYY')}`;
-  const submittedAt = formatInstant(new Date(), await getWorkspaceTimezone(), 'MMM D, YYYY h:mm A');
-  const db = await getDb();
-
-  const [employee] = await db
-    .select({ fullName: users.fullName, email: users.email })
-    .from(users)
-    .where(eq(users.id, userId));
-
-  // R2-10: only ACTIVE reviewers, and only supervisors whose scope actually includes this
-  // submitter (sharing an active CLIN assignment) — previously every supervisor in the tenant
-  // was notified regardless of scope or active status, leaking who's submitting to people with
-  // no business reason to know.
-  const allSupervisors = await db
-    .select({ id: users.id, fullName: users.fullName, email: users.email })
-    .from(users)
-    .where(and(eq(users.role, 'supervisor'), eq(users.isActive, true)));
-
-  const inScopeSupervisors: typeof allSupervisors = [];
-  for (const supervisor of allSupervisors) {
-    const scope = await getSupervisedEmployeeIds(supervisor.id, 'supervisor');
-    if (scope.includes(userId)) inScopeSupervisors.push(supervisor);
-  }
-
-  const admins = await db
-    .select({ id: users.id, fullName: users.fullName, email: users.email })
-    .from(users)
-    .where(and(eq(users.role, 'admin'), eq(users.isActive, true)));
-
-  // Never notify the submitter about their own submission (e.g. an admin's own timesheet).
-  const reviewers = [...inScopeSupervisors, ...admins].filter((r) => r.id !== userId);
-
-  if (!employee) return;
-  const recipients: typeof reviewers = [];
-  for (const reviewer of reviewers) {
-    if (await isNotificationEnabled(reviewer.id, 'emailOnSubmit')) recipients.push(reviewer);
-  }
-  if (recipients.length === 0) return;
-
-  const appUrl = tenantBaseUrl(await getTenantSlug());
-  scheduleEmail('timesheet-submitted', async () => {
-    for (const reviewer of recipients) {
-      await sendTimesheetSubmittedEmail({
-        supervisorEmail: reviewer.email,
-        supervisorName: reviewer.fullName,
-        employeeName: employee.fullName,
-        employeeEmail: employee.email,
-        periodLabel,
-        submittedAt,
-        appUrl,
-      });
-    }
-  });
+async function notifyReviewersOfSubmission(userId: string, periodStart: CalendarDate, numDays: number, submittedAt: Date | null): Promise<void> {
+  await notifySubmissionRecipients({ employeeId: userId, periodStart, numDays, submittedAt });
 }
 
 /**
@@ -194,6 +144,9 @@ export async function submitPeriod(data: {
     let row: typeof timesheetPeriods.$inferSelect;
     try {
       row = await db.transaction(async (tx) => {
+        // feature-plan-certified-outputs.md §3 lock order: the import-window lock (shared here, exclusive in an import
+        // batch) FIRST, then the employee lock — so an import and a first submission serialize and never deadlock.
+        await lockImportWindowShared(tx);
         await lockEmployeeTimesheet(tx, userId);
 
         // Server-side validation: cannot submit a completely empty timesheet
@@ -229,6 +182,7 @@ export async function submitPeriod(data: {
             periodType: periodConfig.periodType,
             periodNumDays: numDays,
             completenessSnapshot: data.completeness ?? null,
+            submissionCount: 1, // C2: approve/reject apply to exactly this submitted version
           }).returning();
         } else {
           if (existing.status !== 'draft' && existing.status !== 'rejected') {
@@ -244,6 +198,7 @@ export async function submitPeriod(data: {
               reviewedBy: null,
               reviewComment: null,
               completenessSnapshot: data.completeness ?? null,
+              submissionCount: sql`${timesheetPeriods.submissionCount} + 1`, // C2: a resubmission is a new version
               updatedAt: new Date(),
             })
             .where(and(eq(timesheetPeriods.id, existing.id), inArray(timesheetPeriods.status, ['draft', 'rejected'])))
@@ -256,6 +211,8 @@ export async function submitPeriod(data: {
           periodId: saved.id, userId, event: 'submitted', actorId: userId,
           comment: data.comment ?? null, completenessSnapshot: data.completeness ?? null,
         });
+        // CO-D1: the first submission closes the timesheet-history import window (a no-op once closed).
+        await closeImportWindowOnSubmit(tx);
         return saved;
       });
     } catch (err) {
@@ -277,7 +234,7 @@ export async function submitPeriod(data: {
     };
 
     // The submission is already committed; a notification failure must not report it as failed.
-    await notifyReviewersOfSubmission(userId, periodStart, numDays).catch((err) => console.error('Submission notification failed:', err));
+    await notifyReviewersOfSubmission(userId, periodStart, numDays, row.submittedAt).catch((err) => console.error('Submission notification failed:', err));
 
     return result;
   });
@@ -354,138 +311,118 @@ async function notifyEmployeeOfReject(
 
 /** Shown when a period's status changed between our check and our write (another tab or reviewer). */
 const CONCURRENT_REVIEW_MESSAGE = 'This timesheet was just changed by someone else. Please refresh and try again.';
+/** C2: the employee resubmitted after the reviewer opened it — the reviewer must look at the new version. */
+const RESUBMITTED_MESSAGE = 'This timesheet was resubmitted after you opened it — refresh to review the new version.';
+const SELF_APPROVAL_OFF_MESSAGE = 'Your timesheet must be approved by another admin or your designated approver.';
+const MISSING_SEEN_MESSAGE = 'Open the timesheet and review it before deciding (the reviewed version is missing).';
+
+type Decision = 'approved' | 'rejected';
 
 /**
- * Approve a timesheet period. Approver only, and only for an employee in scope.
- * Admins may approve their own period (§0); supervisors and employees may not.
+ * Approve or reject (feature-plan-certified-outputs.md C2). Order: fresh approver (in the exported action) → load period → non-admin
+ * self-decision refused (explicit) → admin self-decision refused once a second active admin or an effective designee
+ * exists (explicit) → canApprove false → "not found" (no disclosure) → status → the conditional UPDATE on
+ * status = 'submitted' AND submission_count = seen (approve exactly what was reviewed). A self-approval event carries
+ * approval_context (CO-D19).
+ */
+async function decidePeriod(
+  actor: Awaited<ReturnType<typeof requireApproverFresh>>,
+  decision: Decision,
+  data: { periodId: string; comment?: string; seen?: number },
+): Promise<void> {
+  if (typeof data.seen !== 'number' || !Number.isInteger(data.seen) || data.seen < 0) {
+    throw new UserFacingError(MISSING_SEEN_MESSAGE);
+  }
+  const db = await getDbForWrite();
+  const [period] = await db.select().from(timesheetPeriods).where(eq(timesheetPeriods.id, data.periodId));
+  if (!period) throw new UserFacingError('Period not found', 'not_found');
+  const verb = decision === 'approved' ? 'approve' : 'reject';
+
+  const self = period.userId === actor.id;
+  if (self && actor.role !== 'admin') {
+    // Their own period, so there's nothing to mask: say plainly why it's refused (R2-7).
+    throw new AuthorizationError('forbidden', `Forbidden: You cannot ${verb} your own timesheet.`);
+  }
+  const facts = await loadApprovalFacts(db);
+  if (self && !selfApprovalAvailable(facts, actor.id)) {
+    throw new AuthorizationError('forbidden', SELF_APPROVAL_OFF_MESSAGE);
+  }
+  // R2-12: an out-of-scope or not-approvable period looks exactly like a missing one.
+  if (!canApprove(facts, actor.id, period.userId)) throw new UserFacingError('Period not found', 'not_found');
+
+  if (period.status !== 'submitted') {
+    throw new UserFacingError(`Cannot ${verb} period with status "${period.status}". Only submitted periods can be ${decision}.`);
+  }
+
+  await db.transaction(async (tx) => {
+    // F1: wait for any in-flight user-rules writer (role / is_active / approver_id), then decide on the rules as they
+    // are NOW — the checks above only fail fast; these are the ones that count.
+    await lockUserRulesShared(tx);
+    const current = await loadApprovalFacts(tx);
+    if (self && !selfApprovalAvailable(current, actor.id)) throw new AuthorizationError('forbidden', SELF_APPROVAL_OFF_MESSAGE);
+    if (!canApprove(current, actor.id, period.userId)) throw new UserFacingError('Period not found', 'not_found');
+    const updated = await tx.update(timesheetPeriods)
+      .set({
+        status: decision,
+        reviewedAt: new Date(),
+        reviewedBy: actor.id,
+        reviewComment: data.comment ?? null,
+        updatedAt: new Date(),
+      })
+      // Only if still submitted AND still the version the reviewer saw.
+      .where(and(eq(timesheetPeriods.id, data.periodId), eq(timesheetPeriods.status, 'submitted'), eq(timesheetPeriods.submissionCount, data.seen!)))
+      .returning({ id: timesheetPeriods.id });
+    if (updated.length === 0) {
+      const [now] = await tx.select({ status: timesheetPeriods.status, submissionCount: timesheetPeriods.submissionCount })
+        .from(timesheetPeriods).where(eq(timesheetPeriods.id, data.periodId));
+      if (now?.status === 'submitted' && now.submissionCount > data.seen!) throw new ConflictError(RESUBMITTED_MESSAGE);
+      throw new ConflictError(CONCURRENT_REVIEW_MESSAGE);
+    }
+    // T8/R11: append-only approval history, written in the same transaction as the period change.
+    await tx.insert(periodEvents).values({
+      periodId: data.periodId, userId: period.userId, event: decision, actorId: actor.id,
+      comment: data.comment ?? null, completenessSnapshot: period.completenessSnapshot ?? null,
+      approvalContext: self && decision === 'approved' ? await selfApprovalContext(tx, actor.id) : null,
+    });
+  });
+
+  // The decision is already committed; a notification failure must not report it as failed (audit A12).
+  if (decision === 'approved') {
+    await notifyEmployeeOfApprove(period, actor.fullName).catch((err) => console.error('Approve notification failed:', err));
+  } else {
+    await notifyEmployeeOfReject(period, actor.fullName, data.comment ?? '').catch((err) => console.error('Reject notification failed:', err));
+  }
+}
+
+/**
+ * Approve a timesheet period. `seen` = the submission_count the reviewer saw (getTimesheetForReview returns it).
  */
 export async function approvePeriod(data: {
   periodId: string;
   comment?: string;
+  seen: number;
 }): Promise<ActionResult<void>> {
   return userAction(async () => {
     const actor = await requireApproverFresh();
-    const db = await getDbForWrite();
-    const existing = await db
-      .select()
-      .from(timesheetPeriods)
-      .where(eq(timesheetPeriods.id, data.periodId));
-
-    if (existing.length === 0) throw new UserFacingError('Period not found', 'not_found');
-    const period = existing[0];
-
-    // R2-7 (§0, locked product decision): admins may approve their own timesheet; supervisors
-    // and employees still may not.
-    if (period.userId === actor.id && actor.role !== 'admin') {
-      // Their own period, so there's nothing to mask: say plainly why it's refused.
-      throw new AuthorizationError('forbidden', 'Forbidden: You cannot approve your own timesheet.');
-    }
-
-    // R2-12: scope check immediately after loading the period, before anything about its status
-    // is disclosed — an out-of-scope period must look exactly like a missing one. (For a self
-    // approval this trivially passes: assertCanAccessEmployee always allows actor.id === employeeId.)
-    try {
-      await assertCanAccessEmployee(actor, period.userId);
-    } catch {
-      throw new UserFacingError('Period not found', 'not_found');
-    }
-
-    if (period.status !== 'submitted') {
-      throw new UserFacingError(`Cannot approve period with status "${period.status}". Only submitted periods can be approved.`);
-    }
-
-    await db.transaction(async (tx) => {
-      const updated = await tx.update(timesheetPeriods)
-        .set({
-          status: 'approved',
-          reviewedAt: new Date(),
-          reviewedBy: actor.id,
-          reviewComment: data.comment ?? null,
-          updatedAt: new Date(),
-        })
-        // Only if still submitted: two reviewers acting at once can't both record a decision.
-        .where(and(eq(timesheetPeriods.id, data.periodId), eq(timesheetPeriods.status, 'submitted')))
-        .returning({ id: timesheetPeriods.id });
-      if (updated.length === 0) throw new ConflictError(CONCURRENT_REVIEW_MESSAGE);
-      // T8/R11: append-only approval history, written in the same transaction as the period change.
-      await tx.insert(periodEvents).values({
-        periodId: data.periodId, userId: period.userId, event: 'approved', actorId: actor.id,
-        comment: data.comment ?? null, completenessSnapshot: period.completenessSnapshot ?? null,
-      });
-    });
-
-    // The decision is already committed; a notification failure must not report it as failed (audit A12).
-    await notifyEmployeeOfApprove(period, actor.fullName).catch((err) => console.error('Approve notification failed:', err));
+    await decidePeriod(actor, 'approved', data);
   });
 }
 
 /**
- * Reject a timesheet period. Approver only, and only for an employee in scope.
- * Sets status to 'rejected' so the employee can re-edit and resubmit.
- * Admins may reject their own period (§0); supervisors and employees may not.
+ * Reject a timesheet period so the employee can re-edit and resubmit. A comment is required.
  */
 export async function rejectPeriod(data: {
   periodId: string;
   comment: string; // Required for rejections
+  seen: number;
 }): Promise<ActionResult<void>> {
   return userAction(async () => {
     const actor = await requireApproverFresh();
-    const db = await getDbForWrite();
-    const existing = await db
-      .select()
-      .from(timesheetPeriods)
-      .where(eq(timesheetPeriods.id, data.periodId));
-
-    if (existing.length === 0) throw new UserFacingError('Period not found', 'not_found');
-    const period = existing[0];
-
-    // R2-7 (§0, locked product decision): admins may reject their own timesheet; supervisors
-    // and employees still may not.
-    if (period.userId === actor.id && actor.role !== 'admin') {
-      throw new AuthorizationError('forbidden', 'Forbidden: You cannot reject your own timesheet.');
-    }
-
-    // R2-12: scope check immediately after loading the period, before anything about its status
-    // is disclosed — an out-of-scope period must look exactly like a missing one.
-    try {
-      await assertCanAccessEmployee(actor, period.userId);
-    } catch {
-      throw new UserFacingError('Period not found', 'not_found');
-    }
-
-    if (period.status !== 'submitted') {
-      throw new UserFacingError(`Cannot reject period with status "${period.status}". Only submitted periods can be rejected.`);
-    }
-
-    await db.transaction(async (tx) => {
-      const updated = await tx.update(timesheetPeriods)
-        .set({
-          status: 'rejected',
-          reviewedAt: new Date(),
-          reviewedBy: actor.id,
-          reviewComment: data.comment,
-          updatedAt: new Date(),
-        })
-        // Only if still submitted: two reviewers acting at once can't both record a decision.
-        .where(and(eq(timesheetPeriods.id, data.periodId), eq(timesheetPeriods.status, 'submitted')))
-        .returning({ id: timesheetPeriods.id });
-      if (updated.length === 0) throw new ConflictError(CONCURRENT_REVIEW_MESSAGE);
-      // T8/R11: append-only approval history, written in the same transaction as the period change.
-      await tx.insert(periodEvents).values({
-        periodId: data.periodId, userId: period.userId, event: 'rejected', actorId: actor.id,
-        comment: data.comment, completenessSnapshot: period.completenessSnapshot ?? null,
-      });
-    });
-
-    // The decision is already committed; a notification failure must not report it as failed (audit A12).
-    await notifyEmployeeOfReject(period, actor.fullName, data.comment).catch((err) => console.error('Reject notification failed:', err));
+    await decidePeriod(actor, 'rejected', data);
   });
 }
 
-/**
- * Get all timesheet periods, scoped to the approver's employees (or all, for admins).
- */
-export async function getScopedPeriods(): Promise<Array<{
+export interface ScopedPeriodRow {
   id: string;
   userId: string;
   userName: string;
@@ -496,7 +433,18 @@ export async function getScopedPeriods(): Promise<Array<{
   submittedAt: Date | null;
   reviewedAt: Date | null;
   reviewedBy: string | null;
-}>> {
+  /** C2: whether the session user may approve/reject it now (false → "view but not approve"). */
+  canApprove: boolean;
+  /** C2: approvalLabel() — badge ("Self-approved"/"Self-rejected") and the approval line. */
+  approvalBadge: string | null;
+  approvalText: string | null;
+}
+
+/**
+ * Get all timesheet periods in the approver's review scope (feature-plan-certified-outputs.md C2: CLIN sharers +
+ * designators + self; all for admins), each with whether the session user may decide it.
+ */
+export async function getScopedPeriods(): Promise<ScopedPeriodRow[]> {
   const actor = await requireApprover();
   const scope = await getEmployeeScope(actor);
   const db = await getDb();
@@ -515,7 +463,6 @@ export async function getScopedPeriods(): Promise<Array<{
       status: timesheetPeriods.status,
       submittedAt: timesheetPeriods.submittedAt,
       reviewedAt: timesheetPeriods.reviewedAt,
-      // R2-7: exposed so the UI can render "Self-approved" when reviewedBy === userId.
       reviewedBy: timesheetPeriods.reviewedBy,
     })
     .from(timesheetPeriods)
@@ -523,60 +470,16 @@ export async function getScopedPeriods(): Promise<Array<{
     .where(whereClause)
     .orderBy(timesheetPeriods.submittedAt);
 
-  const resolvedRows = await Promise.all(
-    rows.map(async (row) => ({
-      ...row,
-      periodNumDays: await resolvePeriodNumDays(row.periodStart as CalendarDate, row.periodNumDays),
-    }))
-  );
-
-  return resolvedRows as Array<{
-    id: string; userId: string; userName: string; userEmail: string; periodStart: CalendarDate;
-    periodNumDays: number; status: PeriodStatus; submittedAt: Date | null; reviewedAt: Date | null; reviewedBy: string | null;
-  }>;
-}
-
-/**
- * Get pending (submitted) approvals, scoped to the approver's employees (or all, for admins).
- */
-export async function getScopedPendingApprovals(): Promise<Array<{
-  id: string;
-  userId: string;
-  userName: string;
-  userEmail: string;
-  periodStart: CalendarDate;
-  status: PeriodStatus;
-  submittedAt: Date | null;
-}>> {
-  const actor = await requireApprover();
-  const scope = await getEmployeeScope(actor);
-  const db = await getDb();
-
-  if (scope !== 'all' && scope.length === 0) return [];
-
-  const whereClause = scope === 'all'
-    ? eq(timesheetPeriods.status, 'submitted')
-    : and(eq(timesheetPeriods.status, 'submitted'), inArray(timesheetPeriods.userId, scope));
-
-  const rows = await db
-    .select({
-      id: timesheetPeriods.id,
-      userId: timesheetPeriods.userId,
-      userName: users.fullName,
-      userEmail: users.email,
-      periodStart: timesheetPeriods.periodStart,
-      status: timesheetPeriods.status,
-      submittedAt: timesheetPeriods.submittedAt,
-    })
-    .from(timesheetPeriods)
-    .innerJoin(users, eq(timesheetPeriods.userId, users.id))
-    .where(whereClause)
-    .orderBy(timesheetPeriods.submittedAt);
-
-  return rows as Array<{
-    id: string; userId: string; userName: string; userEmail: string; periodStart: CalendarDate;
-    status: PeriodStatus; submittedAt: Date | null;
-  }>;
+  const facts = await loadApprovalFacts(db);
+  const labels = await approvalLabels(db, rows, await getWorkspaceTimezone());
+  return Promise.all(rows.map(async (row) => ({
+    ...row,
+    periodStart: row.periodStart as CalendarDate,
+    periodNumDays: await resolvePeriodNumDays(row.periodStart as CalendarDate, row.periodNumDays),
+    canApprove: row.status === 'submitted' && canApprove(facts, actor.id, row.userId),
+    approvalBadge: labels.get(row.id)?.badge ?? null,
+    approvalText: labels.get(row.id)?.text ?? null,
+  })));
 }
 
 /**
@@ -587,6 +490,7 @@ export async function getMyScopeInfo(): Promise<{
   assignedContractCount: number;
   assignedClinCount: number;
   supervisedEmployeeCount: number;
+  designatedByCount: number;
 } | null> {
   const actor = await requireApprover();
   if (actor.role !== 'supervisor') return null;

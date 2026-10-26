@@ -16,6 +16,7 @@ export const SAFE_USER_COLUMNS = {
   role: users.role,
   isActive: users.isActive,
   flsaExempt: users.flsaExempt,
+  approverId: users.approverId, // certified-outputs C2: designated approver (supervisor/admin users)
   createdAt: users.createdAt,
   updatedAt: users.updatedAt,
 } as const;

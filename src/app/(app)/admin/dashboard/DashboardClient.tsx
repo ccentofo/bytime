@@ -32,6 +32,8 @@ import {
 import { isCalendarDate } from '@/lib/calendar-date';
 import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { PricedBasisNote, UnpricedNote } from '@/components/costs/UnpricedNote';
+import { CURRENT_RATES_NOTE } from '@/lib/cost-labels';
 
 type Props = {
   initialSummaries: ContractSummary[];
@@ -60,6 +62,8 @@ export function DashboardClient({ initialSummaries }: Props) {
   // Period cost report state
   const [reportStartDate, setReportStartDate] = useState<string | null>(null);
   const [reportEndDate, setReportEndDate] = useState<string | null>(null);
+  // F11: the unpriced note scopes by the range the report was GENERATED for, not whatever the inputs say now.
+  const [generatedRange, setGeneratedRange] = useState<{ startDate: string; endDate: string } | null>(null);
   const [costReport, setCostReport] = useState<PeriodCostEntry[]>([]);
   const [hasGeneratedReport, setHasGeneratedReport] = useState(false);
 
@@ -67,6 +71,7 @@ export function DashboardClient({ initialSummaries }: Props) {
   const totalContracts = summaries.length;
   const totalFunded = summaries.reduce((sum, s) => sum + (parseFloat(s.fundedValue ?? '0') || 0), 0);
   const totalSpent = summaries.reduce((sum, s) => sum + s.totalCost, 0);
+  const totalUnpriced = summaries.reduce((sum, s) => sum + s.unpricedHours, 0);
   const totalRemaining = totalFunded - totalSpent;
 
   function handleGenerateReport() {
@@ -75,6 +80,7 @@ export function DashboardClient({ initialSummaries }: Props) {
     startTransition(async () => {
       const report = await getPeriodCostReport(reportStartDate, reportEndDate);
       setCostReport(report);
+      setGeneratedRange({ startDate: reportStartDate, endDate: reportEndDate });
       setHasGeneratedReport(true);
     });
   }
@@ -119,8 +125,14 @@ export function DashboardClient({ initialSummaries }: Props) {
     {
       accessorKey: 'totalCost',
       header: 'Cost Incurred',
-      Cell: ({ cell }) => formatCurrency(cell.getValue<number>()),
-      size: 130,
+      // certified-outputs C3 (CO-D17): priced cost, with the unpriced hours beside it — totals never quietly shrink.
+      Cell: ({ cell, row }) => (
+        <Stack gap={0}>
+          <Text size="sm">{formatCurrency(cell.getValue<number>())}</Text>
+          <UnpricedNote hours={row.original.unpricedHours} scope={{ contractId: row.original.contractId }} />
+        </Stack>
+      ),
+      size: 150,
     },
     {
       id: 'remaining',
@@ -129,10 +141,15 @@ export function DashboardClient({ initialSummaries }: Props) {
         const funded = parseFloat(row.fundedValue ?? '0') || 0;
         return funded - row.totalCost;
       },
-      Cell: ({ cell }) => {
+      Cell: ({ cell, row }) => {
         const remaining = cell.getValue<number>();
         const color = remaining < 0 ? 'red' : remaining < 10000 ? 'warning' : 'success';
-        return <Text size="sm" c={color} fw={600}>{formatCurrency(remaining)}</Text>;
+        return (
+          <Stack gap={0}>
+            <Text size="sm" c={color} fw={600}>{formatCurrency(remaining)}</Text>
+            <PricedBasisNote hours={row.original.unpricedHours} scope={{ contractId: row.original.contractId }} />
+          </Stack>
+        );
       },
       size: 130,
     },
@@ -144,13 +161,16 @@ export function DashboardClient({ initialSummaries }: Props) {
         if (funded === 0) return 0;
         return Math.round((row.totalCost / funded) * 100);
       },
-      Cell: ({ cell }) => {
+      Cell: ({ cell, row }) => {
         const pct = cell.getValue<number>();
         return (
-          <Group gap="xs" wrap="nowrap">
-            <Progress value={Math.min(pct, 100)} color={getBurnColor(pct)} size="lg" style={{ flex: 1, minWidth: 60 }} />
-            <Text size="xs" fw={600} style={{ minWidth: 35 }}>{pct}%</Text>
-          </Group>
+          <Stack gap={0}>
+            <Group gap="xs" wrap="nowrap">
+              <Progress value={Math.min(pct, 100)} color={getBurnColor(pct)} size="lg" style={{ flex: 1, minWidth: 60 }} />
+              <Text size="xs" fw={600} style={{ minWidth: 35 }}>{pct}%</Text>
+            </Group>
+            {row.original.unpricedHours > 0 && <Text size="xs" c="dimmed">priced cost</Text>}
+          </Stack>
         );
       },
       size: 150,
@@ -201,11 +221,15 @@ export function DashboardClient({ initialSummaries }: Props) {
                       <Table.Td>{clin.description ?? '—'}</Table.Td>
                       <Table.Td>{formatCurrencyString(clin.fundedAmount)}</Table.Td>
                       <Table.Td>{clin.totalHours.toFixed(2)}</Table.Td>
-                      <Table.Td>{formatCurrency(clin.totalCost)}</Table.Td>
+                      <Table.Td>
+                        {formatCurrency(clin.totalCost)}
+                        <UnpricedNote hours={clin.unpricedHours} scope={{ clinId: clin.clinId }} />
+                      </Table.Td>
                       <Table.Td>
                         <Text size="sm" c={remaining < 0 ? 'red' : 'success'} fw={600}>
                           {clin.fundedAmount ? formatCurrency(remaining) : '—'}
                         </Text>
+                        {clin.fundedAmount && <PricedBasisNote hours={clin.unpricedHours} scope={{ clinId: clin.clinId }} />}
                       </Table.Td>
                       <Table.Td>
                         <Badge color={clin.status === 'active' ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive} size="sm">
@@ -224,11 +248,15 @@ export function DashboardClient({ initialSummaries }: Props) {
                           <Table.Td><Text size="xs" c="dimmed">{slin.description ?? '—'}</Text></Table.Td>
                           <Table.Td><Text size="xs">{formatCurrencyString(slin.fundedAmount)}</Text></Table.Td>
                           <Table.Td><Text size="xs">{slin.totalHours.toFixed(2)}</Text></Table.Td>
-                          <Table.Td><Text size="xs">{formatCurrency(slin.totalCost)}</Text></Table.Td>
+                          <Table.Td>
+                            <Text size="xs">{formatCurrency(slin.totalCost)}</Text>
+                            <UnpricedNote hours={slin.unpricedHours} scope={{ slinId: slin.slinId }} />
+                          </Table.Td>
                           <Table.Td>
                             <Text size="xs" c={slinRemaining < 0 ? 'red' : 'success'} fw={600}>
                               {slin.fundedAmount ? formatCurrency(slinRemaining) : '—'}
                             </Text>
+                            {slin.fundedAmount && <PricedBasisNote hours={slin.unpricedHours} scope={{ slinId: slin.slinId }} />}
                           </Table.Td>
                           <Table.Td>
                             <Badge size="xs" color={slin.status === 'active' ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive}>
@@ -299,6 +327,7 @@ export function DashboardClient({ initialSummaries }: Props) {
 
   const reportTotal = costReport.reduce((sum, r) => sum + r.totalCost, 0);
   const reportHours = costReport.reduce((sum, r) => sum + r.totalHours, 0);
+  const reportUnpriced = costReport.reduce((sum, r) => sum + r.unpricedHours, 0);
 
   return (
     <>
@@ -331,8 +360,9 @@ export function DashboardClient({ initialSummaries }: Props) {
         <Paper withBorder p="md" radius="md">
           <Group justify="space-between">
             <div>
-              <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Total Spent</Text>
+              <Text size="xs" c="dimmed" tt="uppercase" fw={700}>{totalUnpriced > 0 ? 'Total Spent (priced cost)' : 'Total Spent'}</Text>
               <Text size="xl" fw={700}>{formatCurrency(totalSpent)}</Text>
+              <UnpricedNote hours={totalUnpriced} />
             </div>
             <ThemeIcon color="warning" variant="light" size="lg" radius="md">
               <IconReceipt size={20} />
@@ -346,6 +376,7 @@ export function DashboardClient({ initialSummaries }: Props) {
               <Text size="xl" fw={700} c={totalRemaining < 0 ? 'red' : undefined}>
                 {formatCurrency(totalRemaining)}
               </Text>
+              <PricedBasisNote hours={totalUnpriced} />
             </div>
             <ThemeIcon color={totalRemaining < 0 ? 'red' : 'signal'} variant="light" size="lg" radius="md">
               <IconChartBar size={20} />
@@ -355,7 +386,8 @@ export function DashboardClient({ initialSummaries }: Props) {
       </SimpleGrid>
 
       {/* ---- Section B: Contract Summary Table ---- */}
-      <Title order={4} mb="sm">Contract Budget Overview</Title>
+      <Title order={4} mb={4}>Contract Budget Overview</Title>
+      <Text size="xs" c="dimmed" mb="sm">{CURRENT_RATES_NOTE}</Text>
       <MantineReactTable table={contractTable} />
 
       {/* ---- Section C: Period Cost Report ---- */}
@@ -405,9 +437,13 @@ export function DashboardClient({ initialSummaries }: Props) {
                 <Text fw={700}>Totals</Text>
                 <Group gap="xl">
                   <Text fw={600}>{reportHours.toFixed(2)} hrs</Text>
-                  <Text fw={700} size="lg">{formatCurrency(reportTotal)}</Text>
+                  <Stack gap={0} align="flex-end">
+                    <Text fw={700} size="lg">{formatCurrency(reportTotal)}</Text>
+                    <UnpricedNote hours={reportUnpriced} size="sm" scope={generatedRange ?? {}} />
+                  </Stack>
                 </Group>
               </Group>
+              <Text size="xs" c="dimmed" mt="xs">{CURRENT_RATES_NOTE}</Text>
             </Paper>
           )}
         </>

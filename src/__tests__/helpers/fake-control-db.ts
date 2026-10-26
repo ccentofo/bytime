@@ -2,6 +2,7 @@
  * A scriptable stand-in for the drizzle control-plane client in unit tests (no Postgres in the unit runner).
  * - `select(...)`: any chain (`.from().where().orderBy().limit()…`) resolves to the next scripted result for the table
  *   passed to `.from(table)` (FIFO per table), or [] when none is scripted.
+ * - `execute(sql)`: recorded in `executes` (advisory locks etc.); resolves to [].
  * - `insert/update/delete`: recorded (table, values / set; an update also records its `.where()` condition, so a test
  *   can render it with drizzle's PgDialect); `.returning()` resolves to the next scripted result for that table +
  *   operation, or [].
@@ -14,6 +15,9 @@ export interface FakeControlDb {
   insert: (table: unknown) => unknown;
   update: (table: unknown) => unknown;
   delete: (table: unknown) => unknown;
+  execute: (query: unknown) => Promise<unknown[]>;
+  /** Every `execute(sql)` call, in order (render with drizzle's PgDialect). */
+  executes: unknown[];
   /** Script the next select result for a table. */
   onSelect(table: unknown, rows: Row[]): void;
   /** Script the next `.returning()` result of an insert/update/delete on a table. */
@@ -62,14 +66,15 @@ export function createFakeControlDb(): FakeControlDb {
   }
 
   const db: FakeControlDb = {
-    inserts: [], updates: [], deletes: [],
+    inserts: [], updates: [], deletes: [], executes: [],
+    execute: async (query) => { db.executes.push(query); return []; },
     select: () => chain(() => []),
     insert: (table) => ({ values: (values: Row) => { db.inserts.push({ table, values }); return writeResult('insert', table); } }),
     update: (table) => ({ set: (set: Row) => { const record: { table: unknown; set: Row; where?: unknown } = { table, set }; db.updates.push(record); return writeResult('update', table, record); } }),
     delete: (table) => { db.deletes.push({ table }); return writeResult('delete', table); },
     onSelect: (table, rows) => { selects.set(table, [...(selects.get(table) ?? []), rows]); },
     onReturning: (op, table, rows) => { const k = keyOf(op, table); returnings.set(k, [...(returnings.get(k) ?? []), rows]); },
-    reset: () => { selects.clear(); returnings.clear(); db.inserts = []; db.updates = []; db.deletes = []; },
+    reset: () => { selects.clear(); returnings.clear(); db.inserts = []; db.updates = []; db.deletes = []; db.executes = []; },
   };
   return db;
 }

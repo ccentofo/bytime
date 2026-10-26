@@ -1,105 +1,110 @@
 'use server';
 
+import { getDb } from '@/db';
 import { requireAdmin } from '@/lib/session';
-import { getApprovedEntriesForSync } from '@/lib/integrations/sync-engine';
+import { userAction, type ActionResult } from '@/lib/action-result';
 import {
-  aggregateEntriesByEmployee,
+  generateDailyDetailCSV,
   generatePayrollCSV,
+  payrollFilename,
   PAYROLL_FORMATS,
   type PayrollFormat,
-  type AggregatedEmployeeHours,
 } from '@/lib/integrations/connectors/payroll-export';
-import dayjs from 'dayjs'; // still used for the export filename's INSTANT timestamp — see D5
-import { parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { fromCents } from '@/lib/payroll/flsa';
+import type { CalendarDate } from '@/lib/calendar-date';
+import { validateCalendarDate } from '@/lib/validation';
 import { UserFacingError } from '@/lib/errors';
+import { loadPayrollData, PayrollNotReadyError } from '@/server/internal/payroll-data';
 
 /**
- * Get available payroll export formats.
+ * Payroll export — FLSA weekly overtime (feature-plan-certified-outputs.md C7). All figures come from
+ * src/server/internal/payroll-data.ts + src/lib/payroll/flsa.ts. Admin-only reads (no write).
  */
-export async function getPayrollFormats() {
-  await requireAdmin();
-  return PAYROLL_FORMATS.map((f) => ({
-    id: f.id,
-    name: f.name,
-    description: f.description,
-  }));
+
+export interface PayrollPreviewEmployee {
+  employeeName: string;
+  employeeEmail: string;
+  flsaExempt: boolean;
+  regularHours: number;
+  overtimeHours: number;
+  uncompensatedOvertimeHours: number;
+  ptoHours: number;
+  sickHours: number;
+  holidayHours: number;
+  unpaidLeaveHours: number;
+  totalPaidHours: number;
+  totalRecordedHours: number;
+  /** The FLSA walk for a reported day used unapproved days earlier in the same workweek. */
+  otBasisIncludesUnapprovedDays: boolean;
 }
 
+export type PayrollPreview =
+  | { status: 'ready'; workweekStartDay: number; employees: PayrollPreviewEmployee[]; reportedDays: number }
+  | { status: 'refused'; reason: 'workweek-unset' | 'leave-pay-type'; codes: string[]; message: string };
+
 /**
- * Generate a payroll export preview (aggregated data without CSV formatting).
- * Used to show a preview table before downloading.
+ * Preview the export for a range: per-employee FLSA totals and the flagged employees — or why the export is refused
+ * (workweek start day unset → Settings; leave codes without a pay type → Indirect Codes).
  */
 export async function getPayrollExportPreview(data: {
   periodStart: CalendarDate;
   periodEnd: CalendarDate;
-}): Promise<{
-  employees: Array<{
-    employeeName: string;
-    employeeEmail: string;
-    totalHours: number;
-    regularHours: number;
-    overtimeHours: number;
-    billableHours: number;
-    nonBillableHours: number;
-    periodStart: string;
-    periodEnd: string;
-  }>;
-  totalEntries: number;
-}> {
-  await requireAdmin();
-
-  const entries = await getApprovedEntriesForSync(parseCalendarDate(data.periodStart), parseCalendarDate(data.periodEnd));
-
-  const aggregated = aggregateEntriesByEmployee(entries, 'YYYY-MM-DD');
-
-  return {
-    employees: aggregated.map((a) => ({
-      employeeName: a.employeeName,
-      employeeEmail: a.employeeEmail,
-      totalHours: a.totalHours,
-      regularHours: a.regularHours,
-      overtimeHours: a.overtimeHours,
-      billableHours: a.billableHours,
-      nonBillableHours: a.nonBillableHours,
-      periodStart: a.periodStart,
-      periodEnd: a.periodEnd,
-    })),
-    totalEntries: entries.length,
-  };
+}): Promise<ActionResult<PayrollPreview>> {
+  return userAction(async () => {
+    await requireAdmin();
+    const db = await getDb();
+    try {
+      const payroll = await loadPayrollData(db, validateCalendarDate(data.periodStart, 'Start date'), validateCalendarDate(data.periodEnd, 'End date'));
+      return {
+        status: 'ready' as const,
+        workweekStartDay: payroll.workweekStartDay,
+        reportedDays: payroll.days.length,
+        employees: payroll.employees.map((e) => ({
+          employeeName: e.employeeName,
+          employeeEmail: e.employeeEmail,
+          flsaExempt: e.flsaExempt,
+          regularHours: fromCents(e.regular),
+          overtimeHours: fromCents(e.overtime),
+          uncompensatedOvertimeHours: fromCents(e.uncompensatedOvertime),
+          ptoHours: fromCents(e.pto),
+          sickHours: fromCents(e.sick),
+          holidayHours: fromCents(e.holiday),
+          unpaidLeaveHours: fromCents(e.unpaidLeave),
+          totalPaidHours: fromCents(e.totalPaid),
+          totalRecordedHours: fromCents(e.totalRecorded),
+          otBasisIncludesUnapprovedDays: e.otBasisIncludesUnapprovedDays,
+        })),
+      };
+    } catch (err) {
+      if (err instanceof PayrollNotReadyError) return { status: 'refused' as const, reason: err.reason, codes: err.codes, message: err.message };
+      throw err;
+    }
+  });
 }
 
 /**
- * Generate a payroll export CSV string.
- * Returns the CSV content as a string (client handles download).
+ * Generate a payroll export CSV (a vendor/custom format, or the Daily hours detail). The client handles the download.
  */
 export async function generatePayrollExportCSV(data: {
   periodStart: CalendarDate;
   periodEnd: CalendarDate;
-  format: PayrollFormat;
-}): Promise<{
-  csvContent: string;
-  filename: string;
-  employeeCount: number;
-  totalHours: number;
-}> {
-  await requireAdmin();
-
-  const formatConfig = PAYROLL_FORMATS.find((f) => f.id === data.format);
-  if (!formatConfig) {
-    throw new UserFacingError(`Unknown payroll format: ${data.format}`);
-  }
-
-  const entries = await getApprovedEntriesForSync(parseCalendarDate(data.periodStart), parseCalendarDate(data.periodEnd));
-  const aggregated = aggregateEntriesByEmployee(entries, formatConfig.dateFormat);
-  const csvContent = generatePayrollCSV(aggregated, formatConfig);
-
-  const timestamp = dayjs().format('YYYY-MM-DD');
-  const filename = `payroll-export-${data.format}-${timestamp}.csv`;
-
-  return {
-    csvContent,
-    filename,
-    employeeCount: aggregated.length,
-    totalHours: aggregated.reduce((sum, a) => sum + a.totalHours, 0),
-  };
+  format: PayrollFormat | 'daily-hours';
+}): Promise<ActionResult<{ csvContent: string; filename: string; employeeCount: number; totalPaidHours: number; flaggedCount: number }>> {
+  return userAction(async () => {
+    await requireAdmin();
+    const formatConfig = data.format === 'daily-hours' ? null : PAYROLL_FORMATS.find((f) => f.id === data.format);
+    if (data.format !== 'daily-hours' && !formatConfig) throw new UserFacingError(`Unknown payroll format: ${data.format}`);
+    const start = validateCalendarDate(data.periodStart, 'Start date');
+    const end = validateCalendarDate(data.periodEnd, 'End date');
+    const db = await getDb();
+    const payroll = await loadPayrollData(db, start, end);
+    const csvContent = formatConfig ? generatePayrollCSV(payroll.employees, formatConfig, start, end) : generateDailyDetailCSV(payroll.days);
+    return {
+      csvContent,
+      filename: payrollFilename(data.format, start, end),
+      employeeCount: payroll.employees.length,
+      totalPaidHours: fromCents(payroll.employees.reduce((s, e) => s + e.totalPaid, 0)),
+      flaggedCount: payroll.employees.filter((e) => e.otBasisIncludesUnapprovedDays).length,
+    };
+  });
 }

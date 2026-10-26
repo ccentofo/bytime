@@ -41,10 +41,11 @@ async function provision() {
     { code: 'GA-001', name: 'General & Administrative', category: 'ga' as const, description: 'G&A expenses' },
     { code: 'IRAD-001', name: 'IR&D', category: 'irad' as const, description: 'Independent R&D' },
     { code: 'BP-001', name: 'Bid & Proposal', category: 'bp' as const, description: 'Proposal preparation' },
-    { code: 'LV-AL', name: 'Annual Leave', category: 'leave' as const, description: 'Paid annual leave' },
-    { code: 'LV-SL', name: 'Sick Leave', category: 'leave' as const, description: 'Paid sick leave' },
-    { code: 'LV-HOL', name: 'Holiday', category: 'leave' as const, description: 'Company-observed holiday' },
-    { code: 'LV-LWOP', name: 'Leave Without Pay', category: 'leave' as const, description: 'Unpaid leave' },
+    // certified-outputs CO-D16: built-in leave codes ship with their pay type pre-set (payroll export needs it).
+    { code: 'LV-AL', name: 'Annual Leave', category: 'leave' as const, description: 'Paid annual leave', leavePayType: 'pto' as const },
+    { code: 'LV-SL', name: 'Sick Leave', category: 'leave' as const, description: 'Paid sick leave', leavePayType: 'sick' as const },
+    { code: 'LV-HOL', name: 'Holiday', category: 'leave' as const, description: 'Company-observed holiday', leavePayType: 'holiday' as const },
+    { code: 'LV-LWOP', name: 'Leave Without Pay', category: 'leave' as const, description: 'Unpaid leave', leavePayType: 'unpaid' as const },
     { code: 'UA-001', name: 'Unallowable', category: 'unallowable' as const, description: 'Non-reimbursable' },
   ];
 

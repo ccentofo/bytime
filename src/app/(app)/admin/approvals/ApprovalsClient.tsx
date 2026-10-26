@@ -38,13 +38,30 @@ type Period = {
   submittedAt: Date | null;
   reviewedAt: Date | null;
   reviewedBy: string | null;
+  /** certified-outputs C2: the session user may decide it now (else "view but not approve"). */
+  canApprove: boolean;
+  /** approvalLabel(): "Self-approved"/"Self-rejected" badge and the approval line (server-formatted). */
+  approvalBadge: string | null;
+  approvalText: string | null;
 };
 
 type ScopeInfo = {
   assignedContractCount: number;
   assignedClinCount: number;
   supervisedEmployeeCount: number;
+  designatedByCount: number;
 } | null;
+
+type ReviewData = {
+  chargeCodes: ChargeCode[];
+  entries: TimesheetEntry[];
+  periodStatus: string;
+  /** C2: the version reviewed — sent back as `seen` so only this version can be decided. */
+  submissionCount: number;
+  canApprove: boolean;
+  approvalBadge: string | null;
+  approvalText: string | null;
+};
 
 type Props = {
   initialPeriods: Period[];
@@ -61,10 +78,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
   // Review drawer state
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedPeriod, setSelectedPeriod] = useState<Period | null>(null);
-  const [reviewData, setReviewData] = useState<{
-    chargeCodes: ChargeCode[];
-    entries: TimesheetEntry[];
-  } | null>(null);
+  const [reviewData, setReviewData] = useState<ReviewData | null>(null);
   const [rejectComment, setRejectComment] = useState('');
   const [approveComment, setApproveComment] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
@@ -96,12 +110,13 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
   }
 
   function handleApprove() {
-    if (!selectedPeriod) return;
+    if (!selectedPeriod || !reviewData) return; // decide only what has been loaded and reviewed
     startTransition(async () => {
       setActionError(null);
       const result = await runAction(approvePeriod({
         periodId: selectedPeriod.id,
         comment: approveComment.trim() || undefined,
+        seen: reviewData.submissionCount,
       }), { errorTitle: 'Approval Failed' });
       if (!result.ok) {
         setActionError(result.error); // the server's reason (e.g. another reviewer decided first)
@@ -125,12 +140,13 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
   }
 
   function handleReject() {
-    if (!selectedPeriod || !rejectComment.trim()) return;
+    if (!selectedPeriod || !reviewData || !rejectComment.trim()) return;
     startTransition(async () => {
       setActionError(null);
       const result = await runAction(rejectPeriod({
         periodId: selectedPeriod.id,
         comment: rejectComment.trim(),
+        seen: reviewData.submissionCount,
       }), { errorTitle: 'Rejection Failed' });
       if (!result.ok) {
         setActionError(result.error);
@@ -173,14 +189,13 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
       header: 'Status',
       Cell: ({ row, cell }) => {
         const status = cell.getValue<string>() as keyof typeof PERIOD_STATUS_COLOR;
-        const isSelfApproved = row.original.reviewedBy === row.original.userId;
         return (
           <Group gap={4} wrap="nowrap">
             <Badge color={PERIOD_STATUS_COLOR[status] ?? 'gray'}>
               {status.charAt(0).toUpperCase() + status.slice(1)}
             </Badge>
-            {isSelfApproved && (status === 'approved' || status === 'rejected') && (
-              <Badge color="gray" variant="light" size="sm">{status === 'approved' ? 'Self-approved' : 'Self-rejected'}</Badge>
+            {row.original.approvalBadge && (
+              <Badge color="gray" variant="light" size="sm">{row.original.approvalBadge}</Badge>
             )}
           </Group>
         );
@@ -251,12 +266,20 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
               const total = hours.reduce((a, b) => a + b, 0);
               return (
                 <Table.Tr key={cc.id}>
-                  <Table.Td>{cc.clin} — {cc.projectName}</Table.Td>
-                  {Array.from({ length: numDays }, (_, i) => (
-                    <Table.Td key={i} style={{ textAlign: 'center' }}>
-                      {(hours[i] ?? 0) === 0 ? '—' : (hours[i] ?? 0).toFixed(2)}
-                    </Table.Td>
-                  ))}
+                  <Table.Td>
+                    {cc.clin} — {cc.projectName}
+                    {!cc.assignable && <Text size="xs" c="dimmed">No longer assigned (recorded hours shown)</Text>}
+                  </Table.Td>
+                  {Array.from({ length: numDays }, (_, i) => {
+                    // certified-outputs C1 display: imported hours are labelled in the review too.
+                    const provenance = entry?.provenance?.[i] ?? null;
+                    return (
+                      <Table.Td key={i} style={{ textAlign: 'center' }} title={provenance ?? undefined}>
+                        {(hours[i] ?? 0) === 0 ? '—' : (hours[i] ?? 0).toFixed(2)}
+                        {provenance && <Text span size="xs" c="signal.6" data-testid="imported-indicator"> •</Text>}
+                      </Table.Td>
+                    );
+                  })}
                   <Table.Td style={{ textAlign: 'center', fontWeight: 700 }}>
                     {total.toFixed(2)}
                   </Table.Td>
@@ -284,7 +307,13 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
             <Badge color="signal" size="sm">{scopeInfo.supervisedEmployeeCount}</Badge>
             <Text size="sm" c="dimmed" component="span">employees across</Text>
             <Badge color="success" size="sm">{scopeInfo.assignedClinCount}</Badge>
-            <Text size="sm" c="dimmed" component="span">CLINs you are assigned to.</Text>
+            <Text size="sm" c="dimmed" component="span">CLINs you are assigned to</Text>
+            {scopeInfo.designatedByCount > 0 && (
+              <Text size="sm" c="dimmed" component="span">
+                , including {scopeInfo.designatedByCount} {scopeInfo.designatedByCount === 1 ? 'person who has' : 'people who have'} designated you as their approver
+              </Text>
+            )}
+            <Text size="sm" c="dimmed" component="span">.</Text>
           </Group>
         </Paper>
       )}
@@ -305,8 +334,8 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         <Paper withBorder p="xl" ta="center" radius="md">
           <Text size="lg" c="dimmed" mb="sm">No Employees in Your Scope</Text>
           <Text size="sm" c="dimmed">
-            You are not assigned to any CLINs, so there are no employees whose timesheets you can review.
-            Contact your administrator to get assigned to the appropriate contracts and CLINs.
+            You are not assigned to any CLINs and nobody has designated you as their approver, so there are no
+            timesheets you can review. Contact your administrator to get assigned to the appropriate contracts and CLINs.
           </Text>
         </Paper>
       )}
@@ -333,10 +362,13 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
                 <Badge color={PERIOD_STATUS_COLOR[selectedPeriod.status as keyof typeof PERIOD_STATUS_COLOR] ?? 'gray'}>
                   {selectedPeriod.status}
                 </Badge>
-                {selectedPeriod.reviewedBy === selectedPeriod.userId && (selectedPeriod.status === 'approved' || selectedPeriod.status === 'rejected') && (
-                  <Badge color="gray" variant="light">{selectedPeriod.status === 'approved' ? 'Self-approved' : 'Self-rejected'}</Badge>
+                {(reviewData?.approvalBadge ?? selectedPeriod.approvalBadge) && (
+                  <Badge color="gray" variant="light">{reviewData?.approvalBadge ?? selectedPeriod.approvalBadge}</Badge>
                 )}
               </Group>
+              {(reviewData?.approvalText ?? selectedPeriod.approvalText) && (
+                <Text size="sm" c="dimmed" mt={4}>{reviewData?.approvalText ?? selectedPeriod.approvalText}</Text>
+              )}
             </Paper>
           )}
 
@@ -354,15 +386,30 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
 
           {(() => {
             if (selectedPeriod?.status !== 'submitted') return null;
+            // C2: Approve/Reject stay unavailable until the review data (and the version it shows) has loaded.
+            if (!reviewData) return null;
             const isOwnPeriod = selectedPeriod.userId === currentUserId;
-            // §0 (R2-7): admins may approve/reject their own period; supervisors and employees
-            // may not — the server enforces this too, this only controls what's offered in the UI.
-            const canReview = !isOwnPeriod || userRole === 'admin';
 
-            if (!canReview) {
+            // R2-7: supervisors and employees never decide their own period (the server enforces this too).
+            if (isOwnPeriod && userRole !== 'admin') {
               return (
                 <Alert icon={<IconAlertCircle size={16} />} color="warning">
                   You cannot approve or reject your own timesheet. Another admin or supervisor must review it.
+                </Alert>
+              );
+            }
+            // C2 (CO-D6/CO-D12): an admin's own timesheet once a second admin or a designated approver exists.
+            if (isOwnPeriod && !reviewData.canApprove) {
+              return (
+                <Alert icon={<IconAlertCircle size={16} />} color="warning">
+                  Your timesheet must be approved by another admin or your designated approver.
+                </Alert>
+              );
+            }
+            if (!reviewData.canApprove) {
+              return (
+                <Alert icon={<IconAlertCircle size={16} />} color="gray">
+                  You can view but not approve this timesheet.
                 </Alert>
               );
             }
@@ -371,8 +418,8 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
               <>
                 {isOwnPeriod && (
                   <Alert icon={<IconAlertCircle size={16} />} color="signal">
-                    This is your own timesheet. As an admin, you may approve or reject it — the
-                    decision will be visibly marked &quot;Self-approved&quot;.
+                    This is your own timesheet. You are the only active admin and have no designated approver, so you
+                    may approve or reject it — the decision is visibly marked as a self-approval everywhere it appears.
                   </Alert>
                 )}
                 <Textarea

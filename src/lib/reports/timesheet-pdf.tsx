@@ -2,6 +2,7 @@ import React from 'react';
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
 import type { TimesheetReportData } from '@/server/actions/reports';
 import { addDays, formatCalendarDate, formatInstant } from '@/lib/calendar-date';
+import { timesheetRowLabel } from '@/lib/reports/timesheet-rows';
 
 const styles = StyleSheet.create({
   page: { padding: 30, fontSize: 9, fontFamily: 'Helvetica' },
@@ -21,6 +22,7 @@ const styles = StyleSheet.create({
   sigBlock: { width: '45%', borderTopWidth: 1, borderColor: '#000', paddingTop: 4 },
   footer: { position: 'absolute', bottom: 20, left: 30, right: 30, fontSize: 7, color: '#999', textAlign: 'center' },
   statusBadge: { fontSize: 10, padding: '2 6', borderRadius: 3, marginLeft: 10 },
+  note: { fontSize: 7, color: '#555', marginBottom: 2 },
 });
 
 type Props = {
@@ -32,6 +34,8 @@ export function TimesheetPdfDocument({ data, workspaceTimezone }: Props) {
   const periodLabel = `${formatCalendarDate(data.periodStart, 'MMM D')} – ${formatCalendarDate(data.periodEnd, 'MMM D, YYYY')}`;
   const numDays = data.dailyTotals.length;
   const instant = (d: Date) => formatInstant(d, workspaceTimezone, 'MMM D, YYYY h:mm A');
+  // Numbered in row order, so a reprint numbers them identically (ruling Q7).
+  const notes = [...new Set(data.rows.flatMap((r) => r.provenance))];
 
   return (
     <Document>
@@ -44,7 +48,7 @@ export function TimesheetPdfDocument({ data, workspaceTimezone }: Props) {
           <Text style={styles.subtitle}>
             Status: {data.periodStatus.toUpperCase()}
             {data.submittedAt && ` | Submitted: ${instant(data.submittedAt)}`}
-            {data.approvedAt && ` | Approved: ${instant(data.approvedAt)} by ${data.approvedBy}`}
+            {data.approvalLine && ` | ${data.approvalLine}`}
           </Text>
         </View>
 
@@ -65,17 +69,18 @@ export function TimesheetPdfDocument({ data, workspaceTimezone }: Props) {
           </View>
 
           {/* Data rows */}
-          {data.chargeCodes.map((cc, rowIdx) => (
+          {data.rows.map((row, rowIdx) => (
             <View key={rowIdx} style={styles.tableRow}>
               <Text style={styles.chargeCodeCell}>
-                {cc.clinNumber} — {cc.contractName}
+                {timesheetRowLabel(row)}
+                {row.provenance.map((p) => ` [${notes.indexOf(p) + 1}]`).join('')}
               </Text>
-              {cc.dailyHours.map((h, dayIdx) => (
+              {row.dailyHours.map((h, dayIdx) => (
                 <Text key={dayIdx} style={styles.dayCell}>
                   {h === 0 ? '—' : h.toFixed(2)}
                 </Text>
               ))}
-              <Text style={styles.totalCell}>{cc.totalHours.toFixed(2)}</Text>
+              <Text style={styles.totalCell}>{row.totalHours.toFixed(2)}</Text>
             </View>
           ))}
 
@@ -90,6 +95,15 @@ export function TimesheetPdfDocument({ data, workspaceTimezone }: Props) {
             <Text style={[styles.totalCell, styles.bold]}>{data.grandTotal.toFixed(2)}</Text>
           </View>
         </View>
+
+        {/* C1 "Display": imported hours are never shown as if the employee typed them */}
+        {notes.length > 0 && (
+          <View style={{ marginTop: 6 }}>
+            {notes.map((n, i) => (
+              <Text key={i} style={styles.note}>[{i + 1}] {n}</Text>
+            ))}
+          </View>
+        )}
 
         {/* DCAA Certification Statement */}
         <View style={styles.certification}>

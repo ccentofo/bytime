@@ -182,8 +182,8 @@ describe('DCAA integrity under concurrency (§5.5)', () => {
     const [period] = await getTestDb().select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.userId, employee.id));
     actingAs(admin);
     const results = await Promise.all([
-      approvePeriod({ periodId: period.id }),
-      rejectPeriod({ periodId: period.id, comment: 'fix hours' }),
+      approvePeriod({ periodId: period.id, seen: 1 }),
+      rejectPeriod({ periodId: period.id, comment: 'fix hours', seen: 1 }),
     ]);
     expect(results.filter((r) => r.ok), results.map((r) => (r.ok ? 'ok' : `${r.code}: ${r.error}`)).join(' | ')).toHaveLength(1);
     const loser = results.find((r) => !r.ok);

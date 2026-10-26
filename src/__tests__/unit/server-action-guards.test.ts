@@ -128,6 +128,7 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     listChargeCodes: 'reads charge codes with joined labels; no write',
     getUserChargeCodeIds: 'reads one user\'s active charge-code ids; no write',
     getChargeCodeAssignments: 'reads user↔charge-code assignments; no write',
+    getChargeCodeReactivationInfo: 'certified-outputs C3: counts still-assigned users for the reactivate dialog; no write',
   },
   'clins.ts': { getClinsByContract: 'reads CLINs of a contract; no write' },
   'contracts.ts': {
@@ -155,15 +156,15 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getAssignableLaborCategories: 'reads assignable labor categories; no write',
     getLaborCategoriesByClin: 'reads a CLIN\'s labor categories; no write',
     getUserLaborCategoryAssignments: 'reads one user\'s LCAT assignments; no write',
+    getUnpricedHoursReport: 'certified-outputs C3: reads unpriced entries via cost-basis.ts; no write',
+    getOverlappingAssignmentsReport: 'certified-outputs C3: reads overlapping assignments via cost-basis.ts; no write',
   },
-  'migration.ts': { validateMigrationData: 'validates uploaded rows against existing records; read-only lookups' },
   'pay-period-config.ts': {
     getConfigHistory: 'reads schedule history; no write',
     getPendingConfigChange: 'reads the pending schedule change; no write',
     getValidScheduleChangeDates: 'computes valid change dates from reads; no write',
   },
   'payroll-export.ts': {
-    getPayrollFormats: 'returns static format metadata; no DB access',
     getPayrollExportPreview: 'reads approved entries (getApprovedEntriesForSync is read-only); no write',
     generatePayrollExportCSV: 'builds a CSV from read-only approved entries; no write',
   },
@@ -175,7 +176,10 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
   'reports.ts': { getDetailedCostReport: 'reads cost report rows via the read-only internal reader; no write' },
   'setup.ts': { getSetupStatus: 'reads setup-checklist counts; no write' },
   'slins.ts': { getSlinsByClin: 'reads a CLIN\'s SLINs; no write' },
-  'users.ts': { getUsers: 'reads users (SAFE_USER_COLUMNS); no write' },
+  'users.ts': {
+    getUsers: 'reads users (SAFE_USER_COLUMNS); no write',
+    getApprovalNotices: 'certified-outputs C2: reads the approval rules + admin_change_log for the notices; no write',
+  },
 };
 
 /** Matches the cached guard only — `requireAdminFresh(` does not match (an "F" follows "requireAdmin"). */

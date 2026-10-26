@@ -7,11 +7,11 @@ import {
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
-import { IconPlus, IconPencil, IconBan, IconBolt } from '@tabler/icons-react';
+import { IconPlus, IconPencil, IconBan, IconBolt, IconRefresh } from '@tabler/icons-react';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import {
-  createChargeCode, updateChargeCode, deactivateChargeCode,
+  createChargeCode, updateChargeCode, deactivateChargeCode, reactivateChargeCode, getChargeCodeReactivationInfo,
   autobridgeChargeCodesFromClins, createCostClass, listChargeCodes,
 } from '@/server/actions/charge-codes';
 import { RECORD_STATUS_COLOR, WORK_LOCATION_COLOR } from '@/lib/ui/status-colors';
@@ -82,6 +82,8 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
   const [newClassName, setNewClassName] = useState('');
   const [classList, setClassList] = useState(costClasses);
   const [confirmTarget, setConfirmTarget] = useState<ChargeCodeRow | null>(null);
+  // certified-outputs C3 (CO-D8, ruling Q2): reactivation confirm — how many employees get the code back.
+  const [reactivateTarget, setReactivateTarget] = useState<{ row: ChargeCodeRow; stillAssigned: number; assignable: boolean } | null>(null);
 
   async function refreshCodes() {
     const fresh = await listChargeCodes();
@@ -145,6 +147,27 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
       if (!result.ok) return;
       notifications.show({ title: 'Deactivated', message: `${code} deactivated.`, color: 'warning' });
       setConfirmTarget(null);
+      await refreshCodes();
+    });
+  }
+
+  function openReactivate(row: ChargeCodeRow) {
+    startTransition(async () => {
+      try {
+        const info = await getChargeCodeReactivationInfo(row.id);
+        setReactivateTarget({ row, ...info });
+      } catch {
+        notifications.show({ title: 'Couldn’t load the charge code', message: 'Refresh the page and try again.', color: 'red' });
+      }
+    });
+  }
+
+  async function handleReactivate(id: string, code: string) {
+    startTransition(async () => {
+      const result = await runAction(reactivateChargeCode(id), { errorTitle: 'Couldn’t reactivate' });
+      if (!result.ok) return;
+      notifications.show({ title: 'Reactivated', message: `${code} reactivated.`, color: 'success' });
+      setReactivateTarget(null);
       await refreshCodes();
     });
   }
@@ -236,6 +259,13 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
             </ActionIcon>
           </Tooltip>
         )}
+        {!row.original.isActive && (
+          <Tooltip label="Reactivate">
+            <ActionIcon disabled={!canWrite} variant="subtle" color="success" onClick={() => openReactivate(row.original)} aria-label="Reactivate charge code">
+              <IconRefresh size={16} />
+            </ActionIcon>
+          </Tooltip>
+        )}
       </Group>
     ),
     displayColumnDefOptions: {
@@ -314,6 +344,19 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
         loading={isPending}
         onConfirm={() => confirmTarget && handleDeactivate(confirmTarget.id, confirmTarget.code)}
         onCancel={() => setConfirmTarget(null)}
+      />
+
+      <ConfirmModal
+        opened={!!reactivateTarget}
+        title="Reactivate charge code?"
+        message={reactivateTarget
+          ? `${reactivateTarget.stillAssigned} ${reactivateTarget.stillAssigned === 1 ? 'employee is' : 'employees are'} still assigned and will see this code again.`
+            + (reactivateTarget.assignable ? '' : ' Its CLIN or contract is inactive, so it can’t be used for new hours until both are active again.')
+          : ''}
+        confirmLabel="Reactivate"
+        loading={isPending}
+        onConfirm={() => reactivateTarget && handleReactivate(reactivateTarget.row.id, reactivateTarget.row.code)}
+        onCancel={() => setReactivateTarget(null)}
       />
     </>
   );

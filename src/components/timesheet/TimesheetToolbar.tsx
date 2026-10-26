@@ -245,9 +245,13 @@ export function TimesheetToolbar() {
 
       <Group justify="space-between" mb="sm" gap="sm">
         {/* Left: Status badge */}
-        <Badge variant="light" color={statusBadge.color} size="lg">
-          {statusBadge.label}
-        </Badge>
+        <Group gap="xs">
+          <Badge variant="light" color={statusBadge.color} size="lg">
+            {statusBadge.label}
+          </Badge>
+          {/* certified-outputs C2 (CO-D6): a self-approval is visibly labelled wherever the timesheet appears. */}
+          {state.approvalBadge && <Badge variant="outline" color="gray" size="lg">{state.approvalBadge}</Badge>}
+        </Group>
 
         {/* Right: Action buttons */}
         <Group gap="sm">

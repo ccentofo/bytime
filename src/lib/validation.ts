@@ -138,6 +138,12 @@ export function validateEnum<T extends string>(value: unknown, fieldName: string
 // Date Validator
 // ---------------------------------------------------------------------------
 
+/** A required calendar date from user input → CalendarDate, or a UserFacingError (never parseCalendarDate's plain Error). */
+export function validateCalendarDate(value: unknown, fieldName: string): CalendarDate {
+  if (!isCalendarDate(value)) throw new UserFacingError(`${fieldName} must be a valid date (YYYY-MM-DD).`);
+  return value;
+}
+
 export function validateOptionalCalendarDate(value: unknown, fieldName: string): CalendarDate | undefined {
   if (value === null || value === undefined) return undefined;
   if (!isCalendarDate(value)) {

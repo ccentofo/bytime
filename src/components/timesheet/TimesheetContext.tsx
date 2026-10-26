@@ -14,7 +14,8 @@ import { seedOfflineStore } from '@/lib/offline/offline-store';
 // Reducer
 // ---------------------------------------------------------------------------
 
-function timesheetReducer(
+/** Exported for tests (fix round 1, F8). */
+export function timesheetReducer(
   state: TimesheetState,
   action: TimesheetAction
 ): TimesheetState {
@@ -71,6 +72,9 @@ function timesheetReducer(
         savedCellRevisions: action.revisions,
         notes: {},
         periodStatus: action.periodStatus,
+        approvalBadge: action.approvalBadge ?? null,
+        // certified-outputs C4: each period has its own code list (assignable ∪ codes with recorded hours).
+        chargeCodes: action.chargeCodes,
         periodConfig: action.periodConfig,
         isLoadingPeriod: false,
       };
@@ -100,7 +104,7 @@ function timesheetReducer(
     }
 
     case 'SET_PERIOD_STATUS': {
-      return { ...state, periodStatus: action.status };
+      return { ...state, periodStatus: action.status, approvalBadge: null };
     }
 
     case 'SET_TODAY': {
@@ -144,6 +148,13 @@ type ProviderProps = {
   children: React.ReactNode;
 };
 
+/** certified-outputs C4: the save cell's column for a row of this kind. */
+export function cellRefForKind(kind: 'charge' | 'clin' | 'indirect', id: string): { chargeCodeId?: string; clinId?: string; indirectCodeId?: string } {
+  if (kind === 'indirect') return { indirectCodeId: id };
+  if (kind === 'clin') return { clinId: id };
+  return { chargeCodeId: id };
+}
+
 export function TimesheetProvider({ initialData, children }: ProviderProps) {
   const initialState: TimesheetState = {
     chargeCodes: initialData.chargeCodes,
@@ -158,6 +169,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
     isSaving: false,
     isLoadingPeriod: false,
     periodStatus: initialData.periodStatus ?? 'draft',
+    approvalBadge: initialData.approvalBadge ?? null,
     flsaExempt: initialData.flsaExempt ?? false,
     periodConfig: initialData.periodConfig,
     today: initialData.today,
@@ -214,10 +226,9 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
           const chargeCode = state.chargeCodes.find((cc) => cc.id === c.chargeCodeId);
           const revisionKey = `${c.chargeCodeId}-${c.dayIndex}`;
           return {
-            // Direct entries: send chargeCodeId; server denormalizes clinId/slinId from the charge code.
-            // Indirect entries: send indirectCodeId as before.
-            chargeCodeId: chargeCode?.isIndirect ? undefined : c.chargeCodeId,
-            indirectCodeId: chargeCode?.isIndirect ? c.chargeCodeId : undefined,
+            // certified-outputs C4: the column follows the row's kind — 'charge' → chargeCodeId (the server denormalizes
+            // CLIN/SLIN from the code), 'clin' (a legacy CLIN-only row) → clinId, 'indirect' → indirectCodeId.
+            ...cellRefForKind(chargeCode?.kind ?? (chargeCode?.isIndirect ? 'indirect' : 'charge'), c.chargeCodeId),
             dayIndex: c.dayIndex,
             hours: c.hours,
             isEdit: c.isEdit,
@@ -264,7 +275,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
           seedOfflineStore({
             userId: state.userId,
             periodStart: period.periodStart,
-            chargeCodes: state.chargeCodes,
+            chargeCodes: period.chargeCodes, // F8: THIS period's list, not the one being left
             entries: period.entries,
             revisions: period.revisions,
             periodStatus: period.periodStatus,
@@ -286,7 +297,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
         });
       }
     },
-    [state.userId, state.chargeCodes]
+    [state.userId]
   );
 
   const loadPeriod = useCallback(

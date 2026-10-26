@@ -43,5 +43,8 @@ async function getCostReport(request: NextRequest): Promise<Response> {
     contractId ?? undefined
   );
 
-  return apiResponse(data, { total: data.length });
+  // certified-outputs C3 (ruling Q6, additive): every row carries costBasis/unpricedHours, and the response carries the
+  // total unpriced hours next to the rows' costs — no field removed or renamed.
+  const unpricedHours = Math.round(data.reduce((sum, e) => sum + e.unpricedHours, 0) * 100) / 100;
+  return apiResponse(data, { total: data.length, unpricedHours });
 }

@@ -24,6 +24,7 @@ import { notifications } from '@mantine/notifications';
 import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { getPeriodOptions, getWorkspaceContext, type PeriodOption } from '@/server/actions/periods';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { CURRENT_RATES_NOTE } from '@/lib/cost-labels';
 
 type FilterOptions = {
   users: Array<{ id: string; fullName: string; email: string }>;
@@ -171,6 +172,8 @@ export function ReportsClient({ filterOptions, role }: Props) {
               <div>
                 <Text fw={600}>Detailed Cost Report</Text>
                 <Text size="xs" c="dimmed">Hours × rates by employee, CLIN, and LCAT</Text>
+                {/* certified-outputs C3: CO-D7 interim note; unpriced hours are counted in the file's footer (CO-D17). */}
+                <Text size="xs" c="dimmed">{CURRENT_RATES_NOTE} Hours with no applicable labor category are listed as unpriced (no cost) and totalled in the file.</Text>
               </div>
             </Group>
 
@@ -233,6 +236,7 @@ export function ReportsClient({ filterOptions, role }: Props) {
               <Text size="xs" c="dimmed">
                 {isAdmin ? 'Aggregated hours & cost by employee per contract/CLIN' : 'Aggregated hours by employee per contract/CLIN'}
               </Text>
+              {isAdmin && <Text size="xs" c="dimmed">{CURRENT_RATES_NOTE}</Text>}
             </div>
           </Group>
 
