@@ -4,8 +4,7 @@ import { Group, Avatar, ActionIcon, Text, Menu, UnstyledButton, useMantineColorS
 import Link from 'next/link';
 import { Logo } from '@/components/brand/Logo';
 import { IconSun, IconMoon, IconLogout, IconUser, IconKey, IconBell } from '@tabler/icons-react';
-import { signOut } from 'next-auth/react';
-import { clearDesigneeNoticeDismissals } from '@/components/approvals/ApprovalNotices';
+import { signOutToLogin } from '@/components/auth/sign-out';
 import { SyncStatusIndicator } from '@/components/shell/SyncStatusIndicator';
 
 type AppHeaderProps = {
@@ -88,7 +87,7 @@ export function AppHeader({ user, mobileNavOpened, onMobileNavToggle, isDemo = f
               <Menu.Item
                 color="red"
                 leftSection={<IconLogout size={14} />}
-                onClick={() => { clearDesigneeNoticeDismissals(); signOut({ callbackUrl: '/login' }); }}
+                onClick={() => { void signOutToLogin(); }}
               >
                 Sign Out
               </Menu.Item>
