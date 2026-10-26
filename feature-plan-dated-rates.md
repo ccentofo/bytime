@@ -282,6 +282,17 @@ transaction). Pure validators (`validateAddInput`, …) live in `src/lib/labor-r
 sync exports of the `'use server'` file. Logging: **the existing `admin_change_log` writer from
 certified outputs, passed `tx`** — never a second writer (if none exists, stop and report).
 
+**Ruling (dev mapping report, 2026-10-26) — the log writer:** certified outputs has no shared writer; it inserts
+`admin_change_log` directly in six places (`charge-codes.ts:120,143,183`, `users.ts:261`, `workspace-settings.ts:72`,
+`approval-rules.ts:180`). **Option A:** add `logAdminChange(tx, row)` in `src/server/internal/admin-change-log.ts`
+(takes the caller's `tx`, inserts one row, returns its id; no `getDb*`). Move the six existing inserts onto it as a
+**pure move** — identical columns and values, same transaction, same position in each function — in its **own commit
+before D1** ("D0"). Add a static test: no file outside `admin-change-log.ts` calls `insert(adminChangeLog)` (fixture
+must fail). The rate actions, D3 and the dated-rates seed (D1.7; seeds now run with `--conditions=react-server`, so
+importing it works) log through it; the §9 Atomicity row mocks this module. D0 gate: the full unit suite plus the
+existing certified-outputs tests for those six paths unchanged and green; the product owner's integration run covers
+them on Postgres.
+
 **Validation (pure, step 2):** ids → `validateUUID(id, 'Labor category')` / `validateUUID(id, 'Rate period')`;
 `effectiveDate` → new `validateCalendarDate(value, 'Effective date')` in `validation.ts` (`isCalendarDate` or
 `UserFacingError('Effective date is not a valid date.')`, matching `validateOptionalCalendarDate`); `hourlyRate` →

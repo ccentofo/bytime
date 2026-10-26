@@ -2,6 +2,7 @@ import 'server-only';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { getDb, type DbTx, type ReadDb, type TenantWriter } from '@/db';
 import { adminChangeLog, timesheetPeriods, userAssignments, users } from '@/db/schema';
+import { logAdminChange } from './admin-change-log';
 
 /**
  * Approver rules (feature-plan-certified-outputs.md C2 — CO-D5, CO-D6, CO-D9, CO-D12, CO-D18, CO-D19). INTERNAL:
@@ -177,15 +178,15 @@ export async function recomputeSelfApproval(
     // R2: an admin with NO record yet whose self-approval was already available before this write (a workspace from
     // before C2) — this row records the existing state; it is not a switch, so it carries a baseline reason (no notice).
     const existingState = !prior && now && opts.before !== undefined && selfApprovalAvailable(opts.before, adminId);
-    const [row] = await tx.insert(adminChangeLog).values({
+    const logId = await logAdminChange(tx, {
       actorId,
       entity: 'self_approval',
       entityId: adminId,
       action: now ? 'enabled' : 'disabled',
       oldValue: { enabled: before },
       newValue: { enabled: now, reason: existingState ? EXISTING_STATE_REASON : reason, activeAdminCount },
-    }).returning({ id: adminChangeLog.id });
-    changes.push({ adminId, enabled: now, logId: row.id });
+    });
+    changes.push({ adminId, enabled: now, logId });
   }
   return changes;
 }

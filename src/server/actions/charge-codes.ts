@@ -1,7 +1,7 @@
 'use server';
 
 import { getDb, getDbForWrite } from '@/db';
-import { chargeCodes, costClasses, userChargeCodes, clins, contracts, slins, laborCategories, users, timesheetEntries, adminChangeLog } from '@/db/schema';
+import { chargeCodes, costClasses, userChargeCodes, clins, contracts, slins, laborCategories, users, timesheetEntries } from '@/db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { UserFacingError } from '@/lib/errors';
@@ -12,6 +12,7 @@ import {
   type ChargeCodeInput,
 } from '@/server/internal/charge-codes';
 import { userAction } from '@/lib/action-result';
+import { logAdminChange } from '@/server/internal/admin-change-log';
 
 // ---------------------------------------------------------------------------
 // Cost Classes
@@ -117,7 +118,7 @@ export async function updateChargeCode(id: string, data: {
       }
       const [row] = await tx.update(chargeCodes).set(updateData).where(eq(chargeCodes.id, id)).returning();
       if (used && lcatChanged) {
-        await tx.insert(adminChangeLog).values({
+        await logAdminChange(tx, {
           actorId: actor.id, entity: 'charge_code', entityId: id, action: 'labor_category_changed',
           oldValue: { laborCategoryId: current.laborCategoryId }, newValue: { laborCategoryId: data.laborCategoryId ?? null },
         });
@@ -140,7 +141,7 @@ export async function deactivateChargeCode(id: string) {
       if (!current) throw new UserFacingError('Charge code not found.', 'not_found');
       if (!current.isActive) return;
       await tx.update(chargeCodes).set({ isActive: false, updatedAt: new Date() }).where(eq(chargeCodes.id, id));
-      await tx.insert(adminChangeLog).values({
+      await logAdminChange(tx, {
         actorId: actor.id, entity: 'charge_code', entityId: id, action: 'deactivated',
         oldValue: { isActive: true }, newValue: { isActive: false },
       });
@@ -180,7 +181,7 @@ export async function reactivateChargeCode(id: string) {
         .where(and(eq(userChargeCodes.chargeCodeId, id), eq(userChargeCodes.isActive, true), eq(users.isActive, true)));
       if (current.isActive) return { stillAssigned: assigned.length };
       await tx.update(chargeCodes).set({ isActive: true, updatedAt: new Date() }).where(eq(chargeCodes.id, id));
-      await tx.insert(adminChangeLog).values({
+      await logAdminChange(tx, {
         actorId: actor.id, entity: 'charge_code', entityId: id, action: 'reactivated',
         oldValue: { isActive: false }, newValue: { isActive: true, stillAssigned: assigned.length },
       });

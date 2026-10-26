@@ -10,10 +10,10 @@ import { SAFE_USER_COLUMNS } from '@/server/internal/users';
 import { assertSeatsAvailable } from '@/server/internal/seats';
 import { activeAdminIds, currentSelfApprovalOn, effectiveDesignee, loadApprovalFacts, lockUserRulesExclusive, newlyEligible, recomputeSelfApproval, snapshotSubmittedEligibility } from '@/server/internal/approval-rules';
 import { notifyReroutedApprovals } from '@/server/internal/submission-notify';
-import { adminChangeLog } from '@/db/schema';
 import { validateEmail, validateRequired, validateStringLength, validateEnum } from '@/lib/validation';
 import { UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
+import { logAdminChange } from '@/server/internal/admin-change-log';
 
 const USER_ROLES = ['admin', 'supervisor', 'employee'] as const;
 
@@ -258,7 +258,7 @@ export async function setUserApprover(userId: string, approverId: string | null)
       const beforeFacts = await loadApprovalFacts(tx);
       const before = await snapshotSubmittedEligibility(tx, beforeFacts);
       await tx.update(users).set({ approverId, updatedAt: new Date() }).where(eq(users.id, userId));
-      await tx.insert(adminChangeLog).values({
+      await logAdminChange(tx, {
         actorId: actor.id, entity: 'user', entityId: userId, action: 'approver_changed',
         oldValue: { approverId: target.approverId }, newValue: { approverId },
       });
