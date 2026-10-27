@@ -186,7 +186,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
           )}
           {row.original.provenance && (
             <Tooltip label={row.original.provenance} multiline maw={360}>
-              <Badge color="grape" size="xs" variant="light" data-testid="audit-imported">Imported</Badge>
+              <Badge color="signal" size="xs" variant="light" data-testid="audit-imported">Imported</Badge>
             </Tooltip>
           )}
         </Group>
@@ -271,7 +271,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
       header: 'Entered By',
       Cell: ({ cell, row }) => {
         // C1 "Display": an imported row is never shown as if someone typed it here.
-        if (row.original.provenance) return <Text size="sm" c="grape">{row.original.provenance}</Text>;
+        if (row.original.provenance) return <Text size="sm" c="signal">{row.original.provenance}</Text>;
         const val = cell.getValue<string | null>();
         return val ?? <Text size="sm" c="dimmed">—</Text>;
       },
@@ -557,7 +557,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
                         </Text>
                       )}
                       {rev.provenance ? (
-                        <Text size="xs" c="grape" data-testid="revision-imported">{rev.provenance}</Text>
+                        <Text size="xs" c="signal" data-testid="revision-imported">{rev.provenance}</Text>
                       ) : (
                         <Text size="xs" c="dimmed">
                           Entered at {formatInstant(rev.createdAt, workspaceTimezone, 'MMM D, YYYY h:mm:ss A')}

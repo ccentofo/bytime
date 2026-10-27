@@ -18,8 +18,8 @@ export function UnpricedNote({ hours, scope = {}, size = 'xs' }: {
   // Fix round 1 (F11): land on the report itself, not the top of the Labor Categories page.
   const href = `${params.size ? `${UNPRICED_REPORT_HREF}&${params.toString()}` : UNPRICED_REPORT_HREF}#cost-basis-reports`;
   return (
-    <Text size={size} c="warning.7">
-      <Anchor href={href} size={size} c="warning.7" underline="always">{label}</Anchor>
+    <Text size={size} c="warning">
+      <Anchor href={href} size={size} c="warning" underline="always">{label}</Anchor>
     </Text>
   );
 }

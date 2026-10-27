@@ -37,7 +37,7 @@ export function AppHeader({ user, mobileNavOpened, onMobileNavToggle, isDemo = f
         <Logo size="sm" />
         {isDemo && (
           <Tooltip label="Demo workspace: exempt from trial expiry and billing">
-            <Badge color="grape" variant="filled" size="sm">Demo</Badge>
+            <Badge color="ink" variant="filled" size="sm">Demo</Badge>
           </Tooltip>
         )}
       </Group>

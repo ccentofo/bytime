@@ -5,9 +5,8 @@ import "@mantine/dates/styles.css";
 import "@mantine/notifications/styles.css";
 import "mantine-react-table/styles.css";
 import "./globals.css";
-import { MantineProvider, ColorSchemeScript } from "@mantine/core";
-import { Notifications } from "@mantine/notifications";
-import { theme } from "@/theme";
+import { ColorSchemeScript } from "@mantine/core";
+import { Providers } from "./providers";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -35,14 +34,12 @@ export default function RootLayout({
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} ${inter.variable}`} suppressHydrationWarning>
       <head />
       <body>
-        {/* ColorSchemeScript MUST be in <body> before MantineProvider — NOT in <head>.
+        {/* ColorSchemeScript MUST be in <body> before the Mantine providers — NOT in <head>.
             Placing it in <head> causes "Encountered a script tag" React errors in Next.js App Router.
-            This is the Mantine v9 recommended pattern for Next.js. */}
+            This is the Mantine v9 recommended pattern for Next.js. The providers live in ./providers
+            (a client component), because this Server Component can't pass function props. */}
         <ColorSchemeScript defaultColorScheme="auto" />
-        <MantineProvider defaultColorScheme="auto" theme={theme}>
-          <Notifications position="top-right" autoClose={4000} />
-          {children}
-        </MantineProvider>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

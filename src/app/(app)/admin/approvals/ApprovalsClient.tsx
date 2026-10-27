@@ -276,7 +276,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
                     return (
                       <Table.Td key={i} style={{ textAlign: 'center' }} title={provenance ?? undefined}>
                         {(hours[i] ?? 0) === 0 ? '—' : (hours[i] ?? 0).toFixed(2)}
-                        {provenance && <Text span size="xs" c="signal.6" data-testid="imported-indicator"> •</Text>}
+                        {provenance && <Text span size="xs" c="signal" data-testid="imported-indicator"> •</Text>}
                       </Table.Td>
                     );
                   })}
