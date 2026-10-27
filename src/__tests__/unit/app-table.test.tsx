@@ -115,7 +115,11 @@ describe('MRT collapsible parts open (T5)', () => {
     expect(names[0]).toContain('Bravo');
   });
 
-  it('no React warning about a non-boolean `in` attribute (formatted message)', () => {
+  it('no React warning about a non-boolean `in` attribute (formatted message)', async () => {
+    // Its own render + expand (not vacuous when run alone); the spy holds every call since the file loaded.
+    await render();
+    await act(async () => { (container.querySelector('button[aria-label="Expand"]') as HTMLButtonElement).click(); });
+    await wait(50);
     const messages = consoleError.mock.calls.map((args) => format(...args));
     expect(messages.filter((m) => /non-boolean attribute .in./.test(m))).toEqual([]);
   });

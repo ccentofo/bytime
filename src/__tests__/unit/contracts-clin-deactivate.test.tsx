@@ -20,7 +20,7 @@ vi.mock('@/server/actions/slins', () => ({ getSlinsByClin: actions.getSlinsByCli
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
 import { ContractsClient } from '@/app/(app)/admin/contracts/ContractsClient';
-import { buttonByText, buttonsByText, chooseRowAction, click, dialogTitled, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
+import { buttonByText, buttonsByText, chooseRowAction, click, dialogTitled, installDomStubs, menuItem, mount, openRowMenu, unmount, wait, type Mounted } from '../helpers/dom';
 
 const now = new Date();
 const CONTRACT = { id: 'k1', contractNumber: 'N-1', name: 'NAVAIR', description: null, contractType: 'prime', status: 'active' as const, startDate: null, endDate: null, fundedValue: null, ceilingValue: null, createdAt: now, updatedAt: now };
@@ -36,8 +36,8 @@ beforeEach(() => {
 });
 afterEach(() => { unmount(m); m = undefined; });
 
-async function openDrawer() {
-  m = await mount(<ContractsClient initialContracts={[CONTRACT]} />);
+async function openDrawer(mode: 'full' | 'read_only' = 'full') {
+  m = await mount(<ContractsClient initialContracts={[CONTRACT]} />, mode);
   await chooseRowAction('N-1', 'Manage CLINs and SLINs');
   await wait(50);
   expect(dialogTitled('CLINs — NAVAIR (N-1)')).toBeDefined();
@@ -72,6 +72,11 @@ describe('CLIN / SLIN deactivate confirm (T11)', () => {
     expect(dialog.textContent).not.toMatch(/can.t charge/i);
     await click(buttonByText('Cancel'));
     expect(actions.updateSlin).not.toHaveBeenCalled();
+    await click(buttonsByText('Deactivate')[1]);
+    const confirm = dialogTitled('Deactivate SLIN 0001AA?')!;
+    await click([...confirm.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Deactivate'));
+    expect(actions.updateSlin).toHaveBeenCalledTimes(1);
+    expect(actions.updateSlin).toHaveBeenCalledWith('s1', { status: 'inactive' });
   });
 
   it('Esc with the confirm open closes the confirm and leaves the drawer open', async () => {
@@ -83,5 +88,41 @@ describe('CLIN / SLIN deactivate confirm (T11)', () => {
     expect(dialogTitled('Deactivate CLIN 0001?')).toBeUndefined();
     expect(dialogTitled('CLINs — NAVAIR (N-1)')).toBeDefined();
     expect(actions.updateClin).not.toHaveBeenCalled();
+  });
+
+  // M3 (UX-1 fix round 1): a refused deactivation keeps the confirm open, re-enabled.
+  const confirmButton = (title: string) => [...dialogTitled(title)!.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Deactivate') as HTMLButtonElement;
+  it('CLIN: a refused deactivation keeps the confirm open and its button enabled', async () => {
+    actions.updateClin.mockResolvedValueOnce({ ok: false, code: 'validation', error: 'No.' } as never);
+    await openDrawer();
+    await click(buttonsByText('Deactivate')[0]);
+    await click(confirmButton('Deactivate CLIN 0001?'));
+    expect(actions.updateClin).toHaveBeenCalledTimes(1);
+    expect(dialogTitled('Deactivate CLIN 0001?')).toBeDefined();
+    expect(confirmButton('Deactivate CLIN 0001?').disabled).toBe(false);
+  });
+
+  it('SLIN: a refused deactivation keeps the confirm open and its button enabled', async () => {
+    actions.updateSlin.mockResolvedValueOnce({ ok: false, code: 'validation', error: 'No.' } as never);
+    await openDrawer();
+    await click(document.body.querySelector('button[aria-label="Expand SLINs"]'));
+    await wait(50);
+    await click(buttonsByText('Deactivate')[1]);
+    await click(confirmButton('Deactivate SLIN 0001AA?'));
+    expect(actions.updateSlin).toHaveBeenCalledTimes(1);
+    expect(dialogTitled('Deactivate SLIN 0001AA?')).toBeDefined();
+    expect(confirmButton('Deactivate SLIN 0001AA?').disabled).toBe(false);
+  });
+
+  // M2 (UX-1 fix round 1): read-only admins can still open the CLIN/SLIN drawer (writes: false), as before UX-1.
+  it('read-only: "Manage CLINs and SLINs" is enabled and opens the drawer', async () => {
+    m = await mount(<ContractsClient initialContracts={[CONTRACT]} />, 'read_only');
+    await openRowMenu('N-1');
+    const item = menuItem('Manage CLINs and SLINs')!;
+    expect(item.getAttribute('aria-disabled')).toBeNull();
+    expect(menuItem('Edit')).toBeUndefined(); // Edit is the primary button, not a menu item
+    await click(item);
+    await wait(50);
+    expect(dialogTitled('CLINs — NAVAIR (N-1)')).toBeDefined();
   });
 });

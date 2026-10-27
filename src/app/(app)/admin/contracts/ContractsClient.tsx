@@ -21,6 +21,7 @@ import { DateInput } from '@mantine/dates';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { RowActions } from '@/components/ui/RowActions';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { useLastTarget } from '@/components/ui/useRowState';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import {
@@ -121,6 +122,9 @@ export function ContractsClient({ initialContracts }: Props) {
   // Deactivating a CLIN or SLIN asks first (feature-plan-ux-foundations.md §4.5, B2); activating doesn't.
   const [clinConfirm, setClinConfirm] = useState<Clin | null>(null);
   const [slinConfirm, setSlinConfirm] = useState<Slin | null>(null);
+  // The confirms keep showing the last target while they animate closed (no "Deactivate CLIN ?" flash).
+  const shownClin = useLastTarget(clinConfirm);
+  const shownSlin = useLastTarget(slinConfirm);
 
   function openAddModal() {
     setEditingContract(null);
@@ -613,7 +617,7 @@ export function ContractsClient({ initialContracts }: Props) {
 
       <ConfirmModal
         opened={!!clinConfirm}
-        title={`Deactivate CLIN ${clinConfirm?.clinNumber ?? ''}?`}
+        title={`Deactivate CLIN ${shownClin?.clinNumber ?? ''}?`}
         message="Employees can't charge new time to it. Existing hours stay on record."
         confirmLabel="Deactivate"
         loading={isPending}
@@ -623,7 +627,7 @@ export function ContractsClient({ initialContracts }: Props) {
 
       <ConfirmModal
         opened={!!slinConfirm}
-        title={`Deactivate SLIN ${slinConfirm?.slinNumber ?? ''}?`}
+        title={`Deactivate SLIN ${shownSlin?.slinNumber ?? ''}?`}
         message="Marks it inactive. Existing hours stay on record."
         confirmLabel="Deactivate"
         loading={isPending}

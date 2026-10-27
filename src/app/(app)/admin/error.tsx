@@ -21,10 +21,9 @@ export default function AdminError({
     <Container size="sm" py="xl">
       <title>Something went wrong – CadenzPoint</title>
       <Stack align="center" gap="lg">
+        <Title order={1} size="h3" ta="center">{isForbidden ? 'Access Denied' : 'Admin Page Error'}</Title>
         <Alert
           icon={<IconAlertTriangle size={24} />}
-          // The alert title is this screen's h1 (inherits the alert title's look).
-          title={<Title order={1} fz="inherit" fw="inherit" lh="inherit" ff="inherit">{isForbidden ? 'Access Denied' : 'Admin Page Error'}</Title>}
           color={isForbidden ? 'warning' : 'red'}
           variant="light"
           w="100%"

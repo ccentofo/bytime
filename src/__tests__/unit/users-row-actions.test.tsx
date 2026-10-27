@@ -20,7 +20,8 @@ vi.mock('@/server/actions/password', () => ({ adminResetPassword: vi.fn() }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
 import { UsersClient } from '@/app/(app)/admin/users/UsersClient';
-import { buttonByText, chooseRowAction, click, dialogTitled, installDomStubs, menuItem, mount, openRowMenu, unmount, type Mounted } from '../helpers/dom';
+import { buttonByText, chooseRowAction, click, dialogTitled, installDomStubs, menuItem, mount, openRowMenu, unmount, wait, type Mounted } from '../helpers/dom';
+import { act } from 'react';
 import { expectNoAxeViolations } from '../helpers/axe';
 
 const user = (id: string, fullName: string, extra: Partial<{ isActive: boolean; flsaExempt: boolean }> = {}) => ({
@@ -82,6 +83,16 @@ describe('Users row actions (T9)', () => {
     expect(actions.updateUser).toHaveBeenCalledWith('u2', { flsaExempt: true });
   });
 
+  it('a refused FLSA change keeps its confirm open and its button enabled (closes only on success)', async () => {
+    actions.updateUser.mockResolvedValueOnce({ ok: false, code: 'validation', error: 'No.' } as never);
+    await render();
+    await chooseRowAction('Pat Doe', 'Mark as FLSA exempt…');
+    await click(buttonByText('Mark as exempt'));
+    expect(actions.updateUser).toHaveBeenCalledTimes(1);
+    expect(dialogTitled('Mark Pat Doe as FLSA exempt?')).toBeDefined();
+    expect(buttonByText('Mark as exempt').disabled).toBe(false);
+  });
+
   it('own row: Deactivate is aria-disabled with "You can\'t deactivate your own account"', async () => {
     await render();
     await openRowMenu('Ann Admin');
@@ -102,5 +113,23 @@ describe('Users row actions (T9)', () => {
     await expectNoAxeViolations(document.body);
     await click(menuItem('Unlock account'));
     expect(actions.unlockUserAccount).toHaveBeenCalledWith('u2@x.test');
+  });
+
+  it('L3: the table search finds the Status and FLSA words', async () => {
+    const people = [user('me', 'Ann Admin'), user('u3', 'Gone Person', { isActive: false, flsaExempt: true })];
+    m = await mount(<UsersClient initialUsers={people} currentUserId="me" />);
+    const names = () => [...m!.container.querySelectorAll('tbody tr')].map((r) => r.textContent ?? '').filter((t) => /Admin|Person/.test(t));
+    const search = async (q: string) => {
+      const input = m!.container.querySelector('input[aria-label="Search this table"]') as HTMLInputElement;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, q);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await wait(350); // MRT debounces the global filter 250 ms
+    };
+    await search('Inactive');
+    expect(names()).toEqual([expect.stringContaining('Gone Person')]);
+    await search('Non-exempt');
+    expect(names()).toEqual([expect.stringContaining('Ann Admin')]);
   });
 });

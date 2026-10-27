@@ -50,6 +50,15 @@ const dark: MantineColorsTuple = [
   '#343a48', '#23262f', '#181a20', '#121319', '#0c0d11',
 ];
 
+/**
+ * Checked / active indicators (Checkbox, Radio, Switch fills, the Tabs indicator) — UX-1 fix round 1, M1. Mantine uses
+ * the primary filled color (signal-7 in both schemes), which is below 3:1 on dark surfaces; signal-4 in dark passes
+ * (and keeps the white check / thumb ≥ 3:1). Only when the caller passes no `color` of its own.
+ */
+export const INDICATOR_COLOR = 'light-dark(var(--mantine-color-signal-7), var(--mantine-color-signal-4))';
+const indicator = (cssVar: string) => (_theme: unknown, props: { color?: unknown }) =>
+  ({ root: { [cssVar]: props.color ? undefined : INDICATOR_COLOR } });
+
 export const theme = createTheme({
   primaryColor: 'signal',
   // Shade 7 for every color's filled / text variants, both schemes (UX-1 §4.1: white on filled ≥ 4.5:1).
@@ -78,6 +87,10 @@ export const theme = createTheme({
     // The close (×) button has no accessible name by default (axe button-name) — name it everywhere.
     Modal: { defaultProps: { centered: true, radius: 'md', closeButtonProps: { 'aria-label': 'Close' } } },
     Drawer: { defaultProps: { closeButtonProps: { 'aria-label': 'Close' } } },
+    Checkbox: { vars: indicator('--checkbox-color') },
+    Radio: { vars: indicator('--radio-color') },
+    Switch: { vars: indicator('--switch-color') },
+    Tabs: { vars: indicator('--tabs-color') },
   },
 });
 

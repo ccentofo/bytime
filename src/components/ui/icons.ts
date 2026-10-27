@@ -1,8 +1,8 @@
 import {
   IconAlertCircle, IconAlertTriangle, IconArrowsExchange, IconBan, IconBell, IconBriefcase, IconCalendarX, IconCash,
   IconChartBar, IconCheck, IconChevronDown, IconChevronRight, IconClock, IconCopy, IconCurrencyDollar, IconDots,
-  IconDownload, IconEdit, IconEye, IconHistory, IconInfoCircle, IconKey, IconKeyOff, IconList, IconLock, IconLockOpen,
-  IconLogout, IconMoon, IconPassword, IconPencil, IconPlus, IconReceipt, IconRefresh, IconReportMoney, IconRestore,
+  IconDownload, IconEye, IconHistory, IconInfoCircle, IconKey, IconKeyOff, IconList, IconLock, IconLockOpen,
+  IconLogout, IconMoon, IconPassword, IconPencil, IconPencilCog, IconPlus, IconReceipt, IconRefresh, IconReportMoney, IconRestore,
   IconScale, IconSearch, IconSun, IconTrash, IconUpload, IconUser, IconUsers, IconWand, IconX,
 } from '@tabler/icons-react';
 
@@ -52,7 +52,7 @@ export const Icons = {
 
   // Records and figures
   timeEntry: IconClock,
-  correction: IconEdit,
+  correction: IconPencilCog,
   users: IconUsers,
   contracts: IconReportMoney,
   funded: IconCash,

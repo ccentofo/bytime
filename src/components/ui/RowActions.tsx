@@ -107,7 +107,8 @@ export function RowActions({ rowLabel, primary, items }: { rowLabel: string; pri
         onClick={blocked ? noop : action.onSelect}
       >
         {action.label}
-        {reason && <Text size="xs" c="dimmed">{reason}</Text>}
+        {/* A span (not a <p>) — it sits inside the item's <button>. */}
+        {reason && <Text component="span" display="block" size="xs" c="dimmed">{reason}</Text>}
       </Menu.Item>
     );
   };

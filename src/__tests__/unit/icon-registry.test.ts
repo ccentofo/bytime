@@ -63,7 +63,9 @@ function sourceFiles(dir: string): string[] {
     return /\.(ts|tsx)$/.test(name) ? [full] : [];
   });
 }
-export const importsTabler = (src: string) => /from\s+['"]@tabler\/icons-react['"]/.test(stripComments(src));
+/** Any import of tabler: static, deep path, side-effect, dynamic import() or require() (UX-1 audit L4). */
+export const importsTabler = (src: string) =>
+  /(from\s+|import\s*\(\s*|require\s*\(\s*|import\s+)['"]@tabler\/icons-react(\/[^'"]*)?['"]/.test(stripComments(src));
 
 describe('icon registry ratchet (T13)', () => {
   it('only icons.ts and the allowlist import @tabler/icons-react', () => {
@@ -77,6 +79,15 @@ describe('icon registry ratchet (T13)', () => {
     const stale = ICON_IMPORT_ALLOWLIST.filter((rel) => !importsTabler(readFileSync(path.join(ROOT, rel), 'utf8')));
     expect(stale).toEqual([]);
     expect(new Set(ICON_IMPORT_ALLOWLIST).size).toBe(ICON_IMPORT_ALLOWLIST.length);
+  });
+
+  it('fixture (L4): static, deep-path, side-effect, dynamic and require imports all count as importing tabler', () => {
+    expect(importsTabler("import { IconX } from '@tabler/icons-react';")).toBe(true);
+    expect(importsTabler("import IconX from '@tabler/icons-react/dist/esm/icons/IconX';")).toBe(true);
+    expect(importsTabler("import '@tabler/icons-react';")).toBe(true);
+    expect(importsTabler("const t = await import('@tabler/icons-react');")).toBe(true);
+    expect(importsTabler("const t = require('@tabler/icons-react');")).toBe(true);
+    expect(importsTabler("import { Icons } from '@/components/ui/icons'; // not @tabler/icons-react")).toBe(false);
   });
 
   it('two keys share a component only through ICON_ALIASES (each with a reason)', () => {
@@ -104,6 +115,8 @@ describe('icon registry ratchet (T13)', () => {
     expect(Icons.resetPassword).toBe(t.IconPassword);
     expect(Icons.sync).toBe(t.IconArrowsExchange);
     expect(Icons.automate).toBe(t.IconWand);
+    expect(Icons.correction).toBe(t.IconPencilCog); // L11: not a second plain pencil next to edit
+    expect(Object.values(Icons)).not.toContain(t.IconEdit);
     expect(Object.values(Icons)).not.toContain(t.IconToggleLeft);
     expect(Icons.laborCategory).not.toBe(t.IconTag);
     expect(Icons.reactivate).not.toBe(t.IconRefresh);

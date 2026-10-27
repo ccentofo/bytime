@@ -9,6 +9,7 @@ import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { RowActions } from '@/components/ui/RowActions';
+import { useBusyRows } from '@/components/ui/useRowState';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import {
@@ -95,7 +96,7 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
   const [confirmTarget, setConfirmTarget] = useState<ChargeCodeRow | null>(null);
   // certified-outputs C3 (CO-D8, ruling Q2): reactivation confirm — how many employees get the code back.
   // Reactivate fetches the code's info before its confirm opens: a loader on that row meanwhile.
-  const [busyRow, setBusyRow] = useState<string | null>(null);
+  const busyRows = useBusyRows();
   const [reactivateTarget, setReactivateTarget] = useState<{ row: ChargeCodeRow; stillAssigned: number; assignable: boolean } | null>(null);
 
   async function refreshCodes() {
@@ -165,7 +166,7 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
   }
 
   function openReactivate(row: ChargeCodeRow) {
-    setBusyRow(row.id);
+    busyRows.start(row.id);
     startTransition(async () => {
       try {
         const info = await getChargeCodeReactivationInfo(row.id);
@@ -173,7 +174,7 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
       } catch {
         notifications.show({ title: 'Couldn’t load the charge code', message: 'Refresh the page and try again.', color: 'red' });
       } finally {
-        setBusyRow(null);
+        busyRows.done(row.id);
       }
     });
   }
@@ -266,7 +267,7 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
             { key: 'category', label: 'Change labor category', icon: 'laborCategory', onSelect: () => setCategoryFor(code) },
             code.isActive
               ? { key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger', onSelect: () => setConfirmTarget(code) }
-              : { key: 'reactivate', label: 'Reactivate…', icon: 'reactivate', busy: busyRow === code.id, onSelect: () => openReactivate(code) },
+              : { key: 'reactivate', label: 'Reactivate…', icon: 'reactivate', busy: busyRows.isBusy(code.id), onSelect: () => openReactivate(code) },
           ]}
         />
       );

@@ -17,6 +17,7 @@ import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { RowActions } from '@/components/ui/RowActions';
+import { useBusyRows, useLastTarget } from '@/components/ui/useRowState';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
@@ -90,7 +91,8 @@ const EMPTY_FORM: CodeForm = {
 export function IndirectCodesClient({ initialCodes }: Props) {
   // Deactivate asks first (feature-plan-ux-foundations.md §4.5, B2); Reactivate runs directly with a row loader.
   const [confirmDeactivate, setConfirmDeactivate] = useState<IndirectCode | null>(null);
-  const [busyRow, setBusyRow] = useState<string | null>(null);
+  const busyRows = useBusyRows();
+  const shownDeactivate = useLastTarget(confirmDeactivate); // kept while the modal animates closed
   const [codes, setCodes] = useState<IndirectCode[]>(initialCodes);
   const [isPending, startTransition] = useTransition();
   const [modalOpen, setModalOpen] = useState(false);
@@ -159,10 +161,10 @@ export function IndirectCodesClient({ initialCodes }: Props) {
 
   /** Same server call as before; the confirm closes only on success (onDone). */
   function handleToggleActive(code: IndirectCode, onDone?: () => void) {
-    if (!onDone) setBusyRow(code.id);
+    if (!onDone) busyRows.start(code.id);
     startTransition(async () => {
       const result = await runAction(updateIndirectCode(code.id, { isActive: !code.isActive }), { errorTitle: 'Couldn’t update code' });
-      setBusyRow(null);
+      busyRows.done(code.id);
       if (!result.ok) return;
       onDone?.();
       const refreshed = await getIndirectChargeCodes();
@@ -209,7 +211,9 @@ export function IndirectCodesClient({ initialCodes }: Props) {
     },
     { accessorKey: 'description', header: 'Description', size: 250 },
     {
-      accessorKey: 'isActive',
+      // The word, so the table search finds "Inactive" (UX-1 audit L3).
+      id: 'isActive',
+      accessorFn: (r) => (r.isActive ? 'Active' : 'Inactive'),
       header: 'Status',
       Cell: ({ row }) => (
         <Badge color={row.original.isActive ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive}>
@@ -239,7 +243,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
           items={[
             code.isActive
               ? { key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger', onSelect: () => setConfirmDeactivate(code) }
-              : { key: 'reactivate', label: 'Reactivate', icon: 'reactivate', busy: busyRow === code.id, onSelect: () => handleToggleActive(code) },
+              : { key: 'reactivate', label: 'Reactivate', icon: 'reactivate', busy: busyRows.isBusy(code.id), onSelect: () => handleToggleActive(code) },
           ]}
         />
       );
@@ -265,7 +269,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
 
       <ConfirmModal
         opened={!!confirmDeactivate}
-        title={`Deactivate ${confirmDeactivate?.code ?? ''}?`}
+        title={`Deactivate ${shownDeactivate?.code ?? ''}?`}
         message="Employees can't charge new time to it. Existing hours stay on record."
         confirmLabel="Deactivate"
         loading={isPending}

@@ -18,7 +18,9 @@ vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 vi.mock('@/server/actions/login-attempts', () => ({ checkLockout: vi.fn() }));
 vi.mock('@/server/actions/password-reset', () => ({ requestPasswordReset: vi.fn(), verifyResetToken: vi.fn(), resetPassword: vi.fn() }));
 vi.mock('@/server/actions/workspace-finder', () => ({ goToWorkspace: vi.fn() }));
-vi.mock('@/server/actions/signup', () => ({ startSignup: vi.fn(), resendSignupVerification: vi.fn() }));
+vi.mock('@/server/actions/signup', () => ({ startSignup: vi.fn(async () => ({ ok: true, data: { slug: 'acme' } })), resendSignupVerification: vi.fn() }));
+vi.mock('@/components/auth/TurnstileWidget', () => ({ TurnstileWidget: () => null }));
+vi.mock('@sentry/nextjs', () => ({ captureException: vi.fn() }));
 vi.mock('@/server/actions/billing', () => ({ startCheckout: vi.fn(), openBillingPortal: vi.fn(), getTenantBillingInfo: vi.fn(async () => h.billing) }));
 
 import { LoginForm } from '@/app/login/LoginForm';
@@ -29,7 +31,11 @@ import { TenantUnavailable } from '@/app/(app)/TenantUnavailable';
 import { OnHoldScreen } from '@/app/(app)/OnHoldScreen';
 import { PolicyHoldScreen } from '@/app/(app)/PolicyHoldScreen';
 import { BillingWall } from '@/app/(app)/BillingWall';
-import { installDomStubs, mount, unmount, type Mounted } from '../helpers/dom';
+import AppError from '@/app/error';
+import AppShellError from '@/app/(app)/error';
+import AdminError from '@/app/(app)/admin/error';
+import { act } from 'react';
+import { installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
 
 h.billing = {
   plan: 'starter', plans: [{ key: 'starter', label: 'Starter', seatLimit: 25, purchasable: true }],
@@ -72,5 +78,37 @@ describe('auth and full-page screens: one <main>, one h1 (T16)', () => {
     expect(headings[0]).toBe('H1:Workspace suspended');
     expect(headings[1]).toBe('H2:Billing');
     expect(headings.slice(2).every((x) => x.startsWith('H3:'))).toBe(true);
+  });
+
+  // UX-1 audit L10: both "Check your email" screens — their links are real buttons that don't submit anything.
+  for (const [label, controls, linkText] of [['without Turnstile', null, 'try again'], ['with Turnstile (resend)', { turnstileSiteKey: 'k' }, 'Start over']] as const) {
+    it(`Signup "Check your email" ${label}: one main, one h1, "${linkText}" is a <button type="button">`, async () => {
+      (globalThis as { fetch?: unknown }).fetch = async () => ({ json: async () => ({ available: true }) });
+      m = await mount(<SignupForm controls={controls} />);
+      await act(async () => { m!.container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); });
+      await wait(20);
+      expect(m.container.textContent).toContain('Check your email');
+      expect(m.container.querySelectorAll('main')).toHaveLength(1);
+      expect(m.container.querySelectorAll('h1')).toHaveLength(1);
+      const link = [...m.container.querySelectorAll('button')].find((b) => b.textContent === linkText)!;
+      expect(link).toBeDefined();
+      expect(link.getAttribute('type')).toBe('button');
+    });
+  }
+
+  // UX-1 audit L7 / L8: error boundaries — one h1, a real heading (not inside the Alert's <span> title); the root one is a <main>.
+  it('error boundaries: one h1 each, never inside a span; the root boundary renders a <main>', async () => {
+    const err = Object.assign(new Error('boom'), { digest: 'd' });
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {}); // the boundaries log the error they show
+    for (const [name, El] of [['app/error', AppError], ['(app)/error', AppShellError], ['admin/error', AdminError]] as const) {
+      m = await mount(<El error={err} reset={() => {}} />);
+      const h1s = [...m.container.querySelectorAll('h1')];
+      expect(h1s, name).toHaveLength(1);
+      expect(h1s[0].closest('span'), name).toBeNull();
+      if (name === 'app/error') expect(m.container.querySelectorAll('main')).toHaveLength(1);
+      unmount(m);
+      m = undefined;
+    }
+    quiet.mockRestore();
   });
 });

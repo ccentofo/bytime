@@ -13,9 +13,9 @@
  *
  * Remove when: delete when MRT ships Mantine 9 support or MRT is replaced.
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 export const MRT_VERSION = '2.0.0-beta.9';
 
@@ -94,5 +94,15 @@ function main() {
   }
 }
 
+/** True when this file is the script node was asked to run (also through a symlinked path). */
+export function isDirectRun(argv1 = process.argv[1]) {
+  if (!argv1) return false;
+  try {
+    return realpathSync(argv1) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
 // CLI only when run directly — importing patchSource (tests) never touches node_modules or calls process.exit.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (isDirectRun()) main();

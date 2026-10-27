@@ -17,6 +17,7 @@ import {
 import { DateInput } from '@mantine/dates';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { RowActions } from '@/components/ui/RowActions';
+import { useBusyRows } from '@/components/ui/useRowState';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
@@ -172,7 +173,7 @@ export function LaborCategoriesClient({
 
   // Dated rates D2: the Rates modal and the current-rate lookups (all from the same laborCats state).
   const [ratesFor, setRatesFor] = useState<LaborCategory | null>(null);
-  const [busyRow, setBusyRow] = useState<string | null>(null);
+  const busyRows = useBusyRows();
   const scheduleOf = (lc: LaborCategory): RateSchedule => ({ starting: { hourlyRate: lc.hourlyRate, ceilingRate: lc.ceilingRate }, changes: lc.rateChanges ?? [] });
   const currentRateOf = (laborCategoryId: string): string | null => {
     const lc = laborCats.find((x) => x.id === laborCategoryId);
@@ -286,7 +287,7 @@ export function LaborCategoriesClient({
 
   function handleToggleStatus(lcat: LaborCategory) {
     const newStatus = lcat.status === 'active' ? 'inactive' : 'active';
-    if (newStatus === 'active') setBusyRow(lcat.id); // Reactivate runs without a confirm: loader on its row
+    if (newStatus === 'active') busyRows.start(lcat.id); // Reactivate runs without a confirm: loader on its row
     startTransition(async () => {
       try {
         const result = await runAction(updateLaborCategory(lcat.id, { status: newStatus }), { errorTitle: 'Couldn’t update status' });
@@ -306,7 +307,7 @@ export function LaborCategoriesClient({
           color: 'red',
         });
       } finally {
-        setBusyRow(null);
+        busyRows.done(lcat.id);
       }
     });
   }
@@ -443,7 +444,7 @@ export function LaborCategoriesClient({
             { key: 'rates', label: 'Rates', icon: 'rates', onSelect: () => setRatesFor(lcat) },
             lcat.status === 'active'
               ? { key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger', onSelect: () => setConfirmDeactivateLcat(lcat) }
-              : { key: 'reactivate', label: 'Reactivate', icon: 'reactivate', busy: busyRow === lcat.id, onSelect: () => handleToggleStatus(lcat) },
+              : { key: 'reactivate', label: 'Reactivate', icon: 'reactivate', busy: busyRows.isBusy(lcat.id), onSelect: () => handleToggleStatus(lcat) },
           ]}
         />
       );

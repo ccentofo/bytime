@@ -90,3 +90,18 @@ describe('the installed mantine-react-table is patched (T4)', () => {
     });
   }
 });
+
+describe('the CLI guard (UX-1 audit L6)', () => {
+  it('runs when invoked directly or through a symlink; not for another script or no argv', async () => {
+    const { isDirectRun } = await import('../../../scripts/patch-mantine-react-table.mjs');
+    const { mkdtempSync, symlinkSync } = await import('fs');
+    const os = await import('os');
+    const script = path.join(ROOT, 'scripts/patch-mantine-react-table.mjs');
+    const link = path.join(mkdtempSync(path.join(os.tmpdir(), 'mrt-guard-')), 'patch.mjs');
+    symlinkSync(script, link);
+    expect(isDirectRun(script)).toBe(true);
+    expect(isDirectRun(link)).toBe(true);
+    expect(isDirectRun(path.join(ROOT, 'scripts/check-migration-safety.ts'))).toBe(false);
+    expect(isDirectRun('')).toBe(false);
+  });
+});

@@ -17,7 +17,7 @@ export default function RootError({
   }, [error]);
 
   return (
-    <Center mih="100vh" p="xl">
+    <Center component="main" mih="100vh" p="xl">
       {/* React 19 hoists this into <head> (error boundaries are client components — no metadata export). */}
       <title>Something went wrong – CadenzPoint</title>
       <Paper shadow="md" p="xl" radius="md" w={480} withBorder>

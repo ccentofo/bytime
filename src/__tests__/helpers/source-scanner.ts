@@ -9,12 +9,28 @@ export const DB_WRITE_CALL_PATTERN = /\.(values|set)\s*\(/g;
 /**
  * R2-12: strip comments before matching, so a comment that happens to mention a guard name or
  * a banned identity parameter can't fool these checks into thinking real code is present.
- * Doesn't special-case comment-like text inside string/template literals — none of the guard
- * calls, DB queries, or spreads this file looks for occur inside this codebase's string
- * literals, so that's an acceptable simplification.
+ * A `//` inside a same-line string literal (e.g. a URL: "https://…") is NOT a comment and is kept
+ * (UX-1 audit L9). Quotes are tracked per line only — a JSX-text apostrophe can open a "string",
+ * in which case the line is kept whole (errs toward keeping text, never toward dropping code).
+ * Block comments are removed first, without string awareness.
  */
 export function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map(stripLineComment).join('\n');
+}
+
+function stripLineComment(line: string): string {
+  let quote: string | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') quote = c;
+    else if (c === '/' && line[i + 1] === '/') return line.slice(0, i);
+  }
+  return line;
 }
 
 // ---------------------------------------------------------------------------

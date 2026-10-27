@@ -20,10 +20,9 @@ export default function AppError({
     <Container size="sm" py="xl">
       <title>Something went wrong – CadenzPoint</title>
       <Stack align="center" gap="lg">
+        <Title order={1} size="h3" ta="center">Something went wrong</Title>
         <Alert
           icon={<IconAlertTriangle size={24} />}
-          // The alert title is this screen's h1 (inherits the alert title's look).
-          title={<Title order={1} fz="inherit" fw="inherit" lh="inherit" ff="inherit">Something went wrong</Title>}
           color="red"
           variant="light"
           w="100%"

@@ -2,7 +2,9 @@
 import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
+import { Checkbox, SegmentedControl, Switch, Tabs, TextInput } from '@mantine/core';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { INDICATOR_COLOR } from '@/theme';
 import { installDomStubs, mount, unmount, type Mounted } from '../helpers/dom';
 import { stripComments } from '../helpers/source-scanner';
 
@@ -37,5 +39,26 @@ describe('page structure (T15)', () => {
     const css = readFileSync(path.join(ROOT, 'src/app/(app)/AppShellWrapper.module.css'), 'utf8');
     expect(css).toMatch(/\.skip:focus-visible \{[^}]*z-index: 300;/);
     expect(readFileSync(path.join(ROOT, 'src/app/globals.css'), 'utf8')).toMatch(/#main-content:focus \{\s*outline: none;\s*\}/);
+  });
+
+  it('M1 wiring: the globals.css selectors match the real Mantine DOM; checked controls carry the scheme-aware color', async () => {
+    m = await mount(
+      <>
+        <TextInput label="Name" />
+        <TextInput label="Filled" variant="filled" />
+        <Checkbox label="Billable" defaultChecked />
+        <Switch label="On" defaultChecked />
+        <SegmentedControl data={['A', 'B']} />
+        <Tabs defaultValue="a"><Tabs.List><Tabs.Tab value="a">A</Tabs.Tab></Tabs.List></Tabs>
+      </>,
+    );
+    const wrappers = [...m.container.querySelectorAll('.mantine-Input-wrapper')];
+    expect(wrappers.map((w) => w.getAttribute('data-variant'))).toEqual(['default', 'filled']);
+    expect(m.container.querySelector('.mantine-SegmentedControl-input[data-focus-ring] + .mantine-SegmentedControl-label')).not.toBeNull();
+    expect(m.container.querySelector('.mantine-focus-auto')).not.toBeNull();
+    const style = (sel: string) => m!.container.querySelector(sel)?.getAttribute('style') ?? '';
+    expect(style('.mantine-Checkbox-root')).toContain(`--checkbox-color: ${INDICATOR_COLOR}`);
+    expect(style('.mantine-Switch-root')).toContain(`--switch-color: ${INDICATOR_COLOR}`);
+    expect(style('.mantine-Tabs-root')).toContain(`--tabs-color: ${INDICATOR_COLOR}`);
   });
 });

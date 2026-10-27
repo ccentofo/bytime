@@ -100,6 +100,9 @@ describe('RowActions (T7)', () => {
     expect(ratesItem.hasAttribute('disabled')).toBe(false);
     expect(ratesItem.hasAttribute('data-disabled')).toBe(false);
     expect(ratesItem.textContent).toContain('Read-only workspace');
+    // L1: the reason is a block <span> — a <p> inside the item's <button> is invalid HTML.
+    expect(ratesItem.querySelector('p')).toBeNull();
+    expect([...ratesItem.querySelectorAll('span')].some((sp) => sp.textContent === 'Read-only workspace')).toBe(true);
     // ArrowDown from the dropdown reaches the first (aria-disabled) item: it's in Mantine's keyboard set.
     await act(async () => { document.body.querySelector('[role="menu"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })); });
     expect(document.activeElement).toBe(ratesItem);

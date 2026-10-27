@@ -106,12 +106,68 @@ describe('T1: contrast (rule R, both schemes)', () => {
     ])).toEqual([]);
   });
 
-  it('signal-6 (focus ring / accent) ≥ 3:1 on white and dark-7', () => {
-    const s6 = merged.colors.signal[6];
+  // M1 (UX-1 fix round 1): the focus ring, the focused input border and checked indicators are drawn with
+  // --mantine-primary-color-filled (signal-7 in both schemes) unless overridden. Read the ACTUAL colors from the
+  // overrides — a missing override falls back to Mantine's default, so deleting one fails the contrast pairs below.
+  const css = readFileSync(path.join(ROOT, 'src/app/globals.css'), 'utf8');
+  const primaryFilled = merged.colors.signal[typeof merged.primaryShade === 'object' ? merged.primaryShade.dark : merged.primaryShade];
+  const lightDark = (value: string | undefined) => {
+    const m = value?.match(/light-dark\(var\(--mantine-color-signal-(\d)\),\s*var\(--mantine-color-signal-(\d)\)\)/);
+    return m ? { light: merged.colors.signal[Number(m[1])], dark: merged.colors.signal[Number(m[2])] } : null;
+  };
+  const ring = () => {
+    const rule = css.match(/:root \.mantine-focus-auto:focus-visible,\s*:root \.mantine-focus-always:focus \{\s*outline-color: ([^;]+);/);
+    return lightDark(rule?.[1]) ?? { light: primaryFilled, dark: primaryFilled };
+  };
+  const inputFocusDark = () => {
+    const rule = css.match(/:root\[data-mantine-color-scheme='dark'\] \.mantine-Input-wrapper:is\(\[data-variant='default'\], \[data-variant='filled'\]\) \{\s*--input-bd-focus: var\(--mantine-color-signal-(\d)\);/);
+    return rule ? merged.colors.signal[Number(rule[1])] : primaryFilled;
+  };
+  const indicatorOf = (component: 'Checkbox' | 'Radio' | 'Switch' | 'Tabs', cssVar: string) => {
+    const vars = (theme.components?.[component] as { vars?: (t: unknown, p: object) => { root?: Record<string, string> } } | undefined)?.vars?.(merged, {});
+    return lightDark(vars?.root?.[cssVar]) ?? { light: primaryFilled, dark: primaryFilled };
+  };
+
+  it('focus ring (actual color per scheme) ≥ 3:1 — signal-7 on white / ink-0, signal-4 on dark-7 / dark-6', () => {
+    const r = ring();
     expect(failures([
-      { what: 'signal-6 on white', fg: s6, bg: '#ffffff', min: 3 },
-      { what: 'signal-6 on dark-7', fg: s6, bg: '#181a20', min: 3 },
+      { what: 'ring light on white', fg: r.light, bg: '#ffffff', min: 3 },
+      { what: 'ring light on ink-0', fg: r.light, bg: '#f7f8fb', min: 3 },
+      { what: 'ring dark on dark-7', fg: r.dark, bg: '#181a20', min: 3 },
+      { what: 'ring dark on dark-6', fg: r.dark, bg: '#23262f', min: 3 },
     ])).toEqual([]);
+  });
+
+  it('focused input border in dark ≥ 3:1 on the input backgrounds (dark-6 default, dark-5 filled)', () => {
+    const c = inputFocusDark();
+    expect(failures([
+      { what: 'input focus border on dark-6', fg: c, bg: '#23262f', min: 3 },
+      { what: 'input focus border on dark-5', fg: c, bg: '#343a48', min: 3 },
+    ])).toEqual([]);
+  });
+
+  it('checked indicators (Checkbox, Radio, Switch, Tabs) ≥ 3:1 against the surface, with the white mark ≥ 3:1 on them', () => {
+    const pairs: Pair[] = [];
+    for (const [component, cssVar] of [['Checkbox', '--checkbox-color'], ['Radio', '--radio-color'], ['Switch', '--switch-color'], ['Tabs', '--tabs-color']] as const) {
+      const c = indicatorOf(component, cssVar);
+      pairs.push(
+        { what: `${component} light on white`, fg: c.light, bg: '#ffffff', min: 3 },
+        { what: `${component} light on ink-0`, fg: c.light, bg: '#f7f8fb', min: 3 },
+        { what: `${component} dark on dark-7`, fg: c.dark, bg: '#181a20', min: 3 },
+        { what: `${component} dark on dark-6`, fg: c.dark, bg: '#23262f', min: 3 },
+      );
+      if (component !== 'Tabs') pairs.push({ what: `${component} white mark on dark fill`, fg: WHITE, bg: c.dark, min: 3 }, { what: `${component} white mark on light fill`, fg: WHITE, bg: c.light, min: 3 });
+    }
+    expect(failures(pairs)).toEqual([]);
+  });
+
+  it('static: the overrides exist (globals.css ring, input focus border, SegmentedControl outline; theme indicator vars)', () => {
+    expect(css).toMatch(/:root \.mantine-focus-auto:focus-visible,\s*:root \.mantine-focus-always:focus \{\s*outline-color: light-dark\(var\(--mantine-color-signal-7\), var\(--mantine-color-signal-4\)\);/);
+    expect(css).toContain("--input-bd-focus: var(--mantine-color-signal-4);");
+    expect(css).toContain('--segmented-control-outline: 2px solid var(--mantine-color-signal-4);');
+    // A caller's own color still wins (the theme var steps aside).
+    const vars = (theme.components?.Checkbox as { vars: (t: unknown, p: object) => { root: Record<string, string | undefined> } }).vars(merged, { color: 'red' });
+    expect(vars.root['--checkbox-color']).toBeUndefined();
   });
 });
 
@@ -140,7 +196,7 @@ export function badColor(value: string): string | null {
  */
 export function colorLiterals(src: string): string[] {
   const out: string[] = [];
-  for (const m of src.matchAll(/\b(?:c|color)=(?:"([^"]*)"|\{\s*['"]([^'"]*)['"]\s*\})/g)) out.push(m[1] ?? m[2]);
+  for (const m of src.matchAll(/\b(?:c|color)=(?:"([^"]*)"|'([^']*)'|\{\s*['"]([^'"]*)['"]\s*\})/g)) out.push(m[1] ?? m[2] ?? m[3]);
   for (const m of src.matchAll(/\b(?:c|color)=\{([^}]*)\}/g)) {
     for (const r of m[1].matchAll(/(?:\?\?|\?|:)\s*['"]([^'"]+)['"]/g)) out.push(r[1]);
   }
@@ -169,6 +225,12 @@ describe('T1b: palette restriction (static)', () => {
     expect(colorLiterals(`<B color={status === 'remove' ? 'red' : undefined} />`)).toEqual(['red']);
     expect(colorLiterals(`<B color={MAP[k] ?? 'gray'} c={'signal'} />`).sort()).toEqual(['gray', 'signal']);
     expect(badColor('var(--mantine-color-red-6)')).toBeNull();
+  });
+
+  it('fixture (L9): a URL\'s // is not a comment; single-quoted attributes are scanned', () => {
+    expect(colorLiterals(stripComments(`<Anchor href="https://x.test/docs" c="grape">Docs</Anchor>`)).map(badColor)).toEqual(['color "grape" is not in the palette']);
+    expect(colorLiterals(`<Badge color='grape' />`).map(badColor)).toEqual(['color "grape" is not in the palette']);
+    expect(stripComments(`const a = 1; // c="grape"`)).not.toContain('grape');
   });
 });
 

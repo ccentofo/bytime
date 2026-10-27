@@ -17,6 +17,7 @@ import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { RowActions } from '@/components/ui/RowActions';
+import { useBusyRows, useLastTarget } from '@/components/ui/useRowState';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
@@ -71,10 +72,13 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
   const [users, setUsers] = useState<User[]>(initialUsers);
   const [isPending, startTransition] = useTransition();
   // Row actions that run without a confirm (Unlock, Reactivate) show a loader on THEIR row only.
-  const [busyRow, setBusyRow] = useState<string | null>(null);
+  const busyRows = useBusyRows();
   // Confirmations (feature-plan-ux-foundations.md §4.5, B2): deactivation and FLSA status ask first.
   const [confirmDeactivate, setConfirmDeactivate] = useState<User | null>(null);
   const [confirmFlsa, setConfirmFlsa] = useState<User | null>(null);
+  // The modals keep showing the last target while they animate closed (no "Deactivate ?" flash).
+  const shownDeactivate = useLastTarget(confirmDeactivate);
+  const shownFlsa = useLastTarget(confirmFlsa);
 
   // Modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -180,10 +184,10 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
   }
 
   function handleUnlockAccount(user: User) {
-    setBusyRow(user.id);
+    busyRows.start(user.id);
     startTransition(async () => {
       const result = await runAction(unlockUserAccount(user.email), { errorTitle: 'Couldn’t unlock account' });
-      setBusyRow(null);
+      busyRows.done(user.id);
       if (!result.ok) return;
       notifications.show({
         title: 'Account Unlocked',
@@ -233,11 +237,11 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
 
   /** Same server call as before; deactivation runs from the confirm (closed only on success), reactivation directly. */
   function handleToggleActive(user: User, onDone?: () => void) {
-    if (!onDone) setBusyRow(user.id);
+    if (!onDone) busyRows.start(user.id);
     startTransition(async () => {
       const newActive = !user.isActive;
       const result = await runAction(updateUser(user.id, { isActive: newActive }), { errorTitle: 'Action Failed' });
-      setBusyRow(null);
+      busyRows.done(user.id);
       if (!result.ok) return;
       onDone?.();
       const refreshed = await getUsers();
@@ -267,7 +271,9 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
       size: 120,
     },
     {
-      accessorKey: 'isActive',
+      // The word, so the table search finds "Inactive" (UX-1 audit L3).
+      id: 'isActive',
+      accessorFn: (r) => (r.isActive ? 'Active' : 'Inactive'),
       header: 'Status',
       Cell: ({ row }) => (
         <Badge color={row.original.isActive ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive}>
@@ -277,7 +283,8 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
       size: 100,
     },
     {
-      accessorKey: 'flsaExempt',
+      id: 'flsaExempt',
+      accessorFn: (r) => (r.flsaExempt ? 'Exempt' : 'Non-exempt'),
       header: 'FLSA',
       Cell: ({ row }) => (row.original.flsaExempt ? 'Exempt' : 'Non-exempt'),
       size: 110,
@@ -297,14 +304,14 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
           items={[
             // Credential actions stay available in read-only mode, matching the server (users.ts unlock, password.ts).
             { key: 'reset-password', label: 'Reset password…', icon: 'resetPassword', writes: false, onSelect: () => openResetModal(user) },
-            { key: 'unlock', label: 'Unlock account', icon: 'unlock', writes: false, busy: busyRow === user.id, onSelect: () => handleUnlockAccount(user) },
+            { key: 'unlock', label: 'Unlock account', icon: 'unlock', writes: false, busy: busyRows.isBusy(user.id), onSelect: () => handleUnlockAccount(user) },
             { key: 'flsa', label: user.flsaExempt ? 'Mark as non-exempt…' : 'Mark as FLSA exempt…', icon: 'flsa', onSelect: () => setConfirmFlsa(user) },
             user.isActive
               ? {
                 key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger', onSelect: () => setConfirmDeactivate(user),
                 disabledReason: user.id === currentUserId ? "You can't deactivate your own account" : undefined,
               }
-              : { key: 'reactivate', label: 'Reactivate', icon: 'reactivate', busy: busyRow === user.id, onSelect: () => handleToggleActive(user) },
+              : { key: 'reactivate', label: 'Reactivate', icon: 'reactivate', busy: busyRows.isBusy(user.id), onSelect: () => handleToggleActive(user) },
           ]}
         />
       );
@@ -325,7 +332,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
 
       <ConfirmModal
         opened={!!confirmDeactivate}
-        title={`Deactivate ${confirmDeactivate?.fullName ?? ''}?`}
+        title={`Deactivate ${shownDeactivate?.fullName ?? ''}?`}
         message="They're signed out and can't sign in. Timesheets waiting for their approval go to admins. Their timesheets and history stay on record."
         confirmLabel="Deactivate"
         loading={isPending}
@@ -336,9 +343,9 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
       <ConfirmModal
         opened={!!confirmFlsa}
         tone="neutral"
-        title={confirmFlsa ? `Mark ${confirmFlsa.fullName} as FLSA ${confirmFlsa.flsaExempt ? 'non-exempt' : 'exempt'}?` : ''}
+        title={shownFlsa ? `Mark ${shownFlsa.fullName} as FLSA ${shownFlsa.flsaExempt ? 'non-exempt' : 'exempt'}?` : ''}
         message="Payroll export uses this to calculate overtime for every period, including past ones."
-        confirmLabel={confirmFlsa?.flsaExempt ? 'Mark as non-exempt' : 'Mark as exempt'}
+        confirmLabel={shownFlsa?.flsaExempt ? 'Mark as non-exempt' : 'Mark as exempt'}
         loading={isPending}
         onConfirm={() => confirmFlsa && handleToggleFlsaExempt(confirmFlsa, () => setConfirmFlsa(null))}
         onCancel={() => setConfirmFlsa(null)}
