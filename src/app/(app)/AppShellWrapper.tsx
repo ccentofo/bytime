@@ -135,7 +135,7 @@ export function AppShellWrapper({ user, setupComplete = true, initialCollapsed =
                     <Button component="a" href="/api/export/workspace" size="xs" variant="default">
                       Export data
                     </Button>
-                    <Button component="a" href="/admin/billing" size="xs" variant="filled">
+                    <Button component="a" href="/settings/billing" size="xs" variant="filled">
                       Subscribe
                     </Button>
                   </Group>

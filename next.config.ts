@@ -56,6 +56,23 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  // feature-plan-ux-navigation-home.md §4.1: moved pages. Old bookmarks, emails already sent and Stripe sessions
+  // created before the move keep working (path-only, so the tenant host and query strings are kept). 307, never 308:
+  // a permanent redirect is cached by browsers indefinitely. The specific payroll-export rule must come before the
+  // integrations wildcard; `:path*` also matches the bare `/admin/integrations`.
+  async redirects() {
+    return [
+      { source: "/admin/settings", destination: "/settings/workspace", permanent: false },
+      { source: "/admin/billing", destination: "/settings/billing", permanent: false },
+      { source: "/admin/integrations/payroll-export", destination: "/admin/payroll-export", permanent: false },
+      { source: "/admin/integrations/:path*", destination: "/settings/integrations/:path*", permanent: false },
+      { source: "/admin/api-keys", destination: "/settings/api-keys", permanent: false },
+      { source: "/admin/import", destination: "/settings/import", permanent: false },
+      { source: "/admin/migration", destination: "/settings/migration", permanent: false },
+      { source: "/admin/notifications", destination: "/profile/notifications", permanent: false },
+      { source: "/settings", destination: "/settings/workspace", permanent: false },
+    ];
+  },
 };
 
 // Sentry build integration. Runtime error reporting comes from src/instrumentation.ts and

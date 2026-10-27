@@ -110,7 +110,7 @@ export function IntegrationsClient({ initialConnections, availableConnectors, wo
                 {conn.provider === 'quickbooks_online' && (
                   <Button
                     component="a"
-                    href={`/admin/integrations/quickbooks?connectionId=${conn.id}`}
+                    href={`/settings/integrations/quickbooks?connectionId=${conn.id}`}
                     size="xs"
                     variant="subtle"
                     mt="xs"
@@ -122,7 +122,7 @@ export function IntegrationsClient({ initialConnections, availableConnectors, wo
                 {conn.provider === 'gusto' && (
                   <Button
                     component="a"
-                    href={`/admin/integrations/gusto?connectionId=${conn.id}`}
+                    href={`/settings/integrations/gusto?connectionId=${conn.id}`}
                     size="xs"
                     variant="subtle"
                     mt="xs"
@@ -191,7 +191,7 @@ export function IntegrationsClient({ initialConnections, availableConnectors, wo
                     {!isConnected && connector.id === 'csv_export' && (
                       <Button
                         component="a"
-                        href="/admin/integrations/payroll-export"
+                        href="/admin/payroll-export"
                         size="sm"
                         variant="light"
                         fullWidth
@@ -228,7 +228,7 @@ export function IntegrationsClient({ initialConnections, availableConnectors, wo
                     {isConnected && connector.id === 'gusto' && (
                       <Button
                         component="a"
-                        href={`/admin/integrations/gusto?connectionId=${activeConnections.find((c) => c.provider === connector.id)?.id}`}
+                        href={`/settings/integrations/gusto?connectionId=${activeConnections.find((c) => c.provider === connector.id)?.id}`}
                         size="sm"
                         variant="filled"
                         fullWidth
@@ -239,7 +239,7 @@ export function IntegrationsClient({ initialConnections, availableConnectors, wo
                     {isConnected && connector.id === 'quickbooks_online' && (
                       <Button
                         component="a"
-                        href={`/admin/integrations/quickbooks?connectionId=${activeConnections.find((c) => c.provider === connector.id)?.id}`}
+                        href={`/settings/integrations/quickbooks?connectionId=${activeConnections.find((c) => c.provider === connector.id)?.id}`}
                         size="sm"
                         variant="filled"
                         fullWidth

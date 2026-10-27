@@ -19,7 +19,7 @@ vi.mock('@mantine/dates', () => ({
     <button data-testid="pick-range" onClick={() => onChange(['2026-09-01', '2026-09-15'])}>pick</button>,
 }));
 
-import { PayrollExportClient } from '@/app/(app)/admin/integrations/payroll-export/PayrollExportClient';
+import { PayrollExportClient } from '@/app/(app)/admin/payroll-export/PayrollExportClient';
 import type { CalendarDate } from '@/lib/calendar-date';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

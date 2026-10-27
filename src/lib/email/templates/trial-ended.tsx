@@ -5,7 +5,7 @@ export function TrialEndedEmail({ tenantName, deletionDateFormatted, appUrl }: {
   tenantName: string; deletionDateFormatted: string; appUrl: string;
 }) {
   return (
-    <LifecycleLayout title={`Your ${tenantName} trial has ended`} cta={{ href: `${appUrl}/admin/billing`, label: 'Subscribe to restore full access' }}>
+    <LifecycleLayout title={`Your ${tenantName} trial has ended`} cta={{ href: `${appUrl}/settings/billing`, label: 'Subscribe to restore full access' }}>
       <Text style={paragraph}>
         Your CadenzPoint trial has ended and <strong>{tenantName}</strong> is now read-only. Everyone can still sign in and
         view timesheets; new entries, approvals and other changes are paused until you subscribe.

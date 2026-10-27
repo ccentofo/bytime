@@ -124,9 +124,9 @@ export function PayrollExportClient({ today }: { today: CalendarDate }) {
     <Container size="lg" py="xl">
       {/* Header */}
       <Group mb="md">
-        <Anchor href="/admin/integrations" size="sm">
+        <Anchor href="/admin/reports" size="sm">
           <IconArrowLeft size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} />
-          Back to Integrations
+          Back to reports
         </Anchor>
       </Group>
 
@@ -248,7 +248,7 @@ export function PayrollExportClient({ today }: { today: CalendarDate }) {
         <Alert color="red" variant="light" icon={<IconAlertTriangle size={16} />} title="Payroll export unavailable" mb="xl" data-testid="payroll-refused">
           <Text size="sm">{preview.message}</Text>
           {preview.reason === 'workweek-unset'
-            ? <Anchor href="/admin/settings" size="sm">Set the workweek start day in Settings</Anchor>
+            ? <Anchor href="/settings/workspace" size="sm">Set the workweek start day in Settings</Anchor>
             : <Anchor href="/admin/indirect-codes" size="sm">Set pay types in Indirect Codes</Anchor>}
         </Alert>
       )}

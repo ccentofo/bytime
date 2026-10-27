@@ -34,7 +34,7 @@ vi.mock('@/server/actions/billing', () => ({
 }));
 
 import { AppNavbar } from '@/components/shell/AppNavbar';
-import { BillingClient } from '@/app/(app)/admin/billing/BillingClient';
+import { BillingClient } from '@/app/(app)/settings/billing/BillingClient';
 import { BillingWall } from '@/app/(app)/BillingWall';
 import { OnHoldScreen } from '@/app/(app)/OnHoldScreen';
 import { PolicyHoldScreen } from '@/app/(app)/PolicyHoldScreen';
@@ -69,13 +69,13 @@ function subscribeButtons(html: string): Array<{ plan: string; disabled: boolean
 }
 
 describe('Billing nav', () => {
-  it('admins see Billing (→ /admin/billing)', () => {
-    expect(render(<AppNavbar userRole="admin" />)).toMatch(/href="\/admin\/billing"[\s\S]*?Billing/);
+  it('admins see Billing (→ /settings/billing)', () => {
+    expect(render(<AppNavbar userRole="admin" />)).toMatch(/href="\/settings\/billing"[\s\S]*?Billing/);
   });
 
   it('supervisors and employees do not', () => {
-    expect(render(<AppNavbar userRole="supervisor" />)).not.toContain('/admin/billing');
-    expect(render(<AppNavbar userRole="employee" />)).not.toContain('/admin/billing');
+    expect(render(<AppNavbar userRole="supervisor" />)).not.toContain('/settings/billing');
+    expect(render(<AppNavbar userRole="employee" />)).not.toContain('/settings/billing');
   });
 });
 

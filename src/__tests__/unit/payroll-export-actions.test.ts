@@ -182,8 +182,8 @@ describe('workweek start day setting', () => {
     expect(db.inserts).toEqual([]);
   });
 
-  it('the Settings page warns (29 CFR 778.105) before changing a set value', () => {
-    const src = readFileSync(path.join(ROOT, 'src/app/(app)/admin/settings/SettingsClient.tsx'), 'utf8');
+  it('the Workspace settings page warns (29 CFR 778.105) before changing a set value', () => {
+    const src = readFileSync(path.join(ROOT, 'src/app/(app)/settings/workspace/WorkspaceSettingsClient.tsx'), 'utf8');
     expect(src).toMatch(/savedWorkweekDay === null \? saveWorkweek\(\) : setConfirmWorkweek\(true\)/);
     expect(src).toMatch(/29 CFR 778\.105/);
   });

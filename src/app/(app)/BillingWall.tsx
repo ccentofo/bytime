@@ -1,7 +1,7 @@
 import { Center, Stack, Title, Text, Alert, ThemeIcon, Container, Button } from '@mantine/core';
 import { IconCreditCard, IconDownload } from '@tabler/icons-react';
 import { getTenantBillingInfo } from '@/server/actions/billing';
-import { BillingClient } from './admin/billing/BillingClient';
+import { BillingClient } from './settings/billing/BillingClient';
 import { SignOutButton } from '@/components/auth/SignOutButton';
 
 /**

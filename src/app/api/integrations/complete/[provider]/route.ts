@@ -52,7 +52,7 @@ async function complete(request: NextRequest, provider: string, cookieNonce: str
   try {
     tenantSlug = await getTenantSlug();
   } catch {
-    return redirectTo('/admin/integrations?error=connection_failed');
+    return redirectTo('/settings/integrations?error=connection_failed');
   }
 
   const valid =
@@ -64,11 +64,11 @@ async function complete(request: NextRequest, provider: string, cookieNonce: str
     !!cookieNonce &&
     safeEqual(payload.nonce, cookieNonce);
 
-  if (!valid) return redirectTo('/admin/integrations?error=connection_failed');
+  if (!valid) return redirectTo('/settings/integrations?error=connection_failed');
 
   const connector = getConnector(provider);
   if (!connector || !connector.exchangeCodeForTokens) {
-    return redirectTo('/admin/integrations?error=unknown_provider');
+    return redirectTo('/settings/integrations?error=unknown_provider');
   }
 
   try {
@@ -84,9 +84,9 @@ async function complete(request: NextRequest, provider: string, cookieNonce: str
       tokenExpiresAt: new Date(Date.now() + tokens.expiresIn * 1000),
     });
 
-    return redirectTo('/admin/integrations?connected=true');
+    return redirectTo('/settings/integrations?connected=true');
   } catch (err) {
     console.error(`OAuth completion error for ${provider}:`, err);
-    return redirectTo('/admin/integrations?error=connection_failed');
+    return redirectTo('/settings/integrations?error=connection_failed');
   }
 }

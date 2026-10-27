@@ -5,7 +5,7 @@ export function SubscriptionEndedEmail({ tenantName, deletionDateFormatted, appU
   tenantName: string; deletionDateFormatted: string; appUrl: string;
 }) {
   return (
-    <LifecycleLayout title={`Your ${tenantName} subscription has ended`} cta={{ href: `${appUrl}/admin/settings`, label: 'Export your data' }}>
+    <LifecycleLayout title={`Your ${tenantName} subscription has ended`} cta={{ href: `${appUrl}/settings/workspace`, label: 'Export your data' }}>
       <Text style={paragraph}>
         The subscription for <strong>{tenantName}</strong> has ended and the workspace is now read-only. An admin can sign in
         and export everything at any time until <strong>{deletionDateFormatted}</strong>, after which the workspace and its

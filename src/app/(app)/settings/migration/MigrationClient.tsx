@@ -243,7 +243,7 @@ export function MigrationClient() {
         <Text size="sm" mt={4}>
           <strong>Required import order:</strong>{' '}
           1. Employees, Contracts, CLINs, Indirect Codes (via{' '}
-          <Anchor href="/admin/import" size="sm">Data Import</Anchor>
+          <Anchor href="/settings/import" size="sm">Data Import</Anchor>
           ) → 2. Historical Timesheet Entries → 3. Period Statuses. Entries can&apos;t be imported into a period that is
           already submitted or approved, so import entries <strong>before</strong> periods.
         </Text>

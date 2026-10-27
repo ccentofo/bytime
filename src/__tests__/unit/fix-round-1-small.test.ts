@@ -66,7 +66,7 @@ describe('F14 — import batches and the window line', () => {
 
 describe('F13 — generated passwords CSV', () => {
   it('uses the shared CSV writer (formula guard + quoting), never a hand-built join', () => {
-    const src = readFileSync(path.join(ROOT, 'src/app/(app)/admin/import/ImportClient.tsx'), 'utf8');
+    const src = readFileSync(path.join(ROOT, 'src/app/(app)/settings/import/ImportClient.tsx'), 'utf8');
     expect(src).toMatch(/generateCsv\(importResult\.generatedPasswords, \[\{ key: 'email', header: 'Email' \}, \{ key: 'password', header: 'Password' \}\]\)/);
     expect(src).not.toMatch(/'Email,Password\\n'/);
   });

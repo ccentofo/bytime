@@ -205,7 +205,7 @@ export function QBOConfigClient({
       setConfirmDisconnectOpen(false);
       return;
     }
-    window.location.href = '/admin/integrations';
+    window.location.href = '/settings/integrations';
   }
 
   function getMappingForEntity(entityType: string, bytimeId: string): Mapping | undefined {
@@ -216,7 +216,7 @@ export function QBOConfigClient({
     <Container size="lg" py="xl">
       {/* Header */}
       <Group mb="md">
-        <Anchor href="/admin/integrations" size="sm">
+        <Anchor href="/settings/integrations" size="sm">
           <IconArrowLeft size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} />
           Back to Integrations
         </Anchor>

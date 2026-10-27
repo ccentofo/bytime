@@ -20,9 +20,11 @@ import { PageHeader } from '@/components/ui/PageHeader';
 
 type Props = {
   initialPrefs: NotificationPrefs;
+  /** UX-2 §4.4: the supervisors-only switch is hidden for employees (UI only — the server still decides who's emailed). */
+  userRole: string;
 };
 
-export function NotificationsClient({ initialPrefs }: Props) {
+export function NotificationsClient({ initialPrefs, userRole }: Props) {
   const [isPending, startTransition] = useTransition();
   const [prefs, setPrefs] = useState<NotificationPrefs>(initialPrefs);
 
@@ -62,13 +64,13 @@ export function NotificationsClient({ initialPrefs }: Props) {
         <Stack gap="md">
           <Divider label="Workflow Notifications" labelPosition="left" />
 
-          <Switch
+          {userRole !== 'employee' && <Switch
             label="Timesheet Submitted (Supervisors)"
             description="Receive an email when an employee submits their timesheet for review"
             checked={prefs.emailOnSubmit}
             onChange={(e) => handleToggle('emailOnSubmit', e.currentTarget.checked)}
             disabled={isPending}
-          />
+          />}
 
           <Switch
             label="Timesheet Approved"

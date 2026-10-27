@@ -5,7 +5,7 @@ export function SuspendedEmail({ tenantName, terminationDateFormatted, appUrl }:
   tenantName: string; terminationDateFormatted: string; appUrl: string;
 }) {
   return (
-    <LifecycleLayout title={`${tenantName} has been suspended`} titleColor="#b91c1c" cta={{ href: `${appUrl}/admin/billing`, label: 'Pay outstanding balance' }}>
+    <LifecycleLayout title={`${tenantName} has been suspended`} titleColor="#b91c1c" cta={{ href: `${appUrl}/settings/billing`, label: 'Pay outstanding balance' }}>
       <Text style={paragraph}>
         <strong>{tenantName}</strong> is suspended for non-payment. Admins can still sign in to pay and to export the
         workspace; access is restored as soon as payment is received.

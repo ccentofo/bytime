@@ -36,7 +36,7 @@ export async function GET(
   // The user declined consent (or the provider failed): send them back to their own workspace
   // with a fixed error code. The provider's error text is never reflected.
   if (error || !code) {
-    return NextResponse.redirect(new URL(`${tenantBase}/admin/integrations?error=connection_cancelled`));
+    return NextResponse.redirect(new URL(`${tenantBase}/settings/integrations?error=connection_cancelled`));
   }
 
   const completeUrl = new URL(`${tenantBase}/api/integrations/complete/${encodeURIComponent(provider)}`);

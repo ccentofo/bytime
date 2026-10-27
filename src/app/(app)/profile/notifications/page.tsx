@@ -14,5 +14,6 @@ export default async function NotificationsPage() {
 
   const prefs = await getNotificationPreferences();
 
-  return <NotificationsClient initialPrefs={prefs} />;
+  const role = (session.user as any).role ?? 'employee';
+  return <NotificationsClient initialPrefs={prefs} userRole={role} />;
 }

@@ -131,7 +131,7 @@ export const STEPS: StepConfig[] = [
     required: true,
     linkHref: '/admin/users',
     linkLabel: 'Go to users',
-    secondaryLinkHref: '/admin/import',
+    secondaryLinkHref: '/settings/import',
     secondaryLinkLabel: 'Or use Data import (people only)',
     entityLabel: 'employees',
   },

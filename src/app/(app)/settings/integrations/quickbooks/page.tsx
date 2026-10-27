@@ -30,7 +30,7 @@ export default async function QBOConfigPage({
   );
 
   if (qboConnections.length === 0) {
-    redirect('/admin/integrations');
+    redirect('/settings/integrations');
   }
 
   // Use the specified connection or the first one
@@ -38,7 +38,7 @@ export default async function QBOConfigPage({
   const activeConnection = qboConnections.find((c) => c.id === activeConnectionId);
 
   if (!activeConnection) {
-    redirect('/admin/integrations');
+    redirect('/settings/integrations');
   }
 
   // Fetch data in parallel

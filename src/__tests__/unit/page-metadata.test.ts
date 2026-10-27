@@ -31,7 +31,7 @@ describe('page titles (T14)', () => {
 
   it('every page.tsx except the landing page exports metadata with a title string', () => {
     const pages = files(APP, (n) => n === 'page.tsx');
-    expect(pages.length).toBe(30);
+    expect(pages.length).toBe(31); // UX-2: + settings/pay-schedule (home lands in a later commit)
     const missing = pages.filter((f) => rel(f) !== LANDING)
       .filter((f) => !/export const metadata: Metadata = \{ title: '[^']+' \};/.test(read(f)))
       .map(rel);
@@ -48,6 +48,10 @@ describe('page titles (T14)', () => {
       .filter((f) => { const s = read(f); return /^\s*['"]use client['"]/.test(s) && /export (const metadata|async function generateMetadata|function generateMetadata)/.test(s); })
       .map(rel);
     expect(offenders).toEqual([]);
+  });
+
+  it('settings/error.tsx is exactly the client re-export of admin/error (UX-2 §4.1)', () => {
+    expect(readFileSync(path.join(APP, '(app)/settings/error.tsx'), 'utf8')).toBe("'use client';\nexport { default } from '../admin/error';\n");
   });
 
   it('client error boundaries render a <title>', () => {

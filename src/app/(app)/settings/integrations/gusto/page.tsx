@@ -25,14 +25,14 @@ export default async function GustoConfigPage({
   );
 
   if (gustoConnections.length === 0) {
-    redirect('/admin/integrations');
+    redirect('/settings/integrations');
   }
 
   const activeConnectionId = connectionId ?? gustoConnections[0].id;
   const activeConnection = gustoConnections.find((c) => c.id === activeConnectionId);
 
   if (!activeConnection) {
-    redirect('/admin/integrations');
+    redirect('/settings/integrations');
   }
 
   const [mappings, syncLogs, bytimeEmployees, workspaceTimezone] = await Promise.all([

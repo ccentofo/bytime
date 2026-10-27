@@ -81,7 +81,7 @@ export function AppHeader({ user, mobileNavOpened, onMobileNavToggle, isDemo = f
               <Menu.Item
                 leftSection={<Icons.notifications size={ICON_SIZE.menu} />}
                 component={Link}
-                href="/admin/notifications"
+                href="/profile/notifications"
               >
                 Notification Settings
               </Menu.Item>

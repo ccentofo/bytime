@@ -5,7 +5,7 @@ export function TrialEndingEmail({ tenantName, trialEndsAtFormatted, appUrl }: {
   tenantName: string; trialEndsAtFormatted: string; appUrl: string;
 }) {
   return (
-    <LifecycleLayout title={`Your ${tenantName} trial ends on ${trialEndsAtFormatted}`} cta={{ href: `${appUrl}/admin/billing`, label: 'Choose a plan' }}>
+    <LifecycleLayout title={`Your ${tenantName} trial ends on ${trialEndsAtFormatted}`} cta={{ href: `${appUrl}/settings/billing`, label: 'Choose a plan' }}>
       <Text style={paragraph}>
         Your CadenzPoint trial for <strong>{tenantName}</strong> ends on <strong>{trialEndsAtFormatted}</strong>. After that
         the workspace becomes read-only until you subscribe: everyone can still sign in and view timesheets, and an admin can

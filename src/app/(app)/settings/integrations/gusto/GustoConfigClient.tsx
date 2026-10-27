@@ -219,7 +219,7 @@ export function GustoConfigClient({
       setConfirmDisconnectOpen(false);
       return;
     }
-    window.location.href = '/admin/integrations';
+    window.location.href = '/settings/integrations';
   }
 
   const employeeMappingCount = mappings.filter((m) => m.entityType === 'employee').length;
@@ -227,7 +227,7 @@ export function GustoConfigClient({
   return (
     <Container size="lg" py="xl">
       <Group mb="md">
-        <Anchor href="/admin/integrations" size="sm">
+        <Anchor href="/settings/integrations" size="sm">
           <IconArrowLeft size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} />
           Back to Integrations
         </Anchor>

@@ -35,12 +35,12 @@ const ADMIN_ITEMS: NavItem[] = [
   { label: 'Labor Categories', href: '/admin/labor-categories', icon: <IconCategory size={18} /> },
   { label: 'User Management', href: '/admin/users', icon: <IconUserCog size={18} /> },
   { label: 'Indirect Codes', href: '/admin/indirect-codes', icon: <IconReceipt size={18} /> },
-  { label: 'Data Import', href: '/admin/import', icon: <IconUpload size={18} /> },
-  { label: 'API Keys', href: '/admin/api-keys', icon: <IconApi size={18} /> },
-  { label: 'Integrations', href: '/admin/integrations', icon: <IconPlug size={18} /> },
-  { label: 'Data Migration', href: '/admin/migration', icon: <IconDatabaseImport size={18} /> },
-  { label: 'Settings', href: '/admin/settings', icon: <IconSettings size={18} /> },
-  { label: 'Billing', href: '/admin/billing', icon: <IconCreditCard size={18} /> },
+  { label: 'Data Import', href: '/settings/import', icon: <IconUpload size={18} /> },
+  { label: 'API Keys', href: '/settings/api-keys', icon: <IconApi size={18} /> },
+  { label: 'Integrations', href: '/settings/integrations', icon: <IconPlug size={18} /> },
+  { label: 'Data Migration', href: '/settings/migration', icon: <IconDatabaseImport size={18} /> },
+  { label: 'Settings', href: '/settings/workspace', icon: <IconSettings size={18} /> },
+  { label: 'Billing', href: '/settings/billing', icon: <IconCreditCard size={18} /> },
 ];
 
 export function AppNavbar({ userRole, collapsed = false }: AppNavbarProps) {
