@@ -11,19 +11,19 @@ import {
   Stack,
   Badge,
   Switch,
-  ActionIcon,
-  Tooltip,
   Text,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
-import { IconPlus, IconEdit } from '@tabler/icons-react';
+import { Icons, ICON_SIZE } from '@/components/ui/icons';
+import { RowActions } from '@/components/ui/RowActions';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import { createIndirectCode, updateIndirectCode, getIndirectChargeCodes, seedIndirectCodes } from '@/server/actions/indirect-codes';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { INDIRECT_CATEGORY_COLOR } from '@/lib/ui/status-colors';
-import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
+import { INDIRECT_CATEGORY_COLOR, RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 type IndirectCode = {
   id: string;
@@ -88,7 +88,9 @@ const EMPTY_FORM: CodeForm = {
 };
 
 export function IndirectCodesClient({ initialCodes }: Props) {
-  const canWrite = useCanWrite();
+  // Deactivate asks first (feature-plan-ux-foundations.md §4.5, B2); Reactivate runs directly with a row loader.
+  const [confirmDeactivate, setConfirmDeactivate] = useState<IndirectCode | null>(null);
+  const [busyRow, setBusyRow] = useState<string | null>(null);
   const [codes, setCodes] = useState<IndirectCode[]>(initialCodes);
   const [isPending, startTransition] = useTransition();
   const [modalOpen, setModalOpen] = useState(false);
@@ -155,10 +157,14 @@ export function IndirectCodesClient({ initialCodes }: Props) {
     });
   }
 
-  function handleToggleActive(code: IndirectCode) {
+  /** Same server call as before; the confirm closes only on success (onDone). */
+  function handleToggleActive(code: IndirectCode, onDone?: () => void) {
+    if (!onDone) setBusyRow(code.id);
     startTransition(async () => {
       const result = await runAction(updateIndirectCode(code.id, { isActive: !code.isActive }), { errorTitle: 'Couldn’t update code' });
+      setBusyRow(null);
       if (!result.ok) return;
+      onDone?.();
       const refreshed = await getIndirectChargeCodes();
       setCodes(refreshed as IndirectCode[]);
       notifications.show({
@@ -204,16 +210,13 @@ export function IndirectCodesClient({ initialCodes }: Props) {
     { accessorKey: 'description', header: 'Description', size: 250 },
     {
       accessorKey: 'isActive',
-      header: 'Active',
+      header: 'Status',
       Cell: ({ row }) => (
-        <Switch
-          checked={row.original.isActive}
-          onChange={() => handleToggleActive(row.original)}
-          disabled={!canWrite || (isPending)}
-          size="sm"
-        />
+        <Badge color={row.original.isActive ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive}>
+          {row.original.isActive ? 'Active' : 'Inactive'}
+        </Badge>
       ),
-      size: 90,
+      size: 100,
     },
     {
       accessorKey: 'availableToAll',
@@ -227,13 +230,20 @@ export function IndirectCodesClient({ initialCodes }: Props) {
     columns,
     data: codes,
     enableRowActions: true,
-    renderRowActions: ({ row }) => (
-      <Tooltip label="Edit">
-        <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit indirect code">
-          <IconEdit size={16} />
-        </ActionIcon>
-      </Tooltip>
-    ),
+    renderRowActions: ({ row }) => {
+      const code = row.original;
+      return (
+        <RowActions
+          rowLabel={code.code}
+          primary={{ key: 'edit', label: 'Edit', icon: 'edit', onSelect: () => openEditModal(code) }}
+          items={[
+            code.isActive
+              ? { key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger', onSelect: () => setConfirmDeactivate(code) }
+              : { key: 'reactivate', label: 'Reactivate', icon: 'reactivate', busy: busyRow === code.id, onSelect: () => handleToggleActive(code) },
+          ]}
+        />
+      );
+    },
   });
 
   return (
@@ -242,7 +252,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
         title="Indirect Charge Codes"
         actions={
           <Group>
-            <WriteButton leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
+            <WriteButton leftSection={<Icons.create size={ICON_SIZE.button} />} onClick={openCreateModal}>
               Add Code
             </WriteButton>
             <WriteButton variant="default" onClick={handleSeedDefaults} loading={isPending}>
@@ -252,6 +262,16 @@ export function IndirectCodesClient({ initialCodes }: Props) {
         }
       />
       <MantineReactTable table={table} />
+
+      <ConfirmModal
+        opened={!!confirmDeactivate}
+        title={`Deactivate ${confirmDeactivate?.code ?? ''}?`}
+        message="Employees can't charge new time to it. Existing hours stay on record."
+        confirmLabel="Deactivate"
+        loading={isPending}
+        onConfirm={() => confirmDeactivate && handleToggleActive(confirmDeactivate, () => setConfirmDeactivate(null))}
+        onCancel={() => setConfirmDeactivate(null)}
+      />
 
       <Modal
         opened={modalOpen}

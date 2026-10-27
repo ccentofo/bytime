@@ -53,17 +53,6 @@ export const ICON_IMPORT_ALLOWLIST = [
   'src/components/timesheet/TimesheetDashboard.tsx',
   'src/components/timesheet/TimesheetToolbar.tsx',
   'src/components/timesheet/cells/HourCell.tsx',
-  // Migrated in the next UX-1 commit (§4.5 tables) — removed from this list there.
-  'src/app/(app)/admin/api-keys/ApiKeysClient.tsx',
-  'src/app/(app)/admin/approvals/ApprovalsClient.tsx',
-  'src/app/(app)/admin/assignments/AssignmentsClient.tsx',
-  'src/app/(app)/admin/audit-trail/AuditTrailClient.tsx',
-  'src/app/(app)/admin/charge-codes/ChargeCodesClient.tsx',
-  'src/app/(app)/admin/contracts/ContractsClient.tsx',
-  'src/app/(app)/admin/dashboard/DashboardClient.tsx',
-  'src/app/(app)/admin/indirect-codes/IndirectCodesClient.tsx',
-  'src/app/(app)/admin/labor-categories/LaborCategoriesClient.tsx',
-  'src/app/(app)/admin/users/UsersClient.tsx',
 ];
 
 function sourceFiles(dir: string): string[] {

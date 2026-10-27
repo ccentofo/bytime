@@ -18,7 +18,8 @@ import {
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
-import { IconPlus, IconTrash, IconBan, IconCheck, IconCopy, IconKey } from '@tabler/icons-react';
+import { Icons, ICON_SIZE } from '@/components/ui/icons';
+import { RowActions } from '@/components/ui/RowActions';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import { createApiKey, revokeApiKey, deleteApiKey, getApiKeys } from '@/server/actions/api-keys';
@@ -26,7 +27,7 @@ import { formatDateTime } from '@/lib/format';
 import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 type ApiKey = {
   id: string;
@@ -47,7 +48,6 @@ type Props = {
 type PendingAction = { key: ApiKey; action: 'revoke' | 'delete' };
 
 export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
-  const canWrite = useCanWrite();
   const [keys, setKeys] = useState<ApiKey[]>(initialKeys);
   const [isPending, startTransition] = useTransition();
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -162,32 +162,13 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
     data: keys,
     enableRowActions: true,
     renderRowActions: ({ row }) => (
-      <Group gap="xs" wrap="nowrap" justify="center">
-        {row.original.isActive && (
-          <Tooltip label="Revoke">
-            <ActionIcon
-              variant="subtle"
-              color="warning"
-              onClick={() => setPendingAction({ key: row.original, action: 'revoke' })}
-              disabled={!canWrite || (isPending)}
-              aria-label="Revoke key"
-            >
-              <IconBan size={16} />
-            </ActionIcon>
-          </Tooltip>
-        )}
-        <Tooltip label="Delete">
-          <ActionIcon
-            variant="subtle"
-            color="red"
-            onClick={() => setPendingAction({ key: row.original, action: 'delete' })}
-            disabled={!canWrite || (isPending)}
-            aria-label="Delete key"
-          >
-            <IconTrash size={16} />
-          </ActionIcon>
-        </Tooltip>
-      </Group>
+      <RowActions
+        rowLabel={row.original.name}
+        items={[
+          { key: 'revoke', label: 'Revoke…', icon: 'revokeKey', tone: 'danger', hidden: !row.original.isActive, onSelect: () => setPendingAction({ key: row.original, action: 'revoke' }) },
+          { key: 'delete', label: 'Delete…', icon: 'delete', tone: 'danger', onSelect: () => setPendingAction({ key: row.original, action: 'delete' }) },
+        ]}
+      />
     ),
   });
 
@@ -196,7 +177,7 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
       <PageHeader
         title="API Keys"
         actions={
-          <WriteButton leftSection={<IconPlus size={16} />} onClick={() => setCreateModalOpen(true)}>
+          <WriteButton leftSection={<Icons.create size={ICON_SIZE.button} />} onClick={() => setCreateModalOpen(true)}>
             Create API Key
           </WriteButton>
         }
@@ -232,7 +213,7 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
           )}
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setCreateModalOpen(false)}>Cancel</Button>
-            <WriteButton onClick={handleCreate} loading={isPending} leftSection={<IconKey size={16} />}>
+            <WriteButton onClick={handleCreate} loading={isPending} leftSection={<Icons.apiKey size={ICON_SIZE.button} />}>
               Generate Key
             </WriteButton>
           </Group>
@@ -259,8 +240,8 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
             <CopyButton value={newKeyValue}>
               {({ copied, copy }) => (
                 <Tooltip label={copied ? 'Copied!' : 'Copy'}>
-                  <ActionIcon color={copied ? 'success' : 'signal'} onClick={copy} size="lg">
-                    {copied ? <IconCheck size={18} /> : <IconCopy size={18} />}
+                  <ActionIcon color={copied ? 'success' : 'signal'} onClick={copy} size="lg" aria-label={copied ? 'Copied' : 'Copy key'}>
+                    {copied ? <Icons.statusSuccess size={18} /> : <Icons.copy size={18} />}
                   </ActionIcon>
                 </Tooltip>
               )}

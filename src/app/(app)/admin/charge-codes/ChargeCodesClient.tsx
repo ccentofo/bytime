@@ -3,11 +3,12 @@
 import { useState, useTransition } from 'react';
 import {
   Button, Modal, TextInput, Textarea, Select, Group, Stack,
-  Badge, Switch, ActionIcon, Tooltip,
+  Badge, Switch,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
-import { IconPlus, IconPencil, IconBan, IconBolt, IconRefresh, IconTag } from '@tabler/icons-react';
+import { Icons, ICON_SIZE } from '@/components/ui/icons';
+import { RowActions } from '@/components/ui/RowActions';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import {
@@ -93,6 +94,8 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
   const [classList, setClassList] = useState(costClasses);
   const [confirmTarget, setConfirmTarget] = useState<ChargeCodeRow | null>(null);
   // certified-outputs C3 (CO-D8, ruling Q2): reactivation confirm — how many employees get the code back.
+  // Reactivate fetches the code's info before its confirm opens: a loader on that row meanwhile.
+  const [busyRow, setBusyRow] = useState<string | null>(null);
   const [reactivateTarget, setReactivateTarget] = useState<{ row: ChargeCodeRow; stillAssigned: number; assignable: boolean } | null>(null);
 
   async function refreshCodes() {
@@ -162,12 +165,15 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
   }
 
   function openReactivate(row: ChargeCodeRow) {
+    setBusyRow(row.id);
     startTransition(async () => {
       try {
         const info = await getChargeCodeReactivationInfo(row.id);
         setReactivateTarget({ row, ...info });
       } catch {
         notifications.show({ title: 'Couldn’t load the charge code', message: 'Refresh the page and try again.', color: 'red' });
+      } finally {
+        setBusyRow(null);
       }
     });
   }
@@ -250,39 +256,21 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
   const table = useAppTable({
     columns, data: codes,
     enableRowActions: true,
-    renderRowActions: ({ row }) => (
-      <Group gap="xs" justify="center">
-        <Tooltip label="Edit">
-          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEdit(row.original)} aria-label="Edit charge code">
-            <IconPencil size={16} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label="Labor category">
-          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => setCategoryFor(row.original)} aria-label="Labor category">
-            <IconTag size={16} />
-          </ActionIcon>
-        </Tooltip>
-        {row.original.isActive && (
-          <Tooltip label="Deactivate">
-            <ActionIcon disabled={!canWrite}
-              variant="subtle"
-              color="red"
-              onClick={() => setConfirmTarget(row.original)}
-              aria-label="Deactivate charge code"
-            >
-              <IconBan size={16} />
-            </ActionIcon>
-          </Tooltip>
-        )}
-        {!row.original.isActive && (
-          <Tooltip label="Reactivate">
-            <ActionIcon disabled={!canWrite} variant="subtle" color="success" onClick={() => openReactivate(row.original)} aria-label="Reactivate charge code">
-              <IconRefresh size={16} />
-            </ActionIcon>
-          </Tooltip>
-        )}
-      </Group>
-    ),
+    renderRowActions: ({ row }) => {
+      const code = row.original;
+      return (
+        <RowActions
+          rowLabel={code.code}
+          primary={{ key: 'edit', label: 'Edit', icon: 'edit', onSelect: () => openEdit(code) }}
+          items={[
+            { key: 'category', label: 'Change labor category', icon: 'laborCategory', onSelect: () => setCategoryFor(code) },
+            code.isActive
+              ? { key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger', onSelect: () => setConfirmTarget(code) }
+              : { key: 'reactivate', label: 'Reactivate…', icon: 'reactivate', busy: busyRow === code.id, onSelect: () => openReactivate(code) },
+          ]}
+        />
+      );
+    },
   });
 
   return (
@@ -292,8 +280,8 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
         description={'Direct charge codes that employees charge to. Each code rolls up to a CLIN → Contract. Use "Auto-generate from CLINs" to create one code per active CLIN, or create custom codes (e.g. Onsite/Telework variants).'}
         actions={
           <Group gap="sm">
-            <WriteButton leftSection={<IconPlus size={16} />} onClick={openCreate} size="sm">New Charge Code</WriteButton>
-            <WriteButton leftSection={<IconBolt size={16} />} variant="default" onClick={handleAutobridge} loading={isPending} size="sm">
+            <WriteButton leftSection={<Icons.create size={ICON_SIZE.button} />} onClick={openCreate} size="sm">New Charge Code</WriteButton>
+            <WriteButton leftSection={<Icons.automate size={ICON_SIZE.button} />} variant="default" onClick={handleAutobridge} loading={isPending} size="sm">
               Auto-generate from CLINs
             </WriteButton>
           </Group>
@@ -366,6 +354,7 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
 
       <ConfirmModal
         opened={!!reactivateTarget}
+        tone="neutral"
         title="Reactivate charge code?"
         message={reactivateTarget
           ? `${reactivateTarget.stillAssigned} ${reactivateTarget.stillAssigned === 1 ? 'employee is' : 'employees are'} still assigned and will see this code again.`

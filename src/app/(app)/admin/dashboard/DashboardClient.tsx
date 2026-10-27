@@ -16,12 +16,7 @@ import {
   Table,
 } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
-import {
-  IconReportMoney,
-  IconCash,
-  IconReceipt,
-  IconChartBar,
-} from '@tabler/icons-react';
+import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import {
@@ -342,7 +337,7 @@ export function DashboardClient({ initialSummaries }: Props) {
               <Text size="xl" fw={700}>{totalContracts}</Text>
             </div>
             <ThemeIcon color="signal" variant="light" size="lg" radius="md">
-              <IconReportMoney size={20} />
+              <Icons.contracts size={ICON_SIZE.stat} />
             </ThemeIcon>
           </Group>
         </Paper>
@@ -353,7 +348,7 @@ export function DashboardClient({ initialSummaries }: Props) {
               <Text size="xl" fw={700}>{formatCurrency(totalFunded)}</Text>
             </div>
             <ThemeIcon color="success" variant="light" size="lg" radius="md">
-              <IconCash size={20} />
+              <Icons.funded size={ICON_SIZE.stat} />
             </ThemeIcon>
           </Group>
         </Paper>
@@ -365,7 +360,7 @@ export function DashboardClient({ initialSummaries }: Props) {
               <UnpricedNote hours={totalUnpriced} />
             </div>
             <ThemeIcon color="warning" variant="light" size="lg" radius="md">
-              <IconReceipt size={20} />
+              <Icons.spent size={ICON_SIZE.stat} />
             </ThemeIcon>
           </Group>
         </Paper>
@@ -379,7 +374,7 @@ export function DashboardClient({ initialSummaries }: Props) {
               <PricedBasisNote hours={totalUnpriced} />
             </div>
             <ThemeIcon color={totalRemaining < 0 ? 'red' : 'signal'} variant="light" size="lg" radius="md">
-              <IconChartBar size={20} />
+              <Icons.remaining size={ICON_SIZE.stat} />
             </ThemeIcon>
           </Group>
         </Paper>

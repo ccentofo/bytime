@@ -13,11 +13,10 @@ import {
   Badge,
   Paper,
   Divider,
-  ActionIcon,
-  Tooltip,
 } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
-import { IconEdit, IconPlus, IconToggleLeft, IconBan, IconCurrencyDollar } from '@tabler/icons-react';
+import { Icons, ICON_SIZE } from '@/components/ui/icons';
+import { RowActions } from '@/components/ui/RowActions';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
@@ -173,6 +172,7 @@ export function LaborCategoriesClient({
 
   // Dated rates D2: the Rates modal and the current-rate lookups (all from the same laborCats state).
   const [ratesFor, setRatesFor] = useState<LaborCategory | null>(null);
+  const [busyRow, setBusyRow] = useState<string | null>(null);
   const scheduleOf = (lc: LaborCategory): RateSchedule => ({ starting: { hourlyRate: lc.hourlyRate, ceilingRate: lc.ceilingRate }, changes: lc.rateChanges ?? [] });
   const currentRateOf = (laborCategoryId: string): string | null => {
     const lc = laborCats.find((x) => x.id === laborCategoryId);
@@ -286,6 +286,7 @@ export function LaborCategoriesClient({
 
   function handleToggleStatus(lcat: LaborCategory) {
     const newStatus = lcat.status === 'active' ? 'inactive' : 'active';
+    if (newStatus === 'active') setBusyRow(lcat.id); // Reactivate runs without a confirm: loader on its row
     startTransition(async () => {
       try {
         const result = await runAction(updateLaborCategory(lcat.id, { status: newStatus }), { errorTitle: 'Couldn’t update status' });
@@ -304,6 +305,8 @@ export function LaborCategoriesClient({
           message: 'Something went wrong. Please refresh and try again.',
           color: 'red',
         });
+      } finally {
+        setBusyRow(null);
       }
     });
   }
@@ -430,34 +433,21 @@ export function LaborCategoriesClient({
     columns: lcatColumns,
     data: laborCats,
     enableRowActions: true,
-    renderRowActions: ({ row }) => (
-      <Group gap="xs" wrap="nowrap" justify="center">
-        <Tooltip label="Edit">
-          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEditLcatModal(row.original)} aria-label="Edit labor category">
-            <IconEdit size={16} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label="Rates">
-          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => setRatesFor(row.original)} aria-label="Rates">
-            <IconCurrencyDollar size={16} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label={row.original.status === 'active' ? 'Deactivate' : 'Activate'}>
-          <ActionIcon disabled={!canWrite}
-            variant="subtle"
-            color={row.original.status === 'active' ? 'red' : 'success'}
-            onClick={() =>
-              row.original.status === 'active'
-                ? setConfirmDeactivateLcat(row.original)
-                : handleToggleStatus(row.original)
-            }
-            aria-label={row.original.status === 'active' ? 'Deactivate labor category' : 'Activate labor category'}
-          >
-            <IconToggleLeft size={16} />
-          </ActionIcon>
-        </Tooltip>
-      </Group>
-    ),
+    renderRowActions: ({ row }) => {
+      const lcat = row.original;
+      return (
+        <RowActions
+          rowLabel={lcat.lcatCode}
+          primary={{ key: 'edit', label: 'Edit', icon: 'edit', onSelect: () => openEditLcatModal(lcat) }}
+          items={[
+            { key: 'rates', label: 'Rates', icon: 'rates', onSelect: () => setRatesFor(lcat) },
+            lcat.status === 'active'
+              ? { key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger', onSelect: () => setConfirmDeactivateLcat(lcat) }
+              : { key: 'reactivate', label: 'Reactivate', icon: 'reactivate', busy: busyRow === lcat.id, onSelect: () => handleToggleStatus(lcat) },
+          ]}
+        />
+      );
+    },
   });
 
   // --- Assignment Table columns ---
@@ -504,17 +494,14 @@ export function LaborCategoriesClient({
     data: assignments,
     enableRowActions: true,
     renderRowActions: ({ row }) => (
-      <Tooltip label={row.original.endDate ? 'Ended' : 'End assignment'}>
-        <ActionIcon
-          variant="subtle"
-          color="warning"
-          onClick={() => setConfirmEndAssignment(row.original)}
-          disabled={!canWrite || (row.original.endDate !== null)}
-          aria-label="End labor category assignment"
-        >
-          <IconBan size={16} />
-        </ActionIcon>
-      </Tooltip>
+      <RowActions
+        rowLabel={`${row.original.userName} — ${row.original.lcatCode}`}
+        items={[{
+          key: 'end', label: 'End assignment…', icon: 'endAssignment',
+          hidden: row.original.endDate !== null, // already ended
+          onSelect: () => setConfirmEndAssignment(row.original),
+        }]}
+      />
     ),
   });
 
@@ -524,7 +511,7 @@ export function LaborCategoriesClient({
       <PageHeader
         title="Labor Categories"
         actions={
-          <WriteButton leftSection={<IconPlus size={16} />} onClick={openAddLcatModal}>
+          <WriteButton leftSection={<Icons.create size={ICON_SIZE.button} />} onClick={openAddLcatModal}>
             Add Labor Category
           </WriteButton>
         }

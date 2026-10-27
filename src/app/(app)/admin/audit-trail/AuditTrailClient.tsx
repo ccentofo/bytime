@@ -19,13 +19,7 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
-import {
-  IconSearch,
-  IconEdit,
-  IconClock,
-  IconAlertTriangle,
-  IconHistory,
-} from '@tabler/icons-react';
+import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { MantineReactTable, MRT_ShowHideColumnsButton, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import { notifications } from '@mantine/notifications';
@@ -225,7 +219,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
                 aria-label="View revision history"
                 onClick={() => handleViewHistory(row.original)}
               >
-                <IconHistory size={16} />
+                <Icons.history size={ICON_SIZE.button} />
               </ActionIcon>
             </Tooltip>
           </Group>
@@ -322,7 +316,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
               <Text size="xl" fw={700}>{summary.totalEntries.toLocaleString('en-US')}</Text>
             </div>
             <ThemeIcon color="signal" variant="light" size="lg" radius="md">
-              <IconClock size={20} />
+              <Icons.timeEntry size={ICON_SIZE.stat} />
             </ThemeIcon>
           </Group>
         </Paper>
@@ -333,7 +327,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
               <Text size="xl" fw={700}>{summary.totalCorrections.toLocaleString('en-US')}</Text>
             </div>
             <ThemeIcon color="warning" variant="light" size="lg" radius="md">
-              <IconEdit size={20} />
+              <Icons.correction size={ICON_SIZE.stat} />
             </ThemeIcon>
           </Group>
         </Paper>
@@ -344,7 +338,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
               <Text size="xl" fw={700}>{summary.totalLateEntries.toLocaleString('en-US')}</Text>
             </div>
             <ThemeIcon color="warning" variant="light" size="lg" radius="md">
-              <IconAlertTriangle size={20} />
+              <Icons.statusWarning size={ICON_SIZE.stat} />
             </ThemeIcon>
           </Group>
         </Paper>
@@ -355,7 +349,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
               <Text size="xl" fw={700}>{summary.uniqueUsers.toLocaleString('en-US')}</Text>
             </div>
             <ThemeIcon color="success" variant="light" size="lg" radius="md">
-              <IconHistory size={20} />
+              <Icons.users size={ICON_SIZE.stat} />
             </ThemeIcon>
           </Group>
         </Paper>
@@ -432,7 +426,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
             mt="xl"
           />
           <Button
-            leftSection={<IconSearch size={16} />}
+            leftSection={<Icons.search size={ICON_SIZE.button} />}
             onClick={handleSearch}
             loading={isPending}
           >
@@ -532,8 +526,8 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
                         color={rev.revisionNumber === 1 ? 'success' : 'warning'}
                       >
                         {rev.revisionNumber === 1
-                          ? <IconClock size={14} />
-                          : <IconEdit size={14} />
+                          ? <Icons.timeEntry size={14} />
+                          : <Icons.correction size={14} />
                         }
                       </ThemeIcon>
                     }
