@@ -27,6 +27,27 @@ a {
   text-decoration: none;
 }
 
+/* The skip link's target (AppShell.Main, tabIndex -1) takes focus programmatically — no ring on it. Lives here, not in
+   AppShellWrapper.module.css, because CSS modules hash ids (feature-plan-ux-foundations.md §4.7). */
+#main-content:focus {
+  outline: none;
+}
+
+/* Focus and input-focus colors (UX-1 fix round 1, M1). Mantine draws them with --mantine-primary-color-filled, which is
+   signal-7 in BOTH schemes (white button text needs it) — only 2.63:1 on dark cards. Use signal-4 in dark (≥ 3:1,
+   WCAG 1.4.11). `:root` raises the specificity above Mantine's own rules, so CSS load order doesn't matter. */
+:root .mantine-focus-auto:focus-visible,
+:root .mantine-focus-always:focus {
+  outline-color: light-dark(var(--mantine-color-signal-7), var(--mantine-color-signal-4));
+}
+:root[data-mantine-color-scheme='dark'] .mantine-Input-wrapper:is([data-variant='default'], [data-variant='filled']) {
+  --input-bd-focus: var(--mantine-color-signal-4);
+}
+:root[data-mantine-color-scheme='dark'] .mantine-SegmentedControl-input[data-focus-ring='auto']:focus:focus-visible + .mantine-SegmentedControl-label,
+:root[data-mantine-color-scheme='dark'] .mantine-SegmentedControl-input[data-focus-ring='always']:focus + .mantine-SegmentedControl-label {
+  --segmented-control-outline: 2px solid var(--mantine-color-signal-4);
+}
+
 /* ---------------------------------------------------------------------------
    CadenzPoint design tokens — tabular figures for aligned numbers.
    Hours, totals, and report figures must line up in columns ("we understand data").

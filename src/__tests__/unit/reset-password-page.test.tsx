@@ -19,7 +19,7 @@ vi.mock('@/server/actions/password-reset', () => ({
 }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
-import ResetPasswordPage from '@/app/reset-password/page';
+import { ResetPasswordForm } from '@/app/reset-password/ResetPasswordForm';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let container: HTMLDivElement;
@@ -45,9 +45,20 @@ describe('reset password page', () => {
     document.body.appendChild(container);
     root = createRoot(container);
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await act(async () => { root.render(<MantineProvider><ResetPasswordPage /></MantineProvider>); });
+    await act(async () => { root.render(<MantineProvider><ResetPasswordForm /></MantineProvider>); });
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(container.textContent).toContain('Resetting password for pat%ops@acme.com');
     errors.mockRestore();
+  });
+
+  it('after the "verifying" state resolves: one <main> and one h1 (feature-plan-ux-foundations.md T16)', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => { root.render(<MantineProvider><ResetPasswordForm /></MantineProvider>); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(container.textContent).not.toContain('Verifying reset link');
+    expect(container.querySelectorAll('main')).toHaveLength(1);
+    expect([...container.querySelectorAll('h1')].map((x) => x.textContent)).toEqual(['Set New Password']);
   });
 });

@@ -10,22 +10,22 @@ import {
   Group,
   Stack,
   Badge,
-  Switch,
-  ActionIcon,
-  Tooltip,
   Alert,
   Text,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
-import { IconPlus, IconEdit, IconKey, IconAlertCircle, IconLockOpen } from '@tabler/icons-react';
+import { Icons, ICON_SIZE } from '@/components/ui/icons';
+import { RowActions } from '@/components/ui/RowActions';
+import { useBusyRows, useLastTarget } from '@/components/ui/useRowState';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import { createUserWithPassword, updateUser, getUsers, unlockUserAccount, setUserApprover } from '@/server/actions/users';
 import { adminResetPassword } from '@/server/actions/password';
-import { ROLE_COLOR } from '@/lib/ui/status-colors';
+import { RECORD_STATUS_COLOR, ROLE_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
 import { approverSelectOptions } from '@/lib/approvals/approver-options';
 
 type User = {
@@ -69,9 +69,16 @@ const EMPTY_FORM: UserForm = {
 };
 
 export function UsersClient({ initialUsers, currentUserId }: Props) {
-  const canWrite = useCanWrite();
   const [users, setUsers] = useState<User[]>(initialUsers);
   const [isPending, startTransition] = useTransition();
+  // Row actions that run without a confirm (Unlock, Reactivate) show a loader on THEIR row only.
+  const busyRows = useBusyRows();
+  // Confirmations (feature-plan-ux-foundations.md §4.5, B2): deactivation and FLSA status ask first.
+  const [confirmDeactivate, setConfirmDeactivate] = useState<User | null>(null);
+  const [confirmFlsa, setConfirmFlsa] = useState<User | null>(null);
+  // The modals keep showing the last target while they animate closed (no "Deactivate ?" flash).
+  const shownDeactivate = useLastTarget(confirmDeactivate);
+  const shownFlsa = useLastTarget(confirmFlsa);
 
   // Modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -177,8 +184,10 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
   }
 
   function handleUnlockAccount(user: User) {
+    busyRows.start(user.id);
     startTransition(async () => {
       const result = await runAction(unlockUserAccount(user.email), { errorTitle: 'Couldn’t unlock account' });
+      busyRows.done(user.id);
       if (!result.ok) return;
       notifications.show({
         title: 'Account Unlocked',
@@ -209,11 +218,13 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
     });
   }
 
-  function handleToggleFlsaExempt(user: User) {
+  /** Same server call as before; the confirm closes only on success (onDone). */
+  function handleToggleFlsaExempt(user: User, onDone?: () => void) {
     startTransition(async () => {
       const newExempt = !user.flsaExempt;
       const result = await runAction(updateUser(user.id, { flsaExempt: newExempt }), { errorTitle: 'Action Failed' });
       if (!result.ok) return;
+      onDone?.();
       const refreshed = await getUsers();
       setUsers(refreshed as User[]);
       notifications.show({
@@ -224,11 +235,15 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
     });
   }
 
-  function handleToggleActive(user: User) {
+  /** Same server call as before; deactivation runs from the confirm (closed only on success), reactivation directly. */
+  function handleToggleActive(user: User, onDone?: () => void) {
+    if (!onDone) busyRows.start(user.id);
     startTransition(async () => {
       const newActive = !user.isActive;
       const result = await runAction(updateUser(user.id, { isActive: newActive }), { errorTitle: 'Action Failed' });
+      busyRows.done(user.id);
       if (!result.ok) return;
+      onDone?.();
       const refreshed = await getUsers();
       setUsers(refreshed as User[]);
       notifications.show({
@@ -256,33 +271,23 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
       size: 120,
     },
     {
-      accessorKey: 'isActive',
-      header: 'Active',
+      // The word, so the table search finds "Inactive" (UX-1 audit L3).
+      id: 'isActive',
+      accessorFn: (r) => (r.isActive ? 'Active' : 'Inactive'),
+      header: 'Status',
       Cell: ({ row }) => (
-        <Tooltip label={row.original.id === currentUserId ? "You can't deactivate your own account" : undefined} disabled={row.original.id !== currentUserId}>
-          <Switch
-            checked={row.original.isActive}
-            onChange={() => handleToggleActive(row.original)}
-            disabled={!canWrite || (isPending || row.original.id === currentUserId)}
-            size="sm"
-          />
-        </Tooltip>
+        <Badge color={row.original.isActive ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive}>
+          {row.original.isActive ? 'Active' : 'Inactive'}
+        </Badge>
       ),
-      size: 90,
+      size: 100,
     },
     {
-      accessorKey: 'flsaExempt',
-      header: 'FLSA Exempt',
-      Cell: ({ row }) => (
-        <Switch
-          checked={row.original.flsaExempt}
-          onChange={() => handleToggleFlsaExempt(row.original)}
-          disabled={!canWrite || (isPending)}
-          size="sm"
-          label={row.original.flsaExempt ? 'Exempt' : 'Non-Exempt'}
-        />
-      ),
-      size: 140,
+      id: 'flsaExempt',
+      accessorFn: (r) => (r.flsaExempt ? 'Exempt' : 'Non-exempt'),
+      header: 'FLSA',
+      Cell: ({ row }) => (row.original.flsaExempt ? 'Exempt' : 'Non-exempt'),
+      size: 110,
     },
   ];
 
@@ -290,41 +295,26 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
     columns,
     data: users,
     enableRowActions: true,
-    renderRowActions: ({ row }) => (
-      <Group gap="xs" wrap="nowrap" justify="center">
-        <Tooltip label="Edit User">
-          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit user">
-            <IconEdit size={16} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label="Reset Password">
-          <ActionIcon
-            variant="subtle"
-            color="warning"
-            onClick={() => openResetModal(row.original)}
-            aria-label="Reset password"
-          >
-            <IconKey size={16} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label="Unlock Account">
-          <ActionIcon
-            variant="subtle"
-            color="success"
-            onClick={() => handleUnlockAccount(row.original)}
-            disabled={isPending}
-            aria-label="Unlock account"
-          >
-            <IconLockOpen size={16} />
-          </ActionIcon>
-        </Tooltip>
-      </Group>
-    ),
-    displayColumnDefOptions: {
-      'mrt-row-actions': {
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
-      },
+    renderRowActions: ({ row }) => {
+      const user = row.original;
+      return (
+        <RowActions
+          rowLabel={user.fullName}
+          primary={{ key: 'edit', label: 'Edit', icon: 'edit', onSelect: () => openEditModal(user) }}
+          items={[
+            // Credential actions stay available in read-only mode, matching the server (users.ts unlock, password.ts).
+            { key: 'reset-password', label: 'Reset password…', icon: 'resetPassword', writes: false, onSelect: () => openResetModal(user) },
+            { key: 'unlock', label: 'Unlock account', icon: 'unlock', writes: false, busy: busyRows.isBusy(user.id), onSelect: () => handleUnlockAccount(user) },
+            { key: 'flsa', label: user.flsaExempt ? 'Mark as non-exempt…' : 'Mark as FLSA exempt…', icon: 'flsa', onSelect: () => setConfirmFlsa(user) },
+            user.isActive
+              ? {
+                key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger', onSelect: () => setConfirmDeactivate(user),
+                disabledReason: user.id === currentUserId ? "You can't deactivate your own account" : undefined,
+              }
+              : { key: 'reactivate', label: 'Reactivate', icon: 'reactivate', busy: busyRows.isBusy(user.id), onSelect: () => handleToggleActive(user) },
+          ]}
+        />
+      );
     },
   });
 
@@ -333,12 +323,33 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
       <PageHeader
         title="User Management"
         actions={
-          <WriteButton leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
+          <WriteButton leftSection={<Icons.create size={ICON_SIZE.button} />} onClick={openCreateModal}>
             Add User
           </WriteButton>
         }
       />
       <MantineReactTable table={table} />
+
+      <ConfirmModal
+        opened={!!confirmDeactivate}
+        title={`Deactivate ${shownDeactivate?.fullName ?? ''}?`}
+        message="They're signed out and can't sign in. Timesheets waiting for their approval go to admins. Their timesheets and history stay on record."
+        confirmLabel="Deactivate"
+        loading={isPending}
+        onConfirm={() => confirmDeactivate && handleToggleActive(confirmDeactivate, () => setConfirmDeactivate(null))}
+        onCancel={() => setConfirmDeactivate(null)}
+      />
+
+      <ConfirmModal
+        opened={!!confirmFlsa}
+        tone="neutral"
+        title={shownFlsa ? `Mark ${shownFlsa.fullName} as FLSA ${shownFlsa.flsaExempt ? 'non-exempt' : 'exempt'}?` : ''}
+        message="Payroll export uses this to calculate overtime for every period, including past ones."
+        confirmLabel={shownFlsa?.flsaExempt ? 'Mark as non-exempt' : 'Mark as exempt'}
+        loading={isPending}
+        onConfirm={() => confirmFlsa && handleToggleFlsaExempt(confirmFlsa, () => setConfirmFlsa(null))}
+        onCancel={() => setConfirmFlsa(null)}
+      />
 
       <Modal
         opened={resetModalOpen}
@@ -359,7 +370,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
             required
           />
           {resetError && (
-            <Alert icon={<IconAlertCircle size={16} />} color="red">
+            <Alert icon={<Icons.statusError size={ICON_SIZE.button} />} color="red">
               {resetError}
             </Alert>
           )}

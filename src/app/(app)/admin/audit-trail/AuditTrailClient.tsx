@@ -19,14 +19,8 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
-import {
-  IconSearch,
-  IconEdit,
-  IconClock,
-  IconAlertTriangle,
-  IconHistory,
-} from '@tabler/icons-react';
-import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { Icons, ICON_SIZE } from '@/components/ui/icons';
+import { MantineReactTable, MRT_ShowHideColumnsButton, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import { notifications } from '@mantine/notifications';
 import { formatInstant, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -186,7 +180,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
           )}
           {row.original.provenance && (
             <Tooltip label={row.original.provenance} multiline maw={360}>
-              <Badge color="grape" size="xs" variant="light" data-testid="audit-imported">Imported</Badge>
+              <Badge color="signal" size="xs" variant="light" data-testid="audit-imported">Imported</Badge>
             </Tooltip>
           )}
         </Group>
@@ -225,7 +219,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
                 aria-label="View revision history"
                 onClick={() => handleViewHistory(row.original)}
               >
-                <IconHistory size={16} />
+                <Icons.history size={ICON_SIZE.button} />
               </ActionIcon>
             </Tooltip>
           </Group>
@@ -271,7 +265,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
       header: 'Entered By',
       Cell: ({ cell, row }) => {
         // C1 "Display": an imported row is never shown as if someone typed it here.
-        if (row.original.provenance) return <Text size="sm" c="grape">{row.original.provenance}</Text>;
+        if (row.original.provenance) return <Text size="sm" c="signal">{row.original.provenance}</Text>;
         const val = cell.getValue<string | null>();
         return val ?? <Text size="sm" c="dimmed">—</Text>;
       },
@@ -290,6 +284,10 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
       // the column-visibility toolbar button. Comment = long free-text; Entered By usually == Employee.
       columnVisibility: { comment: false, createdByName: false },
     },
+    // Keep ONLY the column-visibility button (the shared default hides every toolbar icon): it's how users bring back
+    // the hidden Comment / Entered By columns (feature-plan-ux-foundations.md §4.4).
+    enableToolbarInternalActions: true,
+    renderToolbarInternalActions: ({ table }) => <MRT_ShowHideColumnsButton table={table} />,
     // Correction-row highlight: `data-correction` also drives globals.css's dark-mode
     // text-contrast rule — keep both in sync if this ever changes.
     mantineTableBodyRowProps: ({ row }) => ({
@@ -318,7 +316,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
               <Text size="xl" fw={700}>{summary.totalEntries.toLocaleString('en-US')}</Text>
             </div>
             <ThemeIcon color="signal" variant="light" size="lg" radius="md">
-              <IconClock size={20} />
+              <Icons.timeEntry size={ICON_SIZE.stat} />
             </ThemeIcon>
           </Group>
         </Paper>
@@ -329,7 +327,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
               <Text size="xl" fw={700}>{summary.totalCorrections.toLocaleString('en-US')}</Text>
             </div>
             <ThemeIcon color="warning" variant="light" size="lg" radius="md">
-              <IconEdit size={20} />
+              <Icons.correction size={ICON_SIZE.stat} />
             </ThemeIcon>
           </Group>
         </Paper>
@@ -340,7 +338,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
               <Text size="xl" fw={700}>{summary.totalLateEntries.toLocaleString('en-US')}</Text>
             </div>
             <ThemeIcon color="warning" variant="light" size="lg" radius="md">
-              <IconAlertTriangle size={20} />
+              <Icons.statusWarning size={ICON_SIZE.stat} />
             </ThemeIcon>
           </Group>
         </Paper>
@@ -351,7 +349,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
               <Text size="xl" fw={700}>{summary.uniqueUsers.toLocaleString('en-US')}</Text>
             </div>
             <ThemeIcon color="success" variant="light" size="lg" radius="md">
-              <IconHistory size={20} />
+              <Icons.users size={ICON_SIZE.stat} />
             </ThemeIcon>
           </Group>
         </Paper>
@@ -428,7 +426,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
             mt="xl"
           />
           <Button
-            leftSection={<IconSearch size={16} />}
+            leftSection={<Icons.search size={ICON_SIZE.button} />}
             onClick={handleSearch}
             loading={isPending}
           >
@@ -528,8 +526,8 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
                         color={rev.revisionNumber === 1 ? 'success' : 'warning'}
                       >
                         {rev.revisionNumber === 1
-                          ? <IconClock size={14} />
-                          : <IconEdit size={14} />
+                          ? <Icons.timeEntry size={14} />
+                          : <Icons.correction size={14} />
                         }
                       </ThemeIcon>
                     }
@@ -557,7 +555,7 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
                         </Text>
                       )}
                       {rev.provenance ? (
-                        <Text size="xs" c="grape" data-testid="revision-imported">{rev.provenance}</Text>
+                        <Text size="xs" c="signal" data-testid="revision-imported">{rev.provenance}</Text>
                       ) : (
                         <Text size="xs" c="dimmed">
                           Entered at {formatInstant(rev.createdAt, workspaceTimezone, 'MMM D, YYYY h:mm:ss A')}

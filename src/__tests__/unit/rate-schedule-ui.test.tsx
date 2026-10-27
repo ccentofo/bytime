@@ -80,6 +80,12 @@ async function type(id: string, value: string) {
     el.dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
+/** UX-1 §4.5: "Rates" moved into the row's "More actions" menu, which renders in a portal (document.body). */
+async function openRates() {
+  await click(document.querySelector('button[aria-label="More actions for SE-III"]'));
+  await act(async () => new Promise((r) => setTimeout(r, 20)));
+  await click([...document.body.querySelectorAll('[role="menuitem"]')].find((i) => i.textContent?.trim() === 'Rates') ?? null);
+}
 const ackBox = () => document.querySelector('[data-testid="rate-ack"] input, input[data-testid="rate-ack"]') as HTMLInputElement;
 
 const twoChanges = [
@@ -108,7 +114,7 @@ describe('Display (D2): current rate on the injected today + the next change', (
 
 describe('UI (D2): the Rates modal gate', () => {
   async function openAdd() {
-    await click(document.querySelector('button[aria-label="Rates"]'));
+    await openRates();
     await click(q('rate-start-add'));
   }
 
@@ -180,7 +186,7 @@ describe('UI (D2): Correct and Remove (audit L3)', () => {
     actions.preview.mockResolvedValue({ ok: true, data: { hours: '8.00', from: '2027-01-01', toExclusive: '2027-04-01', reasonRequired: true } });
     actions.correct.mockResolvedValue({ ok: true, data: { laborCategoryId: L, starting: { hourlyRate: '100.00', ceilingRate: '150.00' }, changes: [{ ...twoChanges[0], hourlyRate: '112.00' }, twoChanges[1]] } });
     await render('2027-02-01', twoChanges);
-    await click(document.querySelector('button[aria-label="Rates"]'));
+    await openRates();
     expect(q('rate-remove-starting')).toBeNull(); // the starting rate can't be removed
     await click(q('rate-correct-x1'));
     expect((q('rate-hourly') as HTMLInputElement).value).toBe('110.00');
@@ -200,7 +206,7 @@ describe('UI (D2): Correct and Remove (audit L3)', () => {
     actions.remove.mockResolvedValue({ ok: true, data: { laborCategoryId: L, starting: { hourlyRate: '100.00', ceilingRate: '150.00' }, changes: [twoChanges[0]] } });
     await render('2027-02-01', twoChanges);
     expect(q('lcat-next-hourly')).not.toBeNull();
-    await click(document.querySelector('button[aria-label="Rates"]'));
+    await openRates();
     await click(q('rate-remove-x2'));
     expect(q('rate-hourly')).toBeNull();
     await click(q('rate-preview'));
@@ -220,7 +226,7 @@ const ZERO = { ok: true, data: { hours: '0.00', from: '2028-01-01', toExclusive:
 
 describe('M1 / L5 (audit): a late preview never arms Save; closing the modal discards the half-done form', () => {
   async function openAdd() {
-    await click(document.querySelector('button[aria-label="Rates"]'));
+    await openRates();
     await click(q('rate-start-add'));
   }
 
@@ -259,7 +265,7 @@ describe('M1 / L5 (audit): a late preview never arms Save; closing the modal dis
     await click(q('rate-preview'));
     expect(q('rate-impact')).not.toBeNull();
     await click(document.querySelector('.mantine-Modal-close'));
-    await click(document.querySelector('button[aria-label="Rates"]'));
+    await openRates();
     expect(q('rate-start-add')).not.toBeNull();
     expect(q('rate-date')).toBeNull();
     expect(q('rate-impact')).toBeNull();

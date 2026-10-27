@@ -5,6 +5,9 @@ import { ChargeCodesClient } from './ChargeCodesClient';
 import { getDb } from '@/db';
 import { contracts, clins } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: 'Charge codes' };
 
 export const dynamic = 'force-dynamic';
 

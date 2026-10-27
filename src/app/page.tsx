@@ -1,10 +1,13 @@
-import { Container, Title, Text, Button, Group, Stack, Paper, SimpleGrid, ThemeIcon, Badge, Divider, Center, Anchor } from '@mantine/core';
+import { Container, Title, Text, Button, Group, Stack, Paper, SimpleGrid, ThemeIcon, Badge, Divider, Center, Anchor, VisuallyHidden } from '@mantine/core';
 import { IconClock, IconShieldCheck, IconCloudLock, IconReportAnalytics, IconUsers, IconDeviceFloppy, IconApi, IconMoon } from '@tabler/icons-react';
 import React from 'react';
 import { redirect } from 'next/navigation';
 import { Logo } from '@/components/brand/Logo';
 import { ROLE_COLOR } from '@/lib/ui/status-colors';
 import { getTenantSlug } from '@/lib/tenant/context';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: { absolute: 'CadenzPoint – DCAA-compliant timekeeping' } };
 
 export const dynamic = 'force-dynamic';
 
@@ -22,7 +25,8 @@ export default async function LandingPage() {
   const demoUrl = process.env.NEXT_PUBLIC_DEMO_URL || null;
 
   return (
-    <Container size="lg" py="xl">
+    <Container component="main" size="lg" py="xl">
+      <VisuallyHidden component="h1">CadenzPoint: DCAA-compliant timekeeping for government contractors</VisuallyHidden>
       {/* Hero Section */}
       <Center>
         <Stack align="center" gap="lg" py={60}>
@@ -53,7 +57,7 @@ export default async function LandingPage() {
       {/* Demo Credentials — only when there is a demo workspace to use them on */}
       {demoUrl && (
         <Paper withBorder p="lg" radius="md" mb="xl">
-          <Title order={3} mb="md" ta="center">🎯 Demo Credentials</Title>
+          <Title order={2} size="h3" mb="md" ta="center">🎯 Demo Credentials</Title>
           <Text size="sm" c="dimmed" ta="center" mb="md">
             Try different roles to see the full experience. All accounts use password: <strong>Password123!</strong>
           </Text>

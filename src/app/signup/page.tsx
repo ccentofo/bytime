@@ -5,6 +5,9 @@ import { apexBaseUrl } from '@/lib/tenant/host';
 import { after } from 'next/server';
 import { missingSignupConfig, signupControlsEnabled } from '@/lib/signup/controls';
 import { raiseSignupConfigMissing } from '@/lib/signup/signals';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: 'Create your workspace' };
 
 export const dynamic = 'force-dynamic';
 

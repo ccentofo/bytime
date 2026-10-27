@@ -19,6 +19,8 @@ interface Props {
   /** `?status=` from the billing page. Absent (the BillingWall, rendered by the layout, which gets no searchParams in
    * Next 16) → read from the URL (audit A12/R3). */
   checkoutStatus?: string;
+  /** The page header's heading level: 1 on the billing page, 2 under BillingWall's own h1 (UX-1 §4.7). */
+  headerOrder?: 1 | 2;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -29,7 +31,8 @@ const STATUS_COLORS: Record<string, string> = {
   unpaid: 'red',
 };
 
-export function BillingClient({ billing, checkoutStatus: checkoutStatusProp }: Props) {
+export function BillingClient({ billing, checkoutStatus: checkoutStatusProp, headerOrder = 1 }: Props) {
+  const sectionOrder = (headerOrder + 1) as 2 | 3; // section headings sit one level below the header
   const [isPending, startTransition] = useTransition();
   const [pendingPlan, setPendingPlan] = useState<PlanKey | null>(null);
   const router = useRouter();
@@ -68,6 +71,7 @@ export function BillingClient({ billing, checkoutStatus: checkoutStatusProp }: P
   return (
     <Container size="md" py="xl">
       <PageHeader
+        order={headerOrder}
         title="Billing"
         description="Manage your CadenzPoint subscription, plan, and payment details."
       />
@@ -85,7 +89,7 @@ export function BillingClient({ billing, checkoutStatus: checkoutStatusProp }: P
 
       {/* Current plan */}
       <Paper withBorder p="lg" radius="md" mb="xl">
-        <Title order={4} mb="md">Current Plan</Title>
+        <Title order={sectionOrder} size="h4" mb="md">Current Plan</Title>
         <Group gap="md">
           <Stack gap={4}>
             <Text fw={700} size="lg">{currentPlan.label}</Text>
@@ -119,7 +123,7 @@ export function BillingClient({ billing, checkoutStatus: checkoutStatusProp }: P
 
       {/* Plan picker */}
       <Paper withBorder p="lg" radius="md">
-        <Title order={4} mb="md">Upgrade Plan</Title>
+        <Title order={sectionOrder} size="h4" mb="md">Upgrade Plan</Title>
         <Text size="sm" c="dimmed" mb="lg">
           {billing.canSubscribe
             ? 'All plans include full DCAA-compliant timekeeping.'

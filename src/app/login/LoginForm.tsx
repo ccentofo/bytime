@@ -13,6 +13,7 @@ import {
   Alert,
   Text,
   Anchor,
+  VisuallyHidden,
 } from '@mantine/core';
 import { IconAlertCircle, IconLock, IconShieldCheck } from '@tabler/icons-react';
 import { signIn } from 'next-auth/react';
@@ -116,7 +117,9 @@ export function LoginForm() {
   }
 
   return (
-    <Center mih="100vh" bg="var(--mantine-color-body)">
+    <Center component="main" mih="100vh" bg="var(--mantine-color-body)">
+      {/* The page's h1 lives here, not in login/page.tsx: the auth gate may render WorkspaceFinder instead (own h1). */}
+      <VisuallyHidden component="h1">Sign in</VisuallyHidden>
       <Paper shadow="md" p="xl" radius="md" w={420} withBorder>
         <Stack align="center" mb="lg">
           <Logo size="lg" />
@@ -203,6 +206,8 @@ export function LoginForm() {
                   />
                 )}
                 <Anchor
+                  component="button"
+                  type="button"
                   size="sm"
                   onClick={() => { setUseRecoveryCode((v) => !v); setError(''); setMfaCode(''); setRecoveryCode(''); }}
                 >

@@ -17,6 +17,7 @@ export default function GlobalError({
   return (
     <html lang="en">
       <body>
+        <title>Something went wrong – CadenzPoint</title>
         <div style={{
           display: 'flex',
           flexDirection: 'column',

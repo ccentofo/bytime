@@ -10,11 +10,16 @@ type Props = {
   confirmLabel?: string;
   cancelLabel?: string;
   loading?: boolean;
+  /** `danger` (default): red confirm button. `neutral`: the primary color — e.g. Reactivate, FLSA status. */
+  tone?: 'danger' | 'neutral';
   onConfirm: () => void;
   onCancel: () => void;
 };
 
-/** Shared destructive-action confirmation — replaces the browser's native confirm dialog everywhere. */
+/**
+ * Shared confirmation — replaces the browser's native confirm dialog everywhere. The confirm button is disabled while
+ * `loading` (no double submit); callers close it only on success (feature-plan-ux-foundations.md §4.5).
+ */
 export function ConfirmModal({
   opened,
   title,
@@ -22,6 +27,7 @@ export function ConfirmModal({
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   loading = false,
+  tone = 'danger',
   onConfirm,
   onCancel,
 }: Props) {
@@ -32,7 +38,7 @@ export function ConfirmModal({
         <Button variant="default" onClick={onCancel} disabled={loading}>
           {cancelLabel}
         </Button>
-        <Button color="red" onClick={onConfirm} loading={loading}>
+        <Button color={tone === 'danger' ? 'red' : undefined} onClick={onConfirm} loading={loading}>
           {confirmLabel}
         </Button>
       </Group>

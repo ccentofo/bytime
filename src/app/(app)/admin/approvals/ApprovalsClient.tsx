@@ -13,7 +13,7 @@ import {
   Table,
   Alert,
 } from '@mantine/core';
-import { IconCheck, IconX, IconEye, IconAlertCircle } from '@tabler/icons-react';
+import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { notifications } from '@mantine/notifications';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
@@ -102,7 +102,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
           title: 'Failed to load timesheet',
           message: String(error),
           color: 'red',
-          icon: <IconX size={16} />,
+          icon: <Icons.statusError size={ICON_SIZE.button} />,
         });
         setDrawerOpen(false);
       }
@@ -130,7 +130,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
           title: 'Timesheet Approved',
           message: `${selectedPeriod.userName}'s timesheet has been approved.`,
           color: 'success',
-          icon: <IconCheck size={16} />,
+          icon: <Icons.approve size={ICON_SIZE.button} />,
         });
       } catch {
         // Approved; only the list refresh failed.
@@ -160,7 +160,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
           title: 'Timesheet Rejected',
           message: `${selectedPeriod.userName}'s timesheet has been returned for corrections.`,
           color: 'warning',
-          icon: <IconX size={16} />,
+          icon: <Icons.reject size={ICON_SIZE.button} />,
         });
       } catch {
         notifications.show({ title: 'Returned', message: 'Refresh the page to see the updated list.', color: 'warning' });
@@ -218,7 +218,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
       <Button
         size="xs"
         variant="subtle"
-        leftSection={<IconEye size={14} />}
+        leftSection={<Icons.view size={14} />}
         onClick={() => openReview(row.original)}
         disabled={row.original.status === 'draft'}
       >
@@ -227,13 +227,6 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     ),
     initialState: {
       sorting: [{ id: 'periodStart', desc: true }],
-    },
-    displayColumnDefOptions: {
-      'mrt-row-actions': {
-        header: 'Actions',
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
-      },
     },
   });
 
@@ -276,7 +269,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
                     return (
                       <Table.Td key={i} style={{ textAlign: 'center' }} title={provenance ?? undefined}>
                         {(hours[i] ?? 0) === 0 ? '—' : (hours[i] ?? 0).toFixed(2)}
-                        {provenance && <Text span size="xs" c="signal.6" data-testid="imported-indicator"> •</Text>}
+                        {provenance && <Text span size="xs" c="signal" data-testid="imported-indicator"> •</Text>}
                       </Table.Td>
                     );
                   })}
@@ -379,7 +372,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
           {reviewContent}
 
           {actionError && (
-            <Alert icon={<IconAlertCircle size={16} />} color="red">
+            <Alert icon={<Icons.statusError size={ICON_SIZE.button} />} color="red">
               {actionError}
             </Alert>
           )}
@@ -393,7 +386,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
             // R2-7: supervisors and employees never decide their own period (the server enforces this too).
             if (isOwnPeriod && userRole !== 'admin') {
               return (
-                <Alert icon={<IconAlertCircle size={16} />} color="warning">
+                <Alert icon={<Icons.statusWarning size={ICON_SIZE.button} />} color="warning">
                   You cannot approve or reject your own timesheet. Another admin or supervisor must review it.
                 </Alert>
               );
@@ -401,14 +394,14 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
             // C2 (CO-D6/CO-D12): an admin's own timesheet once a second admin or a designated approver exists.
             if (isOwnPeriod && !reviewData.canApprove) {
               return (
-                <Alert icon={<IconAlertCircle size={16} />} color="warning">
+                <Alert icon={<Icons.statusWarning size={ICON_SIZE.button} />} color="warning">
                   Your timesheet must be approved by another admin or your designated approver.
                 </Alert>
               );
             }
             if (!reviewData.canApprove) {
               return (
-                <Alert icon={<IconAlertCircle size={16} />} color="gray">
+                <Alert icon={<Icons.statusInfo size={ICON_SIZE.button} />} color="gray">
                   You can view but not approve this timesheet.
                 </Alert>
               );
@@ -417,7 +410,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
             return (
               <>
                 {isOwnPeriod && (
-                  <Alert icon={<IconAlertCircle size={16} />} color="signal">
+                  <Alert icon={<Icons.statusInfo size={ICON_SIZE.button} />} color="signal">
                     This is your own timesheet. You are the only active admin and have no designated approver, so you
                     may approve or reject it — the decision is visibly marked as a self-approval everywhere it appears.
                   </Alert>

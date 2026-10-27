@@ -1,0 +1,12 @@
+/* Danger menu item (feature-plan-ux-foundations.md §4.1.7, trap T-N): sets Mantine's OWN menu-item variables, which
+   MenuItem only sets inline when a `color` prop is passed. `color="red"` would hard-code shade 6 (3.28:1). */
+.danger {
+  --menu-item-color: var(--mantine-color-red-text);
+  --menu-item-hover: light-dark(var(--mantine-color-red-0), var(--mantine-color-dark-5));
+}
+
+/* aria-disabled (not disabled) items and buttons: still focusable and announced, visibly unavailable (§4.4 rule 4). */
+.blocked {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

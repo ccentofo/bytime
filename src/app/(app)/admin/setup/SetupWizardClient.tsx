@@ -185,7 +185,7 @@ export function SetupWizardClient({ initialStatus }: Props) {
             <ThemeIcon size={80} radius="xl" color="success" variant="light">
               <IconConfetti size={40} />
             </ThemeIcon>
-            <Title order={2}>Setup Complete!</Title>
+            <Title order={1} size="h2">Setup Complete!</Title>
             <Text c="dimmed" ta="center" maw={500}>
               {allSixDone
                 ? 'All 6 setup steps are complete. Your CadenzPoint workspace is fully configured and ready for your team to start logging time.'
@@ -215,7 +215,7 @@ export function SetupWizardClient({ initialStatus }: Props) {
 
         {/* Summary stats */}
         <Paper p="md" radius="md" withBorder mt="lg">
-          <Title order={4} mb="sm">Setup Summary</Title>
+          <Title order={2} size="h4" mb="sm">Setup Summary</Title>
           <SimpleGrid cols={{ base: 2, sm: 3, md: 6 }} spacing="sm">
             {STEPS.map((step) => (
               <Paper key={step.key} p="sm" radius="sm" withBorder style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', minHeight: 90 }}>
@@ -246,7 +246,7 @@ export function SetupWizardClient({ initialStatus }: Props) {
             <ThemeIcon size="lg" color="signal" variant="light" radius="md">
               <IconRocket size={20} />
             </ThemeIcon>
-            <Title order={2}>Setup Wizard</Title>
+            <Title order={1} size="h2">Setup Wizard</Title>
           </Group>
           <Text c="dimmed" size="sm">
             Complete these steps to get your CadenzPoint workspace ready for your team.

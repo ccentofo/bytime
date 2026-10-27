@@ -31,11 +31,11 @@ export function WorkspaceFinder({ target, rootDomain }: { target: '/login' | '/f
   }
 
   return (
-    <Center mih="100vh" bg="var(--mantine-color-body)">
+    <Center component="main" mih="100vh" bg="var(--mantine-color-body)">
       <Paper shadow="md" p="xl" radius="md" w={420} withBorder>
         <Stack align="center" mb="lg">
           <Logo size="lg" />
-          <Title order={3}>Find your workspace</Title>
+          <Title order={1} size="h3">Find your workspace</Title>
           <Text c="dimmed" size="sm" ta="center">
             {target === '/login'
               ? 'Enter your workspace name to go to your sign-in page.'

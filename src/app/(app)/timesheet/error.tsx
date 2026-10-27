@@ -21,10 +21,11 @@ export default function TimesheetError({
 
   return (
     <Container size="sm" py="xl">
+      <title>Something went wrong – CadenzPoint</title>
       <Paper shadow="sm" p="xl" radius="md" withBorder>
         <Stack align="center" gap="md">
           <IconAlertTriangle size={48} color="var(--mantine-color-warning-6)" />
-          <Title order={3} ta="center">Timesheet Error</Title>
+          <Title order={1} size="h3" ta="center">Timesheet Error</Title>
           <Text c="dimmed" ta="center" size="sm">
             {isNetworkError
               ? 'Unable to connect to the server. Check your internet connection and try again. Your offline data is preserved.'

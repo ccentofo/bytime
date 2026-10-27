@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
-import { Container, Stack, Text, Button, Group, Alert } from '@mantine/core';
+import { Container, Stack, Text, Button, Group, Alert, Title } from '@mantine/core';
 import { IconAlertTriangle, IconRefresh, IconClock } from '@tabler/icons-react';
 import * as Sentry from '@sentry/nextjs';
 
@@ -18,10 +18,11 @@ export default function AppError({
 
   return (
     <Container size="sm" py="xl">
+      <title>Something went wrong – CadenzPoint</title>
       <Stack align="center" gap="lg">
+        <Title order={1} size="h3" ta="center">Something went wrong</Title>
         <Alert
           icon={<IconAlertTriangle size={24} />}
-          title="Something went wrong"
           color="red"
           variant="light"
           w="100%"

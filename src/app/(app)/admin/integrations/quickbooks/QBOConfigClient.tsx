@@ -228,7 +228,7 @@ export function QBOConfigClient({
             <ThemeIcon size="lg" color="success" variant="light" radius="md">
               <IconPlugConnected size={20} />
             </ThemeIcon>
-            <Title order={2}>{connection.displayName}</Title>
+            <Title order={1} size="h2">{connection.displayName}</Title>
           </Group>
           <Text c="dimmed" size="sm">
             {connection.externalCompanyName ?? 'QuickBooks Online'}

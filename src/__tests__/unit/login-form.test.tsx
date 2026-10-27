@@ -86,3 +86,23 @@ describe('LoginForm loading state', () => {
     expect(button.hasAttribute('data-loading')).toBe(false);
   });
 });
+
+describe('LoginForm structure (feature-plan-ux-foundations.md T16)', () => {
+  it('one <main> and one h1 ("Sign in")', async () => {
+    await act(async () => { root.render(<MantineProvider><LoginForm /></MantineProvider>); });
+    expect(container.querySelectorAll('main')).toHaveLength(1);
+    expect([...container.querySelectorAll('h1')].map((x) => x.textContent)).toEqual(['Sign in']);
+  });
+
+  it('the MFA recovery-code switch is a keyboard-reachable <button type="button"> that does not submit the form', async () => {
+    auth.checkLockout.mockResolvedValue({ isLocked: false, failedAttempts: 0, minutesRemaining: 0 });
+    auth.signIn.mockResolvedValue({ code: 'mfa_required' });
+    await submitForm();
+    const toggle = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Use a recovery code instead')!;
+    expect(toggle).toBeDefined();
+    expect(toggle.getAttribute('type')).toBe('button');
+    await act(async () => { toggle.click(); });
+    expect(auth.signIn).toHaveBeenCalledTimes(1); // no submit
+    expect(container.textContent).toContain('Use authenticator app instead');
+  });
+});

@@ -9,10 +9,8 @@ import {
   Paper,
   Tabs,
   Text,
-  ActionIcon,
-  Tooltip,
 } from '@mantine/core';
-import { IconBan } from '@tabler/icons-react';
+import { RowActions } from '@/components/ui/RowActions';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import { getClinsByContract } from '@/server/actions/clins';
@@ -30,7 +28,7 @@ import { RECORD_STATUS_COLOR, WORK_LOCATION_COLOR } from '@/lib/ui/status-colors
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
 import type { CalendarDate } from '@/lib/calendar-date';
-import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 type User = {
   id: string;
@@ -124,7 +122,6 @@ type Props = {
 };
 
 export function AssignmentsClient({ initialAssignments, users, contracts, chargeCodes, initialChargeCodeAssignments, workspaceTimezone }: Props) {
-  const canWrite = useCanWrite();
   const [isPending, startTransition] = useTransition();
   const [assignments, setAssignments] = useState<Assignment[]>(initialAssignments);
 
@@ -210,7 +207,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
 
   function handleDeactivateChargeCode(assignment: ChargeCodeAssignment) {
     startCcTransition(async () => {
-      const result = await runAction(unassignChargeCodeFromUser(assignment.userId, assignment.chargeCodeId), { errorTitle: 'Couldn’t remove assignment' });
+      const result = await runAction(unassignChargeCodeFromUser(assignment.userId, assignment.chargeCodeId), { errorTitle: 'Couldn’t deactivate assignment' });
       if (!result.ok) return;
       const refreshed = await getChargeCodeAssignments();
       setCcAssignments(refreshed as ChargeCodeAssignment[]);
@@ -257,26 +254,19 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
     columns: ccColumns,
     data: ccAssignments,
     enableColumnFilters: true,
+    initialState: { showColumnFilters: true },
     enableRowActions: true,
     renderRowActions: ({ row }) => (
-      <Tooltip label="Deactivate">
-        <ActionIcon
-          variant="subtle"
-          color="red"
-          onClick={() => setConfirmCcTarget(row.original)}
-          disabled={!canWrite || (!row.original.isActive)}
-          aria-label="Deactivate charge code assignment"
-        >
-          <IconBan size={16} />
-        </ActionIcon>
-      </Tooltip>
+      <RowActions
+        rowLabel={`${row.original.userName} — ${row.original.code}`}
+        items={[{
+          key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger',
+          // An inactive row stays listed as Inactive; it has no action.
+          hidden: !row.original.isActive,
+          onSelect: () => setConfirmCcTarget(row.original),
+        }]}
+      />
     ),
-    displayColumnDefOptions: {
-      'mrt-row-actions': {
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
-      },
-    },
   });
 
   function handleContractChange(contractId: string | null) {
@@ -312,7 +302,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
 
   function handleDeactivate(assignment: Assignment) {
     startTransition(async () => {
-      const result = await runAction(unassignUserFromClin(assignment.userId, assignment.clinId), { errorTitle: 'Couldn’t remove assignment' });
+      const result = await runAction(unassignUserFromClin(assignment.userId, assignment.clinId), { errorTitle: 'Couldn’t deactivate assignment' });
       if (!result.ok) return;
       const refreshed = await getAssignments();
       setAssignments(refreshed as Assignment[]);
@@ -368,26 +358,18 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
     columns,
     data: supervisorAssignments,
     enableColumnFilters: true,
+    initialState: { showColumnFilters: true },
     enableRowActions: true,
     renderRowActions: ({ row }) => (
-      <Tooltip label="Deactivate">
-        <ActionIcon
-          variant="subtle"
-          color="red"
-          onClick={() => setConfirmClinTarget(row.original)}
-          disabled={!canWrite || (!row.original.isActive)}
-          aria-label="Deactivate supervisor assignment"
-        >
-          <IconBan size={16} />
-        </ActionIcon>
-      </Tooltip>
+      <RowActions
+        rowLabel={`${row.original.userName} — CLIN ${row.original.clinNumber}`}
+        items={[{
+          key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger',
+          hidden: !row.original.isActive,
+          onSelect: () => setConfirmClinTarget(row.original),
+        }]}
+      />
     ),
-    displayColumnDefOptions: {
-      'mrt-row-actions': {
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
-      },
-    },
   });
 
   return (

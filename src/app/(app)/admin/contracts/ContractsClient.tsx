@@ -15,11 +15,13 @@ import {
   Badge,
   Table,
   ActionIcon,
-  Tooltip,
   Box,
 } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
-import { IconEdit, IconList, IconPlus, IconChevronDown, IconChevronRight } from '@tabler/icons-react';
+import { Icons, ICON_SIZE } from '@/components/ui/icons';
+import { RowActions } from '@/components/ui/RowActions';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { useLastTarget } from '@/components/ui/useRowState';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import {
@@ -33,7 +35,7 @@ import { formatDate } from '@/lib/format';
 import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
-import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 type Contract = {
   id: string;
@@ -99,7 +101,6 @@ const EMPTY_FORM: ContractForm = {
 };
 
 export function ContractsClient({ initialContracts }: Props) {
-  const canWrite = useCanWrite();
   const [contracts, setContracts] = useState<Contract[]>(initialContracts);
   const [isPending, startTransition] = useTransition();
 
@@ -118,6 +119,12 @@ export function ContractsClient({ initialContracts }: Props) {
   const [slinsByClin, setSlinsByClin] = useState<Record<string, Slin[]>>({});
   const [slinForm, setSlinForm] = useState({ slinNumber: '', description: '', fundedAmount: '' });
   const [expandedClinId, setExpandedClinId] = useState<string | null>(null);
+  // Deactivating a CLIN or SLIN asks first (feature-plan-ux-foundations.md §4.5, B2); activating doesn't.
+  const [clinConfirm, setClinConfirm] = useState<Clin | null>(null);
+  const [slinConfirm, setSlinConfirm] = useState<Slin | null>(null);
+  // The confirms keep showing the last target while they animate closed (no "Deactivate CLIN ?" flash).
+  const shownClin = useLastTarget(clinConfirm);
+  const shownSlin = useLastTarget(slinConfirm);
 
   function openAddModal() {
     setEditingContract(null);
@@ -203,11 +210,13 @@ export function ContractsClient({ initialContracts }: Props) {
     });
   }
 
-  function handleClinStatusToggle(clin: Clin) {
+  /** Same server call as before; the confirm closes only on success (onDone). */
+  function handleClinStatusToggle(clin: Clin, onDone?: () => void) {
     const newStatus = clin.status === 'active' ? 'inactive' : 'active';
     startTransition(async () => {
       const updatedResult = await runAction(updateClin(clin.id, { status: newStatus }), { errorTitle: 'Couldn’t update CLIN' });
       if (!updatedResult.ok) return;
+      onDone?.();
       const updated = updatedResult.data;
       if (updated) {
         setClins((prev) => prev.map((c) => (c.id === updated.id ? (updated as Clin) : c)));
@@ -249,11 +258,13 @@ export function ContractsClient({ initialContracts }: Props) {
     });
   }
 
-  function handleSlinStatusToggle(slin: Slin) {
+  /** Same server call as before; the confirm closes only on success (onDone). */
+  function handleSlinStatusToggle(slin: Slin, onDone?: () => void) {
     const newStatus = slin.status === 'active' ? 'inactive' : 'active';
     startTransition(async () => {
       const updatedResult = await runAction(updateSlin(slin.id, { status: newStatus }), { errorTitle: 'Couldn’t update SLIN' });
       if (!updatedResult.ok) return;
+      onDone?.();
       const updated = updatedResult.data;
       if (updated) {
         setSlinsByClin((prev) => ({
@@ -318,25 +329,15 @@ export function ContractsClient({ initialContracts }: Props) {
     data: contracts,
     enableRowActions: true,
     renderRowActions: ({ row }) => (
-      <Group gap="xs" wrap="nowrap" justify="center">
-        <Tooltip label="Edit">
-          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEditModal(row.original)} aria-label="Edit contract">
-            <IconEdit size={16} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label="Manage CLINs">
-          <ActionIcon variant="subtle" onClick={() => openClinsDrawer(row.original)} aria-label="Manage CLINs">
-            <IconList size={16} />
-          </ActionIcon>
-        </Tooltip>
-      </Group>
+      <RowActions
+        rowLabel={row.original.contractNumber}
+        primary={{ key: 'edit', label: 'Edit', icon: 'edit', onSelect: () => openEditModal(row.original) }}
+        items={[
+          // Read-only admins can open the drawer today (its write buttons gate themselves): keep it reachable.
+          { key: 'clins', label: 'Manage CLINs and SLINs', icon: 'manageClins', writes: false, onSelect: () => openClinsDrawer(row.original) },
+        ]}
+      />
     ),
-    displayColumnDefOptions: {
-      'mrt-row-actions': {
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
-      },
-    },
   });
 
   // DateInput in @mantine/dates v9 uses string values (ISO date strings) when valueFormat is not set
@@ -351,7 +352,7 @@ export function ContractsClient({ initialContracts }: Props) {
       <PageHeader
         title="Contracts & CLINs"
         actions={
-          <WriteButton leftSection={<IconPlus size={16} />} onClick={openAddModal}>
+          <WriteButton leftSection={<Icons.create size={ICON_SIZE.button} />} onClick={openAddModal}>
             Add Contract
           </WriteButton>
         }
@@ -431,6 +432,8 @@ export function ContractsClient({ initialContracts }: Props) {
       <Drawer
         opened={drawerOpen}
         onClose={() => setDrawerOpen(false)}
+        // Every open ModalBase listens for Esc on window: with a confirm open, Esc must close only the confirm.
+        closeOnEscape={!clinConfirm && !slinConfirm}
         position="right"
         size="xl"
         title={
@@ -462,7 +465,7 @@ export function ContractsClient({ initialContracts }: Props) {
               onChange={(e) => setClinForm((f) => ({ ...f, fundedAmount: e.target.value }))}
               style={{ minWidth: 150 }}
             />
-            <WriteButton onClick={handleClinSubmit} loading={isPending} leftSection={<IconPlus size={14} />}>
+            <WriteButton onClick={handleClinSubmit} loading={isPending} leftSection={<Icons.create size={14} />}>
               Add
             </WriteButton>
           </Group>
@@ -486,10 +489,11 @@ export function ContractsClient({ initialContracts }: Props) {
                             size="sm"
                             onClick={() => handleExpandClin(clin.id)}
                             title={expandedClinId === clin.id ? 'Collapse SLINs' : 'Expand SLINs'}
+                            aria-label={expandedClinId === clin.id ? 'Collapse SLINs' : 'Expand SLINs'}
                           >
                             {expandedClinId === clin.id
-                              ? <IconChevronDown size={14} />
-                              : <IconChevronRight size={14} />
+                              ? <Icons.collapse size={14} />
+                              : <Icons.expand size={14} />
                             }
                           </ActionIcon>
                         </Table.Td>
@@ -505,7 +509,7 @@ export function ContractsClient({ initialContracts }: Props) {
                           <WriteButton
                             size="xs"
                             variant="subtle"
-                            onClick={() => handleClinStatusToggle(clin)}
+                            onClick={() => (clin.status === 'active' ? setClinConfirm(clin) : handleClinStatusToggle(clin))}
                             loading={isPending}
                           >
                             {clin.status === 'active' ? 'Deactivate' : 'Activate'}
@@ -551,7 +555,7 @@ export function ContractsClient({ initialContracts }: Props) {
                           size="xs"
                           onClick={() => handleSlinSubmit(clin.id)}
                           loading={isPending}
-                          leftSection={<IconPlus size={12} />}
+                          leftSection={<Icons.create size={12} />}
                           disabled={!slinForm.slinNumber.trim()}
                         >
                           Add SLIN
@@ -590,7 +594,7 @@ export function ContractsClient({ initialContracts }: Props) {
                                   <WriteButton
                                     size="xs"
                                     variant="subtle"
-                                    onClick={() => handleSlinStatusToggle(slin)}
+                                    onClick={() => (slin.status === 'active' ? setSlinConfirm(slin) : handleSlinStatusToggle(slin))}
                                     loading={isPending}
                                   >
                                     {slin.status === 'active' ? 'Deactivate' : 'Activate'}
@@ -610,6 +614,26 @@ export function ContractsClient({ initialContracts }: Props) {
           )}
         </Stack>
       </Drawer>
+
+      <ConfirmModal
+        opened={!!clinConfirm}
+        title={`Deactivate CLIN ${shownClin?.clinNumber ?? ''}?`}
+        message="Employees can't charge new time to it. Existing hours stay on record."
+        confirmLabel="Deactivate"
+        loading={isPending}
+        onConfirm={() => clinConfirm && handleClinStatusToggle(clinConfirm, () => setClinConfirm(null))}
+        onCancel={() => setClinConfirm(null)}
+      />
+
+      <ConfirmModal
+        opened={!!slinConfirm}
+        title={`Deactivate SLIN ${shownSlin?.slinNumber ?? ''}?`}
+        message="Marks it inactive. Existing hours stay on record."
+        confirmLabel="Deactivate"
+        loading={isPending}
+        onConfirm={() => slinConfirm && handleSlinStatusToggle(slinConfirm, () => setSlinConfirm(null))}
+        onCancel={() => setSlinConfirm(null)}
+      />
     </>
   );
 }

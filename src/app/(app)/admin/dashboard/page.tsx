@@ -3,6 +3,9 @@ import { getApprovalNotices } from '@/server/actions/users';
 import { ApprovalNotices } from '@/components/approvals/ApprovalNotices';
 import { DashboardClient } from './DashboardClient';
 import { requirePageRole } from '@/lib/session';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: 'Contract dashboard' };
 
 export const dynamic = 'force-dynamic';
 

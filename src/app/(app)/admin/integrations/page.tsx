@@ -2,6 +2,9 @@ import { requirePageRole } from '@/lib/session';
 import { getConnections, getAvailableConnectors } from '@/server/actions/integrations';
 import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { IntegrationsClient } from './IntegrationsClient';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: 'Integrations' };
 
 export const dynamic = 'force-dynamic';
 

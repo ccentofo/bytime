@@ -2,6 +2,9 @@ import { getAuditSummary, getContractsForFilter, getUsersForFilter } from '@/ser
 import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { AuditTrailClient } from './AuditTrailClient';
 import { requirePageRole } from '@/lib/session';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: 'Audit trail' };
 
 export const dynamic = 'force-dynamic';
 

@@ -74,7 +74,7 @@ export function PayPeriodSelector() {
           <IconChevronLeft size={20} />
         </ActionIcon>
         <div>
-          <Title order={3}>{periodTypeLabel} Timesheet</Title>
+          <Title order={1} size="h3">{periodTypeLabel} Timesheet</Title>
           <Text c="dimmed" size="sm">
             Pay Period: {periodLabel}
           </Text>

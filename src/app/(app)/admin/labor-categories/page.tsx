@@ -5,6 +5,9 @@ import { getUsers } from '@/server/actions/users';
 import { LaborCategoriesClient } from './LaborCategoriesClient';
 import { requirePageRole } from '@/lib/session';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: 'Labor categories' };
 
 export const dynamic = 'force-dynamic';
 

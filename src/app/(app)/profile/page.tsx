@@ -4,6 +4,9 @@ import { getPasswordInfo } from '@/server/actions/password';
 import { getMFAStatus } from '@/server/actions/mfa';
 import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { ProfileClient } from './ProfileClient';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: 'Profile and security' };
 
 export const dynamic = 'force-dynamic';
 

@@ -5,6 +5,9 @@ import { getContracts } from '@/server/actions/contracts';
 import { listChargeCodes, getChargeCodeAssignments } from '@/server/actions/charge-codes';
 import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { AssignmentsClient } from './AssignmentsClient';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: 'Assignments' };
 
 export const dynamic = 'force-dynamic';
 

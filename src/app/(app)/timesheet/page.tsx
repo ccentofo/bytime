@@ -9,6 +9,9 @@ import { getEmployeeDashboardData } from '@/server/actions/employee-dashboard';
 import { getCurrentEffectiveConfig } from '@/server/actions/pay-period-config';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { getTenantState } from '@/lib/tenant/context';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: 'Timesheet' };
 
 export const dynamic = 'force-dynamic';
 
