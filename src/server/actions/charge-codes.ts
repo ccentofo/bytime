@@ -162,18 +162,20 @@ export async function deactivateChargeCode(id: string) {
   });
 }
 
-/** Employees still assigned to a charge code, and whether its CLIN and contract are active — for the reactivate dialog. */
+/** Employees still assigned to a charge code, and whether its CLIN, SLIN (if any) and contract are active — for the reactivate dialog. */
 export async function getChargeCodeReactivationInfo(id: string): Promise<{ stillAssigned: number; assignable: boolean }> {
   await requireAdmin();
   const db = await getDb();
-  const [code] = await db.select({ clinActive: clins.status, contractActive: contracts.status })
+  const [code] = await db.select({ clinActive: clins.status, slinStatus: slins.status, contractActive: contracts.status })
     .from(chargeCodes).innerJoin(clins, eq(chargeCodes.clinId, clins.id)).innerJoin(contracts, eq(clins.contractId, contracts.id))
+    .leftJoin(slins, eq(chargeCodes.slinId, slins.id))
     .where(eq(chargeCodes.id, id));
   const assigned = await db.select({ id: userChargeCodes.id }).from(userChargeCodes)
     .innerJoin(users, eq(userChargeCodes.userId, users.id))
     // F11: only ACTIVE employees get the code back — a deactivated user's assignment is not counted.
     .where(and(eq(userChargeCodes.chargeCodeId, id), eq(userChargeCodes.isActive, true), eq(users.isActive, true)));
-  return { stillAssigned: assigned.length, assignable: code?.clinActive === 'active' && code?.contractActive === 'active' };
+  const slinOk = code?.slinStatus == null || code.slinStatus === 'active'; // B5: a deactivated SLIN closes its codes too
+  return { stillAssigned: assigned.length, assignable: code?.clinActive === 'active' && slinOk && code?.contractActive === 'active' };
 }
 
 /**

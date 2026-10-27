@@ -628,7 +628,7 @@ export function ContractsClient({ initialContracts }: Props) {
       <ConfirmModal
         opened={!!slinConfirm}
         title={`Deactivate SLIN ${shownSlin?.slinNumber ?? ''}?`}
-        message="Marks it inactive. Existing hours stay on record."
+        message="Employees can't charge new time to it. Existing hours stay on record."
         confirmLabel="Deactivate"
         loading={isPending}
         onConfirm={() => slinConfirm && handleSlinStatusToggle(slinConfirm, () => setSlinConfirm(null))}

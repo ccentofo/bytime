@@ -18,7 +18,7 @@ vi.mock('@mantine/notifications', () => ({ notifications: { show: h.show } }));
 vi.mock('@/server/actions/integrations', () => ({ saveMapping: h.saveMapping, disconnectIntegration: vi.fn() }));
 vi.mock('@/server/actions/gusto', () => ({ fetchGustoEmployeesForMapping: h.fetchEmployees, triggerGustoSync: vi.fn() }));
 
-import { GustoConfigClient } from '@/app/(app)/admin/integrations/gusto/GustoConfigClient';
+import { GustoConfigClient } from '@/app/(app)/settings/integrations/gusto/GustoConfigClient';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

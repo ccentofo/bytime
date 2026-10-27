@@ -302,6 +302,6 @@ describe('Apex OAuth callback (R2-9)', () => {
     const state = mintOAuthState({ tenantSlug: 'acme', userId: 'user-1', provider: 'quickbooks_online', nonce: 'n' });
     const response = await apexCallback(apexUrl(`error=%3Cscript%3E&state=${encodeURIComponent(state)}`), QBO);
     const location = response.headers.get('location')!;
-    expect(location).toBe('http://acme.localhost:3000/admin/integrations?error=connection_cancelled');
+    expect(location).toBe('http://acme.localhost:3000/settings/integrations?error=connection_cancelled');
   });
 });

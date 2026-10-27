@@ -1,7 +1,7 @@
 import 'server-only';
 import { payPeriodConfig } from '@/db/schema';
-import { desc, lte } from 'drizzle-orm';
-import { getDb } from '@/db';
+import { desc, gt, lte } from 'drizzle-orm';
+import { getDb, type ReadDb } from '@/db';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import {
   DEFAULT_PERIOD_CONFIG,
@@ -112,4 +112,31 @@ export async function getEffectiveConfigAtInternal(date: CalendarDate): Promise<
 /** The schedule in effect on the workspace's "today". */
 export async function getCurrentEffectiveConfigInternal(): Promise<PeriodConfig> {
   return getEffectiveConfigAtInternal(await getWorkspaceToday());
+}
+
+/** A schedule change that hasn't taken effect yet (effective_from after the workspace's today). */
+export interface PendingConfigChange {
+  id: string;
+  periodType: PeriodType;
+  anchorDate: CalendarDate;
+  weekStartDay: number;
+  effectiveFrom: CalendarDate;
+  createdAt: Date;
+}
+
+/**
+ * The pending (not-yet-effective) pay-schedule change, if any. INTERNAL (UX-2 §4.5): Home's "Pay schedule changes on
+ * {date}" item; the getPendingConfigChange action guards + calls.
+ */
+export async function pendingConfigChangeInternal(db: Pick<ReadDb, 'select'>, today: CalendarDate): Promise<PendingConfigChange | null> {
+  const [r] = await db.select().from(payPeriodConfig).where(gt(payPeriodConfig.effectiveFrom, today)).orderBy(desc(payPeriodConfig.effectiveFrom)).limit(1);
+  if (!r) return null;
+  return {
+    id: r.id,
+    periodType: r.periodType as PeriodType,
+    anchorDate: r.anchorDate as CalendarDate,
+    weekStartDay: r.weekStartDay,
+    effectiveFrom: r.effectiveFrom as CalendarDate,
+    createdAt: r.createdAt,
+  };
 }

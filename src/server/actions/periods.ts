@@ -10,6 +10,7 @@ import { closeImportWindowOnSubmit, lockImportWindowShared } from '@/server/inte
 import { getSupervisorScopeInfo } from '@/server/internal/supervisor-scope';
 import { canApprove, loadApprovalFacts, lockUserRulesShared, selfApprovalAvailable, selfApprovalContext } from '@/server/internal/approval-rules';
 import { approvalLabels } from '@/server/internal/approval-label';
+import { periodFlags, type PeriodFlags } from '@/server/internal/period-flags';
 import { notifySubmissionRecipients } from '@/server/internal/submission-notify';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { existingPeriodLength, loadScheduleResolver } from '@/server/internal/pay-period-config';
@@ -438,6 +439,10 @@ export interface ScopedPeriodRow {
   /** C2: approvalLabel() — badge ("Self-approved"/"Self-rejected") and the approval line. */
   approvalBadge: string | null;
   approvalText: string | null;
+  /** UX-2 §4.6: how many times it was submitted (> 1 → "Resubmitted"). */
+  submissionCount: number;
+  /** UX-2 §4.6 "Worth a look" — only for rows the session user may decide (canApprove); null otherwise. */
+  flags: PeriodFlags | null;
 }
 
 /**
@@ -464,6 +469,7 @@ export async function getScopedPeriods(): Promise<ScopedPeriodRow[]> {
       submittedAt: timesheetPeriods.submittedAt,
       reviewedAt: timesheetPeriods.reviewedAt,
       reviewedBy: timesheetPeriods.reviewedBy,
+      submissionCount: timesheetPeriods.submissionCount,
     })
     .from(timesheetPeriods)
     .innerJoin(users, eq(timesheetPeriods.userId, users.id))
@@ -472,7 +478,7 @@ export async function getScopedPeriods(): Promise<ScopedPeriodRow[]> {
 
   const facts = await loadApprovalFacts(db);
   const labels = await approvalLabels(db, rows, await getWorkspaceTimezone());
-  return Promise.all(rows.map(async (row) => ({
+  const resolved = await Promise.all(rows.map(async (row) => ({
     ...row,
     periodStart: row.periodStart as CalendarDate,
     periodNumDays: await resolvePeriodNumDays(row.periodStart as CalendarDate, row.periodNumDays),
@@ -480,6 +486,8 @@ export async function getScopedPeriods(): Promise<ScopedPeriodRow[]> {
     approvalBadge: labels.get(row.id)?.badge ?? null,
     approvalText: labels.get(row.id)?.text ?? null,
   })));
+  const flags = await periodFlags(db, resolved.filter((r) => r.canApprove));
+  return resolved.map((r) => ({ ...r, flags: flags.get(r.id) ?? null }));
 }
 
 /**
@@ -489,7 +497,7 @@ export async function getScopedPeriods(): Promise<ScopedPeriodRow[]> {
 export async function getMyScopeInfo(): Promise<{
   assignedContractCount: number;
   assignedClinCount: number;
-  supervisedEmployeeCount: number;
+  approvableEmployeeCount: number;
   designatedByCount: number;
 } | null> {
   const actor = await requireApprover();

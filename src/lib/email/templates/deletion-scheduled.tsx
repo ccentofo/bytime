@@ -8,7 +8,7 @@ export function DeletionScheduledEmail({ tenantName, deletionDateFormatted, isFi
     <LifecycleLayout
       title={isFinalReminder ? `Final reminder: ${tenantName} will be deleted on ${deletionDateFormatted}` : `${tenantName} is scheduled for deletion on ${deletionDateFormatted}`}
       titleColor="#b91c1c"
-      cta={{ href: `${appUrl}/admin/settings`, label: 'Export your data' }}
+      cta={{ href: `${appUrl}/settings/workspace`, label: 'Export your data' }}
     >
       <Text style={paragraph}>
         <strong>{tenantName}</strong> and all of its data will be permanently deleted on or after

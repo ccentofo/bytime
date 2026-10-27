@@ -21,11 +21,12 @@ export type NewCellRefusal = 'not-assigned' | 'code-inactive' | 'clin-only' | 'i
 
 /** Server-side: may a cell with NO prior revision be created? (Cells with one skip these checks.) */
 export function newCellRefusal(cell:
-  | { kind: 'charge'; assigned: boolean; codeActive: boolean; clinActive: boolean; contractActive: boolean }
+  | { kind: 'charge'; assigned: boolean; codeActive: boolean; clinActive: boolean; slinActive: boolean; contractActive: boolean }
   | { kind: 'indirect'; active: boolean; availableToAll: boolean }
   | { kind: 'clin' }): NewCellRefusal | null {
   if (cell.kind === 'clin') return 'clin-only';
   if (cell.kind === 'indirect') return cell.active && cell.availableToAll ? null : 'indirect-unavailable';
   if (!cell.assigned) return 'not-assigned';
-  return cell.codeActive && cell.clinActive && cell.contractActive ? null : 'code-inactive';
+  // B5: a deactivated SLIN closes its codes to NEW hours, like a CLIN (corrections are unaffected).
+  return cell.codeActive && cell.clinActive && cell.slinActive && cell.contractActive ? null : 'code-inactive';
 }

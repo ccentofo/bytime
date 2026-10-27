@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
 
   const tenantSlug = await getTenantSlug();
   if (!tenantSlug) {
-    return NextResponse.redirect(new URL('/admin/integrations?error=qbo_config_missing', request.url));
+    return NextResponse.redirect(new URL('/settings/integrations?error=qbo_config_missing', request.url));
   }
 
   try {
@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
     return response;
   } catch {
     return NextResponse.redirect(
-      new URL('/admin/integrations?error=qbo_config_missing', request.url)
+      new URL('/settings/integrations?error=qbo_config_missing', request.url)
     );
   }
 }

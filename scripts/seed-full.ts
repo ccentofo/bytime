@@ -81,7 +81,10 @@ export async function seedRichData(
     jane: uuid(), john: uuid(), emily: uuid(), robert: uuid(), lisa: uuid(),
   };
 
-  await db.insert(schema.users).values([
+  // UX-2 §4.5: backdate the demo users so Home's "previous period" team status has people expected in it (a user
+  // created after a period ended isn't expected to have submitted it). No schema change.
+  const DEMO_USERS_CREATED_AT = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+  await db.insert(schema.users).values(([
     { id: userIds.admin, email: `admin@${ED}`, fullName: 'Admin User', role: 'admin', passwordHash: hash, isActive: true, flsaExempt: false },
     // certified-outputs C8 (CO-D5): supervisors are approved by a designated approver (here the admin), never a peer.
     { id: userIds.sarah, email: `sarah.wilson@${ED}`, fullName: 'Sarah Wilson', role: 'supervisor', passwordHash: hash, isActive: true, flsaExempt: true, approverId: userIds.admin },
@@ -91,7 +94,7 @@ export async function seedRichData(
     { id: userIds.emily, email: `emily.davis@${ED}`, fullName: 'Emily Davis', role: 'employee', passwordHash: hash, isActive: true, flsaExempt: true },
     { id: userIds.robert, email: `robert.taylor@${ED}`, fullName: 'Robert Taylor', role: 'employee', passwordHash: hash, isActive: true, flsaExempt: false },
     { id: userIds.lisa, email: `lisa.anderson@${ED}`, fullName: 'Lisa Anderson', role: 'employee', passwordHash: hash, isActive: false, flsaExempt: true },
-  ]);
+  ] as const).map((u) => ({ ...u, createdAt: DEMO_USERS_CREATED_AT })));
   console.log('    ✓ 8 users created');
   // feature-plan-certified-outputs.md C2 (CO-D19, ruling Q5): record the self-approval switch state once, so demo data
   // has the same admin_change_log history as a real workspace.

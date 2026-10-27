@@ -27,12 +27,14 @@ import {
   IconRocket,
   IconConfetti,
   IconRefresh,
+  IconTag,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
 import { getSetupStatus } from '@/server/actions/setup';
-import type { SetupStatus } from '@/server/internal/setup';
+import type { SetupStatus, SetupStepKey } from '@/server/internal/setup';
 import { seedIndirectCodes } from '@/server/actions/indirect-codes';
+import { autobridgeChargeCodesFromClins } from '@/server/actions/charge-codes';
 import classes from './Setup.module.css';
 import { WriteButton } from '@/components/shell/WorkspaceMode';
 
@@ -40,11 +42,14 @@ interface Props {
   initialStatus: SetupStatus;
 }
 
+type CountKey = keyof Omit<SetupStatus, 'isComplete' | 'steps' | 'done' | 'total'>;
+
 interface StepConfig {
-  key: keyof Omit<SetupStatus, 'isComplete'>;
+  key: SetupStepKey;
+  countKey: CountKey;
   title: string;
   description: string;
-  helpText: string;
+  helpText: (status: SetupStatus) => string;
   icon: React.ReactNode;
   required: boolean;
   linkHref: string;
@@ -54,74 +59,93 @@ interface StepConfig {
   entityLabel: string; // e.g., "contracts", "employees"
 }
 
-const STEPS: StepConfig[] = [
+/** feature-plan-ux-navigation-home.md §4.7 (UX-AUDIT B1): the steps that actually make a timesheet usable, in order. */
+export const STEPS: StepConfig[] = [
   {
     key: 'indirectCodes',
-    title: 'Indirect Charge Codes',
-    description: 'Set up leave, overhead, and G&A codes for DCAA-compliant total time accounting.',
-    helpText: 'These codes let employees log non-billable time like PTO, holidays, overhead, and training. Click "Seed Default Codes" to create the 9 standard DCAA codes instantly.',
+    countKey: 'indirectCodes',
+    title: 'Indirect charge codes',
+    description: 'Leave, overhead and G&A codes for total time accounting.',
+    helpText: () => 'These codes let employees record time like PTO, holidays, overhead and training. "Seed default DCAA codes" creates the 9 standard codes.',
     icon: <IconReceipt size={18} />,
     required: false,
     linkHref: '/admin/indirect-codes',
-    linkLabel: 'Go to Indirect Codes',
+    linkLabel: 'Go to indirect codes',
     entityLabel: 'indirect codes',
   },
   {
     key: 'contracts',
+    countKey: 'contracts',
     title: 'Contracts',
     description: 'Create your contract structure.',
-    helpText: 'Each contract needs a contract number and name. You can add details like funded value, ceiling value, and date range.',
+    helpText: () => 'Each contract needs a contract number and name. You can add funded value, ceiling value and dates.',
     icon: <IconFileText size={18} />,
     required: true,
     linkHref: '/admin/contracts',
-    linkLabel: 'Go to Contracts & CLINs',
+    linkLabel: 'Go to contracts and CLINs',
     entityLabel: 'contracts',
   },
   {
     key: 'clins',
-    title: 'CLINs (Contract Line Items)',
+    countKey: 'clins',
+    title: 'CLINs',
     description: 'Add line items under your contracts.',
-    helpText: 'CLINs are the charge codes employees will log time against. Each contract needs at least one CLIN. Create them from within the Contracts & CLINs page.',
+    helpText: () => 'CLINs are the line items of a contract; hours roll up to them through charge codes. Each contract needs at least one. Add them from the Contracts and CLINs page.',
     icon: <IconList size={18} />,
     required: true,
     linkHref: '/admin/contracts',
-    linkLabel: 'Go to Contracts & CLINs',
+    linkLabel: 'Go to contracts and CLINs',
     entityLabel: 'CLINs',
   },
   {
+    key: 'chargeCodes',
+    countKey: 'chargeCodes',
+    title: 'Charge codes',
+    description: 'Charge codes are what employees log time against. Each one belongs to a CLIN.',
+    helpText: () => 'Charge codes are what employees log time against. Each one belongs to a CLIN. Create your own, or create one per active CLIN in one step.',
+    icon: <IconTag size={18} />,
+    required: true,
+    linkHref: '/admin/charge-codes',
+    linkLabel: 'Go to charge codes',
+    entityLabel: 'charge codes',
+  },
+  {
     key: 'laborCategories',
-    title: 'Labor Categories',
-    description: 'Define billing rates per CLIN.',
-    helpText: 'Labor categories (LCATs) define the roles and hourly rates for each CLIN. Examples: Senior Engineer at $145/hr, Help Desk Analyst at $55/hr.',
+    countKey: 'laborCategories',
+    title: 'Labor categories',
+    description: 'Define hourly rates per CLIN.',
+    helpText: () => 'Labor categories define the roles and hourly rates for each CLIN, for example Senior Engineer at $145/hr. Costs use them.',
     icon: <IconCategory size={18} />,
     required: false,
     linkHref: '/admin/labor-categories',
-    linkLabel: 'Go to Labor Categories',
+    linkLabel: 'Go to labor categories',
     entityLabel: 'labor categories',
   },
   {
     key: 'employees',
+    countKey: 'employees',
     title: 'Employees',
-    description: 'Add your team members.',
-    helpText: 'Create user accounts for everyone who will log time. Each employee needs a name, email, and role (employee, supervisor, or admin).',
+    description: 'Add the people who will record time.',
+    helpText: () => 'Create an account for everyone who will record time: name, email and role (employee, supervisor or admin).',
     icon: <IconUsers size={18} />,
     required: true,
     linkHref: '/admin/users',
-    linkLabel: 'Go to User Management',
-    secondaryLinkHref: '/admin/import',
-    secondaryLinkLabel: 'Or use Data Import for bulk upload',
+    linkLabel: 'Go to users',
+    secondaryLinkHref: '/settings/import',
+    secondaryLinkLabel: 'Or use Data import (people only)',
     entityLabel: 'employees',
   },
   {
-    key: 'assignments',
-    title: 'Assignments',
-    description: 'Assign employees to the CLINs they can charge to.',
-    helpText: 'DCAA requires that employees can ONLY charge time to CLINs they are explicitly assigned to. Each employee needs at least one CLIN assignment.',
+    key: 'chargeCodeAccess',
+    countKey: 'employeesWithAccess',
+    title: 'Charge code access',
+    description: 'Give each employee the charge codes they may use.',
+    helpText: (st) => `Give each employee the charge codes they may use. ${st.employeesWithAccess} of ${st.employees} employees have at least one.`,
     icon: <IconLink size={18} />,
     required: true,
     linkHref: '/admin/assignments',
-    linkLabel: 'Go to User Assignments',
-    entityLabel: 'assignments',
+    linkLabel: 'Go to assignments',
+    entityLabel: 'employees with access',
   },
 ];
 
@@ -129,18 +153,19 @@ export function SetupWizardClient({ initialStatus }: Props) {
   const [status, setStatus] = useState<SetupStatus>(initialStatus);
   const [isPending, startTransition] = useTransition();
   const [seedingIndirect, setSeedingIndirect] = useState(false);
+  const [bridging, setBridging] = useState(false);
 
   // Determine which step should be active (first incomplete required, or first incomplete recommended)
   function getActiveStep(): number {
     // First, find the first incomplete required step
     for (let i = 0; i < STEPS.length; i++) {
-      if (STEPS[i].required && status[STEPS[i].key] === 0) {
+      if (STEPS[i].required && status[STEPS[i].countKey] === 0) {
         return i;
       }
     }
     // All required done — find first incomplete recommended step
     for (let i = 0; i < STEPS.length; i++) {
-      if (!STEPS[i].required && status[STEPS[i].key] === 0) {
+      if (!STEPS[i].required && status[STEPS[i].countKey] === 0) {
         return i;
       }
     }
@@ -170,13 +195,22 @@ export function SetupWizardClient({ initialStatus }: Props) {
     refreshStatus();
   }
 
+  async function handleAutobridge() {
+    setBridging(true);
+    const result = await runAction(autobridgeChargeCodesFromClins(), { errorTitle: 'Couldn’t create charge codes' });
+    setBridging(false);
+    if (!result.ok) return;
+    notifications.show({ title: 'Charge codes created', message: `Created ${result.data.created} charge code(s) from ${result.data.total} active CLINs.`, color: 'success' });
+    refreshStatus();
+  }
+
   function isStepComplete(step: StepConfig): boolean {
-    return status[step.key] > 0;
+    return status[step.countKey] > 0;
   }
 
   // All done state
   if (status.isComplete) {
-    const allSixDone = STEPS.every((s) => status[s.key] > 0);
+    const allDone = STEPS.every((s) => status[s.countKey] > 0);
 
     return (
       <Container size="md" py="xl">
@@ -185,16 +219,16 @@ export function SetupWizardClient({ initialStatus }: Props) {
             <ThemeIcon size={80} radius="xl" color="success" variant="light">
               <IconConfetti size={40} />
             </ThemeIcon>
-            <Title order={1} size="h2">Setup Complete!</Title>
+            <Title order={1} size="h2">Setup complete</Title>
             <Text c="dimmed" ta="center" maw={500}>
-              {allSixDone
-                ? 'All 6 setup steps are complete. Your CadenzPoint workspace is fully configured and ready for your team to start logging time.'
-                : 'All required setup steps are complete. Your team can start logging time. You can still complete the recommended steps below for full DCAA compliance.'}
+              {allDone
+                ? `All ${STEPS.length} setup steps are done. Your team can start recording time.`
+                : 'The required steps are done, so your team can start recording time. The recommended steps below are still worth doing.'}
             </Text>
 
-            {!allSixDone && (
+            {!allDone && (
               <Alert color="warning" variant="light" title="Recommended steps remaining" maw={500}>
-                {STEPS.filter((s) => !s.required && status[s.key] === 0).map((s) => (
+                {STEPS.filter((s) => !s.required && status[s.countKey] === 0).map((s) => (
                   <Text key={s.key} size="sm">
                     • {s.title} — <Anchor href={s.linkHref} size="sm">{s.linkLabel}</Anchor>
                   </Text>
@@ -203,11 +237,11 @@ export function SetupWizardClient({ initialStatus }: Props) {
             )}
 
             <Group>
-              <Button component="a" href="/timesheet" variant="filled">
-                Go to Timesheet
+              <Button component="a" href="/home" variant="filled">
+                Go to Home
               </Button>
-              <Button component="a" href="/admin/dashboard" variant="light">
-                Admin Dashboard
+              <Button component="a" href="/timesheet" variant="light">
+                Open timesheet
               </Button>
             </Group>
           </Stack>
@@ -216,7 +250,7 @@ export function SetupWizardClient({ initialStatus }: Props) {
         {/* Summary stats */}
         <Paper p="md" radius="md" withBorder mt="lg">
           <Title order={2} size="h4" mb="sm">Setup Summary</Title>
-          <SimpleGrid cols={{ base: 2, sm: 3, md: 6 }} spacing="sm">
+          <SimpleGrid cols={{ base: 2, sm: 3, md: 4 }} spacing="sm">
             {STEPS.map((step) => (
               <Paper key={step.key} p="sm" radius="sm" withBorder style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', minHeight: 90 }}>
                 {isStepComplete(step) ? (
@@ -228,7 +262,7 @@ export function SetupWizardClient({ initialStatus }: Props) {
                 )}
                 <Text size="sm" fw={500} lh={1.2}>{step.title}</Text>
                 <Text size="xs" c="dimmed" mt={4}>
-                  {status[step.key]} {step.entityLabel}
+                  {status[step.countKey]} {step.entityLabel}
                 </Text>
               </Paper>
             ))}
@@ -259,7 +293,7 @@ export function SetupWizardClient({ initialStatus }: Props) {
           onClick={refreshStatus}
           loading={isPending}
         >
-          Refresh Status
+          Refresh status
         </Button>
       </Group>
 
@@ -275,7 +309,7 @@ export function SetupWizardClient({ initialStatus }: Props) {
             key={step.key}
             label={step.title}
             description={isStepComplete(step)
-              ? `${status[step.key]} ${step.entityLabel} created`
+              ? `${status[step.countKey]} ${step.entityLabel}`
               : step.description
             }
             icon={step.icon}
@@ -296,24 +330,30 @@ export function SetupWizardClient({ initialStatus }: Props) {
               </Group>
 
               <Text size="sm" c="dimmed" mb="md">
-                {step.helpText}
+                {step.helpText(status)}
               </Text>
 
               {isStepComplete(step) ? (
                 <Alert color="success" variant="light" mb="sm">
                   <Text size="sm">
-                    ✅ {status[step.key]} {step.entityLabel} created
+                    ✅ {status[step.countKey]} {step.entityLabel} created
                   </Text>
                 </Alert>
               ) : (
                 <Alert color={step.required ? 'red' : 'warning'} variant="light" mb="sm">
                   <Text size="sm">
-                    No {step.entityLabel} created yet
+                    No {step.entityLabel} yet
                   </Text>
                 </Alert>
               )}
 
               <Group gap="sm">
+                {step.key === 'chargeCodes' && (
+                  <WriteButton variant="light" size="sm" onClick={handleAutobridge} loading={bridging}>
+                    Create one per CLIN
+                  </WriteButton>
+                )}
+
                 {/* Special: Seed Default Codes button for indirect codes step */}
                 {step.key === 'indirectCodes' && status.indirectCodes === 0 && (
                   <WriteButton
@@ -322,7 +362,7 @@ export function SetupWizardClient({ initialStatus }: Props) {
                     onClick={handleSeedIndirect}
                     loading={seedingIndirect}
                   >
-                    Seed Default DCAA Codes
+                    Seed default DCAA codes
                   </WriteButton>
                 )}
 

@@ -217,8 +217,9 @@ export const BASELINE_SELF_APPROVAL_REASONS = ['workspace created', 'demo worksp
  * the latest self_approval row for the admin is `enabled`, and that row is not a baseline (fix round 1, F2: no earlier
  * "disabled" row is needed — workspaces from before C2 have none).
  */
-export async function currentSelfApprovalOn(db: Pick<ReadDb, 'select'>, adminId: string): Promise<{ logId: string; at: Date } | null> {
-  const facts = await loadApprovalFacts(db);
+export async function currentSelfApprovalOn(db: Pick<ReadDb, 'select'>, adminId: string, known?: ApprovalFacts): Promise<{ logId: string; at: Date } | null> {
+  // UX-2 §4.5: callers that already hold the facts pass them, so they aren't loaded twice.
+  const facts = known ?? await loadApprovalFacts(db);
   if (!selfApprovalAvailable(facts, adminId)) return null;
   const rows = await db.select({ id: adminChangeLog.id, action: adminChangeLog.action, createdAt: adminChangeLog.createdAt, newValue: adminChangeLog.newValue })
     .from(adminChangeLog)
@@ -272,6 +273,17 @@ export function newlyEligible(before: EligibilitySnapshot, after: EligibilitySna
     if (recipients.length) out.push({ periodId, userId: now.userId, recipients, designeeLost });
   }
   return out;
+}
+
+/**
+ * The people this approver can decide (feature-plan-ux-navigation-home.md §4.5 "teamScope"): their review scope minus
+ * themselves, kept only where canApprove is true (relational — period status is checked elsewhere). Peer supervisors
+ * or admins who merely share a CLIN are excluded. Home's team status and the Approvals scope sentence both use this.
+ */
+export function approvableScope(facts: ApprovalFacts, actorId: string): string[] {
+  const scope = reviewScopeFrom(facts, actorId);
+  const ids = scope === 'all' ? [...facts.users.keys()] : scope;
+  return ids.filter((id) => id !== actorId && canApprove(facts, actorId, id));
 }
 
 /** The ids among `periodIds` the actor may approve (for lists). */

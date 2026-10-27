@@ -290,7 +290,7 @@ describe('Static (wording): the old footer sentence is gone from src/', () => {
     expect(offenders).toEqual([]);
     const { CURRENT_RATES_NOTE } = await import('@/lib/cost-labels');
     expect(CURRENT_RATES_NOTE).toBe('Costs use the labor-category rate in effect on each day worked.');
-    expect(readFileSync(path.join(ROOT, 'src/app/(app)/admin/api-keys/ApiKeysClient.tsx'), 'utf8')).toMatch(/<Code>hourlyRate<\/Code> is the labor-category rate in effect on that entry&apos;s date/);
+    expect(readFileSync(path.join(ROOT, 'src/app/(app)/settings/api-keys/ApiKeysClient.tsx'), 'utf8')).toMatch(/<Code>hourlyRate<\/Code> is the labor-category rate in effect on that entry&apos;s date/);
   });
 
   it('the assignment dropdown label uses the current rate from the page\'s schedules', () => {

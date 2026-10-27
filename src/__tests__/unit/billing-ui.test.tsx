@@ -34,7 +34,8 @@ vi.mock('@/server/actions/billing', () => ({
 }));
 
 import { AppNavbar } from '@/components/shell/AppNavbar';
-import { BillingClient } from '@/app/(app)/admin/billing/BillingClient';
+import { SETTINGS_NAV } from '@/components/shell/nav-config';
+import { BillingClient } from '@/app/(app)/settings/billing/BillingClient';
 import { BillingWall } from '@/app/(app)/BillingWall';
 import { OnHoldScreen } from '@/app/(app)/OnHoldScreen';
 import { PolicyHoldScreen } from '@/app/(app)/PolicyHoldScreen';
@@ -68,14 +69,19 @@ function subscribeButtons(html: string): Array<{ plan: string; disabled: boolean
   return out;
 }
 
-describe('Billing nav', () => {
-  it('admins see Billing (→ /admin/billing)', () => {
-    expect(render(<AppNavbar userRole="admin" />)).toMatch(/href="\/admin\/billing"[\s\S]*?Billing/);
+describe('Billing nav (UX-2 §4.2: Billing lives in the Settings area)', () => {
+  it('SETTINGS_NAV lists Billing → /settings/billing; the admin main menu reaches it through Settings', () => {
+    expect(SETTINGS_NAV.find((l) => l.label === 'Billing')).toMatchObject({ href: '/settings/billing' });
+    const admin = render(<AppNavbar userRole="admin" />);
+    expect(admin).toMatch(/href="\/settings\/workspace"[\s\S]*?Settings/);
+    expect(admin).not.toContain('/settings/billing'); // not in the main menu any more
   });
 
-  it('supervisors and employees do not', () => {
-    expect(render(<AppNavbar userRole="supervisor" />)).not.toContain('/admin/billing');
-    expect(render(<AppNavbar userRole="employee" />)).not.toContain('/admin/billing');
+  it('supervisors and employees see neither Settings nor Billing', () => {
+    for (const role of ['supervisor', 'employee']) {
+      const out = render(<AppNavbar userRole={role} />);
+      expect(out, role).not.toContain('/settings/');
+    }
   });
 });
 

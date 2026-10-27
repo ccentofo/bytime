@@ -40,6 +40,8 @@ const ALLOWLIST: Array<{ file: string; expr: string; why: string }> = [
   { file: 'src/server/internal/cost-basis.ts', expr: 'CHARGE_CODE_CATEGORY', why: 'SQL fragment from chargeCodeLaborCategoryOnSql (dated rates D3)' },
   { file: 'src/lib/cron/heartbeat.ts', expr: 'name', why: 'the heartbeat cron name (a CronName string)' },
   { file: 'src/lib/signup/signals.ts', expr: '`${key}:last`', why: 'a signal_counters key (a string)' },
+  { file: 'src/server/internal/team-period-status.ts', expr: 'tz', why: 'the workspace timezone NAME for AT TIME ZONE (a string; UX-2 §4.5.2)' },
+  { file: 'src/server/internal/team-period-status.ts', expr: 'periodEnd', why: "a 'YYYY-MM-DD' calendar-date string, cast ::date (UX-2 §4.5.2)" },
 ];
 
 const SCHEMA_FILES = new Set(['src/db/schema.ts', 'src/db/control-plane/schema.ts']);

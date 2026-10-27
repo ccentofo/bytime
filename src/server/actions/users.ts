@@ -8,7 +8,8 @@ import { requireAdmin, requireAdminFresh, AuthorizationError } from '@/lib/sessi
 import { unlockAccount } from '@/server/internal/login-attempts';
 import { SAFE_USER_COLUMNS } from '@/server/internal/users';
 import { assertSeatsAvailable } from '@/server/internal/seats';
-import { activeAdminIds, currentSelfApprovalOn, effectiveDesignee, loadApprovalFacts, lockUserRulesExclusive, newlyEligible, recomputeSelfApproval, snapshotSubmittedEligibility } from '@/server/internal/approval-rules';
+import { loadApprovalFacts, lockUserRulesExclusive, newlyEligible, recomputeSelfApproval, snapshotSubmittedEligibility } from '@/server/internal/approval-rules';
+import { approvalNotices } from '@/server/internal/approval-notices';
 import { notifyReroutedApprovals } from '@/server/internal/submission-notify';
 import { validateEmail, validateRequired, validateStringLength, validateEnum } from '@/lib/validation';
 import { UserFacingError } from '@/lib/errors';
@@ -278,11 +279,5 @@ export async function setUserApprover(userId: string, approverId: string | null)
 export async function getApprovalNotices(): Promise<{ selfApprovalBackOn: { logId: string } | null; recommendDesignee: boolean }> {
   const actor = await requireAdmin();
   const db = await getDb();
-  const facts = await loadApprovalFacts(db);
-  const on = await currentSelfApprovalOn(db, actor.id);
-  const admins = activeAdminIds(facts);
-  return {
-    selfApprovalBackOn: on ? { logId: on.logId } : null,
-    recommendDesignee: admins.length === 1 && admins[0] === actor.id && effectiveDesignee(facts, actor.id) === null,
-  };
+  return approvalNotices(db, actor.id, await loadApprovalFacts(db));
 }

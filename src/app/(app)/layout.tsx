@@ -2,7 +2,7 @@ import { auth } from '@/auth';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { AppShellWrapper } from './AppShellWrapper';
-import { getSetupStatusInternal } from '@/server/internal/setup';
+import { getWaitingCount } from '@/server/internal/approval-queue';
 import { getTenantState } from '@/lib/tenant/context';
 import { TenantUnavailable } from './TenantUnavailable';
 import { BillingWall } from './BillingWall';
@@ -54,20 +54,23 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
 
   const user = {
+    id: (session.user as any).id as string,
     fullName: (session.user as any).fullName ?? session.user.name ?? '',
     email: session.user.email ?? '',
     role: (session.user as any).role ?? 'employee',
   };
 
-  // Only check setup status for admin users
-  let setupComplete = true;
-  if (user.role === 'admin') {
+  // The setup banner is gone (UX-2 L2): Home's "Finish setting up" item replaces it, so setup status is no longer
+  // computed on every page.
+
+  // UX-2 §4.6: the sidebar's waiting count, approvers only. Caught → null (no badge): an error thrown by this layout is
+  // NOT caught by (app)/error.tsx (same segment), so an uncaught DB error here would take down every page.
+  let waitingCount: number | null = null;
+  if (user.role === 'admin' || user.role === 'supervisor') {
     try {
-      const status = await getSetupStatusInternal();
-      setupComplete = status.isComplete;
+      waitingCount = await getWaitingCount(user.id);
     } catch {
-      // If setup status check fails, don't block the app
-      setupComplete = true;
+      waitingCount = null;
     }
   }
 
@@ -84,7 +87,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <AppShellWrapper
       user={user}
-      setupComplete={setupComplete}
+      waitingCount={waitingCount}
       initialCollapsed={navCollapsed}
       readOnlyReason={readOnlyReason}
       isDemo={tenant.tenant.lifecycleExempt}

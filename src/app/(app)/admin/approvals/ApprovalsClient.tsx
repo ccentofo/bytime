@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useMemo, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Badge,
   Button,
@@ -12,10 +13,11 @@ import {
   Paper,
   Table,
   Alert,
+  SegmentedControl,
 } from '@mantine/core';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { notifications } from '@mantine/notifications';
-import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { MantineReactTable, type MRT_ColumnDef, type MRT_SortingState } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import { approvePeriod, rejectPeriod, getScopedPeriods } from '@/server/actions/periods';
 import { runAction } from '@/lib/run-action';
@@ -23,7 +25,7 @@ import { ReviewDecisionButtons } from '@/components/approvals/ReviewDecisionButt
 import { getTimesheetForReview } from '@/server/actions/timesheet';
 import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { formatDateTime } from '@/lib/format';
-import { PERIOD_STATUS_COLOR, ROLE_COLOR } from '@/lib/ui/status-colors';
+import { PERIOD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
 
@@ -43,14 +45,63 @@ type Period = {
   /** approvalLabel(): "Self-approved"/"Self-rejected" badge and the approval line (server-formatted). */
   approvalBadge: string | null;
   approvalText: string | null;
+  /** UX-2 §4.6: submissions so far, and the "Worth a look" flags (decidable rows only). */
+  submissionCount?: number;
+  flags?: { corrections: number; lateEntries: number; resubmitted: boolean } | null;
 };
 
 type ScopeInfo = {
   assignedContractCount: number;
   assignedClinCount: number;
-  supervisedEmployeeCount: number;
+  /** n: people approvable through a shared CLIN who did not designate this supervisor. */
+  approvableEmployeeCount: number;
+  /** k: people who designated this supervisor. n + k = Home's team. */
   designatedByCount: number;
 } | null;
+
+export type ApprovalsView = 'waiting' | 'decided' | 'everything';
+
+/** Which rows each view shows (UX-2 §4.6). Drafts never show. */
+export function rowsForView(view: ApprovalsView, rows: Period[]): Period[] {
+  if (view === 'waiting') return rows.filter((r) => r.canApprove);
+  if (view === 'decided') return rows.filter((r) => r.status === 'approved' || r.status === 'rejected');
+  return rows.filter((r) => r.status !== 'draft');
+}
+
+/** Waiting: oldest submitted first; the others: newest period first. Controlled, so it resets with the view. */
+const SORT_FOR: Record<ApprovalsView, MRT_SortingState> = {
+  waiting: [{ id: 'submittedAt', desc: false }],
+  decided: [{ id: 'periodStart', desc: true }],
+  everything: [{ id: 'periodStart', desc: true }],
+};
+
+/** Why a submitted period isn't yours to decide (only for submitted rows with !canApprove). */
+export function reasonChip(row: Pick<Period, 'status' | 'canApprove' | 'userId'>, currentUserId: string, userRole: string): string | null {
+  if (row.status !== 'submitted' || row.canApprove) return null;
+  if (row.userId === currentUserId) {
+    return userRole === 'admin' ? 'Your own — another admin or designee approves' : 'Your own — needs another approver';
+  }
+  return 'Approved by an admin or their designee';
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** "You review 3 people on 1 CLIN and 2 people who designated you" (UX-2 ruling: n and k never overlap). */
+export function scopeSentence(info: NonNullable<ScopeInfo>): string {
+  const designators = `${plural(info.designatedByCount, 'person', 'people')} who designated you`;
+  // Only designators (nobody via a shared CLIN): no CLIN clause (UX-2 fix round 1, L2).
+  if (info.approvableEmployeeCount === 0 && info.designatedByCount > 0) return `You review ${designators}`;
+  const base = `You review ${plural(info.approvableEmployeeCount, 'person', 'people')} on ${plural(info.assignedClinCount, 'CLIN', 'CLINs')}`;
+  return info.designatedByCount > 0 ? `${base} and ${designators}` : base;
+}
+
+function flagWords(flags: NonNullable<Period['flags']>): string[] {
+  const out: string[] = [];
+  if (flags.corrections > 0) out.push(plural(flags.corrections, 'correction', 'corrections'));
+  if (flags.lateEntries > 0) out.push(plural(flags.lateEntries, 'late entry', 'late entries'));
+  if (flags.resubmitted) out.push('Resubmitted');
+  return out;
+}
 
 type ReviewData = {
   chargeCodes: ChargeCode[];
@@ -74,6 +125,13 @@ type Props = {
 export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scopeInfo, workspaceTimezone }: Props) {
   const [periods, setPeriods] = useState(initialPeriods);
   const [isPending, startTransition] = useTransition();
+  const router = useRouter();
+  const [view, setView] = useState<ApprovalsView>('waiting');
+  const [sorting, setSorting] = useState<MRT_SortingState>(SORT_FOR.waiting);
+  function changeView(next: ApprovalsView) {
+    setView(next);
+    setSorting(SORT_FOR[next]);
+  }
 
   // Review drawer state
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -122,6 +180,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         setActionError(result.error); // the server's reason (e.g. another reviewer decided first)
         return;
       }
+      router.refresh(); // the sidebar's waiting count lives in the layout (UX-2 §4.6)
       try {
         const refreshed = await getScopedPeriods();
         setPeriods(refreshed);
@@ -152,6 +211,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         setActionError(result.error);
         return;
       }
+      router.refresh(); // the sidebar's waiting count lives in the layout (UX-2 §4.6)
       try {
         const refreshed = await getScopedPeriods();
         setPeriods(refreshed);
@@ -197,6 +257,9 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
             {row.original.approvalBadge && (
               <Badge color="gray" variant="light" size="sm">{row.original.approvalBadge}</Badge>
             )}
+            {reasonChip(row.original, currentUserId, userRole) && (
+              <Badge color="gray" variant="outline" size="sm" data-testid="reason-chip">{reasonChip(row.original, currentUserId, userRole)}</Badge>
+            )}
           </Group>
         );
       },
@@ -208,26 +271,46 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
       Cell: ({ cell }) => formatDateTime(cell.getValue<Date | null>(), workspaceTimezone),
       size: 180,
     },
+    {
+      id: 'flags',
+      header: 'Worth a look',
+      enableSorting: false,
+      accessorFn: (row) => (row.flags ? flagWords(row.flags).join(' ') : ''),
+      Cell: ({ row }) => {
+        const words = row.original.flags ? flagWords(row.original.flags) : [];
+        if (words.length === 0) return <Text size="sm" c="dimmed">Nothing unusual</Text>;
+        return (
+          <Group gap={4} wrap="wrap">
+            {words.map((w) => <Badge key={w} color="warning" variant="light" size="sm">{w}</Badge>)}
+          </Group>
+        );
+      },
+      size: 200,
+    },
   ];
 
+  const waitingCount = useMemo(() => rowsForView('waiting', periods).length, [periods]);
+  // Memoized: a new data array on every render makes MRT re-render forever.
+  const viewRows = useMemo(() => rowsForView(view, periods), [view, periods]);
   const table = useAppTable({
     columns,
-    data: periods,
+    data: viewRows,
     enableRowActions: true,
+    // Review decides; View opens the drawer read-only (the existing decision gating still applies there).
     renderRowActions: ({ row }) => (
       <Button
         size="xs"
         variant="subtle"
         leftSection={<Icons.view size={14} />}
         onClick={() => openReview(row.original)}
-        disabled={row.original.status === 'draft'}
       >
-        Review
+        {row.original.canApprove ? 'Review' : 'View'}
       </Button>
     ),
-    initialState: {
-      sorting: [{ id: 'periodStart', desc: true }],
-    },
+    // Controlled sorting: a fixed initialState would override the per-view order.
+    state: { sorting, columnVisibility: { flags: view === 'waiting' } },
+    onSortingChange: setSorting,
+    localization: { noRecordsToDisplay: view === 'waiting' ? 'Nothing is waiting for you.' : 'Nothing here yet.' },
   });
 
   // Build review table content
@@ -261,7 +344,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
                 <Table.Tr key={cc.id}>
                   <Table.Td>
                     {cc.clin} — {cc.projectName}
-                    {!cc.assignable && <Text size="xs" c="dimmed">No longer assigned (recorded hours shown)</Text>}
+                    {!cc.assignable && <Text size="xs" c="dimmed">Closed to new hours (recorded hours shown)</Text>}
                   </Table.Td>
                   {Array.from({ length: numDays }, (_, i) => {
                     // certified-outputs C1 display: imported hours are labelled in the review too.
@@ -290,40 +373,13 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     <>
       <PageHeader title="Timesheet Approvals" />
 
-      {/* Scope information banner */}
-      {userRole === 'supervisor' && scopeInfo && (
-        <Paper withBorder p="sm" mb="md" radius="md">
-          <Group gap="xs" align="center" wrap="wrap">
-            <Text size="sm" c="dimmed" component="span">
-              <strong>Your Approval Scope:</strong> You can review timesheets for
-            </Text>
-            <Badge color="signal" size="sm">{scopeInfo.supervisedEmployeeCount}</Badge>
-            <Text size="sm" c="dimmed" component="span">employees across</Text>
-            <Badge color="success" size="sm">{scopeInfo.assignedClinCount}</Badge>
-            <Text size="sm" c="dimmed" component="span">CLINs you are assigned to</Text>
-            {scopeInfo.designatedByCount > 0 && (
-              <Text size="sm" c="dimmed" component="span">
-                , including {scopeInfo.designatedByCount} {scopeInfo.designatedByCount === 1 ? 'person who has' : 'people who have'} designated you as their approver
-              </Text>
-            )}
-            <Text size="sm" c="dimmed" component="span">.</Text>
-          </Group>
-        </Paper>
+      {/* Scope sentence (supervisors): the people they can approve, never counted twice (UX-2 ruling). */}
+      {userRole === 'supervisor' && scopeInfo && scopeInfo.approvableEmployeeCount + scopeInfo.designatedByCount > 0 && (
+        <Text size="sm" c="dimmed" mb="md" data-testid="scope-sentence">{scopeSentence(scopeInfo)}.</Text>
       )}
 
-      {userRole === 'admin' && (
-        <Paper withBorder p="sm" mb="md" radius="md">
-          <Group gap="xs" align="center">
-            <Badge color={ROLE_COLOR.admin} size="sm">Admin</Badge>
-            <Text size="sm" c="dimmed" component="span">
-              You have full access to all employee timesheets.
-            </Text>
-          </Group>
-        </Paper>
-      )}
-
-      {/* Empty state for supervisors with no assignments */}
-      {userRole === 'supervisor' && scopeInfo && scopeInfo.supervisedEmployeeCount === 0 && (
+      {/* Empty state for supervisors with nobody to review */}
+      {userRole === 'supervisor' && scopeInfo && scopeInfo.approvableEmployeeCount + scopeInfo.designatedByCount === 0 && (
         <Paper withBorder p="xl" ta="center" radius="md">
           <Text size="lg" c="dimmed" mb="sm">No Employees in Your Scope</Text>
           <Text size="sm" c="dimmed">
@@ -332,6 +388,18 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
           </Text>
         </Paper>
       )}
+
+      <SegmentedControl
+        mb="md"
+        value={view}
+        onChange={(v) => changeView(v as ApprovalsView)}
+        data={[
+          { value: 'waiting', label: `Waiting for you (${waitingCount})` },
+          { value: 'decided', label: 'Decided' },
+          { value: 'everything', label: 'Everything' },
+        ]}
+        aria-label="Which timesheets to show"
+      />
 
       <MantineReactTable table={table} />
 
@@ -342,7 +410,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         size="90%"
         title={
           selectedPeriod
-            ? `Review — ${selectedPeriod.userName}`
+            ? `${selectedPeriod.canApprove ? 'Review' : 'View'} — ${selectedPeriod.userName}`
             : 'Review Timesheet'
         }
       >

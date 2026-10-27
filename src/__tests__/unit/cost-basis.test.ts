@@ -176,7 +176,8 @@ describe('static: labor categories are resolved for costs only through cost-basi
     const count = (rel: string) => (readFileSync(path.join(ROOT, rel), 'utf8').match(/\.leftJoinLateral\(COST_BASIS_LATERAL, sql`true`\)/g) ?? []).length;
     expect(count('src/server/internal/reports.ts')).toBe(1);
     expect(count('src/server/actions/reports.ts')).toBe(1);
-    expect(count('src/server/actions/dashboard.ts')).toBe(3);
+    expect(count('src/server/actions/dashboard.ts')).toBe(2); // summary, SLIN
+    expect(count('src/server/internal/dashboard.ts')).toBe(1); // CLIN — the shared clinCostTotals (UX-2 §4.5, also Home)
   });
 });
 
@@ -230,10 +231,19 @@ describe('totals never quietly shrink (CO-D17)', () => {
     expect(src).toMatch(/row\.original\.unpricedHours > 0 && <Text size="xs" c="dimmed">priced cost<\/Text>/);
   });
 
+  it('Home (UX-2 §4.5): the Contracts card says "priced cost" (never "spent"), shows unpriced hours per contract and the note', () => {
+    const src = readFileSync(path.join(ROOT, 'src/app/(app)/home/HomeClient.tsx'), 'utf8');
+    expect(src).toContain('priced cost of');
+    expect(src).not.toMatch(/\bspent\b/i);
+    expect(src).toMatch(/unpricedHoursLabel\(c\.unpricedHours\)/);
+    expect(src).toContain('{CURRENT_RATES_NOTE}');
+  });
+
   it('the CO-D7 note appears on every cost view: dashboard, reports screen, CSV, XLSX, the Unpriced report', () => {
     for (const rel of [
       'src/app/(app)/admin/dashboard/DashboardClient.tsx', 'src/app/(app)/admin/reports/ReportsClient.tsx',
       'src/app/api/reports/cost-report-csv/route.ts', 'src/lib/reports/cost-report-excel.ts', 'src/app/(app)/admin/labor-categories/CostBasisReports.tsx',
+      'src/app/(app)/home/HomeClient.tsx', // UX-2 §4.5: Home's Contracts card
     ]) expect(readFileSync(path.join(ROOT, rel), 'utf8'), rel).toContain('CURRENT_RATES_NOTE');
     expect(CURRENT_RATES_NOTE).toBe('Costs use the labor-category rate in effect on each day worked.'); // dated rates D2
   });

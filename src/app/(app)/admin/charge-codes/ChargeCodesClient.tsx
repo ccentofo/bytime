@@ -359,7 +359,7 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
         title="Reactivate charge code?"
         message={reactivateTarget
           ? `${reactivateTarget.stillAssigned} ${reactivateTarget.stillAssigned === 1 ? 'employee is' : 'employees are'} still assigned and will see this code again.`
-            + (reactivateTarget.assignable ? '' : ' Its CLIN or contract is inactive, so it can’t be used for new hours until both are active again.')
+            + (reactivateTarget.assignable ? '' : ' Its CLIN, SLIN or contract is inactive, so it can’t be used for new hours until they’re all active again.')
           : ''}
         confirmLabel="Reactivate"
         loading={isPending}

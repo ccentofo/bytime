@@ -5,6 +5,8 @@ import { redirect } from 'next/navigation';
 import { Logo } from '@/components/brand/Logo';
 import { ROLE_COLOR } from '@/lib/ui/status-colors';
 import { getTenantSlug } from '@/lib/tenant/context';
+import { getSessionUser } from '@/lib/session';
+import { landingPath } from '@/components/shell/nav-config';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = { title: { absolute: 'CadenzPoint – DCAA-compliant timekeeping' } };
@@ -19,7 +21,14 @@ export default async function LandingPage() {
   } catch {
     slug = ''; // host/header mismatch: nothing workspace-specific to show — render the public page
   }
-  if (slug) redirect('/timesheet');
+  // UX-2 §4.3 (UX-D3): on a workspace host, "/" sends people where they land — admins and supervisors to Home,
+  // employees to Timesheet; no session → sign in. redirect() stays OUTSIDE the try above: it throws NEXT_REDIRECT,
+  // which a catch-all would swallow (trap T-P).
+  if (slug) {
+    const user = await getSessionUser();
+    if (!user) redirect('/login');
+    redirect(landingPath(user.role));
+  }
 
   // The demo lives on its own workspace; without a configured URL there is nothing to link to.
   const demoUrl = process.env.NEXT_PUBLIC_DEMO_URL || null;

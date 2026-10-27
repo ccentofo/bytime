@@ -8,6 +8,7 @@ import { UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
 import { eq } from 'drizzle-orm';
 import { logAdminChange } from '@/server/internal/admin-change-log';
+import { workweekStartDayInternal } from '@/server/internal/workspace-settings';
 
 /**
  * The workspace's configured IANA timezone, for the settings page's initial value.
@@ -48,9 +49,7 @@ const WORKSPACE_SETTINGS_ENTITY_ID = '00000000-0000-0000-0000-000000000000';
  */
 export async function getWorkweekStartDaySetting(): Promise<number | null> {
   await requireSession();
-  const db = await getDb();
-  const [row] = await db.select({ day: workspaceSettings.workweekStartDay }).from(workspaceSettings).limit(1);
-  return row?.day ?? null;
+  return workweekStartDayInternal(await getDb());
 }
 
 /**

@@ -145,7 +145,7 @@ describe('F11 — small cost-view fixes', () => {
     const dash = readFileSync(path.join(ROOT, 'src/app/(app)/admin/dashboard/DashboardClient.tsx'), 'utf8');
     expect(dash).toMatch(/<UnpricedNote hours=\{reportUnpriced\} size="sm" scope=\{generatedRange \?\? \{\}\} \/>/);
     expect(dash).toMatch(/setGeneratedRange\(\{ startDate: reportStartDate, endDate: reportEndDate \}\)/);
-    expect(readFileSync(path.join(ROOT, 'src/app/(app)/admin/api-keys/ApiKeysClient.tsx'), 'utf8')).toMatch(/<Code>lcatTitle<\/Code> is\{' '\}\s*<Code>Unpriced<\/Code>/);
+    expect(readFileSync(path.join(ROOT, 'src/app/(app)/settings/api-keys/ApiKeysClient.tsx'), 'utf8')).toMatch(/<Code>lcatTitle<\/Code> is\{' '\}\s*<Code>Unpriced<\/Code>/);
   });
 });
 

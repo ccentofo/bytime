@@ -52,8 +52,8 @@ export async function startCheckout(plan: PlanKey): Promise<ActionResult<{ url: 
       mode: 'subscription',
       customer: customerId,
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${base}/admin/billing?status=success`,
-      cancel_url: `${base}/admin/billing?status=cancelled`,
+      success_url: `${base}/settings/billing?status=success`,
+      cancel_url: `${base}/settings/billing?status=cancelled`,
       metadata: { slug: tenant.slug },
     });
     if (!session.url) throw new UserFacingError('Could not start checkout.');
@@ -71,7 +71,7 @@ export async function openBillingPortal(): Promise<ActionResult<{ url: string }>
 
     const portal = await stripe.billingPortal.sessions.create({
       customer: row.stripeCustomerId,
-      return_url: `${tenantBaseUrl(tenant.slug)}/admin/billing`,
+      return_url: `${tenantBaseUrl(tenant.slug)}/settings/billing`,
     });
     return { url: portal.url };
   });
