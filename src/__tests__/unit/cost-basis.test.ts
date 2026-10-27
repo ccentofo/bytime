@@ -213,7 +213,7 @@ describe('totals never quietly shrink (CO-D17)', () => {
       'src/app/(app)/admin/dashboard/DashboardClient.tsx', 'src/app/(app)/admin/reports/ReportsClient.tsx',
       'src/app/api/reports/cost-report-csv/route.ts', 'src/lib/reports/cost-report-excel.ts', 'src/app/(app)/admin/labor-categories/CostBasisReports.tsx',
     ]) expect(readFileSync(path.join(ROOT, rel), 'utf8'), rel).toContain('CURRENT_RATES_NOTE');
-    expect(CURRENT_RATES_NOTE).toBe('Costs use current labor-category rates.');
+    expect(CURRENT_RATES_NOTE).toBe('Costs use the labor-category rate in effect on each day worked.'); // dated rates D2
   });
 });
 

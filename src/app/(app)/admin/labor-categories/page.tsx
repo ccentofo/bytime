@@ -4,6 +4,7 @@ import { getContracts } from '@/server/actions/contracts';
 import { getUsers } from '@/server/actions/users';
 import { LaborCategoriesClient } from './LaborCategoriesClient';
 import { requirePageRole } from '@/lib/session';
+import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,7 +18,7 @@ export default async function LaborCategoriesPage({
   // certified-outputs C3: the "X hours unpriced" links open the Unpriced hours report scoped to their total.
   const scope = { contractId: params.contractId, clinId: params.clinId, slinId: params.slinId, startDate: params.startDate, endDate: params.endDate };
 
-  const [laborCats, assignments, contracts, users, assignableLcats, unpriced, overlaps] = await Promise.all([
+  const [laborCats, assignments, contracts, users, assignableLcats, unpriced, overlaps, today] = await Promise.all([
     getAllLaborCategories(),
     getUserLaborCategoryAssignments(),
     getContracts(),
@@ -25,6 +26,7 @@ export default async function LaborCategoriesPage({
     getAssignableLaborCategories(),
     getUnpricedHoursReport(scope),
     getOverlappingAssignmentsReport(),
+    getWorkspaceToday(), // dated rates D2: "today" for the current-rate display — the workspace's, from the server
   ]);
 
   return (
@@ -35,6 +37,7 @@ export default async function LaborCategoriesPage({
       contracts={contracts}
       users={users}
       assignableLcats={assignableLcats}
+      today={today}
     />
     <CostBasisReports
       report={params.report === 'overlaps' ? 'overlaps' : 'unpriced'}

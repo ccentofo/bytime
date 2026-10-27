@@ -167,7 +167,7 @@ describe('cost exports carry the unpriced count (ruling Q6)', () => {
     const data = [entry({}), entry({ costBasis: 'unpriced', unpricedReason: 'no-category', unpricedHours: 4, totalHours: 4, totalCost: 0, hourlyRate: 0, lcatCode: '—', lcatTitle: 'Unpriced' })];
     const r = await rows(await generateCostReportExcel(data, 'Cost Report', 'Sep'));
     expect(r.find((x) => String(x[0]).startsWith('UNPRICED HOURS'))?.[9]).toBe(4);
-    expect(r.some((x) => x[0] === 'Costs use current labor-category rates.')).toBe(true);
+    expect(r.some((x) => x[0] === 'Costs use the labor-category rate in effect on each day worked.')).toBe(true);
   });
 
   it('the summary XLSX adds them only with the cost column (admins)', async () => {

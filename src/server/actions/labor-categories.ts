@@ -147,7 +147,6 @@ export interface UserLcatAssignment {
   userEmail: string;
   lcatCode: string;
   lcatTitle: string;
-  hourlyRate: string;
   clinNumber: string;
   contractName: string;
   contractNumber: string;
@@ -168,7 +167,7 @@ export async function getUserLaborCategoryAssignments(): Promise<UserLcatAssignm
       userEmail: users.email,
       lcatCode: laborCategories.lcatCode,
       lcatTitle: laborCategories.title,
-      hourlyRate: laborCategories.hourlyRate,
+      // Dated rates D2: no rate here — the page shows the CURRENT rate from the category's schedule (rateDisplay).
       clinNumber: clins.clinNumber,
       contractName: contracts.name,
       contractNumber: contracts.contractNumber,
@@ -273,7 +272,7 @@ export async function getAssignableLaborCategories() {
       id: laborCategories.id,
       lcatCode: laborCategories.lcatCode,
       title: laborCategories.title,
-      hourlyRate: laborCategories.hourlyRate,
+      // Dated rates D2: no starting rate here — the dropdown shows the current rate from the page's schedules.
       clinId: laborCategories.clinId,
       slinId: laborCategories.slinId,
       clinNumber: clins.clinNumber,

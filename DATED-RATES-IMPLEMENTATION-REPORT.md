@@ -288,3 +288,48 @@ case fails, restore:
    blueprint doesn't define that input.
 4. **Two inherited items stay as they are, per the ruling:** the other 16 latest-revision copies, and the per-entry TS
    cost in `reports.ts`.
+
+## 8. D2 — rate schedule UI, current-rate displays, wording
+
+**Files.**
+- `page.tsx` passes `today = getWorkspaceToday()`.
+- `LaborCategoriesClient.tsx`:
+  - The Hourly / Ceiling columns show `rateDisplay(schedule, today).current`, plus a dimmed "→ $X from MMM D, YYYY"
+    line when a later change exists.
+  - The assignments table and the assignment dropdown show the assigned category's current rate, looked up by
+    `laborCategoryId` in the same `laborCats` state.
+  - New "Rates" row action; `mergeSchedule` folds a returned `RateScheduleView` into `laborCats`.
+- `RateScheduleModal.tsx` (new):
+  - the table "From the start" plus changes ascending, with Correct (all rows) and Remove (changes only);
+  - "Add a rate change" with Effective date / Hourly / Ceiling, prefilled from `rateOn(schedule, date)` when the date
+    changes;
+  - Preview → (Reason + "I understand past costs will change" when `reasonRequired`) → save;
+  - all calls through `runAction`; on `ok` it replaces its schedule and calls `onSaved`; on failure it shows `r.error`
+    and keeps the form.
+- `src/components/admin/ImpactGate.tsx` (new): the gate hook plus the impact panel, shared with D3.
+- `labor-categories.ts`: `getUserLaborCategoryAssignments` / `getAssignableLaborCategories` no longer select a rate
+  (`UserLcatAssignment.hourlyRate` removed).
+- `cost-labels.ts`: `CURRENT_RATES_NOTE` = "Costs use the labor-category rate in effect on each day worked." Every cost
+  view, the CSV footer and the XLSX rows already read this constant.
+- `ApiKeysClient.tsx`: a note that `/api/v1/costs` `hourlyRate` is the rate in effect on each entry's date.
+- C3 tests that asserted the old sentence (`charge-code-cost-rules`, `cost-basis`) were updated to the new wording.
+
+**§9 rows (D2) → tests** (`unit/rate-schedule-ui.test.tsx`, jsdom; today injected, never the real clock).
+
+| §9 row | Test | Break-it |
+|---|---|---|
+| Display (D2) | today `2027-02-01` → `$110.00` and `→ $120.00 from Apr 1, 2027`; today `2026-12-31` → `$100.00` (next: Jan 1, 2027). Assignments show `$110.00/hr`, not the starting `$100.00/hr`. (`rateDisplay` pure cases are in the D1 unit file.) | U-fail: starting rate shown (U1), next line missing (U2), assignments from the starting rate (U3) |
+| UI (D2) | Add disabled before Preview; with `reasonRequired` disabled until reason + checkbox; typing the reason keeps the gate, changing Hourly clears preview / reason / checkbox; on `ok` the **main table** shows `$110.00`; zero impact → "No recorded hours are affected." with no reason field; on failure the error shows, the value stays, the main table is unchanged | U-fail: U4–U10 (gate ignores the reason requirement, no preview needed, typing the reason resets, a value change doesn't reset, no merge, failure closes the form, no prefill) |
+| Static (wording) | no `src/` file (tests excluded) contains the old sentence (needle built by concatenation); the constant is the new sentence; the API-key note present; the assignment selects carry no rate; the dropdown label uses `currentRateOf` | U-fail: W1–W3 |
+
+**D2 break-it: 13 mutations, 13 failures.** No D2 row needs Postgres.
+
+**Gates (D2):** tsc clean; lint 0 errors / 59 warnings; 1329 unit tests ×4; the migration-safety script passes.
+
+**Notes (D2):**
+1. **Not checked in a browser here.** The UI was verified by jsdom render tests only. The dev server needs a tenant
+   database, which this sandbox can't run. The §10 manual steps 1–4 and 6 are the product owner's.
+2. **Harmless test warning.** Mantine's test mode (`env="test"`) logs a React warning about its `Transition`'s `in`
+   attribute in the render test.
+3. **Period wording.** The impact message renders the period as "(Jan 1, 2027 – Mar 31, 2027)", "(from …)",
+   "(through …)" or "(all dates)", using the inclusive last day.
