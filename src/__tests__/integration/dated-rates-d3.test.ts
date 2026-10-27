@@ -173,12 +173,15 @@ describe('charge codes: dated labor category (D3)', () => {
     expect((await db().select().from(schema.chargeCodes).where(eq(schema.chargeCodes.id, K)))[0]).toMatchObject({ name: 'Renamed', laborCategoryId: L });
   });
 
-  it('D3 validation: duplicate date, already in effect, nothing to correct, remove twice — exact messages', async () => {
+  it('D3 validation: duplicate date, already in effect, nothing to correct, DR-2 reason (8.00 h vs 0.00 h), remove twice — exact messages', async () => {
     await expectOk(addChargeCodeCategoryChange({ chargeCodeId: K, effectiveDate: '2027-03-01', laborCategoryId: M, reason: 'r' }));
     await expectFailure(addChargeCodeCategoryChange({ chargeCodeId: K, effectiveDate: '2027-03-01', laborCategoryId: L, reason: 'r' }), 'conflict', /^There is already a category change on 2027-03-01 for this charge code\. Correct that one instead\.$/);
     await expectFailure(addChargeCodeCategoryChange({ chargeCodeId: K, effectiveDate: '2027-04-01', laborCategoryId: M, reason: 'r' }), 'validation', /^That is already the category in effect on 2027-04-01\.$/);
     await expectFailure(correctChargeCodeCategory({ chargeCodeId: K, target: 'starting', laborCategoryId: L, reason: 'r' }), 'validation', /^Nothing to correct — the category is unchanged\.$/);
-    await expectFailure(addChargeCodeCategoryChange({ chargeCodeId: K, effectiveDate: '2027-02-01', laborCategoryId: M }), 'validation', /A reason is required/);
+    // DR-2: [2027-01-01, 2027-03-01) holds the 2027-01-15 entry (8.00 h) → a reason is required; [2027-02-01, 2027-03-01)
+    // holds no entry on K (0.00 h) → none is needed.
+    await expectFailure(addChargeCodeCategoryChange({ chargeCodeId: K, effectiveDate: '2027-01-01', laborCategoryId: M }), 'validation', /^A reason is required because this change re-prices recorded hours\.$/);
+    await expectOk(addChargeCodeCategoryChange({ chargeCodeId: K, effectiveDate: '2027-02-01', laborCategoryId: M }));
     const id = await changeOn('2027-03-01');
     await expectOk(removeChargeCodeCategoryChange({ chargeCodeId: K, changeId: id, reason: 'r' }));
     await expectFailure(removeChargeCodeCategoryChange({ chargeCodeId: K, changeId: id, reason: 'r' }), 'not_found', /^That category period no longer exists\. Refresh and try again\.$/);

@@ -535,3 +535,13 @@ Rulings: the audit §3 accepts every deviation from report §9 as is; no code ch
 **Gates (fix round 1, final):** tsc clean; lint 0 errors / 58 warnings; 1381 unit tests ×4; the migration-safety script passes. Integration tests not run (no Postgres here).
 
 **Not committed:** `DATED-RATES-AUDIT.md` and `breakit-check.mjs` are the lead's files. The script says "do not commit", and I didn't edit it.
+
+### Follow-up: D3 validation test expectation (lead)
+
+`integration/dated-rates-d3.test.ts`, "D3 validation": the DR-2 step added K→M on `2027-02-01` without a reason and
+expected "A reason is required". But `[2027-02-01, 2027-03-01)` holds no entry on K, so 0.00 h are re-priced and DR-2
+correctly needs no reason. The code was right; the test was wrong. Now:
+- `2027-01-01` without a reason (re-prices the `2027-01-15` entry, 8.00 h) → the exact DR-2 message;
+- the zero-impact counterpart: `2027-02-01` without a reason → ok.
+
+No code change. The unit DR-2 tests were already correct: they script the hours.
