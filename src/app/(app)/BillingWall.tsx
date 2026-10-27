@@ -16,14 +16,14 @@ export async function BillingWall() {
   const billing = await getTenantBillingInfo();
 
   return (
-    <Center mih="100vh" p="xl">
+    <Center component="main" mih="100vh" p="xl">
       <Container size="sm" w="100%">
         <Stack gap="lg" align="center" ta="center" mb="xl">
           <ThemeIcon size={64} radius="xl" color="warning" variant="light">
             <IconCreditCard size={32} />
           </ThemeIcon>
           <Stack gap="xs" align="center">
-            <Title order={2}>Workspace suspended</Title>
+            <Title order={1} size="h2">Workspace suspended</Title>
             <Text c="dimmed">
               Access has been paused due to a billing issue. Pay the outstanding balance or update your billing
               information below to restore access for everyone in your workspace.
@@ -35,7 +35,8 @@ export async function BillingWall() {
             Access is restored automatically once payment is confirmed — usually within a minute.
           </Text>
         </Alert>
-        <BillingClient billing={billing} />
+        {/* "Workspace suspended" is this screen's h1; the billing page header sits under it as an h2. */}
+        <BillingClient billing={billing} headerOrder={2} />
         <Center mt="lg">
           <Button component="a" href="/api/export/workspace" variant="subtle" leftSection={<IconDownload size={16} />}>
             Export all workspace data

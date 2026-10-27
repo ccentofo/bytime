@@ -8,6 +8,7 @@ import { IconRocket, IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand,
 import { AppHeader } from '@/components/shell/AppHeader';
 import { AppNavbar } from '@/components/shell/AppNavbar';
 import { WorkspaceModeProvider } from '@/components/shell/WorkspaceMode';
+import classes from './AppShellWrapper.module.css';
 
 type ReadOnlyReason = 'trial_ended' | 'subscription_ended';
 
@@ -84,6 +85,7 @@ export function AppShellWrapper({ user, setupComplete = true, initialCollapsed =
         navbar={{ width: railCollapsed ? 72 : 250, breakpoint: 'sm', collapsed: { mobile: !opened } }}
         padding="md"
       >
+        <a href="#main-content" className={classes.skip}>Skip to main content</a>
         <AppShell.Header>
           <AppHeader user={user} mobileNavOpened={opened} onMobileNavToggle={toggle} isDemo={isDemo} />
         </AppShell.Header>
@@ -117,7 +119,7 @@ export function AppShellWrapper({ user, setupComplete = true, initialCollapsed =
         {/* minWidth:0 lets this CSS-grid item shrink below its content's intrinsic width so
             wide children (e.g. the timesheet table) scroll within their own container instead
             of stretching the page and clipping the right edge. */}
-        <AppShell.Main style={{ minWidth: 0 }}>
+        <AppShell.Main id="main-content" tabIndex={-1} style={{ minWidth: 0 }}>
           {readOnlyReason && (
             <Alert
               icon={<IconLock size={18} />}

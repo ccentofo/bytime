@@ -239,7 +239,7 @@ export function GustoConfigClient({
             <ThemeIcon size="lg" color="signal" variant="light" radius="md">
               <IconCash size={20} />
             </ThemeIcon>
-            <Title order={2}>{connection.displayName}</Title>
+            <Title order={1} size="h2">{connection.displayName}</Title>
           </Group>
           <Text c="dimmed" size="sm">
             {connection.externalCompanyName ?? 'Gusto'}

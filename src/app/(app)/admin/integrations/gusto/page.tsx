@@ -4,6 +4,9 @@ import { getConnections, getMappings, getSyncLogs } from '@/server/actions/integ
 import { getBytimeEmployeesForGustoMapping } from '@/server/actions/gusto';
 import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { GustoConfigClient } from './GustoConfigClient';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: 'Gusto' };
 
 export const dynamic = 'force-dynamic';
 

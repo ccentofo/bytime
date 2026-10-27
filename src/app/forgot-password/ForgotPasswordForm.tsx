@@ -40,11 +40,11 @@ export function ForgotPasswordForm() {
   }
 
   return (
-    <Center mih="100vh" bg="var(--mantine-color-body)">
+    <Center component="main" mih="100vh" bg="var(--mantine-color-body)">
       <Paper shadow="md" p="xl" radius="md" w={420} withBorder>
         <Stack align="center" mb="lg">
           <Logo size="lg" />
-          <Title order={2}>Reset Password</Title>
+          <Title order={1} size="h2">Reset Password</Title>
           <Text c="dimmed" size="sm" ta="center">
             Enter your email and we'll send you a link to reset your password.
           </Text>

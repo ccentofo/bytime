@@ -39,7 +39,7 @@ export const ICON_IMPORT_ALLOWLIST = [
   'src/app/login/LoginForm.tsx',
   'src/app/page.tsx',
   'src/app/privacy/page.tsx',
-  'src/app/reset-password/page.tsx',
+  'src/app/reset-password/ResetPasswordForm.tsx',
   'src/app/signup/SignupForm.tsx',
   'src/app/terms/page.tsx',
   'src/components/approvals/ApprovalNotices.tsx',

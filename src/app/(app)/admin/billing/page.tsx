@@ -1,6 +1,9 @@
 import { requirePageRole } from '@/lib/session';
 import { getTenantBillingInfo } from '@/server/actions/billing';
 import { BillingClient } from './BillingClient';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: 'Billing' };
 
 export const dynamic = 'force-dynamic';
 

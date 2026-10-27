@@ -10,13 +10,13 @@ import { SignOutButton } from '@/components/auth/SignOutButton';
  */
 export function OnHoldScreen() {
   return (
-    <Center mih="100vh" p="xl">
+    <Center component="main" mih="100vh" p="xl">
       <Stack maw={460} gap="md" align="center" ta="center">
         <ThemeIcon size={64} radius="xl" color="warning" variant="light">
           <IconClockPause size={32} />
         </ThemeIcon>
         <Stack gap="xs" align="center">
-          <Title order={2}>Workspace on hold</Title>
+          <Title order={1} size="h2">Workspace on hold</Title>
           <Text c="dimmed">
             This workspace is temporarily on hold due to a billing issue. Please contact your
             workspace administrator — they can sign in to resolve it.

@@ -18,10 +18,12 @@ export default function RootError({
 
   return (
     <Center mih="100vh" p="xl">
+      {/* React 19 hoists this into <head> (error boundaries are client components — no metadata export). */}
+      <title>Something went wrong – CadenzPoint</title>
       <Paper shadow="md" p="xl" radius="md" w={480} withBorder>
         <Stack align="center" gap="md">
           <IconAlertTriangle size={48} color="var(--mantine-color-red-6)" />
-          <Title order={2} ta="center">Something Went Wrong</Title>
+          <Title order={1} size="h2" ta="center">Something Went Wrong</Title>
           <Text c="dimmed" ta="center" size="sm">
             An unexpected error occurred. This has been logged for review.
             Please try again or return to the home page.

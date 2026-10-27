@@ -35,9 +35,9 @@ const COPY: Record<Reason, { title: string; body: string }> = {
 export function TenantUnavailable({ reason }: { reason: Reason }) {
   const copy = COPY[reason] ?? COPY.unknown;
   return (
-    <Center mih="100vh" p="xl">
+    <Center component="main" mih="100vh" p="xl">
       <Stack maw={460} gap="sm" align="center" ta="center">
-        <Title order={2}>{copy.title}</Title>
+        <Title order={1} size="h2">{copy.title}</Title>
         <Text c="dimmed">{copy.body}</Text>
         <Text size="sm" c="dimmed">
           Need help? Contact <Anchor href="mailto:support@cadenzpoint.com">support</Anchor>.

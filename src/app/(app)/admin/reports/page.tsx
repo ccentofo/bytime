@@ -1,6 +1,9 @@
 import { requirePageRole } from '@/lib/session';
 import { getReportFilterOptions } from '@/server/actions/reports';
 import { ReportsClient } from './ReportsClient';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: 'Reports' };
 
 export const dynamic = 'force-dynamic';
 

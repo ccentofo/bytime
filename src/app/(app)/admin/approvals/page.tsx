@@ -4,6 +4,9 @@ import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { ApprovalsClient } from './ApprovalsClient';
 import { getApprovalNotices } from '@/server/actions/users';
 import { ApprovalNotices } from '@/components/approvals/ApprovalNotices';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: 'Approvals' };
 
 export const dynamic = 'force-dynamic';
 

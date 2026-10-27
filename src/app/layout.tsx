@@ -21,7 +21,8 @@ const geistMono = Geist_Mono({
 const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "CadenzPoint — DCAA-Compliant Timekeeping",
+  // Each page sets its own title (feature-plan-ux-foundations.md §4.7); the template adds the product name.
+  title: { default: "CadenzPoint", template: "%s – CadenzPoint" },
   description: "Modern timekeeping for Government Contractors",
 };
 

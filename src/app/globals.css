@@ -27,6 +27,12 @@ a {
   text-decoration: none;
 }
 
+/* The skip link's target (AppShell.Main, tabIndex -1) takes focus programmatically — no ring on it. Lives here, not in
+   AppShellWrapper.module.css, because CSS modules hash ids (feature-plan-ux-foundations.md §4.7). */
+#main-content:focus {
+  outline: none;
+}
+
 /* ---------------------------------------------------------------------------
    CadenzPoint design tokens — tabular figures for aligned numbers.
    Hours, totals, and report figures must line up in columns ("we understand data").

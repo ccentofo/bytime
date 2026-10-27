@@ -8,6 +8,9 @@ import {
 } from '@/server/actions/qbo';
 import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { QBOConfigClient } from './QBOConfigClient';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: 'QuickBooks' };
 
 export const dynamic = 'force-dynamic';
 

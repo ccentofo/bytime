@@ -83,18 +83,18 @@ export function SignupForm({ errorParam, controls = null }: { errorParam?: strin
 
   if (success) {
     return (
-      <Center mih="100vh">
+      <Center component="main" mih="100vh">
         <Paper withBorder shadow="sm" p={40} radius="md" w="100%" maw={440}>
           <Stack align="center" gap="md">
             <IconCheck size={48} color="var(--mantine-color-success-6)" />
-            <Title order={2} ta="center">Check your email</Title>
+            <Title order={1} size="h2" ta="center">Check your email</Title>
             <Text c="dimmed" ta="center" size="sm">
               We sent a confirmation link to <strong>{email}</strong>. Click it to finish creating your workspace.
               The link expires in 24 hours.
             </Text>
             <Text size="xs" c="dimmed" ta="center">
               Didn't receive it? Check your spam folder or{' '}
-              <Anchor onClick={() => { setSuccess(false); }} size="xs">try again</Anchor>.
+              <Anchor component="button" type="button" onClick={() => { setSuccess(false); }} size="xs">try again</Anchor>.
             </Text>
           </Stack>
         </Paper>
@@ -109,12 +109,12 @@ export function SignupForm({ errorParam, controls = null }: { errorParam?: strin
     : slugStatus === 'checking' ? 'Checking…' : '';
 
   return (
-    <Center mih="100vh">
+    <Center component="main" mih="100vh">
       <Paper withBorder shadow="sm" p={40} radius="md" w="100%" maw={440}>
         <Stack gap="lg">
           <Stack align="center" gap={4}>
             <Logo size="lg" />
-            <Title order={2}>Create your workspace</Title>
+            <Title order={1} size="h2">Create your workspace</Title>
             <Text size="sm" c="dimmed" ta="center">Start your free CadenzPoint trial — no credit card required</Text>
           </Stack>
 
@@ -220,11 +220,11 @@ function CheckEmailWithResend({ email, slug, siteKey, onStartOver }: { email: st
   }
 
   return (
-    <Center mih="100vh">
+    <Center component="main" mih="100vh">
       <Paper withBorder shadow="sm" p={40} radius="md" w="100%" maw={440}>
         <Stack align="center" gap="md">
           <IconCheck size={48} color="var(--mantine-color-success-6)" />
-          <Title order={2} ta="center">Check your email</Title>
+          <Title order={1} size="h2" ta="center">Check your email</Title>
           <Text c="dimmed" ta="center" size="sm">
             We sent a confirmation link to <strong>{email}</strong>. Click it to finish creating your workspace.
             The link expires in 24 hours.
@@ -234,7 +234,7 @@ function CheckEmailWithResend({ email, slug, siteKey, onStartOver }: { email: st
           <Text size="xs" c="dimmed" ta="center">Didn&apos;t receive it? Check your spam folder, or send a new link:</Text>
           <TurnstileWidget ref={widget} siteKey={siteKey} onToken={setToken} />
           <Button variant="light" onClick={resend} loading={sending} disabled={!token}>Send a new link</Button>
-          <Anchor onClick={onStartOver} size="xs">Start over</Anchor>
+          <Anchor component="button" type="button" onClick={onStartOver} size="xs">Start over</Anchor>
         </Stack>
       </Paper>
     </Center>

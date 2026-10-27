@@ -136,7 +136,7 @@ export function PayrollExportClient({ today }: { today: CalendarDate }) {
             <ThemeIcon size="lg" color="warning" variant="light" radius="md">
               <IconFileExport size={20} />
             </ThemeIcon>
-            <Title order={2}>Payroll Export</Title>
+            <Title order={1} size="h2">Payroll Export</Title>
           </Group>
           <Text c="dimmed" size="sm">
             Download approved timesheet data formatted for your payroll system — FLSA weekly overtime.

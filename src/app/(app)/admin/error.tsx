@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
-import { Container, Stack, Text, Button, Group, Alert } from '@mantine/core';
+import { Container, Stack, Text, Button, Group, Alert, Title } from '@mantine/core';
 import { IconAlertTriangle, IconRefresh, IconClock } from '@tabler/icons-react';
 
 export default function AdminError({
@@ -19,10 +19,12 @@ export default function AdminError({
 
   return (
     <Container size="sm" py="xl">
+      <title>Something went wrong – CadenzPoint</title>
       <Stack align="center" gap="lg">
         <Alert
           icon={<IconAlertTriangle size={24} />}
-          title={isForbidden ? 'Access Denied' : 'Admin Page Error'}
+          // The alert title is this screen's h1 (inherits the alert title's look).
+          title={<Title order={1} fz="inherit" fw="inherit" lh="inherit" ff="inherit">{isForbidden ? 'Access Denied' : 'Admin Page Error'}</Title>}
           color={isForbidden ? 'warning' : 'red'}
           variant="light"
           w="100%"

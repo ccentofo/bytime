@@ -2,6 +2,9 @@ import { requirePageRole } from '@/lib/session';
 import { getApprovalNotices, getUsers } from '@/server/actions/users';
 import { ApprovalNotices } from '@/components/approvals/ApprovalNotices';
 import { UsersClient } from './UsersClient';
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = { title: 'Users' };
 
 export const dynamic = 'force-dynamic';
 
