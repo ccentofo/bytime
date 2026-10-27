@@ -220,7 +220,8 @@ export function LaborCategoriesClient({
   }
 
   function handleLcatSubmit() {
-    if (!lcatForm.lcatCode.trim() || !lcatForm.title.trim() || !lcatForm.hourlyRate.trim()) return;
+    // Dated rates D1.6: editing never sends rates (they change only through the Rates schedule); create sets the starting rate.
+    if (!lcatForm.lcatCode.trim() || !lcatForm.title.trim() || (!editingLcat && !lcatForm.hourlyRate.trim())) return;
 
     startTransition(async () => {
       try {
@@ -228,8 +229,6 @@ export function LaborCategoriesClient({
           const result = await runAction(updateLaborCategory(editingLcat.id, {
             lcatCode: lcatForm.lcatCode.trim(),
             title: lcatForm.title.trim(),
-            hourlyRate: lcatForm.hourlyRate.trim(),
-            ceilingRate: lcatForm.ceilingRate.trim() || undefined,
           }), { errorTitle: 'Couldn’t update labor category' });
           if (!result.ok) return;
           notifications.show({
@@ -553,19 +552,23 @@ export function LaborCategoriesClient({
             value={lcatForm.title}
             onChange={(e) => setLcatForm((f) => ({ ...f, title: e.target.value }))}
           />
-          <TextInput
-            label="Hourly Rate ($)"
-            required
-            placeholder="125.00"
-            value={lcatForm.hourlyRate}
-            onChange={(e) => setLcatForm((f) => ({ ...f, hourlyRate: e.target.value }))}
-          />
-          <TextInput
-            label="Ceiling Rate ($)"
-            placeholder="150.00 (optional)"
-            value={lcatForm.ceilingRate}
-            onChange={(e) => setLcatForm((f) => ({ ...f, ceilingRate: e.target.value }))}
-          />
+          {!editingLcat && (
+            <>
+              <TextInput
+                label="Starting hourly rate ($)"
+                required
+                placeholder="125.00"
+                value={lcatForm.hourlyRate}
+                onChange={(e) => setLcatForm((f) => ({ ...f, hourlyRate: e.target.value }))}
+              />
+              <TextInput
+                label="Starting ceiling rate ($)"
+                placeholder="150.00 (optional)"
+                value={lcatForm.ceilingRate}
+                onChange={(e) => setLcatForm((f) => ({ ...f, ceilingRate: e.target.value }))}
+              />
+            </>
+          )}
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setLcatModalOpen(false)}>
               Cancel
@@ -576,7 +579,7 @@ export function LaborCategoriesClient({
               disabled={
                 !lcatForm.lcatCode.trim() ||
                 !lcatForm.title.trim() ||
-                !lcatForm.hourlyRate.trim() ||
+                (!editingLcat && !lcatForm.hourlyRate.trim()) ||
                 (!editingLcat && !lcatForm.clinId)
               }
             >

@@ -79,7 +79,8 @@ describe('the SQL resolution (COST_BASIS_LATERAL) mirrors decideCostBasis', () =
   it('cost sums only PRICED entries; unpriced hours are summed separately', () => {
     const cost = new PgDialect().sqlToQuery(pricedCostSum).sql.replace(/\s+/g, ' ');
     const unpriced = new PgDialect().sqlToQuery(unpricedHoursSum).sql.replace(/\s+/g, ' ');
-    expect(cost).toContain("CASE WHEN cost_basis.basis = 'priced' THEN CAST(\"timesheet_entries\".\"hours\" AS NUMERIC) * CAST(\"cost_lc\".\"hourly_rate\" AS NUMERIC) ELSE 0 END");
+    // Dated rates D1.4: priced at the rate in effect on the entry's date (applied_rate from the lateral).
+    expect(cost).toContain("CASE WHEN cost_basis.basis = 'priced' THEN CAST(\"timesheet_entries\".\"hours\" AS NUMERIC) * cost_basis.applied_rate ELSE 0 END");
     expect(unpriced).toContain("CASE WHEN cost_basis.basis <> 'priced' THEN CAST(\"timesheet_entries\".\"hours\" AS NUMERIC) ELSE 0 END");
   });
 });
@@ -104,6 +105,8 @@ const LCAT_IMPORT_ALLOWLIST = new Set([
   'src/server/actions/import.ts',                // bulk import
   'src/server/internal/setup.ts',                // setup checklist counts
   'src/db/clear-tenant-data.ts',                 // test / seed cleanup (namespace import)
+  'src/server/internal/labor-rates.ts',          // dated rates D1.3: the one SQL rate rule + schedule readers
+  'src/server/actions/labor-category-rates.ts',  // dated rates D1.5: the rate actions
 ]);
 
 export function lcatImporters(src: string): boolean {

@@ -34,6 +34,8 @@ export const DUPLICATE_ENTITY_MESSAGES: Readonly<Record<string, string>> = {
   clin_slin_unique_idx: 'That SLIN number already exists on this CLIN.',
   clin_lcat_unique_idx: 'That labor category code already exists on this CLIN.',
   user_lcat_effective_unique_idx: 'That employee already has this labor category from that date.',
+  // Dated rates D1.5 — static wording, deliberately different from the date-specific pre-check message.
+  lcat_rate_effective_unique_idx: 'There is already a rate change on that date for this labor category. Correct that one instead.',
 };
 
 /** The friendly message for a known duplicate (see DUPLICATE_ENTITY_MESSAGES), or null. */

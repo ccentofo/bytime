@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 /**
- * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4), unit form: each of the 37 admin-only writes (incl. the
+ * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4), unit form: each of the 40 admin-only writes (incl. the
  * 6 OAuth-token-refreshing mapping readers) authorizes with requireAdminFresh(), never the cached requireAdmin().
  * The session is a stale JWT-admin: requireAdmin() admits it, requireAdminFresh() — which re-reads the DB role —
  * refuses it (DB role is now supervisor). The integration form against a real users row is
@@ -42,6 +42,7 @@ import * as contracts from '@/server/actions/contracts';
 import * as indirect from '@/server/actions/indirect-codes';
 import * as integrations from '@/server/actions/integrations';
 import * as lcats from '@/server/actions/labor-categories';
+import * as rates from '@/server/actions/labor-category-rates';
 import * as qbo from '@/server/actions/qbo';
 import * as gusto from '@/server/actions/gusto';
 import * as slins from '@/server/actions/slins';
@@ -50,12 +51,12 @@ import * as users from '@/server/actions/users';
 type AnyAction = (...args: never[]) => Promise<unknown>;
 const call = (fn: unknown, ...args: unknown[]) => (fn as (...a: unknown[]) => Promise<unknown>)(...args);
 
-/** Refused by the fresh role check: every one of the 37 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
+/** Refused by the fresh role check: every one of the 40 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
 async function expectRefused(pending: Promise<unknown>): Promise<void> {
   expect(await pending).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/access has changed/i) });
 }
 
-/** The 37 (feature-plan-launch-blockers.md §1 "Roles" + §4 P3). */
+/** The 40 (feature-plan-launch-blockers.md §1 "Roles" + §4 P3). */
 const ADMIN_WRITES: Array<[string, AnyAction | unknown, unknown[]]> = [
   ['assignUserToClin', assignments.assignUserToClin, ['u2', 'c1']],
   ['unassignUserFromClin', assignments.unassignUserFromClin, ['u2', 'c1']],
@@ -94,11 +95,15 @@ const ADMIN_WRITES: Array<[string, AnyAction | unknown, unknown[]]> = [
   ['createSlin', slins.createSlin, [{ clinId: 'c1', slinNumber: 'AA' }]],
   ['updateSlin', slins.updateSlin, ['s1', { slinNumber: 'AB' }]],
   ['unlockUserAccount', users.unlockUserAccount, ['locked@acme.com']],
+  // feature-plan-dated-rates.md D1.5
+  ['addLaborCategoryRateChange', rates.addLaborCategoryRateChange, [{ laborCategoryId: 'l1', effectiveDate: '2027-01-01', hourlyRate: '110', ceilingRate: null }]],
+  ['correctLaborCategoryRate', rates.correctLaborCategoryRate, [{ laborCategoryId: 'l1', target: 'starting', hourlyRate: '105', ceilingRate: null }]],
+  ['removeLaborCategoryRateChange', rates.removeLaborCategoryRateChange, [{ laborCategoryId: 'l1', changeId: 'x' }]],
 ];
 
-describe('the 37 admin-only writes refuse a stale JWT-admin (requireAdminFresh)', () => {
-  it('covers exactly 37 actions, all exported', () => {
-    expect(ADMIN_WRITES).toHaveLength(37);
+describe('the 40 admin-only writes refuse a stale JWT-admin (requireAdminFresh)', () => {
+  it('covers exactly 40 actions, all exported', () => {
+    expect(ADMIN_WRITES).toHaveLength(40);
     for (const [name, fn] of ADMIN_WRITES) expect(typeof fn, name).toBe('function');
   });
 

@@ -56,6 +56,18 @@ describe('seeder conformance (T3)', () => {
     expect(leave.length).toBeGreaterThan(0);
     for (const c of leave) expect(c.leavePayType, c.code).not.toBeNull();
 
+    // Dated rates D1.7: NAV-01 SE-III has the seeded change (149.35 / 164.80) and exactly one matching log row.
+    const rateChanges = await t.select().from(schema.laborCategoryRates);
+    expect(rateChanges).toEqual([expect.objectContaining({ hourlyRate: '149.35', ceilingRate: '164.80' })]);
+    const [seIII] = await t.select().from(schema.laborCategories).where(eq(schema.laborCategories.id, rateChanges[0].laborCategoryId));
+    expect(seIII).toMatchObject({ lcatCode: 'SE-III', hourlyRate: '145.00', ceilingRate: '160.00' });
+    const rateLog = await t.select().from(schema.adminChangeLog).where(eq(schema.adminChangeLog.entity, 'labor_category_rate'));
+    expect(rateLog).toEqual([expect.objectContaining({
+      entityId: seIII.id, action: 'rate_change_added',
+      oldValue: { source: 'starting', hourlyRate: '145.00', ceilingRate: '160.00' },
+      newValue: expect.objectContaining({ effectiveDate: rateChanges[0].effectiveDate, hourlyRate: '149.35', ceilingRate: '164.80', reason: 'Demo: option-year escalation' }),
+    })]);
+
     const baseline = await t.select().from(schema.adminChangeLog).where(and(eq(schema.adminChangeLog.entity, 'self_approval')));
     expect(baseline).toHaveLength(1);
     expect(baseline[0]).toMatchObject({ action: 'enabled', newValue: expect.objectContaining({ reason: 'demo workspace seeded' }) });
