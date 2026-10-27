@@ -13,6 +13,8 @@ import { stripComments } from '../helpers/source-scanner';
 vi.mock('server-only', () => ({}));
 
 import { COST_BASIS_LATERAL, decideCostBasis, findOverlaps, unpricedFixText, pricedCostSum, unpricedHoursSum } from '@/server/internal/cost-basis';
+import { chargeCodeLaborCategoryOnSql, hourlyRateOnSql } from '@/server/internal/labor-rates';
+import { sql } from 'drizzle-orm';
 import { formatCostBasisChange, mergeCostRows } from '../../../scripts/lib/cost-basis-change';
 import { unpricedHoursLabel, CURRENT_RATES_NOTE } from '@/lib/cost-labels';
 
@@ -52,8 +54,27 @@ describe('the SQL resolution (COST_BASIS_LATERAL) mirrors decideCostBasis', () =
   const flat = text.replace(/\s+/g, ' ');
 
   it('level 1: the entry\'s charge code\'s labor category ON THE ENTRY\'S DATE (dated rates D3: dated change, else starting)', () => {
-    expect(flat).toContain('(SELECT c.labor_category_id FROM charge_code_labor_categories c WHERE c.charge_code_id = "timesheet_entries"."charge_code_id" AND c.effective_date <= "timesheet_entries"."entry_date" ORDER BY c.effective_date DESC LIMIT 1)');
-    expect(flat).toContain('(SELECT cc0.labor_category_id FROM charge_codes cc0 WHERE cc0.id = "timesheet_entries"."charge_code_id") ) AS l1');
+    expect(flat).toContain('(SELECT dr_cc_change.labor_category_id FROM charge_code_labor_categories dr_cc_change WHERE dr_cc_change.charge_code_id = "timesheet_entries"."charge_code_id" AND dr_cc_change.effective_date <= "timesheet_entries"."entry_date" ORDER BY dr_cc_change.effective_date DESC LIMIT 1)');
+    expect(flat).toContain('(SELECT dr_cc_start.labor_category_id FROM charge_codes dr_cc_start WHERE dr_cc_start.id = "timesheet_entries"."charge_code_id") ) AS l1');
+  });
+
+  it('H1 (dated-rates audit): no builder alias shadows a caller alias — no `x.labor_category_id = x.labor_category_id` (or charge_code_id) self-comparison', () => {
+    expect(flat).not.toMatch(/(\w+)\.labor_category_id = \1\.labor_category_id/);
+    expect(flat).not.toMatch(/(\w+)\.charge_code_id = \1\.charge_code_id/);
+    // Same with drizzle's quoted column references (e.g. "timesheet_entries"."charge_code_id").
+    const unquoted = flat.replace(/"/g, '');
+    expect(unquoted).not.toMatch(/(\w+)\.labor_category_id = \1\.labor_category_id/);
+    expect(unquoted).not.toMatch(/(\w+)\.charge_code_id = \1\.charge_code_id/);
+    // The rate is applied to the lateral's resolved category, one level outside the resolution (derived tables
+    // `resolved` / `counts`), and the builder's own table is `dr_rate`.
+    expect(flat).toContain('WHERE dr_rate.labor_category_id = resolved.labor_category_id AND dr_rate.effective_date <= "timesheet_entries"."entry_date"');
+    expect(flat).toMatch(/\) counts \) resolved \) cost_basis$/);
+  });
+
+  it('H1: the builders render only their prefixed internal aliases (plus whatever the caller passes)', () => {
+    const qualifiers = (q: ReturnType<typeof sql>) => new Set([...new PgDialect().sqlToQuery(q).sql.matchAll(/\b([a-z_][a-z0-9_]*)\./gi)].map((m) => m[1]));
+    expect(qualifiers(hourlyRateOnSql({ laborCategoryId: sql`caller.labor_category_id`, onDate: sql`caller.d` }))).toEqual(new Set(['dr_rate', 'dr_start', 'caller']));
+    expect(qualifiers(chargeCodeLaborCategoryOnSql({ chargeCodeId: sql`caller.charge_code_id`, onDate: sql`caller.d` }))).toEqual(new Set(['dr_cc_change', 'dr_cc_start', 'caller']));
   });
 
   it('level 2 only on the entry\'s OWN SLIN; level 3 only CLIN-level categories (slin_id IS NULL) — a SLIN category on another SLIN never applies', () => {
@@ -69,8 +90,8 @@ describe('the SQL resolution (COST_BASIS_LATERAL) mirrors decideCostBasis', () =
   });
 
   it('the decision CASE: l1, else exactly one at SLIN, else (none at SLIN and) exactly one at CLIN; >1 → conflict; else no-category', () => {
-    expect(flat).toContain("CASE WHEN c.l1 IS NOT NULL THEN c.l1 WHEN c.n2 = 1 THEN c.sole2 WHEN c.n2 = 0 AND c.n3 = 1 THEN c.sole3 END AS labor_category_id");
-    expect(flat).toContain("CASE WHEN c.l1 IS NOT NULL OR c.n2 = 1 OR (c.n2 = 0 AND c.n3 = 1) THEN 'priced' WHEN c.n2 > 1 OR (c.n2 = 0 AND c.n3 > 1) THEN 'conflict' ELSE 'no-category' END AS basis");
+    expect(flat).toContain("CASE WHEN counts.l1 IS NOT NULL THEN counts.l1 WHEN counts.n2 = 1 THEN counts.sole2 WHEN counts.n2 = 0 AND counts.n3 = 1 THEN counts.sole3 END AS labor_category_id");
+    expect(flat).toContain("CASE WHEN counts.l1 IS NOT NULL OR counts.n2 = 1 OR (counts.n2 = 0 AND counts.n3 = 1) THEN 'priced' WHEN counts.n2 > 1 OR (counts.n2 = 0 AND counts.n3 > 1) THEN 'conflict' ELSE 'no-category' END AS basis");
   });
 
   it('no status filter (a deactivated category still prices the hours it covered)', () => {

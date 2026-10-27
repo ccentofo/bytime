@@ -52,7 +52,7 @@ import { addLaborCategoryRateChange, correctLaborCategoryRate, removeLaborCatego
 import { updateLaborCategory } from '@/server/actions/labor-categories';
 import { getDetailedCostReportData } from '@/server/internal/reports';
 import { getPeriodCostReport } from '@/server/actions/dashboard';
-import { hourlyRateOnSql } from '@/server/internal/labor-rates';
+import { hourlyRateOnSql, readRateSchedule } from '@/server/internal/labor-rates';
 import { rateOn } from '@/lib/labor-rates';
 import { duplicateEntityMessage } from '@/lib/db-errors';
 
@@ -103,6 +103,30 @@ describe('dated labor-category rates (D1, Fixture F1)', () => {
         .from(schema.laborCategories).where(eq(schema.laborCategories.id, L));
       expect(money(row.rate), day).toBe(money(rateOn(view, d(day)).hourlyRate));
     }
+  });
+
+  it('Two categories (dated-rates audit H1): each entry uses ITS category\'s rate in effect that day, not the latest change of any category', async () => {
+    // F1 + category O on the same CLIN (starting 90.00, change 2027-03-01 → 95.00); E2 assigned to O; L keeps 2027-01-01 → 110.00.
+    const [{ id: O }] = await db().insert(schema.laborCategories).values({ clinId, lcatCode: 'O', title: 'Other', hourlyRate: '90.00' }).returning();
+    const emp2 = await createTestUser({ role: 'employee', fullName: 'Eve Employee' });
+    await db().insert(schema.userLaborCategories).values({ userId: emp2.id, laborCategoryId: O, effectiveDate: '2026-01-01' });
+    for (const entryDate of ['2027-01-15', '2027-04-15']) {
+      await db().insert(schema.timesheetEntries).values({ userId: emp2.id, chargeCodeId: codeId, clinId, entryDate, hours: '8.00', revisionNumber: 1, createdBy: emp2.id });
+    }
+    await expectOk(add('2027-01-01', '110.00', 'option year'));
+    await expectOk(addLaborCategoryRateChange({ laborCategoryId: O, effectiveDate: '2027-03-01', hourlyRate: '95.00', ceilingRate: null, reason: 'escalation' }));
+
+    const rows = await costs();
+    const of = (name: string) => rows.filter((r) => r.employeeName === name).map((r) => [r.entryDate, r.lcatCode, money(r.hourlyRate), money(r.totalCost)]);
+    expect(of('Eve Employee')).toEqual([['2027-01-15', 'O', '90.00', '720.00'], ['2027-04-15', 'O', '95.00', '760.00']]);
+    expect(of('Ed Employee')).toEqual([['2026-12-31', 'L', '100.00', '800.00'], ['2027-01-01', 'L', '110.00', '880.00'], ['2027-06-30', 'L', '110.00', '440.00']]);
+
+    // SQL = TS through the REAL call site: every report row's hourlyRate equals rateOn(its category's schedule, its date).
+    const schedules = { L: (await readRateSchedule(db(), L))!, O: (await readRateSchedule(db(), O))! };
+    for (const r of rows) {
+      expect(money(r.hourlyRate), `${r.employeeName} ${r.entryDate}`).toBe(money(rateOn(schedules[r.lcatCode as 'L' | 'O'], d(r.entryDate)).hourlyRate));
+    }
+    expect(money((await getPeriodCostReport(...RANGE)).reduce((sum, r) => sum + r.totalCost, 0))).toBe('3600.00');
   });
 
   it('Pricing → Correction → Removal: each step re-prices exactly its period; the log records each change', async () => {

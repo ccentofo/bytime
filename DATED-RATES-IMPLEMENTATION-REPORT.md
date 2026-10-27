@@ -451,3 +451,57 @@ Before the PR, the product owner should:
 Open questions shipped as their stated defaults (unanswered; see §4):
 - **DR-Q1:** backdated changes are allowed; a reason is required when recorded hours are re-priced.
 - **DR-Q2:** a charge code's category must match its own CLIN/SLIN. This is enforced in the new D3 schedule and on CLIN/SLIN moves only; charge-code create is unchanged.
+
+---
+
+## 11. Fix round 1 (`DATED-RATES-AUDIT.md`)
+
+Rulings: the audit §3 accepts every deviation from report §9 as is; no code change for those.
+
+### H1 — builder aliases shadowed the lateral's (own commit)
+
+**Cause (confirmed).** The lateral's derived table and `hourlyRateOnSql`'s inner `labor_category_rates` were both `r`, so the correlation rendered as `r.labor_category_id = r.labor_category_id`, which is always true. Every priced entry then took the latest change of any category.
+
+**Fix.**
+- `hourlyRateOnSql` uses the internal aliases `dr_rate` (`labor_category_rates`) and `dr_start` (`labor_categories`).
+- `chargeCodeLaborCategoryOnSql` uses `dr_cc_change` (`charge_code_labor_categories`) and `dr_cc_start` (`charge_codes`).
+- The lateral's derived tables are renamed `r` → `resolved` and `c` → `counts`, and `APPLIED_RATE` takes `resolved.labor_category_id`.
+- Both builders' doc comments now state the prefixed-alias rule (trap T16).
+- The SQL text pinned in `unit/cost-basis` is updated.
+
+**Tests.**
+
+| Row | Test | On the pre-fix code |
+|---|---|---|
+| H1 unit: no self-comparison | `unit/cost-basis`: renders `COST_BASIS_LATERAL` with `PgDialect`. Rejects `(\w+)\.labor_category_id = \1\.labor_category_id` and the `charge_code_id` twin, both raw and with drizzle's quotes stripped. Pins `dr_rate.labor_category_id = resolved.labor_category_id` and the `) counts ) resolved ) cost_basis` nesting | fails (`r.labor_category_id = r.labor_category_id` matched) |
+| H1 unit: prefixed aliases only | the qualifiers in each builder's rendered SQL are exactly `{dr_rate, dr_start, caller}` and `{dr_cc_change, dr_cc_start, caller}` | fails |
+| Two categories (new §9 row, added to the blueprint) | `integration/dated-rates.test.ts`: F1 plus `O` (90.00, `2027-03-01` → 95.00); E2 on `O` with 8.00 h on `2027-01-15` and `2027-04-15`; L `2027-01-01` → 110.00. Per entry: E2 `O` 90.00 / 720.00 and 95.00 / 760.00; E `L` 800.00 / 880.00 / 440.00; period total 3600.00 | E2 Jan → 880.00, E Jun → 380.00 (per the audit; Postgres run pending) |
+| SQL = TS through the real call site | the same test: every `getDetailedCostReportData()` row's `hourlyRate` equals `rateOn(readRateSchedule(its category), its date)` | fails with the numbers above |
+
+**Break-its (unit, `$TMPDIR/breakit2.py`, multi-file edits, all restored): 8 mutations, 8 killed.**
+- H-1: `dr_rate` → `resolved` (collides with the lateral).
+- H-2: full revert (`dr_rate` → `r` and `resolved` → `r`).
+- H-3: lateral `resolved` → `r` only.
+- H-4: `counts` → `c`.
+- H-5: `dr_start` → `lc0`.
+- H-6: `dr_cc_change` → `c`.
+- H-7: `dr_cc_start` → `cc0`.
+- H-8: `dr_cc_change` → `timesheet_entries`, a collision through drizzle's quoted column reference.
+  - On the first run only the pinned text caught H-8, so I added the quote-stripped self-comparison check. The re-run is killed by the H1 test itself.
+
+**Postgres break-its (for the lead's script).** Run each against `integration/dated-rates.test.ts`; "Two categories" must fail.
+- **PG-22:** in `labor-rates.ts`, rename `dr_rate` → `resolved` everywhere, which collides with the lateral's derived table.
+- **PG-23 ("revert the lateral alias to `r`"):** `dr_rate` → `r` everywhere in `labor-rates.ts`, and `resolved` → `r` everywhere in `cost-basis.ts`. This restores the pre-fix SQL.
+  - Reverting only the lateral alias (`resolved` → `r`) no longer reproduces the bug, because the builder's alias is now prefixed and nothing collides. On Postgres that edit is harmless; the unit pinned text (H-3) catches it.
+- A collision inside `chargeCodeLaborCategoryOnSql` (H-8) isn't Postgres-detectable with the D3 fixture, which has only one code with category changes. The unit check guards it.
+
+**`breakit-check.mjs` (the lead's; not edited or committed by me) — find strings that need the new aliases:**
+- PG-1: `AND dr_rate.effective_date <= ${onDate}` → `<`.
+- PG-2: ``sql`resolved.labor_category_id` `` in both find and replace.
+- PG-4: `WHERE dr_start.id = ${laborCategoryId})` → `WHERE dr_start.clin_id IS NOT NULL ORDER BY dr_start.id LIMIT 1)`.
+- PG-11: `ORDER BY dr_cc_change.effective_date DESC LIMIT 1),` → `ASC`.
+- PG-12: `AND dr_cc_change.effective_date <= ${onDate}` → `<`.
+- PG-21: `    (SELECT dr_cc_start.labor_category_id FROM charge_codes dr_cc_start WHERE dr_cc_start.id = ${chargeCodeId})\n  )\`;`.
+- PG-13's find string is unchanged; its replacement text still works.
+
+**Gates (H1):** tsc clean; lint 0 errors / 58 warnings; 1370 unit tests ×4; the migration-safety script passes.

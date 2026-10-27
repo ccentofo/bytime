@@ -48,28 +48,28 @@ export function decideCostBasis(c: {
 
 /**
  * The resolved category's rate on the entry's date (dated rates D1.4). Applied one level OUTSIDE the resolution, to its
- * `r.labor_category_id`, so the CASE that picks the category is never repeated. NULL when unpriced.
+ * `resolved.labor_category_id`, so the CASE that picks the category is never repeated. NULL when unpriced.
  */
 /** Level 1 (dated rates D3): the entry's charge code's category ON THE ENTRY'S DATE (starting category, else dated). */
 const CHARGE_CODE_CATEGORY = chargeCodeLaborCategoryOnSql({ chargeCodeId: sql`${timesheetEntries.chargeCodeId}`, onDate: sql`${timesheetEntries.entryDate}` });
 
-const APPLIED_RATE = hourlyRateOnSql({ laborCategoryId: sql`r.labor_category_id`, onDate: sql`${timesheetEntries.entryDate}` });
+const APPLIED_RATE = hourlyRateOnSql({ laborCategoryId: sql`resolved.labor_category_id`, onDate: sql`${timesheetEntries.entryDate}` });
 
 /**
  * LEFT JOIN LATERAL … AS cost_basis(labor_category_id, basis, level, applied_rate): exactly one row per entry.
  * Correlated to the outer `timesheet_entries` row by its real table name (callers must not alias timesheet_entries).
  */
 export const COST_BASIS_LATERAL: SQL = sql`(
-  SELECT r.labor_category_id, r.basis, r.level, ${APPLIED_RATE} AS applied_rate
+  SELECT resolved.labor_category_id, resolved.basis, resolved.level, ${APPLIED_RATE} AS applied_rate
   FROM (
   SELECT
-    CASE WHEN c.l1 IS NOT NULL THEN c.l1
-         WHEN c.n2 = 1 THEN c.sole2
-         WHEN c.n2 = 0 AND c.n3 = 1 THEN c.sole3 END AS labor_category_id,
-    CASE WHEN c.l1 IS NOT NULL OR c.n2 = 1 OR (c.n2 = 0 AND c.n3 = 1) THEN 'priced'
-         WHEN c.n2 > 1 OR (c.n2 = 0 AND c.n3 > 1) THEN 'conflict'
+    CASE WHEN counts.l1 IS NOT NULL THEN counts.l1
+         WHEN counts.n2 = 1 THEN counts.sole2
+         WHEN counts.n2 = 0 AND counts.n3 = 1 THEN counts.sole3 END AS labor_category_id,
+    CASE WHEN counts.l1 IS NOT NULL OR counts.n2 = 1 OR (counts.n2 = 0 AND counts.n3 = 1) THEN 'priced'
+         WHEN counts.n2 > 1 OR (counts.n2 = 0 AND counts.n3 > 1) THEN 'conflict'
          ELSE 'no-category' END AS basis,
-    CASE WHEN c.l1 IS NOT NULL THEN 'charge-code' WHEN c.n2 > 0 THEN 'slin' WHEN c.n3 > 0 THEN 'clin' END AS level
+    CASE WHEN counts.l1 IS NOT NULL THEN 'charge-code' WHEN counts.n2 > 0 THEN 'slin' WHEN counts.n3 > 0 THEN 'clin' END AS level
   FROM (
     SELECT
       ${CHARGE_CODE_CATEGORY} AS l1,
@@ -87,8 +87,8 @@ export const COST_BASIS_LATERAL: SQL = sql`(
           AND ulc3.effective_date <= ${timesheetEntries.entryDate}
           AND (ulc3.end_date IS NULL OR ulc3.end_date >= ${timesheetEntries.entryDate})
           AND lc3.clin_id = ${timesheetEntries.clinId} AND lc3.slin_id IS NULL) s3
-  ) c
-  ) r
+  ) counts
+  ) resolved
 ) cost_basis`;
 
 /** The resolved category (code, title — never its rate; use cost_basis.applied_rate) — join with COST_LC_ON. */

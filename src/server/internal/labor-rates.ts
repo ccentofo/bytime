@@ -13,15 +13,16 @@ import type { CategorySchedule, RateSchedule } from '@/lib/labor-rates';
 /**
  * Hourly rate (NUMERIC) of a category on a day; NULL when the category is NULL. The ONLY SQL rate rule (pure twin:
  * rateOn in src/lib/labor-rates.ts). Arguments are SQL FRAGMENTS (e.g. sql`${laborCategories.id}`), typed `SQL` so a
- * value can't be passed. Both COALESCE arguments are varchar; the single cast is outside (trap T6).
+ * value can't be passed. Both COALESCE arguments are varchar; the single cast is outside (trap T6). Internal aliases are
+ * prefixed (dr_rate / dr_start) so a caller's fragment can never be captured by them (trap T16, dated-rates audit H1).
  */
 export function hourlyRateOnSql(args: { laborCategoryId: SQL; onDate: SQL }): SQL<string> {
   const { laborCategoryId, onDate } = args;
   return sql<string>`CAST(COALESCE(
-    (SELECT r.hourly_rate FROM labor_category_rates r
-      WHERE r.labor_category_id = ${laborCategoryId} AND r.effective_date <= ${onDate}
-      ORDER BY r.effective_date DESC LIMIT 1),
-    (SELECT lc0.hourly_rate FROM labor_categories lc0 WHERE lc0.id = ${laborCategoryId})
+    (SELECT dr_rate.hourly_rate FROM labor_category_rates dr_rate
+      WHERE dr_rate.labor_category_id = ${laborCategoryId} AND dr_rate.effective_date <= ${onDate}
+      ORDER BY dr_rate.effective_date DESC LIMIT 1),
+    (SELECT dr_start.hourly_rate FROM labor_categories dr_start WHERE dr_start.id = ${laborCategoryId})
   ) AS NUMERIC)`;
 }
 
@@ -64,15 +65,16 @@ export async function readRateSchedule(db: Reader, laborCategoryId: string): Pro
 
 /**
  * Labor category (uuid) of a charge code on a day; NULL when the code is NULL or has no category then. The ONLY SQL rule
- * for it (pure twin: chargeCodeCategoryOn). `SQL` fragment arguments, like hourlyRateOnSql.
+ * for it (pure twin: chargeCodeCategoryOn). `SQL` fragment arguments and prefixed internal aliases (dr_cc_change /
+ * dr_cc_start), like hourlyRateOnSql.
  */
 export function chargeCodeLaborCategoryOnSql(args: { chargeCodeId: SQL; onDate: SQL }): SQL<string | null> {
   const { chargeCodeId, onDate } = args;
   return sql<string | null>`COALESCE(
-    (SELECT c.labor_category_id FROM charge_code_labor_categories c
-      WHERE c.charge_code_id = ${chargeCodeId} AND c.effective_date <= ${onDate}
-      ORDER BY c.effective_date DESC LIMIT 1),
-    (SELECT cc0.labor_category_id FROM charge_codes cc0 WHERE cc0.id = ${chargeCodeId})
+    (SELECT dr_cc_change.labor_category_id FROM charge_code_labor_categories dr_cc_change
+      WHERE dr_cc_change.charge_code_id = ${chargeCodeId} AND dr_cc_change.effective_date <= ${onDate}
+      ORDER BY dr_cc_change.effective_date DESC LIMIT 1),
+    (SELECT dr_cc_start.labor_category_id FROM charge_codes dr_cc_start WHERE dr_cc_start.id = ${chargeCodeId})
   )`;
 }
 
