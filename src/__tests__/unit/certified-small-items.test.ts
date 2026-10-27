@@ -46,7 +46,7 @@ beforeEach(() => db.reset());
 function correctionFacts() {
   db.onSelect(chargeCodes, [{ id: CODE, clinId: 'clin-1', slinId: null }]);
   db.onSelect(userChargeCodes, [{ id: CODE }]);
-  db.onSelect(chargeCodes, [{ id: CODE, codeActive: true, clinStatus: 'active', contractStatus: 'active' }]);
+  db.onSelect(chargeCodes, [{ id: CODE, codeActive: true, clinStatus: 'active', slinStatus: null, contractStatus: 'active' }]);
   db.onSelect(timesheetEntries, [{ maxRevision: 1 }]);
 }
 const correct = (changeReasonCode: string, comment?: string) => saveTimesheetBatch({

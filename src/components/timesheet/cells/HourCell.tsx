@@ -103,7 +103,7 @@ export function HourCell({ chargeCodeId, dayIndex, density = 'comfortable' }: Ho
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       onClick={handleClick}
-      title={isFutureDate ? 'Cannot enter hours for future dates' : lockedForNewHours ? 'No longer assigned — you can correct existing hours, not add new ones' : undefined}
+      title={isFutureDate ? 'Cannot enter hours for future dates' : lockedForNewHours ? 'Closed to new hours — you can correct existing hours' : undefined}
     >
       {provenance && (
         <Tooltip label={provenance} multiline maw={320} withArrow>

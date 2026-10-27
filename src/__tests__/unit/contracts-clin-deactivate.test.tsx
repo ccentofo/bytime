@@ -4,7 +4,7 @@ import { act } from 'react';
 
 /**
  * feature-plan-ux-foundations.md §4.5 / T11 (UX-AUDIT B2, B5): in the CLIN/SLIN drawer, Deactivate asks first; Cancel
- * makes no call; the SLIN copy promises no charging block (nothing reads slins.status); Esc with a confirm open
+ * makes no call; the SLIN copy matches the CLIN's — a deactivated SLIN now blocks new hours (UX-2 §4.8, B5); Esc with a confirm open
  * closes only the confirm — the drawer stays open (closeOnEscape guard, trap T-P).
  */
 
@@ -61,15 +61,14 @@ describe('CLIN / SLIN deactivate confirm (T11)', () => {
     expect(actions.updateClin).toHaveBeenCalledWith('c1', { status: 'inactive' });
   });
 
-  it('SLIN: Deactivate asks first with copy that makes no charging claim; Cancel → no call', async () => {
+  it('SLIN: Deactivate asks first with the CLIN wording (B5: it now blocks new hours); Cancel → no call', async () => {
     await openDrawer();
     await click(document.body.querySelector('button[aria-label="Expand SLINs"]'));
     await wait(50);
     const slinButton = buttonsByText('Deactivate')[1];
     await click(slinButton);
     const dialog = dialogTitled('Deactivate SLIN 0001AA?')!;
-    expect(dialog.textContent).toContain('Marks it inactive. Existing hours stay on record.');
-    expect(dialog.textContent).not.toMatch(/can.t charge/i);
+    expect(dialog.textContent).toContain("Employees can't charge new time to it. Existing hours stay on record.");
     await click(buttonByText('Cancel'));
     expect(actions.updateSlin).not.toHaveBeenCalled();
     await click(buttonsByText('Deactivate')[1]);

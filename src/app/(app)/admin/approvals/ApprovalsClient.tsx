@@ -261,7 +261,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
                 <Table.Tr key={cc.id}>
                   <Table.Td>
                     {cc.clin} — {cc.projectName}
-                    {!cc.assignable && <Text size="xs" c="dimmed">No longer assigned (recorded hours shown)</Text>}
+                    {!cc.assignable && <Text size="xs" c="dimmed">Closed to new hours (recorded hours shown)</Text>}
                   </Table.Td>
                   {Array.from({ length: numDays }, (_, i) => {
                     // certified-outputs C1 display: imported hours are labelled in the review too.

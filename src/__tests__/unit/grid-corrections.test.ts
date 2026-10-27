@@ -53,10 +53,10 @@ const START = '2026-10-01';
 beforeEach(() => { db.reset(); h.locked = false; });
 
 /** Script the in-transaction reads for one charge-code cell, in the order the save makes them. */
-function chargeCodeFacts(o: { assigned: boolean; codeActive: boolean; clinActive?: boolean; contractActive?: boolean; priorRevision: number }) {
+function chargeCodeFacts(o: { assigned: boolean; codeActive: boolean; clinActive?: boolean; slinStatus?: string | null; contractActive?: boolean; priorRevision: number }) {
   db.onSelect(chargeCodes, [{ id: CODE, clinId: CLIN, slinId: null }]);                                   // FOR SHARE re-read
   db.onSelect(userChargeCodes, o.assigned ? [{ id: CODE }] : []);                                          // active assignment
-  db.onSelect(chargeCodes, [{ id: CODE, codeActive: o.codeActive, clinStatus: o.clinActive === false ? 'inactive' : 'active', contractStatus: o.contractActive === false ? 'inactive' : 'active' }]);
+  db.onSelect(chargeCodes, [{ id: CODE, codeActive: o.codeActive, clinStatus: o.clinActive === false ? 'inactive' : 'active', slinStatus: o.slinStatus ?? null, contractStatus: o.contractActive === false ? 'inactive' : 'active' }]);
   db.onSelect(timesheetEntries, [{ maxRevision: o.priorRevision }]);                                       // prior revision
 }
 const save = (cell: Record<string, unknown>, reason = true) => saveTimesheetBatch({
@@ -79,11 +79,16 @@ describe('the one cell rule (UI and server)', () => {
 
   it('newCellRefusal: CLIN-only always refused (Q1); charge code needs assignment + active code/CLIN/contract (Q4)', () => {
     expect(newCellRefusal({ kind: 'clin' })).toBe('clin-only');
-    expect(newCellRefusal({ kind: 'charge', assigned: false, codeActive: true, clinActive: true, contractActive: true })).toBe('not-assigned');
-    expect(newCellRefusal({ kind: 'charge', assigned: true, codeActive: false, clinActive: true, contractActive: true })).toBe('code-inactive');
-    expect(newCellRefusal({ kind: 'charge', assigned: true, codeActive: true, clinActive: false, contractActive: true })).toBe('code-inactive');
-    expect(newCellRefusal({ kind: 'charge', assigned: true, codeActive: true, clinActive: true, contractActive: true })).toBeNull();
+    expect(newCellRefusal({ kind: 'charge', assigned: false, codeActive: true, clinActive: true, slinActive: true, contractActive: true })).toBe('not-assigned');
+    expect(newCellRefusal({ kind: 'charge', assigned: true, codeActive: false, clinActive: true, slinActive: true, contractActive: true })).toBe('code-inactive');
+    expect(newCellRefusal({ kind: 'charge', assigned: true, codeActive: true, clinActive: false, slinActive: true, contractActive: true })).toBe('code-inactive');
+    expect(newCellRefusal({ kind: 'charge', assigned: true, codeActive: true, clinActive: true, slinActive: true, contractActive: true })).toBeNull();
     expect(newCellRefusal({ kind: 'indirect', active: false, availableToAll: true })).toBe('indirect-unavailable');
+  });
+
+  it('T18 (B5): a deactivated SLIN refuses new hours; an active SLIN (or none) allows them', () => {
+    expect(newCellRefusal({ kind: 'charge', assigned: true, codeActive: true, clinActive: true, slinActive: false, contractActive: true })).toBe('code-inactive');
+    expect(newCellRefusal({ kind: 'charge', assigned: true, codeActive: true, clinActive: true, slinActive: true, contractActive: true })).toBeNull();
   });
 });
 
@@ -111,13 +116,28 @@ describe('saveTimesheetBatch — per cell, inside the transaction, after the pri
     for (const facts of [{ clinActive: false }, { contractActive: false }]) {
       db.reset();
       chargeCodeFacts({ assigned: true, codeActive: true, ...facts, priorRevision: 0 });
-      expect(await save({ chargeCodeId: CODE }), JSON.stringify(facts)).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/no longer active \(or its CLIN or contract isn't\)/) });
+      expect(await save({ chargeCodeId: CODE }), JSON.stringify(facts)).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/no longer active \(or its CLIN, SLIN or contract isn't\)/) });
       expect(inserted()).toEqual([]);
       db.reset();
       chargeCodeFacts({ assigned: true, codeActive: true, ...facts, priorRevision: 1 });
       expect((await save({ chargeCodeId: CODE, isEdit: true })).ok, JSON.stringify(facts)).toBe(true);
       expect(inserted()).toEqual([expect.objectContaining({ chargeCodeId: CODE, revisionNumber: 2 })]);
     }
+  });
+
+  it('T18 (B5): the code SLIN inactive or closed → a NEW day is refused (message names the SLIN); a correction succeeds', async () => {
+    for (const slinStatus of ['inactive', 'closed']) {
+      db.reset();
+      chargeCodeFacts({ assigned: true, codeActive: true, slinStatus, priorRevision: 0 });
+      expect(await save({ chargeCodeId: CODE }), slinStatus).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/no longer active \(or its CLIN, SLIN or contract isn't\)/) });
+      expect(inserted()).toEqual([]);
+      db.reset();
+      chargeCodeFacts({ assigned: true, codeActive: true, slinStatus, priorRevision: 1 });
+      expect((await save({ chargeCodeId: CODE, isEdit: true })).ok, slinStatus).toBe(true);
+    }
+    db.reset();
+    chargeCodeFacts({ assigned: true, codeActive: true, slinStatus: 'active', priorRevision: 0 });
+    expect((await save({ chargeCodeId: CODE })).ok).toBe(true);
   });
 
   it('a correction still needs a reason code', async () => {
@@ -196,7 +216,7 @@ describe('save mapping by kind (client and offline queue)', () => {
     const cell = readFileSync(path.join(ROOT, 'src/components/timesheet/cells/HourCell.tsx'), 'utf8');
     expect(cell).toMatch(/isCellEditable\(\{ periodEditable, isFutureDate, assignable: row\?\.assignable \?\? true, priorRevision \}\)/);
     expect(readFileSync(path.join(ROOT, 'src/components/timesheet/cells/ChargeCodeCell.tsx'), 'utf8'))
-      .toContain('No longer assigned — you can correct existing hours, not add new ones');
+      .toContain('Closed to new hours — you can correct existing hours');
     const ctx = readFileSync(path.join(ROOT, 'src/components/timesheet/TimesheetContext.tsx'), 'utf8');
     expect(ctx).toMatch(/chargeCodes: action\.chargeCodes,/);
     // F8: offline seeding uses the NEW period's list.

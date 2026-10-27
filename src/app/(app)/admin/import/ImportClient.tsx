@@ -435,7 +435,7 @@ export function ImportClient() {
       <PageHeader title="Data Import" />
       <Alert icon={<IconAlertCircle size={16} />} color="signal" variant="light" mb="lg">
         <Text size="sm" fw={600}>Import Order — follow these steps in order:</Text>
-        <Text size="sm">1. Employees → 2. Contracts → 3. CLINs → 4. Labor Categories → 5. Assignments</Text>
+        <Text size="sm">1. Employees → 2. Contracts → 3. CLINs → 4. Labor Categories → 5. CLIN assignments</Text>
       </Alert>
 
       <Tabs defaultValue="employees">
@@ -444,7 +444,7 @@ export function ImportClient() {
           <Tabs.Tab value="contracts">Contracts</Tabs.Tab>
           <Tabs.Tab value="clins">CLINs</Tabs.Tab>
           <Tabs.Tab value="lcats">Labor Categories</Tabs.Tab>
-          <Tabs.Tab value="assignments">Assignments</Tabs.Tab>
+          <Tabs.Tab value="assignments">CLIN assignments (approval scope)</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="employees">
@@ -508,8 +508,8 @@ export function ImportClient() {
 
         <Tabs.Panel value="assignments">
           <ImportWizard
-            title="Assignment Import"
-            description="Bulk assign employees to CLINs. Duplicate assignments are skipped."
+            title="CLIN assignments (approval scope)"
+            description="Bulk assign employees to CLINs. Duplicate assignments are skipped. This doesn't give anyone charge codes. Use Assignments → Charge code access for that."
             templateUrl="/templates/assignment-import-template.csv"
             templateName="assignment-import-template.csv"
             requiredColumns={['Email', 'Contract Number', 'CLIN Number']}

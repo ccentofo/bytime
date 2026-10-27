@@ -86,6 +86,35 @@ describe('grid corrections (certified-outputs C4)', () => {
     expect((await getTimesheetPeriod(start)).chargeCodes.map((c) => c.id)).toContain(code.id);
   });
 
+  it('T17 (B5): SLIN deactivated — new day refused naming the SLIN; a mixed batch writes nothing; the correction alone succeeds; reactivated → new days allowed', async () => {
+    const [slin] = await db().insert(schema.slins).values({ clinId: clin.id, slinNumber: 'B5AA' }).returning();
+    const code = await createTestChargeCode(clin.id, { slinId: slin.id });
+    await db().insert(schema.userChargeCodes).values({ userId: emp.id, chargeCodeId: code.id, isActive: true });
+    await entry({ chargeCodeId: code.id, clinId: clin.id, slinId: slin.id });
+    await db().update(schema.slins).set({ status: 'inactive' }).where(eq(schema.slins.id, slin.id));
+    const count = async () => (await db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.chargeCodeId, code.id))).length;
+
+    expect((await getTimesheetPeriod(start)).chargeCodes.find((c) => c.id === code.id)).toMatchObject({ kind: 'charge', assignable: false });
+    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 1, hours: 4, isEdit: false, isLateEntry: true }], ...fix }), 'validation', /no longer active \(or its CLIN, SLIN or contract isn't\)/);
+
+    // All-or-nothing: a new cell on the closed SLIN + a valid correction → the whole save is refused, nothing written.
+    const before = await count();
+    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [
+      { chargeCodeId: code.id, dayIndex: 0, hours: 5, isEdit: true, isLateEntry: false },
+      { chargeCodeId: code.id, dayIndex: 2, hours: 3, isEdit: false, isLateEntry: true },
+    ], ...fix }), 'validation', /SLIN/);
+    expect(await count()).toBe(before);
+
+    const r = await saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 5, isEdit: true, isLateEntry: false }], ...fix });
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    expect(await count()).toBe(before + 1);
+
+    await db().update(schema.slins).set({ status: 'active' }).where(eq(schema.slins.id, slin.id));
+    expect((await getTimesheetPeriod(start)).chargeCodes.find((c) => c.id === code.id)).toMatchObject({ assignable: true });
+    const again = await saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 1, hours: 4, isEdit: false, isLateEntry: true }], ...fix });
+    expect(again.ok, JSON.stringify(again)).toBe(true);
+  });
+
   it('unassigned charge code: shown only in periods where it has hours; new day refused (forbidden), correction allowed with a reason', async () => {
     const code = await createTestChargeCode(clin.id);
     await db().insert(schema.userChargeCodes).values({ userId: emp.id, chargeCodeId: code.id, isActive: false });

@@ -20,6 +20,7 @@ import { getNumDaysInPeriod } from '@/lib/date-utils';
 import { addDays, diffDays, isAfter, isBefore, formatCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { ConflictError, UserFacingError } from '@/lib/errors';
 import { newCellRefusal } from '@/lib/timesheet/cell-rules';
+import { CHARGEABLE_CODE } from '@/server/internal/chargeable';
 import { userAction, type ActionResult } from '@/lib/action-result';
 
 /**
@@ -254,8 +255,9 @@ export async function saveTimesheetBatch(data: {
           .where(and(eq(userChargeCodes.userId, userId), inArray(userChargeCodes.chargeCodeId, chargeCodeIds), eq(userChargeCodes.isActive, true))))
           .map((r) => r.id));
         const codeState = new Map((chargeCodeIds.length === 0 ? [] : await tx
-          .select({ id: chargeCodes.id, codeActive: chargeCodes.isActive, clinStatus: clins.status, contractStatus: contracts.status })
+          .select({ id: chargeCodes.id, codeActive: chargeCodes.isActive, clinStatus: clins.status, slinStatus: slins.status, contractStatus: contracts.status })
           .from(chargeCodes).innerJoin(clins, eq(chargeCodes.clinId, clins.id)).innerJoin(contracts, eq(clins.contractId, contracts.id))
+          .leftJoin(slins, eq(chargeCodes.slinId, slins.id))
           .where(inArray(chargeCodes.id, chargeCodeIds))).map((r) => [r.id, r]));
         const indirectIds = [...new Set(data.cells.flatMap((c) => (c.indirectCodeId ? [c.indirectCodeId] : [])))];
         const indirectState = new Map((indirectIds.length === 0 ? [] : await tx
@@ -308,6 +310,8 @@ export async function saveTimesheetBatch(data: {
                 assigned: assignedCodes.has(cell.chargeCodeId),
                 codeActive: codeState.get(cell.chargeCodeId)?.codeActive ?? false,
                 clinActive: codeState.get(cell.chargeCodeId)?.clinStatus === 'active',
+                // B5: no SLIN (null) or an active one.
+                slinActive: (codeState.get(cell.chargeCodeId)?.slinStatus ?? null) === null || codeState.get(cell.chargeCodeId)?.slinStatus === 'active',
                 contractActive: codeState.get(cell.chargeCodeId)?.contractStatus === 'active',
               })
               : cell.indirectCodeId
@@ -318,7 +322,7 @@ export async function saveTimesheetBatch(data: {
               throw new AuthorizationError('forbidden', `Unauthorized: You are not assigned to charge code ${cell.chargeCodeId}. Cannot save timesheet entry.`);
             }
             if (refusal === 'code-inactive') {
-              throw new UserFacingError(`This charge code is no longer active (or its CLIN or contract isn't), so new hours can't be added on ${label}. You can correct hours already recorded on it.`);
+              throw new UserFacingError(`This charge code is no longer active (or its CLIN, SLIN or contract isn't), so new hours can't be added on ${label}. You can correct hours already recorded on it.`);
             }
             if (refusal === 'indirect-unavailable') throw new UserFacingError(`Indirect code ${cell.indirectCodeId} is not available.`);
             if (refusal === 'clin-only') {
@@ -490,9 +494,7 @@ async function getChargeCodesForEmployee(userId: string): Promise<ChargeCode[]> 
       and(
         eq(userChargeCodes.userId, userId),
         eq(userChargeCodes.isActive, true),
-        eq(chargeCodes.isActive, true),
-        eq(clins.status, 'active'),
-        eq(contracts.status, 'active'),
+        CHARGEABLE_CODE, // code, CLIN, SLIN (if any) and contract active — shared with the Setup counts
       )
     )
     .orderBy(contracts.name, clins.clinNumber, chargeCodes.code);
