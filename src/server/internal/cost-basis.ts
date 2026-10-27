@@ -1,7 +1,9 @@
 import 'server-only';
-import { and, desc, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lt, lte, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
-import type { ReadDb } from '@/db';
+import type { DbTx, ReadDb } from '@/db';
+import type { CalendarDate } from '@/lib/calendar-date';
+import { chargeCodeLaborCategoryOnSql, hourlyRateOnSql } from './labor-rates';
 import { chargeCodes, clins, laborCategories, slins, timesheetEntries, userLaborCategories, users } from '@/db/schema';
 
 /**
@@ -9,14 +11,16 @@ import { chargeCodes, clins, laborCategories, slins, timesheetEntries, userLabor
  * read `user_labor_categories` / `labor_categories` for report and dashboard costs (a static test enforces it).
  *
  * Per latest-revision entry, the applicable labor category is, most specific first:
- *   1. the entry's charge code's `labor_category_id`, when it has one; else
+ *   1. the entry's charge code's labor category on the entry's date (dated rates D3: its dated changes, else
+ *      `charge_codes.labor_category_id`), when it has one; else
  *   2. the employee's assignments effective on the entry date whose category is on the entry's SLIN; else
  *   3. the employee's assignments effective on the date whose category is on the entry's CLIN with NO SLIN.
  * At the first level with candidates: exactly one distinct category → priced with it; two or more → UNPRICED
  * ('conflict' — never pick one). No candidates at any level → UNPRICED ('no-category'; a SLIN-level category on a
  * different SLIN never applies). Unpriced entries count in hours totals and contribute no cost. No `status` filter: a
- * deactivated category still prices the hours it covered. Rates are today's (CO-D7 interim; effective-dated rates are
- * feature-plan-dated-rates.md).
+ * deactivated category still prices the hours it covered. The RATE is the one in effect on the entry's date
+ * (feature-plan-dated-rates.md D1.4): `applied_rate`, computed inside the lateral by hourlyRateOnSql — the only SQL
+ * rate rule. This module never reads a rate column itself.
  *
  * Use in a query over `timesheet_entries`:
  *   .leftJoinLateral(COST_BASIS_LATERAL, sql`true`).leftJoin(costLaborCategory, COST_LC_ON)
@@ -42,22 +46,33 @@ export function decideCostBasis(c: {
   return { basis: 'no-category', laborCategoryId: null, level: null };
 }
 
+/** Level 1 (dated rates D3): the entry's charge code's category ON THE ENTRY'S DATE (starting category, else dated). */
+const CHARGE_CODE_CATEGORY = chargeCodeLaborCategoryOnSql({ chargeCodeId: sql`${timesheetEntries.chargeCodeId}`, onDate: sql`${timesheetEntries.entryDate}` });
+
 /**
- * LEFT JOIN LATERAL … AS cost_basis(labor_category_id, basis, level): exactly one row per entry. Correlated to the
- * outer `timesheet_entries` row by its real table name (callers must not alias timesheet_entries).
+ * The resolved category's rate on the entry's date (dated rates D1.4). Applied one level OUTSIDE the resolution, to its
+ * `resolved.labor_category_id`, so the CASE that picks the category is never repeated. NULL when unpriced.
+ */
+const APPLIED_RATE = hourlyRateOnSql({ laborCategoryId: sql`resolved.labor_category_id`, onDate: sql`${timesheetEntries.entryDate}` });
+
+/**
+ * LEFT JOIN LATERAL … AS cost_basis(labor_category_id, basis, level, applied_rate): exactly one row per entry.
+ * Correlated to the outer `timesheet_entries` row by its real table name (callers must not alias timesheet_entries).
  */
 export const COST_BASIS_LATERAL: SQL = sql`(
+  SELECT resolved.labor_category_id, resolved.basis, resolved.level, ${APPLIED_RATE} AS applied_rate
+  FROM (
   SELECT
-    CASE WHEN c.l1 IS NOT NULL THEN c.l1
-         WHEN c.n2 = 1 THEN c.sole2
-         WHEN c.n2 = 0 AND c.n3 = 1 THEN c.sole3 END AS labor_category_id,
-    CASE WHEN c.l1 IS NOT NULL OR c.n2 = 1 OR (c.n2 = 0 AND c.n3 = 1) THEN 'priced'
-         WHEN c.n2 > 1 OR (c.n2 = 0 AND c.n3 > 1) THEN 'conflict'
+    CASE WHEN counts.l1 IS NOT NULL THEN counts.l1
+         WHEN counts.n2 = 1 THEN counts.sole2
+         WHEN counts.n2 = 0 AND counts.n3 = 1 THEN counts.sole3 END AS labor_category_id,
+    CASE WHEN counts.l1 IS NOT NULL OR counts.n2 = 1 OR (counts.n2 = 0 AND counts.n3 = 1) THEN 'priced'
+         WHEN counts.n2 > 1 OR (counts.n2 = 0 AND counts.n3 > 1) THEN 'conflict'
          ELSE 'no-category' END AS basis,
-    CASE WHEN c.l1 IS NOT NULL THEN 'charge-code' WHEN c.n2 > 0 THEN 'slin' WHEN c.n3 > 0 THEN 'clin' END AS level
+    CASE WHEN counts.l1 IS NOT NULL THEN 'charge-code' WHEN counts.n2 > 0 THEN 'slin' WHEN counts.n3 > 0 THEN 'clin' END AS level
   FROM (
     SELECT
-      (SELECT cc1.labor_category_id FROM charge_codes cc1 WHERE cc1.id = ${timesheetEntries.chargeCodeId}) AS l1,
+      ${CHARGE_CODE_CATEGORY} AS l1,
       s2.n AS n2, s2.sole AS sole2, s3.n AS n3, s3.sole AS sole3
     FROM
       (SELECT count(DISTINCT ulc2.labor_category_id)::int AS n, min(ulc2.labor_category_id::text)::uuid AS sole
@@ -72,26 +87,83 @@ export const COST_BASIS_LATERAL: SQL = sql`(
           AND ulc3.effective_date <= ${timesheetEntries.entryDate}
           AND (ulc3.end_date IS NULL OR ulc3.end_date >= ${timesheetEntries.entryDate})
           AND lc3.clin_id = ${timesheetEntries.clinId} AND lc3.slin_id IS NULL) s3
-  ) c
+  ) counts
+  ) resolved
 ) cost_basis`;
 
-/** The resolved category (rate, code, title) — join with COST_LC_ON. */
+/** The resolved category (code, title — never its rate; use cost_basis.applied_rate) — join with COST_LC_ON. */
 export const costLaborCategory = alias(laborCategories, 'cost_lc');
 export const COST_LC_ON = eq(costLaborCategory.id, sql`cost_basis.labor_category_id`);
 
-/** Per-entry fields. `hourlyRate` is null when unpriced. */
+/** Per-entry fields. `hourlyRate` / `appliedRate` = the rate in effect on the entry's date; null when unpriced. */
 export const costBasisFields = {
   basis: sql<CostBasis>`cost_basis.basis`,
   level: sql<CostBasisLevel>`cost_basis.level`,
   laborCategoryId: sql<string | null>`cost_basis.labor_category_id`,
   lcatCode: costLaborCategory.lcatCode,
   lcatTitle: costLaborCategory.title,
-  hourlyRate: costLaborCategory.hourlyRate,
+  hourlyRate: sql<string | null>`cost_basis.applied_rate`,
+  appliedRate: sql<string | null>`cost_basis.applied_rate`,
 };
 
 /** SUM of hours × rate over PRICED entries only (unpriced contribute no cost). */
 export const pricedCostSum = sql<number>`COALESCE(SUM(CASE WHEN cost_basis.basis = 'priced'
-  THEN CAST(${timesheetEntries.hours} AS NUMERIC) * CAST("cost_lc"."hourly_rate" AS NUMERIC) ELSE 0 END), 0)`;
+  THEN CAST(${timesheetEntries.hours} AS NUMERIC) * cost_basis.applied_rate ELSE 0 END), 0)`;
+
+/**
+ * The latest revision of each cell (identity COALESCE(charge_code_id, indirect_code_id, clin_id) + date) — one shared
+ * fragment for this module (dated rates D1.4 (3)).
+ */
+export const LATEST_REVISION: SQL = sql`${timesheetEntries.revisionNumber} = (
+    SELECT MAX(te2.revision_number) FROM timesheet_entries te2
+    WHERE te2.user_id = ${timesheetEntries.userId}
+      AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
+      AND te2.entry_date = ${timesheetEntries.entryDate})`;
+
+/**
+ * Latest-revision hours priced at labor category `laborCategoryId` in [from, toExclusive) — the hours a rate change
+ * over that period re-prices (dated rates D1.4, DR-2). Always two decimals ('12.00'). Values only via operators (T1).
+ */
+export async function pricedHoursFor(
+  db: Pick<ReadDb, 'select'> | DbTx,
+  laborCategoryId: string,
+  from: CalendarDate | null,
+  toExclusive: CalendarDate | null,
+): Promise<string> {
+  const [row] = await db
+    .select({ hours: sql<string>`CAST(ROUND(COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0), 2) AS NUMERIC(12,2))::text` })
+    .from(timesheetEntries)
+    .leftJoinLateral(COST_BASIS_LATERAL, sql`true`)
+    .where(and(
+      LATEST_REVISION,
+      eq(sql`cost_basis.labor_category_id`, laborCategoryId),
+      from ? gte(timesheetEntries.entryDate, from) : undefined,
+      toExclusive ? lt(timesheetEntries.entryDate, toExclusive) : undefined,
+    ));
+  return row?.hours ?? '0.00';
+}
+
+/**
+ * Latest-revision hours recorded on charge code `chargeCodeId` in [from, toExclusive) — the hours a change of that code's
+ * labor category over the period re-prices (dated rates D3, DR-2). Same rounding as pricedHoursFor.
+ */
+export async function pricedHoursForChargeCode(
+  db: Pick<ReadDb, 'select'> | DbTx,
+  chargeCodeId: string,
+  from: CalendarDate | null,
+  toExclusive: CalendarDate | null,
+): Promise<string> {
+  const [row] = await db
+    .select({ hours: sql<string>`CAST(ROUND(COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0), 2) AS NUMERIC(12,2))::text` })
+    .from(timesheetEntries)
+    .where(and(
+      LATEST_REVISION,
+      eq(timesheetEntries.chargeCodeId, chargeCodeId),
+      from ? gte(timesheetEntries.entryDate, from) : undefined,
+      toExclusive ? lt(timesheetEntries.entryDate, toExclusive) : undefined,
+    ));
+  return row?.hours ?? '0.00';
+}
 
 /** SUM of hours over UNPRICED entries — shown as "X hours unpriced" next to every cost total (CO-D17). */
 export const unpricedHoursSum = sql<number>`COALESCE(SUM(CASE WHEN cost_basis.basis <> 'priced'
@@ -131,11 +203,7 @@ export async function unpricedEntries(
   filters: UnpricedFilters,
   limit = 500,
 ): Promise<{ rows: UnpricedEntryRow[]; truncated: boolean }> {
-  const latest = sql`${timesheetEntries.revisionNumber} = (
-    SELECT MAX(te2.revision_number) FROM timesheet_entries te2
-    WHERE te2.user_id = ${timesheetEntries.userId}
-      AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
-      AND te2.entry_date = ${timesheetEntries.entryDate})`;
+  const latest = LATEST_REVISION;
   const rows = await db
     .select({
       userId: timesheetEntries.userId,

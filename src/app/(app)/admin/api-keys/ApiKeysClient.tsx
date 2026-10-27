@@ -283,6 +283,11 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
             so add them to your checks rather than reading the cost alone. On those rows <Code>lcatTitle</Code> is{' '}
             <Code>Unpriced</Code> (no labor category applied) and <Code>totalCost</Code> is 0.
           </Text>
+          {/* feature-plan-dated-rates.md D2: rates are dated. */}
+          <Text size="sm" c="dimmed">
+            Each row&apos;s <Code>hourlyRate</Code> is the labor-category rate in effect on that entry&apos;s date, so one
+            labor category can appear at different rates across a range.
+          </Text>
           <Button onClick={() => { setNewKeyModalOpen(false); setNewKeyValue(''); }} color="success">
             I've Copied the Key
           </Button>

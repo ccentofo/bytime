@@ -344,7 +344,8 @@ export async function getPeriodCostReport(
       basis: sql<string>`CASE WHEN cost_basis.basis = 'priced' THEN 'priced' ELSE 'unpriced' END`,
       lcatCode: sql<string>`COALESCE("cost_lc"."lcat_code", '—')`,
       lcatTitle: sql<string>`COALESCE("cost_lc"."title", 'Unpriced')`,
-      hourlyRate: sql<string>`COALESCE("cost_lc"."hourly_rate", '0')`,
+      // Dated rates D1.4: the rate in effect on each entry's date — one row per rate when it changed inside the range.
+      hourlyRate: sql<string>`COALESCE(cost_basis.applied_rate, 0)::text`,
       totalHours: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
       totalCost: pricedCostSum,
       unpricedHours: unpricedHoursSum,
@@ -382,7 +383,8 @@ export async function getPeriodCostReport(
       sql`CASE WHEN cost_basis.basis = 'priced' THEN 'priced' ELSE 'unpriced' END`,
       costLaborCategory.lcatCode,
       costLaborCategory.title,
-      costLaborCategory.hourlyRate,
+      // Grouped over the per-entry lateral's column — never by re-evaluating the rate rule (trap T14).
+      sql`cost_basis.applied_rate`,
     )
     .orderBy(contracts.name, clins.clinNumber, users.fullName);
 

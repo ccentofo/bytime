@@ -282,6 +282,17 @@ transaction). Pure validators (`validateAddInput`, …) live in `src/lib/labor-r
 sync exports of the `'use server'` file. Logging: **the existing `admin_change_log` writer from
 certified outputs, passed `tx`** — never a second writer (if none exists, stop and report).
 
+**Ruling (dev mapping report, 2026-10-26) — the log writer:** certified outputs has no shared writer; it inserts
+`admin_change_log` directly in six places (`charge-codes.ts:120,143,183`, `users.ts:261`, `workspace-settings.ts:72`,
+`approval-rules.ts:180`). **Option A:** add `logAdminChange(tx, row)` in `src/server/internal/admin-change-log.ts`
+(takes the caller's `tx`, inserts one row, returns its id; no `getDb*`). Move the six existing inserts onto it as a
+**pure move** — identical columns and values, same transaction, same position in each function — in its **own commit
+before D1** ("D0"). Add a static test: no file outside `admin-change-log.ts` calls `insert(adminChangeLog)` (fixture
+must fail). The rate actions, D3 and the dated-rates seed (D1.7; seeds now run with `--conditions=react-server`, so
+importing it works) log through it; the §9 Atomicity row mocks this module. D0 gate: the full unit suite plus the
+existing certified-outputs tests for those six paths unchanged and green; the product owner's integration run covers
+them on Postgres.
+
 **Validation (pure, step 2):** ids → `validateUUID(id, 'Labor category')` / `validateUUID(id, 'Rate period')`;
 `effectiveDate` → new `validateCalendarDate(value, 'Effective date')` in `validation.ts` (`isCalendarDate` or
 `UserFacingError('Effective date is not a valid date.')`, matching `validateOptionalCalendarDate`); `hourlyRate` →
@@ -493,6 +504,7 @@ its own, hours stored as `'8.00'`, `'8.00'`, `'4.00'` on `2026-12-31`, `2027-01-
 | Pure | `rateOn` with changes out of order; day before / on / after each change; no changes | exact values + `source`; inclusive on the date |
 | Pure | `periodBounds` starting / middle / last; unknown id throws; `sameRate('145','145.00')` true, `('145','$145')` false; `rateDisplay` current + next | exact |
 | SQL = TS | F1 + changes `2027-01-01`→`110.00`, `2027-04-01`→`120.00`: `hourlyRateOnSql` vs `rateOn` on 2020-01-01, 2026-12-31, 2027-01-01, 2027-03-31, 2027-04-01, 2030-01-01 | equal on every date |
+| Two categories (audit H1) | F1 + category `O` on the same CLIN, starting `90.00`, change `2027-03-01` → `95.00`; `E2` assigned to `O` with entries `2027-01-15` 8.00 h and `2027-04-15` 8.00 h; L's change `2027-01-01` → `110.00`. Per entry via `getDetailedCostReportData`, and SQL = TS through its `hourlyRate` (each row equals `rateOn` of its own category's schedule on its date). Unit: render `COST_BASIS_LATERAL` with `PgDialect` — no `(\w+)\.labor_category_id = \1\.labor_category_id` (nor the `charge_code_id` twin); the builders render only their prefixed aliases (`dr_rate` / `dr_start`, `dr_cc_change` / `dr_cc_start`) | E2 720.00 (rate 90) / 760.00 (rate 95); E/L 800.00 / 880.00 / 440.00; period total 3600.00. Fails on a shadowed alias (E2 Jan 880.00, E Jun 380.00) |
 | Pricing | F1, no changes (per-entry via `getDetailedCostReportData`; grouped via `getPeriodCostReport`) | 800.00 / 800.00 / 400.00, total 2000.00 |
 | Pricing | add `2027-01-01` → `110.00` (reason given: it re-prices 12.00 h) | 800.00 / 880.00 / 440.00 = 2120.00; applied rates 100 / 110 / 110 |
 | Pricing | then add `2027-04-01` → `120.00` (reason given) | 800.00 / 880.00 / 480.00 = 2160.00 |
@@ -578,6 +590,7 @@ Manual (product owner, `npm run dev`, `acme.localhost:3000` as admin):
 | T13 | Float money / scale surprises | no TS money math; SQL returns strings; assertions use `toFixed(2)`; `pricedHoursFor` rounds to `NUMERIC(12,2)` | Pricing rows |
 | T14 | Grouping by a re-evaluated subquery | group over the per-entry result's `applied_rate` column | Grouping row |
 | T15 | `.for('update')` blocking FK inserts on related tables | `.for('no key update')` | Concurrency rows |
+| T16 | A SQL builder's internal table alias shadowing the caller's (e.g. both named `r`) turns a correlation into `x.col = x.col` — always true | prefix every builder-internal alias (`dr_…`); never name a caller's derived table the same; a unit test renders the real query and rejects `(\w+)\.col = \1\.col` | Two-categories row (audit H1) |
 
 ## 12. Dev-agent hand-off rules
 

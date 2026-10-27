@@ -20,6 +20,8 @@ import * as schema from '../src/db/schema';
 import { eq } from 'drizzle-orm';
 import { clearTenantData, SEED_EMAIL_DOMAINS } from '../src/db/clear-tenant-data';
 import { lockUserRulesExclusive, recomputeSelfApproval } from '../src/server/internal/approval-rules';
+import { logAdminChange } from '../src/server/internal/admin-change-log';
+import { addMonths, startOfMonth, todayIn } from '../src/lib/calendar-date';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import dayjs from 'dayjs';
@@ -163,6 +165,22 @@ export async function seedRichData(
     });
   }
   console.log('    ✓ 10 labor categories created');
+
+  // Dated rates D1.7: one demo rate change — NAV-01 SE-III (starting 145.00 / 160.00) escalates two months ago, with its
+  // change-log row through the one writer (same transaction). Hard-coded strings, no arithmetic.
+  const seIII = lcatIds[`${clinIds.nav01}-SE-III`];
+  const escalationDate = addMonths(startOfMonth(todayIn('America/New_York')), -2);
+  await db.transaction(async (tx) => {
+    await tx.insert(schema.laborCategoryRates).values({
+      laborCategoryId: seIII, effectiveDate: escalationDate, hourlyRate: '149.35', ceilingRate: '164.80', createdBy: userIds.admin,
+    });
+    await logAdminChange(tx as never, {
+      actorId: userIds.admin, entity: 'labor_category_rate', entityId: seIII, action: 'rate_change_added',
+      oldValue: { source: 'starting', hourlyRate: '145.00', ceilingRate: '160.00' },
+      newValue: { effectiveDate: escalationDate, hourlyRate: '149.35', ceilingRate: '164.80', reason: 'Demo: option-year escalation', repricedHours: null },
+    });
+  });
+  console.log('    ✓ 1 dated rate change (NAV-01 SE-III)');
 
   // ── 6. User Assignments ──
   console.log('  Creating user assignments...');

@@ -7,7 +7,7 @@ import {
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
-import { IconPlus, IconPencil, IconBan, IconBolt, IconRefresh } from '@tabler/icons-react';
+import { IconPlus, IconPencil, IconBan, IconBolt, IconRefresh, IconTag } from '@tabler/icons-react';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import {
@@ -18,6 +18,8 @@ import { RECORD_STATUS_COLOR, WORK_LOCATION_COLOR } from '@/lib/ui/status-colors
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
+import { ChargeCodeCategoryModal, type CategoryOption } from './ChargeCodeCategoryModal';
+import type { CategoryChange, CategoryScheduleView } from '@/lib/labor-rates';
 
 type ChargeCodeRow = {
   id: string;
@@ -36,6 +38,8 @@ type ChargeCodeRow = {
   billable: boolean;
   isActive: boolean;
   createdAt: Date;
+  /** Dated rates D3: laborCategoryId is the STARTING category; these are its dated changes. */
+  categoryChanges: CategoryChange[];
 };
 
 type ClinOption = { id: string; clinNumber: string; description: string | null };
@@ -45,6 +49,7 @@ type Props = {
   initialCodes: ChargeCodeRow[];
   costClasses: Array<{ id: string; name: string }>;
   contracts: ContractOption[];
+  laborCategories: CategoryOption[];
 };
 
 type CodeForm = {
@@ -72,9 +77,14 @@ const WORK_LOCATION_OPTIONS = [
 ];
 
 
-export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Props) {
+export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborCategories }: Props) {
   const canWrite = useCanWrite();
   const [codes, setCodes] = useState(initialCodes);
+  // Dated rates D3: the "Labor category" modal; a saved schedule is merged back into the table's rows.
+  const [categoryFor, setCategoryFor] = useState<ChargeCodeRow | null>(null);
+  function mergeCategorySchedule(view: CategoryScheduleView) {
+    setCodes((prev) => prev.map((c) => (c.id === view.chargeCodeId ? { ...c, laborCategoryId: view.starting, categoryChanges: view.changes } : c)));
+  }
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<CodeForm>(EMPTY_FORM);
@@ -247,6 +257,11 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
             <IconPencil size={16} />
           </ActionIcon>
         </Tooltip>
+        <Tooltip label="Labor category">
+          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => setCategoryFor(row.original)} aria-label="Labor category">
+            <IconTag size={16} />
+          </ActionIcon>
+        </Tooltip>
         {row.original.isActive && (
           <Tooltip label="Deactivate">
             <ActionIcon disabled={!canWrite}
@@ -335,6 +350,15 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts }: Prop
           </Group>
         </Stack>
       </Modal>
+
+      <ChargeCodeCategoryModal
+        opened={!!categoryFor}
+        onClose={() => setCategoryFor(null)}
+        code={categoryFor ? { id: categoryFor.id, code: categoryFor.code, clinId: categoryFor.clinId, slinId: categoryFor.slinId, schedule: { starting: categoryFor.laborCategoryId, changes: categoryFor.categoryChanges ?? [] } } : null}
+        categories={laborCategories}
+        canWrite={canWrite}
+        onSaved={mergeCategorySchedule}
+      />
 
       <ConfirmModal
         opened={!!confirmTarget}

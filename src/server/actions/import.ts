@@ -11,6 +11,7 @@ import { notifyReroutedApprovals } from '@/server/internal/submission-notify';
 import bcrypt from 'bcryptjs';
 import { importRowMessage, parseImportDate } from '@/server/internal/import-errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
+import { validateRate } from '@/lib/validation';
 
 // ---------------------------------------------------------------------------
 // Bulk Employee Import
@@ -250,12 +251,17 @@ export async function bulkImportLaborCategories(rows: LcatImportRow[]): Promise<
           continue;
         }
 
+        // Dated rates D1.6: the starting rate goes through validateRate (a blank or '$145' hourly rate is a row error —
+        // an unparseable stored rate would make every pricing query fail on its cast); a blank ceiling is none.
+        const hourlyRate = validateRate(row.hourlyRate, 'Hourly rate');
+        const ceilingRate = typeof row.ceilingRate === 'string' && row.ceilingRate.trim() !== '' ? validateRate(row.ceilingRate, 'Ceiling rate') : undefined;
+
         await db.insert(laborCategories).values({
           clinId: clin.id,
           lcatCode: row.lcatCode.trim(),
           title: row.title.trim(),
-          hourlyRate: row.hourlyRate?.trim() || '0.00',
-          ceilingRate: row.ceilingRate?.trim() || undefined,
+          hourlyRate,
+          ceilingRate,
           status: 'active',
         });
 

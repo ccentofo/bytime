@@ -193,6 +193,22 @@ export const laborCategories = pgTable('labor_categories', {
   uniqueIndex('clin_lcat_unique_idx').on(table.clinId, table.lcatCode),
 ]);
 
+// Dated rate changes (feature-plan-dated-rates.md). labor_categories.hourly_rate / ceiling_rate are the STARTING
+// rate (days before the first change). Rate on day D = latest change with effective_date <= D, else the starting
+// rate. No end dates by design: periods can't overlap or leave gaps.
+export const laborCategoryRates = pgTable('labor_category_rates', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  laborCategoryId: uuid('labor_category_id').notNull().references(() => laborCategories.id, { onDelete: 'cascade' }),
+  effectiveDate: date('effective_date', { mode: 'string' }).notNull(),
+  hourlyRate: varchar('hourly_rate', { length: 20 }).notNull(),  // validateRate format, same type as the starting rate
+  ceilingRate: varchar('ceiling_rate', { length: 20 }),           // null = no ceiling in this period
+  createdBy: uuid('created_by').references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('lcat_rate_effective_unique_idx').on(table.laborCategoryId, table.effectiveDate),
+]);
+
 // ---------------------------------------------------------------------------
 // User Labor Categories (maps employees to their authorized LCAT + rate)
 // ---------------------------------------------------------------------------
@@ -250,6 +266,21 @@ export const chargeCodes = pgTable('charge_codes', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index('idx_charge_codes_clin').on(table.clinId),
+]);
+
+// Dated labor category of a charge code (feature-plan-dated-rates.md D3). charge_codes.labor_category_id is the STARTING
+// category (may be null); a dated change always names a category (FK default NO ACTION — never SET NULL). Category of
+// code K on day D = latest change with effective_date <= D, else the starting category.
+export const chargeCodeLaborCategories = pgTable('charge_code_labor_categories', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  chargeCodeId: uuid('charge_code_id').notNull().references(() => chargeCodes.id, { onDelete: 'cascade' }),
+  effectiveDate: date('effective_date', { mode: 'string' }).notNull(),
+  laborCategoryId: uuid('labor_category_id').notNull().references(() => laborCategories.id),
+  createdBy: uuid('created_by').references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('cc_lcat_effective_unique_idx').on(table.chargeCodeId, table.effectiveDate),
 ]);
 
 // ---------------------------------------------------------------------------

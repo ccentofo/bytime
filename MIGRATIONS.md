@@ -84,6 +84,27 @@ import" by their `MIGRATION` reason code), and the old `submitPeriod` doesn't se
 import-window check also treats any app-sourced `submitted` period event as "closed", so a submission made by the old
 code still closes the window once the new code is live.
 
+### Note: tenant migration 0015 (dated labor-category rates)
+
+`0015` only creates `labor_category_rates` (its FKs and the `lcat_rate_effective_unique_idx` unique index); there is no
+backfill. With no rows, every rate equals today's starting rate, so deploying it changes no number.
+
+- **Deploy the app right after migrating.** Older code ignores the new table, which is harmless until someone adds a
+  dated change through the new UI.
+- **Never roll the app back past dated rates once a dated change exists.** Older code prices every hour at the starting
+  rate (`labor_categories.hourly_rate`), which silently re-prices history. Fix forward instead. This is the one
+  exception to "code can be rolled back with Instant Rollback" below.
+
+### Note: tenant migration 0016 (a charge code's labor category by date)
+
+`0016` only creates `charge_code_labor_categories` (its FKs — the labor category with NO ACTION, never `SET NULL` — and
+the `cc_lcat_effective_unique_idx` unique index); there is no backfill. With no rows, every charge code keeps its
+category (`charge_codes.labor_category_id`, now the starting category), so deploying it changes no number.
+
+- **Deploy the app right after migrating**, as for 0015.
+- **The same no-rollback rule applies once a dated category change exists.** Older code prices every entry on a code
+  with the code's starting category, which silently re-prices history. Fix forward instead.
+
 ## Production Deployment
 
 ### Automated (CI/CD)

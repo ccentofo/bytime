@@ -1,7 +1,7 @@
 'use server';
 
 import { getDb, getDbForWrite } from '@/db';
-import { chargeCodes, costClasses, userChargeCodes, clins, contracts, slins, laborCategories, users, timesheetEntries, adminChangeLog } from '@/db/schema';
+import { chargeCodes, chargeCodeLaborCategories, costClasses, userChargeCodes, clins, contracts, slins, laborCategories, users, timesheetEntries } from '@/db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { UserFacingError } from '@/lib/errors';
@@ -12,6 +12,9 @@ import {
   type ChargeCodeInput,
 } from '@/server/internal/charge-codes';
 import { userAction } from '@/lib/action-result';
+import { logAdminChange } from '@/server/internal/admin-change-log';
+import type { CategoryChange } from '@/lib/labor-rates';
+import type { CalendarDate } from '@/lib/calendar-date';
 
 // ---------------------------------------------------------------------------
 // Cost Classes
@@ -38,7 +41,7 @@ export async function createCostClass(name: string) {
 export async function listChargeCodes() {
   await requireAdmin();
   const db = await getDb();
-  return db
+  const rows = await db
     .select({
       id: chargeCodes.id,
       code: chargeCodes.code,
@@ -62,6 +65,18 @@ export async function listChargeCodes() {
     .innerJoin(contracts, eq(clins.contractId, contracts.id))
     .leftJoin(costClasses, eq(chargeCodes.classId, costClasses.id))
     .orderBy(contracts.name, clins.clinNumber, chargeCodes.code);
+  // Dated rates D3: each code's dated labor-category changes (laborCategoryId above is the STARTING category).
+  const changes = rows.length === 0 ? [] : await db
+    .select({ id: chargeCodeLaborCategories.id, chargeCodeId: chargeCodeLaborCategories.chargeCodeId, effectiveDate: chargeCodeLaborCategories.effectiveDate, laborCategoryId: chargeCodeLaborCategories.laborCategoryId })
+    .from(chargeCodeLaborCategories)
+    .where(inArray(chargeCodeLaborCategories.chargeCodeId, rows.map((r) => r.id)));
+  const byCode = new Map<string, CategoryChange[]>();
+  for (const c of changes) {
+    const list = byCode.get(c.chargeCodeId) ?? [];
+    list.push({ id: c.id, effectiveDate: c.effectiveDate as CalendarDate, laborCategoryId: c.laborCategoryId });
+    byCode.set(c.chargeCodeId, list);
+  }
+  return rows.map((r) => ({ ...r, categoryChanges: byCode.get(r.id) ?? [] }));
 }
 
 export async function createChargeCode(data: ChargeCodeInput) {
@@ -78,13 +93,12 @@ export async function updateChargeCode(id: string, data: {
   description?: string;
   clinId?: string;
   slinId?: string | null;
-  laborCategoryId?: string | null;
   classId?: string | null;
   workLocation?: 'onsite' | 'telework' | 'other' | null;
   billable?: boolean;
 }) {
   return userAction(async () => {
-    const actor = await requireAdminFresh();
+    await requireAdminFresh();
     const db = await getDbForWrite();
     // R2-6: explicit allowlist — never spread the caller's object into .set(). `isActive` in
     // particular is a real column not in this form's type; deactivation has its own action
@@ -95,33 +109,33 @@ export async function updateChargeCode(id: string, data: {
     if (data.description !== undefined) updateData.description = data.description;
     if (data.clinId !== undefined) updateData.clinId = data.clinId;
     if (data.slinId !== undefined) updateData.slinId = data.slinId;
-    if (data.laborCategoryId !== undefined) updateData.laborCategoryId = data.laborCategoryId;
     if (data.classId !== undefined) updateData.classId = data.classId;
     if (data.workLocation !== undefined) updateData.workLocation = data.workLocation;
     if (data.billable !== undefined) updateData.billable = data.billable;
 
-    // feature-plan-certified-outputs.md C3 (charge-code denormalization invariant, CO-D13): compared against the stored
-    // row, locked FOR UPDATE (saveTimesheetBatch re-reads FOR SHARE, so the two serialize). A used code's CLIN/SLIN never
-    // changes; a used code's labor category may change and is logged (who, when, old, new).
+    // feature-plan-certified-outputs.md C3 (charge-code denormalization invariant): compared against the stored row,
+    // locked FOR UPDATE (saveTimesheetBatch re-reads FOR SHARE, so the two serialize). A used code's CLIN/SLIN never
+    // changes. The labor category is NOT editable here (feature-plan-dated-rates.md D3): it changes only through the
+    // dated category actions (src/server/actions/charge-code-categories.ts), which log every change.
     return db.transaction(async (tx) => {
       const [current] = await tx.select().from(chargeCodes).where(eq(chargeCodes.id, id)).for('update');
       if (!current) throw new UserFacingError('Charge code not found.', 'not_found');
       const clinChanged = data.clinId !== undefined && data.clinId !== current.clinId;
       const slinChanged = data.slinId !== undefined && (data.slinId ?? null) !== current.slinId;
-      const lcatChanged = data.laborCategoryId !== undefined && (data.laborCategoryId ?? null) !== current.laborCategoryId;
-      const used = clinChanged || slinChanged || lcatChanged
+      const used = clinChanged || slinChanged
         ? (await tx.select({ id: timesheetEntries.id }).from(timesheetEntries).where(eq(timesheetEntries.chargeCodeId, id)).limit(1)).length > 0
         : false;
       if (used && (clinChanged || slinChanged)) {
         throw new UserFacingError('This charge code already has recorded hours, so its CLIN and SLIN can\'t change — the hours stay on the CLIN they were recorded against. Create a new charge code instead.');
       }
-      const [row] = await tx.update(chargeCodes).set(updateData).where(eq(chargeCodes.id, id)).returning();
-      if (used && lcatChanged) {
-        await tx.insert(adminChangeLog).values({
-          actorId: actor.id, entity: 'charge_code', entityId: id, action: 'labor_category_changed',
-          oldValue: { laborCategoryId: current.laborCategoryId }, newValue: { laborCategoryId: data.laborCategoryId ?? null },
-        });
+      if (clinChanged || slinChanged) {
+        // DR-Q2 default: a code's categories must sit on its own CLIN/SLIN, so it can't move while it has any.
+        const [dated] = await tx.select({ id: chargeCodeLaborCategories.id }).from(chargeCodeLaborCategories).where(eq(chargeCodeLaborCategories.chargeCodeId, id)).limit(1);
+        if (current.laborCategoryId || dated) {
+          throw new UserFacingError("Remove this charge code's labor categories before moving it to another CLIN or SLIN.");
+        }
       }
+      const [row] = await tx.update(chargeCodes).set(updateData).where(eq(chargeCodes.id, id)).returning();
       return row;
     });
   });
@@ -140,7 +154,7 @@ export async function deactivateChargeCode(id: string) {
       if (!current) throw new UserFacingError('Charge code not found.', 'not_found');
       if (!current.isActive) return;
       await tx.update(chargeCodes).set({ isActive: false, updatedAt: new Date() }).where(eq(chargeCodes.id, id));
-      await tx.insert(adminChangeLog).values({
+      await logAdminChange(tx, {
         actorId: actor.id, entity: 'charge_code', entityId: id, action: 'deactivated',
         oldValue: { isActive: true }, newValue: { isActive: false },
       });
@@ -180,7 +194,7 @@ export async function reactivateChargeCode(id: string) {
         .where(and(eq(userChargeCodes.chargeCodeId, id), eq(userChargeCodes.isActive, true), eq(users.isActive, true)));
       if (current.isActive) return { stillAssigned: assigned.length };
       await tx.update(chargeCodes).set({ isActive: true, updatedAt: new Date() }).where(eq(chargeCodes.id, id));
-      await tx.insert(adminChangeLog).values({
+      await logAdminChange(tx, {
         actorId: actor.id, entity: 'charge_code', entityId: id, action: 'reactivated',
         oldValue: { isActive: false }, newValue: { isActive: true, stillAssigned: assigned.length },
       });

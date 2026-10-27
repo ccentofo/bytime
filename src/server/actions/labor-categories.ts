@@ -1,8 +1,9 @@
 'use server';
 
 import { getDb, getDbForWrite } from '@/db';
-import { laborCategories, userLaborCategories, users, clins, contracts, slins } from '@/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { laborCategories, laborCategoryRates, userLaborCategories, users, clins, contracts, slins } from '@/db/schema';
+import { eq, and, asc, inArray } from 'drizzle-orm';
+import type { RateChange } from '@/lib/labor-rates';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { validateRequired, validateStringLength, validateOptionalString, validateRate } from '@/lib/validation';
 import { isBefore, isCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -38,7 +39,7 @@ export async function getLaborCategoriesByClin(clinId: string) {
 export async function getAllLaborCategories() {
   await requireAdmin();
   const db = await getDb();
-  return db
+  const rows = await db
     .select({
       id: laborCategories.id,
       clinId: laborCategories.clinId,
@@ -61,6 +62,19 @@ export async function getAllLaborCategories() {
     .innerJoin(contracts, eq(clins.contractId, contracts.id))
     .leftJoin(slins, eq(laborCategories.slinId, slins.id))
     .orderBy(contracts.name, clins.clinNumber, laborCategories.lcatCode);
+  // Dated rates D1.6: each category's rate changes (hourlyRate / ceilingRate above are the STARTING rate).
+  const changes = rows.length === 0 ? [] : await db
+    .select({ id: laborCategoryRates.id, laborCategoryId: laborCategoryRates.laborCategoryId, effectiveDate: laborCategoryRates.effectiveDate, hourlyRate: laborCategoryRates.hourlyRate, ceilingRate: laborCategoryRates.ceilingRate })
+    .from(laborCategoryRates)
+    .where(inArray(laborCategoryRates.laborCategoryId, rows.map((r) => r.id)))
+    .orderBy(asc(laborCategoryRates.effectiveDate));
+  const byCategory = new Map<string, RateChange[]>();
+  for (const c of changes) {
+    const list = byCategory.get(c.laborCategoryId) ?? [];
+    list.push({ id: c.id, effectiveDate: c.effectiveDate as CalendarDate, hourlyRate: c.hourlyRate, ceilingRate: c.ceilingRate ?? null });
+    byCategory.set(c.laborCategoryId, list);
+  }
+  return rows.map((r) => ({ ...r, rateChanges: byCategory.get(r.id) ?? [] }));
 }
 
 /**
@@ -91,13 +105,13 @@ export async function createLaborCategory(data: {
 }
 
 /**
- * Update an existing labor category.
+ * Update an existing labor category's code, title or status. Rates change ONLY through the dated rate actions
+ * (src/server/actions/labor-category-rates.ts — feature-plan-dated-rates.md D1.6): an in-place overwrite would silently
+ * re-price all history.
  */
 export async function updateLaborCategory(id: string, data: {
   lcatCode?: string;
   title?: string;
-  hourlyRate?: string;
-  ceilingRate?: string;
   status?: 'active' | 'inactive' | 'closed';
 }) {
   return userAction(async () => {
@@ -106,8 +120,6 @@ export async function updateLaborCategory(id: string, data: {
     const validatedData: Record<string, unknown> = { updatedAt: new Date() };
     if (data.lcatCode !== undefined) validatedData.lcatCode = validateStringLength(validateRequired(data.lcatCode, 'LCAT code'), 'LCAT code', 1, 50);
     if (data.title !== undefined) validatedData.title = validateStringLength(validateRequired(data.title, 'Title'), 'Title', 1, 255);
-    if (data.hourlyRate !== undefined) validatedData.hourlyRate = validateRate(data.hourlyRate, 'Hourly rate');
-    if (data.ceilingRate !== undefined) validatedData.ceilingRate = data.ceilingRate ? validateRate(data.ceilingRate, 'Ceiling rate') : undefined;
     if (data.status !== undefined) validatedData.status = data.status;
     const rows = await db.update(laborCategories)
       .set(validatedData)
@@ -135,7 +147,6 @@ export interface UserLcatAssignment {
   userEmail: string;
   lcatCode: string;
   lcatTitle: string;
-  hourlyRate: string;
   clinNumber: string;
   contractName: string;
   contractNumber: string;
@@ -156,7 +167,7 @@ export async function getUserLaborCategoryAssignments(): Promise<UserLcatAssignm
       userEmail: users.email,
       lcatCode: laborCategories.lcatCode,
       lcatTitle: laborCategories.title,
-      hourlyRate: laborCategories.hourlyRate,
+      // Dated rates D2: no rate here — the page shows the CURRENT rate from the category's schedule (rateDisplay).
       clinNumber: clins.clinNumber,
       contractName: contracts.name,
       contractNumber: contracts.contractNumber,
@@ -261,7 +272,7 @@ export async function getAssignableLaborCategories() {
       id: laborCategories.id,
       lcatCode: laborCategories.lcatCode,
       title: laborCategories.title,
-      hourlyRate: laborCategories.hourlyRate,
+      // Dated rates D2: no starting rate here — the dropdown shows the current rate from the page's schedules.
       clinId: laborCategories.clinId,
       slinId: laborCategories.slinId,
       clinNumber: clins.clinNumber,

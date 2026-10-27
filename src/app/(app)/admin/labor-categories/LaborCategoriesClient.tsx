@@ -17,7 +17,7 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
-import { IconEdit, IconPlus, IconToggleLeft, IconBan } from '@tabler/icons-react';
+import { IconEdit, IconPlus, IconToggleLeft, IconBan, IconCurrencyDollar } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
@@ -35,7 +35,9 @@ import { formatDate } from '@/lib/format';
 import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { formatCalendarDate, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { rateDisplay, type RateChange, type RateSchedule, type RateScheduleView } from '@/lib/labor-rates';
+import { RateScheduleModal } from './RateScheduleModal';
 import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 
 // ---------------------------------------------------------------------------
@@ -58,6 +60,8 @@ type LaborCategory = {
   contractName: string;
   contractNumber: string;
   slinNumber: string | null;
+  /** Dated rates: hourlyRate / ceilingRate are the STARTING rate; these are the dated changes. */
+  rateChanges: RateChange[];
 };
 
 type UserLcatAssignment = {
@@ -71,7 +75,6 @@ type UserLcatAssignment = {
   userEmail: string;
   lcatCode: string;
   lcatTitle: string;
-  hourlyRate: string;
   clinNumber: string;
   contractName: string;
   contractNumber: string;
@@ -81,7 +84,6 @@ type AssignableLcat = {
   id: string;
   lcatCode: string;
   title: string;
-  hourlyRate: string;
   clinId: string;
   clinNumber: string;
   contractName: string;
@@ -135,6 +137,8 @@ type Props = {
   contracts: Contract[];
   users: User[];
   assignableLcats: AssignableLcat[];
+  /** The workspace's today (server — never the browser clock), for the current-rate display. */
+  today: CalendarDate;
 };
 
 const EMPTY_LCAT_FORM: LcatForm = {
@@ -159,12 +163,26 @@ export function LaborCategoriesClient({
   contracts,
   users,
   assignableLcats: initialAssignableLcats,
+  today,
 }: Props) {
   const canWrite = useCanWrite();
   const [isPending, startTransition] = useTransition();
   const [laborCats, setLaborCats] = useState<LaborCategory[]>(initialLaborCategories);
   const [assignments, setAssignments] = useState<UserLcatAssignment[]>(initialAssignments);
   const [assignableLcats] = useState<AssignableLcat[]>(initialAssignableLcats);
+
+  // Dated rates D2: the Rates modal and the current-rate lookups (all from the same laborCats state).
+  const [ratesFor, setRatesFor] = useState<LaborCategory | null>(null);
+  const scheduleOf = (lc: LaborCategory): RateSchedule => ({ starting: { hourlyRate: lc.hourlyRate, ceilingRate: lc.ceilingRate }, changes: lc.rateChanges ?? [] });
+  const currentRateOf = (laborCategoryId: string): string | null => {
+    const lc = laborCats.find((x) => x.id === laborCategoryId);
+    return lc ? rateDisplay(scheduleOf(lc), today).current.hourlyRate : null;
+  };
+  function mergeSchedule(view: RateScheduleView) {
+    setLaborCats((prev) => prev.map((lc) => (lc.id === view.laborCategoryId
+      ? { ...lc, hourlyRate: view.starting.hourlyRate, ceilingRate: view.starting.ceilingRate, rateChanges: view.changes }
+      : lc)));
+  }
 
   // LCAT Modal state
   const [lcatModalOpen, setLcatModalOpen] = useState(false);
@@ -220,7 +238,8 @@ export function LaborCategoriesClient({
   }
 
   function handleLcatSubmit() {
-    if (!lcatForm.lcatCode.trim() || !lcatForm.title.trim() || !lcatForm.hourlyRate.trim()) return;
+    // Dated rates D1.6: editing never sends rates (they change only through the Rates schedule); create sets the starting rate.
+    if (!lcatForm.lcatCode.trim() || !lcatForm.title.trim() || (!editingLcat && !lcatForm.hourlyRate.trim())) return;
 
     startTransition(async () => {
       try {
@@ -228,8 +247,6 @@ export function LaborCategoriesClient({
           const result = await runAction(updateLaborCategory(editingLcat.id, {
             lcatCode: lcatForm.lcatCode.trim(),
             title: lcatForm.title.trim(),
-            hourlyRate: lcatForm.hourlyRate.trim(),
-            ceilingRate: lcatForm.ceilingRate.trim() || undefined,
           }), { errorTitle: 'Couldn’t update labor category' });
           if (!result.ok) return;
           notifications.show({
@@ -370,16 +387,33 @@ export function LaborCategoriesClient({
     { accessorKey: 'lcatCode', header: 'LCAT Code', size: 120 },
     { accessorKey: 'title', header: 'Title', size: 200 },
     {
-      accessorKey: 'hourlyRate',
+      id: 'hourlyRate',
       header: 'Hourly Rate',
-      Cell: ({ cell }) => formatRate(cell.getValue<string>()),
-      size: 120,
+      // The rate in effect today, and the next later change (dimmed) if one exists.
+      Cell: ({ row }) => {
+        const { current, next } = rateDisplay(scheduleOf(row.original), today);
+        return (
+          <Stack gap={0}>
+            <Text size="sm" data-testid="lcat-current-hourly">{formatRate(current.hourlyRate)}</Text>
+            {next && <Text size="xs" c="dimmed" data-testid="lcat-next-hourly">→ {formatRate(next.hourlyRate)} from {formatCalendarDate(next.effectiveDate, 'MMM D, YYYY')}</Text>}
+          </Stack>
+        );
+      },
+      size: 150,
     },
     {
-      accessorKey: 'ceilingRate',
+      id: 'ceilingRate',
       header: 'Ceiling Rate',
-      Cell: ({ cell }) => formatRate(cell.getValue<string | null>()),
-      size: 120,
+      Cell: ({ row }) => {
+        const { current, next } = rateDisplay(scheduleOf(row.original), today);
+        return (
+          <Stack gap={0}>
+            <Text size="sm">{formatRate(current.ceilingRate)}</Text>
+            {next && <Text size="xs" c="dimmed">→ {formatRate(next.ceilingRate)} from {formatCalendarDate(next.effectiveDate, 'MMM D, YYYY')}</Text>}
+          </Stack>
+        );
+      },
+      size: 150,
     },
     {
       accessorKey: 'status',
@@ -401,6 +435,11 @@ export function LaborCategoriesClient({
         <Tooltip label="Edit">
           <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => openEditLcatModal(row.original)} aria-label="Edit labor category">
             <IconEdit size={16} />
+          </ActionIcon>
+        </Tooltip>
+        <Tooltip label="Rates">
+          <ActionIcon disabled={!canWrite} variant="subtle" onClick={() => setRatesFor(row.original)} aria-label="Rates">
+            <IconCurrencyDollar size={16} />
           </ActionIcon>
         </Tooltip>
         <Tooltip label={row.original.status === 'active' ? 'Deactivate' : 'Activate'}>
@@ -445,9 +484,11 @@ export function LaborCategoriesClient({
       size: 200,
     },
     {
-      accessorKey: 'hourlyRate',
+      id: 'currentRate',
       header: 'Rate',
-      Cell: ({ cell }) => `${formatRate(cell.getValue<string>())}/hr`,
+      // The assigned category's CURRENT rate (from its schedule in laborCats), never a starting rate.
+      accessorFn: (row) => currentRateOf(row.laborCategoryId),
+      Cell: ({ cell }) => `${formatRate(cell.getValue<string | null>())}/hr`,
       size: 120,
     },
     {
@@ -553,19 +594,23 @@ export function LaborCategoriesClient({
             value={lcatForm.title}
             onChange={(e) => setLcatForm((f) => ({ ...f, title: e.target.value }))}
           />
-          <TextInput
-            label="Hourly Rate ($)"
-            required
-            placeholder="125.00"
-            value={lcatForm.hourlyRate}
-            onChange={(e) => setLcatForm((f) => ({ ...f, hourlyRate: e.target.value }))}
-          />
-          <TextInput
-            label="Ceiling Rate ($)"
-            placeholder="150.00 (optional)"
-            value={lcatForm.ceilingRate}
-            onChange={(e) => setLcatForm((f) => ({ ...f, ceilingRate: e.target.value }))}
-          />
+          {!editingLcat && (
+            <>
+              <TextInput
+                label="Starting hourly rate ($)"
+                required
+                placeholder="125.00"
+                value={lcatForm.hourlyRate}
+                onChange={(e) => setLcatForm((f) => ({ ...f, hourlyRate: e.target.value }))}
+              />
+              <TextInput
+                label="Starting ceiling rate ($)"
+                placeholder="150.00 (optional)"
+                value={lcatForm.ceilingRate}
+                onChange={(e) => setLcatForm((f) => ({ ...f, ceilingRate: e.target.value }))}
+              />
+            </>
+          )}
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setLcatModalOpen(false)}>
               Cancel
@@ -576,7 +621,7 @@ export function LaborCategoriesClient({
               disabled={
                 !lcatForm.lcatCode.trim() ||
                 !lcatForm.title.trim() ||
-                !lcatForm.hourlyRate.trim() ||
+                (!editingLcat && !lcatForm.hourlyRate.trim()) ||
                 (!editingLcat && !lcatForm.clinId)
               }
             >
@@ -607,7 +652,7 @@ export function LaborCategoriesClient({
             placeholder="Select labor category"
             data={assignableLcats.map((lc) => ({
               value: lc.id,
-              label: `${lc.contractName} — ${lc.clinNumber} — ${lc.lcatCode}: ${lc.title} (${formatRate(lc.hourlyRate)}/hr)`,
+              label: `${lc.contractName} — ${lc.clinNumber} — ${lc.lcatCode}: ${lc.title} (${formatRate(currentRateOf(lc.id))}/hr)`,
             }))}
             value={assignLcatId}
             onChange={setAssignLcatId}
@@ -639,6 +684,14 @@ export function LaborCategoriesClient({
       </Paper>
 
       <MantineReactTable table={assignmentTable} />
+
+      <RateScheduleModal
+        opened={!!ratesFor}
+        onClose={() => setRatesFor(null)}
+        category={ratesFor ? { id: ratesFor.id, lcatCode: ratesFor.lcatCode, title: ratesFor.title, schedule: scheduleOf(ratesFor) } : null}
+        canWrite={canWrite}
+        onSaved={mergeSchedule}
+      />
 
       <ConfirmModal
         opened={!!confirmDeactivateLcat}

@@ -1,12 +1,13 @@
 'use server';
 
 import { getDb, getDbForWrite } from '@/db';
-import { adminChangeLog, workspaceSettings } from '@/db/schema';
+import { workspaceSettings } from '@/db/schema';
 import { requireAdminFresh, requireSession } from '@/lib/session';
 import { canonicalTimeZone } from '@/lib/calendar-date';
 import { UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
 import { eq } from 'drizzle-orm';
+import { logAdminChange } from '@/server/internal/admin-change-log';
 
 /**
  * The workspace's configured IANA timezone, for the settings page's initial value.
@@ -69,7 +70,7 @@ export async function updateWorkweekStartDay(day: number): Promise<ActionResult<
       await tx.insert(workspaceSettings)
         .values({ id: 1, workweekStartDay: day, updatedAt: new Date() })
         .onConflictDoUpdate({ target: workspaceSettings.id, set: { workweekStartDay: day, updatedAt: new Date() } });
-      await tx.insert(adminChangeLog).values({
+      await logAdminChange(tx, {
         actorId: actor.id, entity: 'workspace_settings', entityId: WORKSPACE_SETTINGS_ENTITY_ID, action: 'workweek_start_day_changed',
         oldValue: { workweekStartDay: old }, newValue: { workweekStartDay: day },
       });

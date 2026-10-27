@@ -3,7 +3,7 @@ import { getTestDb, createTestUser, cleanupTestData } from './helpers';
 import * as schema from '@/db/schema';
 
 /**
- * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4): each of the 37 admin-only writes (incl. the 6
+ * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4): each of the 43 admin-only writes (incl. the 6
  * OAuth-token-refreshing mapping readers) refuses a session whose JWT still says admin while the users row now says
  * supervisor — the real requireAdminFresh() re-reads the role from the tenant DB. Nothing is written.
  */
@@ -32,6 +32,8 @@ import * as contracts from '@/server/actions/contracts';
 import * as indirect from '@/server/actions/indirect-codes';
 import * as integrations from '@/server/actions/integrations';
 import * as lcats from '@/server/actions/labor-categories';
+import * as rates from '@/server/actions/labor-category-rates';
+import * as ccats from '@/server/actions/charge-code-categories';
 import * as qbo from '@/server/actions/qbo';
 import * as gusto from '@/server/actions/gusto';
 import * as slins from '@/server/actions/slins';
@@ -39,7 +41,7 @@ import * as users from '@/server/actions/users';
 
 const call = (fn: unknown, ...args: unknown[]) => (fn as (...a: unknown[]) => Promise<unknown>)(...args);
 
-/** Refused by the fresh role check: every one of the 37 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
+/** Refused by the fresh role check: every one of the 43 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
 async function expectRefused(pending: Promise<unknown>): Promise<void> {
   expect(await pending).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/access has changed/i) });
 }
@@ -83,9 +85,17 @@ const ADMIN_WRITES: Array<[string, unknown, unknown[]]> = [
   ['createSlin', slins.createSlin, [{ clinId: ZERO, slinNumber: 'AA' }]],
   ['updateSlin', slins.updateSlin, [ZERO, { slinNumber: 'AB' }]],
   ['unlockUserAccount', users.unlockUserAccount, ['locked@acme.com']],
+  // feature-plan-dated-rates.md D1.5
+  ['addLaborCategoryRateChange', rates.addLaborCategoryRateChange, [{ laborCategoryId: 'l1', effectiveDate: '2027-01-01', hourlyRate: '110', ceilingRate: null }]],
+  ['correctLaborCategoryRate', rates.correctLaborCategoryRate, [{ laborCategoryId: 'l1', target: 'starting', hourlyRate: '105', ceilingRate: null }]],
+  ['removeLaborCategoryRateChange', rates.removeLaborCategoryRateChange, [{ laborCategoryId: 'l1', changeId: 'x' }]],
+  // feature-plan-dated-rates.md D3
+  ['addChargeCodeCategoryChange', ccats.addChargeCodeCategoryChange, [{ chargeCodeId: 'cc1', effectiveDate: '2027-01-01', laborCategoryId: 'l1' }]],
+  ['correctChargeCodeCategory', ccats.correctChargeCodeCategory, [{ chargeCodeId: 'cc1', target: 'starting', laborCategoryId: null }]],
+  ['removeChargeCodeCategoryChange', ccats.removeChargeCodeCategoryChange, [{ chargeCodeId: 'cc1', changeId: 'x' }]],
 ];
 
-describe('the 37 admin-only writes refuse a JWT-admin whose DB role is supervisor (P3)', () => {
+describe('the 43 admin-only writes refuse a JWT-admin whose DB role is supervisor (P3)', () => {
   beforeAll(async () => {
     await cleanupTestData();
     const demoted = await createTestUser({ role: 'supervisor' }); // DB truth: supervisor
@@ -96,8 +106,8 @@ describe('the 37 admin-only writes refuse a JWT-admin whose DB role is superviso
     await cleanupTestData();
   });
 
-  it('covers exactly 37 actions', () => {
-    expect(ADMIN_WRITES).toHaveLength(37);
+  it('covers exactly 43 actions', () => {
+    expect(ADMIN_WRITES).toHaveLength(43);
   });
 
   it.each(ADMIN_WRITES)('%s', async (_name, fn, args) => {

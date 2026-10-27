@@ -33,6 +33,11 @@ const ALLOWLIST: Array<{ file: string; expr: string; why: string }> = [
   { file: 'src/lib/tenant/migrate-tenant.ts', expr: 'MIGRATION_LOCK_KEY', why: 'advisory-lock key (a number constant)' },
   { file: 'src/server/internal/import-window.ts', expr: 'IMPORT_WINDOW_LOCK', why: 'advisory-lock key (a string constant for hashtext; certified-outputs C1)' },
   { file: 'src/server/internal/approval-rules.ts', expr: 'USER_RULES_LOCK', why: 'advisory-lock key (a string constant for hashtext; certified-outputs fix round 1 F1)' },
+  { file: 'src/server/internal/labor-rates.ts', expr: 'laborCategoryId', why: 'typed `SQL` fragment parameter — the type forbids values (dated rates D1.3)' },
+  { file: 'src/server/internal/labor-rates.ts', expr: 'onDate', why: 'typed `SQL` fragment parameter — the type forbids values (dated rates D1.3)' },
+  { file: 'src/server/internal/cost-basis.ts', expr: 'APPLIED_RATE', why: 'SQL fragment from hourlyRateOnSql (dated rates D1.4)' },
+  { file: 'src/server/internal/labor-rates.ts', expr: 'chargeCodeId', why: 'typed `SQL` fragment parameter — the type forbids values (dated rates D3)' },
+  { file: 'src/server/internal/cost-basis.ts', expr: 'CHARGE_CODE_CATEGORY', why: 'SQL fragment from chargeCodeLaborCategoryOnSql (dated rates D3)' },
   { file: 'src/lib/cron/heartbeat.ts', expr: 'name', why: 'the heartbeat cron name (a CronName string)' },
   { file: 'src/lib/signup/signals.ts', expr: '`${key}:last`', why: 'a signal_counters key (a string)' },
 ];

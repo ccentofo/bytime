@@ -40,6 +40,8 @@ import * as importActions from '@/server/actions/import';
 import * as indirectCodes from '@/server/actions/indirect-codes';
 import * as integrations from '@/server/actions/integrations';
 import * as laborCategories from '@/server/actions/labor-categories';
+import * as laborCategoryRates from '@/server/actions/labor-category-rates';
+import * as chargeCodeCategories from '@/server/actions/charge-code-categories';
 import * as migration from '@/server/actions/migration';
 import * as payPeriodConfig from '@/server/actions/pay-period-config';
 import * as slins from '@/server/actions/slins';
@@ -73,6 +75,16 @@ const CASES: Array<[string, AnyAction, unknown[]]> = [
   ['updateSlin', a(slins.updateSlin), ['s', {}]],
   ['createUser', a(users.createUser), [{}]],
   ['createUserWithPassword', a(users.createUserWithPassword), [{}]],
+  // feature-plan-dated-rates.md D1.5 (guard first; the preview's read client is refused the same way)
+  ['addLaborCategoryRateChange', a(laborCategoryRates.addLaborCategoryRateChange), [{}]],
+  ['correctLaborCategoryRate', a(laborCategoryRates.correctLaborCategoryRate), [{}]],
+  ['removeLaborCategoryRateChange', a(laborCategoryRates.removeLaborCategoryRateChange), [{}]],
+  ['previewRateChangeImpact', a(laborCategoryRates.previewRateChangeImpact), [{}]],
+  // feature-plan-dated-rates.md D3
+  ['addChargeCodeCategoryChange', a(chargeCodeCategories.addChargeCodeCategoryChange), [{}]],
+  ['correctChargeCodeCategory', a(chargeCodeCategories.correctChargeCodeCategory), [{}]],
+  ['removeChargeCodeCategoryChange', a(chargeCodeCategories.removeChargeCodeCategoryChange), [{}]],
+  ['previewChargeCodeCategoryImpact', a(chargeCodeCategories.previewChargeCodeCategoryImpact), [{}]],
 ];
 
 describe('anonymous mutation against a billing_only workspace (audit A1)', () => {
