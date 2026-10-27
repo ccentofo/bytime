@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Checkbox, Stack, Text, Textarea } from '@mantine/core';
 import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 
@@ -8,7 +8,9 @@ import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-d
  * The preview → reason → checkbox gate shared by the dated-schedule modals (feature-plan-dated-rates.md D2 / D3).
  * A save is enabled only once a preview for the CURRENT values has run and, when it re-prices recorded hours
  * (`reasonRequired`), a reason is typed and "I understand past costs will change" is ticked. Changing a value field
- * calls `reset()` (preview, reason and checkbox cleared); typing the reason does not.
+ * calls `reset()` (preview, reason and checkbox cleared); typing the reason does not. A preview takes a ticket
+ * (`begin()`) and its result is applied only while `isCurrent(ticket)`: any reset (a value change, another row, Cancel,
+ * close) or a newer preview makes a still-running preview stale, so it can never arm Save for other values (audit M1).
  */
 export interface Impact { hours: string; from: CalendarDate | null; toExclusive: CalendarDate | null; reasonRequired: boolean }
 
@@ -16,9 +18,12 @@ export function useImpactGate() {
   const [impact, setImpact] = useState<Impact | null>(null);
   const [reason, setReason] = useState('');
   const [acknowledged, setAcknowledged] = useState(false);
-  const reset = () => { setImpact(null); setReason(''); setAcknowledged(false); };
+  const generation = useRef(0);
+  const reset = () => { generation.current += 1; setImpact(null); setReason(''); setAcknowledged(false); };
+  const begin = () => { generation.current += 1; return generation.current; };
+  const isCurrent = (ticket: number) => ticket === generation.current;
   const ready = impact !== null && (!impact.reasonRequired || (reason.trim() !== '' && acknowledged));
-  return { impact, setImpact, reason, setReason, acknowledged, setAcknowledged, reset, ready };
+  return { impact, setImpact, reason, setReason, acknowledged, setAcknowledged, reset, begin, isCurrent, ready };
 }
 
 const day = (d: CalendarDate) => formatCalendarDate(d, 'MMM D, YYYY');

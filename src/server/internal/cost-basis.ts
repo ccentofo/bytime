@@ -46,13 +46,13 @@ export function decideCostBasis(c: {
   return { basis: 'no-category', laborCategoryId: null, level: null };
 }
 
+/** Level 1 (dated rates D3): the entry's charge code's category ON THE ENTRY'S DATE (starting category, else dated). */
+const CHARGE_CODE_CATEGORY = chargeCodeLaborCategoryOnSql({ chargeCodeId: sql`${timesheetEntries.chargeCodeId}`, onDate: sql`${timesheetEntries.entryDate}` });
+
 /**
  * The resolved category's rate on the entry's date (dated rates D1.4). Applied one level OUTSIDE the resolution, to its
  * `resolved.labor_category_id`, so the CASE that picks the category is never repeated. NULL when unpriced.
  */
-/** Level 1 (dated rates D3): the entry's charge code's category ON THE ENTRY'S DATE (starting category, else dated). */
-const CHARGE_CODE_CATEGORY = chargeCodeLaborCategoryOnSql({ chargeCodeId: sql`${timesheetEntries.chargeCodeId}`, onDate: sql`${timesheetEntries.entryDate}` });
-
 const APPLIED_RATE = hourlyRateOnSql({ laborCategoryId: sql`resolved.labor_category_id`, onDate: sql`${timesheetEntries.entryDate}` });
 
 /**

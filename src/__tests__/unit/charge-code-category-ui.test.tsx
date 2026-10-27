@@ -62,11 +62,12 @@ let saved: unknown[];
 beforeEach(() => { container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container); saved = []; vi.clearAllMocks(); });
 afterEach(() => { act(() => root.unmount()); container.remove(); document.body.innerHTML = ''; });
 
-async function render(starting: string | null, changes: Array<{ id: string; effectiveDate: string; laborCategoryId: string }> = []) {
+let closed = 0;
+async function render(starting: string | null, changes: Array<{ id: string; effectiveDate: string; laborCategoryId: string }> = [], opened = true) {
   await act(async () => {
     root.render(
       <MantineProvider env="test">
-        <ChargeCodeCategoryModal opened onClose={() => {}} canWrite categories={categories}
+        <ChargeCodeCategoryModal opened={opened} onClose={() => { closed += 1; }} canWrite categories={categories}
           code={{ id: K, code: 'NAV-1', clinId: 'c1', slinId: null, schedule: { starting, changes: changes as never } }}
           onSaved={(v) => saved.push(v)} />
       </MantineProvider>,
@@ -139,6 +140,37 @@ describe('ChargeCodeCategoryModal (D3)', () => {
     expect(q('cat-error')!.textContent).toMatch(/different CLIN or SLIN/);
     expect((q('cat-category') as HTMLSelectElement).value).toBe(L);
     expect(saved).toEqual([]);
+  });
+
+  it('M1: a category change while the preview is pending → after it resolves: no impact shown, Save disabled', async () => {
+    let resolve!: (v: unknown) => void;
+    actions.preview.mockReturnValue(new Promise((r) => { resolve = r; }));
+    await render(L);
+    await click(q('cat-start-add'));
+    await setValue('cat-date', '2027-03-01');
+    await setValue('cat-category', M);
+    await click(q('cat-preview'));
+    await setValue('cat-category', L); // changed while the preview runs
+    await act(async () => { resolve({ ok: true, data: { hours: '0.00', from: '2027-03-01', toExclusive: null, reasonRequired: false } }); });
+    expect(q('cat-impact')).toBeNull();
+    expect((q('cat-save') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('L5: closing discards the half-done form; reopening shows the schedule only', async () => {
+    actions.preview.mockResolvedValue({ ok: true, data: { hours: '0.00', from: null, toExclusive: null, reasonRequired: false } });
+    closed = 0;
+    await render(null);
+    await click(q('cat-correct-starting'));
+    await setValue('cat-category', L);
+    await click(q('cat-preview'));
+    expect(q('cat-impact')).not.toBeNull();
+    await click(document.querySelector('.mantine-Modal-close'));
+    expect(closed).toBe(1);
+    await render(null, [], false);
+    await render(null, [], true);
+    expect(q('cat-start-add')).not.toBeNull();
+    expect(q('cat-category')).toBeNull();
+    expect(q('cat-impact')).toBeNull();
   });
 
   it('static: both modals render the shared EffectiveDatedTable; the charge codes page merges the returned schedule', () => {

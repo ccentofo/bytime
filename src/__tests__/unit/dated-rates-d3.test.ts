@@ -184,6 +184,51 @@ describe('state checks (exact messages, nothing written)', () => {
   });
 });
 
+describe('audit L2 / L4: input validation and check order', () => {
+  it('L2: a bad date, a 501-character reason, a bad Category period id → exact validation messages; nothing written', async () => {
+    expect(await addChargeCodeCategoryChange({ chargeCodeId: K, effectiveDate: '2027-02-30', laborCategoryId: M, reason: 'r' }))
+      .toEqual({ ok: false, code: 'validation', error: 'Effective date is not a valid date.' });
+    expect(await addChargeCodeCategoryChange({ chargeCodeId: K, effectiveDate: '2027-03-01', laborCategoryId: M, reason: 'x'.repeat(501) }))
+      .toEqual({ ok: false, code: 'validation', error: 'Reason must not exceed 500 characters.' });
+    expect(await correctChargeCodeCategory({ chargeCodeId: K, target: 'not-a-uuid', laborCategoryId: M, reason: 'r' }))
+      .toEqual({ ok: false, code: 'validation', error: 'Category period is not a valid identifier.' });
+    expect(await removeChargeCodeCategoryChange({ chargeCodeId: K, changeId: 'not-a-uuid', reason: 'r' }))
+      .toEqual({ ok: false, code: 'validation', error: 'Category period is not a valid identifier.' });
+    expect(await previewChargeCodeCategoryImpact({ kind: 'add', chargeCodeId: K, effectiveDate: '2027-02-30', laborCategoryId: M }))
+      .toEqual({ ok: false, code: 'validation', error: 'Effective date is not a valid date.' });
+    expect(writes()).toEqual([]);
+  });
+
+  it('L4: a gone period AND a wrong-CLIN category → the period message first, in the preview and in correct', async () => {
+    const gone = { ok: false, code: 'not_found', error: 'That category period no longer exists. Refresh and try again.' };
+    db.onSelect(chargeCodes, [{ clinId: 'c1', slinId: null, laborCategoryId: L }]);
+    db.onSelect(chargeCodeLaborCategories, []);
+    db.onSelect(laborCategories, [{ clinId: 'c9', slinId: null }]);
+    expect(await previewChargeCodeCategoryImpact({ kind: 'correct', chargeCodeId: K, target: X1, laborCategoryId: M })).toEqual(gone);
+    db.reset();
+    facts({ placement: { clinId: 'c9', slinId: null } });
+    expect(await correctChargeCodeCategory({ chargeCodeId: K, target: X1, laborCategoryId: M, reason: 'r' })).toEqual(gone);
+  });
+});
+
+describe('audit L6 / L7: docs', () => {
+  it('L6: MIGRATIONS.md has a 0016 note naming charge_code_labor_categories with the no-rollback rule', () => {
+    const md = readFileSync(path.join(ROOT, 'MIGRATIONS.md'), 'utf8');
+    const start = md.indexOf('### Note: tenant migration 0016');
+    expect(start).toBeGreaterThan(-1);
+    const note = md.slice(start, md.indexOf('\n## ', start));
+    expect(note).toContain('`charge_code_labor_categories`');
+    expect(note).toMatch(/no-rollback rule applies once a dated category change exists/);
+    expect(note).toMatch(/Fix forward instead\./);
+  });
+
+  it('L7: the APPLIED_RATE doc comment sits directly above APPLIED_RATE (and the level-1 comment above CHARGE_CODE_CATEGORY)', () => {
+    const src = readFileSync(path.join(ROOT, 'src/server/internal/cost-basis.ts'), 'utf8');
+    expect(src).toMatch(/NULL when unpriced\.\n \*\/\nconst APPLIED_RATE = /);
+    expect(src).toMatch(/\(starting category, else dated\)\. \*\/\nconst CHARGE_CODE_CATEGORY = /);
+  });
+});
+
 describe('atomicity, no silent edit, static wiring, export', () => {
   it('a failing log write fails the action (inside the transaction; real rollback on Postgres)', async () => {
     h.logThrows = true;

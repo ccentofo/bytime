@@ -505,3 +505,33 @@ Rulings: the audit §3 accepts every deviation from report §9 as is; no code ch
 - PG-13's find string is unchanged; its replacement text still works.
 
 **Gates (H1):** tsc clean; lint 0 errors / 58 warnings; 1370 unit tests ×4; the migration-safety script passes.
+
+### M1 and L1–L7 (one commit)
+
+| Item | Fix | Test | Break-it |
+|---|---|---|---|
+| **M1** a late preview armed Save for other values | `useImpactGate` keeps a generation counter (`useRef`). `reset()` and `begin()` bump it. Both modals take a ticket before the preview call and drop the result, error included, when `!gate.isCurrent(ticket)` | `rate-schedule-ui`: Hourly changed while the preview is pending → after it resolves no impact text and Save disabled; a row's Correct clicked while an Add preview is pending → result dropped. `charge-code-category-ui`: category changed while pending → same | M-1 (`isCurrent` always true), M-2 (`reset` doesn't bump), M-3 / M-4 (each modal ignores the ticket): all killed |
+| **L1** §9 period totals | — | `integration/dated-rates`: `getPeriodCostReport` total 2120.00 after the first add, 2160.00 after the second | PG-24 |
+| **L2** category input validation untested | — | `unit/dated-rates-d3`: `'2027-02-30'` → "Effective date is not a valid date." (add and preview); 501-character reason → "Reason must not exceed 500 characters."; bad target / change id → "Category period is not a valid identifier."; nothing written | L2-a…d (date check, reason check, target id, change id dropped): all killed |
+| **L3** rate modal Correct / Remove unrendered | — | `rate-schedule-ui`: Correct prefills the change's values, preview / save send `target`, the main table shows $112.00; Remove has no value fields, preview / save send `changeId`, the next-change line disappears; no Remove on the starting row | L3-a…d (no prefill, wrong change id, Remove on starting, Correct not merged): all killed |
+| **L4** preview checked the category before the period | `previewChargeCodeCategoryImpact` now resolves the period (`periodGone`) before the category checks, matching `correctChargeCodeCategory` | a gone period plus a wrong-CLIN category → the period message, in the preview and in correct | L4 (old order restored): killed |
+| **L5** reopening showed the half-done form | both modals: `discard()` (mode, gate, error), used by Cancel; Modal `onClose` → `close()` = `discard()` + `onClose()` | `rate-schedule-ui`: close via the Modal's close button, reopen → schedule only, no form, no impact. `charge-code-category-ui`: same, via `opened` false → true | L5-a / L5-b (`onClose` passed straight through): killed |
+| **L6** MIGRATIONS.md | new "tenant migration 0016" note: table, FKs (NO ACTION), index, no backfill, deploy right after, the same no-rollback rule once a dated category change exists | static: the note exists, names `` `charge_code_labor_categories` ``, and states the no-rollback rule and "Fix forward instead." | L6 first mutation survived (it renamed the heading to "…0016-removed", which still contains the heading text: a weak mutation, not a weak test). Re-run with L6-a (heading removed), L6-b (table not named), L6-c (rule dropped): all killed |
+| **L7** misplaced doc comment | the `APPLIED_RATE` doc block moved back directly above `APPLIED_RATE` | static: the comment's last line is directly followed by `const APPLIED_RATE`, and the level-1 comment by `const CHARGE_CODE_CATEGORY` | L7 (comment moved back): killed |
+
+**Break-its (M1 + LOWs): 19 mutations, 19 killed.** That counts the three L6 replacements, not the weak first L6 mutation.
+
+**Postgres break-its (this commit):**
+- **PG-24 (L1):** in `pricedCostSum`, replace `* cost_basis.applied_rate` with `* (SELECT CAST(lcx.hourly_rate AS NUMERIC) FROM labor_categories lcx WHERE lcx.id = cost_basis.labor_category_id)`, i.e. the starting rate. Run against `integration/dated-rates.test.ts`. Expected failures:
+  - "Pricing → Correction → Removal": period total 2000.00 instead of 2120.00;
+  - "Two categories": 3440.00 instead of 3600.00.
+  The per-entry costs still pass, because the detail report reads `applied_rate` directly. That is why L1's totals are needed.
+
+**Fix round 1 Postgres list for the lead's script:**
+- PG-22 and PG-23 (H1; PG-23 is "revert the lateral alias to `r`", in the form that actually re-creates the bug);
+- PG-24 (L1);
+- the find-string updates for PG-1, 2, 4, 11, 12 and 21 listed under H1.
+
+**Gates (fix round 1, final):** tsc clean; lint 0 errors / 58 warnings; 1381 unit tests ×4; the migration-safety script passes. Integration tests not run (no Postgres here).
+
+**Not committed:** `DATED-RATES-AUDIT.md` and `breakit-check.mjs` are the lead's files. The script says "do not commit", and I didn't edit it.

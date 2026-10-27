@@ -178,12 +178,12 @@ export async function previewChargeCodeCategoryImpact(input: CategoryImpactInput
     const db = await getDb();
     const state = await readCategorySchedule(db, chargeCodeId);
     if (!state) throw new UserFacingError(CATEGORY_MESSAGES.codeNotFound, 'not_found');
+    const period = periodOf(state.schedule); // the period first, then the category — same order as the mutations (audit L4)
     if (category !== undefined && category !== null) {
       const placement = await readCategoryPlacement(db, category);
       if (!placement) throw new UserFacingError(CATEGORY_MESSAGES.categoryNotFound, 'not_found');
       if (!categoryFitsCode(placement, state.code)) throw new UserFacingError(CATEGORY_MESSAGES.wrongClin);
     }
-    const period = periodOf(state.schedule);
     const hours = await pricedHoursForChargeCode(db, chargeCodeId, period.from, period.toExclusive);
     return { hours, from: period.from, toExclusive: period.toExclusive, reasonRequired: Number(hours) > 0 };
   });

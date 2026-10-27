@@ -95,6 +95,16 @@ backfill. With no rows, every rate equals today's starting rate, so deploying it
   rate (`labor_categories.hourly_rate`), which silently re-prices history. Fix forward instead. This is the one
   exception to "code can be rolled back with Instant Rollback" below.
 
+### Note: tenant migration 0016 (a charge code's labor category by date)
+
+`0016` only creates `charge_code_labor_categories` (its FKs — the labor category with NO ACTION, never `SET NULL` — and
+the `cc_lcat_effective_unique_idx` unique index); there is no backfill. With no rows, every charge code keeps its
+category (`charge_codes.labor_category_id`, now the starting category), so deploying it changes no number.
+
+- **Deploy the app right after migrating**, as for 0015.
+- **The same no-rollback rule applies once a dated category change exists.** Older code prices every entry on a code
+  with the code's starting category, which silently re-prices history. Fix forward instead.
+
 ## Production Deployment
 
 ### Automated (CI/CD)

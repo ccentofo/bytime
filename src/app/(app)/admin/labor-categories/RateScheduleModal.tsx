@@ -88,6 +88,7 @@ export function RateScheduleModal({ opened, onClose, category, canWrite, onSaved
   function preview() {
     if (!mode) return;
     setError(null);
+    const ticket = gate.begin();
     startTransition(async () => {
       const input = mode.kind === 'add'
         ? { kind: 'add' as const, laborCategoryId: category!.id, effectiveDate: date ?? '', hourlyRate: hourly, ceilingRate: ceilingValue }
@@ -95,6 +96,7 @@ export function RateScheduleModal({ opened, onClose, category, canWrite, onSaved
           ? { kind: 'correct' as const, laborCategoryId: category!.id, target: mode.target, hourlyRate: hourly, ceilingRate: ceilingValue }
           : { kind: 'remove' as const, laborCategoryId: category!.id, changeId: mode.changeId };
       const r = await runAction(previewRateChangeImpact(input), { silent: true });
+      if (!gate.isCurrent(ticket)) return; // the values changed while it ran — never apply it (audit M1)
       if (!r.ok) { setError(r.error); return; }
       gate.setImpact(r.data);
     });
@@ -118,10 +120,13 @@ export function RateScheduleModal({ opened, onClose, category, canWrite, onSaved
     });
   }
 
+  function discard() { setMode(null); gate.reset(); setError(null); }
+  function close() { discard(); onClose(); } // reopening never shows a half-done form (audit L5)
+
   const saveLabel = mode?.kind === 'add' ? 'Add' : mode?.kind === 'correct' ? 'Save correction' : 'Remove change';
 
   return (
-    <Modal opened={opened} onClose={onClose} title={`Rates — ${category.lcatCode}: ${category.title}`} size="lg">
+    <Modal opened={opened} onClose={close} title={`Rates — ${category.lcatCode}: ${category.title}`} size="lg">
       <Stack>
         <EffectiveDatedTable
           headers={['Hourly', 'Ceiling']}
@@ -147,7 +152,7 @@ export function RateScheduleModal({ opened, onClose, category, canWrite, onSaved
             <ImpactPanel gate={gate} testIdPrefix="rate" />
             {error && <Text size="sm" c="red" data-testid="rate-error">{error}</Text>}
             <Group justify="flex-end">
-              <Button variant="default" onClick={() => { setMode(null); gate.reset(); setError(null); }}>Cancel</Button>
+              <Button variant="default" onClick={discard}>Cancel</Button>
               <Button variant="light" onClick={preview} loading={isPending} disabled={mode.kind === 'add' && !date} data-testid="rate-preview">Preview</Button>
               <Button onClick={save} loading={isPending} disabled={!gate.ready} color={mode.kind === 'remove' ? 'red' : undefined} data-testid="rate-save">{saveLabel}</Button>
             </Group>

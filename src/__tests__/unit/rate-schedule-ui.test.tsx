@@ -175,6 +175,97 @@ describe('UI (D2): the Rates modal gate', () => {
   });
 });
 
+describe('UI (D2): Correct and Remove (audit L3)', () => {
+  it('Correct a change: prefilled with its values; preview/save send the target; the main table shows the corrected current rate', async () => {
+    actions.preview.mockResolvedValue({ ok: true, data: { hours: '8.00', from: '2027-01-01', toExclusive: '2027-04-01', reasonRequired: true } });
+    actions.correct.mockResolvedValue({ ok: true, data: { laborCategoryId: L, starting: { hourlyRate: '100.00', ceilingRate: '150.00' }, changes: [{ ...twoChanges[0], hourlyRate: '112.00' }, twoChanges[1]] } });
+    await render('2027-02-01', twoChanges);
+    await click(document.querySelector('button[aria-label="Rates"]'));
+    expect(q('rate-remove-starting')).toBeNull(); // the starting rate can't be removed
+    await click(q('rate-correct-x1'));
+    expect((q('rate-hourly') as HTMLInputElement).value).toBe('110.00');
+    await type('rate-hourly', '112');
+    await click(q('rate-preview'));
+    expect(actions.preview).toHaveBeenCalledWith({ kind: 'correct', laborCategoryId: L, target: 'x1', hourlyRate: '112', ceilingRate: null });
+    expect(q('rate-impact')!.textContent).toBe('This changes the cost of 8.00 recorded hours (Jan 1, 2027 – Mar 31, 2027).');
+    await type('rate-reason', 'mod 3');
+    await click(ackBox());
+    await click(q('rate-save'));
+    expect(actions.correct).toHaveBeenCalledWith({ laborCategoryId: L, target: 'x1', hourlyRate: '112', ceilingRate: null, reason: 'mod 3' });
+    expect(q('lcat-current-hourly')!.textContent).toBe('$112.00');
+  });
+
+  it('Remove a change: no value fields; preview/save send the change id; the main table drops the next-change line', async () => {
+    actions.preview.mockResolvedValue({ ok: true, data: { hours: '4.00', from: '2027-04-01', toExclusive: null, reasonRequired: true } });
+    actions.remove.mockResolvedValue({ ok: true, data: { laborCategoryId: L, starting: { hourlyRate: '100.00', ceilingRate: '150.00' }, changes: [twoChanges[0]] } });
+    await render('2027-02-01', twoChanges);
+    expect(q('lcat-next-hourly')).not.toBeNull();
+    await click(document.querySelector('button[aria-label="Rates"]'));
+    await click(q('rate-remove-x2'));
+    expect(q('rate-hourly')).toBeNull();
+    await click(q('rate-preview'));
+    expect(actions.preview).toHaveBeenCalledWith({ kind: 'remove', laborCategoryId: L, changeId: 'x2' });
+    expect(q('rate-impact')!.textContent).toBe('This changes the cost of 4.00 recorded hours (from Apr 1, 2027).');
+    expect(btn('rate-save').disabled).toBe(true);
+    await type('rate-reason', 'wrong date');
+    await click(ackBox());
+    await click(q('rate-save'));
+    expect(actions.remove).toHaveBeenCalledWith({ laborCategoryId: L, changeId: 'x2', reason: 'wrong date' });
+    expect(q('lcat-next-hourly')).toBeNull();
+  });
+});
+
+function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>((r) => { resolve = r; }); return { promise, resolve }; }
+const ZERO = { ok: true, data: { hours: '0.00', from: '2028-01-01', toExclusive: null, reasonRequired: false } };
+
+describe('M1 / L5 (audit): a late preview never arms Save; closing the modal discards the half-done form', () => {
+  async function openAdd() {
+    await click(document.querySelector('button[aria-label="Rates"]'));
+    await click(q('rate-start-add'));
+  }
+
+  it('a value change while the preview is pending → after it resolves: no impact shown, Save disabled', async () => {
+    const pending = deferred<unknown>();
+    actions.preview.mockReturnValue(pending.promise);
+    await render('2027-02-01', []);
+    await openAdd();
+    await type('rate-date', '2028-01-01');
+    await type('rate-hourly', '130');
+    await click(q('rate-preview'));
+    await type('rate-date', '2025-01-01'); // changed while the preview runs
+    await act(async () => { pending.resolve(ZERO); });
+    expect(q('rate-impact')).toBeNull();
+    expect(btn('rate-save').disabled).toBe(true);
+  });
+
+  it('a row\'s Correct clicked while an Add preview is pending → the late result is dropped', async () => {
+    const pending = deferred<unknown>();
+    actions.preview.mockReturnValue(pending.promise);
+    await render('2027-02-01', twoChanges);
+    await openAdd();
+    await type('rate-date', '2028-01-01');
+    await click(q('rate-preview'));
+    await click(q('rate-correct-x1'));
+    await act(async () => { pending.resolve(ZERO); });
+    expect(q('rate-impact')).toBeNull();
+    expect(btn('rate-save').disabled).toBe(true);
+  });
+
+  it('close and reopen the same category: the form, preview and reason are gone', async () => {
+    actions.preview.mockResolvedValue(ZERO);
+    await render('2027-02-01', []);
+    await openAdd();
+    await type('rate-date', '2028-01-01');
+    await click(q('rate-preview'));
+    expect(q('rate-impact')).not.toBeNull();
+    await click(document.querySelector('.mantine-Modal-close'));
+    await click(document.querySelector('button[aria-label="Rates"]'));
+    expect(q('rate-start-add')).not.toBeNull();
+    expect(q('rate-date')).toBeNull();
+    expect(q('rate-impact')).toBeNull();
+  });
+});
+
 // ── Static (wording) ──────────────────────────────────────────────────────────────────────────────────────────
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {

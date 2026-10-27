@@ -137,9 +137,12 @@ describe('dated labor-category rates (D1, Fixture F1)', () => {
     const afterFirst = await costs();
     expect(afterFirst.map((r) => money(r.totalCost))).toEqual(['800.00', '880.00', '440.00']);
     expect(afterFirst.map((r) => money(r.hourlyRate))).toEqual(['100.00', '110.00', '110.00']);
+    const periodTotal = async () => money((await getPeriodCostReport(...RANGE)).reduce((s, r) => s + r.totalCost, 0));
+    expect(await periodTotal()).toBe('2120.00'); // audit L1: the §9 totals, grouped
 
     await expectOk(add('2027-04-01', '120.00', 'escalation'));
     expect((await costs()).map((r) => money(r.totalCost))).toEqual(['800.00', '880.00', '480.00']);
+    expect(await periodTotal()).toBe('2160.00');
 
     await expectOk(correctLaborCategoryRate({ laborCategoryId: L, target: 'starting', hourlyRate: '105.00', ceilingRate: '150.00', reason: 'typo' }));
     expect((await costs()).map((r) => money(r.totalCost))).toEqual(['840.00', '880.00', '480.00']);

@@ -83,6 +83,7 @@ export function ChargeCodeCategoryModal({ opened, onClose, code, categories, can
   function preview() {
     if (!mode) return;
     setError(null);
+    const ticket = gate.begin();
     startTransition(async () => {
       const input = mode.kind === 'add'
         ? { kind: 'add' as const, chargeCodeId: code!.id, effectiveDate: date ?? '', laborCategoryId: categoryValue }
@@ -90,6 +91,7 @@ export function ChargeCodeCategoryModal({ opened, onClose, code, categories, can
           ? { kind: 'correct' as const, chargeCodeId: code!.id, target: mode.target, laborCategoryId: categoryValue }
           : { kind: 'remove' as const, chargeCodeId: code!.id, changeId: mode.changeId };
       const r = await runAction(previewChargeCodeCategoryImpact(input), { silent: true });
+      if (!gate.isCurrent(ticket)) return; // the values changed while it ran — never apply it (audit M1)
       if (!r.ok) { setError(r.error); return; }
       gate.setImpact(r.data);
     });
@@ -113,10 +115,13 @@ export function ChargeCodeCategoryModal({ opened, onClose, code, categories, can
     });
   }
 
+  function discard() { setMode(null); gate.reset(); setError(null); }
+  function close() { discard(); onClose(); } // reopening never shows a half-done form (audit L5)
+
   const saveLabel = mode?.kind === 'add' ? 'Add' : mode?.kind === 'correct' ? 'Save correction' : 'Remove change';
 
   return (
-    <Modal opened={opened} onClose={onClose} title={`Labor category — ${code.code}`} size="lg">
+    <Modal opened={opened} onClose={close} title={`Labor category — ${code.code}`} size="lg">
       <Stack>
         <EffectiveDatedTable
           headers={['Labor category']}
@@ -145,7 +150,7 @@ export function ChargeCodeCategoryModal({ opened, onClose, code, categories, can
             <ImpactPanel gate={gate} testIdPrefix="cat" />
             {error && <Text size="sm" c="red" data-testid="cat-error">{error}</Text>}
             <Group justify="flex-end">
-              <Button variant="default" onClick={() => { setMode(null); gate.reset(); setError(null); }}>Cancel</Button>
+              <Button variant="default" onClick={discard}>Cancel</Button>
               <Button variant="light" onClick={preview} loading={isPending} disabled={(mode.kind === 'add' && !date) || (mode.kind !== 'remove' && category === null)} data-testid="cat-preview">Preview</Button>
               <Button onClick={save} loading={isPending} disabled={!gate.ready} color={mode.kind === 'remove' ? 'red' : undefined} data-testid="cat-save">{saveLabel}</Button>
             </Group>
