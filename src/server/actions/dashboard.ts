@@ -9,6 +9,7 @@ import {
   users,
 } from '@/db/schema';
 import { COST_BASIS_LATERAL, COST_LC_ON, costLaborCategory, pricedCostSum, unpricedHoursSum } from '@/server/internal/cost-basis';
+import { clinCostTotals, sumRounded } from '@/server/internal/dashboard';
 import { eq, and, sql, gte, lt } from 'drizzle-orm';
 import { requireAdmin } from '@/lib/session';
 import { addDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -128,33 +129,8 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
       )
       .groupBy(timesheetEntries.clinId),
 
-    // Query 5: Total cost per CLIN (latest revision × effective rate)
-    db
-      .select({
-        clinId: timesheetEntries.clinId,
-        totalCost: pricedCostSum,
-        unpricedHours: unpricedHoursSum,
-      })
-      .from(timesheetEntries)
-      // certified-outputs C3: the one cost-basis resolution (CO-D10) — never doubles on overlapping assignments.
-      .leftJoinLateral(COST_BASIS_LATERAL, sql`true`)
-      .leftJoin(costLaborCategory, COST_LC_ON)
-      .where(
-        and(
-          sql`${timesheetEntries.clinId} IS NOT NULL`,
-          eq(
-            timesheetEntries.revisionNumber,
-            sql`(
-              SELECT MAX(te2.revision_number)
-              FROM timesheet_entries te2
-              WHERE te2.user_id = ${timesheetEntries.userId}
-                AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
-                AND te2.entry_date = ${timesheetEntries.entryDate}
-            )`
-          ),
-        )
-      )
-      .groupBy(timesheetEntries.clinId),
+    // Query 5: priced cost + unpriced hours per CLIN, rounded per CLIN — the shared helper (also Home's burn data)
+    clinCostTotals(db),
 
     // Query 6: Total hours per SLIN (latest revision only)
     db
@@ -219,11 +195,9 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
 
   const costMap = new Map<string, number>();
   const unpricedMap = new Map<string, number>();
-  for (const row of costData) {
-    if (row.clinId) {
-      costMap.set(row.clinId, Math.round(Number(row.totalCost) * 100) / 100);
-      unpricedMap.set(row.clinId, Math.round(Number(row.unpricedHours) * 100) / 100);
-    }
+  for (const [clinId, v] of costData) {
+    costMap.set(clinId, v.cost);
+    unpricedMap.set(clinId, v.unpricedHours);
   }
 
   const slinHoursMap = new Map<string, number>();
@@ -292,8 +266,6 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
     });
 
     const totalHours = clinSummaries.reduce((sum, c) => sum + c.totalHours, 0);
-    const totalCost = clinSummaries.reduce((sum, c) => sum + c.totalCost, 0);
-    const unpricedHours = clinSummaries.reduce((sum, c) => sum + c.unpricedHours, 0);
 
     summaries.push({
       contractId: contract.id,
@@ -304,8 +276,8 @@ export async function getContractSummaries(): Promise<ContractSummary[]> {
       fundedValue: contract.fundedValue,
       ceilingValue: contract.ceilingValue,
       totalHours: Math.round(totalHours * 100) / 100,
-      totalCost: Math.round(totalCost * 100) / 100,
-      unpricedHours: Math.round(unpricedHours * 100) / 100,
+      totalCost: sumRounded(clinSummaries.map((c) => c.totalCost)),
+      unpricedHours: sumRounded(clinSummaries.map((c) => c.unpricedHours)),
       clinSummaries,
     });
   }

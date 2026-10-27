@@ -28,6 +28,7 @@ import { isCalendarDate } from '@/lib/calendar-date';
 import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { PricedBasisNote, UnpricedNote } from '@/components/costs/UnpricedNote';
+import { BURN_TIER_COLOR, BURN_TIER_LABEL, burnPercent, burnTier, remainingWarning } from '@/lib/ui/burn';
 import { CURRENT_RATES_NOTE } from '@/lib/cost-labels';
 
 type Props = {
@@ -44,11 +45,6 @@ function formatCurrencyString(val: string | null): string {
   return isNaN(num) ? '—' : formatCurrency(num);
 }
 
-function getBurnColor(pct: number): string {
-  if (pct >= 90) return 'red';
-  if (pct >= 75) return 'warning';
-  return 'success';
-}
 
 export function DashboardClient({ initialSummaries }: Props) {
   const [isPending, startTransition] = useTransition();
@@ -138,7 +134,7 @@ export function DashboardClient({ initialSummaries }: Props) {
       },
       Cell: ({ cell, row }) => {
         const remaining = cell.getValue<number>();
-        const color = remaining < 0 ? 'red' : remaining < 10000 ? 'warning' : 'success';
+        const color = remaining < 0 ? 'red' : remainingWarning(remaining) ? 'warning' : 'success';
         return (
           <Stack gap={0}>
             <Text size="sm" c={color} fw={600}>{formatCurrency(remaining)}</Text>
@@ -153,17 +149,20 @@ export function DashboardClient({ initialSummaries }: Props) {
       header: 'Burn %',
       accessorFn: (row) => {
         const funded = parseFloat(row.fundedValue ?? '0') || 0;
-        if (funded === 0) return 0;
-        return Math.round((row.totalCost / funded) * 100);
+        return burnPercent(row.totalCost, funded);
       },
       Cell: ({ cell, row }) => {
         const pct = cell.getValue<number>();
+        // UX-2 §4.5.3: the shared tiers, with a word next to the bar (status is never colour alone).
+        const funded = parseFloat(row.original.fundedValue ?? '0') || 0;
+        const tier = burnTier(pct, funded, funded - row.original.totalCost);
         return (
           <Stack gap={0}>
             <Group gap="xs" wrap="nowrap">
-              <Progress value={Math.min(pct, 100)} color={getBurnColor(pct)} size="lg" style={{ flex: 1, minWidth: 60 }} />
+              <Progress value={Math.min(pct, 100)} color={BURN_TIER_COLOR[tier]} size="lg" style={{ flex: 1, minWidth: 60 }} aria-label={`Burn ${pct}%`} />
               <Text size="xs" fw={600} style={{ minWidth: 35 }}>{pct}%</Text>
             </Group>
+            <Text size="xs" c="dimmed" data-testid="burn-tier">{BURN_TIER_LABEL[tier]}</Text>
             {row.original.unpricedHours > 0 && <Text size="xs" c="dimmed">priced cost</Text>}
           </Stack>
         );

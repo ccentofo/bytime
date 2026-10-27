@@ -1,0 +1,31 @@
+/* Home's mini cadence (feature-plan-ux-navigation-home.md §4.5): one cell per day; the bar is min(hours / 8, 1). */
+.cadence {
+  display: flex;
+  gap: 3px;
+  align-items: flex-end;
+  height: 36px;
+}
+
+.cell {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  border-radius: 3px;
+  background: light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-5));
+}
+
+.cell[data-weekend] {
+  background: transparent;
+}
+
+.cell[data-today] {
+  outline: 2px solid light-dark(var(--mantine-color-signal-7), var(--mantine-color-signal-4));
+  outline-offset: 1px;
+}
+
+.bar {
+  width: 100%;
+  border-radius: 3px;
+  background: light-dark(var(--mantine-color-signal-7), var(--mantine-color-signal-4));
+}

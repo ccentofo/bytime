@@ -1,6 +1,6 @@
 import 'server-only';
 import { cache } from 'react';
-import { getDb } from '@/db';
+import { getDb, type ReadDb } from '@/db';
 import { workspaceSettings } from '@/db/schema';
 import { todayIn, canonicalTimeZone, addMonths, daysInMonth, startOfMonth, withDayOfMonth, type CalendarDate } from '@/lib/calendar-date';
 
@@ -41,4 +41,13 @@ export async function getDefaultSyncWindow(): Promise<{ periodStart: CalendarDat
   const periodStart = startOfMonth(addMonths(today, -2));
   const periodEnd = withDayOfMonth(today, daysInMonth(today));
   return { periodStart, periodEnd };
+}
+
+/**
+ * The workspace's FLSA workweek start day (0 = Sunday … 6), or null while unset (payroll export refuses until set).
+ * INTERNAL (UX-2 §4.5): Home's "Payroll workweek isn't set" item; the getWorkweekStartDaySetting action guards + calls.
+ */
+export async function workweekStartDayInternal(db: Pick<ReadDb, 'select'>): Promise<number | null> {
+  const [row] = await db.select({ day: workspaceSettings.workweekStartDay }).from(workspaceSettings).limit(1);
+  return row?.day ?? null;
 }

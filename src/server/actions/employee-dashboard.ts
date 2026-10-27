@@ -3,19 +3,17 @@
 import { getDb } from '@/db';
 import { timesheetEntries, timesheetPeriods } from '@/db/schema';
 import { eq, and, gte, lt, desc, sql } from 'drizzle-orm';
-import { getCurrentPeriodStart, getLastWeekdayInPeriod } from '@/lib/date-utils';
+import { getCurrentPeriodStart } from '@/lib/date-utils';
 import { getCurrentEffectiveConfigInternal } from '@/server/internal/pay-period-config';
 import { resolvePeriod } from '@/server/internal/periods';
 import { existingPeriodLength } from '@/server/internal/pay-period-config';
 import { getWorkspaceToday, getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { requireSession } from '@/lib/session';
+import { currentPeriodSummary } from '@/server/internal/employee-dashboard';
 import {
   addDays,
   calendarDayOf,
-  dayOfWeek,
   formatCalendarDate,
-  isAfter,
-  isBefore,
   type CalendarDate,
 } from '@/lib/calendar-date';
 
@@ -67,80 +65,20 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
   // D3/§0.6: resolve this period's REAL config/length (handles a pending schedule change),
   // never the landing config assumed by default.
   const { config: periodConfig, numDays } = await resolvePeriod(periodStart);
-  const periodEnd = addDays(periodStart, numDays - 1);
-  const periodLabel = `${formatCalendarDate(periodStart, 'MMM D')} – ${formatCalendarDate(periodEnd, 'MMM D, YYYY')}`;
-  const periodEndExclusive = addDays(periodStart, numDays);
+  const summary = await currentPeriodSummary(db, userId, { start: periodStart, numDays, config: periodConfig }, today);
 
-  // Parallel fetch: current period status + hours + recent periods
-  const [periodRows, hoursResult, recentRows] = await Promise.all([
-    db
-      .select()
-      .from(timesheetPeriods)
-      .where(
-        and(
-          eq(timesheetPeriods.userId, userId),
-          eq(timesheetPeriods.periodStart, periodStart),
-        )
-      ),
-    db
-      .select({
-        totalHours: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
-        distinctDays: sql<number>`COUNT(DISTINCT ${timesheetEntries.entryDate})`,
-      })
-      .from(timesheetEntries)
-      .where(
-        and(
-          eq(timesheetEntries.userId, userId),
-          gte(timesheetEntries.entryDate, periodStart),
-          lt(timesheetEntries.entryDate, periodEndExclusive),
-          eq(
-            timesheetEntries.revisionNumber,
-            sql`(
-              SELECT MAX(te2.revision_number)
-              FROM timesheet_entries te2
-              WHERE te2.user_id = ${timesheetEntries.userId}
-                AND COALESCE(te2.charge_code_id, te2.indirect_code_id, te2.clin_id) = COALESCE(${timesheetEntries.chargeCodeId}, ${timesheetEntries.indirectCodeId}, ${timesheetEntries.clinId})
-                AND te2.entry_date = ${timesheetEntries.entryDate}
-            )`
-          ),
-        )
-      ),
-    db
-      .select({
-        periodStart: timesheetPeriods.periodStart,
-        status: timesheetPeriods.status,
-        submittedAt: timesheetPeriods.submittedAt,
-        reviewedAt: timesheetPeriods.reviewedAt,
-        periodNumDays: timesheetPeriods.periodNumDays,
-      })
-      .from(timesheetPeriods)
-      .where(eq(timesheetPeriods.userId, userId))
-      .orderBy(desc(timesheetPeriods.periodStart))
-      .limit(5),
-  ]);
-
-  const period = periodRows[0];
-
-  // Count expected workdays (Mon-Fri) up to today
-  let expectedWorkdays = 0;
-  let daysRemaining = 0;
-  for (let i = 0; i < numDays; i++) {
-    const date = addDays(periodStart, i);
-    const dow = dayOfWeek(date);
-    const isWeekday = dow >= 1 && dow <= 5;
-    if (isWeekday) {
-      if (isAfter(date, today)) {
-        daysRemaining++;
-      } else {
-        expectedWorkdays++;
-      }
-    }
-  }
-
-  // Mirrors submitPeriod's actual gate (lastWeekday, not periodEnd) so the dashboard never
-  // claims a submission is allowed when the server would reject it.
-  const lastWeekday = getLastWeekdayInPeriod(periodStart, periodConfig);
-  const canSubmitToday = !isBefore(today, lastWeekday);
+  const recentRows = await db
+    .select({
+      periodStart: timesheetPeriods.periodStart,
+      status: timesheetPeriods.status,
+      submittedAt: timesheetPeriods.submittedAt,
+      reviewedAt: timesheetPeriods.reviewedAt,
+      periodNumDays: timesheetPeriods.periodNumDays,
+    })
+    .from(timesheetPeriods)
+    .where(eq(timesheetPeriods.userId, userId))
+    .orderBy(desc(timesheetPeriods.periodStart))
+    .limit(5);
 
   // Build recent periods with hours
   const timeZone = await getWorkspaceTimezone();
@@ -197,21 +135,22 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
     recentPeriods[i].totalHours = Math.round(Number(recentHoursResults[i][0]?.total ?? 0) * 100) / 100;
   }
 
+  // The current period comes from the shared internal (UX-2 §4.5.1); the payload keeps its shape.
   return {
     currentPeriod: {
-      periodStart,
-      periodEnd,
-      periodLabel,
-      status: period?.status ?? 'draft',
-      submittedAt: period?.submittedAt ?? null,
-      reviewedAt: period?.reviewedAt ?? null,
-      reviewComment: period?.reviewComment ?? null,
-      totalHoursEntered: Math.round(Number(hoursResult[0]?.totalHours ?? 0) * 100) / 100,
-      expectedWorkdays,
-      daysWithEntries: Number(hoursResult[0]?.distinctDays ?? 0),
-      daysRemaining,
-      submissionDeadline: formatCalendarDate(lastWeekday, 'MMM D, YYYY'),
-      canSubmitToday,
+      periodStart: summary.periodStart,
+      periodEnd: summary.periodEnd,
+      periodLabel: summary.periodLabel,
+      status: summary.status,
+      submittedAt: summary.submittedAt,
+      reviewedAt: summary.reviewedAt,
+      reviewComment: summary.reviewComment,
+      totalHoursEntered: summary.totalHoursEntered,
+      expectedWorkdays: summary.expectedWorkdays,
+      daysWithEntries: summary.daysWithEntries,
+      daysRemaining: summary.daysRemaining,
+      submissionDeadline: summary.submissionDeadline,
+      canSubmitToday: summary.canSubmitToday,
     },
     recentPeriods,
   };

@@ -11,7 +11,7 @@ import { validateEnum } from '@/lib/validation';
 
 /** effective_from for the first schedule row (matches the migration-0008 backfill sentinel). */
 const SCHEDULE_HISTORY_START = '1900-01-01' as CalendarDate;
-import { configAt, getCurrentEffectiveConfigInternal, getEffectiveConfigAtInternal, loadScheduleResolver } from '@/server/internal/pay-period-config';
+import { configAt, getCurrentEffectiveConfigInternal, getEffectiveConfigAtInternal, loadScheduleResolver, pendingConfigChangeInternal } from '@/server/internal/pay-period-config';
 import { eq, desc, gt } from 'drizzle-orm';
 import { UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
@@ -108,25 +108,7 @@ export async function getConfigHistory(): Promise<ConfigHistoryRow[]> {
  */
 export async function getPendingConfigChange(): Promise<ConfigHistoryRow | null> {
   await requireAdmin();
-  const db = await getDb();
-  const today = await getWorkspaceToday();
-  const rows = await db
-    .select()
-    .from(payPeriodConfig)
-    .where(gt(payPeriodConfig.effectiveFrom, today))
-    .orderBy(desc(payPeriodConfig.effectiveFrom))
-    .limit(1);
-
-  if (rows.length === 0) return null;
-  const r = rows[0];
-  return {
-    id: r.id,
-    periodType: r.periodType as PeriodType,
-    anchorDate: r.anchorDate as CalendarDate,
-    weekStartDay: r.weekStartDay,
-    effectiveFrom: r.effectiveFrom as CalendarDate,
-    createdAt: r.createdAt,
-  };
+  return pendingConfigChangeInternal(await getDb(), await getWorkspaceToday());
 }
 
 // ---------------------------------------------------------------------------
