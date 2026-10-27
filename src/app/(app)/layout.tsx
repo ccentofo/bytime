@@ -2,6 +2,7 @@ import { auth } from '@/auth';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { AppShellWrapper } from './AppShellWrapper';
+import { getWaitingCount } from '@/server/internal/approval-queue';
 import { getTenantState } from '@/lib/tenant/context';
 import { TenantUnavailable } from './TenantUnavailable';
 import { BillingWall } from './BillingWall';
@@ -53,6 +54,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
 
   const user = {
+    id: (session.user as any).id as string,
     fullName: (session.user as any).fullName ?? session.user.name ?? '',
     email: session.user.email ?? '',
     role: (session.user as any).role ?? 'employee',
@@ -60,6 +62,17 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   // The setup banner is gone (UX-2 L2): Home's "Finish setting up" item replaces it, so setup status is no longer
   // computed on every page.
+
+  // UX-2 §4.6: the sidebar's waiting count, approvers only. Caught → null (no badge): an error thrown by this layout is
+  // NOT caught by (app)/error.tsx (same segment), so an uncaught DB error here would take down every page.
+  let waitingCount: number | null = null;
+  if (user.role === 'admin' || user.role === 'supervisor') {
+    try {
+      waitingCount = await getWaitingCount(user.id);
+    } catch {
+      waitingCount = null;
+    }
+  }
 
   // Read the navbar-collapsed preference server-side so the first paint already has the correct
   // width — prevents the rail flashing open then collapsing on navigation. (Key must match
@@ -74,7 +87,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <AppShellWrapper
       user={user}
-      waitingCount={null}
+      waitingCount={waitingCount}
       initialCollapsed={navCollapsed}
       readOnlyReason={readOnlyReason}
       isDemo={tenant.tenant.lifecycleExempt}

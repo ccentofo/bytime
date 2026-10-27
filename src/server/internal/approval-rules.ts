@@ -274,6 +274,17 @@ export function newlyEligible(before: EligibilitySnapshot, after: EligibilitySna
   return out;
 }
 
+/**
+ * The people this approver can decide (feature-plan-ux-navigation-home.md §4.5 "teamScope"): their review scope minus
+ * themselves, kept only where canApprove is true (relational — period status is checked elsewhere). Peer supervisors
+ * or admins who merely share a CLIN are excluded. Home's team status and the Approvals scope sentence both use this.
+ */
+export function approvableScope(facts: ApprovalFacts, actorId: string): string[] {
+  const scope = reviewScopeFrom(facts, actorId);
+  const ids = scope === 'all' ? [...facts.users.keys()] : scope;
+  return ids.filter((id) => id !== actorId && canApprove(facts, actorId, id));
+}
+
 /** The ids among `periodIds` the actor may approve (for lists). */
 export function approvableAmong(facts: ApprovalFacts, actorId: string, periods: Array<{ id: string; userId: string }>): Set<string> {
   return new Set(periods.filter((p) => canApprove(facts, actorId, p.userId)).map((p) => p.id));
