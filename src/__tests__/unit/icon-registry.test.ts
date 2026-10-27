@@ -45,7 +45,6 @@ export const ICON_IMPORT_ALLOWLIST = [
   'src/components/approvals/ReviewDecisionButtons.tsx',
   'src/components/auth/SignOutButton.tsx',
   'src/components/auth/WorkspaceFinder.tsx',
-  'src/components/shell/AppNavbar.tsx',
   'src/components/shell/SyncStatusIndicator.tsx',
   'src/components/timesheet/PayPeriodSelector.tsx',
   'src/components/timesheet/SubmitModal.tsx',

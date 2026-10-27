@@ -2,7 +2,6 @@ import { auth } from '@/auth';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { AppShellWrapper } from './AppShellWrapper';
-import { getSetupStatusInternal } from '@/server/internal/setup';
 import { getTenantState } from '@/lib/tenant/context';
 import { TenantUnavailable } from './TenantUnavailable';
 import { BillingWall } from './BillingWall';
@@ -59,17 +58,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     role: (session.user as any).role ?? 'employee',
   };
 
-  // Only check setup status for admin users
-  let setupComplete = true;
-  if (user.role === 'admin') {
-    try {
-      const status = await getSetupStatusInternal();
-      setupComplete = status.isComplete;
-    } catch {
-      // If setup status check fails, don't block the app
-      setupComplete = true;
-    }
-  }
+  // The setup banner is gone (UX-2 L2): Home's "Finish setting up" item replaces it, so setup status is no longer
+  // computed on every page.
 
   // Read the navbar-collapsed preference server-side so the first paint already has the correct
   // width — prevents the rail flashing open then collapsing on navigation. (Key must match
@@ -84,7 +74,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <AppShellWrapper
       user={user}
-      setupComplete={setupComplete}
+      waitingCount={null}
       initialCollapsed={navCollapsed}
       readOnlyReason={readOnlyReason}
       isDemo={tenant.tenant.lifecycleExempt}

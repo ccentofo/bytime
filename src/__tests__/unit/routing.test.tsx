@@ -27,6 +27,12 @@ vi.mock('@/lib/tenant/context', () => ({
   getTenantSlug: async () => tenant.slug,
   getTenantState: async () => tenant.state,
 }));
+// UX-2 §4.3: "/" on a workspace host reads the session to pick the landing page.
+const session = vi.hoisted(() => ({ user: null as null | { id: string; role: 'admin' | 'supervisor' | 'employee'; email: string; fullName: string } }));
+vi.mock('@/lib/session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/session')>()),
+  getSessionUser: async () => session.user,
+}));
 vi.mock('@/lib/tenant/registry', () => ({
   getTenantBySlug: async (slug: string) => (tenant.registry.has(slug) ? { id: 't', slug, status: 'active' } : null),
 }));
@@ -58,6 +64,7 @@ beforeEach(() => {
   tenant.slug = '';
   tenant.state = { kind: 'none' };
   tenant.registry = new Set(['acme']);
+  session.user = { id: 'u1', role: 'employee', email: 'e@x', fullName: 'E' };
   vi.stubEnv('NEXT_PUBLIC_DEMO_URL', '');
 });
 afterEach(() => {
@@ -65,9 +72,11 @@ afterEach(() => {
 });
 
 describe('/ (landing)', () => {
-  it('on a workspace host redirects to /timesheet', async () => {
+  it('on a workspace host redirects to the landing page for the role (employee → /timesheet, admin → /home)', async () => {
     tenant.slug = 'acme';
     expect(await redirectOf(LandingPage())).toBe('/timesheet');
+    session.user = { id: 'u2', role: 'admin', email: 'a@x', fullName: 'A' };
+    expect(await redirectOf(LandingPage())).toBe('/home');
   });
 
   it('on the apex renders the marketing page', async () => {

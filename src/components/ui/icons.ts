@@ -1,4 +1,6 @@
 import {
+  IconArrowLeft, IconBuilding, IconCalendarTime, IconChecklist, IconCreditCard, IconDatabaseImport, IconHome, IconPlug,
+  IconReportAnalytics, IconSettings, IconTableImport,
   IconAlertCircle, IconAlertTriangle, IconArrowsExchange, IconBan, IconBell, IconBriefcase, IconCalendarX, IconCash,
   IconChartBar, IconCheck, IconChevronDown, IconChevronRight, IconClock, IconCopy, IconCurrencyDollar, IconDots,
   IconDownload, IconEye, IconHistory, IconInfoCircle, IconKey, IconKeyOff, IconList, IconLock, IconLockOpen,
@@ -59,6 +61,21 @@ export const Icons = {
   spent: IconReceipt,
   remaining: IconChartBar,
 
+  // Navigation (feature-plan-ux-navigation-home.md §4.2). The groups reuse `contracts` and `users`; the timesheet
+  // link reuses `timeEntry`.
+  home: IconHome,
+  approvals: IconChecklist,
+  reports: IconReportAnalytics,
+  settings: IconSettings,
+  back: IconArrowLeft,
+  workspace: IconBuilding,
+  paySchedule: IconCalendarTime,
+  billing: IconCreditCard,
+  integrations: IconPlug,
+  apiKeys: IconKey,
+  dataImport: IconTableImport,
+  historyImport: IconDatabaseImport,
+
   // Shell
   profile: IconUser,
   changePassword: IconLock,
@@ -76,4 +93,5 @@ export const ICON_SIZE = { menu: 16, button: 16, nav: 18, stat: 20 } as const;
 /** Key pairs that deliberately share an icon, each with its reason. Any other shared component fails the test. */
 export const ICON_ALIASES: ReadonlyArray<{ keys: readonly [IconKey, IconKey]; reason: string }> = [
   { keys: ['approve', 'statusSuccess'], reason: 'A check means "done / OK" both as an action (approve) and as a status.' },
+  { keys: ['apiKey', 'apiKeys'], reason: 'The same key stands for an API key, whether creating one or the API keys settings page.' },
 ];

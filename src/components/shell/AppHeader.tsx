@@ -21,6 +21,9 @@ type AppHeaderProps = {
   isDemo?: boolean;
 };
 
+/** The role as a word (UX-2 §4.2), never the raw value. */
+const ROLE_WORD: Record<string, string> = { admin: 'Admin', supervisor: 'Supervisor', employee: 'Employee' };
+
 export function AppHeader({ user, mobileNavOpened, onMobileNavToggle, isDemo = false }: AppHeaderProps) {
   const { toggleColorScheme } = useMantineColorScheme();
 
@@ -33,7 +36,9 @@ export function AppHeader({ user, mobileNavOpened, onMobileNavToggle, isDemo = f
           onClick={onMobileNavToggle}
           hiddenFrom="sm"
           size="sm"
-          aria-label="Toggle navigation"
+          // Mantine's Burger sets no aria-expanded (UX-2 §4.2).
+          aria-expanded={mobileNavOpened ?? false}
+          aria-label={mobileNavOpened ? 'Close navigation' : 'Open navigation'}
         />
         <Logo size="sm" />
         {isDemo && (
@@ -54,7 +59,7 @@ export function AppHeader({ user, mobileNavOpened, onMobileNavToggle, isDemo = f
           <Box darkHidden><Icons.themeDark size={20} /></Box>
         </ActionIcon>
         {user && (
-          <Menu shadow="md" width={200} position="bottom-end">
+          <Menu shadow="md" width={220} position="bottom-end" withInitialFocusPlaceholder={false}>
             <Menu.Target>
               <UnstyledButton>
                 <Group gap="xs">
@@ -68,29 +73,31 @@ export function AppHeader({ user, mobileNavOpened, onMobileNavToggle, isDemo = f
               </UnstyledButton>
             </Menu.Target>
             <Menu.Dropdown>
+              <Menu.Label>{user.fullName}</Menu.Label>
               <Menu.Label>{user.email}</Menu.Label>
-              <Menu.Label>Role: {user.role}</Menu.Label>
+              <Menu.Label>{ROLE_WORD[user.role] ?? 'Employee'}</Menu.Label>
               <Menu.Divider />
               <Menu.Item
-                leftSection={<Icons.changePassword size={ICON_SIZE.menu} />}
+                leftSection={<Icons.profile size={ICON_SIZE.menu} />}
                 component={Link}
                 href="/profile"
               >
-                Change Password
+                Profile and security
               </Menu.Item>
               <Menu.Item
                 leftSection={<Icons.notifications size={ICON_SIZE.menu} />}
                 component={Link}
                 href="/profile/notifications"
               >
-                Notification Settings
+                Notifications
               </Menu.Item>
+              <Menu.Divider />
               <Menu.Item
                 className={DANGER_MENU_ITEM_CLASS}
                 leftSection={<Icons.signOut size={ICON_SIZE.menu} />}
                 onClick={() => { void signOutToLogin(); }}
               >
-                Sign Out
+                Sign out
               </Menu.Item>
             </Menu.Dropdown>
           </Menu>

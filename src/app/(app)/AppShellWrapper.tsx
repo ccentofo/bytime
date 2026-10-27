@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { AppShell, Alert, Anchor, Group, CloseButton, ActionIcon, Tooltip, ScrollArea, Button } from '@mantine/core';
+import { useState, useEffect, useRef } from 'react';
+import { AppShell, Alert, Group, ActionIcon, Tooltip, ScrollArea, Button } from '@mantine/core';
 import { useDisclosure, useMediaQuery } from '@mantine/hooks';
 import { SessionProvider } from 'next-auth/react';
-import { IconRocket, IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand, IconLock } from '@tabler/icons-react';
+import { IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand, IconLock } from '@tabler/icons-react';
+import { usePathname } from 'next/navigation';
 import { AppHeader } from '@/components/shell/AppHeader';
 import { AppNavbar } from '@/components/shell/AppNavbar';
 import { WorkspaceModeProvider } from '@/components/shell/WorkspaceMode';
@@ -18,7 +19,8 @@ type Props = {
     email: string;
     role: string;
   };
-  setupComplete?: boolean;
+  /** Timesheets waiting for this approver (UX-2 §4.6); null = not an approver / unknown → no badge. */
+  waitingCount?: number | null;
   /** Collapse preference, read from a cookie server-side so the first paint is already correct. */
   initialCollapsed?: boolean;
   /** §3.2/T3: non-null when the workspace is `read_only` — shows a persistent (non-dismissible)
@@ -29,7 +31,6 @@ type Props = {
   children: React.ReactNode;
 };
 
-const BANNER_DISMISS_KEY = 'bytime-setup-banner-dismissed';
 const NAV_COLLAPSED_KEY = 'cadenzpoint-navbar-collapsed';
 
 const READ_ONLY_COPY: Record<ReadOnlyReason, string> = {
@@ -37,9 +38,16 @@ const READ_ONLY_COPY: Record<ReadOnlyReason, string> = {
   subscription_ended: 'Your subscription has ended. You can still view and export your data for a limited time.',
 };
 
-export function AppShellWrapper({ user, setupComplete = true, initialCollapsed = false, readOnlyReason = null, isDemo = false, children }: Props) {
-  const [opened, { toggle }] = useDisclosure();
-  const [bannerDismissed, setBannerDismissed] = useState(true); // Start hidden to avoid flash
+export function AppShellWrapper({ user, waitingCount = null, initialCollapsed = false, readOnlyReason = null, isDemo = false, children }: Props) {
+  const [opened, { toggle, close }] = useDisclosure();
+  // The layout doesn't remount on client navigation, so close the mobile menu when the path changes (not on the
+  // first render) — tapping a page in the overlay menu otherwise leaves it covering the page (UX-2 §4.2).
+  const pathname = usePathname();
+  const firstPath = useRef(true);
+  useEffect(() => {
+    if (firstPath.current) { firstPath.current = false; return; }
+    close();
+  }, [pathname, close]);
   // Seed from the server-read cookie so the rail renders at the right width on the FIRST paint
   // (no flash-open-then-collapse on navigation).
   const [collapsed, setCollapsed] = useState(initialCollapsed);
@@ -53,18 +61,6 @@ export function AppShellWrapper({ user, setupComplete = true, initialCollapsed =
   // device self-corrects via the effect a moment after mount, before the nav is ever opened.
   const isDesktop = useMediaQuery('(min-width: 48em)', true);
   const railCollapsed = collapsed && !!isDesktop;
-
-  const showBanner = user.role === 'admin' && !setupComplete && !bannerDismissed;
-
-  useEffect(() => {
-    // Banner state lives in sessionStorage (no SSR equivalent needed — it's allowed to settle post-mount).
-    setBannerDismissed(sessionStorage.getItem(BANNER_DISMISS_KEY) === 'true');
-  }, []);
-
-  function handleDismissBanner() {
-    sessionStorage.setItem(BANNER_DISMISS_KEY, 'true');
-    setBannerDismissed(true);
-  }
 
   function toggleCollapsed() {
     setCollapsed((c) => {
@@ -92,7 +88,7 @@ export function AppShellWrapper({ user, setupComplete = true, initialCollapsed =
         <AppShell.Navbar p="xs">
           {/* Scrollable nav list grows to fill; the collapse toggle pins to the bottom (desktop only). */}
           <AppShell.Section grow component={ScrollArea}>
-            <AppNavbar userRole={user.role} collapsed={railCollapsed} />
+            <AppNavbar userRole={user.role} collapsed={railCollapsed} waitingCount={waitingCount} />
           </AppShell.Section>
           <AppShell.Section visibleFrom="sm" pt="xs">
             <Group justify={railCollapsed ? 'center' : 'flex-end'} px={railCollapsed ? 0 : 'xs'}>
@@ -140,26 +136,6 @@ export function AppShellWrapper({ user, setupComplete = true, initialCollapsed =
                     </Button>
                   </Group>
                 )}
-              </Group>
-            </Alert>
-          )}
-          {showBanner && (
-            <Alert
-              icon={<IconRocket size={18} />}
-              color="signal"
-              variant="light"
-              mb="md"
-              radius="md"
-              styles={{ root: { position: 'relative' } }}
-            >
-              <Group justify="space-between" align="center" wrap="nowrap">
-                <span>
-                  Your CadenzPoint workspace needs initial setup.{' '}
-                  <Anchor href="/admin/setup" fw={600}>
-                    Complete the Setup Wizard →
-                  </Anchor>
-                </span>
-                <CloseButton size="sm" onClick={handleDismissBanner} aria-label="Dismiss setup banner" />
               </Group>
             </Alert>
           )}

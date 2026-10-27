@@ -107,7 +107,8 @@ export function LoginForm() {
       }
 
       // Success — a session now exists (MFA, if enabled, already passed).
-      router.push('/timesheet');
+      // "/" picks the landing page by role (UX-2 §4.3: admins and supervisors → Home, employees → Timesheet).
+      router.push('/');
       router.refresh();
     } catch {
       setError('Something went wrong signing in. Please try again.');
