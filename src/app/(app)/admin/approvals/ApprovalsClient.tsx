@@ -88,8 +88,11 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 /** "You review 3 people on 1 CLIN and 2 people who designated you" (UX-2 ruling: n and k never overlap). */
 export function scopeSentence(info: NonNullable<ScopeInfo>): string {
+  const designators = `${plural(info.designatedByCount, 'person', 'people')} who designated you`;
+  // Only designators (nobody via a shared CLIN): no CLIN clause (UX-2 fix round 1, L2).
+  if (info.approvableEmployeeCount === 0 && info.designatedByCount > 0) return `You review ${designators}`;
   const base = `You review ${plural(info.approvableEmployeeCount, 'person', 'people')} on ${plural(info.assignedClinCount, 'CLIN', 'CLINs')}`;
-  return info.designatedByCount > 0 ? `${base} and ${plural(info.designatedByCount, 'person', 'people')} who designated you` : base;
+  return info.designatedByCount > 0 ? `${base} and ${designators}` : base;
 }
 
 function flagWords(flags: NonNullable<Period['flags']>): string[] {
@@ -407,7 +410,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         size="90%"
         title={
           selectedPeriod
-            ? `Review — ${selectedPeriod.userName}`
+            ? `${selectedPeriod.canApprove ? 'Review' : 'View'} — ${selectedPeriod.userName}`
             : 'Review Timesheet'
         }
       >

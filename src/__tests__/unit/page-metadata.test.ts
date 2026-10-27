@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'fs';
 import path from 'path';
 import { stripComments } from '../helpers/source-scanner';
+import { SETTINGS_NAV } from '@/components/shell/nav-config';
 
 /**
  * feature-plan-ux-foundations.md §4.7 / T14 (UX-AUDIT A6, WCAG 2.4.2): every page has its own title. Root layout:
@@ -48,6 +49,16 @@ describe('page titles (T14)', () => {
       .filter((f) => { const s = read(f); return /^\s*['"]use client['"]/.test(s) && /export (const metadata|async function generateMetadata|function generateMetadata)/.test(s); })
       .map(rel);
     expect(offenders).toEqual([]);
+  });
+
+  it('UX-2 fix round 1 (L4): each Settings page\'s title and heading are its nav label', () => {
+    for (const leaf of SETTINGS_NAV) {
+      const dir = path.join(APP, '(app)', leaf.href);
+      expect(read(path.join(dir, 'page.tsx')), leaf.href).toContain(`export const metadata: Metadata = { title: '${leaf.label}' };`);
+      const headings = readdirSync(dir).filter((n) => n.endsWith('.tsx') && n !== 'page.tsx')
+        .flatMap((n) => [...read(path.join(dir, n)).matchAll(/<PageHeader\s+title="([^"]+)"/g)].map((m) => m[1]));
+      for (const h of headings) expect(h, leaf.href).toBe(leaf.label);
+    }
   });
 
   it('settings/error.tsx is exactly the client re-export of admin/error (UX-2 §4.1)', () => {

@@ -13,7 +13,11 @@ vi.mock('next/navigation', () => ({ usePathname: () => '/home', useRouter: () =>
 
 import { HomeClient } from '@/app/(app)/home/HomeClient';
 import { attentionItems, type HomeView } from '@/lib/home/attention';
+import { BACK_ON_KEY, RECOMMEND_KEY } from '@/components/approvals/ApprovalNotices';
 import { CURRENT_RATES_NOTE } from '@/lib/cost-labels';
+import { renderToString } from 'react-dom/server';
+import { MantineProvider } from '@mantine/core';
+import { theme } from '@/theme';
 import { installDomStubs, mount, unmount, type Mounted } from '../helpers/dom';
 import { expectNoAxeViolations } from '../helpers/axe';
 
@@ -22,6 +26,7 @@ const TEAM = { submitted: { count: 3, names: ['A', 'B', 'C'] }, returned: { coun
 
 function view(o: Partial<HomeView> = {}): HomeView {
   return {
+    userId: 'admin-1',
     role: 'admin',
     today: '2026-10-07',
     waiting: { count: 6, people: 5, names: ['Ann', 'Bob', 'Cat', 'Dan'], oldestPeriodLabel: 'Sep 16 – Sep 30, 2026' },
@@ -52,7 +57,7 @@ function view(o: Partial<HomeView> = {}): HomeView {
 
 beforeAll(installDomStubs);
 let m: Mounted | undefined;
-afterEach(() => { unmount(m); m = undefined; });
+afterEach(() => { unmount(m); m = undefined; window.localStorage.clear(); });
 
 describe('Home (T10)', () => {
   it('admin: every attention item fires, in order, with its button', () => {
@@ -73,11 +78,17 @@ describe('Home (T10)', () => {
     expect(items[4]).toMatchObject({ title: 'Finish setting up: 5 of 7 done', sentence: 'Give each employee the charge codes they may use.' });
     // Only ACTIVE contracts at Watch or above; closed and unfunded never appear.
     expect(items[7]).toMatchObject({ title: '1 contract needs a look', sentence: 'NAVAIR (Near limit)' });
+    expect(items[6]).toMatchObject({ title: 'Pay schedule changes on Nov 1, 2026' }); // L1: a readable date, never ISO
   });
 
   it('renders the items, the aria-hidden cadence with its text summary, team counts, and the admin Contracts card', async () => {
     m = await mount(<HomeClient view={view()} />);
     expect(m.container.querySelector('h1')!.textContent).toBe('Home');
+    // L5: the same page container as the other PageHeader pages (Container size="lg" py="xl").
+    const root = m.container.querySelector('h1')!.closest('.mantine-Container-root') as HTMLElement | null;
+    expect(root).not.toBeNull();
+    expect(root!.getAttribute('style') ?? '').toContain('--container-size: var(--container-size-lg)');
+    expect(root!.contains(m.container.querySelector('[data-testid="attention"]'))).toBe(true);
     expect(m.container.querySelectorAll('[data-testid^="attention-"]')).toHaveLength(9);
     const cadence = m.container.querySelector('[data-testid="cadence"]')!;
     expect(cadence.getAttribute('aria-hidden')).toBe('true');
@@ -98,6 +109,36 @@ describe('Home (T10)', () => {
     expect(card).not.toContain('Unfunded');  // no funding set
     expect(m.container.textContent).toContain(CURRENT_RATES_NOTE);
     await expectNoAxeViolations(document.body);
+  });
+
+  it('L10: a designee recommendation dismissed in ApprovalNotices (same key) is not a Home item', async () => {
+    m = await mount(<HomeClient view={view()} />);
+    expect(m.container.querySelector('[data-testid="attention-self-approval"]')).not.toBeNull();
+    unmount(m);
+    window.localStorage.setItem(RECOMMEND_KEY('admin-1'), '1');
+    m = await mount(<HomeClient view={view()} />);
+    expect(m.container.querySelector('[data-testid="attention-self-approval"]')).toBeNull();
+    expect(m.container.querySelectorAll('[data-testid^="attention-"]')).toHaveLength(8);
+  });
+
+  it('L10: a dismissed "back on" notice (keyed by its log id) is dropped; an undismissed recommendation still shows with its own sentence', async () => {
+    const backOn = (recommendDesignee: boolean) => view({ admin: { ...view().admin!, notices: { selfApprovalBackOn: { logId: 'log-7' }, recommendDesignee } } });
+    window.localStorage.setItem(BACK_ON_KEY('log-7'), '1');
+    m = await mount(<HomeClient view={backOn(false)} />);
+    expect(m.container.querySelector('[data-testid="attention-self-approval"]')).toBeNull();
+    unmount(m);
+    m = await mount(<HomeClient view={backOn(true)} />);
+    expect(m.container.querySelector('[data-testid="attention-self-approval"]')!.textContent).toContain('Auditors prefer an independent reviewer.');
+    unmount(m);
+    window.localStorage.clear();
+    m = await mount(<HomeClient view={backOn(false)} />);
+    expect(m.container.querySelector('[data-testid="attention-self-approval"]')!.textContent).toContain('Self-approval is back on');
+  });
+
+  it('L10: the server render reads notices as dismissed (nothing to flash or mismatch), even with no dismissal stored', () => {
+    const html = renderToString(<MantineProvider env="test" theme={theme}><HomeClient view={view()} /></MantineProvider>);
+    expect(html).toContain('data-testid="attention-waiting"');
+    expect(html).not.toContain('data-testid="attention-self-approval"');
   });
 
   it('supervisor: no money anywhere', async () => {

@@ -130,18 +130,22 @@ function Group({ group, activeHref: active, collapsed, opened, onToggle }: {
   if (collapsed) {
     return (
       <Menu position="right-start" withinPortal withInitialFocusPlaceholder={false}>
-        <Menu.Target>
-          <ActionIcon
-            variant={containsActive ? 'light' : 'subtle'}
-            size="xl"
-            mx="auto"
-            my={2}
-            aria-label={group.label}
-            data-active={containsActive || undefined}
-          >
-            <Icon size={ICON_SIZE.nav} />
-          </ActionIcon>
-        </Menu.Target>
+        {/* Tooltip OUTSIDE Menu.Target: Tooltip spreads unknown props onto its floating box, so inside it the menu's
+            aria-haspopup / aria-expanded would land on the tooltip instead of the button. */}
+        <Tooltip label={group.label} position="right" withArrow openDelay={200} events={{ hover: true, focus: true, touch: false }}>
+          <Menu.Target>
+            <ActionIcon
+              variant={containsActive ? 'light' : 'subtle'}
+              size="xl"
+              mx="auto"
+              my={2}
+              aria-label={group.label}
+              data-active={containsActive || undefined}
+            >
+              <Icon size={ICON_SIZE.nav} />
+            </ActionIcon>
+          </Menu.Target>
+        </Tooltip>
         <Menu.Dropdown>
           <Menu.Label>{group.label}</Menu.Label>
           {group.children.map((child) => (

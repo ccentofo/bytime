@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
+import { act } from 'react';
 import path from 'path';
 
 /**
@@ -70,6 +71,10 @@ describe('AppNavbar — expanded (T3)', () => {
     await render({ waitingCount: 3 });
     for (const a of m!.container.querySelectorAll('a')) expect(a.getAttribute('aria-label'), a.textContent ?? '').toBeNull();
     expect(link('Approvals')!.textContent).toContain('3 waiting');
+    // L9: the visible badge is hidden from assistive tech (the announced text carries the count).
+    const badge = link('Approvals')!.querySelector('.mantine-Badge-root')!;
+    expect(badge.textContent).toBe('3');
+    expect(badge.getAttribute('aria-hidden')).toBe('true');
     unmount(m);
     await render({ waitingCount: 0 });
     expect(link('Approvals')!.textContent).toBe('Approvals');
@@ -114,6 +119,22 @@ describe('AppNavbar — collapsed rail (T3)', () => {
     expect(items[1].getAttribute('aria-current')).toBe('page');
     expect(items[1].getAttribute('href')).toBe('/admin/assignments');
     await expectNoAxeViolations(document.body);
+  });
+
+  it('M1: every rail group trigger shows its name in a tooltip on focus; the menu ARIA stays on the button; axe clean', async () => {
+    await render({ collapsed: true });
+    for (const label of ['Contracts', 'People', 'Reports']) {
+      const trigger = m!.container.querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement;
+      expect(trigger.getAttribute('aria-haspopup'), label).toBe('menu');
+      expect(trigger.getAttribute('aria-expanded'), label).toBe('false');
+      await act(async () => { trigger.focus(); });
+      await wait(300);
+      const tip = [...document.body.querySelectorAll('[role="tooltip"]')].find((t) => t.textContent === label);
+      expect(tip, label).toBeDefined();
+      await expectNoAxeViolations(document.body);
+      await act(async () => { trigger.blur(); });
+      await wait(150);
+    }
   });
 
   it('leaves are icons with an aria-label; Approvals is labelled "Approvals, 3 waiting"', async () => {

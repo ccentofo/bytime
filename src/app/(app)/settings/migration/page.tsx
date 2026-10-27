@@ -2,7 +2,7 @@ import { requirePageRole } from '@/lib/session';
 import { MigrationClient } from './MigrationClient';
 import type { Metadata } from 'next';
 
-export const metadata: Metadata = { title: 'Data migration' };
+export const metadata: Metadata = { title: 'Timesheet history import' };
 
 export const dynamic = 'force-dynamic';
 

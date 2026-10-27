@@ -3,6 +3,7 @@
  * the server builds HomeView (src/server/internal/home.ts), the page renders it, and the items are derived here so the
  * rules are unit-testable.
  */
+import { formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { UNPRICED_REPORT_HREF } from '@/lib/cost-labels';
 import { BURN_TIER_LABEL, NEEDS_A_LOOK, burnPercent, burnTier, type BurnTier } from '@/lib/ui/burn';
 
@@ -21,6 +22,7 @@ export interface HomeContract {
 export interface HomeSetupStep { key: string; done: boolean; required: boolean }
 
 export interface HomeView {
+  userId: string;
   role: 'admin' | 'supervisor';
   today: string;
   waiting: { count: number; people: number; names: string[]; oldestPeriodLabel: string | null };
@@ -77,6 +79,22 @@ export function burnCard(contracts: HomeContract[]): Array<HomeContract & { pct:
     .map((c) => ({ ...c, ...contractTier(c) }))
     .filter((c) => c.tier !== 'noFunding')
     .sort((a, b) => b.pct - a.pct);
+}
+
+/**
+ * The view with the admin notices this browser has dismissed removed (L10: the same localStorage dismissals as
+ * ApprovalNotices — a dismissed "back on" notice or designee recommendation doesn't come back as a Home item).
+ */
+export function withDismissedNotices(v: HomeView, dismissed: { backOn: boolean; recommend: boolean }): HomeView {
+  if (!v.admin) return v;
+  const { selfApprovalBackOn, recommendDesignee } = v.admin.notices;
+  return {
+    ...v,
+    admin: {
+      ...v.admin,
+      notices: { selfApprovalBackOn: dismissed.backOn ? null : selfApprovalBackOn, recommendDesignee: recommendDesignee && !dismissed.recommend },
+    },
+  };
 }
 
 /** "Needs your attention", in order (§4.5 table). */
@@ -145,7 +163,7 @@ export function attentionItems(v: HomeView): AttentionItem[] {
     if (a.pendingConfig) {
       items.push({
         key: 'pay-schedule',
-        title: `Pay schedule changes on ${a.pendingConfig.effectiveFrom}`,
+        title: `Pay schedule changes on ${formatCalendarDate(a.pendingConfig.effectiveFrom as CalendarDate, 'MMM D, YYYY')}`,
         action: { label: 'View', href: '/settings/pay-schedule' },
       });
     }

@@ -50,6 +50,7 @@ export async function getHomeData(userId: string): Promise<HomeView | { redirect
   const setup = isAdmin ? await getSetupStatusInternal() : null;
 
   return {
+    userId,
     role: isAdmin ? 'admin' : 'supervisor',
     today,
     waiting,

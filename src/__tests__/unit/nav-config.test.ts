@@ -48,6 +48,9 @@ describe('nav-config (T2)', () => {
     expect(activeHref('/settings/integrations/gusto', SETTINGS_NAV)).toBe('/settings/integrations');
     expect(activeHref('/admin/payroll-export', admin)).toBe('/admin/payroll-export');
     expect(activeHref('/admin/users', admin)).toBe('/admin/users');
+    // L9: the LONGEST matching prefix wins, whatever the order.
+    expect(activeHref('/a/b/c', [{ href: '/a' }, { href: '/a/b' }])).toBe('/a/b');
+    expect(activeHref('/a/b/c', [{ href: '/a/b' }, { href: '/a' }])).toBe('/a/b');
     expect(activeHref('/admin/users/42', admin)).toBe('/admin/users');
     expect(activeHref('/admin/users-x', admin)).toBeNull();
     expect(activeHref('/settings/billing', admin)).toBe('/settings/workspace'); // Settings matches all of /settings

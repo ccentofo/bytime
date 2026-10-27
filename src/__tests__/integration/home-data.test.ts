@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { readFileSync } from 'fs';
+import path from 'path';
 import { eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
 import { getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, assignUserToClin, cleanupTestData } from './helpers';
@@ -103,7 +105,7 @@ describe('getHomeData (T9)', () => {
     expect(await getHomeData(gone.id)).toEqual({ redirect: '/timesheet' });
   });
 
-  it('a just-demoted admin (the JWT still says admin; the DB says supervisor) sees no money', async () => {
+  it('the DB role decides: a user whose DB role is now supervisor (whatever their session says) gets no admin parts and no money', async () => {
     const was = await user('Wes Was', 'admin');
     await user('Ann Admin', 'admin');
     await db().update(schema.users).set({ role: 'supervisor' }).where(eq(schema.users.id, was.id));
@@ -216,5 +218,13 @@ describe('getHomeData (T9)', () => {
     }
     expect(v.admin!.contracts.find((c) => c.contractName === 'Active')!.pricedCost).toBe(61.72);
     expect(burnCard(v.admin!.contracts).map((c) => c.contractName)).toEqual(['Active']); // the card is active-only
+  });
+});
+
+describe('home/page.tsx (T9 static, L9)', () => {
+  it('passes only user.id to getHomeData — never the session role or the user object', () => {
+    const src = readFileSync(path.resolve(__dirname, '../../app/(app)/home/page.tsx'), 'utf8');
+    const calls = [...src.matchAll(/getHomeData\(([^)]*)\)/g)].map((m) => m[1]);
+    expect(calls).toEqual(['user.id']);
   });
 });

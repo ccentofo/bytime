@@ -175,7 +175,7 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
   return (
     <>
       <PageHeader
-        title="API Keys"
+        title="API keys"
         actions={
           <WriteButton leftSection={<Icons.create size={ICON_SIZE.button} />} onClick={() => setCreateModalOpen(true)}>
             Create API Key

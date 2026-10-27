@@ -11,9 +11,10 @@ import { IconInfoCircle, IconAlertTriangle } from '@tabler/icons-react';
  *   after the next sign-in.
  */
 
-const BACK_ON_KEY = (logId: string) => `cadenzpoint:self-approval-back-on-dismissed:${logId}`;
+// Exported for Home's "Needs your attention" item, which honours the same dismissals (UX-2 fix round 1, L10).
+export const BACK_ON_KEY = (logId: string) => `cadenzpoint:self-approval-back-on-dismissed:${logId}`;
 const RECOMMEND_PREFIX = 'cadenzpoint:designee-notice-dismissed:';
-const RECOMMEND_KEY = (adminId: string) => `${RECOMMEND_PREFIX}${adminId}`;
+export const RECOMMEND_KEY = (adminId: string) => `${RECOMMEND_PREFIX}${adminId}`;
 
 /** Called on sign-out: the designee recommendation returns after the next sign-in. */
 export function clearDesigneeNoticeDismissals(): void {
@@ -46,7 +47,7 @@ function subscribe(onChange: () => void): () => void {
 }
 
 /** A localStorage flag; on the server (and the first client render) it reads as set, so nothing flashes or mismatches. */
-function useStoredFlag(key: string | null): boolean {
+export function useStoredFlag(key: string | null): boolean {
   return useSyncExternalStore(subscribe, () => (key ? readFlag(key) : true), () => true);
 }
 

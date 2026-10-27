@@ -22,7 +22,7 @@ vi.mock('@/server/actions/timesheet', () => ({ getTimesheetForReview: actions.ge
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
 import { ApprovalsClient, reasonChip, rowsForView, scopeSentence } from '@/app/(app)/admin/approvals/ApprovalsClient';
-import { buttonByText, click, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
+import { buttonByText, click, dialogTitled, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
 import { expectNoAxeViolations } from '../helpers/axe';
 
 const ME = 'me';
@@ -36,7 +36,8 @@ const PERIODS = [
   row('old', { canApprove: true, userName: 'Older Olga', submittedAt: new Date('2026-10-15T10:00:00Z'), flags: { corrections: 0, lateEntries: 0, resubmitted: false } }),
   row('mine', { userId: ME, userName: 'Me Myself' }),                                  // own, not decidable
   row('peer', { userName: 'Peer Pat' }),                                               // someone else's to decide
-  row('done', { userName: 'Done Dana', status: 'approved', reviewedAt: new Date() }),
+  row('done', { userName: 'Done Dana', status: 'approved', reviewedAt: new Date(), periodStart: '2026-10-16' }), // newest period
+  row('sept', { userName: 'Sept Sam', periodStart: '2026-09-16' }),                    // oldest period, not decidable
   row('draft', { userName: 'Draft Dee', status: 'draft' }),
 ];
 
@@ -69,7 +70,7 @@ describe('Approvals to-do list (T12)', () => {
     await render();
     await click(segment('Everything'));
     const names = bodyNames();
-    expect(names).toHaveLength(5);
+    expect(names).toHaveLength(6);
     expect(names).not.toContain('Draft Dee');
     const rowOf = (name: string) => [...m!.container.querySelectorAll('tbody tr')].find((r) => r.textContent?.includes(name))!;
     expect(rowOf('Me Myself').querySelector('button')!.textContent).toBe('View');
@@ -79,6 +80,30 @@ describe('Approvals to-do list (T12)', () => {
     expect(rowOf('Older Olga').querySelector('[data-testid="reason-chip"]')).toBeNull();
     await click(segment('Decided'));
     expect(bodyNames()).toEqual(['Done Dana']);
+  });
+
+  it('L9: switching from Waiting to Everything sorts newest period first', async () => {
+    await render();
+    expect(bodyNames()).toEqual(['Older Olga', 'Newer Nora']);
+    await click(segment('Everything'));
+    const names = bodyNames();
+    expect(names[0]).toBe('Done Dana');           // 2026-10-16
+    expect(names[names.length - 1]).toBe('Sept Sam'); // 2026-09-16
+  });
+
+  it('L3: the drawer title says Review for a decidable row and View otherwise', async () => {
+    await render();
+    await click(segment('Everything'));
+    const rowOf = (name: string) => [...m!.container.querySelectorAll('tbody tr')].find((r) => r.textContent?.includes(name))!;
+    await click(rowOf('Me Myself').querySelector('button'));
+    await wait(30);
+    expect(dialogTitled('View — Me Myself')).toBeTruthy();
+    expect(dialogTitled('Review — Me Myself')).toBeFalsy();
+    unmount(m);
+    await render();
+    await click(rowOf('Older Olga').querySelector('button'));
+    await wait(30);
+    expect(dialogTitled('Review — Older Olga')).toBeTruthy();
   });
 
   it('reason chips per case (pure)', () => {
@@ -110,6 +135,7 @@ describe('Approvals to-do list (T12)', () => {
   it('scope sentence with plurals; the admin banner is gone; axe clean', async () => {
     expect(scopeSentence({ assignedContractCount: 0, assignedClinCount: 2, approvableEmployeeCount: 1, designatedByCount: 0 })).toBe('You review 1 person on 2 CLINs');
     expect(scopeSentence({ assignedContractCount: 0, assignedClinCount: 1, approvableEmployeeCount: 3, designatedByCount: 2 })).toBe('You review 3 people on 1 CLIN and 2 people who designated you');
+    expect(scopeSentence({ assignedContractCount: 0, assignedClinCount: 2, approvableEmployeeCount: 0, designatedByCount: 1 })).toBe('You review 1 person who designated you'); // L2
     await render();
     expect(m!.container.querySelector('[data-testid="scope-sentence"]')!.textContent).toBe('You review 3 people on 1 CLIN and 2 people who designated you.');
     await expectNoAxeViolations(document.body);

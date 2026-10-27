@@ -71,6 +71,15 @@ describe('team period status (T8)', () => {
     expect(s.notStarted).toEqual({ count: 5, names: ['Cell Cleared', 'Last Day Hire', 'Mid Hire', 'No Hours', 'Sup Ervisor'] });
   });
 
+  it('M2: the created_at rule uses the WORKSPACE timezone, not the database session or UTC (Honolulu differs from both)', async () => {
+    // 05:00 UTC Oct 1 = 7 pm Sep 30 in Honolulu (but Oct 1 in UTC and New York) → counted for the period ending Sep 30.
+    await user('Honolulu Evening', { createdAt: new Date('2026-10-01T05:00:00Z') });
+    // 11:00 UTC Oct 1 = 1 am Oct 1 in Honolulu → after the period ended, not counted.
+    await user('Honolulu Next Day', { createdAt: new Date('2026-10-01T11:00:00Z') });
+    const s = await teamPeriodStatus(db(), START, 15, 'all', 'Pacific/Honolulu');
+    expect(s.notStarted.names).toEqual(['Honolulu Evening']);
+  });
+
   it('supervisor scope (approvableScope): excludes self and peers; an empty scope gives nobody', async () => {
     const sup = await user('Sam Super', { role: 'supervisor' });
     const peer = await user('Pat Peer', { role: 'supervisor' });

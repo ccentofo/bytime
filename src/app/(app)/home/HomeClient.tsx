@@ -1,12 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { Badge, Box, Button, Grid, Group, Paper, Progress, Stack, Text, Title } from '@mantine/core';
+import { Badge, Box, Button, Container, Grid, Group, Paper, Progress, Stack, Text, Title } from '@mantine/core';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { addDays, dayOfWeek, type CalendarDate } from '@/lib/calendar-date';
 import { CURRENT_RATES_NOTE, unpricedHoursLabel } from '@/lib/cost-labels';
 import { BURN_TIER_COLOR, BURN_TIER_LABEL } from '@/lib/ui/burn';
-import { attentionItems, burnCard, type HomeView } from '@/lib/home/attention';
+import { attentionItems, burnCard, withDismissedNotices, type HomeView } from '@/lib/home/attention';
+import { BACK_ON_KEY, RECOMMEND_KEY, useStoredFlag } from '@/components/approvals/ApprovalNotices';
 import classes from './Home.module.css';
 
 const STATUS_WORD: Record<string, string> = { draft: 'Not submitted', submitted: 'Submitted', approved: 'Approved', rejected: 'Returned' };
@@ -14,7 +15,12 @@ const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', curr
 
 /** Home (feature-plan-ux-navigation-home.md §4.5; mockup "Admin home"). Money only for admins (view.admin). */
 export function HomeClient({ view }: { view: HomeView }) {
-  const items = attentionItems(view);
+  // L10: notices dismissed in ApprovalNotices stay dismissed here (same keys). Read as dismissed on the server and the
+  // first client render, so nothing flashes or mismatches.
+  const backOn = view.admin?.notices.selfApprovalBackOn;
+  const backOnDismissed = useStoredFlag(backOn ? BACK_ON_KEY(backOn.logId) : null);
+  const recommendDismissed = useStoredFlag(RECOMMEND_KEY(view.userId));
+  const items = attentionItems(withDismissedNotices(view, { backOn: backOnDismissed, recommend: recommendDismissed }));
   const p = view.myPeriod;
   const days: CalendarDate[] = [];
   for (let d = p.periodStart as CalendarDate; d <= p.periodEnd; d = addDays(d, 1)) days.push(d);
@@ -22,7 +28,7 @@ export function HomeClient({ view }: { view: HomeView }) {
   const contracts = view.admin ? burnCard(view.admin.contracts).slice(0, 5) : [];
 
   return (
-    <>
+    <Container size="lg" py="xl">
       <PageHeader title="Home" />
       <Grid gap="lg">
         <Grid.Col span={{ base: 12, md: 8 }}>
@@ -110,6 +116,6 @@ export function HomeClient({ view }: { view: HomeView }) {
           </Stack>
         </Grid.Col>
       </Grid>
-    </>
+    </Container>
   );
 }

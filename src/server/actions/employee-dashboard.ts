@@ -65,20 +65,22 @@ export async function getEmployeeDashboardData(): Promise<EmployeeDashboardData>
   // D3/§0.6: resolve this period's REAL config/length (handles a pending schedule change),
   // never the landing config assumed by default.
   const { config: periodConfig, numDays } = await resolvePeriod(periodStart);
-  const summary = await currentPeriodSummary(db, userId, { start: periodStart, numDays, config: periodConfig }, today);
-
-  const recentRows = await db
-    .select({
-      periodStart: timesheetPeriods.periodStart,
-      status: timesheetPeriods.status,
-      submittedAt: timesheetPeriods.submittedAt,
-      reviewedAt: timesheetPeriods.reviewedAt,
-      periodNumDays: timesheetPeriods.periodNumDays,
-    })
-    .from(timesheetPeriods)
-    .where(eq(timesheetPeriods.userId, userId))
-    .orderBy(desc(timesheetPeriods.periodStart))
-    .limit(5);
+  // One parallel round trip: this period's summary and the recent-periods list (UX-2 fix round 1, L8).
+  const [summary, recentRows] = await Promise.all([
+    currentPeriodSummary(db, userId, { start: periodStart, numDays, config: periodConfig }, today),
+    db
+      .select({
+        periodStart: timesheetPeriods.periodStart,
+        status: timesheetPeriods.status,
+        submittedAt: timesheetPeriods.submittedAt,
+        reviewedAt: timesheetPeriods.reviewedAt,
+        periodNumDays: timesheetPeriods.periodNumDays,
+      })
+      .from(timesheetPeriods)
+      .where(eq(timesheetPeriods.userId, userId))
+      .orderBy(desc(timesheetPeriods.periodStart))
+      .limit(5),
+  ]);
 
   // Build recent periods with hours
   const timeZone = await getWorkspaceTimezone();

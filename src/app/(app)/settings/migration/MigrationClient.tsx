@@ -231,7 +231,7 @@ export function MigrationClient() {
   return (
     <Container size="lg" py="xl">
       <PageHeader
-        title="Data Migration"
+        title="Timesheet history import"
         description="Import historical data when switching from another timekeeping system."
       />
 

@@ -1,6 +1,6 @@
 import 'server-only';
 import { cache } from 'react';
-import { eq, sql } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { getDb, type ReadDb } from '@/db';
 import { timesheetPeriods, users } from '@/db/schema';
 import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -14,7 +14,7 @@ export interface ApprovalQueue {
   people: number;
   /** Up to `opts.names` people, oldest submission first, each once. */
   names: string[];
-  /** The oldest waiting period ("Oct 1 – Oct 15, 2026"), or null. */
+  /** The oldest waiting period ("Oct 1 – Oct 15, 2026"); null when nothing waits or opts.label is false. */
   oldestPeriodLabel: string | null;
 }
 
@@ -24,7 +24,12 @@ export interface ApprovalQueue {
  * filter (a deactivated person's submitted period still needs a decision, and canApprove allows it). One lean query;
  * never getScopedPeriods (all history). INTERNAL, no guard: callers pass their own (authorized) actor id.
  */
-export async function approvalQueue(db: Pick<ReadDb, 'select'>, actorId: string, facts: ApprovalFacts, opts: { names?: number } = {}): Promise<ApprovalQueue> {
+export async function approvalQueue(
+  db: Pick<ReadDb, 'select'>,
+  actorId: string,
+  facts: ApprovalFacts,
+  opts: { names?: number; /** Build oldestPeriodLabel (default true); it may cost a schedule lookup. */ label?: boolean } = {},
+): Promise<ApprovalQueue> {
   const rows = await db
     .select({
       id: timesheetPeriods.id,
@@ -37,7 +42,8 @@ export async function approvalQueue(db: Pick<ReadDb, 'select'>, actorId: string,
     .from(timesheetPeriods)
     .innerJoin(users, eq(timesheetPeriods.userId, users.id))
     .where(eq(timesheetPeriods.status, 'submitted'))
-    .orderBy(sql`${timesheetPeriods.submittedAt} ASC NULLS LAST`);
+    // Oldest submission first (never-stamped last); ties by period so the order is stable.
+    .orderBy(sql`${timesheetPeriods.submittedAt} ASC NULLS LAST`, asc(timesheetPeriods.periodStart));
 
   const mine = rows.filter((r) => canApprove(facts, actorId, r.userId));
   const seen = new Set<string>();
@@ -48,7 +54,7 @@ export async function approvalQueue(db: Pick<ReadDb, 'select'>, actorId: string,
     people.push(r.fullName);
   }
   let oldestPeriodLabel: string | null = null;
-  if (mine[0]) {
+  if (mine[0] && opts.label !== false) {
     const start = mine[0].periodStart as CalendarDate;
     const numDays = await existingPeriodLength(db, start, mine[0].periodNumDays);
     oldestPeriodLabel = `${formatCalendarDate(start, 'MMM D')} – ${formatCalendarDate(addDays(start, numDays - 1), 'MMM D, YYYY')}`;
@@ -63,5 +69,5 @@ export async function approvalQueue(db: Pick<ReadDb, 'select'>, actorId: string,
 export const getWaitingCount = cache(async (actorId: string): Promise<number> => {
   const db = await getDb();
   const facts = await loadApprovalFacts(db);
-  return (await approvalQueue(db, actorId, facts)).count;
+  return (await approvalQueue(db, actorId, facts, { names: 0, label: false })).count; // the count only
 });
