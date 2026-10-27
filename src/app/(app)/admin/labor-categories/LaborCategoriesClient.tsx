@@ -458,12 +458,6 @@ export function LaborCategoriesClient({
         </Tooltip>
       </Group>
     ),
-    displayColumnDefOptions: {
-      'mrt-row-actions': {
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
-      },
-    },
   });
 
   // --- Assignment Table columns ---
@@ -522,12 +516,6 @@ export function LaborCategoriesClient({
         </ActionIcon>
       </Tooltip>
     ),
-    displayColumnDefOptions: {
-      'mrt-row-actions': {
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
-      },
-    },
   });
 
   return (

@@ -3,7 +3,8 @@
 import { Group, Avatar, ActionIcon, Text, Menu, UnstyledButton, useMantineColorScheme, Box, Burger, Badge, Tooltip } from '@mantine/core';
 import Link from 'next/link';
 import { Logo } from '@/components/brand/Logo';
-import { IconSun, IconMoon, IconLogout, IconUser, IconKey, IconBell } from '@tabler/icons-react';
+import { Icons, ICON_SIZE } from '@/components/ui/icons';
+import { DANGER_MENU_ITEM_CLASS } from '@/components/ui/RowActions';
 import { signOutToLogin } from '@/components/auth/sign-out';
 import { SyncStatusIndicator } from '@/components/shell/SyncStatusIndicator';
 
@@ -49,8 +50,8 @@ export function AppHeader({ user, mobileNavOpened, onMobileNavToggle, isDemo = f
           onClick={toggleColorScheme}
           aria-label="Toggle color scheme"
         >
-          <Box lightHidden><IconSun size={20} /></Box>
-          <Box darkHidden><IconMoon size={20} /></Box>
+          <Box lightHidden><Icons.themeLight size={20} /></Box>
+          <Box darkHidden><Icons.themeDark size={20} /></Box>
         </ActionIcon>
         {user && (
           <Menu shadow="md" width={200} position="bottom-end">
@@ -71,22 +72,22 @@ export function AppHeader({ user, mobileNavOpened, onMobileNavToggle, isDemo = f
               <Menu.Label>Role: {user.role}</Menu.Label>
               <Menu.Divider />
               <Menu.Item
-                leftSection={<IconKey size={14} />}
+                leftSection={<Icons.changePassword size={ICON_SIZE.menu} />}
                 component={Link}
                 href="/profile"
               >
                 Change Password
               </Menu.Item>
               <Menu.Item
-                leftSection={<IconBell size={14} />}
+                leftSection={<Icons.notifications size={ICON_SIZE.menu} />}
                 component={Link}
                 href="/admin/notifications"
               >
                 Notification Settings
               </Menu.Item>
               <Menu.Item
-                color="red"
-                leftSection={<IconLogout size={14} />}
+                className={DANGER_MENU_ITEM_CLASS}
+                leftSection={<Icons.signOut size={ICON_SIZE.menu} />}
                 onClick={() => { void signOutToLogin(); }}
               >
                 Sign Out

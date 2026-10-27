@@ -234,12 +234,6 @@ export function IndirectCodesClient({ initialCodes }: Props) {
         </ActionIcon>
       </Tooltip>
     ),
-    displayColumnDefOptions: {
-      'mrt-row-actions': {
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
-      },
-    },
   });
 
   return (

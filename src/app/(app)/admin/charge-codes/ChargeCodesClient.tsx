@@ -283,12 +283,6 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
         )}
       </Group>
     ),
-    displayColumnDefOptions: {
-      'mrt-row-actions': {
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
-      },
-    },
   });
 
   return (

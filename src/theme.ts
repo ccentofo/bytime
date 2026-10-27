@@ -75,7 +75,9 @@ export const theme = createTheme({
     // Sentence case (UX-D2): no uppercase transform.
     Badge: { defaultProps: { variant: 'light' }, styles: { root: { textTransform: 'none', fontWeight: 600 } } },
     Tooltip: { defaultProps: { withArrow: true, openDelay: 300 } },
-    Modal: { defaultProps: { centered: true, radius: 'md' } },
+    // The close (×) button has no accessible name by default (axe button-name) — name it everywhere.
+    Modal: { defaultProps: { centered: true, radius: 'md', closeButtonProps: { 'aria-label': 'Close' } } },
+    Drawer: { defaultProps: { closeButtonProps: { 'aria-label': 'Close' } } },
   },
 });
 

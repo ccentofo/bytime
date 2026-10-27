@@ -189,12 +189,6 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
         </Tooltip>
       </Group>
     ),
-    displayColumnDefOptions: {
-      'mrt-row-actions': {
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
-      },
-    },
   });
 
   return (

@@ -26,7 +26,7 @@ import {
   IconAlertTriangle,
   IconHistory,
 } from '@tabler/icons-react';
-import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { MantineReactTable, MRT_ShowHideColumnsButton, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import { notifications } from '@mantine/notifications';
 import { formatInstant, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -290,6 +290,10 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
       // the column-visibility toolbar button. Comment = long free-text; Entered By usually == Employee.
       columnVisibility: { comment: false, createdByName: false },
     },
+    // Keep ONLY the column-visibility button (the shared default hides every toolbar icon): it's how users bring back
+    // the hidden Comment / Entered By columns (feature-plan-ux-foundations.md §4.4).
+    enableToolbarInternalActions: true,
+    renderToolbarInternalActions: ({ table }) => <MRT_ShowHideColumnsButton table={table} />,
     // Correction-row highlight: `data-correction` also drives globals.css's dark-mode
     // text-contrast rule — keep both in sync if this ever changes.
     mantineTableBodyRowProps: ({ row }) => ({

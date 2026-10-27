@@ -257,6 +257,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
     columns: ccColumns,
     data: ccAssignments,
     enableColumnFilters: true,
+    initialState: { showColumnFilters: true },
     enableRowActions: true,
     renderRowActions: ({ row }) => (
       <Tooltip label="Deactivate">
@@ -271,12 +272,6 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
         </ActionIcon>
       </Tooltip>
     ),
-    displayColumnDefOptions: {
-      'mrt-row-actions': {
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
-      },
-    },
   });
 
   function handleContractChange(contractId: string | null) {
@@ -368,6 +363,7 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
     columns,
     data: supervisorAssignments,
     enableColumnFilters: true,
+    initialState: { showColumnFilters: true },
     enableRowActions: true,
     renderRowActions: ({ row }) => (
       <Tooltip label="Deactivate">
@@ -382,12 +378,6 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
         </ActionIcon>
       </Tooltip>
     ),
-    displayColumnDefOptions: {
-      'mrt-row-actions': {
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
-      },
-    },
   });
 
   return (

@@ -331,12 +331,6 @@ export function ContractsClient({ initialContracts }: Props) {
         </Tooltip>
       </Group>
     ),
-    displayColumnDefOptions: {
-      'mrt-row-actions': {
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
-      },
-    },
   });
 
   // DateInput in @mantine/dates v9 uses string values (ISO date strings) when valueFormat is not set

@@ -228,13 +228,6 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     initialState: {
       sorting: [{ id: 'periodStart', desc: true }],
     },
-    displayColumnDefOptions: {
-      'mrt-row-actions': {
-        header: 'Actions',
-        mantineTableHeadCellProps: { style: { textAlign: 'center' as const } },
-        mantineTableBodyCellProps: { style: { textAlign: 'center' as const } },
-      },
-    },
   });
 
   // Build review table content

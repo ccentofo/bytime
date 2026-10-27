@@ -3,14 +3,17 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { format } from 'util';
+import { readFileSync } from 'fs';
+import path from 'path';
 import { MantineProvider } from '@mantine/core';
-import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { MantineReactTable, MRT_ShowHideColumnsButton, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 
 /**
  * feature-plan-ux-foundations.md T5 (UX-AUDIT B4): with the Collapse patch, MRT's collapsible parts actually OPEN —
  * the detail panel, the global search — and React no longer warns about a non-boolean `in` attribute. Unpatched, the
- * panel is in the DOM but hidden, so presence is not enough: `isRendered` walks the ancestors.
+ * panel is in the DOM but hidden, so presence is not enough: `isRendered` walks the ancestors. T6: the shared
+ * useAppTable defaults (aria-sort, the actions header's name, no toolbar toggles, a bordered search box).
  */
 
 // Attached before the file's first render: React warns once per attribute per page load.
@@ -26,8 +29,30 @@ function Table() {
     columns: COLUMNS,
     data: DATA,
     enableExpanding: true,
-    initialState: { showGlobalFilter: true }, // explicit here; §4.4 makes it the default (T6)
     renderDetailPanel: ({ row }) => <div data-testid={`panel-${row.original.id}`}>Detail for {row.original.name}</div>,
+  });
+  return <MantineReactTable table={table} />;
+}
+
+type Person = { id: string; name: string; email: string; note: string };
+const PEOPLE_COLUMNS: MRT_ColumnDef<Person>[] = [
+  { accessorKey: 'name', header: 'Name' },
+  { accessorKey: 'email', header: 'Email' },
+  { accessorKey: 'note', header: 'Note' },
+];
+const PEOPLE: Person[] = [{ id: 'a', name: 'Bo', email: 'bo@x', note: 'n1' }, { id: 'b', name: 'Al', email: 'al@x', note: 'n2' }];
+const SORTED = { sorting: [{ id: 'name', desc: false }] };
+const HIDDEN = { columnVisibility: { note: false } };
+
+/** Like a migrated table: row actions; optionally AuditTrail's hidden column + its show/hide-columns button. */
+function PeopleTable({ auditLike = false }: { auditLike?: boolean }) {
+  const table = useAppTable<Person>({
+    columns: PEOPLE_COLUMNS,
+    data: PEOPLE,
+    enableRowActions: true,
+    renderRowActions: () => <button type="button">Edit</button>,
+    initialState: auditLike ? HIDDEN : SORTED,
+    ...(auditLike ? { enableToolbarInternalActions: true, renderToolbarInternalActions: ({ table: t }) => <MRT_ShowHideColumnsButton table={t} /> } : {}),
   });
   return <MantineReactTable table={table} />;
 }
@@ -59,7 +84,7 @@ function isRendered(el: Element | null): boolean {
 }
 const wait = (ms: number) => act(async () => new Promise((r) => setTimeout(r, ms)));
 const bodyRows = () => [...container.querySelectorAll('tbody tr')].filter((tr) => !tr.querySelector('[data-testid^="panel-"]'));
-const searchInput = () => container.querySelector('input[placeholder="Search"]') as HTMLInputElement | null;
+const searchInput = () => container.querySelector('input[aria-label="Search this table"]') as HTMLInputElement | null;
 
 async function render() {
   await act(async () => { root.render(<MantineProvider env="test"><Table /></MantineProvider>); });
@@ -93,5 +118,44 @@ describe('MRT collapsible parts open (T5)', () => {
   it('no React warning about a non-boolean `in` attribute (formatted message)', () => {
     const messages = consoleError.mock.calls.map((args) => format(...args));
     expect(messages.filter((m) => /non-boolean attribute .in./.test(m))).toEqual([]);
+  });
+});
+
+describe('useAppTable defaults (T6)', () => {
+  const headCell = (label: string) => [...container.querySelectorAll('thead th')].find((th) => th.textContent?.includes(label)) as HTMLElement;
+  const renderPeople = async (auditLike = false) => {
+    await act(async () => { root.render(<MantineProvider env="test"><PeopleTable auditLike={auditLike} /></MantineProvider>); });
+  };
+
+  it('aria-sort: ascending on the sorted column, none on a sortable unsorted one', async () => {
+    await renderPeople();
+    expect(headCell('Name').getAttribute('aria-sort')).toBe('ascending');
+    expect(headCell('Email').getAttribute('aria-sort')).toBe('none');
+  });
+
+  it('the actions column header has the accessible name "Actions" (visually hidden), right-aligned', async () => {
+    await renderPeople();
+    const ths = [...container.querySelectorAll('thead th')];
+    const actions = ths[ths.length - 1] as HTMLElement;
+    expect(actions.textContent?.trim()).toBe('Actions');
+    expect(actions.style.textAlign).toBe('right');
+  });
+
+  it('no toolbar toggle icons by default; the search box uses the bordered `default` variant', async () => {
+    await renderPeople();
+    for (const label of ['Show/Hide search', 'Show/Hide filters', 'Show/Hide columns', 'Toggle density', 'Toggle full screen']) {
+      expect(container.querySelector(`button[aria-label="${label}"]`), label).toBeNull();
+    }
+    expect(searchInput()?.getAttribute('data-variant')).toBe('default');
+  });
+
+  it('a table configured like AuditTrail renders the show/hide-columns button (and only it)', async () => {
+    await renderPeople(true);
+    expect(container.querySelector('button[aria-label="Show/Hide columns"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Show/Hide filters"]')).toBeNull();
+    // …and AuditTrail itself is configured that way (it hides Comment / Entered By by default).
+    const audit = readFileSync(path.resolve(__dirname, '../../app/(app)/admin/audit-trail/AuditTrailClient.tsx'), 'utf8');
+    expect(audit).toContain('enableToolbarInternalActions: true,');
+    expect(audit).toContain('renderToolbarInternalActions: ({ table }) => <MRT_ShowHideColumnsButton table={table} />,');
   });
 });
