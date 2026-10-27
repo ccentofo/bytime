@@ -1,0 +1,979 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CadenzPoint redesign mockups</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ── Tokens. Every text/background pair below is ≥ 4.5:1; borders and focus ≥ 3:1. ── */
+:root {
+  --page: #f7f8fb;          /* ink-0 */
+  --panel: #ffffff;
+  --text: #0c1b33;          /* ink-9  — 17.1:1 on white */
+  --text-2: #46526e;        /* ink-6  — 7.8:1 on white (replaces gray-6 "dimmed", 3.3:1) */
+  --hairline: #e2e6ee;      /* ink-2  — decorative dividers only */
+  --control: #858fa5;       /* input borders — 3.25:1 on white (was 1.57:1) */
+  --primary: #3f55e6;       /* signal-7 — white text 5.75:1 (signal-6 was 4.30:1) */
+  --primary-hover: #3346c0;
+  --accent: #4f6bff;        /* signal-6 — non-text accents: focus, today, meters */
+  --accent-soft: #eef1ff;
+  --link: #3f55e6;
+  --ok-text: #077634; --ok-bg: #e8f8ef;        /* 5.2:1 */
+  --warn-text: #a35f02; --warn-bg: #fff6e3;    /* 4.7:1 (warning-6 was 2.0:1) */
+  --danger: #c92a2a; --danger-bg: #fff0f0;     /* 5.6:1 */
+  --weekend: #f2f4f8;
+  --future: #fafbfc;
+  --shadow: 0 8px 24px rgba(12, 27, 51, .14);
+  --radius: 8px;
+  color-scheme: light;
+}
+[data-theme="dark"] {
+  --page: #121319; --panel: #181a20;
+  --text: #e6e8ee; --text-2: #abafba;           /* 6.9:1 on #23262f */
+  --hairline: #2b2f3a; --control: #646a7c;      /* 3.2:1 */
+  --primary: #3f55e6; --primary-hover: #566eff;
+  --accent: #6b80ff; --accent-soft: #1f2540;
+  --link: #8d9eff;
+  --ok-text: #48c077; --ok-bg: #15281d;
+  --warn-text: #f6aa1f; --warn-bg: #2d2412;
+  --danger: #ff8787; --danger-bg: #2e1a1c;
+  --weekend: #1d2027; --future: #1a1c22;
+  --shadow: 0 8px 24px rgba(0, 0, 0, .5);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  font: 14px/1.5 Inter, -apple-system, "Segoe UI", sans-serif;
+  color: var(--text); background: #d9dde6;
+  -webkit-font-smoothing: antialiased;
+}
+[data-theme="dark"] body { background: #07080b; }
+h1, h2, h3 { font-family: Geist, Inter, sans-serif; margin: 0; letter-spacing: -0.01em; }
+h1 { font-size: 24px; font-weight: 600; line-height: 1.25; }
+h2 { font-size: 16px; font-weight: 600; }
+h3 { font-size: 14px; font-weight: 600; }
+p { margin: 0; }
+.num { font-variant-numeric: tabular-nums; }
+.code { font-family: "Geist Mono", ui-monospace, monospace; font-size: 12px; color: var(--text-2); }
+.muted { color: var(--text-2); }
+a { color: var(--link); text-underline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ── Review chrome (not part of the product) ── */
+.review {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 10px 20px; background: #0c1b33; color: #e6e8ee;
+}
+.review strong { font-family: Geist, sans-serif; font-weight: 600; }
+.review nav { display: flex; gap: 4px; flex-wrap: wrap; }
+.review button {
+  font: inherit; font-size: 13px; color: #c7cad2; background: transparent;
+  border: 1px solid transparent; border-radius: 6px; padding: 5px 10px; cursor: pointer;
+}
+.review button[aria-pressed="true"] { background: #1f2c4a; color: #fff; border-color: #33415f; }
+.review .theme { margin-left: auto; border-color: #33415f; }
+.notes {
+  max-width: 1440px; margin: 0 auto; padding: 18px 24px 40px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px 32px;
+  color: #26324a;
+}
+[data-theme="dark"] .notes { color: #c7cad2; }
+.notes h2 { grid-column: 1 / -1; font-size: 15px; margin-bottom: 4px; }
+.notes ul { margin: 0; padding-left: 18px; }
+.notes li { margin: 4px 0; }
+
+/* ── App frame ── */
+.frame {
+  max-width: 1440px; margin: 20px auto 0; min-height: 820px;
+  display: grid; grid-template-columns: 240px 1fr;
+  background: var(--page); border-radius: 12px; overflow: hidden;
+  box-shadow: 0 20px 60px rgba(12, 27, 51, .25);
+}
+.screen { display: none; }
+.screen.on { display: block; }
+
+/* Sidebar */
+.side {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 16px 12px; border-right: 1px solid var(--hairline); background: var(--page);
+}
+.brand { display: flex; align-items: center; gap: 8px; padding: 4px 10px 18px; font-family: Geist, sans-serif; font-size: 17px; }
+.brand b { font-weight: 800; } .brand span { font-weight: 500; } .brand .wm { display: inline-flex; }
+.brand svg { flex: none; }
+.nav-item, .nav-group > button {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 7px 10px; border: 0; border-radius: 6px; background: none;
+  font: inherit; color: var(--text); text-decoration: none; text-align: left; cursor: pointer;
+}
+.nav-item:hover, .nav-group > button:hover { background: var(--hairline); }
+.nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--primary); font-weight: 600; }
+[data-theme="dark"] .nav-item[aria-current="page"] { color: #b6c1ff; }
+.nav-item svg, .nav-group > button svg { flex: none; color: var(--text-2); }
+.nav-item[aria-current="page"] svg { color: inherit; }
+.count {
+  margin-left: auto; min-width: 22px; padding: 0 7px; border-radius: 999px;
+  background: var(--primary); color: #fff; font-size: 12px; font-weight: 600; text-align: center; line-height: 20px;
+}
+.nav-group > button .chev { margin-left: auto; transition: transform .15s; }
+.nav-group > button[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+.nav-group ul { list-style: none; margin: 0; padding: 0 0 4px 30px; }
+.nav-group button[aria-expanded="false"] + ul { display: none; }
+.nav-group ul .nav-item { padding: 5px 10px; }
+.side .spacer { flex: 1; }
+.side hr { border: 0; border-top: 1px solid var(--hairline); margin: 8px 4px; }
+.who { display: flex; align-items: center; gap: 10px; padding: 8px 10px; }
+.avatar {
+  width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--primary); color: #fff; font-size: 12px; font-weight: 600; flex: none;
+}
+.who small { display: block; color: var(--text-2); font-size: 12px; line-height: 1.3; }
+.back { color: var(--text-2); font-size: 13px; }
+
+/* Main column */
+.main { padding: 28px 36px 48px; min-width: 0; }
+.head { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+.head .grow { flex: 1; min-width: 240px; }
+.head p { margin-top: 4px; }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px;
+  border-radius: var(--radius); border: 1px solid var(--control); background: var(--panel);
+  font: 500 14px Inter, sans-serif; color: var(--text); cursor: pointer; white-space: nowrap;
+}
+.btn:hover { background: var(--page); }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn.primary:hover { background: var(--primary-hover); }
+.btn.primary[aria-disabled="true"] { background: var(--hairline); border-color: var(--hairline); color: var(--text-2); cursor: not-allowed; }
+.btn.quiet { border-color: transparent; background: transparent; color: var(--link); padding: 0 8px; height: 30px; }
+.btn.quiet:hover { background: var(--accent-soft); }
+.btn.icon { width: 32px; height: 30px; padding: 0; justify-content: center; border-color: transparent; background: transparent; color: var(--text-2); }
+.btn.icon:hover, .btn.icon[aria-expanded="true"] { background: var(--hairline); color: var(--text); }
+.btn-stack { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.btn-stack small { color: var(--text-2); font-size: 12px; }
+
+/* Status: always a word, never color alone */
+.status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; }
+.status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.status.ok { color: var(--ok-text); } .status.warn { color: var(--warn-text); }
+.status.draft { color: var(--text-2); } .status.off { color: var(--text-2); }
+.status.off::before { background: transparent; border: 1.5px solid currentColor; }
+.pill { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 999px; font-size: 13px; font-weight: 500; }
+.pill.draft { background: var(--hairline); color: var(--text); }
+
+/* Panels */
+.panel { background: var(--panel); border: 1px solid var(--hairline); border-radius: 10px; }
+.section-title { display: flex; align-items: baseline; gap: 12px; margin: 0 0 10px; }
+.section-title a { margin-left: auto; font-size: 13px; }
+
+/* ── Timesheet ── */
+.period-nav { display: flex; align-items: center; gap: 4px; }
+.period-nav .label { font-family: Geist, sans-serif; font-size: 16px; font-weight: 600; padding: 0 6px; white-space: nowrap; }
+.summary { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; margin: -4px 0 18px; }
+.summary .fact { color: var(--text-2); }
+.summary .fact b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.grid-wrap { overflow-x: auto; }
+table.sheet { width: 100%; border-collapse: separate; border-spacing: 0; min-width: 980px; }
+.sheet th, .sheet td { border-bottom: 1px solid var(--hairline); }
+.sheet thead th { position: sticky; top: 0; background: var(--panel); font-weight: 500; padding: 10px 0 8px; vertical-align: bottom; }
+.sheet th.row-h { text-align: left; padding: 10px 16px; width: 280px; position: sticky; left: 0; background: var(--panel); z-index: 1; }
+.sheet thead th.row-h { z-index: 2; }
+.day { text-align: center; font-size: 12px; color: var(--text-2); line-height: 1.3; }
+.day b { display: block; font-size: 13px; color: var(--text); font-weight: 600; }
+.meter { display: block; height: 3px; margin: 6px 8px 0; border-radius: 2px; background: var(--hairline); overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--accent); }
+.day.today b { color: var(--primary); }
+[data-theme="dark"] .day.today b { color: #b6c1ff; }
+.day.today { box-shadow: inset 0 3px 0 var(--accent); }
+.wk { background: var(--weekend); }
+.fut { background: var(--future); }
+.sheet td.h {
+  height: 44px; text-align: center; padding: 0; font-variant-numeric: tabular-nums; position: relative;
+  border-left: 1px solid var(--hairline);
+}
+.sheet td.h button {
+  width: 100%; height: 100%; border: 0; background: transparent; font: inherit; color: var(--text); cursor: text;
+}
+.sheet td.h button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 0; background: var(--accent-soft); }
+.sheet td.h.focus { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--accent-soft); }
+.note-flag { position: absolute; top: 0; right: 0; width: 0; height: 0; border-top: 9px solid var(--accent); border-left: 9px solid transparent; }
+.row-name { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-h .code { display: block; margin-top: 1px; }
+.sheet td.tot, .sheet th.tot { text-align: right; padding: 0 16px; font-weight: 600; font-variant-numeric: tabular-nums; width: 80px; border-left: 1px solid var(--hairline); }
+.group-row th { text-align: left; padding: 16px 16px 6px; font-size: 13px; font-weight: 600; color: var(--text-2); background: var(--panel); border-bottom: 1px solid var(--hairline); }
+.group-row button { all: unset; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.sheet tfoot td, .sheet tfoot th { font-weight: 600; border-bottom: 0; background: var(--page); }
+.sheet tfoot td.h { color: var(--text); }
+.keys { display: flex; gap: 18px; flex-wrap: wrap; padding: 10px 16px; font-size: 12px; color: var(--text-2); border-top: 1px solid var(--hairline); }
+kbd { font: 500 11px "Geist Mono", monospace; padding: 1px 5px; border: 1px solid var(--control); border-bottom-width: 2px; border-radius: 4px; color: var(--text); background: var(--panel); }
+.cell-tip {
+  position: absolute; z-index: 5; top: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  white-space: nowrap; padding: 6px 10px; border-radius: 6px; background: var(--text); color: var(--panel); font-size: 12px; box-shadow: var(--shadow);
+}
+
+/* ── Home ── */
+.home { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr); gap: 28px; align-items: start; }
+.todo { list-style: none; margin: 0; padding: 0; }
+.todo li { display: grid; grid-template-columns: 32px 1fr auto; gap: 14px; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--hairline); }
+.todo li:last-child { border-bottom: 0; }
+.todo .ic { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; background: var(--accent-soft); color: var(--primary); }
+[data-theme="dark"] .todo .ic { color: #b6c1ff; }
+.todo .ic.warn { background: var(--warn-bg); color: var(--warn-text); }
+.todo h3 { font-size: 14px; }
+.todo p { color: var(--text-2); margin-top: 2px; }
+.mini-cadence { display: grid; grid-template-columns: repeat(16, 1fr); gap: 3px; align-items: end; height: 44px; margin: 14px 0 6px; }
+.mini-cadence i { display: block; border-radius: 2px; background: var(--accent); }
+.mini-cadence i.empty { background: var(--hairline); height: 4px !important; }
+.mini-cadence i.wk { background: transparent; }
+.mini-cadence i.today { outline: 2px solid var(--accent); outline-offset: 1px; background: var(--hairline); height: 4px !important; }
+.mini-days { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-2); }
+.stack > * + * { margin-top: 28px; }
+.pad { padding: 18px; }
+.split { display: grid; grid-template-columns: repeat(3, 1fr); text-align: left; }
+.split div { padding: 14px 18px; border-right: 1px solid var(--hairline); }
+.split div:last-child { border-right: 0; }
+.split b { display: block; font-family: Geist, sans-serif; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.split span { color: var(--text-2); font-size: 13px; }
+.burn { display: flex; align-items: center; gap: 10px; }
+.burn .track { flex: 1; height: 6px; border-radius: 3px; background: var(--hairline); overflow: hidden; min-width: 60px; }
+.burn .track i { display: block; height: 100%; background: var(--accent); }
+
+/* ── Tables ── */
+.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 14px; border-bottom: 1px solid var(--hairline); }
+.search { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; width: 260px; border: 1px solid var(--control); border-radius: var(--radius); background: var(--panel); color: var(--text-2); }
+.search input { border: 0; outline: 0; background: transparent; font: inherit; color: var(--text); width: 100%; }
+.filter { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border: 1px solid var(--control); border-radius: var(--radius); background: var(--panel); font: inherit; color: var(--text); cursor: pointer; }
+.filter span { color: var(--text-2); }
+.toolbar .end { margin-left: auto; color: var(--text-2); font-size: 13px; }
+table.list { width: 100%; border-collapse: collapse; }
+.list th { text-align: left; font-weight: 500; font-size: 13px; color: var(--text-2); padding: 10px 14px; border-bottom: 1px solid var(--hairline); white-space: nowrap; }
+.list td { padding: 0 14px; height: 48px; border-bottom: 1px solid var(--hairline); white-space: nowrap; }
+.list tr:last-child td { border-bottom: 0; }
+.list tbody tr:hover { background: var(--page); }
+.list td.r, .list th.r { text-align: right; }
+.list td.actions { width: 1%; text-align: right; padding-right: 8px; }
+.actions-wrap { display: inline-flex; align-items: center; gap: 2px; position: relative; }
+.menu {
+  position: absolute; z-index: 20; right: 0; top: calc(100% + 4px); min-width: 220px;
+  padding: 6px; border-radius: 10px; background: var(--panel); border: 1px solid var(--hairline); box-shadow: var(--shadow);
+  text-align: left;
+}
+.menu[hidden] { display: none; }
+.menu button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 6px; background: none; font: inherit; color: var(--text); cursor: pointer; }
+.menu button:hover, .menu button:focus-visible { background: var(--page); outline: none; }
+.menu button svg { color: var(--text-2); flex: none; }
+.menu hr { border: 0; border-top: 1px solid var(--hairline); margin: 6px 4px; }
+.menu .danger, .menu .danger svg { color: var(--danger); }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--hairline); margin-bottom: 16px; }
+.tabs button { font: 500 14px Inter, sans-serif; padding: 10px 12px; border: 0; background: none; color: var(--text-2); border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer; }
+.tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+.tabs .n { color: var(--text-2); font-weight: 400; margin-left: 4px; }
+.flags { display: inline-flex; gap: 6px; }
+.flag { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--warn-bg); color: var(--warn-text); font-weight: 500; }
+.seg { display: inline-flex; padding: 3px; border-radius: 9px; background: var(--hairline); gap: 2px; }
+.seg button { font: 500 13px Inter, sans-serif; border: 0; background: transparent; color: var(--text-2); padding: 6px 12px; border-radius: 7px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(12,27,51,.12); }
+
+/* ── Settings ── */
+.settings { max-width: 760px; }
+.field { display: grid; grid-template-columns: 220px 1fr; gap: 24px; padding: 20px 0; border-bottom: 1px solid var(--hairline); }
+.field:last-of-type { border-bottom: 0; }
+.field label, .field .lab { font-weight: 500; }
+.field .help { color: var(--text-2); font-size: 13px; margin-top: 2px; }
+.input { height: 36px; width: 100%; max-width: 360px; padding: 0 10px; border: 1px solid var(--control); border-radius: var(--radius); background: var(--panel); font: inherit; color: var(--text); }
+.notice { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 8px; background: var(--warn-bg); color: var(--warn-text); font-size: 13px; margin-top: 10px; max-width: 460px; }
+.notice svg { flex: none; margin-top: 1px; }
+.form-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 0 0; }
+
+/* ── Color comparison ── */
+.compare { display: grid; grid-template-columns: 220px 1fr 1fr; border: 1px solid var(--hairline); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.compare > div { padding: 14px 18px; border-bottom: 1px solid var(--hairline); display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.compare > div.h { font-weight: 600; background: var(--page); }
+.compare .ratio { font-size: 13px; font-variant-numeric: tabular-nums; }
+.compare .pass { color: var(--ok-text); font-weight: 600; }
+.compare .fail { color: var(--danger); font-weight: 600; }
+.old-btn { height: 36px; padding: 0 14px; border-radius: 8px; border: 0; background: #4f6bff; color: #fff; font: 500 14px Inter, sans-serif; }
+.old-ok { height: 36px; padding: 0 14px; border-radius: 8px; border: 0; background: #16a34a; color: #fff; font: 500 14px Inter, sans-serif; }
+.new-ok { height: 36px; padding: 0 14px; border-radius: 8px; border: 0; background: #077634; color: #fff; font: 500 14px Inter, sans-serif; }
+.old-badge { font: 700 11px Inter, sans-serif; letter-spacing: .04em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; background: #fff6e3; color: #f59e0b; }
+.old-dim { color: #868e96; }
+.old-input { height: 34px; width: 160px; border: 1px solid #c8cfdc; border-radius: 8px; background: #fff; }
+.new-input { height: 34px; width: 160px; border: 1px solid #858fa5; border-radius: 8px; background: #fff; }
+
+/* Navigation before/after */
+.navcmp { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+.navcmp ol, .navcmp ul { margin: 8px 0 0; padding-left: 22px; }
+.navcmp li { margin: 3px 0; }
+.navcmp .tag { font-size: 12px; color: var(--text-2); }
+
+@media (max-width: 900px) {
+  .frame { grid-template-columns: 1fr; }
+  .side { display: none; }
+  .main { padding: 20px 16px 40px; }
+  .home, .navcmp { grid-template-columns: 1fr; }
+  .field { grid-template-columns: 1fr; gap: 8px; }
+  .compare { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="review" role="region" aria-label="Mockup controls">
+  <strong>CadenzPoint redesign mockups</strong>
+  <nav aria-label="Screens">
+    <button data-show="timesheet" aria-pressed="true">Employee timesheet</button>
+    <button data-show="home">Admin home</button>
+    <button data-show="approvals">Supervisor approvals</button>
+    <button data-show="codes">Charge codes table</button>
+    <button data-show="settings">Settings area</button>
+    <button data-show="color">Color fix</button>
+    <button data-show="nav">Navigation before / after</button>
+  </nav>
+  <button class="theme" id="theme" aria-pressed="false">Dark mode</button>
+</div>
+
+<!-- SVG icon sprite (tabler-style strokes). One icon per meaning. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M5 12l-2 0l9-9l9 9l-2 0M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7M9 21v-6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 7v5l3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M9 11l3 3l8-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2zM9 13h6M9 17h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="7" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2M16 3.13a4 4 0 0 1 0 7.75M21 21v-2a4 4 0 0 0-3-3.85" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 13a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1zM15 9a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1zM9 5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><path d="M10.3 4.3c.4-1.8 3-1.8 3.4 0a1.7 1.7 0 0 0 2.6 1.1c1.5-.9 3.3.8 2.4 2.4a1.7 1.7 0 0 0 1 2.5c1.8.4 1.8 3 0 3.4a1.7 1.7 0 0 0-1 2.6c.9 1.5-.9 3.3-2.4 2.4a1.7 1.7 0 0 0-2.6 1c-.4 1.8-3 1.8-3.4 0a1.7 1.7 0 0 0-2.6-1c-1.5.9-3.3-.9-2.4-2.4a1.7 1.7 0 0 0-1-2.6c-1.8-.4-1.8-3 0-3.4a1.7 1.7 0 0 0 1-2.5c-.9-1.6.9-3.3 2.4-2.4 1 .6 2.3.1 2.6-1.1z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="M6 9l6 6l6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 6l-6 6l6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 6l6 6l-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-dots" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 20h4L18.5 9.5a2.8 2.8 0 0 0-4-4L4 16v4M13.5 6.5l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-brief" viewBox="0 0 24 24"><path d="M3 9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M12 12v.01M3 13a20 20 0 0 0 18 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M12 8v4l2 2M3.05 11a9 9 0 1 1 .5 4M3 20v-5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.7 5.7l12.6 12.6" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-wand" viewBox="0 0 24 24"><path d="M6 21L21 6l-3-3L3 18zM15 6l3 3M9 3a2 2 0 0 0 2 2a2 2 0 0 0-2 2a2 2 0 0 0-2-2a2 2 0 0 0 2-2M19 13a2 2 0 0 0 2 2a2 2 0 0 0-2 2a2 2 0 0 0-2-2a2 2 0 0 0 2-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M21 21l-6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-coins" viewBox="0 0 24 24"><ellipse cx="9" cy="7" rx="6" ry="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 7v4c0 1.7 2.7 3 6 3s6-1.3 6-3V7M3 11v4c0 1.7 2.7 3 6 3c1.2 0 2.3-.2 3.2-.5M15 11.5c3.4.2 6 1.4 6 3c0 1.6-2.7 3-6 3s-6-1.4-6-3" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3a12 12 0 0 0 8.5 3A12 12 0 0 1 12 21A12 12 0 0 1 3.5 6A12 12 0 0 0 12 3M9 12l2 2l4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-cal" viewBox="0 0 24 24"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM16 3v4M8 3v4M4 11h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 9v4M10.4 3.9L2.6 17.5a1.8 1.8 0 0 0 1.6 2.7h15.6a1.8 1.8 0 0 0 1.6-2.7L13.6 3.9a1.8 1.8 0 0 0-3.2 0zM12 16.5v.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 5a5 5 0 0 1 7 0a5 5 0 0 0 7 0v9a5 5 0 0 1-7 0a5 5 0 0 0-7 0zM5 21v-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-logo" viewBox="0 0 24 24"><rect x="3" y="13" width="3.5" height="8" rx="1" fill="currentColor"/><rect x="9" y="9" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="15" y="5" width="3.5" height="16" rx="1" fill="currentColor"/><circle cx="20.5" cy="3.5" r="2" fill="#4f6bff"/></symbol>
+  </defs>
+</svg>
+
+<!-- Sidebar templates, filled by script -->
+<template id="nav-admin">
+  <aside class="side" aria-label="Main">
+    <div class="brand"><svg width="20" height="20"><use href="#i-logo"/></svg><span class="wm"><span>Cadenz</span><b>Point</b></span></div>
+    <a class="nav-item" href="#" data-key="home"><svg width="18" height="18"><use href="#i-home"/></svg>Home</a>
+    <a class="nav-item" href="#" data-key="timesheet"><svg width="18" height="18"><use href="#i-clock"/></svg>My timesheet</a>
+    <a class="nav-item" href="#" data-key="approvals"><svg width="18" height="18"><use href="#i-check"/></svg>Approvals<span class="count" aria-label="4 waiting">4</span></a>
+    <div class="nav-group">
+      <button aria-expanded="false" data-group="contracts"><svg width="18" height="18"><use href="#i-file"/></svg>Contracts<svg class="chev" width="16" height="16"><use href="#i-chev"/></svg></button>
+      <ul>
+        <li><a class="nav-item" href="#">Overview</a></li>
+        <li><a class="nav-item" href="#">Contracts and CLINs</a></li>
+        <li><a class="nav-item" href="#" data-key="codes">Charge codes</a></li>
+        <li><a class="nav-item" href="#">Labor categories</a></li>
+      </ul>
+    </div>
+    <div class="nav-group">
+      <button aria-expanded="false" data-group="people"><svg width="18" height="18"><use href="#i-users"/></svg>People<svg class="chev" width="16" height="16"><use href="#i-chev"/></svg></button>
+      <ul>
+        <li><a class="nav-item" href="#">Users</a></li>
+        <li><a class="nav-item" href="#">Assignments</a></li>
+      </ul>
+    </div>
+    <div class="nav-group">
+      <button aria-expanded="false" data-group="reports"><svg width="18" height="18"><use href="#i-chart"/></svg>Reports<svg class="chev" width="16" height="16"><use href="#i-chev"/></svg></button>
+      <ul>
+        <li><a class="nav-item" href="#">Downloads</a></li>
+        <li><a class="nav-item" href="#">Payroll export</a></li>
+        <li><a class="nav-item" href="#">Audit trail</a></li>
+      </ul>
+    </div>
+    <div class="spacer"></div>
+    <a class="nav-item" href="#" data-key="settings"><svg width="18" height="18"><use href="#i-gear"/></svg>Settings</a>
+    <hr>
+    <div class="who"><span class="avatar" aria-hidden="true">AU</span><div>Admin User<small>Acme Federal · Admin</small></div></div>
+  </aside>
+</template>
+
+<template id="nav-supervisor">
+  <aside class="side" aria-label="Main">
+    <div class="brand"><svg width="20" height="20"><use href="#i-logo"/></svg><span class="wm"><span>Cadenz</span><b>Point</b></span></div>
+    <a class="nav-item" href="#" data-key="home"><svg width="18" height="18"><use href="#i-home"/></svg>Home</a>
+    <a class="nav-item" href="#" data-key="timesheet"><svg width="18" height="18"><use href="#i-clock"/></svg>My timesheet</a>
+    <a class="nav-item" href="#" data-key="approvals"><svg width="18" height="18"><use href="#i-check"/></svg>Approvals<span class="count" aria-label="3 waiting">3</span></a>
+    <div class="nav-group">
+      <button aria-expanded="true"><svg width="18" height="18"><use href="#i-chart"/></svg>Reports<svg class="chev" width="16" height="16"><use href="#i-chev"/></svg></button>
+      <ul>
+        <li><a class="nav-item" href="#">Downloads</a></li>
+        <li><a class="nav-item" href="#">Audit trail</a></li>
+      </ul>
+    </div>
+    <div class="spacer"></div>
+    <hr>
+    <div class="who"><span class="avatar" aria-hidden="true">SW</span><div>Sarah Wilson<small>Acme Federal · Supervisor</small></div></div>
+  </aside>
+</template>
+
+<template id="nav-employee">
+  <aside class="side" aria-label="Main">
+    <div class="brand"><svg width="20" height="20"><use href="#i-logo"/></svg><span class="wm"><span>Cadenz</span><b>Point</b></span></div>
+    <a class="nav-item" href="#" data-key="timesheet"><svg width="18" height="18"><use href="#i-clock"/></svg>Timesheet</a>
+    <a class="nav-item" href="#"><svg width="18" height="18"><use href="#i-history"/></svg>Past timesheets</a>
+    <div class="spacer"></div>
+    <hr>
+    <div class="who"><span class="avatar" aria-hidden="true">JS</span><div>Jane Smith<small>Acme Federal</small></div></div>
+  </aside>
+</template>
+
+<template id="nav-settings">
+  <aside class="side" aria-label="Settings">
+    <div class="brand"><svg width="20" height="20"><use href="#i-logo"/></svg><span class="wm"><span>Cadenz</span><b>Point</b></span></div>
+    <a class="nav-item back" href="#" data-goto="home"><svg width="16" height="16"><use href="#i-left"/></svg>Back to the app</a>
+    <h2 style="padding: 14px 10px 6px; font-size: 13px; color: var(--text-2); font-weight: 600;">Settings</h2>
+    <a class="nav-item" href="#" aria-current="page">Workspace</a>
+    <a class="nav-item" href="#">Pay schedule</a>
+    <a class="nav-item" href="#">Billing</a>
+    <a class="nav-item" href="#">Integrations</a>
+    <a class="nav-item" href="#">API keys</a>
+    <a class="nav-item" href="#">Import and migration</a>
+    <div class="spacer"></div>
+    <hr>
+    <div class="who"><span class="avatar" aria-hidden="true">AU</span><div>Admin User<small>Acme Federal · Admin</small></div></div>
+  </aside>
+</template>
+
+<!-- ═════════════ 1. Employee timesheet ═════════════ -->
+<section class="screen on" id="s-timesheet" data-nav="employee" data-active="timesheet">
+  <div class="frame">
+    <div data-slot="nav"></div>
+    <main class="main">
+      <div class="head">
+        <div class="grow">
+          <h1>Timesheet</h1>
+          <div class="period-nav" style="margin-top:8px">
+            <button class="btn icon" aria-label="Previous period"><svg width="18" height="18"><use href="#i-left"/></svg></button>
+            <span class="label">Oct 16 – 31, 2026</span>
+            <button class="btn icon" aria-label="Next period"><svg width="18" height="18"><use href="#i-right"/></svg></button>
+            <button class="btn quiet">Choose period</button>
+          </div>
+        </div>
+        <span class="pill draft" style="margin-top:6px">Draft</span>
+        <button class="btn">Save</button>
+        <div class="btn-stack">
+          <button class="btn primary" aria-disabled="true" aria-describedby="submit-why">Submit</button>
+          <small id="submit-why">Opens Friday, Oct 30</small>
+        </div>
+      </div>
+
+      <div class="summary" role="status">
+        <span class="fact"><b>57.0</b> hours entered</span>
+        <span class="fact"><b>7 of 8</b> workdays so far are filled in</span>
+        <span class="fact">Due <b>Friday, Oct 30</b></span>
+      </div>
+
+      <div class="panel grid-wrap">
+        <table class="sheet" aria-label="Hours for Oct 16 to 31, 2026">
+          <thead>
+            <tr>
+              <th class="row-h" scope="col">Charge code</th>
+              <!-- day headers + meters filled by script -->
+            </tr>
+          </thead>
+          <tbody id="sheet-body"></tbody>
+          <tfoot><tr id="sheet-foot"><th class="row-h" scope="row">Daily total</th></tr></tfoot>
+        </table>
+        <div class="keys" aria-hidden="true">
+          <span><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd> move between days and codes</span>
+          <span>Type a number to enter hours</span>
+          <span><kbd>N</kbd> add a note</span>
+          <span><kbd>Esc</kbd> undo the cell</span>
+        </div>
+      </div>
+    </main>
+  </div>
+  <div class="notes">
+    <h2>What changed and why</h2>
+    <ul>
+      <li><b>The grid is the page.</b> The four stat cards and Recent periods table are gone. Status is one line, and past periods live under "Past timesheets". The first row of hours now sits about 260px from the top instead of about 1,000px.</li>
+      <li><b>One status, one period control.</b> "Draft" appears once (it was shown three times). Arrows plus "Choose period" replace three separate navigators.</li>
+      <li><b>Each day header shows how full the day is.</b> A thin bar fills toward 8 hours, so the shape of the period is visible at a glance without "LATE" badges on every past day.</li>
+    </ul>
+    <ul>
+      <li><b>Empty is blank.</b> No "—" in every cell. Weekends are shaded, future days are lighter, and today has a blue top edge.</li>
+      <li><b>Row labels are one line plus the code.</b> Rows are 44px instead of about 85px. Leave rows are named by type ("Annual leave", "Holiday"), not all "Leave".</li>
+      <li><b>Built for keyboard and screen readers (508).</b> Every cell is a real control: arrows move, typing enters hours, N adds a note. Notes are reachable without a mouse. Submit says why it's unavailable instead of just being grey.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═════════════ 2. Admin home ═════════════ -->
+<section class="screen" id="s-home" data-nav="admin" data-active="home">
+  <div class="frame">
+    <div data-slot="nav"></div>
+    <main class="main">
+      <div class="head"><div class="grow"><h1>Home</h1><p class="muted">Tuesday, October 27, 2026</p></div></div>
+      <div class="home">
+        <div class="stack">
+          <section aria-labelledby="att">
+            <div class="section-title"><h2 id="att">Needs your attention</h2></div>
+            <ul class="todo panel">
+              <li>
+                <span class="ic"><svg width="18" height="18"><use href="#i-check"/></svg></span>
+                <div><h3>4 timesheets are waiting for your approval</h3><p>John Doe, Sarah Wilson, Emily Davis and Jane Smith, for Oct 1 – 15.</p></div>
+                <button class="btn">Review</button>
+              </li>
+              <li>
+                <span class="ic warn"><svg width="18" height="18"><use href="#i-coins"/></svg></span>
+                <div><h3>1,691 hours have no rate</h3><p>They're on charge codes without a labor category, so contract costs leave them out.</p></div>
+                <button class="btn">Fix pricing</button>
+              </li>
+              <li>
+                <span class="ic"><svg width="18" height="18"><use href="#i-shield"/></svg></span>
+                <div><h3>You approve your own timesheets</h3><p>Auditors prefer an independent reviewer. Choose a supervisor or your bookkeeper.</p></div>
+                <button class="btn">Choose a reviewer</button>
+              </li>
+              <li>
+                <span class="ic"><svg width="18" height="18"><use href="#i-flag"/></svg></span>
+                <div><h3>Finish setting up: 5 of 6 done</h3><p>Next: give employees charge codes so their timesheets have rows to fill in.</p></div>
+                <button class="btn">Continue</button>
+              </li>
+            </ul>
+          </section>
+
+          <section aria-labelledby="contracts-h">
+            <div class="section-title"><h2 id="contracts-h">Contracts</h2><a href="#">Open overview</a></div>
+            <div class="panel">
+              <table class="list">
+                <thead><tr><th scope="col">Contract</th><th scope="col" class="r">Funded</th><th scope="col" class="r">Spent</th><th scope="col">Funding used</th></tr></thead>
+                <tbody>
+                  <tr><td>Army IT Support</td><td class="r num">$750,000</td><td class="r num">$171,315</td><td><div class="burn"><div class="track"><i style="width:23%"></i></div><span class="num">23%</span></div></td></tr>
+                  <tr><td>DISA Cyber Operations</td><td class="r num">$1,800,000</td><td class="r num">$216,980</td><td><div class="burn"><div class="track"><i style="width:12%"></i></div><span class="num">12%</span></div></td></tr>
+                  <tr><td>NAVAIR Systems Support</td><td class="r num">$2,500,000</td><td class="r num">$376,413</td><td><div class="burn"><div class="track"><i style="width:15%"></i></div><span class="num">15%</span></div></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div class="stack">
+          <section class="panel pad" aria-labelledby="mine">
+            <div class="section-title" style="margin:0"><h2 id="mine">Your timesheet</h2><span class="pill draft" style="margin-left:auto">Draft</span></div>
+            <p class="muted" style="margin-top:4px">Oct 16 – 31, due Friday, Oct 30</p>
+            <div class="mini-cadence" aria-hidden="true" id="mini"></div>
+            <div class="mini-days" aria-hidden="true"><span>Oct 16</span><span>Oct 31</span></div>
+            <p style="margin:12px 0 14px">No hours yet this period. 8 workdays have passed.</p>
+            <button class="btn primary">Open timesheet</button>
+          </section>
+
+          <section class="panel" aria-labelledby="team">
+            <div class="pad" style="padding-bottom:0"><h2 id="team">This pay period</h2><p class="muted" style="margin-top:2px">Oct 16 – 31, 7 employees</p></div>
+            <div class="split" style="margin-top:10px; border-top:1px solid var(--hairline)">
+              <div><b>0</b><span>Submitted</span></div>
+              <div><b>6</b><span>In progress</span></div>
+              <div><b>1</b><span>Not started</span></div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+  <div class="notes">
+    <h2>What changed and why</h2>
+    <ul>
+      <li><b>A real starting point.</b> Admins and supervisors land here instead of their own timesheet. Everything that needs a decision is one list, with one button each.</li>
+      <li><b>Scattered warnings, gathered.</b> The independent-reviewer banner, unpriced hours and setup progress used to live on three different pages.</li>
+      <li><b>The Setup Wizard leaves the menu.</b> It becomes the last item here until it's genuinely done, and it now checks charge-code access (bug B1).</li>
+    </ul>
+    <ul>
+      <li><b>"1,691 hours unpriced" said once,</b> in plain words, with a way to fix it. The dashboard repeated it six times.</li>
+      <li><b>Money without the cents</b> where cents add nothing; exact figures stay in reports.</li>
+      <li><b>New data needed:</b> "This pay period" (submitted / in progress / not started) needs one new query. Everything else on this page exists today.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═════════════ 3. Supervisor approvals ═════════════ -->
+<section class="screen" id="s-approvals" data-nav="supervisor" data-active="approvals">
+  <div class="frame">
+    <div data-slot="nav"></div>
+    <main class="main">
+      <div class="head">
+        <div class="grow"><h1>Approvals</h1><p class="muted">You review 3 employees on 2 CLINs. Admin User reviews your own timesheets.</p></div>
+      </div>
+      <div class="seg" role="group" aria-label="Show" style="margin-bottom:16px">
+        <button aria-pressed="true">Waiting for you (3)</button>
+        <button aria-pressed="false">Decided</button>
+        <button aria-pressed="false">Everything</button>
+      </div>
+      <div class="panel">
+        <table class="list">
+          <thead><tr><th scope="col">Employee</th><th scope="col">Pay period</th><th scope="col" class="r">Hours</th><th scope="col">Submitted</th><th scope="col">Worth a look</th><th scope="col"><span class="sr">Actions</span></th></tr></thead>
+          <tbody>
+            <tr><td>John Doe</td><td>Oct 1 – 15, 2026</td><td class="r num">92.0</td><td>Oct 17</td><td><span class="flags"><span class="flag">1 correction</span></span></td><td class="actions"><button class="btn">Review</button></td></tr>
+            <tr><td>Emily Davis</td><td>Oct 1 – 15, 2026</td><td class="r num">88.0</td><td>Oct 17</td><td><span class="muted">Nothing unusual</span></td><td class="actions"><button class="btn">Review</button></td></tr>
+            <tr><td>Jane Smith</td><td>Oct 1 – 15, 2026</td><td class="r num">92.0</td><td>Oct 17</td><td><span class="flags"><span class="flag">2 late entries</span></span></td><td class="actions"><button class="btn">Review</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+  <div class="notes">
+    <h2>What changed and why</h2>
+    <ul>
+      <li><b>A to-do list, not a history log.</b> It opens on what's waiting. Drafts with disabled "Review" buttons are gone, and history is one click away.</li>
+      <li><b>Your own timesheets aren't listed</b> when you can't approve them (bug B3). One sentence says who does review them.</li>
+    </ul>
+    <ul>
+      <li><b>"Worth a look" surfaces corrections and late entries</b> before you open the timesheet. The audit trail already records both.</li>
+      <li><b>The count follows you.</b> The sidebar shows "3" next to Approvals on every page.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═════════════ 4. Charge codes ═════════════ -->
+<section class="screen" id="s-codes" data-nav="admin" data-active="codes" data-open="contracts">
+  <div class="frame">
+    <div data-slot="nav"></div>
+    <main class="main">
+      <div class="head">
+        <div class="grow"><h1>Charge codes</h1><p class="muted">What employees can charge time to. Each direct code belongs to a CLIN.</p></div>
+        <button class="btn"><svg width="16" height="16"><use href="#i-wand"/></svg>Create from CLINs</button>
+        <button class="btn primary"><svg width="16" height="16"><use href="#i-plus"/></svg>Add charge code</button>
+      </div>
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true">Direct<span class="n">12</span></button>
+        <button role="tab" aria-selected="false">Indirect and leave<span class="n">9</span></button>
+      </div>
+      <div class="panel">
+        <div class="toolbar">
+          <label class="search"><svg width="16" height="16"><use href="#i-search"/></svg><span class="sr">Search charge codes</span><input placeholder="Search codes or names"></label>
+          <button class="filter"><span>Status</span> Active<svg width="14" height="14"><use href="#i-chev"/></svg></button>
+          <button class="filter"><span>Contract</span> All<svg width="14" height="14"><use href="#i-chev"/></svg></button>
+          <span class="end">12 codes</span>
+        </div>
+        <table class="list">
+          <thead><tr><th scope="col">Code</th><th scope="col">Name</th><th scope="col">Contract</th><th scope="col">CLIN</th><th scope="col">Class</th><th scope="col">Location</th><th scope="col">Status</th><th scope="col"><span class="sr">Actions</span></th></tr></thead>
+          <tbody id="codes-body"></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+  <div class="notes">
+    <h2>What changed and why</h2>
+    <ul>
+      <li><b>One row-action rule for every table.</b> The common action ("Edit") is visible with its name. Everything else is in one "⋯" menu with text labels. Destructive actions come last, in red, and always ask for confirmation. Nothing wraps, whatever the number of actions.</li>
+      <li><b>Icons only where they help, one meaning each.</b> The tag icon no longer means both "charge codes" and "labor category".</li>
+    </ul>
+    <ul>
+      <li><b>Search and filters are visible controls,</b> not three oversized icons. They're broken today anyway (bug B4).</li>
+      <li><b>Rows are 48px and never wrap.</b> Contract and CLIN are separate columns; class and location are plain words instead of shouting badges.</li>
+      <li><b>Direct and indirect codes are one page with two tabs.</b> They were two separate menu items.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═════════════ 5. Settings ═════════════ -->
+<section class="screen" id="s-settings" data-nav="settings">
+  <div class="frame">
+    <div data-slot="nav"></div>
+    <main class="main">
+      <div class="settings">
+        <div class="head"><div class="grow"><h1>Workspace</h1><p class="muted">Applies to everyone in Acme Federal.</p></div></div>
+        <div class="panel" style="padding: 4px 24px 20px">
+          <div class="field">
+            <div><label for="ws-name">Workspace name</label><p class="help">Shown on timesheets and exports.</p></div>
+            <div><input class="input" id="ws-name" value="Acme Federal"></div>
+          </div>
+          <div class="field">
+            <div><label for="tz">Time zone</label><p class="help">Decides when "today" starts and when timesheets lock.</p></div>
+            <div><select class="input" id="tz"><option>Eastern Time (America/New_York)</option></select></div>
+          </div>
+          <div class="field">
+            <div><span class="lab" id="wk-l">Workweek starts on</span><p class="help">Used to split overtime by week.</p></div>
+            <div>
+              <div class="seg" role="group" aria-labelledby="wk-l">
+                <button aria-pressed="false">Sunday</button><button aria-pressed="false">Monday</button><button aria-pressed="false">Saturday</button>
+              </div>
+              <div class="notice"><svg width="16" height="16"><use href="#i-alert"/></svg><span>Payroll export stays off until you save a workweek.</span></div>
+            </div>
+          </div>
+          <div class="form-foot"><button class="btn">Cancel</button><button class="btn primary">Save changes</button></div>
+        </div>
+
+        <div class="head" style="margin-top:32px"><div class="grow"><h2>Export your data</h2><p class="muted">Every timesheet, revision and setting, as a ZIP of CSV files.</p></div><button class="btn">Download export</button></div>
+      </div>
+    </main>
+  </div>
+  <div class="notes">
+    <h2>What changed and why</h2>
+    <ul>
+      <li><b>Configure-once pages get their own space.</b> Workspace, pay schedule, billing, integrations, API keys, and import and migration leave the main menu (6 fewer items) and get a sidebar of their own. "Back to the app" returns you.</li>
+      <li><b>Data import, migration and export are one page</b> with three sections. They were split across three places.</li>
+    </ul>
+    <ul>
+      <li><b>Every field says what it does</b> in one line. Warnings sit next to the field they're about, in a color that passes contrast.</li>
+      <li><b>One save per page,</b> labelled "Save changes" (the current page has four separate Save buttons).</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═════════════ 6. Color fix ═════════════ -->
+<section class="screen" id="s-color" data-nav="admin" data-active="none">
+  <div class="frame">
+    <div data-slot="nav"></div>
+    <main class="main">
+      <div class="head"><div class="grow"><h1>Color and contrast</h1><p class="muted">Section 508 needs 4.5:1 for text and 3:1 for control edges. Measured, not estimated. Shown on a light background.</p></div></div>
+      <div class="compare" style="color-scheme: light; --panel:#fff; --page:#f7f8fb; --hairline:#e2e6ee; --text:#0c1b33; --ok-text:#077634; --danger:#c92a2a; color:#0c1b33">
+        <div class="h">Element</div><div class="h">Today</div><div class="h">Proposed</div>
+        <div>Primary button</div>
+        <div><button class="old-btn">Add charge code</button><span class="ratio">4.30:1 <span class="fail">Fails</span></span></div>
+        <div><button class="btn primary">Add charge code</button><span class="ratio">5.75:1 <span class="pass">Passes</span></span></div>
+        <div>Submit button</div>
+        <div><button class="old-ok">Submit</button><span class="ratio">3.30:1 <span class="fail">Fails</span></span></div>
+        <div><button class="btn primary">Submit</button><span class="ratio">5.75:1 <span class="pass">Passes</span>, the same blue as every other primary action</span></div>
+        <div>Secondary text</div>
+        <div><span class="old-dim">Due Friday, Oct 30</span><span class="ratio">3.32:1 <span class="fail">Fails</span></span></div>
+        <div><span style="color:#46526e">Due Friday, Oct 30</span><span class="ratio">7.80:1 <span class="pass">Passes</span></span></div>
+        <div>Warning label</div>
+        <div><span class="old-badge">Unsaved changes</span><span class="ratio">2.00:1 <span class="fail">Fails</span></span></div>
+        <div><span class="flag" style="background:#fff6e3;color:#a35f02">Unsaved changes</span><span class="ratio">4.66:1 <span class="pass">Passes</span></span></div>
+        <div>Input border</div>
+        <div><span class="old-input" aria-hidden="true"></span><span class="ratio">1.57:1 <span class="fail">Fails</span></span></div>
+        <div><span class="new-input" aria-hidden="true"></span><span class="ratio">3.25:1 <span class="pass">Passes</span></span></div>
+        <div>Status</div>
+        <div><span class="old-badge" style="background:#e8f8ef;color:#16a34a">Active</span><span class="ratio">color alone, 3.00:1 <span class="fail">Fails</span></span></div>
+        <div><span class="status ok">Active</span><span class="ratio">dot + word, 5.75:1 <span class="pass">Passes</span></span></div>
+      </div>
+      <p class="muted" style="margin-top:16px; max-width:720px">The brand blue <span class="code">#4F6BFF</span> stays: it's still the focus ring, today marker, progress bars and logo dot, where 3:1 is the requirement. Only filled buttons and blue text move one step darker to <span class="code">#3F55E6</span>. Toggle dark mode at the top right to see both themes.</p>
+    </main>
+  </div>
+  <div class="notes">
+    <h2>Decision UX-D1</h2>
+    <ul><li>Default: filled buttons and blue text use <b>#3F55E6</b>; <b>#4F6BFF</b> remains the accent. If you'd rather keep the brighter blue on buttons, the only compliant alternative is dark text on the blue, which looks heavier.</li></ul>
+    <ul><li>Green stops being a button color. Submit is a primary action like any other; green is kept for "approved" and "active" status only.</li></ul>
+  </div>
+</section>
+
+<!-- ═════════════ 7. Navigation before/after ═════════════ -->
+<section class="screen" id="s-nav" data-nav="admin" data-active="none" data-open="contracts,people,reports">
+  <div class="frame">
+    <div data-slot="nav"></div>
+    <main class="main">
+      <div class="head"><div class="grow"><h1>Navigation, before and after</h1><p class="muted">Admin view. The sidebar on the left is the proposal, with every group expanded.</p></div></div>
+      <div class="navcmp">
+        <section class="panel pad">
+          <h2>Today: 18 items, one long list</h2>
+          <ol class="muted">
+            <li>My Timesheet</li><li>Timesheet Approvals</li><li>Audit Trail</li><li>Reports &amp; Export</li>
+            <li>Setup Wizard <span class="tag">(permanent)</span></li><li>Contract Dashboard</li><li>Contracts &amp; CLINs</li><li>Charge Codes</li>
+            <li>User Assignments</li><li>Labor Categories</li><li>User Management</li><li>Indirect Codes</li>
+            <li>Data Import</li><li>API Keys</li><li>Integrations</li><li>Data Migration</li><li>Settings</li><li>Billing</li>
+          </ol>
+        </section>
+        <section class="panel pad">
+          <h2>Proposed: 7 items, 3 of them groups</h2>
+          <ul>
+            <li>Home <span class="tag">(new: what needs you)</span></li>
+            <li>My timesheet</li>
+            <li>Approvals <span class="tag">(with a waiting count)</span></li>
+            <li>Contracts: Overview, Contracts and CLINs, Charge codes <span class="tag">(direct + indirect)</span>, Labor categories</li>
+            <li>People: Users, Assignments <span class="tag">(charge codes, approval scope, labor categories in one place)</span></li>
+            <li>Reports: Downloads, Payroll export <span class="tag">(moved out of Integrations)</span>, Audit trail</li>
+            <li>Settings <span class="tag">(its own area: workspace, pay schedule, billing, integrations, API keys, import and migration)</span></li>
+          </ul>
+          <p class="muted" style="margin-top:12px">Setup Wizard becomes a Home item until it's done. Notifications and Profile move to the menu under your name. Supervisors see 4 items; employees see 2.</p>
+        </section>
+      </div>
+    </main>
+  </div>
+  <div class="notes">
+    <h2>How the groups behave</h2>
+    <ul><li>The group containing the current page is open; the others stay closed, so the menu is short by default. Your open/closed choice is remembered.</li></ul>
+    <ul><li>Groups are buttons that announce "expanded" or "collapsed" to screen readers; the current page is marked for assistive technology, not just highlighted.</li></ul>
+  </div>
+</section>
+
+<script>
+(() => {
+  // Sidebars
+  document.querySelectorAll('.screen').forEach((screen) => {
+    const tpl = document.getElementById('nav-' + screen.dataset.nav);
+    const slot = screen.querySelector('[data-slot="nav"]');
+    const nav = tpl.content.firstElementChild.cloneNode(true);
+    const active = screen.dataset.active;
+    nav.querySelectorAll('[data-key]').forEach((a) => { if (a.dataset.key === active) a.setAttribute('aria-current', 'page'); });
+    const open = (screen.dataset.open || '').split(',');
+    nav.querySelectorAll('[data-group]').forEach((b) => { if (open.includes(b.dataset.group)) b.setAttribute('aria-expanded', 'true'); });
+    slot.replaceWith(nav);
+  });
+  document.addEventListener('click', (e) => {
+    const g = e.target.closest('.nav-group > button');
+    if (g) g.setAttribute('aria-expanded', g.getAttribute('aria-expanded') === 'true' ? 'false' : 'true');
+    const goto = e.target.closest('[data-goto]');
+    if (goto) { e.preventDefault(); show(goto.dataset.goto); }
+    if (e.target.closest('a[href="#"]')) e.preventDefault();
+  });
+
+  // Screen switching
+  const buttons = document.querySelectorAll('[data-show]');
+  function show(id) {
+    document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('on', s.id === 's-' + id));
+    buttons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.show === id)));
+    history.replaceState(null, '', '#' + id);
+  }
+  buttons.forEach((b) => b.addEventListener('click', () => show(b.dataset.show)));
+  if (location.hash) show(location.hash.slice(1));
+
+  // Theme
+  const t = document.getElementById('theme');
+  t.addEventListener('click', () => {
+    const dark = document.documentElement.dataset.theme !== 'dark';
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    t.setAttribute('aria-pressed', String(dark));
+    t.textContent = dark ? 'Light mode' : 'Dark mode';
+  });
+
+  // Timesheet
+  const days = [];
+  const names = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  for (let d = 16; d <= 31; d++) {
+    const dow = new Date(2026, 9, d).getDay();
+    days.push({ d, dow, wk: dow === 0 || dow === 6, today: d === 27, future: d > 27 });
+  }
+  const rows = [
+    { group: 'Direct' },
+    { name: 'NAVAIR Base Year — Onsite', code: 'NAVAIR-0001-ONSITE', h: { 16: 6.5, 19: 6.5, 20: 5.5, 21: 6, 22: 6.5, 23: 6, 26: 6 }, note: 22, focus: 27 },
+    { name: 'NAVAIR Base Year — Telework', code: 'NAVAIR-0001-TELEWORK', h: { 16: 1.5, 19: 1.5, 20: 2.5, 21: 2, 22: 1.5, 23: 2, 26: 2 } },
+    { name: 'NAVAIR Option Year 1', code: 'NAVAIR-0002', h: { 22: 1 } },
+    { group: 'Indirect and leave' },
+    { name: 'Overhead', code: 'OH-001', h: {} },
+    { name: 'General and administrative', code: 'GA-001', h: {} },
+    { name: 'Annual leave', code: 'LV-AL', h: {} },
+    { name: 'Holiday', code: 'LV-HOL', h: {} },
+    { name: 'Sick leave', code: 'LV-SICK', h: {} },
+  ];
+  const fmt = (n) => n.toFixed(2);
+  const totals = {};
+  rows.forEach((r) => r.h && Object.entries(r.h).forEach(([d, v]) => { totals[d] = (totals[d] || 0) + v; }));
+  const headRow = document.querySelector('#s-timesheet thead tr');
+  days.forEach((x) => {
+    const th = document.createElement('th');
+    th.scope = 'col';
+    th.className = 'day' + (x.wk ? ' wk' : '') + (x.future ? ' fut' : '') + (x.today ? ' today' : '');
+    const pct = Math.min(100, ((totals[x.d] || 0) / 8) * 100);
+    th.innerHTML = `<b>${names[x.dow]}</b>${x.today ? 'Today' : 'Oct ' + x.d}` +
+      (x.wk || x.future ? '<span class="meter" style="visibility:hidden"></span>' : `<span class="meter" aria-hidden="true"><i style="width:${pct}%"></i></span>`) +
+      `<span class="sr">${x.today ? 'Today, ' : ''}${names[x.dow]} October ${x.d}, ${fmt(totals[x.d] || 0)} hours</span>`;
+    headRow.appendChild(th);
+  });
+  const totTh = document.createElement('th'); totTh.className = 'tot'; totTh.scope = 'col'; totTh.textContent = 'Total'; headRow.appendChild(totTh);
+
+  const body = document.getElementById('sheet-body');
+  rows.forEach((r) => {
+    const tr = document.createElement('tr');
+    if (r.group) {
+      tr.className = 'group-row';
+      tr.innerHTML = `<th colspan="${days.length + 2}" scope="colgroup">${r.group}</th>`;
+      body.appendChild(tr);
+      return;
+    }
+    let sum = 0;
+    tr.innerHTML = `<th class="row-h" scope="row"><span class="row-name">${r.name}</span><span class="code">${r.code}</span></th>`;
+    days.forEach((x) => {
+      const v = r.h[x.d];
+      if (v) sum += v;
+      const td = document.createElement('td');
+      td.className = 'h' + (x.wk ? ' wk' : '') + (x.future ? ' fut' : '') + (r.focus === x.d ? ' focus' : '');
+      const label = `${r.name}, ${names[x.dow]} Oct ${x.d}, ${v ? fmt(v) + ' hours' : 'no hours'}${r.note === x.d ? ', has a note' : ''}`;
+      td.innerHTML = `<button aria-label="${label}" ${x.future ? 'aria-disabled="true" style="cursor:default"' : ''}>${v ? fmt(v) : ''}</button>` +
+        (r.note === x.d ? '<span class="note-flag" aria-hidden="true"></span>' : '') +
+        (r.focus === x.d ? '<span class="cell-tip" role="tooltip">Type hours · N adds a note</span>' : '');
+      tr.appendChild(td);
+    });
+    const tot = document.createElement('td'); tot.className = 'tot'; tot.textContent = sum ? fmt(sum) : ''; tr.appendChild(tot);
+    body.appendChild(tr);
+  });
+  const foot = document.getElementById('sheet-foot');
+  let grand = 0;
+  days.forEach((x) => {
+    const td = document.createElement('td');
+    td.className = 'h' + (x.wk ? ' wk' : '') + (x.future ? ' fut' : '');
+    const v = totals[x.d] || 0; grand += v;
+    td.textContent = v ? fmt(v) : '';
+    foot.appendChild(td);
+  });
+  const g = document.createElement('td'); g.className = 'tot'; g.textContent = fmt(grand); foot.appendChild(g);
+
+  // Home: mini cadence of the admin's own (empty) period
+  const mini = document.getElementById('mini');
+  days.forEach((x) => {
+    const i = document.createElement('i');
+    i.className = x.wk ? 'wk' : x.today ? 'today' : x.future ? 'empty' : 'empty';
+    i.style.height = '4px';
+    mini.appendChild(i);
+  });
+
+  // Charge codes
+  const codes = [
+    ['ARMY-0001', 'Army Help Desk', 'Army IT Support', '0001', 'Government services', '', true],
+    ['ARMY-0002', 'Army Network Operations', 'Army IT Support', '0002', 'Government services', '', true],
+    ['DISA-0001', 'DISA Cyber Operations', 'DISA Cyber Operations', '0001', 'Government services', '', true],
+    ['DISA-0002', 'DISA Cloud Infrastructure', 'DISA Cyber Operations', '0002', 'R&amp;D programs', '', true],
+    ['NAVAIR-0001-ONSITE', 'NAVAIR Base Year — Onsite', 'NAVAIR Systems Support', '0001', 'Government services', 'Onsite', true],
+    ['NAVAIR-0001-TELEWORK', 'NAVAIR Base Year — Telework', 'NAVAIR Systems Support', '0001', 'Government services', 'Telework', true],
+    ['NAVAIR-0002', 'NAVAIR Option Year 1', 'NAVAIR Systems Support', '0002', 'Government services', '', true],
+    ['NAVAIR-0003', 'NAVAIR Option Year 2', 'NAVAIR Systems Support', '0003', 'Government services', '', false],
+  ];
+  const cb = document.getElementById('codes-body');
+  codes.forEach((c, idx) => {
+    const tr = document.createElement('tr');
+    const open = idx === 4;
+    tr.innerHTML = `
+      <td><span class="code" style="color:var(--text);font-size:13px">${c[0]}</span></td>
+      <td>${c[1]}</td><td>${c[2]}</td><td class="num">${c[3]}</td><td>${c[4]}</td>
+      <td>${c[5] || '<span class="sr">None</span>'}</td>
+      <td>${c[6] ? '<span class="status ok">Active</span>' : '<span class="status off">Inactive</span>'}</td>
+      <td class="actions"><span class="actions-wrap">
+        <button class="btn quiet">Edit</button>
+        <button class="btn icon" aria-haspopup="menu" aria-expanded="${open}" aria-label="More actions for ${c[0]}" data-menu><svg width="18" height="18"><use href="#i-dots"/></svg></button>
+        <div class="menu" role="menu" ${open ? '' : 'hidden'}>
+          <button role="menuitem"><svg width="16" height="16"><use href="#i-pencil"/></svg>Edit details</button>
+          <button role="menuitem"><svg width="16" height="16"><use href="#i-brief"/></svg>Change labor category</button>
+          <button role="menuitem"><svg width="16" height="16"><use href="#i-history"/></svg>View change history</button>
+          <hr>
+          ${c[6]
+            ? '<button role="menuitem" class="danger"><svg width="16" height="16"><use href="#i-ban"/></svg>Deactivate…</button>'
+            : '<button role="menuitem"><svg width="16" height="16"><use href="#i-check"/></svg>Reactivate…</button>'}
+        </div>
+      </span></td>`;
+    cb.appendChild(tr);
+  });
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('.review')) return;
+    const b = e.target.closest('[data-menu]');
+    document.querySelectorAll('[data-menu]').forEach((m) => {
+      if (m !== b) { m.setAttribute('aria-expanded', 'false'); m.nextElementSibling.hidden = true; }
+    });
+    if (b) {
+      const openNow = b.getAttribute('aria-expanded') !== 'true';
+      b.setAttribute('aria-expanded', String(openNow));
+      b.nextElementSibling.hidden = !openNow;
+    }
+  });
+})();
+</script>
+</body>
+</html>
