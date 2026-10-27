@@ -23,7 +23,7 @@ export function rateOn(s: RateSchedule, day: CalendarDate): RatePeriodValues & {
   return best ? { hourlyRate: best.hourlyRate, ceilingRate: best.ceilingRate, source: best.id } : { ...s.starting, source: 'starting' };
 }
 
-export function periodBounds(s: RateSchedule, ref: RatePeriodRef): { from: CalendarDate | null; toExclusive: CalendarDate | null } {
+export function periodBounds<S extends { changes: Array<{ id: string; effectiveDate: CalendarDate }> }>(s: S, ref: RatePeriodRef): { from: CalendarDate | null; toExclusive: CalendarDate | null } {
   const sorted = [...s.changes].sort((a, b) => compare(a.effectiveDate, b.effectiveDate));
   if (ref === 'starting') return { from: null, toExclusive: sorted[0]?.effectiveDate ?? null };
   const i = sorted.findIndex((c) => c.id === ref);
@@ -136,3 +136,81 @@ export const RATE_MESSAGES = {
   nothingToCorrect: 'Nothing to correct — the values are unchanged.',
   reasonRequired: 'A reason is required because this change re-prices recorded hours.',
 } as const;
+
+// ── D3: a charge code's dated labor category (same pattern) ────────────────────────────────────────────────────
+/** `starting` = charge_codes.labor_category_id (may be null); a dated change always names a category. */
+export interface CategoryChange { id: string; effectiveDate: CalendarDate; laborCategoryId: string }
+export interface CategorySchedule { starting: string | null; changes: CategoryChange[] } // changes in ANY order
+export interface CategoryScheduleView extends CategorySchedule { chargeCodeId: string }
+
+/** Pure twin of chargeCodeLaborCategoryOnSql: the latest change with effective_date <= day, else the starting category. */
+export function chargeCodeCategoryOn(s: CategorySchedule, day: CalendarDate): { laborCategoryId: string | null; source: RatePeriodRef } {
+  let best: CategoryChange | null = null;
+  for (const c of s.changes) {
+    if (compare(c.effectiveDate, day) <= 0 && (best === null || compare(c.effectiveDate, best.effectiveDate) > 0)) best = c;
+  }
+  return best ? { laborCategoryId: best.laborCategoryId, source: best.id } : { laborCategoryId: s.starting, source: 'starting' };
+}
+
+export interface AddCategoryChangeInput { chargeCodeId: string; effectiveDate: string; laborCategoryId: string | null; reason?: string }
+export interface CorrectCategoryInput { chargeCodeId: string; target: RatePeriodRef; laborCategoryId: string | null; reason?: string }
+export interface RemoveCategoryChangeInput { chargeCodeId: string; changeId: string; reason?: string }
+export type CategoryImpactInput = ({ kind: 'add' } & AddCategoryChangeInput) | ({ kind: 'correct' } & CorrectCategoryInput) | ({ kind: 'remove' } & RemoveCategoryChangeInput);
+
+export const CATEGORY_MESSAGES = {
+  codeNotFound: 'Charge code not found.',
+  categoryNotFound: 'Labor category not found.',
+  datedNeedsCategory: 'A dated change must name a labor category.',
+  periodGone: 'That category period no longer exists. Refresh and try again.',
+  duplicateOn: (date: string) => `There is already a category change on ${date} for this charge code. Correct that one instead.`,
+  alreadyInEffect: (date: string) => `That is already the category in effect on ${date}.`,
+  nothingToCorrect: 'Nothing to correct — the category is unchanged.',
+  reasonRequired: 'A reason is required because this change re-prices recorded hours.',
+  wrongClin: 'That labor category belongs to a different CLIN or SLIN than this charge code.',
+} as const;
+
+/** null is allowed only where `allowNull` (the starting category); otherwise the dated-change message. */
+export function validateCategoryRef(value: unknown, allowNull: boolean): string | null {
+  if (value === null || value === undefined || value === '') {
+    if (allowNull) return null;
+    throw new UserFacingError(CATEGORY_MESSAGES.datedNeedsCategory);
+  }
+  return validateUUID(value, 'Labor category');
+}
+
+export interface ValidCategoryAdd { chargeCodeId: string; effectiveDate: CalendarDate; laborCategoryId: string; reason: string | null }
+export interface ValidCategoryCorrect { chargeCodeId: string; target: RatePeriodRef; laborCategoryId: string | null; reason: string | null }
+export interface ValidCategoryRemove { chargeCodeId: string; changeId: string; reason: string | null }
+
+export function validateCategoryAddInput(input: AddCategoryChangeInput, opts: { withReason?: boolean } = { withReason: true }): ValidCategoryAdd {
+  return {
+    chargeCodeId: validateUUID(input?.chargeCodeId, 'Charge code'),
+    effectiveDate: validateEffectiveDate(input?.effectiveDate),
+    laborCategoryId: validateCategoryRef(input?.laborCategoryId, false) as string,
+    reason: opts.withReason === false ? null : normalizeReason(input?.reason),
+  };
+}
+
+export function validateCategoryCorrectInput(input: CorrectCategoryInput, opts: { withReason?: boolean } = { withReason: true }): ValidCategoryCorrect {
+  const target = input?.target === 'starting' ? 'starting' : validateUUID(input?.target, 'Category period');
+  return {
+    chargeCodeId: validateUUID(input?.chargeCodeId, 'Charge code'),
+    target,
+    laborCategoryId: validateCategoryRef(input?.laborCategoryId, target === 'starting'),
+    reason: opts.withReason === false ? null : normalizeReason(input?.reason),
+  };
+}
+
+export function validateCategoryRemoveInput(input: RemoveCategoryChangeInput, opts: { withReason?: boolean } = { withReason: true }): ValidCategoryRemove {
+  return {
+    chargeCodeId: validateUUID(input?.chargeCodeId, 'Charge code'),
+    changeId: validateUUID(input?.changeId, 'Category period'),
+    reason: opts.withReason === false ? null : normalizeReason(input?.reason),
+  };
+}
+
+/** DR-Q2 default: a category must sit on the code's CLIN, and on its SLIN when both have one. */
+export function categoryFitsCode(category: { clinId: string; slinId: string | null }, code: { clinId: string; slinId: string | null }): boolean {
+  if (category.clinId !== code.clinId) return false;
+  return !(category.slinId && code.slinId && category.slinId !== code.slinId);
+}

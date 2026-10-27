@@ -3,7 +3,7 @@ import { and, desc, eq, gte, inArray, lt, lte, sql, type SQL } from 'drizzle-orm
 import { alias } from 'drizzle-orm/pg-core';
 import type { DbTx, ReadDb } from '@/db';
 import type { CalendarDate } from '@/lib/calendar-date';
-import { hourlyRateOnSql } from './labor-rates';
+import { chargeCodeLaborCategoryOnSql, hourlyRateOnSql } from './labor-rates';
 import { chargeCodes, clins, laborCategories, slins, timesheetEntries, userLaborCategories, users } from '@/db/schema';
 
 /**
@@ -11,7 +11,8 @@ import { chargeCodes, clins, laborCategories, slins, timesheetEntries, userLabor
  * read `user_labor_categories` / `labor_categories` for report and dashboard costs (a static test enforces it).
  *
  * Per latest-revision entry, the applicable labor category is, most specific first:
- *   1. the entry's charge code's `labor_category_id`, when it has one; else
+ *   1. the entry's charge code's labor category on the entry's date (dated rates D3: its dated changes, else
+ *      `charge_codes.labor_category_id`), when it has one; else
  *   2. the employee's assignments effective on the entry date whose category is on the entry's SLIN; else
  *   3. the employee's assignments effective on the date whose category is on the entry's CLIN with NO SLIN.
  * At the first level with candidates: exactly one distinct category → priced with it; two or more → UNPRICED
@@ -49,6 +50,9 @@ export function decideCostBasis(c: {
  * The resolved category's rate on the entry's date (dated rates D1.4). Applied one level OUTSIDE the resolution, to its
  * `r.labor_category_id`, so the CASE that picks the category is never repeated. NULL when unpriced.
  */
+/** Level 1 (dated rates D3): the entry's charge code's category ON THE ENTRY'S DATE (starting category, else dated). */
+const CHARGE_CODE_CATEGORY = chargeCodeLaborCategoryOnSql({ chargeCodeId: sql`${timesheetEntries.chargeCodeId}`, onDate: sql`${timesheetEntries.entryDate}` });
+
 const APPLIED_RATE = hourlyRateOnSql({ laborCategoryId: sql`r.labor_category_id`, onDate: sql`${timesheetEntries.entryDate}` });
 
 /**
@@ -68,7 +72,7 @@ export const COST_BASIS_LATERAL: SQL = sql`(
     CASE WHEN c.l1 IS NOT NULL THEN 'charge-code' WHEN c.n2 > 0 THEN 'slin' WHEN c.n3 > 0 THEN 'clin' END AS level
   FROM (
     SELECT
-      (SELECT cc1.labor_category_id FROM charge_codes cc1 WHERE cc1.id = ${timesheetEntries.chargeCodeId}) AS l1,
+      ${CHARGE_CODE_CATEGORY} AS l1,
       s2.n AS n2, s2.sole AS sole2, s3.n AS n3, s3.sole AS sole3
     FROM
       (SELECT count(DISTINCT ulc2.labor_category_id)::int AS n, min(ulc2.labor_category_id::text)::uuid AS sole
@@ -133,6 +137,28 @@ export async function pricedHoursFor(
     .where(and(
       LATEST_REVISION,
       eq(sql`cost_basis.labor_category_id`, laborCategoryId),
+      from ? gte(timesheetEntries.entryDate, from) : undefined,
+      toExclusive ? lt(timesheetEntries.entryDate, toExclusive) : undefined,
+    ));
+  return row?.hours ?? '0.00';
+}
+
+/**
+ * Latest-revision hours recorded on charge code `chargeCodeId` in [from, toExclusive) — the hours a change of that code's
+ * labor category over the period re-prices (dated rates D3, DR-2). Same rounding as pricedHoursFor.
+ */
+export async function pricedHoursForChargeCode(
+  db: Pick<ReadDb, 'select'> | DbTx,
+  chargeCodeId: string,
+  from: CalendarDate | null,
+  toExclusive: CalendarDate | null,
+): Promise<string> {
+  const [row] = await db
+    .select({ hours: sql<string>`CAST(ROUND(COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0), 2) AS NUMERIC(12,2))::text` })
+    .from(timesheetEntries)
+    .where(and(
+      LATEST_REVISION,
+      eq(timesheetEntries.chargeCodeId, chargeCodeId),
       from ? gte(timesheetEntries.entryDate, from) : undefined,
       toExclusive ? lt(timesheetEntries.entryDate, toExclusive) : undefined,
     ));

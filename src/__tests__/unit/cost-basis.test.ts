@@ -51,8 +51,9 @@ describe('the SQL resolution (COST_BASIS_LATERAL) mirrors decideCostBasis', () =
   const { sql: text } = new PgDialect().sqlToQuery(COST_BASIS_LATERAL);
   const flat = text.replace(/\s+/g, ' ');
 
-  it('level 1: the entry\'s charge code\'s labor category', () => {
-    expect(flat).toContain('(SELECT cc1.labor_category_id FROM charge_codes cc1 WHERE cc1.id = "timesheet_entries"."charge_code_id") AS l1');
+  it('level 1: the entry\'s charge code\'s labor category ON THE ENTRY\'S DATE (dated rates D3: dated change, else starting)', () => {
+    expect(flat).toContain('(SELECT c.labor_category_id FROM charge_code_labor_categories c WHERE c.charge_code_id = "timesheet_entries"."charge_code_id" AND c.effective_date <= "timesheet_entries"."entry_date" ORDER BY c.effective_date DESC LIMIT 1)');
+    expect(flat).toContain('(SELECT cc0.labor_category_id FROM charge_codes cc0 WHERE cc0.id = "timesheet_entries"."charge_code_id") ) AS l1');
   });
 
   it('level 2 only on the entry\'s OWN SLIN; level 3 only CLIN-level categories (slin_id IS NULL) — a SLIN category on another SLIN never applies', () => {

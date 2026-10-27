@@ -6,7 +6,7 @@ outputs merged in PR #10; not fetched). I read `AGENTS.md`, `BLUEPRINT-STANDARD.
 
 **Status (2026-10-26):** the stop item below was ruled **option A**, recorded in the blueprint at D1.5, "Ruling (dev
 mapping report, 2026-10-26)". The branch was recreated from `main` at `ac65b25`, which includes the sign-out fix. D0
-(the single log writer) landed first, then D1–D3; see §6 onward. The original stop report follows unchanged.
+(the single log writer) landed first, then D1–D3; see §6 onward, and §10 for the hand-off. The original stop report follows unchanged.
 
 **Original status: STOPPED before any code.** D1.4 maps cleanly onto the real `cost-basis.ts`. D1.5's logging rule does not fit:
 there is no shared `admin_change_log` writer (§2 below). That is an explicit stop condition in the blueprint (D1.5:
@@ -333,3 +333,121 @@ case fails, restore:
    attribute in the render test.
 3. **Period wording.** The impact message renders the period as "(Jan 1, 2027 – Mar 31, 2027)", "(from …)",
    "(through …)" or "(all dates)", using the inclusive last day.
+
+---
+
+## 9. D3 — charge codes: dated labor category
+
+**Files.**
+- `src/db/schema.ts`: new `chargeCodeLaborCategories` table:
+  - `charge_code_id` FK cascade; `labor_category_id` NOT NULL, FK NO ACTION;
+  - `created_by`, timestamps;
+  - unique `cc_lcat_effective_unique_idx (charge_code_id, effective_date)`.
+- `drizzle/0016_last_talisman.sql` contains only that table, its FKs and the index.
+- `src/lib/labor-rates.ts`:
+  - `chargeCodeCategoryOn` (the pure twin) and `categoryFitsCode` (DR-Q2);
+  - `validateCategoryRef` and `validateCategory{Add,Correct,Remove}Input`;
+  - `CATEGORY_MESSAGES` and the D3 types.
+- `src/server/internal/labor-rates.ts`:
+  - `chargeCodeLaborCategoryOnSql`, exactly the blueprint's SQL;
+  - `lockAndReadCategorySchedule`, which takes the charge code row `FOR NO KEY UPDATE`;
+  - `readCategorySchedule` and `readCategoryPlacement`.
+- `src/server/internal/cost-basis.ts`:
+  - step 1 (`l1`) now uses `chargeCodeLaborCategoryOnSql` on the entry's date;
+  - new `pricedHoursForChargeCode`, next to `pricedHoursFor`, with the same rounding and `LATEST_REVISION`.
+- `src/server/actions/charge-code-categories.ts` (new): add / correct / remove / preview, built on the same skeleton as the rate actions. Each mutation:
+  - logs one row through `logAdminChange(tx, …)`;
+  - uses entity `charge_code_labor_category` and action `category_change_added` / `category_corrected` / `category_change_removed`;
+  - logs JSON exactly as D3 specifies.
+- `src/server/actions/charge-codes.ts`, `updateChargeCode`:
+  - `laborCategoryId` is removed from its type and body, so it no longer writes or logs the category;
+  - DR-Q2: a CLIN/SLIN change is refused while the code has a starting category or any dated change;
+  - `listChargeCodes` now returns `categoryChanges`.
+- UI:
+  - `src/components/admin/EffectiveDatedTable.tsx` (new): the shared presentational table. `RateScheduleModal` was refactored onto it, with its behaviour and test ids unchanged; the D2 UI tests still pass.
+  - `ChargeCodeCategoryModal.tsx` (new): offers only DR-Q2 categories. "No labor category" appears only when correcting the starting category. It uses the same Preview → Reason + checkbox gate, through `ImpactGate`.
+  - `ChargeCodesClient.tsx`: a "Labor category" row action, plus `mergeCategorySchedule`.
+  - `page.tsx`: passes `laborCategories`.
+- Export:
+  - new `charge_code_labor_categories` table, described in the D1.6 style;
+  - `charge_codes.labor_category_id` reworded to the blueprint sentence.
+- `db-errors.ts`: `cc_lcat_effective_unique_idx` added to the map and the key list.
+- `clearTenantData`: unchanged; the charge code delete cascades, as the blueprint says.
+- Test lists:
+  - fresh-admin-writes 40 → 43 (the three mutations);
+  - guard-first-oracle (all four);
+  - R11 allowlist (`chargeCodeId`, `CHARGE_CODE_CATEGORY`);
+  - admin-change-log-writer counts (charge-codes 2, categories 3).
+- C3 tests that set a category through `updateChargeCode` now use `correctChargeCodeCategory`: unit `charge-code-cost-rules`, integration `cost-basis` and `fresh-admin-writes`.
+
+**§9 rows (D3) → tests.**
+- U = `unit/dated-rates-d3.test.ts` (17) or `unit/charge-code-category-ui.test.tsx` (5).
+- I = `integration/dated-rates-d3.test.ts` (12, Postgres; the product owner runs these).
+
+| §9 row | Test | Break-it |
+|---|---|---|
+| D3 pricing → correction → removal → starting to none | I: 800 / 800 → add K→M from 2027-03-01 → 800 / 720 → correct starting → M → 720 / 720 → remove 2027-03-01 → 720 / 720 → E assigned L, starting → null (reason) → 800 / 800; four log rows with the right actions | U-fail X29 (static `l1`); PG-13, PG-21 |
+| D3 impact (D1's Impact row applied to D3) | I: with a superseded revision on 2027-01-15, the previews give: add `{8.00, 2027-03-01, null}`, correct starting `{8.00, null, 2027-03-01}`, remove `{8.00, 2027-03-01, null}`; the log records `repricedHours` 8.00; U: preview shape, DR-Q2, not_found | U-fail X10; PG-14, PG-15 |
+| D3 first category | U + I: a new code with no entries: correct starting from null to L with no reason → ok; logged `reason: null, repricedHours: '0.00'` | U-fail X15, X17 |
+| D3 bad category id | U (pure + action) + I: `'not-a-uuid'` → "Labor category is not a valid identifier."; unknown uuid → "Labor category not found." (not_found); `null` on a dated change (add, and correcting a change) → "A dated change must name a labor category."; nothing written | U-fail X6, X7, X8 |
+| D3 SQL = TS | I: `chargeCodeLaborCategoryOnSql` vs `chargeCodeCategoryOn` on 8 dates, two changes (03-01 → M, 06-01 → L); U: pure twin inclusive, latest wins in any order, null starting; the SQL text is pinned in `unit/cost-basis` | U-fail X1–X3, X27, X28; PG-11, PG-12 |
+| D3 DR-Q2 | U + I: a category from another CLIN → refused on add; a SLIN mismatch → refused on correct; preview refuses too; an unused code with a category can't move to another CLIN (exact message, CLIN unchanged); UI offers only same-CLIN categories | U-fail X4, X5, X9, X10, X26, X31; PG-19 |
+| D3 no silent edit | U + I: `updateChargeCode(K, { name, laborCategoryId: M })` renames the code but leaves the category at L; static: no `laborCategoryId` in the type or body | U-fail X25; PG-20 |
+| D3 validation | U + I: duplicate date → date-specific `conflict`; already in effect → refused; nothing to correct → refused; re-pricing without a reason → refused (DR-2); removing twice / another code's change → not_found | U-fail X11–X14, X16 |
+| D3 concurrency | I: deterministic test: a held `FOR NO KEY UPDATE` on the charge code plus an uncommitted insert → the action waits ≥ 200 ms, then the date-specific `conflict`; U static: lock in `lockAndReadCategorySchedule`, used by all three mutations | U-fail X20, X21; PG-16 |
+| D3 atomicity | I: writer mocked to throw → no change row, starting category unchanged, no log row (add and correct); U: failing writer fails the action; static `await logAdminChange(tx, {` inside `db.transaction` | U-fail X18, X19; PG-18 |
+| D3 security | I: signed out → unauthenticated; employee → forbidden; nothing written; U: guard-first-oracle (all four), fresh-admin-writes (three mutations), static guard before `getDbForWrite` | U-fail X22, X23, X24 |
+| Duplicate mapping (`cc_lcat_effective_unique_idx`) | I: a real duplicate → `duplicateEntityMessage` = the static string; U: key list | U-fail X30; PG-17 |
+| UI (D3) | U: DR-Q2 options only; "No labor category" only for the starting category (not when correcting a change); the date prefills the category in effect; a category change clears the gate; Save gated; ok → `onSaved` merge; failure keeps the form; both modals render `EffectiveDatedTable` | U-fail X31–X37, X38b |
+
+**D3 break-its: 39 mutations, 38 killed, 1 equivalent.** Driver: `$TMPDIR/breakit.py`. Each case applies one string replacement, runs the named test file, and restores the source.
+- **X33 survived the first run.** No test corrected a dated-change row. I added "'No labor category' is not offered when correcting a dated change" and re-ran it: killed.
+- **X38 is an equivalent mutant.** It removes the `if (!gate.ready) return` in `save()`. The Save button is `disabled={!gate.ready}`, and React never fires onClick on a disabled button, so that line can't be reached. I kept it as defence in depth and mutated the real gate instead (X38b, `disabled={false}`): killed.
+
+**Break-its that need Postgres (for the lead's check script).** Each mutation runs against `integration/dated-rates-d3.test.ts`, and the named test must fail. PG-11, 12, 13, 17, 19 and 20 are also killed by a static unit check. The PG run proves the behaviour, not just the text.
+- **PG-11:** in `chargeCodeLaborCategoryOnSql`, `ORDER BY c.effective_date DESC` → `ASC`. Fails: "D3 SQL = TS" (2030-01-01: L vs M).
+- **PG-12:** in `chargeCodeLaborCategoryOnSql`, `c.effective_date <= ${onDate}` → `<`. Fails: "D3 SQL = TS" (2027-03-01 and 2027-06-01).
+- **PG-13:** in `cost-basis.ts`, `${CHARGE_CODE_CATEGORY} AS l1` → `(SELECT cc0.labor_category_id FROM charge_codes cc0 WHERE cc0.id = ${timesheetEntries.chargeCodeId}) AS l1`. Fails: "D3 pricing" (800 / 800 after the add).
+- **PG-14:** in `pricedHoursForChargeCode`, drop `toExclusive ? lt(...) : undefined`. Fails: "D3 impact" (correct starting → 16.00).
+- **PG-15:** in `pricedHoursForChargeCode`, drop `LATEST_REVISION`. Fails: "D3 impact" (correct starting → 16.00).
+- **PG-16:** in `lockAndReadCategorySchedule`, remove `.for('no key update')`. Fails: "D3 concurrency". The action still blocks, but on the unique index rather than the lock. After the commit it gets the static duplicate message instead of the date-specific one.
+- **PG-17:** rename `cc_lcat_effective_unique_idx` in `DUPLICATE_ENTITY_MESSAGES`. Fails: "Duplicate mapping".
+- **PG-18:** move `addChargeCodeCategoryChange`'s `logAdminChange` call after `db.transaction(...)` resolves. Fails: "D3 atomicity" (the change row exists).
+- **PG-19:** in `updateChargeCode`, `if (current.laborCategoryId || dated) {` → `if (false) {`. Fails: "D3 DR-Q2" (the code moves).
+- **PG-20:** in `updateChargeCode`, re-add `updateData.laborCategoryId = data.laborCategoryId`. Fails: "D3 no silent edit".
+- **PG-21:** in `chargeCodeLaborCategoryOnSql`, replace the starting subquery with `NULL::uuid`. Fails: "D3 pricing" (both entries unpriced at the first assertion).
+
+**Gates (D3):** tsc clean; lint 0 errors / 58 warnings; 1368 unit tests ×4 (test, and test:tz ×3); the migration-safety script passes. The D3 integration tests have not been run (no Postgres in this sandbox).
+
+**Deviations and notes (D3).**
+1. **Message mapping.**
+   - D1.5's "Labor category not found." for the locked row becomes "Charge code not found." (not_found), because D3 locks the charge code.
+   - The id labels are "Charge code" and "Category period" (`validateUUID`), so a bad id gives, for example, "Category period is not a valid identifier.".
+   - The remaining category messages follow D1.5 with "category" in place of "rate": "That is already the category in effect on {date}.", "Nothing to correct — the category is unchanged.", "That category period no longer exists. Refresh and try again.".
+2. **Category-id order.**
+   - The blueprint lists `validateUUID` → existence → null-on-a-dated-change. Taken literally, `null` would get "…is not a valid identifier." and the null message could never show.
+   - So `validateCategoryRef` checks null first (with the dated-change message, or null allowed for the starting category), then `validateUUID`, then the existence read inside the transaction, then DR-Q2.
+   - When correcting, the target period is checked (not_found) before the category.
+3. **DR-Q2 move check placement.** In `updateChargeCode` it runs after the existing used-code refusal. A code with recorded hours keeps the certified-outputs message, which is more specific. An unused code with a category gets the DR-Q2 message.
+4. **Shared components.**
+   - `EffectiveDatedTable` is as the blueprint specifies.
+   - `ImpactGate` (introduced in D2) is a second shared piece, which the blueprint didn't name. It holds the preview / reason / checkbox gate, so the two modals can't drift.
+5. **Not checked in a browser here.** UI behaviour is verified by jsdom render tests only. §10 step 5 is the product owner's.
+
+---
+
+## 10. Hand-off
+
+D0, D1, D2 and D3 are committed on `dated-rates`, one commit per phase. Not pushed.
+
+Before the PR, the product owner should:
+1. Skip `npm run db:migrate:cp`: this plan adds tenant migrations only (0015, 0016), and no control-plane migration changed.
+2. Run the integration command from `CERTIFIED-OUTPUTS-AUDIT.md` §4 (also in §5 above). It covers `integration/dated-rates.test.ts`, `integration/dated-rates-d3.test.ts` and the updated C3 / fresh-admin-writes integration tests.
+3. Run `npm run build && node scripts/check-build-trace.mjs`.
+4. Run `npm run demo:local` twice. The D1.7 seed must leave exactly one NAV-01 SE-III change and one log row.
+5. Do the blueprint §10 manual browser checks 1–6.
+6. Optionally, give the lead PG-1…PG-21 (§7 and §9) to turn into a Postgres break-it check script.
+
+Open questions shipped as their stated defaults (unanswered; see §4):
+- **DR-Q1:** backdated changes are allowed; a reason is required when recorded hours are re-priced.
+- **DR-Q2:** a charge code's category must match its own CLIN/SLIN. This is enforced in the new D3 schedule and on CLIN/SLIN moves only; charge-code create is unchanged.

@@ -57,9 +57,12 @@ describe('static: no admin_change_log insert outside the writer', () => {
     expect(insertsChangeLog('await tx.delete(schema.adminChangeLog)')).toBe(false);
   });
 
-  it('the six certified-outputs writers use it (same transaction client)', () => {
+  it('the certified-outputs writers and the dated-rates actions use it (same transaction client)', () => {
     const uses = (rel: string) => (readFileSync(path.join(ROOT, rel), 'utf8').match(/await logAdminChange\(tx, \{/g) ?? []).length;
-    expect(uses('src/server/actions/charge-codes.ts')).toBe(3);
+    // dated rates D3: the labor-category log moved from updateChargeCode into the category actions.
+    expect(uses('src/server/actions/charge-codes.ts')).toBe(2);
+    expect(uses('src/server/actions/labor-category-rates.ts')).toBe(3);
+    expect(uses('src/server/actions/charge-code-categories.ts')).toBe(3);
     expect(uses('src/server/actions/users.ts')).toBe(1);
     expect(uses('src/server/actions/workspace-settings.ts')).toBe(1);
     expect(readFileSync(path.join(ROOT, 'src/server/internal/approval-rules.ts'), 'utf8')).toMatch(/const logId = await logAdminChange\(tx, \{/);

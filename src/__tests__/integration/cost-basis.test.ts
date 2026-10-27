@@ -53,6 +53,7 @@ import { getDetailedCostReport, getEmployeeSummaryReport } from '@/server/action
 import { getContractSummaries, getPeriodCostReport } from '@/server/actions/dashboard';
 import { getUnpricedHoursReport, getOverlappingAssignmentsReport, endUserLaborCategoryAssignment } from '@/server/actions/labor-categories';
 import { updateChargeCode, reactivateChargeCode, deactivateChargeCode } from '@/server/actions/charge-codes';
+import { correctChargeCodeCategory } from '@/server/actions/charge-code-categories';
 import { saveTimesheetBatch, getChargeCodesForUser } from '@/server/actions/timesheet';
 import { GET as getV1Costs } from '@/app/api/v1/costs/route';
 
@@ -242,10 +243,11 @@ describe('cost basis (certified-outputs C3)', () => {
     await expectFailure(updateChargeCode(used.id, { clinId: clinB.id }), 'validation', /CLIN and SLIN can't change/);
     await expectOk(updateChargeCode(used.id, { clinId: clinA.id, name: 'Renamed' }));
     await expectOk(updateChargeCode(unused.id, { clinId: clinB.id }));
+    // Dated rates D3: the category changes only through the category actions (logged there, entity charge_code_labor_category).
     const lc = await lcat(clinA.id, 'L', '10.00');
-    await expectOk(updateChargeCode(used.id, { laborCategoryId: lc.id }));
+    await expectOk(correctChargeCodeCategory({ chargeCodeId: used.id, target: 'starting', laborCategoryId: lc.id, reason: 'set category' }));
     const log = await db().select().from(schema.adminChangeLog).where(eq(schema.adminChangeLog.entityId, used.id));
-    expect(log).toEqual([expect.objectContaining({ entity: 'charge_code', action: 'labor_category_changed', oldValue: { laborCategoryId: null }, newValue: { laborCategoryId: lc.id } })]);
+    expect(log).toEqual([expect.objectContaining({ entity: 'charge_code_labor_category', action: 'category_corrected', oldValue: { target: 'starting', laborCategoryId: null }, newValue: expect.objectContaining({ laborCategoryId: lc.id, repricedHours: '8.00' }) })]);
   });
 
   it('CLIN change racing a first save (separate connections): the save uses the in-transaction CLIN — never a stale one', async () => {

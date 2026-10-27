@@ -80,7 +80,7 @@ describe('known duplicates become conflict results (A6)', () => {
 
   it('covers the audit families: email, contract number, charge code, indirect code, cost class, SLIN, LCAT, LCAT assignment', () => {
     expect(Object.keys(DUPLICATE_ENTITY_MESSAGES).sort()).toEqual([
-      'charge_codes_code_unique', 'clin_lcat_unique_idx', 'clin_slin_unique_idx', 'contracts_contract_number_unique',
+      'cc_lcat_effective_unique_idx', 'charge_codes_code_unique', 'clin_lcat_unique_idx', 'clin_slin_unique_idx', 'contracts_contract_number_unique',
       'cost_classes_name_unique', 'indirect_charge_codes_code_unique', 'lcat_rate_effective_unique_idx', 'user_lcat_effective_unique_idx', 'users_email_unique',
     ]);
   });

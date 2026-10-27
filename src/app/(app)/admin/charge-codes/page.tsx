@@ -1,5 +1,6 @@
 import { requirePageRole } from '@/lib/session';
 import { listChargeCodes, listCostClasses } from '@/server/actions/charge-codes';
+import { getAllLaborCategories } from '@/server/actions/labor-categories';
 import { ChargeCodesClient } from './ChargeCodesClient';
 import { getDb } from '@/db';
 import { contracts, clins } from '@/db/schema';
@@ -11,7 +12,7 @@ export default async function ChargeCodesPage() {
   await requirePageRole('admin');
 
   const db = await getDb();
-  const [codes, costClassList, contractList] = await Promise.all([
+  const [codes, costClassList, contractList, laborCats] = await Promise.all([
     listChargeCodes(),
     listCostClasses(),
     db.select({
@@ -26,6 +27,7 @@ export default async function ChargeCodesPage() {
       .innerJoin(clins, eq(clins.contractId, contracts.id))
       .where(and(eq(contracts.status, 'active'), eq(clins.status, 'active')))
       .orderBy(contracts.name, clins.clinNumber),
+    getAllLaborCategories(), // dated rates D3: the category options (filtered per code by DR-Q2 in the modal)
   ]);
 
   // Group CLINs by contract for the picker
@@ -42,6 +44,7 @@ export default async function ChargeCodesPage() {
       initialCodes={codes}
       costClasses={costClassList}
       contracts={Array.from(contractMap.values())}
+      laborCategories={laborCats.map((lc) => ({ id: lc.id, lcatCode: lc.lcatCode, title: lc.title, clinId: lc.clinId, slinId: lc.slinId, status: lc.status }))}
     />
   );
 }

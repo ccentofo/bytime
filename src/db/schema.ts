@@ -268,6 +268,21 @@ export const chargeCodes = pgTable('charge_codes', {
   index('idx_charge_codes_clin').on(table.clinId),
 ]);
 
+// Dated labor category of a charge code (feature-plan-dated-rates.md D3). charge_codes.labor_category_id is the STARTING
+// category (may be null); a dated change always names a category (FK default NO ACTION — never SET NULL). Category of
+// code K on day D = latest change with effective_date <= D, else the starting category.
+export const chargeCodeLaborCategories = pgTable('charge_code_labor_categories', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  chargeCodeId: uuid('charge_code_id').notNull().references(() => chargeCodes.id, { onDelete: 'cascade' }),
+  effectiveDate: date('effective_date', { mode: 'string' }).notNull(),
+  laborCategoryId: uuid('labor_category_id').notNull().references(() => laborCategories.id),
+  createdBy: uuid('created_by').references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('cc_lcat_effective_unique_idx').on(table.chargeCodeId, table.effectiveDate),
+]);
+
 // ---------------------------------------------------------------------------
 // User Charge Codes (employee's direct pick-list — which charge codes they may charge to)
 // ---------------------------------------------------------------------------

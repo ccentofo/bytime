@@ -26,9 +26,10 @@ vi.mock('@/lib/session', () => {
 vi.mock('@/server/internal/workspace-settings', () => ({ getWorkspaceToday: async () => '2026-10-25', getWorkspaceTimezone: async () => 'UTC' }));
 
 import * as dbModule from '@/db';
-import { adminChangeLog, chargeCodes, timesheetEntries, userChargeCodes, userLaborCategories } from '@/db/schema';
+import { adminChangeLog, chargeCodeLaborCategories, chargeCodes, laborCategories, timesheetEntries, userChargeCodes, userLaborCategories } from '@/db/schema';
 import type { FakeControlDb } from '../helpers/fake-control-db';
 import { deactivateChargeCode, reactivateChargeCode, updateChargeCode } from '@/server/actions/charge-codes';
+import { correctChargeCodeCategory } from '@/server/actions/charge-code-categories';
 import { endUserLaborCategoryAssignment } from '@/server/actions/labor-categories';
 import { generateCostReportExcel, generateEmployeeSummaryExcel } from '@/lib/reports/cost-report-excel';
 import type { CostReportEntry } from '@/server/internal/reports';
@@ -61,19 +62,38 @@ describe('updateChargeCode — a used code\'s CLIN/SLIN never changes; a used co
     expect(logs()).toEqual([]);
   });
 
-  it('an unused code is editable (CLIN may change)', async () => {
-    db.onSelect(chargeCodes, [stored()]);
+  it('an unused code with no labor category is editable (CLIN may change)', async () => {
+    db.onSelect(chargeCodes, [stored({ laborCategoryId: null })]);
     db.onSelect(timesheetEntries, []);
+    db.onSelect(chargeCodeLaborCategories, []);
     db.onReturning('update', chargeCodes, [stored({ clinId: 'clin-B' })]);
     expect(await updateChargeCode('cc1', { clinId: 'clin-B' })).toMatchObject({ ok: true });
   });
 
-  it('changing a used code\'s labor category writes one admin_change_log row (old, new)', async () => {
+  it('dated rates D3 (DR-Q2): an unused code with a labor category can\'t move to another CLIN', async () => {
     db.onSelect(chargeCodes, [stored()]);
-    db.onSelect(timesheetEntries, [{ id: 'e1' }]);
-    db.onReturning('update', chargeCodes, [stored({ laborCategoryId: 'lc-2' })]);
-    expect(await updateChargeCode('cc1', { laborCategoryId: 'lc-2' })).toMatchObject({ ok: true });
-    expect(logs()).toEqual([{ actorId: 'admin-1', entity: 'charge_code', entityId: 'cc1', action: 'labor_category_changed', oldValue: { laborCategoryId: 'lc-1' }, newValue: { laborCategoryId: 'lc-2' } }]);
+    db.onSelect(timesheetEntries, []);
+    db.onSelect(chargeCodeLaborCategories, []);
+    expect(await updateChargeCode('cc1', { clinId: 'clin-B' })).toEqual({ ok: false, code: 'validation', error: "Remove this charge code's labor categories before moving it to another CLIN or SLIN." });
+    expect(db.updates).toEqual([]);
+  });
+
+  it('dated rates D3: a used code\'s labor category changes only through the category actions, which log it (old, new)', async () => {
+    const CC = '44444444-4444-4444-8444-444444444444';
+    const LC2 = '55555555-5555-4555-8555-555555555555';
+    db.onSelect(chargeCodes, [{ clinId: 'clin-A', slinId: null, laborCategoryId: 'lc-1' }]); // locked row
+    db.onSelect(chargeCodeLaborCategories, []);
+    db.onSelect(laborCategories, [{ clinId: 'clin-A', slinId: null }]);                      // DR-Q2 placement
+    db.onSelect(timesheetEntries, [{ hours: '8.00' }]);                                     // re-priced hours
+    db.onReturning('update', chargeCodes, [{ id: CC }]);
+    db.onSelect(chargeCodes, [{ clinId: 'clin-A', slinId: null, laborCategoryId: LC2 }]);   // view
+    db.onSelect(chargeCodeLaborCategories, []);
+    expect((await correctChargeCodeCategory({ chargeCodeId: CC, target: 'starting', laborCategoryId: LC2, reason: 'rebid' })).ok).toBe(true);
+    expect(logs()).toEqual([{
+      actorId: 'admin-1', entity: 'charge_code_labor_category', entityId: CC, action: 'category_corrected',
+      oldValue: { target: 'starting', laborCategoryId: 'lc-1' },
+      newValue: { target: 'starting', effectiveDate: null, laborCategoryId: LC2, reason: 'rebid', period: { from: null, toExclusive: null }, repricedHours: '8.00' },
+    }]);
   });
 
   it('a missing code → not_found', async () => {

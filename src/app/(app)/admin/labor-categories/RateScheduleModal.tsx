@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useTransition } from 'react';
-import { Button, Group, Modal, Stack, Table, Text, TextInput, Title } from '@mantine/core';
+import { Button, Group, Modal, Stack, Text, TextInput, Title } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
 import { runAction } from '@/lib/run-action';
 import { formatCalendarDate, isCalendarDate, compare, type CalendarDate } from '@/lib/calendar-date';
@@ -10,6 +10,7 @@ import {
   addLaborCategoryRateChange, correctLaborCategoryRate, previewRateChangeImpact, removeLaborCategoryRateChange,
 } from '@/server/actions/labor-category-rates';
 import { ImpactPanel, useImpactGate } from '@/components/admin/ImpactGate';
+import { EffectiveDatedTable } from '@/components/admin/EffectiveDatedTable';
 
 /**
  * A labor category's rate schedule (feature-plan-dated-rates.md D2): "From the start" then each change, ascending.
@@ -122,22 +123,14 @@ export function RateScheduleModal({ opened, onClose, category, canWrite, onSaved
   return (
     <Modal opened={opened} onClose={onClose} title={`Rates — ${category.lcatCode}: ${category.title}`} size="lg">
       <Stack>
-        <Table data-testid="rate-schedule">
-          <Table.Thead>
-            <Table.Tr><Table.Th>From</Table.Th><Table.Th>Hourly</Table.Th><Table.Th>Ceiling</Table.Th><Table.Th /><Table.Th /></Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {rows.map((r) => (
-              <Table.Tr key={r.ref}>
-                <Table.Td>{r.label}</Table.Td>
-                <Table.Td>{formatRate(r.hourlyRate)}</Table.Td>
-                <Table.Td>{formatRate(r.ceilingRate)}</Table.Td>
-                <Table.Td><Button size="xs" variant="subtle" disabled={!canWrite} onClick={() => start({ kind: 'correct', target: r.ref })} data-testid={`rate-correct-${r.ref}`}>Correct</Button></Table.Td>
-                <Table.Td>{r.ref !== 'starting' && <Button size="xs" variant="subtle" color="red" disabled={!canWrite} onClick={() => start({ kind: 'remove', changeId: r.ref })} data-testid={`rate-remove-${r.ref}`}>Remove</Button>}</Table.Td>
-              </Table.Tr>
-            ))}
-          </Table.Tbody>
-        </Table>
+        <EffectiveDatedTable
+          headers={['Hourly', 'Ceiling']}
+          rows={rows.map((r) => ({ ref: r.ref, label: r.label, cells: [formatRate(r.hourlyRate), formatRate(r.ceilingRate)] }))}
+          canWrite={canWrite}
+          onCorrect={(ref) => start({ kind: 'correct', target: ref })}
+          onRemove={(ref) => start({ kind: 'remove', changeId: ref })}
+          testIdPrefix="rate"
+        />
 
         {!mode && <Button variant="light" disabled={!canWrite} onClick={() => start({ kind: 'add' })} data-testid="rate-start-add">Add a rate change</Button>}
 
