@@ -205,6 +205,41 @@ describe('editing (B-T3)', () => {
     expect(dispatched.setHours).toBe(4);
   });
 
+  // UX-TIMESHEET-B-AUDIT M8: a valid Tab at the last visible day (and Shift+Tab at the first) commits and LEAVES the grid.
+  it('a valid Tab at the last day commits and leaves the grid; Shift+Tab at the first day commits and leaves it backwards (M8)', async () => {
+    const { user } = setup(fixture({ today: '2026-01-15' as CalendarDate }));   // every day is past or today: all editable
+    await enterGrid(user);
+    await press(user, '{End}{ArrowLeft}');                    // 0:14, the last day
+    expect(focused()).toBe('0:14');
+    await press(user, '5{Tab}');
+    expect(value(0, 14)).toBe(5);
+    expect((document.activeElement as HTMLElement).textContent).toBe('after');
+    await user.tab({ shift: true });                           // back into the grid, at its tab stop (0:14)
+    await press(user, '{Home}{ArrowRight}');                   // 0:0, the first day
+    expect(focused()).toBe('0:0');
+    await press(user, '2{Shift>}{Tab}{/Shift}');
+    expect(value(0, 0)).toBe(2);
+    expect(grid().contains(document.activeElement)).toBe(false);
+    expect(input()).toBeNull();
+  });
+
+  it('F2 enters edit with the caret at the end; Enter and Space enter edit with the text selected (M8)', async () => {
+    const { user } = setup();
+    await enterGrid(user);
+    await press(user, '{Home}{ArrowRight}');                   // 0:0 holds 8.00
+    await press(user, '{F2}');
+    expect(input()!.value).toBe('8.00');
+    expect([input()!.selectionStart, input()!.selectionEnd]).toEqual([4, 4]);
+    await press(user, '{Escape}');
+    await press(user, '{Enter}');
+    expect([input()!.selectionStart, input()!.selectionEnd]).toEqual([0, 4]);
+    await press(user, '{Escape}');
+    await press(user, ' ');
+    expect(input()).not.toBeNull();
+    expect(input()!.value).toBe('8.00');
+    expect([input()!.selectionStart, input()!.selectionEnd]).toEqual([0, 4]);
+  });
+
   it('edit-mode Esc discards the draft and the blur does not commit', async () => {
     const { user } = setup();
     await enterGrid(user);

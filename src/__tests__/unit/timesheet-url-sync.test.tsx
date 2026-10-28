@@ -140,6 +140,16 @@ describe('generations and re-sync (B-T8, §4.4)', () => {
     expect(window.location.search).toBe('?period=2025-12-16');
   });
 
+  it('a re-sync applies SET_PAGE_CONTEXT: the new today and readOnly (M8)', () => {
+    const view = renderTimesheet(pageData({ chargeCodes: [chargeCode()] }), <TimesheetPage />);
+    expect(live.ctx!.state.today).toBe('2026-01-20');
+    expect(live.ctx!.state.readOnly).toBe(false);
+    view.rerenderWith(pageData({ chargeCodes: [chargeCode()], today: '2026-01-22' as CalendarDate, readOnly: true }));
+    expect(live.ctx!.state.today).toBe('2026-01-22');
+    expect(live.ctx!.state.readOnly).toBe(true);
+    expect(live.ctx!.state.syncGen).toBe(1);
+  });
+
   it('edit mode resets on re-sync', async () => {
     const view = renderTimesheet(pageData({ chargeCodes: [chargeCode()] }), <TimesheetPage />);
     const user = userEvent.setup();

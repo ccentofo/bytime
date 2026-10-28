@@ -165,6 +165,8 @@ describe('the link listener (B-T7)', () => {
       <a href="#main-content">Skip</a>
       <a href="/timesheet?period=2026-01-01#top">Same page anchor</a>
       <a href="/api/export/x">Export</a>
+      <a href="/files/report.csv" download>Download</a>
+      <a href="https://example.com/help">Elsewhere</a>
     </nav>
   );
   const link = (text: string) => [...document.querySelectorAll('a')].find((a) => a.textContent === text) as HTMLAnchorElement;
@@ -201,6 +203,15 @@ describe('the link listener (B-T7)', () => {
     await user.click(link('Skip'));
     await user.click(link('Same page anchor'));
     expect(prevented).toEqual([false, false, false, false, false]);
+    expect(dialog()).toBeUndefined();
+  });
+
+  it('dirty: a download link and a cross-origin link pass through (M8)', async () => {
+    const { user } = setup(links);
+    await edit(6);
+    await user.click(link('Download'));
+    await user.click(link('Elsewhere'));
+    expect(prevented).toEqual([false, false]);
     expect(dialog()).toBeUndefined();
   });
 
@@ -251,6 +262,20 @@ describe('lifecycle, sign-out and beforeunload (B-T7)', () => {
     expect(result).toBe(false);
     expect(dialog()).toBeUndefined();
     expect(await confirmLeave()).toBe(true); // the re-sync replaced the data: nothing unsaved, nothing pending
+  });
+
+  it('a re-sync with the ReasonModal open closes it and the save resolves false (M8)', async () => {
+    const { view } = setup();
+    await edit(2);                                             // a late entry: needs a reason
+    let result: boolean | undefined;
+    act(() => { void live.ctx!.requestSave().then((r) => { result = r; }); });
+    await settle();
+    expect(button('MOCK_REASON_CANCEL')).toBeDefined();
+    view.rerenderWith(pageData({ today: '2026-01-07' as CalendarDate, chargeCodes: [chargeCode()] }));
+    await settle();
+    expect(button('MOCK_REASON_CANCEL')).toBeUndefined();
+    expect(result).toBe(false);
+    expect(actions.saveTimesheetBatch).not.toHaveBeenCalled();
   });
 
   it('sign-out awaits the confirm before signOut (Cancel → never signs out; Discard → signs out)', async () => {
@@ -396,7 +421,7 @@ describe('a save in flight (H2)', () => {
     expect(actions.saveTimesheetBatch).toHaveBeenCalledTimes(1);
   });
 
-  it('a save landing after a period change neither moves the baseline nor opens a ReasonModal for the new period', async () => {
+  it('a save landing after a period change neither moves the baseline (the MARK_SAVED stale guard, M8) nor opens a ReasonModal for the new period', async () => {
     const land = deferredSave();
     setup();
     await edit(6);
