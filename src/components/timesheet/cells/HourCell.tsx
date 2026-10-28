@@ -54,7 +54,8 @@ export function HourCell({ chargeCodeId, dayIndex, density = 'comfortable' }: Ho
   const provenance = entry?.provenance?.[dayIndex] ?? null;
 
   const noteKey = `${chargeCodeId}-${dayIndex}`;
-  const hasNote = Boolean(state.notes[noteKey]);
+  // UX-3 A4.9: a cleared ('') note shows no icon.
+  const hasNote = Boolean(state.notes[noteKey]?.trim());
   const cellId = `cell-${chargeCodeId}-${dayIndex}`;
 
   const handleClick = () => {
@@ -75,7 +76,8 @@ export function HourCell({ chargeCodeId, dayIndex, density = 'comfortable' }: Ho
 
   const handleNoteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    dispatch({ type: 'OPEN_NOTE_MODAL', chargeCodeId, dayIndex });
+    // UX-3 A4.9: read-only on a cell whose note can't change (locked period, future date, read-only mode).
+    dispatch({ type: 'OPEN_NOTE_MODAL', chargeCodeId, dayIndex, editable: periodEditable && !isFutureDate });
   };
 
   const showNoteIcon = isHovered || hasNote;

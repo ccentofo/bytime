@@ -18,11 +18,12 @@ const STATUS_BADGES: Record<string, { color: string; label: string }> = {
 };
 
 export function TimesheetToolbar() {
-  const { dirtyCells, hasEdits, hasLateEntries, saveAll, discardChanges, submitTimesheet, state } = useTimesheet();
+  const { dirtyCells, dirtyNotes, hasEdits, hasLateEntries, saveAll, discardChanges, submitTimesheet, state } = useTimesheet();
   const [reasonModalOpen, setReasonModalOpen] = useState(false);
   const [submitModalOpen, setSubmitModalOpen] = useState(false);
 
-  const dirtyCount = dirtyCells.length;
+  // UX-3 A4.9: unsaved notes count too — Save/Discard enable on them and Submit stays blocked until they're saved.
+  const dirtyCount = dirtyCells.length + dirtyNotes.length;
   const { periodStatus, periodStart } = state;
   const isEditable = (periodStatus === 'draft' || periodStatus === 'rejected') && !state.readOnly;
 

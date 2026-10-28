@@ -74,11 +74,11 @@ describe('OTHER reason requires a comment', () => {
     expect(reasonNeedsComment('CORRECTION', '')).toBe(false);
   });
 
-  it('client: the reason modal and the daily-note modal both block OTHER without a comment', () => {
+  it('client: the reason modal blocks OTHER without a comment; the note modal has no reason code (UX-3 L3)', () => {
     const modal = readFileSync(path.join(ROOT, 'src/components/timesheet/ReasonModal.tsx'), 'utf8');
     expect(modal).toMatch(/const canSubmit = reasonCode !== null && comment\.trim\(\)\.length > 0 && !reasonNeedsComment\(reasonCode, comment\);/);
-    const note = readFileSync(path.join(ROOT, 'src/components/timesheet/DailyNoteModal.tsx'), 'utf8');
-    expect(note).toMatch(/disabled=\{reasonNeedsComment\(reasonCode, comment\)\}/);
+    const note = stripComments(readFileSync(path.join(ROOT, 'src/components/timesheet/DailyNoteModal.tsx'), 'utf8'));
+    expect(note).not.toMatch(/REASON_CODES|reasonCode|reasonNeedsComment|<Select/);
   });
 });
 

@@ -51,6 +51,9 @@ export default async function TimesheetPage({ searchParams }: { searchParams: Pr
     dashboardData,
     periodConfig: period.periodConfig,
     readOnly: tenantState.kind === 'read_only',
+    // UX-3 A4.9: the period's saved notes (shown on first load) and whether it is the current period.
+    notes: period.notes,
+    isCurrent: period.isCurrent,
   };
 
   return <BiWeeklyTimesheetClient initialData={pageData} />;
