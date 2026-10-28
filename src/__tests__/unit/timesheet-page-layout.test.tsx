@@ -2,11 +2,17 @@
 import '@testing-library/react';
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { act, cleanup } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { readFileSync } from 'fs';
+import path from 'path';
 
 /**
- * feature-plan-ux-timesheet-ui.md B-T6 (§4.1, §4.4). Step 1 covers initialization: the page context (userId, today,
- * readOnly, flsaExempt) survives initialization and period loads (trap T-O); first mount holds the server's notes and the
- * selected-period fields from initialData. The layout cases are added with the page layout step.
+ * feature-plan-ux-timesheet-ui.md B-T6 (§4.1, §4.4): initialization (the page context survives initialization and period
+ * loads, trap T-O; first mount holds the server's notes and selected-period fields) and the page layout — one h1 with the
+ * period control below it, the status line (follows edits; "Was due"; submittedOn / reviewedOn), the returned banner,
+ * Submit's reason precedence (and no aria-describedby when available), SET_TODAY opening Submit, the SubmitModal
+ * overtime figure (incomplete weeks included), the exempt-only weekly notice (complete weeks), focus kept on controls
+ * that become unavailable (aria-disabled, never disabled), the missing Choose-period option, no dashboard / old panel.
  */
 
 const actions = vi.hoisted(() => ({ getTimesheetPeriod: vi.fn(), getNeighborPeriod: vi.fn(), saveTimesheetBatch: vi.fn(), submitPeriod: vi.fn(), getPeriodOptions: vi.fn() }));
@@ -15,11 +21,17 @@ vi.mock('@/server/actions/periods', () => ({ submitPeriod: actions.submitPeriod,
 vi.mock('@/server/actions/pay-period-config', () => ({ getNeighborPeriod: actions.getNeighborPeriod }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }), usePathname: () => '/timesheet' }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
+vi.mock('@/components/timesheet/SubmitModal', () => ({
+  SubmitModal: ({ opened, uncompensatedHours, totalPeriodHours }: { opened: boolean; uncompensatedHours?: number; totalPeriodHours?: number }) =>
+    (opened ? <div data-testid="submit-modal">OT {uncompensatedHours} of {totalPeriodHours}</div> : null),
+}));
 
 import { initialTimesheetState, timesheetReducer } from '@/components/timesheet/TimesheetContext';
+import { TimesheetPage } from '@/components/timesheet/TimesheetClient';
 import { CC, chargeCode, pageData, periodData } from '../helpers/timesheet-fixtures';
 import { installTimesheetDomStubs, live, renderTimesheet } from '../helpers/timesheet-render';
 import type { CalendarDate } from '@/lib/calendar-date';
+import type { TimesheetPeriodData } from '@/types/timesheet';
 
 beforeAll(() => installTimesheetDomStubs());
 beforeEach(() => { for (const f of Object.values(actions)) f.mockReset(); actions.getPeriodOptions.mockResolvedValue([]); live.ctx = null; });
@@ -60,5 +72,177 @@ describe('initialization and the page context (B-T6, T-O)', () => {
     const s = live.ctx!.state;
     expect({ userId: s.userId, flsaExempt: s.flsaExempt, readOnly: s.readOnly, today: s.today }).toEqual({ userId: 'jane', flsaExempt: true, readOnly: true, today: '2026-01-21' });
     expect(s).toMatchObject({ periodStart: '2025-12-16', periodEnd: '2025-12-31', notes: { [`${CC}-3`]: 'December' }, loadGen: 1, isLoadingPeriod: false });
+  });
+});
+
+// Jan 1–15, 2026 (Thu–Thu). Submit opens Thu Jan 15.
+const page = (o: Partial<TimesheetPeriodData> = {}, ctx: Partial<{ flsaExempt: boolean; readOnly: boolean }> = {}) =>
+  pageData({ chargeCodes: [chargeCode()], entries: [{ chargeCodeId: CC, hours: [8, 8, 0, 0, 8, 8, 8, ...Array(8).fill(0)] }], revisions: { [`${CC}-0`]: 1 }, ...o }, ctx);
+const btn = (label: string) => [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === label) as HTMLButtonElement;
+const statusLine = () => document.querySelector('[data-testid="status-line"]')!.textContent;
+const submitWhy = () => { const id = btn('Submit').getAttribute('aria-describedby'); return id ? document.getElementById(id)?.textContent ?? null : null; };
+const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+
+describe('page layout (B-T6)', () => {
+  it('one h1 "Timesheet"; the period control sits below it in the header band; status pill once (+ self-approval badge)', () => {
+    renderTimesheet(page({ approvalBadge: 'Self-approved', periodStatus: 'approved' }), <TimesheetPage />);
+    const h1s = document.querySelectorAll('h1');
+    expect([...h1s].map((h) => h.textContent)).toEqual(['Timesheet']);
+    const band = h1s[0].closest('.mantine-Group-root')!;
+    expect(band.querySelector('button[aria-label="Previous period"]')).not.toBeNull();
+    expect(band.querySelector('[aria-label="Choose period"]')).not.toBeNull();
+    expect(band.compareDocumentPosition(band.querySelector('button[aria-label="Previous period"]')!) & Node.DOCUMENT_POSITION_CONTAINED_BY).toBeTruthy();
+    expect(document.body.textContent!.match(/Approved/g)!.length).toBeGreaterThanOrEqual(1);
+    expect([...document.querySelectorAll('.mantine-Badge-root')].map((b) => b.textContent)).toEqual(['Approved', 'Self-approved']);
+  });
+
+  it('flsaExempt: true and readOnly: true are both kept: the FLSA notice shows (a complete week over 40) and every cell is read-only', () => {
+    renderTimesheet(page({ entries: [{ chargeCodeId: CC, hours: [0, 0, 0, 0, 10, 10, 10, 10, 10, ...Array(6).fill(0)] }], workweekStartDay: 1 }, { flsaExempt: true, readOnly: true }), <TimesheetPage />);
+    expect(document.querySelector('[data-testid="weekly-notice"]')!.textContent).toContain('Week of Jan 5: 10 hours over 40 (uncompensated).');
+    const days = [...document.querySelectorAll('tbody td')].filter((td) => td.getAttribute('data-c') !== 'total');
+    expect(days.every((td) => td.getAttribute('aria-readonly') === 'true')).toBe(true);
+    expect(submitWhy()).toBe('This workspace is read-only');
+  });
+
+  it('first mount shows the server notes and the status line from initialData; the status line follows a commit', () => {
+    renderTimesheet(page({ notes: { [`${CC}-1`]: { body: 'Site visit', revision: 1 } } }), <TimesheetPage />);
+    expect(document.querySelector(`td[data-r="0"][data-c="1"]`)!.textContent).toContain(', note');
+    expect(statusLine()).toBe('40 hours entered · 5 of 11 workdays so far are filled in · Was due Jan 15');
+    act(() => live.ctx!.dispatch({ type: 'SET_HOURS', chargeCodeId: CC, dayIndex: 7, value: 7.5 }));
+    expect(statusLine()).toBe('47.5 hours entered · 6 of 11 workdays so far are filled in · Was due Jan 15');
+  });
+
+  it('"Due {dddd, MMM D}" while due; submittedOn / reviewedOn for submitted and approved periods', () => {
+    const { unmount } = renderTimesheet(page({ today: '2026-01-07' as CalendarDate }), <TimesheetPage />);
+    expect(statusLine()).toBe('40 hours entered · 5 of 5 workdays so far are filled in · Due Thursday, Jan 15');
+    unmount();
+    const sub = renderTimesheet(page({ periodStatus: 'submitted', submittedOn: '2026-01-16' as CalendarDate }), <TimesheetPage />);
+    expect(statusLine()).toBe('40 hours · Submitted Jan 16, 2026');
+    sub.unmount();
+    renderTimesheet(page({ periodStatus: 'approved', reviewedOn: '2026-01-19' as CalendarDate }), <TimesheetPage />);
+    expect(statusLine()).toBe('40 hours · Approved Jan 19, 2026');
+    expect(document.querySelector('[data-testid="status-line"]')!.tagName).toBe('P');
+    expect(document.querySelector('[data-testid="status-line"]')!.closest('[aria-live], [role="status"]')).toBeNull();
+  });
+
+  it('the returned banner, once, with the review comment quoted', () => {
+    renderTimesheet(page({ periodStatus: 'rejected', reviewComment: 'Split Tuesday across codes.' }), <TimesheetPage />);
+    const banners = document.querySelectorAll('[data-testid="returned-banner"]');
+    expect(banners).toHaveLength(1);
+    expect(banners[0].textContent).toBe('Returned for corrections\u201cSplit Tuesday across codes.\u201d');
+  });
+
+  it('Submit reason precedence (§4.1), visible and linked; no aria-describedby and no reason element when available', () => {
+    const cases: Array<[Partial<TimesheetPeriodData>, Partial<{ readOnly: boolean }>, string]> = [
+      [{ periodStatus: 'submitted' }, { readOnly: true }, 'This workspace is read-only'],
+      [{ periodStatus: 'submitted' }, {}, 'This timesheet is submitted'],
+      [{ periodStatus: 'approved' }, {}, 'This timesheet is approved'],
+      [{ today: '2026-01-07' as CalendarDate }, {}, 'Opens Thursday, Jan 15'],
+      [{ entries: [{ chargeCodeId: CC, hours: Array(15).fill(0) }] }, {}, 'Add hours before submitting'],
+      // Precedence: each earlier reason wins over the later ones that also apply.
+      [{ today: '2026-01-07' as CalendarDate, entries: [{ chargeCodeId: CC, hours: Array(15).fill(0) }] }, { readOnly: true }, 'This workspace is read-only'],
+      [{ periodStatus: 'submitted', today: '2026-01-07' as CalendarDate }, {}, 'This timesheet is submitted'],
+      [{ today: '2026-01-07' as CalendarDate, entries: [{ chargeCodeId: CC, hours: Array(15).fill(0) }] }, {}, 'Opens Thursday, Jan 15'],
+    ];
+    for (const [period, ctx, why] of cases) {
+      const view = renderTimesheet(page(period, ctx), <TimesheetPage />);
+      expect(btn('Submit').getAttribute('aria-disabled'), why).toBe('true');
+      expect(submitWhy(), why).toBe(why);
+      view.unmount();
+    }
+    renderTimesheet(page(), <TimesheetPage />);
+    expect(btn('Submit').hasAttribute('aria-disabled')).toBe(false);
+    expect(btn('Submit').hasAttribute('aria-describedby')).toBe(false);
+    expect(document.body.textContent).not.toMatch(/Save your changes first|Add hours before submitting/);
+    act(() => live.ctx!.dispatch({ type: 'SET_HOURS', chargeCodeId: CC, dayIndex: 7, value: 2 }));
+    expect(submitWhy()).toBe('Save your changes first');
+    act(() => live.ctx!.dispatch({ type: 'BEGIN_PERIOD_LOAD' }));
+    expect(submitWhy()).toBe('Loading…');
+  });
+
+  it('Submit becomes available when SET_TODAY passes submitOpensOn', () => {
+    renderTimesheet(page({ today: '2026-01-14' as CalendarDate }), <TimesheetPage />);
+    expect(submitWhy()).toBe('Opens Thursday, Jan 15');
+    act(() => live.ctx!.dispatch({ type: 'SET_TODAY', today: '2026-01-15' as CalendarDate }));
+    expect(btn('Submit').hasAttribute('aria-disabled')).toBe(false);
+    expect(submitWhy()).toBeNull();
+  });
+
+  it('the SubmitModal overtime figure includes an incomplete final week (today\'s meaning)', async () => {
+    const user = userEvent.setup();
+    // Monday workweek. Week of Jan 5: 40 hours (complete). Week of Jan 12: incomplete (Jan 16–18 are outside the period and
+    // unknown) but already 9 + 9 + 9 + 18 = 45 hours → its 5 hours over 40 still count, as they did before.
+    const hours = [0, 0, 0, 0, 8, 8, 8, 8, 8, 0, 0, 9, 9, 9, 18];
+    renderTimesheet(page({ entries: [{ chargeCodeId: CC, hours }], revisions: {}, workweekStartDay: 1, outsideWeekHours: {} }, { flsaExempt: true }), <TimesheetPage />);
+    expect(live.ctx!.checks.uncompensatedHours).toBe(5);
+    expect(live.ctx!.checks.totalPeriodHours).toBe(85);
+    await user.click(btn('Submit'));
+    expect(document.querySelector('[data-testid="submit-modal"]')!.textContent).toBe('OT 5 of 85');
+  });
+
+  it('the weekly notice is exempt-only and uses complete weeks only', () => {
+    const under = page({ entries: [{ chargeCodeId: CC, hours: [0, 0, 0, 0, 8, 8, 8, 8, 0, 0, 0, 4, ...Array(3).fill(0)] }], workweekStartDay: 1, today: '2026-01-13' as CalendarDate });
+    const v1 = renderTimesheet(under, <TimesheetPage />);
+    expect(document.querySelector('[data-testid="weekly-notice"]')).toBeNull();               // not exempt
+    v1.unmount();
+    renderTimesheet({ ...under, flsaExempt: true }, <TimesheetPage />);
+    const text = document.querySelector('[data-testid="weekly-notice"]')!.textContent;
+    expect(text).toContain('Week of Jan 5: 32 hours. Record all time worked, including leave.');
+    expect(text).not.toContain('Week of Jan 12');                                             // incomplete: never flagged
+    expect(text).not.toContain('Week of Dec 29');                                             // edge week unknown outside days
+  });
+
+  it('focus stays on Save, Discard changes, Today and ‹ after they become unavailable (aria-disabled, never disabled)', async () => {
+    const user = userEvent.setup();
+    actions.saveTimesheetBatch.mockResolvedValue({ ok: true, data: { revisions: { [`${CC}-1`]: 1 }, noteRevisions: {} } });
+    renderTimesheet(page({ today: '2026-01-15' as CalendarDate }), <TimesheetPage />);
+    act(() => live.ctx!.dispatch({ type: 'SET_HOURS', chargeCodeId: CC, dayIndex: 14, value: 4 })); // a new entry today: no reason needed
+    await user.click(btn('Save'));
+    await settle();
+    expect(document.activeElement).toBe(btn('Save'));
+    expect(btn('Save').getAttribute('aria-disabled')).toBe('true');
+    expect(btn('Save').hasAttribute('disabled')).toBe(false);
+
+    act(() => live.ctx!.dispatch({ type: 'SET_HOURS', chargeCodeId: CC, dayIndex: 13, value: 2 }));
+    await user.click(btn('Discard changes'));
+    await settle();
+    expect(document.activeElement).toBe(btn('Discard changes'));
+    expect(btn('Discard changes').getAttribute('aria-disabled')).toBe('true');
+    expect(btn('Discard changes').hasAttribute('disabled')).toBe(false);
+
+    actions.getTimesheetPeriod.mockResolvedValue(periodData({ chargeCodes: [chargeCode()], isCurrent: true, periodStart: '2026-01-16' as CalendarDate, numDays: 16, today: '2026-01-20' as CalendarDate }));
+    await user.click(btn('Today'));
+    await settle();
+    expect(document.activeElement).toBe(btn('Today'));
+    expect(btn('Today').getAttribute('aria-disabled')).toBe('true');
+    expect(btn('Today').hasAttribute('disabled')).toBe(false);
+    expect(document.querySelector('button[aria-label="Next period"]')!.getAttribute('aria-disabled')).toBe('true');
+
+    let resolve!: (v: unknown) => void;
+    actions.getNeighborPeriod.mockResolvedValue({ periodStart: '2026-01-01', numDays: 15, periodConfig: periodData().periodConfig, isCurrent: false });
+    actions.getTimesheetPeriod.mockReturnValue(new Promise((r) => { resolve = r; }));
+    const prev = document.querySelector('button[aria-label="Previous period"]') as HTMLButtonElement;
+    await user.click(prev);
+    expect(live.ctx!.state.isLoadingPeriod).toBe(true);
+    expect(document.activeElement).toBe(prev);
+    expect(prev.hasAttribute('disabled')).toBe(false);
+    await act(async () => { resolve(periodData({ chargeCodes: [chargeCode()] })); });
+    expect(document.activeElement).toBe(prev);
+  });
+
+  it('a Choose period value missing from the 24-period list is added (the Select shows the period)', async () => {
+    actions.getPeriodOptions.mockResolvedValue([{ start: '2026-10-01', numDays: 15, label: 'Oct 1 – Oct 15, 2026' }, { start: '2026-10-16', numDays: 16, label: 'Oct 16 – Oct 31, 2026' }]);
+    renderTimesheet(page(), <TimesheetPage />);
+    await settle();
+    expect((document.querySelector('input[aria-label="Choose period"]') as HTMLInputElement).value).toBe('Jan 1 – 15, 2026');
+  });
+
+  it('no dashboard and no old exempt panel; the page no longer fetches the dashboard', () => {
+    renderTimesheet(page({}, { flsaExempt: true }), <TimesheetPage />);
+    expect(document.body.textContent).not.toMatch(/Total Period Hours|Semi-Monthly Timesheet|Days Remaining|Late/);
+    expect(btn('Current')).toBeUndefined();
+    const src = readFileSync(path.resolve(__dirname, '../../app/(app)/timesheet/page.tsx'), 'utf8');
+    expect(src).not.toMatch(/getEmployeeDashboardData|TimesheetDashboard/);
+    expect(document.querySelector('a[href="/timesheet/history"]')!.textContent).toBe('Past timesheets');
   });
 });

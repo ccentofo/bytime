@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Modal, Button, Group, Stack, Text, Textarea, Alert, Checkbox, Paper } from '@mantine/core';
-import { IconAlertTriangle } from '@tabler/icons-react';
+import { Icons } from '@/components/ui/icons';
 
 type Props = {
   opened: boolean;
@@ -54,7 +54,7 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
       closeOnEscape={!isSaving}
     >
       <Stack>
-        <Alert icon={<IconAlertTriangle size={16} />} color="warning" variant="light">
+        <Alert icon={<Icons.statusWarning size={16} />} color="warning" variant="light">
           <Text size="sm" fw={600}>
             You are submitting your timesheet for {periodLabel}.
           </Text>
@@ -65,7 +65,7 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
         </Alert>
 
         {completenessWarnings && completenessWarnings.length > 0 && (
-          <Alert icon={<IconAlertTriangle size={16} />} color="warning" variant="light">
+          <Alert icon={<Icons.statusWarning size={16} />} color="warning" variant="light">
             <Text size="sm" fw={600} mb={4}>
               Period Completeness Warnings ({completenessWarnings.length}):
             </Text>

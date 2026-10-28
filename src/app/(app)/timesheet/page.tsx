@@ -1,10 +1,9 @@
 import { auth } from '@/auth';
 import { loginRedirect } from '@/lib/session';
 import { getTimesheetPeriod } from '@/server/actions/timesheet';
-import { BiWeeklyTimesheetClient } from '@/components/timesheet/BiWeeklyTimesheetClient';
+import { TimesheetClient } from '@/components/timesheet/TimesheetClient';
 import type { TimesheetPageData } from '@/types/timesheet';
 import { getUserByEmail } from '@/server/internal/users';
-import { getEmployeeDashboardData } from '@/server/actions/employee-dashboard';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = { title: 'Timesheet' };
@@ -26,10 +25,9 @@ export default async function TimesheetPage({ searchParams }: { searchParams: Pr
 
   // Fetch ALL independent data in parallel (single await). getTimesheetPeriod resolves the
   // period's length and schedule on the server, the same way navigation does.
-  const [period, fullUser, dashboardData] = await Promise.all([
+  const [period, fullUser] = await Promise.all([
     getTimesheetPeriod(requested),
     getUserByEmail(session.user.email!),
-    getEmployeeDashboardData(),
   ]);
 
   // feature-plan-ux-timesheet-ui.md §4.4: the page context plus the whole period. `today` and `readOnly` come from the
@@ -42,5 +40,5 @@ export default async function TimesheetPage({ searchParams }: { searchParams: Pr
     period,
   };
 
-  return <BiWeeklyTimesheetClient initialData={pageData} dashboardData={dashboardData} />;
+  return <TimesheetClient initialData={pageData} />;
 }

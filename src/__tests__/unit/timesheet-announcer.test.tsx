@@ -23,6 +23,7 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), replace: 
 vi.mock('@mantine/notifications', () => ({ notifications: { show: notify } }));
 
 import { TimesheetGrid } from '@/components/timesheet/TimesheetGrid';
+import { TimesheetPage } from '@/components/timesheet/TimesheetClient';
 import { useAnnounce } from '@/components/timesheet/TimesheetAnnouncer';
 import { CC, chargeCode, pageData, periodData } from '../helpers/timesheet-fixtures';
 import { enterGrid, installTimesheetDomStubs, live, renderTimesheet } from '../helpers/timesheet-render';
@@ -116,5 +117,12 @@ describe('announcer (B-T14)', () => {
     expect(counter.textContent).toBe('0/1000');
     expect(counter.closest('[aria-live], [role="status"], [role="alert"]')).toBeNull();
     expect(counter.hasAttribute('aria-live')).toBe(false);
+  });
+
+  it('the status line is a plain paragraph, not a live region (step 5)', () => {
+    renderTimesheet(data(), <TimesheetPage />);
+    const line = document.querySelector('[data-testid="status-line"]')!;
+    expect(line.tagName).toBe('P');
+    expect(line.closest('[aria-live], [role="status"], [role="alert"]')).toBeNull();
   });
 });

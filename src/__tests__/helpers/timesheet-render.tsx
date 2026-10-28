@@ -45,13 +45,15 @@ export function withTheme(ui: ReactNode): ReactNode {
 }
 
 /** Mount `children` inside a TimesheetProvider for `data`. `rerenderWith` swaps initialData (an RSC re-sync). */
-export function renderTimesheet(data: TimesheetPageData, children: ReactNode): RenderResult & { rerenderWith: (next: TimesheetPageData) => void } {
-  const tree = (d: TimesheetPageData) => withTheme(<TimesheetProvider initialData={d}>{children}<Probe /></TimesheetProvider>);
-  const result = render(tree(data));
-  return Object.assign(result, { rerenderWith: (next: TimesheetPageData) => result.rerender(tree(next)) });
+export function renderTimesheet(data: TimesheetPageData, children: ReactNode): RenderResult & { rerenderWith: (next: TimesheetPageData, nextChildren?: ReactNode) => void } {
+  const tree = (d: TimesheetPageData, c: ReactNode) => withTheme(<TimesheetProvider initialData={d}>{c}<Probe /></TimesheetProvider>);
+  const result = render(tree(data, children));
+  // Pass fresh children (new elements) to re-render them on the same commit, as the page does (TimesheetClient renders
+  // <TimesheetPage /> anew each time its initialData changes).
+  return Object.assign(result, { rerenderWith: (next: TimesheetPageData, nextChildren?: ReactNode) => result.rerender(tree(next, nextChildren ?? children)) });
 }
 
 /** Tab until focus is inside the grid (the note button above the table comes first in tab order, §4.1). */
 export async function enterGrid(user: { tab: () => Promise<void> }): Promise<void> {
-  for (let i = 0; i < 6 && !document.activeElement?.closest('table[role="grid"]'); i++) await user.tab();
+  for (let i = 0; i < 30 && !document.activeElement?.closest('table[role="grid"]'); i++) await user.tab();
 }

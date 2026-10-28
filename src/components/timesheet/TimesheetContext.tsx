@@ -217,6 +217,8 @@ export interface TimesheetActionsValue {
   openSubmit: () => void;
   /** Resolves to the submit's result — never throws. The status becomes 'submitted' only on `ok`. */
   submitTimesheet: (comment?: string) => Promise<RunResult<void>>;
+  /** Run an in-page period change (‹, ›, Choose period, Today) — behind the unsaved-changes guard (§4.9). */
+  guardPeriodChange: (change: () => Promise<void>) => Promise<void>;
 }
 
 const StateContext = createContext<TimesheetStateValue | undefined>(undefined);
@@ -250,6 +252,16 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
 function TimesheetStateProvider({ initialData, children }: ProviderProps) {
   const [state, dispatch] = useReducer(timesheetReducer, initialData, initialTimesheetState);
   const announce = useAnnounce();
+
+  // Re-sync on RSC navigation (§4.4, trap T-H): the page segment doesn't remount for a new ?period=, so a NEW initialData
+  // object is applied during render — dispatches to this component's own reducer only (no refs, storage or effects) —
+  // and SET_PERIOD_DATA's resync bumps syncGen, which supersedes any load in flight and stale saves.
+  const [seenInitial, setSeenInitial] = useState(initialData);
+  if (seenInitial !== initialData) {
+    setSeenInitial(initialData);
+    dispatch({ type: 'SET_PAGE_CONTEXT', today: initialData.today, readOnly: initialData.readOnly, flsaExempt: initialData.flsaExempt });
+    dispatch({ type: 'SET_PERIOD_DATA', ...initialData.period, resync: true });
+  }
 
   // Compute dirty cells by comparing entries to savedEntries
   const dirtyCells = useMemo<DirtyCell[]>(() => {
@@ -347,6 +359,11 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
     [dirtyCells, dirtyNotes, state],
   );
 
+  // Generations of the committed state, for async continuations: the latest load wins (loadGen) and a re-sync
+  // supersedes any load in flight (syncGen).
+  const genRef = useRef<LoadGen>({ loadGen: state.loadGen, syncGen: state.syncGen });
+  useLayoutEffect(() => { genRef.current = { loadGen: state.loadGen, syncGen: state.syncGen }; });
+
   // ── useSaveFlow (§4.4). Refs are used only because an await intervenes; they're updated in layout effects.
   const saveAllRef = useRef(saveAll);
   const flowRef = useRef({ hasUnsaved, needsReason: hasEdits || hasLateEntries, unsavedCount });
@@ -355,7 +372,9 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
     flowRef.current = { hasUnsaved, needsReason: hasEdits || hasLateEntries, unsavedCount };
   });
   const runningRef = useRef<Promise<boolean> | null>(null);
-  const [reasonOpen, setReasonOpen] = useState(false);
+  // The ReasonModal is open for the syncGen it was opened under; a re-sync closes it without a state update (§4.4).
+  const [reasonGen, setReasonGen] = useState<number | null>(null);
+  const reasonOpen = reasonGen !== null && reasonGen === state.syncGen;
   const reasonResolveRef = useRef<((ok: boolean) => void) | null>(null);
 
   const failSave = useCallback((error: string) => {
@@ -373,23 +392,29 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
     // A failed save keeps the ReasonModal open for a retry; the promise settles on success or Cancel.
     return new Promise<boolean>((resolve) => {
       reasonResolveRef.current = resolve;
-      setReasonOpen(true);
+      setReasonGen(genRef.current.syncGen);
     });
   }, [failSave]);
 
   const handleReasonConfirm = useCallback(async (reasonCode: string, comment: string) => {
     const result = await saveAllRef.current(reasonCode, comment);
     if (!result.ok) { failSave(result.error); return; }
-    setReasonOpen(false);
+    setReasonGen(null);
     reasonResolveRef.current?.(true);
     reasonResolveRef.current = null;
   }, [failSave]);
 
   const handleReasonCancel = useCallback(() => {
-    setReasonOpen(false);
+    setReasonGen(null);
     reasonResolveRef.current?.(false);
     reasonResolveRef.current = null;
   }, []);
+
+  // A re-sync replaced the data: a pending ReasonModal closes and its save promise settles false (§4.4).
+  useEffect(() => {
+    reasonResolveRef.current?.(false);
+    reasonResolveRef.current = null;
+  }, [state.syncGen]);
 
   const requestSave = useCallback((): Promise<boolean> => {
     // A save already running is awaited first; then the same re-check applies (saves are serialized).
@@ -413,9 +438,6 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
     return run;
   }, [saveOnce, announce]);
 
-  // ── Period loads: the latest load wins (loadGen), and a re-sync supersedes any load in flight (syncGen).
-  const genRef = useRef<LoadGen>({ loadGen: state.loadGen, syncGen: state.syncGen });
-  useLayoutEffect(() => { genRef.current = { loadGen: state.loadGen, syncGen: state.syncGen }; });
 
   const showPeriod = useCallback(
     async (resolveStart: () => Promise<CalendarDate>) => {
@@ -462,6 +484,16 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
     [state.periodStart],
   );
 
+  // In-page period changes. Step 6 puts them behind the unsaved-changes guard (confirmLeave).
+  const guardPeriodChange = useCallback(async (change: () => Promise<void>) => { await change(); }, []);
+
+  // URL sync (§4.10): after the committed period changes — never from a fetch continuation — and only when the URL
+  // differs. replaceState doesn't re-run the server components (trap T-H); on mount it canonicalizes to the period shown.
+  useEffect(() => {
+    const target = state.isCurrent ? '/timesheet' : `/timesheet?period=${state.periodStart}`;
+    if (window.location.pathname + window.location.search !== target) window.history.replaceState(null, '', target);
+  }, [state.periodStart, state.isCurrent, state.syncGen]);
+
   const [submitOpen, setSubmitOpen] = useState(false);
   const openSubmit = useCallback(() => setSubmitOpen(true), []);
   const periodLabel = `${formatCalendarDate(state.periodStart, 'MMM D')} – ${formatCalendarDate(state.periodEnd, 'MMM D, YYYY')}`;
@@ -506,8 +538,8 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
     [state, dirtyCells, dirtyNotes, hasUnsaved, unsavedCount, hasEdits, hasLateEntries, checks],
   );
   const actionsValue = useMemo<TimesheetActionsValue>(
-    () => ({ requestSave, saveAll, loadPeriod, loadPeriodByDate, discardChanges, openSubmit, submitTimesheet }),
-    [requestSave, saveAll, loadPeriod, loadPeriodByDate, discardChanges, openSubmit, submitTimesheet],
+    () => ({ requestSave, saveAll, loadPeriod, loadPeriodByDate, discardChanges, openSubmit, submitTimesheet, guardPeriodChange }),
+    [requestSave, saveAll, loadPeriod, loadPeriodByDate, discardChanges, openSubmit, submitTimesheet, guardPeriodChange],
   );
 
   return (

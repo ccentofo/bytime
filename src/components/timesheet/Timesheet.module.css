@@ -224,3 +224,16 @@ tfoot .cell {
   font-size: 0.875rem;
   color: var(--mantine-color-dimmed);
 }
+
+.periodLabel {
+  white-space: nowrap;
+}
+
+.periodSelect {
+  inline-size: 14rem;
+}
+
+.statusLine {
+  margin: 0;
+  font-size: 0.875rem;
+}

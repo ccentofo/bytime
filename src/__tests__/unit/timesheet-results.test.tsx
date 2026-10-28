@@ -16,6 +16,7 @@ const actions = vi.hoisted(() => ({
 vi.mock('@/server/actions/timesheet', () => ({ saveTimesheetBatch: actions.saveTimesheetBatch, getTimesheetPeriod: vi.fn() }));
 vi.mock('@/server/actions/periods', () => ({
   submitPeriod: actions.submitPeriod,
+  getPeriodOptions: vi.fn(async () => []),
   getWorkspaceContext: vi.fn(async () => ({ today: '2026-01-20', timezone: 'America/New_York' })),
 }));
 vi.mock('@/server/actions/pay-period-config', () => ({ getNeighborPeriod: vi.fn() }));
@@ -31,7 +32,7 @@ const notify = vi.hoisted(() => vi.fn());
 vi.mock('@mantine/notifications', () => ({ notifications: { show: notify } }));
 
 import { TimesheetProvider, useTimesheet } from '@/components/timesheet/TimesheetContext';
-import { TimesheetToolbar } from '@/components/timesheet/TimesheetToolbar';
+import { TimesheetPage } from '@/components/timesheet/TimesheetClient';
 import type { TimesheetPageData } from '@/types/timesheet';
 import { chargeCode, pageData } from '../helpers/timesheet-fixtures';
 
@@ -142,7 +143,7 @@ describe('TimesheetContext', () => {
   });
 });
 
-describe('TimesheetToolbar', () => {
+describe('Save / Submit controls (TimesheetPage)', () => {
   const button = (label: string) => [...container.querySelectorAll('button')].find((b) => b.textContent?.trim() === label) as HTMLButtonElement;
   const shown = () => notify.mock.calls.map((c) => c[0] as { title: string; message: string });
   const click = async (label: string) => {
@@ -152,7 +153,7 @@ describe('TimesheetToolbar', () => {
 
   it('a failed save shows the server’s message and never the success toast', async () => {
     actions.saveTimesheetBatch.mockResolvedValue({ ok: false, code: 'validation', error: 'This period has been certified and is locked.' });
-    await render(<TimesheetToolbar />);
+    await render(<TimesheetPage />);
     await makeDirty();
     await click('Save');                 // the provider's save flow: a first-time entry on a past day needs a reason
     await click('MOCK_CONFIRM_REASON');
@@ -163,7 +164,7 @@ describe('TimesheetToolbar', () => {
 
   it('a successful save shows the success toast', async () => {
     actions.saveTimesheetBatch.mockResolvedValue({ ok: true, data: { revisions: { 'cc1-1': 1 }, noteRevisions: {} } }); // UX-3 A4.2 shape
-    await render(<TimesheetToolbar />);
+    await render(<TimesheetPage />);
     await makeDirty();
     await click('Save');
     await click('MOCK_CONFIRM_REASON');
@@ -172,7 +173,7 @@ describe('TimesheetToolbar', () => {
 
   it('a failed submit shows the server’s message and never the success toast', async () => {
     actions.submitPeriod.mockResolvedValue({ ok: false, code: 'validation', error: 'Cannot submit an empty timesheet.' });
-    await render(<TimesheetToolbar />);
+    await render(<TimesheetPage />);
     await click('MOCK_CONFIRM_SUBMIT');
     expect(actions.submitPeriod).toHaveBeenCalledTimes(1);
     expect(shown()).toEqual([expect.objectContaining({ title: 'Submit failed', message: 'Cannot submit an empty timesheet.' })]);

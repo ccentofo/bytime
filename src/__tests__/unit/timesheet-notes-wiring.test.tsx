@@ -31,9 +31,7 @@ const notify = vi.hoisted(() => vi.fn());
 vi.mock('@mantine/notifications', () => ({ notifications: { show: notify } }));
 
 import { TimesheetProvider, useTimesheet } from '@/components/timesheet/TimesheetContext';
-import { TimesheetGrid } from '@/components/timesheet/TimesheetGrid';
-import { TimesheetToolbar } from '@/components/timesheet/TimesheetToolbar';
-import { PayPeriodSelector } from '@/components/timesheet/PayPeriodSelector';
+import { TimesheetPage } from '@/components/timesheet/TimesheetClient';
 import type { TimesheetPageData, TimesheetPeriodData } from '@/types/timesheet';
 import { chargeCode, pageData, periodData } from '../helpers/timesheet-fixtures';
 import type { CalendarDate } from '@/lib/calendar-date';
@@ -62,9 +60,7 @@ let m: Mounted | undefined;
 const render = async (initial: TimesheetPageData) => {
   m = await mount(
     <TimesheetProvider initialData={initial}>
-      <PayPeriodSelector />
-      <TimesheetToolbar />
-      <TimesheetGrid />
+      <TimesheetPage />
       <Probe />
     </TimesheetProvider>,
   );
@@ -74,6 +70,8 @@ const render = async (initial: TimesheetPageData) => {
 const cell = (day: number) => document.querySelector(`td[data-r="0"][data-c="${day}"]`) as HTMLElement;
 const hasNoteMark = (day: number) => Boolean(cell(day)?.textContent?.includes(', note'));
 const button = (label: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === label) as HTMLButtonElement;
+// UX-3 Part B: unavailable controls are aria-disabled (never `disabled`, which would drop focus).
+const unavailable = (el: Element | null) => el?.getAttribute('aria-disabled') === 'true';
 const writeNote = async (day: number, body: string) => {
   await act(async () => { ctx!.dispatch({ type: 'SET_NOTE', chargeCodeId: CC, dayIndex: day, body }); });
 };
@@ -88,7 +86,7 @@ beforeEach(() => {
 });
 afterEach(() => { unmount(m); m = undefined; });
 
-describe('old-grid note wiring (UX-3 A-T14)', () => {
+describe('note wiring on the timesheet page (UX-3 A-T14, ported to Part B)', () => {
   it('a server note shows on the FIRST render, from initialData', async () => {
     await render(data({ notes: { [KEY]: { body: 'Site visit', revision: 2 } } }));
     expect(hasNoteMark(1)).toBe(true);
@@ -100,9 +98,9 @@ describe('old-grid note wiring (UX-3 A-T14)', () => {
   it('typing a note enables Save; Save sends notes with expectedRevision and no reason (no ReasonModal); after ok the note is clean', async () => {
     actions.saveTimesheetBatch.mockResolvedValue({ ok: true, data: { revisions: {}, noteRevisions: { [KEY]: 1 } } });
     await render(data());
-    expect(button('Save').disabled).toBe(true);
+    expect(unavailable(button('Save'))).toBe(true);
     await writeNote(1, '  Badge outage  ');
-    expect(button('Save').disabled).toBe(false);
+    expect(unavailable(button('Save'))).toBe(false);
     await click(button('Save'));
     await wait(20);
     expect(document.body.textContent).not.toContain('REASON_MODAL_OPEN');
@@ -110,7 +108,7 @@ describe('old-grid note wiring (UX-3 A-T14)', () => {
     expect(lastSave().changeReasonCode).toBeUndefined();
     expect(ctx!.dirtyNotes).toEqual([]);
     expect(ctx!.state.savedNotes[KEY]).toEqual({ body: 'Badge outage', revision: 1 });
-    expect(button('Save').disabled).toBe(true);
+    expect(unavailable(button('Save'))).toBe(true);
     // L9: the toast counts notes as changes, not "entries".
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ title: 'Timesheet saved', message: '1 change saved.' }));
   });
@@ -145,33 +143,33 @@ describe('old-grid note wiring (UX-3 A-T14)', () => {
 
   it('Discard reverts a note; Submit is disabled while a note is dirty', async () => {
     await render(data({ notes: { [KEY]: { body: 'Saved', revision: 1 } } }));
-    expect(button('Submit').disabled).toBe(false);
+    expect(unavailable(button('Submit'))).toBe(false);
     await act(async () => { ctx!.dispatch({ type: 'SET_NOTE', chargeCodeId: CC, dayIndex: 1, body: 'Edited' }); });
-    expect(button('Submit').disabled).toBe(true);
-    expect(button('Discard Changes').disabled).toBe(false);
-    await click(button('Discard Changes'));
+    expect(unavailable(button('Submit'))).toBe(true);
+    expect(unavailable(button('Discard changes'))).toBe(false);
+    await click(button('Discard changes'));
     expect(ctx!.state.notes[KEY]).toBe('Saved');
     expect(ctx!.dirtyNotes).toEqual([]);
-    expect(button('Submit').disabled).toBe(false);
+    expect(unavailable(button('Submit'))).toBe(false);
   });
 
   it('Next is disabled at the current period', async () => {
     await render(data({ isCurrent: true }));
-    expect((document.body.querySelector('button[aria-label="Next pay period"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(unavailable(document.body.querySelector('button[aria-label="Next period"]'))).toBe(true);
     unmount(m);
     await render(data({ isCurrent: false }));
-    expect((document.body.querySelector('button[aria-label="Next pay period"]') as HTMLButtonElement).disabled).toBe(false);
+    expect(unavailable(document.body.querySelector('button[aria-label="Next period"]'))).toBe(false);
     unmount(m);
     // A tab left open across a period boundary: the server said "current", but the period list (fetched for the new
     // today) has a newer current period — Next must not stay stuck.
     actions.getPeriodOptions.mockResolvedValue([{ start: '2026-01-01', numDays: 15, label: 'Jan 1' }, { start: '2026-01-16', numDays: 16, label: 'Jan 16' }]);
     await render(data({ isCurrent: true }));
-    expect((document.body.querySelector('button[aria-label="Next pay period"]') as HTMLButtonElement).disabled).toBe(false);
+    expect(unavailable(document.body.querySelector('button[aria-label="Next period"]'))).toBe(false);
     // L7: a later re-fetch (today rolled over) that FAILS forgets the old list's "current" and falls back to isCurrent.
     actions.getPeriodOptions.mockRejectedValue(new Error('offline'));
     await act(async () => { ctx!.dispatch({ type: 'SET_TODAY', today: '2026-01-21' as CalendarDate }); });
     await wait(20);
-    expect((document.body.querySelector('button[aria-label="Next pay period"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(unavailable(document.body.querySelector('button[aria-label="Next period"]'))).toBe(true);
   });
 
   it('a period load shows that period\'s server notes', async () => {
@@ -181,7 +179,7 @@ describe('old-grid note wiring (UX-3 A-T14)', () => {
       chargeCodes: [chargeCode({ id: CC })], periodStart: '2025-12-16' as CalendarDate, numDays: 16, entries: [{ chargeCodeId: CC, hours: Array(16).fill(0) }], revisions: {},
       notes: { [`${CC}-3`]: { body: 'December', revision: 4 } }, isCurrent: false,
     }));
-    await click(document.body.querySelector('button[aria-label="Previous pay period"]'));
+    await click(document.body.querySelector('button[aria-label="Previous period"]'));
     await wait(30);
     expect(ctx!.state.periodStart).toBe('2025-12-16');
     expect(ctx!.state.notes).toEqual({ [`${CC}-3`]: 'December' });

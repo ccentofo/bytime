@@ -45,10 +45,6 @@ export const ICON_IMPORT_ALLOWLIST = [
   'src/components/approvals/ReviewDecisionButtons.tsx',
   'src/components/auth/SignOutButton.tsx',
   'src/components/auth/WorkspaceFinder.tsx',
-  'src/components/timesheet/PayPeriodSelector.tsx',
-  'src/components/timesheet/SubmitModal.tsx',
-  'src/components/timesheet/TimesheetDashboard.tsx',
-  'src/components/timesheet/TimesheetToolbar.tsx',
 ];
 
 function sourceFiles(dir: string): string[] {
