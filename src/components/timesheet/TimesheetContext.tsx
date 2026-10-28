@@ -2,6 +2,9 @@
 
 import React, { createContext, useContext, useReducer, useCallback, useMemo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
+import { useRouter } from 'next/navigation';
+import { Button, Group, Modal, Text } from '@mantine/core';
+import { confirmLeave, registerUnsavedGuard, type LeaveChoice } from '@/lib/timesheet/unsaved-guard';
 import type { TimesheetState, TimesheetAction, TimesheetPageData, DirtyCell, SavedNote, LoadGen, TimesheetPeriodData } from '@/types/timesheet';
 import { addDays, formatCalendarDate, isBefore, type CalendarDate } from '@/lib/calendar-date';
 import { saveTimesheetBatch, getTimesheetPeriod } from '@/server/actions/timesheet';
@@ -203,6 +206,8 @@ export interface TimesheetStateValue {
   hasEdits: boolean;        // true if any dirty cell has a prior revision (isEdit=true)
   hasLateEntries: boolean;  // true if any dirty cell is a late first-time entry
   checks: SubmitChecks;
+  /** Set when a save failed because the session expired: the new-tab sign-in link (§4.4). */
+  sessionExpiredHref: string | null;
 }
 
 export interface TimesheetActionsValue {
@@ -220,6 +225,9 @@ export interface TimesheetActionsValue {
   /** Run an in-page period change (‹, ›, Choose period, Today) — behind the unsaved-changes guard (§4.9). */
   guardPeriodChange: (change: () => Promise<void>) => Promise<void>;
 }
+
+/** §4.4: what a save says when the session expired. */
+export const SESSION_EXPIRED = "Your session expired. Your changes aren't saved yet. Sign in again in a new tab, then come back and press Save.";
 
 const StateContext = createContext<TimesheetStateValue | undefined>(undefined);
 const DispatchContext = createContext<React.Dispatch<TimesheetAction> | undefined>(undefined);
@@ -252,6 +260,8 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
 function TimesheetStateProvider({ initialData, children }: ProviderProps) {
   const [state, dispatch] = useReducer(timesheetReducer, initialData, initialTimesheetState);
   const announce = useAnnounce();
+  // The grid's focusActive handle, held here for NoteModal and the guard's confirm (§4.3, §4.8, §4.9).
+  const gridRef = useRef<GridHandle | null>(null);
 
   // Re-sync on RSC navigation (§4.4, trap T-H): the page segment doesn't remount for a new ?period=, so a NEW initialData
   // object is applied during render — dispatches to this component's own reducer only (no refs, storage or effects) —
@@ -377,16 +387,24 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
   const reasonOpen = reasonGen !== null && reasonGen === state.syncGen;
   const reasonResolveRef = useRef<((ok: boolean) => void) | null>(null);
 
-  const failSave = useCallback((error: string) => {
-    announce(error, 'assertive');
-    quietToast({ title: 'Save failed', message: error, color: 'red', error: true });
+  const [sessionExpiredHref, setSessionExpiredHref] = useState<string | null>(null);
+  const failSave = useCallback((result: { code: string; error: string }) => {
+    if (result.code === 'unauthenticated') {
+      // §4.4: the edits stay dirty; sign in again in a NEW tab (the session cookie is shared), then Save works here.
+      setSessionExpiredHref(`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+      announce(SESSION_EXPIRED, 'assertive');
+      return;
+    }
+    announce(result.error, 'assertive');
+    quietToast({ title: 'Save failed', message: result.error, color: 'red', error: true });
   }, [announce]);
 
   /** One save, with the ReasonModal when hours need a reason. Resolves true on success, false on cancel or failure. */
   const saveOnce = useCallback(async (): Promise<boolean> => {
     if (!flowRef.current.needsReason) {
       const result = await saveAllRef.current();
-      if (!result.ok) { failSave(result.error); return false; }
+      if (!result.ok) { failSave(result); return false; }
+      setSessionExpiredHref(null);
       return true;
     }
     // A failed save keeps the ReasonModal open for a retry; the promise settles on success or Cancel.
@@ -398,7 +416,18 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
 
   const handleReasonConfirm = useCallback(async (reasonCode: string, comment: string) => {
     const result = await saveAllRef.current(reasonCode, comment);
-    if (!result.ok) { failSave(result.error); return; }
+    if (!result.ok) {
+      failSave(result);
+      // A failed save keeps the ReasonModal open for a retry — except when the session expired: then it closes and the
+      // save resolves false (nothing can succeed until the user signs in again).
+      if (result.code === 'unauthenticated') {
+        setReasonGen(null);
+        reasonResolveRef.current?.(false);
+        reasonResolveRef.current = null;
+      }
+      return;
+    }
+    setSessionExpiredHref(null);
     setReasonGen(null);
     reasonResolveRef.current?.(true);
     reasonResolveRef.current = null;
@@ -484,8 +513,87 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
     [state.periodStart],
   );
 
-  // In-page period changes. Step 6 puts them behind the unsaved-changes guard (confirmLeave).
-  const guardPeriodChange = useCallback(async (change: () => Promise<void>) => { await change(); }, []);
+  // ── The unsaved-changes guard (§4.9). In-page period changes wait for confirmLeave(); on cancel nothing changes (the
+  // Choose period Select is controlled, so it snaps back).
+  const guardPeriodChange = useCallback(async (change: () => Promise<void>) => {
+    if (await confirmLeave()) await change();
+  }, []);
+
+  // The confirm: open for the syncGen it was opened under (a re-sync closes it); it resolves after its exit transition
+  // so it is closed before any ReasonModal opens; on Cancel focus returns to the trigger (or the grid's active cell).
+  const [confirm, setConfirm] = useState<{ n: number; gen: number; resolve: (c: LeaveChoice) => void } | null>(null);
+  const [confirmShown, setConfirmShown] = useState(false);
+  const confirmOpen = confirm !== null && confirmShown && confirm.gen === state.syncGen;
+  const chosenRef = useRef<LeaveChoice | null>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+  const openConfirm = useCallback((n: number) => new Promise<LeaveChoice>((resolve) => {
+    triggerRef.current ??= (document.activeElement as HTMLElement | null);
+    chosenRef.current = null;
+    setConfirm({ n, gen: genRef.current.syncGen, resolve });
+    setConfirmShown(true);
+  }), []);
+  const choose = (c: LeaveChoice) => { chosenRef.current = c; setConfirmShown(false); };
+  const confirmClosed = () => {
+    if (!confirm) return;
+    const choice = chosenRef.current ?? 'cancel';
+    const trigger = triggerRef.current;
+    triggerRef.current = null;
+    if (choice === 'cancel') {
+      if (trigger?.isConnected) trigger.focus();
+      else gridRef.current?.focusActive();
+    }
+    confirm.resolve(choice);
+    setConfirm(null);
+  };
+
+  // Registered while mounted (functions read the latest state through refs updated in layout effects).
+  const guardRef = useRef({ count: unsavedCount, requestSave, discard: discardChanges, openConfirm });
+  useLayoutEffect(() => { guardRef.current = { count: unsavedCount, requestSave, discard: discardChanges, openConfirm }; });
+  useLayoutEffect(() => registerUnsavedGuard({
+    token: Symbol('timesheet'),
+    getCount: () => guardRef.current.count,
+    requestSave: () => guardRef.current.requestSave(),
+    discard: () => guardRef.current.discard(),
+    openConfirm: (n) => guardRef.current.openConfirm(n),
+  }), []);
+
+  // In-app links: ONE capture-phase listener (it runs before Link's onClick, and Link skips navigation when
+  // defaultPrevented is set). Only with unsaved changes, for a plain primary click on a same-origin link that would
+  // navigate (not a new tab, a download, an in-page #hash jump).
+  const router = useRouter();
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (guardRef.current.count === 0 || e.defaultPrevented) return;
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+      if (!a || a.hasAttribute('download')) return;
+      const target = a.getAttribute('target');
+      if (target && target !== '_self') return;
+      const raw = a.getAttribute('href') ?? '';
+      if (raw.startsWith('#')) return;
+      const url = new URL(a.href, window.location.href);
+      if (url.origin !== window.location.origin) return;
+      if (url.pathname === window.location.pathname && url.search === window.location.search && url.hash !== '') return;
+      e.preventDefault();
+      triggerRef.current = a;
+      void confirmLeave().then((ok) => {
+        if (!ok) return;
+        const dest = url.pathname + url.search + url.hash;
+        if (url.pathname.startsWith('/api/')) window.location.assign(dest);
+        else router.push(dest);
+      });
+    };
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, [router]);
+
+  // Tab close / reload: armed while COMMITTED unsaved changes exist; re-evaluated after every commit.
+  useEffect(() => {
+    if (!hasUnsaved) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = true; };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [hasUnsaved]);
 
   // URL sync (§4.10): after the committed period changes — never from a fetch continuation — and only when the URL
   // differs. replaceState doesn't re-run the server components (trap T-H); on mount it canonicalizes to the period shown.
@@ -530,12 +638,10 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
     };
   }, []);
 
-  // The grid's focusActive handle, held here for NoteModal (§4.3, §4.8).
-  const gridRef = useRef<GridHandle | null>(null);
 
   const stateValue = useMemo<TimesheetStateValue>(
-    () => ({ state, dirtyCells, dirtyNotes, hasUnsaved, unsavedCount, hasEdits, hasLateEntries, checks }),
-    [state, dirtyCells, dirtyNotes, hasUnsaved, unsavedCount, hasEdits, hasLateEntries, checks],
+    () => ({ state, dirtyCells, dirtyNotes, hasUnsaved, unsavedCount, hasEdits, hasLateEntries, checks, sessionExpiredHref }),
+    [state, dirtyCells, dirtyNotes, hasUnsaved, unsavedCount, hasEdits, hasLateEntries, checks, sessionExpiredHref],
   );
   const actionsValue = useMemo<TimesheetActionsValue>(
     () => ({ requestSave, saveAll, loadPeriod, loadPeriodByDate, discardChanges, openSubmit, submitTimesheet, guardPeriodChange }),
@@ -549,6 +655,20 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
           <GridRefContext.Provider value={gridRef}>
           {children}
           <NoteModal />
+          <Modal
+            opened={confirmOpen}
+            onClose={() => choose('cancel')}
+            title={`You have ${confirm?.n ?? 0} unsaved ${confirm?.n === 1 ? 'change' : 'changes'}`}
+            returnFocus={false}
+            onExitTransitionEnd={confirmClosed}
+          >
+            <Text size="sm" mb="lg">Save them before you leave this timesheet, or discard them.</Text>
+            <Group justify="flex-end" gap="sm">
+              <Button variant="default" onClick={() => choose('cancel')}>Cancel</Button>
+              <Button color="red" variant="light" onClick={() => choose('discard')}>Discard and continue</Button>
+              <Button onClick={() => choose('save')}>Save and continue</Button>
+            </Group>
+          </Modal>
           </GridRefContext.Provider>
           <ReasonModal
             opened={reasonOpen}

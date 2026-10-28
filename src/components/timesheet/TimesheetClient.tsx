@@ -4,7 +4,9 @@ import Link from 'next/link';
 import { Alert, Anchor, Badge, Container, Group, Stack, Text } from '@mantine/core';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
-import { TimesheetProvider, useTimesheetActions, useTimesheetState } from '@/components/timesheet/TimesheetContext';
+import { useState } from 'react';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { SESSION_EXPIRED, TimesheetProvider, useTimesheetActions, useTimesheetState } from '@/components/timesheet/TimesheetContext';
 import { TimesheetGrid } from '@/components/timesheet/TimesheetGrid';
 import { PeriodControl } from '@/components/timesheet/PeriodControl';
 import { SaveSubmitControls } from '@/components/timesheet/SaveSubmitControls';
@@ -31,11 +33,14 @@ export function TimesheetClient({ initialData }: { initialData: TimesheetPageDat
 
 /** The page body, inside a TimesheetProvider (exported for tests). */
 export function TimesheetPage() {
-  const { state } = useTimesheetState();
+  const { state, unsavedCount, sessionExpiredHref } = useTimesheetState();
   const { discardChanges, guardPeriodChange } = useTimesheetActions();
   const { periodStatus } = state;
 
+  // §4.9.5: Discard changes asks first; confirming discards (DISCARD_CHANGES in flushSync).
+  const [discardOpen, setDiscardOpen] = useState(false);
   const discard = () => {
+    setDiscardOpen(false);
     discardChanges();
     quietToast({ title: 'Changes discarded', message: 'Your unsaved changes were reverted.', color: 'gray' });
   };
@@ -50,14 +55,21 @@ export function TimesheetPage() {
             <Badge variant="light" size="lg" color={PERIOD_STATUS_COLOR[periodStatus]}>{STATUS_WORD[periodStatus]}</Badge>
             {/* certified-outputs C2 (CO-D6): a self-approval is visibly labelled wherever the timesheet appears. */}
             {state.approvalBadge && <Badge variant="outline" color="gray" size="lg">{state.approvalBadge}</Badge>}
-            <SaveSubmitControls onDiscard={discard} />
+            <SaveSubmitControls onDiscard={() => setDiscardOpen(true)} />
           </Group>
         )}
       />
       <Stack gap="sm">
+        {sessionExpiredHref && (
+          // Visual only (role="note"): the announcer already spoke the message assertively (§4.5).
+          <Alert role="note" color="red" variant="light" icon={<Icons.statusError size={ICON_SIZE.button} />} data-testid="session-expired">
+            <Text size="sm">{SESSION_EXPIRED}</Text>
+            <Anchor href={sessionExpiredHref} target="_blank" rel="noopener" size="sm" fw={600}>Sign in (new tab)</Anchor>
+          </Alert>
+        )}
         <StatusLine />
         {periodStatus === 'rejected' && (
-          <Alert color="warning" variant="light" icon={<Icons.statusWarning size={ICON_SIZE.button} />} title="Returned for corrections" data-testid="returned-banner">
+          <Alert role="note" color="warning" variant="light" icon={<Icons.statusWarning size={ICON_SIZE.button} />} title="Returned for corrections" data-testid="returned-banner">
             {state.reviewComment && <Text size="sm">&ldquo;{state.reviewComment}&rdquo;</Text>}
           </Alert>
         )}
@@ -65,6 +77,14 @@ export function TimesheetPage() {
         <TimesheetGrid />
         <Anchor component={Link} href="/timesheet/history" size="sm">Past timesheets</Anchor>
       </Stack>
+      <ConfirmModal
+        opened={discardOpen}
+        title={`Discard ${unsavedCount} unsaved ${unsavedCount === 1 ? 'change' : 'changes'}?`}
+        message="Your unsaved hours and notes on this timesheet will be reverted to what was last saved."
+        confirmLabel="Discard changes"
+        onConfirm={discard}
+        onCancel={() => setDiscardOpen(false)}
+      />
     </Container>
   );
 }

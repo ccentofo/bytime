@@ -24,7 +24,7 @@ export function WeeklyNotice() {
   });
   if (lines.length === 0) return null;
   return (
-    <Alert color="signal" variant="light" icon={<Icons.statusInfo size={ICON_SIZE.button} />} data-testid="weekly-notice">
+    <Alert role="note" color="signal" variant="light" icon={<Icons.statusInfo size={ICON_SIZE.button} />} data-testid="weekly-notice">
       <Stack gap={2}>{lines.map((l) => <Text key={l} size="sm">{l}</Text>)}</Stack>
     </Alert>
   );

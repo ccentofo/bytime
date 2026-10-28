@@ -1,5 +1,6 @@
 import { signOut } from 'next-auth/react';
 import { clearDesigneeNoticeDismissals } from '@/components/approvals/ApprovalNotices';
+import { confirmLeave } from '@/lib/timesheet/unsaved-guard';
 
 /**
  * Sign out and land on THIS workspace's /login. `signOut({ callbackUrl: '/login' })` let Auth.js resolve '/login'
@@ -7,6 +8,8 @@ import { clearDesigneeNoticeDismissals } from '@/components/approvals/ApprovalNo
  * Auth.js only clears the session here and the browser navigates to a RELATIVE path, which stays on the current host.
  */
 export async function signOutToLogin(): Promise<void> {
+  // feature-plan-ux-timesheet-ui.md §4.9: unsaved timesheet changes are only discarded by the user's choice.
+  if (!(await confirmLeave())) return;
   clearDesigneeNoticeDismissals();
   await signOut({ redirect: false });
   window.location.assign('/login');

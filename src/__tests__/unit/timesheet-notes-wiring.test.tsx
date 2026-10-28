@@ -148,6 +148,10 @@ describe('note wiring on the timesheet page (UX-3 A-T14, ported to Part B)', () 
     expect(unavailable(button('Submit'))).toBe(true);
     expect(unavailable(button('Discard changes'))).toBe(false);
     await click(button('Discard changes'));
+    // §4.9.5: Discard asks first.
+    const dialogDiscard = [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent?.trim() === 'Discard changes') as HTMLButtonElement;
+    await click(dialogDiscard);
+    await wait(20);
     expect(ctx!.state.notes[KEY]).toBe('Saved');
     expect(ctx!.dirtyNotes).toEqual([]);
     expect(unavailable(button('Submit'))).toBe(false);

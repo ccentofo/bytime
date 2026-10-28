@@ -78,7 +78,7 @@ describe('initialization and the page context (B-T6, T-O)', () => {
 // Jan 1–15, 2026 (Thu–Thu). Submit opens Thu Jan 15.
 const page = (o: Partial<TimesheetPeriodData> = {}, ctx: Partial<{ flsaExempt: boolean; readOnly: boolean }> = {}) =>
   pageData({ chargeCodes: [chargeCode()], entries: [{ chargeCodeId: CC, hours: [8, 8, 0, 0, 8, 8, 8, ...Array(8).fill(0)] }], revisions: { [`${CC}-0`]: 1 }, ...o }, ctx);
-const btn = (label: string) => [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === label) as HTMLButtonElement;
+const btn = (label: string) => [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === label && !b.closest('[role="dialog"]')) as HTMLButtonElement;
 const statusLine = () => document.querySelector('[data-testid="status-line"]')!.textContent;
 const submitWhy = () => { const id = btn('Submit').getAttribute('aria-describedby'); return id ? document.getElementById(id)?.textContent ?? null : null; };
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 20)); });
@@ -205,7 +205,10 @@ describe('page layout (B-T6)', () => {
 
     act(() => live.ctx!.dispatch({ type: 'SET_HOURS', chargeCodeId: CC, dayIndex: 13, value: 2 }));
     await user.click(btn('Discard changes'));
+    // §4.9.5: Discard asks first; after confirming, focus is back on Discard changes (now aria-disabled).
+    await user.click([...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent?.trim() === 'Discard changes')!);
     await settle();
+    expect(live.ctx!.hasUnsaved).toBe(false);
     expect(document.activeElement).toBe(btn('Discard changes'));
     expect(btn('Discard changes').getAttribute('aria-disabled')).toBe('true');
     expect(btn('Discard changes').hasAttribute('disabled')).toBe(false);

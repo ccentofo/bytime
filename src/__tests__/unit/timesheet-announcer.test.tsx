@@ -125,4 +125,13 @@ describe('announcer (B-T14)', () => {
     expect(line.tagName).toBe('P');
     expect(line.closest('[aria-live], [role="status"], [role="alert"]')).toBeNull();
   });
+
+  it('on the full page — with the returned banner and the weekly notice showing — the announcer\'s two regions are still the only live regions', async () => {
+    renderTimesheet(pageData({ periodStatus: 'rejected', reviewComment: 'Fix Tuesday', chargeCodes: [chargeCode()], entries: [{ chargeCodeId: CC, hours: [0, 0, 0, 0, 8, 8, 8, 8, 0, ...Array(6).fill(0)] }], workweekStartDay: 1, today: '2026-01-20' as CalendarDate }, { flsaExempt: true }), <TimesheetPage />);
+    expect(document.querySelector('[data-testid="returned-banner"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="weekly-notice"]')).not.toBeNull();
+    const live = [...document.querySelectorAll('[aria-live], [role="status"], [role="alert"], [role="log"]')];
+    expect(live).toEqual([polite(), assertive()]);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  });
 });
