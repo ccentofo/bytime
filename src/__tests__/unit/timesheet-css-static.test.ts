@@ -66,6 +66,13 @@ describe('timesheet reflow and text size (B-T13)', () => {
     expect(ruleOf(sheet, '.page')).toMatch(/--ts-chrome: 15rem;/);
   });
 
+  it('M3: no `-filled` color as TEXT color (it fails 4.5:1 in dark mode); the closed note and grand total use light-dark pairs', () => {
+    const sheet = css();
+    expect(sheet).not.toMatch(/(?<![-\w])color:\s*var\(--mantine-color-[\w-]+-filled\)/);
+    expect(ruleOf(sheet, '.closedNote')).toContain('color: light-dark(var(--mantine-color-warning-8), var(--mantine-color-warning-4));');
+    expect(ruleOf(sheet, '.grand')).toContain('color: light-dark(var(--mantine-color-signal-7), var(--mantine-color-signal-4));');
+  });
+
   it('no overflow: hidden on the grid, its cells or the scroller', () => {
     const sheet = css();
     for (const sel of ['.scroller', '.grid', '.cell', '.day', '.rowHeader', '.gridArea', '.colHead', '.dayHeader']) {

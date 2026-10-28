@@ -154,7 +154,8 @@
 
 .closedNote {
   display: block;
-  color: var(--mantine-color-warning-filled);
+  /* UX-TIMESHEET-B-AUDIT M3: warning-filled was 3.51:1 on the dark background; the indicator pair passes in both. */
+  color: light-dark(var(--mantine-color-warning-8), var(--mantine-color-warning-4));
   font-weight: 600;
 }
 
@@ -206,7 +207,8 @@
 }
 
 .grand {
-  color: var(--mantine-color-signal-filled);
+  /* M3: signal-filled was 3.03:1 in dark mode. */
+  color: light-dark(var(--mantine-color-signal-7), var(--mantine-color-signal-4));
   font-weight: 800;
 }
 
