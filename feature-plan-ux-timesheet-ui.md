@@ -17,6 +17,7 @@
 >
 > **Status:** v5.2 FINAL, 2026-10-28, lead architect. Self-contained. Pre-mortem history is in §13.
 > - v5.1 changed only the NoteModal button wording (§4.8).
+> - **v5.3 (§15) fixes two things the browser check found:** the compiled CSS dropped every `light-dark()` color, and the page and grid double-scroll. §15 overrides §14.1's token syntax and §4.7's scroller height.
 > - **v5.2 is the visual revision in §14.** It supersedes the grid's look, the note button, the day meters and the weekly notice's styling, wherever §4.1, §4.2, §4.6 and §4.8 say otherwise. Approved mockup: `ux-mockups/timesheet-grid-v2.html`.
 >
 > **Branch:** `ux-timesheet-ui`, cut from `main` after Part A merges.
@@ -1012,3 +1013,103 @@ In light and dark, at 1280 px and at 400 % zoom (week view):
 - no meters, no "Add note" button;
 - the overtime notice is one slim line;
 - the result looks like `ux-mockups/timesheet-grid-v2.html`.
+
+
+## 15. v5.3: compiled-CSS colours and one scroll container (2026-10-28)
+
+**Found in the product owner's browser pass of v5.2:**
+- no row or column lines;
+- no weekend tint, group band, chip background or notice border;
+- "Today" not blue;
+- the page and the grid both scroll.
+
+### 15.1 Root cause: `light-dark()` in `.css` files never works in this build
+- **What happens:** Turbopack's Lightning CSS compiles `light-dark(A, B)` to `var(--lightningcss-light, A) var(--lightningcss-dark, B)`. It defines those two variables only where it compiles a `color-scheme` declaration. Mantine sets the scheme with the `data-mantine-color-scheme` attribute, so the variables are never defined. The value becomes `A B` (two colours), which is invalid, and the browser drops the whole declaration.
+- **Verified** in `.next/dev/static/chunks/src_components_timesheet_Timesheet_module_*.css`.
+- **Not affected:** `light-dark()` in inline styles and Mantine style props (`theme.ts` `INDICATOR_COLOR`, `AuditTrailClient.tsx`) never passes through Lightning CSS, so it works natively.
+- **Also broken on `main`:**
+  - `globals.css:35`: UX-1's dark-mode input focus ring (a 508 contrast fix that has never been active);
+  - `RowActions.module.css:5`: the danger hover;
+  - `Home.module.css:15,23,30`.
+
+**Fix, deterministic and not tied to Lightning CSS internals:** no `light-dark()` in any `src/**/*.css`. Use explicit scheme selectors.
+- **Tokens:** define the light value on the class, and the dark value in an override rule placed after it:
+  ```css
+  .page {
+    --line: var(--mantine-color-ink-2);
+    --line-strong: var(--mantine-color-ink-3);
+    --weekend: var(--mantine-color-gray-0);
+    --hover-tint: var(--mantine-color-signal-0);
+    --group: var(--mantine-color-gray-1);
+    --chip: var(--mantine-color-gray-1);
+    --accent-text: var(--mantine-color-signal-7);
+    --warn-text: var(--mantine-color-warning-8);
+    --unsaved-bg: var(--mantine-color-warning-0);
+    --notice-bg: var(--mantine-color-gray-0);
+    --today-tint: color-mix(in srgb, var(--mantine-color-signal-6) 9%, transparent);
+  }
+  :global([data-mantine-color-scheme='dark']) .page {
+    --line: var(--mantine-color-dark-5);
+    --line-strong: var(--mantine-color-dark-4);
+    --weekend: color-mix(in srgb, var(--mantine-color-body) 85%, black);
+    --hover-tint: color-mix(in srgb, var(--mantine-color-signal-6) 18%, transparent);
+    --group: color-mix(in srgb, var(--mantine-color-body) 92%, white);
+    --chip: var(--mantine-color-dark-5);
+    --accent-text: var(--mantine-color-signal-4);
+    --warn-text: var(--mantine-color-warning-4);
+    --unsaved-bg: var(--mantine-color-dark-6);
+    --notice-bg: color-mix(in srgb, var(--mantine-color-body) 92%, white);
+  }
+  ```
+  Every former `light-dark()` in `Timesheet.module.css` uses one of these tokens. That covers the focus ring, the today header text, the trigger with a note, the closed note, the unsaved dash, the grand total, the chip and the notice. The values are the same as §14 and audit M3, only spelled differently.
+- **`globals.css:35`:** move the dark value into the existing `:root[data-mantine-color-scheme='dark'] …` rule; the light value goes in the plain rule.
+- **`RowActions.module.css`, `Home.module.css`:** the same pattern (light on the class; `:global([data-mantine-color-scheme='dark']) .cls` for dark).
+
+**Guards:**
+- **Static unit test** `unit/css-no-light-dark.test.ts`: no `light-dark(` in any `src/**/*.css`. Inline TS/TSX usage is allowed.
+- **Build-output check** `scripts/check-css-output.mjs`: after `npm run build`, scan `.next/static/**/*.css` and fail if any contains `--lightningcss-`. Print the file. Add it to the product owner's verification right after the build-trace check.
+- **Lesson for visual checks:** compare against the **compiled** CSS (a real `next dev` or `next build`). A static render with raw CSS hides compiler transforms.
+
+### 15.2 One scroll container: the page doesn't scroll, the grid fills the rest
+**Problem:** the scroller's `max(18rem, calc(100dvh - var(--ts-chrome)))` with `--ts-chrome: 15rem` is shorter than the real chrome: the app header, padding, page header, status line, notice and hint, about 22–24rem. The page scrolls too, giving two nested scrollbars and wheel scrolling that switches between them.
+
+**Fix (wide and tall viewports):**
+```css
+.page {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  block-size: calc(100dvh - var(--app-shell-header-offset, 0rem) - 2 * var(--app-shell-padding, 0rem));
+  min-block-size: 0;
+}
+.page > * { flex: 0 0 auto; }
+.page > .gridSlot { flex: 1 1 auto; min-block-size: 0; display: flex; flex-direction: column; }
+.gridArea { flex: 1 1 auto; min-block-size: 0; }
+.scroller { flex: 1 1 auto; min-block-size: 18rem; max-height: none; }
+```
+- **`gridSlot`** is a wrapper `div` in `TimesheetClient` around `<TimesheetGrid/>`. The "Past timesheets" link moves into the header area (next to the status line). That way only the grid flexes, and nothing sits below the scroller.
+- **Delete `--ts-chrome`.**
+- **Result:** at desktop sizes the page itself never scrolls. The grid fills the remaining height, scrolls in both directions, and keeps the sticky header and row header (T-G).
+- **Short or narrow viewports** (the existing `@media (max-height: 40em), (max-width: 40em)` block): `.page { block-size: auto; }` and `.scroller { flex: none; min-block-size: 0; max-height: none; }`. The page scrolls normally and stickiness is lifted, as now (§4.7, 400 % zoom).
+- **If a shell banner** (demo or read-only) adds height above the page, the page may scroll by that amount. That's acceptable; don't measure it.
+
+### 15.3 Tests
+- `css-no-light-dark` (above). Reverting one `light-dark(` must fail it.
+- **B-T13 updates:**
+  - `.page` has the dark override block defining every token used;
+  - no `--ts-chrome`;
+  - `.scroller` has `flex: 1 1 auto` and no `calc(100dvh` max-height;
+  - the narrow/short media block resets `.page` `block-size: auto`.
+- **B-T6:** the "Past timesheets" link is in the header area. The grid's wrapper has the `gridSlot` class and is the page's last child.
+
+### 15.4 Product owner verification (adds to §14.7)
+- `npm run build && node scripts/check-build-trace.mjs && node scripts/check-css-output.mjs` → all pass.
+- **Dark and light at 1280 px:**
+  - lines, weekend tint, section band and chip backgrounds all visible;
+  - "Today" is blue;
+  - only one scrollbar (the grid's); the page doesn't move when you scroll the grid;
+  - the column header and row names stay pinned while scrolling.
+- **Elsewhere:**
+  - Home looks as designed in dark mode;
+  - a red row-action menu item shows its hover;
+  - the input focus ring in dark mode is light blue (UX-1 fix now active).
