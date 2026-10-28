@@ -23,7 +23,7 @@ import { newCellRefusal } from '@/lib/timesheet/cell-rules';
 import { SESSION_USER_CHANGED } from '@/lib/timesheet/copy';
 import { CHARGEABLE_CODE } from '@/server/internal/chargeable';
 import { dayTotalRefusal, latestDayTotals } from '@/server/internal/day-totals';
-import { pastPeriods, PAST_PERIODS_PAGE_SIZE, type PastPeriodRow } from '@/server/internal/past-periods';
+import { pastPeriods, PAST_PERIODS_PAGE_SIZE, type PastPeriodsPage } from '@/server/internal/past-periods';
 import { resolveRequestedPeriod, selectedPeriodFacts } from '@/server/internal/timesheet-period';
 import { latestNotesInPeriod, NOTE_CONFLICT, notedCodes, notesMap, validateNotes, writeNotes, type LatestNote, type NoteInput } from '@/server/internal/timesheet-notes';
 import { userAction, type ActionResult } from '@/lib/action-result';
@@ -448,7 +448,7 @@ export async function saveTimesheetBatch(data: {
  * The session user's past timesheets, a page at a time (feature-plan-ux-timesheet.md A4.7). Own data only: the user
  * comes from the session, never the input. `page` is a whole number ≥ 0; anything else is page 0.
  */
-export async function getPastTimesheets(input?: { page?: unknown }): Promise<{ rows: PastPeriodRow[]; page: number; hasMore: boolean }> {
+export async function getPastTimesheets(input?: { page?: unknown }): Promise<PastPeriodsPage> {
   const actor = await requireSession();
   const raw = input?.page;
   const page = typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 ? raw : 0;

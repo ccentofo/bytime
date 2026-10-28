@@ -76,6 +76,7 @@ describe('Approvals drawer notes (B-T12)', () => {
     const list = document.body.querySelector('[data-testid="review-notes"]')!;
     expect(list.getAttribute('aria-labelledby')).toBe('review-notes-heading');
     expect(document.getElementById('review-notes-heading')!.textContent).toBe('Notes');
+    expect(document.getElementById('review-notes-heading')!.tagName).toBe('H3');     // L14: a real heading
     expect([...list.querySelectorAll('li')].map((li) => li.textContent)).toEqual([
       'Thu, Oct 1 · 0001 Systems engineering · Kickoff',
       'Thu, Oct 1 · OH Overhead · Training day',

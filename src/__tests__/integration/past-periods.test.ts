@@ -61,8 +61,9 @@ describe('past periods (UX-3 A-T9)', () => {
   it('starts at the creation day when nothing is older: current first, newest to oldest', async () => {
     const r = await list();
     expect(r.rows.map((x) => [x.start, x.isCurrent])).toEqual([['2026-10-16', true], ['2026-10-01', false], ['2026-09-16', false], ['2026-09-01', false]]);
-    expect(r).toMatchObject({ page: 0, hasMore: false });
-    expect(r.rows[0]).toMatchObject({ label: 'Oct 16 – Oct 31, 2026', numDays: 16, status: 'notSubmitted', hours: 0 });
+    expect(r).toMatchObject({ page: 0, hasMore: false, currentStart: '2026-10-16' });
+    // UX-TIMESHEET-B-AUDIT L15: the timesheet's own label format.
+    expect(r.rows[0]).toMatchObject({ label: 'Oct 16 – 31, 2026', numDays: 16, status: 'notSubmitted', hours: 0 });
   });
 
   it('imported entries before creation, with no period row, extend the list back to their period', async () => {
@@ -101,7 +102,7 @@ describe('past periods (UX-3 A-T9)', () => {
     expect(first.rows[0].isCurrent).toBe(true);
     const second = await list(emp.id, 1);
     expect(second.rows).toHaveLength(18);
-    expect(second).toMatchObject({ page: 1, hasMore: false });
+    expect(second).toMatchObject({ page: 1, hasMore: false, currentStart: '2026-10-16' }); // L12: every page says which is current
     expect(second.rows.at(-1)!.start).toBe('2025-01-01');
     expect(new Set([...first.rows, ...second.rows].map((x) => x.start)).size).toBe(44);
   });

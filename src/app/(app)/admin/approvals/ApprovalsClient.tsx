@@ -402,7 +402,8 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         </Table.ScrollContainer>
         {noteLines.length > 0 && (
           <>
-            <Text fw={600} size="sm" id="review-notes-heading">Notes</Text>
+            {/* A real heading (L14), with the look of the drawer's other labels. */}
+            <Text component="h3" fw={600} size="sm" m={0} id="review-notes-heading">Notes</Text>
             <List size="sm" spacing={4} aria-labelledby="review-notes-heading" data-testid="review-notes">
               {noteLines.map((n) => <List.Item key={n.key}>{n.text}</List.Item>)}
             </List>

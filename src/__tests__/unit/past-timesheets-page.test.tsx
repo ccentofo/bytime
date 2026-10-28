@@ -8,8 +8,9 @@ import type { ReactElement } from 'react';
 /**
  * feature-plan-ux-timesheet-ui.md B-T11 (§4.11): the server page fetches page 0 and passes it with the workspace
  * timezone; one row per period with its status word, `approvalBadge` as given, hours, deterministic dates and the comment
- * preview; Period links (the current period → /timesheet, "(current)"); no pagination, search or sort UI; Load more
- * appends the next page de-duplicated by start; the empty state; axe; the employee nav entry and its activeHref.
+ * preview; Period links (every row → /timesheet?period={start}; "(current)" from the latest response — L12); no
+ * pagination, search or sort UI; Load more appends the next page de-duplicated by start (and refreshes page 0 when a new
+ * period started — L12; focus — L11); the table's label (L14); the empty state; axe; the employee nav entry.
  */
 
 const h = vi.hoisted(() => ({ session: { user: { id: 'u1', email: 'u1@x' } } as unknown, getPastTimesheets: vi.fn(), tz: 'America/Los_Angeles' }));
@@ -44,7 +45,8 @@ const ROWS = [
   row('2025-12-16', { label: 'Dec 16 – Dec 31, 2025', status: 'rejected', hours: 7.25, submittedAt: new Date('2026-01-01T12:00:00Z'), reviewedAt: new Date('2026-01-01T13:00:00Z'), reviewComment: 'Please fix Dec 24.' }),
   row('2025-12-01', { label: 'Dec 1 – Dec 15, 2025', status: 'submitted', hours: 40, submittedAt: new Date('2025-12-16T12:00:00Z') }),
 ];
-const mountClient = (rows = ROWS, hasMore = false, tz = 'America/Los_Angeles') => render(withTheme(<PastTimesheetsClient initial={{ rows, page: 0, hasMore }} timeZone={tz} />));
+const CURRENT = '2026-01-16' as CalendarDate;
+const mountClient = (rows = ROWS, hasMore = false, tz = 'America/Los_Angeles') => render(withTheme(<PastTimesheetsClient initial={{ rows, page: 0, hasMore, currentStart: CURRENT }} timeZone={tz} />));
 const bodyRows = () => [...document.querySelectorAll('tbody tr')];
 const cells = (tr: Element) => [...tr.querySelectorAll('td')].map((td) => td.textContent?.trim());
 const periodLinks = () => [...document.querySelectorAll('tbody a')] as HTMLAnchorElement[];
@@ -52,7 +54,7 @@ const button = (label: string) => [...document.querySelectorAll('button')].find(
 
 describe('the server page (B-T11)', () => {
   it('fetches page 0 and passes it with the workspace timezone; titled "Past timesheets"', async () => {
-    const first = { rows: ROWS, page: 0, hasMore: true };
+    const first = { rows: ROWS, page: 0, hasMore: true, currentStart: CURRENT };
     h.getPastTimesheets.mockResolvedValue(first);
     const el = (await PastTimesheetsPage()) as ReactElement<{ initial: unknown; timeZone: string }>;
     expect(h.getPastTimesheets).toHaveBeenCalledWith({ page: 0 });
@@ -89,9 +91,14 @@ describe('the list (B-T11)', () => {
     expect(cells(bodyRows()[1]).slice(3, 5)).toEqual(['Jan 2, 2026', 'Jan 3, 2026']);
   });
 
-  it('Period links carry the period; the current period links to /timesheet', () => {
+  it('every Period link carries its period — the current one too (L12)', () => {
     mountClient();
-    expect(periodLinks().map((a) => a.getAttribute('href'))).toEqual(['/timesheet', '/timesheet?period=2026-01-01', '/timesheet?period=2025-12-16', '/timesheet?period=2025-12-01']);
+    expect(periodLinks().map((a) => a.getAttribute('href'))).toEqual(['/timesheet?period=2026-01-16', '/timesheet?period=2026-01-01', '/timesheet?period=2025-12-16', '/timesheet?period=2025-12-01']);
+  });
+
+  it('the table is labelled "Past timesheets" (L14)', () => {
+    mountClient();
+    expect(document.querySelector('table')!.getAttribute('aria-label')).toBe('Past timesheets');
   });
 
   it('no pagination, search or sort UI', () => {
@@ -103,7 +110,7 @@ describe('the list (B-T11)', () => {
   });
 
   it('Load more appends the next page, de-duplicated by start; the button goes away on the last page (focus → the first new row)', async () => {
-    h.getPastTimesheets.mockResolvedValue({ page: 1, hasMore: false, rows: [row('2025-12-01', { label: 'DUPLICATE' }), row('2025-11-16', { label: 'Nov 16 – Nov 30, 2025' }), row('2025-11-01', { label: 'Nov 1 – Nov 15, 2025' })] });
+    h.getPastTimesheets.mockResolvedValue({ page: 1, hasMore: false, currentStart: CURRENT, rows: [row('2025-12-01', { label: 'DUPLICATE' }), row('2025-11-16', { label: 'Nov 16 – Nov 30, 2025' }), row('2025-11-01', { label: 'Nov 1 – Nov 15, 2025' })] });
     const user = userEvent.setup();
     mountClient(ROWS, true);
     const more = button('Load more')!;
@@ -114,6 +121,41 @@ describe('the list (B-T11)', () => {
     expect(periodLinks().map((a) => a.textContent)).toEqual(['Jan 16 – Jan 31, 2026 (current)', 'Jan 1 – Jan 15, 2026', 'Dec 16 – Dec 31, 2025', 'Dec 1 – Dec 15, 2025', 'Nov 16 – Nov 30, 2025', 'Nov 1 – Nov 15, 2025']);
     expect(button('Load more')).toBeUndefined();
     expect(document.activeElement?.textContent).toBe('Nov 16 – Nov 30, 2025');
+  });
+
+  it('L11: a last page that brings no new rows moves focus to the last row\'s link (not the page body)', async () => {
+    h.getPastTimesheets.mockResolvedValue({ page: 1, hasMore: false, currentStart: CURRENT, rows: [row('2025-12-01', { label: 'DUPLICATE' })] });
+    const user = userEvent.setup();
+    mountClient(ROWS, true);
+    await user.click(button('Load more')!);
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(periodLinks()).toHaveLength(4);
+    expect(button('Load more')).toBeUndefined();
+    expect(document.activeElement?.textContent).toBe('Dec 1 – Dec 15, 2025');
+  });
+
+  it('L12: when a new period started since page 0, Load more refreshes page 0 — the new current row on top, "(current)" moves', async () => {
+    const NEW = '2026-02-01' as CalendarDate;
+    h.getPastTimesheets.mockImplementation(async ({ page }: { page: number }) => (page === 0
+      ? { page: 0, hasMore: true, currentStart: NEW, rows: [row(NEW, { label: 'Feb 1 – 15, 2026', isCurrent: true }), row('2026-01-16', { label: 'Jan 16 – 31, 2026', status: 'submitted', hours: 80 }), ...ROWS.slice(1)] }
+      : { page: 1, hasMore: false, currentStart: NEW, rows: [row('2025-12-01', { label: 'DUPLICATE' }), row('2025-11-16', { label: 'Nov 16 – Nov 30, 2025' })] }));
+    const user = userEvent.setup();
+    mountClient(ROWS, true);
+    await user.click(button('Load more')!);
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(h.getPastTimesheets.mock.calls.map((c) => c[0])).toEqual([{ page: 1 }, { page: 0 }]);
+    expect(periodLinks().map((a) => a.textContent)).toEqual(['Feb 1 – 15, 2026 (current)', 'Jan 16 – 31, 2026', 'Jan 1 – Jan 15, 2026', 'Dec 16 – Dec 31, 2025', 'Dec 1 – Dec 15, 2025', 'Nov 16 – Nov 30, 2025']);
+    expect(cells(bodyRows()[1])[1]).toBe('Submitted');                // page 0's latest data for the old current row
+  });
+
+  it('Load more with the current period unchanged makes one request', async () => {
+    h.getPastTimesheets.mockResolvedValue({ page: 1, hasMore: true, currentStart: CURRENT, rows: [row('2025-11-16', { label: 'Nov 16 – Nov 30, 2025' })] });
+    const user = userEvent.setup();
+    mountClient(ROWS, true);
+    await user.click(button('Load more')!);
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(h.getPastTimesheets).toHaveBeenCalledTimes(1);
+    expect(periodLinks()[0].textContent).toBe('Jan 16 – Jan 31, 2026 (current)');
   });
 
   it('while loading, Load more is aria-disabled (never disabled) and a second click doesn\'t fetch again', async () => {
@@ -127,7 +169,7 @@ describe('the list (B-T11)', () => {
     expect(loading.hasAttribute('disabled')).toBe(false);
     await user.click(loading);
     expect(h.getPastTimesheets).toHaveBeenCalledTimes(1);
-    await act(async () => { release({ rows: [], page: 1, hasMore: true }); });
+    await act(async () => { release({ rows: [], page: 1, hasMore: true, currentStart: CURRENT }); });
     expect(button('Load more')).toBeDefined();
   });
 
