@@ -8,7 +8,6 @@ import { saveTimesheetBatch, getTimesheetPeriod } from '@/server/actions/timeshe
 import { submitPeriod, getWorkspaceContext } from '@/server/actions/periods';
 import { runAction, type RunResult } from '@/lib/run-action';
 import { getNeighborPeriod } from '@/server/actions/pay-period-config';
-import { seedOfflineStore } from '@/lib/offline/offline-store';
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -325,20 +324,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
         const period = await getTimesheetPeriod(await resolveStart());
         if (seq !== loadSeq.current) return;
 
-        // Fire-and-forget offline seeding — wrapped in try/catch to prevent IndexedDB errors from crashing the app
-        try {
-          seedOfflineStore({
-            userId: state.userId,
-            periodStart: period.periodStart,
-            chargeCodes: period.chargeCodes, // F8: THIS period's list, not the one being left
-            entries: period.entries,
-            revisions: period.revisions,
-            periodStatus: period.periodStatus,
-          });
-        } catch {
-          // IndexedDB unavailable or corrupted — app continues without offline support
-        }
-
+        // F8: SET_PERIOD_DATA replaces the code list with THIS period's (never the one being left).
         dispatch({ type: 'SET_PERIOD_DATA', ...period });
       } catch (error) {
         if (seq !== loadSeq.current) return;
@@ -352,7 +338,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
         });
       }
     },
-    [state.userId]
+    []
   );
 
   const loadPeriod = useCallback(

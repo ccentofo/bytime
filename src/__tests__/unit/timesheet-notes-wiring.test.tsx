@@ -23,7 +23,6 @@ vi.mock('@/server/actions/periods', () => ({
   getPeriodOptions: vi.fn(async () => []),
 }));
 vi.mock('@/server/actions/pay-period-config', () => ({ getNeighborPeriod: actions.getNeighborPeriod }));
-vi.mock('@/lib/offline/offline-store', () => ({ seedOfflineStore: vi.fn() }));
 vi.mock('@/components/timesheet/ReasonModal', () => ({ ReasonModal: ({ opened }: { opened: boolean }) => (opened ? <div>REASON_MODAL_OPEN</div> : null) }));
 vi.mock('@/components/timesheet/SubmitModal', () => ({ SubmitModal: () => null }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));

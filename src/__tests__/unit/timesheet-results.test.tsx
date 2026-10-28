@@ -19,7 +19,6 @@ vi.mock('@/server/actions/periods', () => ({
   getWorkspaceContext: vi.fn(async () => ({ today: '2026-01-20', timezone: 'America/New_York' })),
 }));
 vi.mock('@/server/actions/pay-period-config', () => ({ getNeighborPeriod: vi.fn() }));
-vi.mock('@/lib/offline/offline-store', () => ({ seedOfflineStore: vi.fn() }));
 // The modals are UI plumbing here: render them as plain buttons that call onConfirm.
 vi.mock('@/components/timesheet/SubmitModal', () => ({
   SubmitModal: ({ onConfirm }: { onConfirm: (c?: string) => void }) => <button onClick={() => onConfirm('done')}>MOCK_CONFIRM_SUBMIT</button>,

@@ -6,7 +6,7 @@ import path from 'path';
  * feature-plan-certified-outputs.md C4 / §9 rows "Grid assignable", "Corrections (CO-D8)", "Grid/review", "Leave
  * pre-set" (0-hour correction on a deactivated code): the one cell rule (UI + server), saveTimesheetBatch's per-cell
  * decisions inside its transaction (new cell → full assignable rule, rulings Q1/Q4; prior revision → correctable; a
- * legacy CLIN correction keeps its prior SLIN), the save mapping by kind, and the offline queue mapping.
+ * legacy CLIN correction keeps its prior SLIN), and the save mapping by kind.
  */
 
 const h = vi.hoisted(() => ({ locked: false, lockDates: [] as string[] }));
@@ -43,7 +43,6 @@ import type { FakeControlDb } from '../helpers/fake-control-db';
 import { saveTimesheetBatch } from '@/server/actions/timesheet';
 import { isCellEditable, newCellRefusal } from '@/lib/timesheet/cell-rules';
 import { cellRefForKind, timesheetReducer } from '@/components/timesheet/TimesheetContext';
-import { queueItemCellRef } from '@/lib/offline/sync-service';
 
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
 const ROOT = path.resolve(__dirname, '../../..');
@@ -207,18 +206,11 @@ describe('F8 — navigation replaces the code list', () => {
   });
 });
 
-describe('save mapping by kind (client and offline queue)', () => {
+describe('save mapping by kind', () => {
   it('charge → chargeCodeId, clin → clinId, indirect → indirectCodeId', () => {
     expect(cellRefForKind('charge', 'x')).toEqual({ chargeCodeId: 'x' });
     expect(cellRefForKind('clin', 'x')).toEqual({ clinId: 'x' });
     expect(cellRefForKind('indirect', 'x')).toEqual({ indirectCodeId: 'x' });
-  });
-
-  it('offline queue items map by kind; items queued before C4 (no kind) are treated as charge', () => {
-    expect(queueItemCellRef({ clinId: 'cc', kind: 'charge' })).toEqual({ chargeCodeId: 'cc' });
-    expect(queueItemCellRef({ clinId: 'clin', kind: 'clin' })).toEqual({ clinId: 'clin' });
-    expect(queueItemCellRef({ indirectCodeId: 'ind' })).toEqual({ indirectCodeId: 'ind' });
-    expect(queueItemCellRef({ clinId: 'cc' })).toEqual({ chargeCodeId: 'cc' });
   });
 
   it('wiring (static): the grid uses the rule, the label, the per-period code list; the save maps by kind', () => {
@@ -228,8 +220,6 @@ describe('save mapping by kind (client and offline queue)', () => {
       .toContain('Closed to new hours — you can correct existing hours');
     const ctx = readFileSync(path.join(ROOT, 'src/components/timesheet/TimesheetContext.tsx'), 'utf8');
     expect(ctx).toMatch(/chargeCodes: action\.chargeCodes,/);
-    // F8: offline seeding uses the NEW period's list.
-    expect(ctx).toMatch(/seedOfflineStore\(\{[\s\S]*?chargeCodes: period\.chargeCodes,/);
     expect(ctx).not.toMatch(/chargeCodes: state\.chargeCodes/);
     expect(ctx).toMatch(/\.\.\.cellRefForKind\(chargeCode\?\.kind/);
     expect(readFileSync(path.join(ROOT, 'src/app/(app)/timesheet/page.tsx'), 'utf8')).toMatch(/chargeCodes: period\.chargeCodes,/);

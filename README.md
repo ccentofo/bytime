@@ -29,7 +29,6 @@
 ### Modern UX
 - 🌙 **Dark/Light Mode** — Seamless theme switching
 - 📱 **Responsive Design** — Works on desktop, tablet, and mobile
-- 🔌 **Offline Support** — Log time without internet; syncs automatically
 - ⚡ **Fast** — Sub-second page loads with parallel data fetching
 - 🔔 **Notifications** — Email alerts for submissions, approvals, rejections
 
@@ -90,7 +89,6 @@ npm run test:all          # All tests
 | Database | PostgreSQL 16 |
 | ORM | Drizzle ORM |
 | Auth | Auth.js v5 (JWT sessions) |
-| Offline | Dexie.js (IndexedDB) |
 | Testing | Vitest |
 | Email | Resend + React Email |
 
