@@ -92,6 +92,51 @@ describe('timesheet read: notes (UX-3 A-T4)', () => {
   });
 });
 
+describe('timesheet read: the selected period (UX-3 A-T4)', () => {
+  // Mar 1–15, 2026 (semi-monthly): Mar 1 is a Sunday, Mar 15 a Sunday; the last weekday is Fri Mar 13.
+  const MAR = '2026-03-01' as CalendarDate;
+  let emp: Awaited<ReturnType<typeof createTestUser>>;
+  let code: Awaited<ReturnType<typeof createTestChargeCode>>;
+  let clinId: string;
+  const db = () => getTestDb();
+  const hours = (entryDate: string, h: string, revisionNumber = 1) =>
+    db().insert(schema.timesheetEntries).values({ userId: emp.id, chargeCodeId: code.id, clinId, entryDate, hours: h, revisionNumber, createdBy: emp.id, ...(revisionNumber > 1 ? { changeReasonCode: 'CORRECTION', comment: 'x' } : {}) });
+
+  beforeEach(async () => {
+    await cleanupTestData();
+    emp = await createTestUser({ role: 'employee', createdAt: new Date('2026-01-01T03:00:00Z') }); // Dec 31, 2025 in New York
+    session.user = fake(emp);
+    clinId = (await createTestClin((await createTestContract()).id)).id;
+    code = await createTestChargeCode(clinId);
+  });
+  afterEach(async () => { session.user = null; await cleanupTestData(); });
+
+  it('reviewComment; the summary of a PAST period; submitOpensOn; userCreatedOn (workspace timezone)', async () => {
+    await db().insert(schema.timesheetPeriods).values({ userId: emp.id, periodStart: MAR, status: 'rejected', periodNumDays: 15, submissionCount: 1, submittedAt: new Date(), reviewComment: 'Please split Tuesday.' });
+    await hours('2026-03-03', '8');
+    await hours('2026-03-03', '6', 2);
+    await hours('2026-03-07', '2'); // Saturday
+    const p = await getTimesheetPeriod('2026-03-05');
+    expect(p).toMatchObject({ periodStart: MAR, isCurrent: false, reviewComment: 'Please split Tuesday.', submitOpensOn: '2026-03-13', userCreatedOn: '2025-12-31' });
+    expect(p.summary).toMatchObject({ periodStart: MAR, periodEnd: '2026-03-15', status: 'rejected', expectedWorkdays: 10, workdaysFilled: 1, totalHoursEntered: 8, submissionDeadline: 'Mar 13, 2026' });
+    expect(p.summary.dailyHours).toEqual({ '2026-03-03': 6, '2026-03-07': 2 });
+  });
+
+  it('outsideWeekHours: the edge weeks\' days outside the period — Monday workweek, then none set (Sunday)', async () => {
+    await hours('2026-02-27', '5');               // Fri before the period (Monday week Feb 23–Mar 1)
+    await hours('2026-02-27', '4', 2);            // latest revision wins
+    await hours('2026-03-17', '7');               // Tue after the period (Sunday week Mar 15–21)
+    await db().update(schema.workspaceSettings).set({ workweekStartDay: 1 });
+    const monday = await getTimesheetPeriod(MAR);
+    expect(monday.workweekStartDay).toBe(1);
+    expect(monday.outsideWeekHours).toEqual({ '2026-02-23': 0, '2026-02-24': 0, '2026-02-25': 0, '2026-02-26': 0, '2026-02-27': 4, '2026-02-28': 0 });
+    await db().update(schema.workspaceSettings).set({ workweekStartDay: null });
+    const sunday = await getTimesheetPeriod(MAR);
+    expect(sunday.workweekStartDay).toBeNull();
+    expect(sunday.outsideWeekHours).toEqual({ '2026-03-16': 0, '2026-03-17': 7, '2026-03-18': 0, '2026-03-19': 0, '2026-03-20': 0, '2026-03-21': 0 });
+  });
+});
+
 describe('getTimesheetForReview reads notes after submissionCount (UX-3 A-T4, static, C2 order)', () => {
   it('the period row (submissionCount) is read before the notes and the entries', () => {
     const src = readFileSync(path.resolve(__dirname, '../../server/actions/timesheet.ts'), 'utf8');

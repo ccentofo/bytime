@@ -1,6 +1,6 @@
 import 'server-only';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import type { DbTx } from '@/db';
+import type { ReadDb } from '@/db';
 import { timesheetEntries } from '@/db/schema';
 import { formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { LATEST_REVISION } from './cost-basis';
@@ -12,7 +12,7 @@ export const MAX_DAY_HOURS = 24;
  * The latest-revision hours per date for one employee over `dates` ('YYYY-MM-DD' strings), in one grouped query —
  * read through the save's transaction (inside the employee lock; trap T-E). A date with no rows is absent (= 0).
  */
-export async function latestDayTotals(tx: Pick<DbTx, 'select'>, userId: string, dates: CalendarDate[]): Promise<Record<string, number>> {
+export async function latestDayTotals(tx: Pick<ReadDb, 'select'>, userId: string, dates: CalendarDate[]): Promise<Record<string, number>> {
   if (dates.length === 0) return {};
   const rows = await tx
     .select({ day: timesheetEntries.entryDate, total: sql<string>`SUM(CAST(${timesheetEntries.hours} AS NUMERIC))` })

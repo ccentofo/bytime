@@ -301,6 +301,13 @@ describe('Period-lock integrity (R2-2)', () => {
   // longer schedule into a shorter one (semimonthly Nov 16 − 1 period = Nov 1 → weekly Oct 26,
   // hiding the Nov 2 and Nov 9 weeks).
   describe('period navigation across a schedule change', () => {
+    // UX-3 A4.6: getNeighborPeriod('next') stops at the period containing the workspace's today, so pin the clock after
+    // these (otherwise future) periods. Clock only: faking all timers stalls the Postgres driver.
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-12-15T17:00:00Z'));
+    });
+    afterEach(() => { vi.useRealTimers(); });
     beforeEach(async () => {
       const db = getTestDb();
       await db.insert(schema.payPeriodConfig).values([

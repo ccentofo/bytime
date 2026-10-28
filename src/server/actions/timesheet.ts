@@ -22,6 +22,8 @@ import { ConflictError, UserFacingError } from '@/lib/errors';
 import { newCellRefusal } from '@/lib/timesheet/cell-rules';
 import { CHARGEABLE_CODE } from '@/server/internal/chargeable';
 import { dayTotalRefusal, latestDayTotals } from '@/server/internal/day-totals';
+import { pastPeriods, PAST_PERIODS_PAGE_SIZE, type PastPeriodRow } from '@/server/internal/past-periods';
+import { resolveRequestedPeriod, selectedPeriodFacts, type SelectedPeriodFacts } from '@/server/internal/timesheet-period';
 import { latestNotesInPeriod, notedCodes, notesMap, validateNotes, writeNotes, type LatestNote, type NoteInput } from '@/server/internal/timesheet-notes';
 import { userAction, type ActionResult } from '@/lib/action-result';
 
@@ -67,8 +69,11 @@ export async function getRevisionMap(periodStart: CalendarDate): Promise<Record<
  * its length and schedule, the session user's entries and revision numbers, and its status.
  * The client does no schedule math; it renders exactly this.
  */
-export async function getTimesheetPeriod(periodStart: CalendarDate): Promise<{
+export async function getTimesheetPeriod(requested?: string | string[]): Promise<{
+  /** UX-3 A4.6: the canonical start — a mid-period date is snapped, garbage means the current period, a future one is clamped. */
   periodStart: CalendarDate;
+  /** UX-3 A4.6: the period containing the workspace's today. */
+  isCurrent: boolean;
   numDays: number;
   periodConfig: PeriodConfig;
   entries: TimesheetEntry[];
@@ -80,10 +85,14 @@ export async function getTimesheetPeriod(periodStart: CalendarDate): Promise<{
   chargeCodes: ChargeCode[];
   /** UX-3 A4.3: `{rowId}-{dayIndex}` → the latest note (cleared bodies '' included, with their revision). */
   notes: Record<string, { body: string; revision: number }>;
-}> {
+  /** UX-3 A4.6: the reviewer's comment on this period (e.g. why it was returned), else null. */
+  reviewComment: string | null;
+} & SelectedPeriodFacts> {
   const actor = await requireSession();
-  const start = parseCalendarDate(periodStart);
   const db = await getDb();
+  const [today, timeZone] = await Promise.all([getWorkspaceToday(), getWorkspaceTimezone()]);
+  const requestedPeriod = await resolveRequestedPeriod(db, requested, today);
+  const start = requestedPeriod.start;
   const [numDays, periodConfig, periodInfo] = await Promise.all([
     periodLengthFor(actor.id, start),
     configAt(db, start),
@@ -95,10 +104,17 @@ export async function getTimesheetPeriod(periodStart: CalendarDate): Promise<{
     getTimesheetEntriesForEmployee(actor.id, start, periodCodes),
     revisionMapFor(actor.id, start, numDays),
   ]);
-  const approvalBadge = periodInfo.id
-    ? (await approvalLabels(db, [{ id: periodInfo.id, userId: actor.id, status: periodInfo.status, reviewedBy: periodInfo.reviewedBy, reviewedAt: periodInfo.reviewedAt }], await getWorkspaceTimezone())).get(periodInfo.id)?.badge ?? null
-    : null;
-  return { periodStart: start, numDays, periodConfig, entries, revisions, periodStatus: periodInfo.status, approvalBadge, chargeCodes: periodCodes, notes: notesMap(latestNotes) };
+  const [approvalBadge, facts] = await Promise.all([
+    periodInfo.id
+      ? approvalLabels(db, [{ id: periodInfo.id, userId: actor.id, status: periodInfo.status, reviewedBy: periodInfo.reviewedBy, reviewedAt: periodInfo.reviewedAt }], timeZone)
+        .then((labels) => labels.get(periodInfo.id!)?.badge ?? null)
+      : null,
+    selectedPeriodFacts(db, actor.id, { start, numDays, config: periodConfig }, today, timeZone),
+  ]);
+  return {
+    periodStart: start, isCurrent: requestedPeriod.isCurrent, numDays, periodConfig, entries, revisions, periodStatus: periodInfo.status,
+    approvalBadge, chargeCodes: periodCodes, notes: notesMap(latestNotes), reviewComment: periodInfo.reviewComment ?? null, ...facts,
+  };
 }
 
 /** This employee's length for the period at `start`: their stored snapshot, else the schedule. */
@@ -438,6 +454,19 @@ export async function saveTimesheetBatch(data: {
 
     return { revisions: newRevisions, noteRevisions };
   });
+}
+
+/**
+ * The session user's past timesheets, a page at a time (feature-plan-ux-timesheet.md A4.7). Own data only: the user
+ * comes from the session, never the input. `page` is a whole number ≥ 0; anything else is page 0.
+ */
+export async function getPastTimesheets(input?: { page?: unknown }): Promise<{ rows: PastPeriodRow[]; page: number; hasMore: boolean }> {
+  const actor = await requireSession();
+  const raw = input?.page;
+  const page = typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 ? raw : 0;
+  const db = await getDb();
+  const [today, timeZone] = await Promise.all([getWorkspaceToday(), getWorkspaceTimezone()]);
+  return pastPeriods(db, actor.id, page, PAST_PERIODS_PAGE_SIZE, today, timeZone);
 }
 
 /**
