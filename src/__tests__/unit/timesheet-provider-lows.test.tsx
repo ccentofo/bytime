@@ -3,6 +3,7 @@ import '@testing-library/react';
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { act, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useEffect } from 'react';
 
 /**
  * UX-TIMESHEET-B-AUDIT LOWs in the provider: L4 (the SubmitModal is tied to syncGen; SET_PERIOD_STATUS applies only to
@@ -29,7 +30,7 @@ vi.mock('@/components/timesheet/SubmitModal', () => ({
 }));
 
 import { TimesheetPage } from '@/components/timesheet/TimesheetClient';
-import { timesheetReducer, initialTimesheetState, SESSION_EXPIRED } from '@/components/timesheet/TimesheetContext';
+import { timesheetReducer, initialTimesheetState, SESSION_EXPIRED, useTimesheetState } from '@/components/timesheet/TimesheetContext';
 import { CC, chargeCode, pageData, periodData } from '../helpers/timesheet-fixtures';
 import { installTimesheetDomStubs, live, renderTimesheet } from '../helpers/timesheet-render';
 import type { CalendarDate } from '@/lib/calendar-date';
@@ -149,5 +150,23 @@ describe('L9: SET_TODAY past the period\'s end', () => {
     act(() => live.ctx!.dispatch({ type: 'SET_TODAY', today: '2026-01-16' as CalendarDate }));
     expect(live.ctx!.state.isCurrent).toBe(false);
     expect(window.location.search).toBe('?period=2026-01-01');
+  });
+});
+
+describe('L8 follow-up: the derived session alert keeps the state context stable', () => {
+  const renders = { n: 0 };
+  /** Counts its commits (an effect with no deps runs after every render of this component). */
+  function StateConsumer() { useTimesheetState(); useEffect(() => { renders.n++; }); return null; }
+
+  it('with the alert showing, a provider re-render that changes no state (opening the SubmitModal) doesn\'t re-render state consumers', async () => {
+    renderTimesheet(data(), <><TimesheetPage /><StateConsumer /></>);
+    actions.saveTimesheetBatch.mockResolvedValueOnce({ ok: false, code: 'unauthenticated', error: 'Unauthorized' });
+    await edit(6);
+    await act(async () => { await live.ctx!.requestSave(); });
+    expect(shown('session-expired')).not.toBeNull();
+    const before = renders.n;
+    act(() => live.ctx!.openSubmit());
+    expect(shown('submit-modal')).not.toBeNull();
+    expect(renders.n).toBe(before);
   });
 });

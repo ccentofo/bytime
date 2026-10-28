@@ -404,8 +404,11 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
 
   const [raisedAlert, setRaisedAlert] = useState<RaisedSessionAlert | null>(null);
   // L8: a period change or a re-sync hides it (derived, no effect); Discard and a successful save clear it.
-  const sessionAlert: SessionAlert | null = raisedAlert && raisedAlert.shownLoadGen === state.shownLoadGen && raisedAlert.syncGen === state.syncGen
-    ? { message: raisedAlert.message, signInHref: raisedAlert.signInHref } : null;
+  const sessionAlert = useMemo<SessionAlert | null>(
+    () => (raisedAlert && raisedAlert.shownLoadGen === state.shownLoadGen && raisedAlert.syncGen === state.syncGen
+      ? { message: raisedAlert.message, signInHref: raisedAlert.signInHref } : null),
+    [raisedAlert, state.shownLoadGen, state.syncGen],
+  );
   const setSessionAlert = useCallback((alert: SessionAlert | null) => {
     setRaisedAlert(alert && { ...alert, shownLoadGen: flowRef.current.shownLoadGen, syncGen: flowRef.current.syncGen });
   }, []);
