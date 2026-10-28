@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/react';
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
-import { cleanup } from '@testing-library/react';
+import { act, cleanup } from '@testing-library/react';
 
 /**
  * feature-plan-ux-timesheet-ui.md B-T1 (§4.2): the grid tree — caption, column/row headers with data-r/data-c, one tbody
@@ -17,7 +17,7 @@ vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
 import { TimesheetGrid } from '@/components/timesheet/TimesheetGrid';
 import { CC, CC2, IND, chargeCode, pageData } from '../helpers/timesheet-fixtures';
-import { installTimesheetDomStubs, renderTimesheet } from '../helpers/timesheet-render';
+import { installTimesheetDomStubs, live, renderTimesheet } from '../helpers/timesheet-render';
 import { expectNoAxeViolations } from '../helpers/axe';
 import type { CalendarDate } from '@/lib/calendar-date';
 import type { TimesheetPeriodData } from '@/types/timesheet';
@@ -152,6 +152,22 @@ describe('grid structure (B-T1)', () => {
     expect(grid().textContent).not.toMatch(/\bLate\b/);
     expect(srOf(cell('foot', 4))).toBe(', no hours, past workday');
     expect(srOf(cell('foot', 1))).toBe('');
+  });
+
+  it('L3: while a period loads, every day cell is read-only with the reason "Loading…"', () => {
+    renderTimesheet(fixture(), <TimesheetGrid />);
+    expect(cell(0, 3).getAttribute('aria-readonly')).toBeNull();               // editable before the load
+    act(() => live.ctx!.dispatch({ type: 'BEGIN_PERIOD_LOAD' }));
+    expect(cell(0, 3).getAttribute('aria-readonly')).toBe('true');
+    expect(document.getElementById(cell(0, 3).getAttribute('aria-describedby')!)!.textContent).toBe('Loading…');
+    expect(document.getElementById(cell(0, 10).getAttribute('aria-describedby')!)!.textContent).toBe('Loading…'); // future too
+  });
+
+  it('L13: a row name that repeats its code is shown once (a legacy CLIN without a description)', () => {
+    renderTimesheet(fixture({ chargeCodes: [chargeCode({ id: CC, clin: 'CLIN 0001', name: 'CLIN 0001', kind: 'clin', assignable: false })], entries: [{ chargeCodeId: CC, hours: hoursA }] }), <TimesheetGrid />);
+    const rh = grid().querySelector('tbody th[scope="row"]')!;
+    expect(rh.textContent).toBe('CLIN 0001 Closed to new hours');
+    expect(rh.querySelector('[class*="name"]')).toBeNull();
   });
 
   it('no body rows: the footer row header is the one tab stop', () => {

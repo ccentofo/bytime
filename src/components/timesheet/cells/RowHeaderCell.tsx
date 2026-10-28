@@ -19,7 +19,7 @@ export interface RowHeaderCellProps {
 export const RowHeaderCell = memo(function RowHeaderCell(p: RowHeaderCellProps) {
   return (
     <th scope="row" id={`${p.gridId}-rh-${p.rowKey}`} data-r={p.r} data-c={RH} tabIndex={p.isActive ? 0 : -1} className={[styles.cell, styles.rowHeader].join(' ')}>
-      {p.code && <span className={styles.code}>{p.code}</span>} <span className={styles.name}>{p.name}</span>
+      {p.code && <span className={styles.code}>{p.code}</span>}{p.name && <> <span className={styles.name}>{p.name}</span></>}
       {p.closed && <span className={styles.closedNote}> {CLOSED_TO_NEW_HOURS}</span>}
     </th>
   );

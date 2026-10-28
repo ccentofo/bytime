@@ -28,6 +28,7 @@ import { getTimesheetForReview } from '@/server/actions/timesheet';
 import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { formatDateTime } from '@/lib/format';
 import { PERIOD_STATUS_COLOR } from '@/lib/ui/status-colors';
+import { rowLabel } from '@/lib/timesheet/labels';
 import { PageHeader } from '@/components/ui/PageHeader';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
 
@@ -135,7 +136,7 @@ export function reviewNotes(notes: ReviewData['notes'], chargeCodes: ChargeCode[
     if (dash < 0 || !Number.isInteger(dayIndex)) continue;
     const rowIndex = chargeCodes.findIndex((cc) => cc.id === id);
     const cc = chargeCodes[rowIndex];
-    const row = cc ? `${cc.clin} ${cc.name}` : 'Removed code';
+    const row = cc ? rowLabel(cc) : 'Removed code';
     out.push({ dayIndex, rowIndex: rowIndex < 0 ? chargeCodes.length : rowIndex, key, text: `${formatCalendarDate(addDays(start, dayIndex), 'ddd, MMM D')} · ${row} · ${note.body}` });
   }
   return out.sort((a, b) => a.dayIndex - b.dayIndex || a.rowIndex - b.rowIndex || a.key.localeCompare(b.key));
@@ -372,7 +373,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
               return (
                 <Table.Tr key={cc.id}>
                   <Table.Td>
-                    {cc.clin} {cc.name}
+                    {rowLabel(cc)}
                     {!cc.assignable && <Text size="xs" c="dimmed">Closed to new hours (recorded hours shown)</Text>}
                   </Table.Td>
                   {Array.from({ length: numDays }, (_, i) => {

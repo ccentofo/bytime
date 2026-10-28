@@ -16,7 +16,7 @@ import { CellEditor } from '@/components/timesheet/cells/CellEditor';
 import { addDays, dayOfWeek, diffDays, formatCalendarDate, isAfter, isBefore, type CalendarDate } from '@/lib/calendar-date';
 import { isCellEditable } from '@/lib/timesheet/cell-rules';
 import { CLOSED_TO_NEW_HOURS } from '@/lib/timesheet/copy';
-import { STATUS_WORD, periodWords } from '@/lib/timesheet/labels';
+import { STATUS_WORD, periodWords, shownRowName } from '@/lib/timesheet/labels';
 import { RH, TOTAL, clampPos, columnsOf, initialPos, rowsOf, type Col, type Pos, type Row } from '@/lib/timesheet/grid-positions';
 import { draftOf, normalizeDraft, seedChar, validateDraft } from '@/lib/timesheet/cell-input';
 import type { ChargeCode } from '@/types/timesheet';
@@ -147,9 +147,11 @@ export function TimesheetGrid() {
 
   const why = {
     future: `${gridId}-why-future`, closed: `${gridId}-why-closed`, locked: `${gridId}-why-locked`,
-    readonly: `${gridId}-why-readonly`, total: `${gridId}-why-total`,
+    readonly: `${gridId}-why-readonly`, loading: `${gridId}-why-loading`, total: `${gridId}-why-total`,
   };
   const reasonText = {
+    // UX-TIMESHEET-B-AUDIT L3: a cell read-only only because a period is loading says so.
+    loading: 'Loading…',
     future: "Future date. Hours can't be entered yet.",
     closed: `${CLOSED_TO_NEW_HOURS}. You can correct hours already recorded.`,
     locked: `This timesheet is ${periodStatus === 'approved' ? 'approved' : 'submitted'} and can't be changed.`,
@@ -167,7 +169,7 @@ export function TimesheetGrid() {
     const future = isAfter(addDays(periodStart, d), today);
     const editable = isCellEditable({ periodEditable, isFutureDate: future, assignable: row.cc.assignable, priorRevision: savedCellRevisions[`${row.cc.id}-${d}`] ?? 0 });
     const closed = periodEditable && !future && !editable;
-    const whyKey: keyof typeof reasonText | null = editable ? null : readOnly ? 'readonly' : locked ? 'locked' : future ? 'future' : closed ? 'closed' : null;
+    const whyKey: keyof typeof reasonText | null = editable ? null : readOnly ? 'readonly' : locked ? 'locked' : isLoadingPeriod ? 'loading' : future ? 'future' : closed ? 'closed' : null;
     return { row, d, editable, closed, whyKey, reason: whyKey ? reasonText[whyKey] : null, value: row.hours[d], saved: row.saved[d] };
   }
 
@@ -320,7 +322,8 @@ export function TimesheetGrid() {
         if (activeDay) {
           if (activeDay.editable) enterEdit(table, draftOf(activeDay.value), key === 'F2' ? 'end' : 'select');
           else if (activeDay.reason) announce(activeDay.reason);
-        } else if (active.c === TOTAL) {
+        } else if (active.c === TOTAL || active.r === 'foot') {
+          // Row totals and the footer's daily totals (L2) are calculated.
           announce(TOTALS_CALCULATED);
         }
         return;
@@ -344,6 +347,9 @@ export function TimesheetGrid() {
       case 'Escape': {
         if (!activeDay || activeDay.value === activeDay.saved) return;
         e.preventDefault();
+        // L1: restoring is a change like any other — it mustn't push the day over 24 (unless no higher than saved).
+        const restore = validateDraft(draftOf(activeDay.saved), { current: activeDay.value, dayTotal: dayTotals[activeDay.d], savedDayTotal: savedDayTotals[activeDay.d] });
+        if (!restore.ok) { announce(restore.error, 'assertive'); return; }
         dispatch({ type: 'SET_HOURS', chargeCodeId: activeDay.row.cc.id, dayIndex: activeDay.d, value: activeDay.saved });
         announce(`Restored to ${activeDay.saved.toFixed(2)}`);
         return;
@@ -480,7 +486,7 @@ export function TimesheetGrid() {
                 const row = rows.get(cc.id)!;
                 return (
                   <tr key={cc.id}>
-                    <RowHeaderCell gridId={gridId} rowKey={cc.id} r={row.r} code={cc.clin} name={cc.name} closed={!cc.assignable} isActive={isActive(row.r, RH)} />
+                    <RowHeaderCell gridId={gridId} rowKey={cc.id} r={row.r} code={cc.clin} name={shownRowName(cc)} closed={!cc.assignable} isActive={isActive(row.r, RH)} />
                     {days.map((day) => {
                       const key = `${cc.id}-${day.d}`;
                       const info = dayCell(row, day.d);
@@ -533,6 +539,7 @@ export function TimesheetGrid() {
           <span id={why.closed}>{reasonText.closed}</span>
           <span id={why.locked}>{reasonText.locked}</span>
           <span id={why.readonly}>{reasonText.readonly}</span>
+          <span id={why.loading}>{reasonText.loading}</span>
           <span id={why.total}>{TOTALS_CALCULATED}</span>
           {rowList.flatMap((row) => row.provenance.map((p, d) => (p ? <span key={`${row.r}-${d}`} id={`${gridId}-prov-${row.r}-${d}`}>{p}</span> : null)))}
         </div>

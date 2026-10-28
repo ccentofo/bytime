@@ -1,5 +1,5 @@
 import { formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
-import type { PeriodStatus } from '@/types/timesheet';
+import type { ChargeCode, PeriodStatus } from '@/types/timesheet';
 
 /** Timesheet labels (feature-plan-ux-timesheet-ui.md §4.1, §4.2). Pure. */
 
@@ -16,4 +16,18 @@ export function periodLabel(start: CalendarDate, end: CalendarDate): string {
 /** The same range in words, for the grid caption: "Oct 16 to 31, 2026". */
 export function periodWords(start: CalendarDate, end: CalendarDate): string {
   return periodLabel(start, end).replace(' – ', ' to ');
+}
+
+/**
+ * A row's name as shown next to its code — empty when it just repeats the code (a legacy CLIN without a description is
+ * "CLIN 0001" / "CLIN 0001"), so it isn't shown twice (UX-TIMESHEET-B-AUDIT L13).
+ */
+export function shownRowName(cc: Pick<ChargeCode, 'clin' | 'name'>): string {
+  return cc.name.trim() === cc.clin.trim() ? '' : cc.name;
+}
+
+/** "{code} {rowName}", or just the code when the name repeats it (L13). */
+export function rowLabel(cc: Pick<ChargeCode, 'clin' | 'name'>): string {
+  const name = shownRowName(cc);
+  return name ? `${cc.clin} ${name}` : cc.clin;
 }

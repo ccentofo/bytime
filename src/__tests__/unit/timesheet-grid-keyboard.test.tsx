@@ -291,6 +291,35 @@ describe('editing (B-T3)', () => {
     expect([input()!.selectionStart, input()!.selectionEnd]).not.toEqual([0, 1]);
   });
 
+  it('L1: nav-mode Esc doesn\'t restore a value that would push the day over 24 — it says why and keeps the value', async () => {
+    const { user } = setup();
+    await enterGrid(user);
+    act(() => live.ctx!.dispatch({ type: 'SET_HOURS', chargeCodeId: CC, dayIndex: 0, value: 2 }));   // A: saved 8 → 2
+    act(() => live.ctx!.dispatch({ type: 'SET_HOURS', chargeCodeId: CC2, dayIndex: 0, value: 20 })); // B: 0 → 20 (day 22)
+    await press(user, '{Home}{ArrowRight}');                   // 0:0
+    dispatched.setHours = 0;
+    await press(user, '{Escape}');                             // restoring 8 would make 28 (saved total 8)
+    expect(value(0, 0)).toBe(2);
+    expect(dispatched.setHours).toBe(0);
+    await settle();
+    expect(assertive()).toBe("This day would total 28 hours. A day can't exceed 24.");
+    // Lower B first; then the restore fits and goes through.
+    act(() => live.ctx!.dispatch({ type: 'SET_HOURS', chargeCodeId: CC2, dayIndex: 0, value: 10 }));
+    await press(user, '{Escape}');
+    expect(value(0, 0)).toBe(8);
+  });
+
+  it('L2: Enter on a footer daily total announces "Totals are calculated."', async () => {
+    const { user } = setup();
+    await enterGrid(user);
+    await press(user, '{Control>}{End}{/Control}{Home}{ArrowRight}');   // foot:0
+    expect(focused()).toBe('foot:0');
+    await press(user, '{Enter}');
+    await settle();
+    expect(polite()).toBe('Totals are calculated.');
+    expect(input()).toBeNull();
+  });
+
   it('IME composing (and keyCode 229) does not seed', async () => {
     const { user } = setup();
     await enterGrid(user);

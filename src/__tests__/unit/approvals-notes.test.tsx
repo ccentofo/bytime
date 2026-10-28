@@ -92,6 +92,14 @@ describe('Approvals drawer notes (B-T12)', () => {
     await expectNoAxeViolations(document.body);
   });
 
+  it('L13: a legacy CLIN row whose name repeats its code is labelled once, in the row and in the Notes list', async () => {
+    const clinRow = chargeCode({ id: CC2, clin: 'CLIN 0001', name: 'CLIN 0001', projectName: 'Atlas', kind: 'clin', assignable: false });
+    expect(reviewNotes({ [`${CC2}-0`]: { body: 'Old work', revision: 1 } }, [clinRow], START).map((n) => n.text)).toEqual(['Thu, Oct 1 · CLIN 0001 · Old work']);
+    actions.getTimesheetForReview.mockResolvedValue(review({ chargeCodes: [clinRow], entries: [{ chargeCodeId: CC2, hours: [3, ...Array(14).fill(0)] }], notes: {} }));
+    await openDrawer();
+    expect(drawerRows()[0].querySelector('td')!.textContent).toBe('CLIN 0001Closed to new hours (recorded hours shown)');
+  });
+
   it('a review without `notes` (or with an empty map) doesn\'t crash and shows no Notes list', async () => {
     const { notes: _omit, ...withoutNotes } = review();
     void _omit;

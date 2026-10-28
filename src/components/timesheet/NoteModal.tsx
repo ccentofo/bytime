@@ -4,6 +4,7 @@ import { createContext, useContext, useState, type RefObject } from 'react';
 import { Button, Group, Modal, Text, Textarea } from '@mantine/core';
 import { useTimesheetDispatch, useTimesheetState } from '@/components/timesheet/TimesheetContext';
 import { addDays, formatCalendarDate } from '@/lib/calendar-date';
+import { rowLabel } from '@/lib/timesheet/labels';
 
 /** A note's maximum length (the server enforces it too, Part A). */
 export const NOTE_MAX_LENGTH = 1000;
@@ -40,7 +41,7 @@ export function NoteModal() {
   const row = shown ? state.chargeCodes.find((cc) => cc.id === shown.chargeCodeId) : undefined;
   const date = shown ? addDays(state.periodStart, shown.dayIndex) : null;
   const editable = shown?.editable ?? false;
-  const title = row && date ? `Note — ${row.clin} ${row.name} — ${formatCalendarDate(date, 'ddd, MMM D')}` : 'Note';
+  const title = row && date ? `Note — ${rowLabel(row)} — ${formatCalendarDate(date, 'ddd, MMM D')}` : 'Note';
 
   const close = () => dispatch({ type: 'CLOSE_NOTE_MODAL' });
   const write = (next: string) => {
