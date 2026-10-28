@@ -16,11 +16,22 @@
    overflow: hidden in between; both are lifted on short or narrow viewports (400% zoom, landscape phones). */
 .page {
   --ts-chrome: 15rem;
+  /* v5.2 (§14.1): the grid's lines and tints, defined once. The lines follow the approved mockup (faint hairlines, the
+     separators a touch darker): default-border is darkened for input edges in this theme, so it would make every cell
+     line darker than the separators (product owner, 2026-10-28). */
+  --line: light-dark(var(--mantine-color-ink-2), var(--mantine-color-dark-5));
+  --line-strong: light-dark(var(--mantine-color-ink-3), var(--mantine-color-dark-4));
+  --weekend: light-dark(var(--mantine-color-gray-0), color-mix(in srgb, var(--mantine-color-body) 85%, black));
+  --today-tint: color-mix(in srgb, var(--mantine-color-signal-6) 9%, transparent);
+  --hover-tint: light-dark(var(--mantine-color-signal-0), color-mix(in srgb, var(--mantine-color-signal-6) 18%, transparent));
+  --group: light-dark(var(--mantine-color-gray-1), color-mix(in srgb, var(--mantine-color-body) 92%, white));
 }
 
 .scroller {
   overflow: auto;
   max-height: max(18rem, calc(100dvh - var(--ts-chrome)));
+  border: 1px solid var(--line-strong);
+  border-radius: var(--mantine-radius-md);
   scroll-padding-top: 3.5rem;
   scroll-padding-left: var(--ts-rh);
 }
@@ -64,7 +75,9 @@
 .colHead,
 .dayHeader {
   background: var(--mantine-color-body);
-  border-bottom: 1px solid var(--mantine-color-default-border);
+  /* §14.1: column and row lines; a heavier line under the column headers. */
+  border-inline-end: 1px solid var(--line);
+  border-block-end: 2px solid var(--line-strong);
   padding: 0.375rem 0.25rem;
   font-weight: 600;
   text-align: center;
@@ -73,7 +86,10 @@
 
 .corner {
   text-align: start;
+  vertical-align: bottom;
   inline-size: var(--ts-rh);
+  padding-inline: 0.75rem;
+  border-inline-end: 2px solid var(--line-strong);
 }
 
 .dayHeader {
@@ -85,8 +101,20 @@
   border-top-color: var(--mantine-color-signal-6);
 }
 
-.todayHead .dayName {
-  font-weight: 800;
+.dayName {
+  font-weight: 600;
+}
+
+.todayHead .dayName,
+.todayHead .dayDate {
+  color: light-dark(var(--mantine-color-signal-7), var(--mantine-color-signal-4));
+  font-weight: 700;
+}
+
+.futureHead .dayName,
+.futureHead .dayDate {
+  color: var(--mantine-color-dimmed);
+  font-weight: 500;
 }
 
 .dayHeadVisible {
@@ -98,35 +126,26 @@
 
 .dayDate {
   color: var(--mantine-color-dimmed);
-  font-weight: 400;
+  font-weight: 500;
 }
 
-.meter {
-  display: block;
-  inline-size: 2rem;
-  block-size: 0.25rem;
-  border-radius: 999px;
-  background: var(--mantine-color-default-border);
-}
-
-.meterFill {
-  display: block;
-  block-size: 100%;
-  border-radius: inherit;
-  background: var(--mantine-color-signal-6);
-}
-
+/* A slim band; no vertical lines inside it (its cell has no .cell class). */
 .groupRow th {
   text-align: start;
+  font-size: 0.875rem;
   font-weight: 700;
-  padding: 0.5rem 0.5rem 0.25rem;
-  background: var(--mantine-color-default-hover);
+  color: var(--mantine-color-dimmed);
+  padding: 0.375rem 0.75rem;
+  background: var(--group);
+  border-block-end: 1px solid var(--line);
 }
 
+/* §14.1: every cell has a column line and a row line. */
 .cell {
   position: relative;
   padding: 0.375rem 0.25rem;
-  border-bottom: 1px solid var(--mantine-color-default-border);
+  border-inline-end: 1px solid var(--line);
+  border-block-end: 1px solid var(--line);
   text-align: center;
   cursor: default;
 }
@@ -142,14 +161,30 @@
   inline-size: var(--ts-rh);
   background: var(--mantine-color-body);
   font-weight: 400;
+  padding-inline: 0.75rem;
+  /* §14.1: a heavier line after the row-header column. */
+  border-inline-end: 2px solid var(--line-strong);
+}
+
+/* §14.3: the row name on line 1, the code as a chip on line 2. */
+.name {
+  display: block;
+  font-weight: 600;
 }
 
 .code {
-  font-weight: 700;
+  display: inline-block;
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: 0 0.375rem;
+  border-radius: var(--mantine-radius-xs);
+  background: light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-5));
+  color: var(--mantine-color-text);
 }
 
-.name {
-  color: var(--mantine-color-dimmed);
+.name + .code {
+  margin-block-start: 0.125rem;
 }
 
 .closedNote {
@@ -161,6 +196,8 @@
 
 .day {
   min-inline-size: 3.5rem;
+  /* Table cells treat block-size as a minimum (min-block-size doesn't apply to them). */
+  block-size: 2.875rem;
 }
 
 .value {
@@ -168,38 +205,102 @@
   min-block-size: 1.25rem;
 }
 
-.unsaved {
-  background: light-dark(var(--mantine-color-warning-0), var(--mantine-color-dark-6));
-  border-bottom: 2px dashed var(--mantine-color-warning-filled);
-}
-
 .future .value {
   color: var(--mantine-color-dimmed);
 }
 
-.weekend {
-  background: var(--mantine-color-default-hover);
+/* §14.2: faint tints on body day cells only (weekend, then today over it). background-color, never the shorthand: the
+   shorthand would also clear a closed cell's hatch (background-image). */
+.day.weekend {
+  background-color: var(--weekend);
 }
 
-.todayCol {
-  box-shadow: inset 0 3px 0 var(--mantine-color-signal-6);
+.day.todayCol {
+  background-color: var(--today-tint);
+}
+
+@media (hover: hover) {
+  .day.editable:hover {
+    background-color: var(--hover-tint);
+  }
+}
+
+/* After the tints and hover (same specificity), so an unsaved cell always shows as unsaved. */
+.day.unsaved {
+  background-color: light-dark(var(--mantine-color-warning-0), var(--mantine-color-dark-6));
+}
+
+/* A dashed line inset 4px at the bottom (audit M3 colours). */
+.unsaved::after {
+  content: '';
+  position: absolute;
+  inset-inline: 4px;
+  inset-block-end: 3px;
+  border-block-end: 2px dashed light-dark(var(--mantine-color-warning-8), var(--mantine-color-warning-4));
 }
 
 .closed {
   background-image: repeating-linear-gradient(135deg, transparent 0 6px, var(--mantine-color-default-border) 6px 7px);
 }
 
+/* The import and lock glyphs sit top-left; the note trigger owns the top-right corner (§14.4). */
 .glyphs {
   position: absolute;
   inset-block-start: 0.125rem;
-  inset-inline-end: 0.125rem;
+  inset-inline-start: 0.125rem;
   display: inline-flex;
   gap: 0.125rem;
   color: var(--mantine-color-dimmed);
 }
 
+/* §14.4: the per-cell note trigger — a pointer convenience (N is the keyboard way). Shown when the cell has a note, is
+   active, or is under the pointer; never focusable. */
+.noteTrigger {
+  position: absolute;
+  inset-block-start: 2px;
+  inset-inline-end: 2px;
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
+  display: none;
+  place-items: center;
+  border-radius: var(--mantine-radius-xs);
+  cursor: pointer;
+  color: var(--mantine-color-dimmed);
+}
+
+.hasNote .noteTrigger,
+[data-active] .noteTrigger {
+  display: grid;
+}
+
+@media (hover: hover) {
+  .day:hover .noteTrigger {
+    display: grid;
+  }
+
+  .noteTrigger:hover {
+    background: var(--mantine-color-default-hover);
+  }
+}
+
+.hasNote .noteTrigger {
+  color: light-dark(var(--mantine-color-signal-7), var(--mantine-color-signal-4));
+}
+
 .total {
   font-weight: 600;
+}
+
+/* §14.1: a heavier line before the Total column. */
+.totalHead,
+.totalCol {
+  border-inline-start: 2px solid var(--line-strong);
+}
+
+/* Row totals read right-aligned, as in the mockup. */
+.totalCol {
+  text-align: end;
+  padding-inline: 0.875rem;
 }
 
 .totalHead {
@@ -212,8 +313,9 @@
   font-weight: 800;
 }
 
+/* §14.1: a heavier line above the footer. */
 tfoot .cell {
-  border-top: 2px solid var(--mantine-color-default-border);
+  border-block-start: 2px solid var(--line-strong);
   font-weight: 700;
 }
 
@@ -252,13 +354,6 @@ tfoot .cell {
   font-weight: 600;
 }
 
-.noteBar {
-  display: flex;
-  align-items: center;
-  gap: var(--mantine-spacing-sm);
-  flex-wrap: wrap;
-}
-
 .reason {
   font-size: 0.875rem;
   color: var(--mantine-color-dimmed);
@@ -275,4 +370,19 @@ tfoot .cell {
 .statusLine {
   margin: 0;
   font-size: 0.875rem;
+}
+
+/* §14.5: the weekly notice, one slim line. */
+.weeklyNotice {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-inline-start: 3px solid var(--mantine-color-signal-6);
+  border-radius: var(--mantine-radius-sm);
+  padding: 0.5rem 0.75rem;
+  background: light-dark(var(--mantine-color-gray-0), color-mix(in srgb, var(--mantine-color-body) 92%, white));
+  font-size: 0.875rem;
+  color: var(--mantine-color-text);
 }

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/react';
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
-import { act, cleanup } from '@testing-library/react';
+import { act, cleanup, fireEvent } from '@testing-library/react';
 
 /**
  * feature-plan-ux-timesheet-ui.md B-T10 (§7): committing one cell re-renders only these grid cells — the changed cell, its
@@ -34,5 +34,18 @@ describe('render cost (B-T10)', () => {
     rendered.length = 0;
     act(() => live.ctx!.dispatch({ type: 'SET_HOURS', chargeCodeId: CC2, dayIndex: 4, value: 7.5 }));
     expect(new Set(rendered)).toEqual(new Set(['1:4', '1:total', 'foot:4', 'foot:total']));
+  });
+
+  it('v5.2: the note trigger costs no renders — pointer hover re-renders nothing (noteViewable doesn\'t depend on hover)', () => {
+    const rendered: string[] = [];
+    const probe = (_kind: 'cell', key: string) => { rendered.push(key); };
+    renderTimesheet(pageData({ chargeCodes: [chargeCode({ id: CC })] }), <RenderProbeContext.Provider value={probe}><TimesheetGrid /></RenderProbeContext.Provider>);
+    rendered.length = 0;
+    const td = document.querySelector('td[data-r="0"][data-c="3"]')!;
+    fireEvent.mouseEnter(td);
+    fireEvent.mouseOver(td);
+    fireEvent.pointerEnter(td);
+    fireEvent.mouseLeave(td);
+    expect(rendered).toEqual([]);
   });
 });

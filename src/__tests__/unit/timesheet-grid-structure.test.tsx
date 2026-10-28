@@ -58,7 +58,7 @@ describe('grid structure (B-T1)', () => {
     const caption = g.querySelector('caption')!;
     expect(caption.textContent).toBe('Hours for Jan 1 to 15, 2026, Draft');
     expect(g.getAttribute('aria-labelledby')).toBe(caption.id);
-    expect(document.getElementById(g.getAttribute('aria-describedby')!)!.textContent).toMatch(/^Arrow keys move between days and codes\. Type a number to enter hours\. Press N to add a note\. Escape undoes the cell\.$/);
+    expect(document.getElementById(g.getAttribute('aria-describedby')!)!.textContent).toBe('Arrow keys move. Type a number to enter hours. N adds or edits a note. Escape undoes the cell.');
 
     const heads = [...g.querySelectorAll('thead th')];
     expect(heads).toHaveLength(17);
@@ -75,13 +75,57 @@ describe('grid structure (B-T1)', () => {
     expect(rowHeads[0].id).toMatch(new RegExp(`-rh-${CC}$`));
     expect(rowHeads[1].textContent).toContain('Closed to new hours');
     // rowName: the indirect row shows the code's own name, not its category.
-    expect(rowHeads[2].textContent).toBe('LV-AL Annual leave');
+    expect(rowHeads[2].textContent).toBe('Annual leave LV-AL');                // v5.2: name, then the code chip
     expect(rowHeads[2].textContent).not.toContain('Leave ');
 
     const foot = g.querySelector('tfoot tr')!;
     expect(foot.querySelector('th[scope="row"]')!.textContent).toBe('Daily total');
     expect(foot.querySelector('th')!.getAttribute('data-r')).toBe('foot');
     expect(cell('foot', 'total').textContent).toContain('12.00');
+  });
+
+  // v5.2 visual revision (§14, §14.6 B-T1).
+  it('v5.2: no button above the table; no meter in the day headers; the visible hint', () => {
+    renderTimesheet(fixture(), <TimesheetGrid />);
+    const area = grid().closest('[class*="gridArea"]')!;
+    expect(area.querySelectorAll('button')).toHaveLength(0);
+    expect([...area.querySelectorAll('*')].some((el) => /\bnote\b/i.test(el.textContent ?? '') && el.tagName === 'BUTTON')).toBe(false);
+    expect(document.body.textContent).not.toContain('Choose a day cell first');
+    expect(grid().querySelectorAll('thead [class*="meter"]')).toHaveLength(0);
+    for (const th of grid().querySelectorAll('thead th[id*="-ch-"]:not([id$="-ch-total"])')) {
+      expect([...th.querySelector('[aria-hidden="true"]')!.children].map((c) => c.textContent)).toHaveLength(2); // name, date
+    }
+    expect(area.querySelector('[class*="hint"]')!.textContent).toBe('Click a cell or type a number to enter hours. Hover a cell to add a note, or press N.');
+  });
+
+  it('v5.2: group rows carry no vertical-line class; every other row cell does', () => {
+    renderTimesheet(fixture(), <TimesheetGrid />);
+    for (const group of grid().querySelectorAll('tr[class*="groupRow"]')) {
+      for (const c of group.children) expect(c.className, 'group row cell').not.toMatch(/\bcell\b|_cell_|cell__/);
+    }
+    const rowCells = [...grid().querySelectorAll('tbody tr:not([class*="groupRow"]) > *, tfoot tr > *')];
+    expect(rowCells.length).toBeGreaterThan(0);
+    for (const c of rowCells) expect(c.className, `${c.tagName} ${c.getAttribute('data-c')}`).toMatch(/cell/);
+  });
+
+  it('v5.2: the row header reads name, then the code chip (accessible name "{name} {code}"); no name → the chip alone', () => {
+    renderTimesheet(fixture(), <TimesheetGrid />);
+    const rh = grid().querySelector('tbody th[scope="row"]')!;
+    const parts = [...rh.children].map((c) => [c.className.match(/name|code|closedNote/)?.[0], c.textContent]);
+    expect(parts.slice(0, 2)).toEqual([['name', 'Code 1'], ['code', 'NAV-1']]);
+    expect(rh.textContent).toBe('Code 1 NAV-1');
+    cleanup();
+    renderTimesheet(fixture({ chargeCodes: [chargeCode({ id: CC, clin: 'CLIN 0001', name: 'CLIN 0001' })], entries: [{ chargeCodeId: CC, hours: hoursA }] }), <TimesheetGrid />);
+    const only = grid().querySelector('tbody th[scope="row"]')!;
+    expect([...only.children].map((c) => c.className.match(/name|code/)?.[0])).toEqual(['code']);
+    expect(only.textContent).toBe('CLIN 0001');
+  });
+
+  it('v5.2: axe clean with note triggers rendered (the active cell and a cell with a note)', async () => {
+    const { container } = renderTimesheet(fixture(), <TimesheetGrid />);
+    expect(cell(0, 6).querySelector('[data-note-trigger]')).not.toBeNull();   // active
+    expect(cell(0, 1).querySelector('[data-note-trigger]')).not.toBeNull();   // has a note
+    await expectNoAxeViolations(container);
   });
 
   it('day cells are explicit gridcells with data-r/data-c; empty cells are blank; 2 decimals; exactly one tabindex=0 (today in the first row)', () => {

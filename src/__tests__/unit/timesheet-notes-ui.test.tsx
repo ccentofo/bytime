@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
 import '@testing-library/react';
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
-import { act, cleanup } from '@testing-library/react';
+import { act, cleanup, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 /**
- * feature-plan-ux-timesheet-ui.md B-T5 (§4.8, §5 "Notes"): N / n and the grid's note button open NoteModal; a note is
- * editable on a CLOSED row (not the hours rule) and read-only when locked or in the future; the button says "Done" (no
- * "Save" in the modal) and the hint is the textarea's description; Done makes the note dirty; Save sends notes only with
- * no ReasonModal; Remove sets ''; focus returns to the active cell for both openers; axe with the modal open.
+ * feature-plan-ux-timesheet-ui.md B-T5 (§4.8, §5 "Notes", v5.2 §14.4): N / n and the per-cell note trigger open NoteModal
+ * for their cell — the trigger without entering edit mode, after committing an open draft once (the H1 path); a future
+ * empty cell has no trigger; a locked period shows one only on cells with a note (read-only); a note is editable on a
+ * CLOSED row (not the hours rule) and read-only when locked or in the future; the button says "Done" (no "Save" in the
+ * modal) and the hint is the textarea's description; Done makes the note dirty; Save sends notes only with no
+ * ReasonModal; Remove sets ''; focus returns to the cell for both openers; axe with the modal open.
  */
 
 const actions = vi.hoisted(() => ({ saveTimesheetBatch: vi.fn() }));
@@ -18,6 +20,18 @@ vi.mock('@/server/actions/pay-period-config', () => ({ getNeighborPeriod: vi.fn(
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }), usePathname: () => '/timesheet' }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 vi.mock('@/components/timesheet/ReasonModal', () => ({ ReasonModal: ({ opened }: { opened: boolean }) => (opened ? <div>REASON_MODAL_OPEN</div> : null) }));
+// Counts the grid's SET_HOURS dispatches ("commits once").
+const dispatched = vi.hoisted(() => ({ setHours: 0 }));
+vi.mock('@/components/timesheet/TimesheetContext', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/components/timesheet/TimesheetContext')>();
+  return {
+    ...actual,
+    useTimesheetDispatch: () => {
+      const dispatch = actual.useTimesheetDispatch();
+      return (action: Parameters<typeof dispatch>[0]) => { if (action.type === 'SET_HOURS') dispatched.setHours++; dispatch(action); };
+    },
+  };
+});
 
 import { TimesheetGrid } from '@/components/timesheet/TimesheetGrid';
 import { NOTE_HINT } from '@/components/timesheet/NoteModal';
@@ -28,7 +42,7 @@ import type { CalendarDate } from '@/lib/calendar-date';
 import type { TimesheetPeriodData } from '@/types/timesheet';
 
 beforeAll(() => installTimesheetDomStubs());
-beforeEach(() => actions.saveTimesheetBatch.mockReset());
+beforeEach(() => { actions.saveTimesheetBatch.mockReset(); dispatched.setHours = 0; });
 afterEach(() => cleanup());
 
 // Jan 1–15, 2026; today Wed Jan 7 (index 6). Row A (open, a note on day 1), row B closed to new hours (no prior hours).
@@ -47,12 +61,15 @@ const dialog = () => document.querySelector('[role="dialog"]') as HTMLElement | 
 const textarea = () => dialog()?.querySelector('textarea') as HTMLTextAreaElement;
 const dialogButtons = () => [...(dialog()?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? b.getAttribute('aria-label') ?? '');
 const dialogButton = (label: string) => [...dialog()!.querySelectorAll('button')].find((b) => b.textContent?.trim() === label) as HTMLButtonElement;
-const noteButton = () => [...document.querySelectorAll('button')].find((b) => /^(Add|Edit) note$/.test(b.textContent?.trim() ?? '')) as HTMLButtonElement;
+const grid = () => document.querySelector('table[role="grid"]') as HTMLTableElement;
+const cell = (r: number, c: number) => grid().querySelector(`td[data-r="${r}"][data-c="${c}"]`) as HTMLElement;
+const trigger = (r: number, c: number) => cell(r, c).querySelector('[data-note-trigger]') as HTMLElement | null;
+const editor = () => grid().querySelector('input[data-cell-editor]') as HTMLInputElement | null;
 const focusedPos = () => { const el = document.activeElement as HTMLElement; return `${el?.dataset?.r}:${el?.dataset?.c}`; };
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 30)); });
 
 describe('notes UI (B-T5)', () => {
-  it('N and n open NoteModal for the active day cell; so does the grid\'s note button (labelled with row and day)', async () => {
+  it('N and n open NoteModal for the active day cell (unchanged)', async () => {
     const user = setup();
     await enterGrid(user);
     await user.keyboard('N');
@@ -63,25 +80,77 @@ describe('notes UI (B-T5)', () => {
     expect(dialog()).toBeNull();
     await user.keyboard('n');
     expect(dialog()).not.toBeNull();
-    await user.keyboard('{Escape}');
-    await settle();
-    expect(noteButton().getAttribute('aria-label')).toBe('Add note, Code 1, Wed Jan 7');
-    await user.click(noteButton());
-    expect(dialog()).not.toBeNull();
   });
 
-  it('the note button reads "Edit note" on a cell with a note; without a day cell it is aria-disabled ("Choose a day cell first") and does nothing', async () => {
+  it('a click on a cell\'s trigger opens NoteModal for THAT cell, selects it and doesn\'t enter edit mode', async () => {
+    const user = setup();
+    await user.click(trigger(0, 1)!);                              // Fri Jan 2, "Site visit"
+    expect(dialog()!.textContent).toContain('Note — A Code 1 — Fri, Jan 2');
+    expect(textarea().value).toBe('Site visit');
+    expect(editor()).toBeNull();
+    expect(grid().querySelector('[tabindex="0"]')).toBe(cell(0, 1));
+    expect(dispatched.setHours).toBe(0);
+  });
+
+  it('while editing another cell, a trigger click commits that draft once (the H1 path), then opens the note', async () => {
     const user = setup();
     await enterGrid(user);
-    await user.keyboard('{ArrowLeft}{ArrowLeft}{ArrowLeft}{ArrowLeft}{ArrowLeft}'); // 0:1 (has a note)
-    expect(noteButton().textContent).toBe('Edit note');
-    expect(noteButton().getAttribute('aria-label')).toBe('Edit note, Code 1, Fri Jan 2');
-    await user.keyboard('{Home}');
-    expect(noteButton().getAttribute('aria-disabled')).toBe('true');
-    expect(noteButton().hasAttribute('disabled')).toBe(false);
-    expect(document.getElementById(noteButton().getAttribute('aria-describedby')!)!.textContent).toBe('Choose a day cell first');
-    await user.click(noteButton());
-    expect(dialog()).toBeNull();
+    await user.keyboard('{ArrowLeft}{ArrowLeft}{ArrowLeft}5');      // 0:3, draft "5"
+    expect(editor()!.value).toBe('5');
+    await user.click(trigger(0, 1)!);
+    expect(live.ctx!.state.entries[0].hours[3]).toBe(5);
+    expect(dispatched.setHours).toBe(1);
+    expect(dialog()!.textContent).toContain('Fri, Jan 2');
+    expect(editor()).toBeNull();
+  });
+
+  it('a trigger click on the cell being edited commits its draft first, then opens its note', async () => {
+    const user = setup();
+    await enterGrid(user);
+    await user.keyboard('{ArrowLeft}{ArrowLeft}{ArrowLeft}5');      // 0:3
+    await user.click(trigger(0, 3)!);
+    expect(live.ctx!.state.entries[0].hours[3]).toBe(5);
+    expect(dispatched.setHours).toBe(1);
+    expect(dialog()!.textContent).toContain('Sun, Jan 4');
+    expect(editor()).toBeNull();
+  });
+
+  it('a pointer-down on a trigger is default-prevented: focus stays put and an open editor keeps its draft until the click', async () => {
+    const user = setup();
+    await enterGrid(user);
+    await user.keyboard('{ArrowLeft}{ArrowLeft}{ArrowLeft}5');      // 0:3, editing
+    const input = editor()!;
+    expect(fireEvent.mouseDown(trigger(0, 1)!)).toBe(false);        // defaultPrevented
+    expect(document.activeElement).toBe(input);
+    expect(editor()!.value).toBe('5');
+    expect(dispatched.setHours).toBe(0);
+    expect(fireEvent.mouseDown(cell(0, 2))).toBe(true);             // a plain cell's pointer-down is untouched
+  });
+
+  it('a future empty cell renders no trigger; a past cell and today do (hidden by CSS until hover / active / a note)', () => {
+    setup();
+    expect(trigger(0, 10)).toBeNull();                              // future, no note
+    expect(trigger(0, 3)).not.toBeNull();
+    expect(trigger(0, 6)).not.toBeNull();
+    expect(trigger(1, 3)).not.toBeNull();                           // a closed row: notes stay editable there
+  });
+
+  it('a locked period shows a trigger only on cells with a note, and it opens read-only', async () => {
+    const user = setup(fixture({ periodStatus: 'submitted' }));
+    const withTrigger = [...grid().querySelectorAll('[data-note-trigger]')].map((t) => (t.closest('td') as HTMLElement).dataset.c);
+    expect(withTrigger).toEqual(['1']);
+    await user.click(trigger(0, 1)!);
+    expect(textarea().readOnly).toBe(true);
+    expect(dialogButtons()).not.toContain('Done');
+  });
+
+  it('a cell with a note keeps its trigger with the note class (and "Edit note"); others say "Add note"', () => {
+    setup();
+    expect(cell(0, 1).className).toMatch(/hasNote/);
+    expect(trigger(0, 1)!.getAttribute('title')).toBe('Edit note');
+    expect(cell(0, 3).className).not.toMatch(/hasNote/);
+    expect(trigger(0, 3)!.getAttribute('title')).toBe('Add note');
+    expect(trigger(0, 1)!.getAttribute('aria-hidden')).toBe('true');
   });
 
   it('editable on a CLOSED row (notes don\'t follow the hours rule)', async () => {
@@ -148,7 +217,7 @@ describe('notes UI (B-T5)', () => {
     expect(live.ctx!.dirtyNotes).toEqual([{ key: `${CC}-1`, rowId: CC, dayIndex: 1, body: '' }]);
   });
 
-  it('focus returns to the active cell after Done, Cancel and Esc — for the N key and for the note button', async () => {
+  it('focus returns to the cell after Done, Cancel and Esc — for the N key and for the trigger', async () => {
     const user = setup();
     await enterGrid(user);
     expect(focusedPos()).toBe('0:6');
@@ -158,10 +227,11 @@ describe('notes UI (B-T5)', () => {
       if (close === '{Escape}') await user.keyboard(close); else await user.click(dialogButton(close));
       await settle();
       expect(focusedPos(), `N then ${close}`).toBe('0:6');
-      await user.click(noteButton());
+      await user.click(trigger(0, 2)!);
       if (close === '{Escape}') await user.keyboard(close); else await user.click(dialogButton(close));
       await settle();
-      expect(focusedPos(), `button then ${close}`).toBe('0:6');
+      expect(focusedPos(), `trigger then ${close}`).toBe('0:2');
+      await user.keyboard('{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}');   // back to 0:6
     }
   });
 

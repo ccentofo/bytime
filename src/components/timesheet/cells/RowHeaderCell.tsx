@@ -15,11 +15,14 @@ export interface RowHeaderCellProps {
   isActive: boolean;
 }
 
-/** A row header (§4.2): the code and the row's name (rowName), plus "Closed to new hours" on a correction-only row. */
+/**
+ * A row header (§4.2, §14.3): the row's name (rowName) on line 1, the code as a chip on line 2 — the chip alone when there
+ * is no name — plus "Closed to new hours" on a correction-only row. Its accessible name is "{name} {code}".
+ */
 export const RowHeaderCell = memo(function RowHeaderCell(p: RowHeaderCellProps) {
   return (
     <th scope="row" id={`${p.gridId}-rh-${p.rowKey}`} data-r={p.r} data-c={RH} tabIndex={p.isActive ? 0 : -1} className={[styles.cell, styles.rowHeader].join(' ')}>
-      {p.code && <span className={styles.code}>{p.code}</span>}{p.name && <> <span className={styles.name}>{p.name}</span></>}
+      {p.name && <><span className={styles.name}>{p.name}</span>{' '}</>}{p.code && <span className={styles.code}>{p.code}</span>}
       {p.closed && <span className={styles.closedNote}> {CLOSED_TO_NEW_HOURS}</span>}
     </th>
   );

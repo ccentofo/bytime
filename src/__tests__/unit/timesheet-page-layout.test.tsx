@@ -215,6 +215,19 @@ describe('page layout (B-T6)', () => {
     expect(text).not.toContain('Week of Dec 29');                                             // edge week unknown outside days
   });
 
+  it('v5.2 (§14.5): the weekly notice is one p[role="note"] — not a Mantine Alert — icon hidden, lines joined with " · "', () => {
+    const two = page({ entries: [{ chargeCodeId: CC, hours: [0, 0, 0, 0, 8, 8, 8, 8, 0, 0, 0, 4, 4, 4, 4] }], workweekStartDay: 1, today: '2026-01-20' as CalendarDate,
+      outsideWeekHours: { '2026-01-16': 0, '2026-01-17': 0, '2026-01-18': 0 } });
+    renderTimesheet({ ...two, flsaExempt: true }, <TimesheetPage />);
+    const notice = document.querySelector('[data-testid="weekly-notice"]')!;
+    expect(notice.tagName).toBe('P');
+    expect(notice.getAttribute('role')).toBe('note');
+    expect(notice.closest('.mantine-Alert-root')).toBeNull();
+    expect(notice.className).not.toMatch(/mantine-Alert/);
+    expect(notice.querySelector('svg')!.getAttribute('aria-hidden')).toBe('true');
+    expect(notice.textContent).toContain(' · ');
+  });
+
   it('focus stays on Save, Discard changes, Today and ‹ after they become unavailable (aria-disabled, never disabled)', async () => {
     const user = userEvent.setup();
     actions.saveTimesheetBatch.mockResolvedValue({ ok: true, data: { revisions: { [`${CC}-1`]: 1 }, noteRevisions: {} } });

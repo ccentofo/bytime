@@ -73,6 +73,37 @@ describe('timesheet reflow and text size (B-T13)', () => {
     expect(ruleOf(sheet, '.grand')).toContain('color: light-dark(var(--mantine-color-signal-7), var(--mantine-color-signal-4));');
   });
 
+  // v5.2 visual revision (§14.6 B-T13).
+  it('v5.2: no meter; no today box-shadow; the weekend tint isn\'t default-hover; cells declare column lines; no noteBar', () => {
+    const sheet = css();
+    expect(sheet).not.toMatch(/\.meter/);
+    expect(ruleOf(sheet, '.todayCol') ?? '').not.toMatch(/box-shadow/);
+    expect(sheet).not.toMatch(/\.todayCol\s*\{[^}]*box-shadow/);
+    const weekendRules = [...sheet.matchAll(/[^{}]*\.weekend[^{}]*\{[^}]*\}/g)].map((m) => m[0]);
+    expect(weekendRules.length).toBeGreaterThan(0);
+    for (const r of weekendRules) expect(r).not.toMatch(/default-hover/);
+    // The tints set background-color only: the shorthand would clear a closed cell's hatch (background-image).
+    for (const sel of ['.day.weekend', '.day.todayCol', '.day.unsaved', '.day.editable:hover']) expect(ruleOf(sheet, sel) ?? '', sel).toMatch(/^[^{]*\{\s*background-color:/);
+    expect(ruleOf(sheet, '.cell')).toMatch(/border-inline-end:\s*1px solid var\(--line\);/);
+    expect(ruleOf(sheet, '.cell')).toMatch(/border-block-end:\s*1px solid var\(--line\);/);
+    expect(sheet).not.toMatch(/noteBar/);
+    for (const f of walk(DIR).filter((f) => f.endsWith('.tsx'))) expect(stripComments(readFileSync(f, 'utf8')), f).not.toMatch(/noteBar|meterFill|styles\.meter/);
+  });
+
+  it('v5.2: the heavier lines, the scroller frame, the tokens and the note trigger', () => {
+    const sheet = css();
+    expect(ruleOf(sheet, '.rowHeader')).toMatch(/border-inline-end: 2px solid var\(--line-strong\);/);
+    expect(sheet).toMatch(/\.totalHead,\s*\.totalCol \{\s*border-inline-start: 2px solid var\(--line-strong\);/);
+    expect(sheet).toMatch(/tfoot \.cell \{\s*border-block-start: 2px solid var\(--line-strong\);/);
+    expect(ruleOf(sheet, '.scroller')).toMatch(/border: 1px solid var\(--line-strong\);[\s\S]*border-radius: var\(--mantine-radius-md\);/);
+    for (const token of ['--line:', '--line-strong:', '--weekend:', '--today-tint:', '--hover-tint:', '--group:']) expect(ruleOf(sheet, '.page'), token).toContain(token);
+    // The separators are darker than the cell lines in both schemes (ink-3 > ink-2, dark-4 > dark-5 on a dark body).
+    expect(ruleOf(sheet, '.page')).toContain('--line: light-dark(var(--mantine-color-ink-2), var(--mantine-color-dark-5));');
+    expect(ruleOf(sheet, '.page')).toContain('--line-strong: light-dark(var(--mantine-color-ink-3), var(--mantine-color-dark-4));');
+    expect(ruleOf(sheet, '.noteTrigger')).toMatch(/display: none;/);
+    expect(sheet).toMatch(/\.hasNote \.noteTrigger,\s*\[data-active\] \.noteTrigger \{\s*display: grid;/);
+  });
+
   it('no overflow: hidden on the grid, its cells or the scroller', () => {
     const sheet = css();
     for (const sel of ['.scroller', '.grid', '.cell', '.day', '.rowHeader', '.gridArea', '.colHead', '.dayHeader']) {

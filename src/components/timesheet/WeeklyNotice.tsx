@@ -1,15 +1,16 @@
 'use client';
 
-import { Alert, Stack, Text } from '@mantine/core';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { useTimesheetState } from '@/components/timesheet/TimesheetContext';
 import { addDays, formatCalendarDate } from '@/lib/calendar-date';
 import { weeklyTotals } from '@/lib/timesheet/weekly';
+import styles from './Timesheet.module.css';
 
 /**
  * The weekly notice (feature-plan-ux-timesheet-ui.md §4.1 item 4, UX3B-D3): FLSA-exempt employees only, built from
  * COMPLETE workspace weeks — "Week of {MMM D}: {h} hours. Record all time worked, including leave." under 40, and
- * "Week of {MMM D}: {o} hours over 40 (uncompensated)." over. Replaces the old exempt panel.
+ * "Week of {MMM D}: {o} hours over 40 (uncompensated)." over. Replaces the old exempt panel. One slim line (§14.5): a
+ * static note, not a Mantine Alert.
  */
 export function WeeklyNotice() {
   const { state, checks } = useTimesheetState();
@@ -24,8 +25,9 @@ export function WeeklyNotice() {
   });
   if (lines.length === 0) return null;
   return (
-    <Alert role="note" color="signal" variant="light" icon={<Icons.statusInfo size={ICON_SIZE.button} />} data-testid="weekly-notice">
-      <Stack gap={2}>{lines.map((l) => <Text key={l} size="sm">{l}</Text>)}</Stack>
-    </Alert>
+    <p role="note" data-testid="weekly-notice" className={styles.weeklyNotice}>
+      <Icons.statusInfo size={ICON_SIZE.button} aria-hidden="true" />
+      <span>{lines.join(' · ')}</span>
+    </p>
   );
 }

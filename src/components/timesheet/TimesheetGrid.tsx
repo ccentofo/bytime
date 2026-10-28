@@ -1,10 +1,9 @@
 'use client';
 
 import { useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type FocusEvent, type KeyboardEvent, type MouseEvent } from 'react';
-import { Button, Select } from '@mantine/core';
+import { Select } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
 import { useGridRef } from '@/components/timesheet/NoteModal';
-import { Icons } from '@/components/ui/icons';
 import { flushSync } from 'react-dom';
 import { useTimesheetDispatch, useTimesheetState } from '@/components/timesheet/TimesheetContext';
 import { useAnnounce } from '@/components/timesheet/TimesheetAnnouncer';
@@ -188,9 +187,6 @@ export function TimesheetGrid() {
       (document.getElementById(tableId)?.querySelector('[tabindex="0"]') as HTMLElement | null)?.focus();
     },
   }), [tableId]);
-  const activeNoteKey = activeDay ? `${activeDay.row.cc.id}-${activeDay.d}` : null;
-  const activeHasNote = activeNoteKey ? Boolean(notes[activeNoteKey]?.trim()) : false;
-  const noteVerb = activeHasNote ? 'Edit' : 'Add';
 
   // ── Focus and movement (handlers only).
   const focusPos = (table: HTMLElement, p: Pos) => {
@@ -380,23 +376,48 @@ export function TimesheetGrid() {
     const cRaw = el.dataset.c!;
     const c: Col = cRaw === RH || cRaw === TOTAL ? cRaw : Number(cRaw);
     const table = e.currentTarget;
+    const row = typeof r === 'number' ? rowList[r] : undefined;
+    // v5.2 (§14.4): the per-cell note trigger. Its mousedown was prevented (handleMouseDown), so an open editor never
+    // blurred: run the blur path for it first (this cell or another), select this cell WITHOUT editing, open its note.
+    // Focus comes back to the cell after the modal's exit transition (focusActive).
+    if (target.closest('[data-note-trigger]')) {
+      if (!row || typeof c !== 'number') return;
+      if (mode === 'edit' && activeDay) leaveEditForClick(table);
+      flushSync(() => setRequested({ r, c }));
+      focusPos(table, { r, c });
+      openNote(row, c);
+      return;
+    }
     // A click that arrives while still editing came without a focus change (a screen-reader activation, an iOS tap):
     // no mousedown blurred the editor. The click on the active cell itself keeps the draft; anywhere else runs the blur
-    // path first — commit, or restore and say so — then focuses the cell, so the input blurs while still mounted and
-    // suppressBlurCommit stops that blur committing twice (UX-TIMESHEET-B-AUDIT H1).
+    // path first (UX-TIMESHEET-B-AUDIT H1).
     if (mode === 'edit' && activeDay) {
       if (r === active.r && c === active.c) { (table.querySelector('input[data-cell-editor]') as HTMLInputElement | null)?.focus(); return; }
-      const committed = commitDraft(activeDay);
-      if (!committed.ok) announce(`${draft} isn't valid; restored ${draftOf(activeDay.value) || '0.00'}`, 'assertive');
-      suppressBlurCommit.current = true;
-      focusPos(table, active);
-      flushSync(() => { setMode('nav'); setError(null); });
+      leaveEditForClick(table);
     }
     flushSync(() => setRequested({ r, c }));
-    const row = typeof r === 'number' ? rowList[r] : undefined;
     const info = row && typeof c === 'number' ? dayCell(row, c) : null;
     if (info?.editable) enterEdit(table, draftOf(info.value), 'select');
     else focusPos(table, { r, c });
+  }
+
+  /**
+   * The blur path, run by a click that came without one (H1, the note trigger): commit, or restore and say so — then focus
+   * the cell, so the input blurs while still mounted and suppressBlurCommit stops that blur committing twice.
+   */
+  function leaveEditForClick(table: HTMLElement) {
+    if (!activeDay) return;
+    const committed = commitDraft(activeDay);
+    if (!committed.ok) announce(`${draft} isn't valid; restored ${draftOf(activeDay.value) || '0.00'}`, 'assertive');
+    suppressBlurCommit.current = true;
+    focusPos(table, active);
+    flushSync(() => { setMode('nav'); setError(null); });
+  }
+
+  // §14.4: a pointer-down on the note trigger must not move focus (that would blur an open editor and start the cell's
+  // focus-then-edit path); the click handler does the work.
+  function handleMouseDown(e: MouseEvent<HTMLTableElement>) {
+    if ((e.target as HTMLElement).closest('[data-note-trigger]')) e.preventDefault();
   }
 
   function handleDraftChange(e: ChangeEvent<HTMLInputElement>) {
@@ -439,20 +460,6 @@ export function TimesheetGrid() {
 
   return (
     <div className={styles.gridArea}>
-      <div className={styles.noteBar}>
-        <Button
-          variant="default"
-          size="sm"
-          leftSection={<Icons.note size={16} />}
-          aria-label={activeDay ? `${noteVerb} note, ${activeDay.row.cc.name}, ${formatCalendarDate(addDays(periodStart, activeDay.d), 'ddd MMM D')}` : undefined}
-          aria-disabled={activeDay ? undefined : 'true'}
-          aria-describedby={activeDay ? undefined : `${gridId}-note-why`}
-          onClick={() => { if (activeDay) openNote(activeDay.row, activeDay.d); }}
-        >
-          {noteVerb} note
-        </Button>
-        {!activeDay && <span id={`${gridId}-note-why`} className={styles.reason}>Choose a day cell first</span>}
-      </div>
       {/* Always a Select, whatever the number of weeks: a SegmentedControl clipped its labels at 320 px (UX-TIMESHEET-B-AUDIT M4). */}
       {narrow && weeks.length > 1 && (
         <Select
@@ -464,15 +471,15 @@ export function TimesheetGrid() {
           data={weeks.map((w, i) => ({ value: String(i), label: weekLabel(w) }))}
         />
       )}
-      <div className={styles.hint} aria-hidden="true">Arrows move · type a number to enter hours · N adds a note · Esc undoes the cell</div>
+      <div className={styles.hint} aria-hidden="true">Click a cell or type a number to enter hours. Hover a cell to add a note, or press N.</div>
       <div className={styles.scroller} data-view={narrow ? 'week' : 'full'} style={{ ['--ts-rh' as string]: 'clamp(9rem, 28vw, 16rem)' }}>
-        <table role="grid" id={tableId} className={styles.grid} aria-labelledby={`${gridId}-cap`} aria-describedby={`${gridId}-keys`} onKeyDown={handleKeyDown} onClick={handleClick} onFocus={handleGridFocus} onBlur={handleGridBlur}>
+        <table role="grid" id={tableId} className={styles.grid} aria-labelledby={`${gridId}-cap`} aria-describedby={`${gridId}-keys`} onKeyDown={handleKeyDown} onClick={handleClick} onMouseDown={handleMouseDown} onFocus={handleGridFocus} onBlur={handleGridBlur}>
           <caption id={`${gridId}-cap`} className={styles.srOnly}>Hours for {periodWords(periodStart, periodEnd)}, {STATUS_WORD[periodStatus]}</caption>
           <thead>
             <tr>
               <th scope="col" className={[styles.corner, styles.colHead].join(' ')}>Charge code</th>
               {days.map((day) => (
-                <DayHeader key={day.d} gridId={gridId} d={day.d} date={day.date} isToday={day.isToday} weekend={day.weekend} hours={dayTotals[day.d]} noHoursLogged={day.noHours} />
+                <DayHeader key={day.d} gridId={gridId} d={day.d} date={day.date} isToday={day.isToday} future={day.future} hours={dayTotals[day.d]} noHoursLogged={day.noHours} />
               ))}
               <th scope="col" id={`${gridId}-ch-total`} className={[styles.colHead, styles.totalHead].join(' ')}>Total</th>
             </tr>
@@ -503,6 +510,7 @@ export function TimesheetGrid() {
                           editable={info.editable}
                           whyId={info.whyKey ? why[info.whyKey] : null}
                           hasNote={Boolean(notes[key]?.trim())}
+                          noteViewable={noteEditable(day.d) || Boolean(notes[key]?.trim())}
                           provenanceId={row.provenance[day.d] ? `${gridId}-prov-${row.r}-${day.d}` : null}
                           isActive={isActive(row.r, day.d)}
                           unsaved={dirty.has(key)}
@@ -527,13 +535,13 @@ export function TimesheetGrid() {
               <th scope="row" id={`${gridId}-rh-foot`} data-r="foot" data-c={RH} tabIndex={isActive('foot', RH) ? 0 : -1} className={[styles.cell, styles.rowHeader].join(' ')}>Daily total</th>
               {days.map((day) => (
                 <TotalCell key={day.d} r="foot" c={day.d as never} value={dayTotals[day.d]} isActive={isActive('foot', day.d)} whyId={why.total}
-                  srExtra={day.noHours ? ', no hours, past workday' : undefined} weekend={day.weekend} today={day.isToday} />
+                  srExtra={day.noHours ? ', no hours, past workday' : undefined} />
               ))}
               <TotalCell r="foot" c={TOTAL} value={grand} isActive={isActive('foot', TOTAL)} whyId={why.total} grand />
             </tr>
           </tfoot>
         </table>
-        <p id={`${gridId}-keys`} className={styles.srOnly}>Arrow keys move between days and codes. Type a number to enter hours. Press N to add a note. Escape undoes the cell.</p>
+        <p id={`${gridId}-keys`} className={styles.srOnly}>Arrow keys move. Type a number to enter hours. N adds or edits a note. Escape undoes the cell.</p>
         <div hidden>
           <span id={why.future}>{reasonText.future}</span>
           <span id={why.closed}>{reasonText.closed}</span>

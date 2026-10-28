@@ -13,15 +13,14 @@ export interface TotalCellProps {
   whyId: string;
   /** Extra screen-reader words after the value (e.g. ", no hours, past workday"). */
   srExtra?: string;
-  weekend?: boolean;
-  today?: boolean;
   grand?: boolean;
 }
 
 /** A calculated total (row total, a footer day, or the grand total): read-only, 2 decimals (§4.2). Memoized (§7). */
 export const TotalCell = memo(function TotalCell(p: TotalCellProps) {
   useContext(RenderProbeContext)?.('cell', `${p.r}:${p.c}`);
-  const className = [styles.cell, styles.total, p.weekend && styles.weekend, p.today && styles.todayCol, p.grand && styles.grand].filter(Boolean).join(' ');
+  // The weekend and today tints are for body day cells only (§14.2); the Total column gets the heavier line before it.
+  const className = [styles.cell, styles.total, p.c === 'total' && styles.totalCol, p.grand && styles.grand].filter(Boolean).join(' ');
   return (
     <td role="gridcell" data-r={p.r} data-c={p.c} aria-readonly="true" aria-describedby={p.whyId} tabIndex={p.isActive ? 0 : -1} className={className}>
       <span className={styles.value}>{p.value.toFixed(2)}</span>

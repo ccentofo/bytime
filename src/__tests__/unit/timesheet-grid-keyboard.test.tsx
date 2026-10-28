@@ -146,6 +146,25 @@ describe('navigation (B-T2)', () => {
     expect(focused()).toBe(before);
   });
 
+  it('v5.2: exactly one tab stop in the grid area with note triggers rendered; no trigger is focusable', async () => {
+    const { user } = setup(fixture({ notes: { [`${CC}-1`]: { body: 'Site visit', revision: 1 } } }));
+    const area = grid().closest('[class*="gridArea"]')!;
+    expect(grid().querySelectorAll('[data-note-trigger]').length).toBeGreaterThan(10);
+    expect(area.querySelectorAll('[tabindex="0"]')).toHaveLength(1);
+    for (const t of grid().querySelectorAll('[data-note-trigger]')) {
+      expect(t.tagName).toBe('SPAN');
+      expect(t.hasAttribute('tabindex')).toBe(false);
+      expect(t.getAttribute('role')).toBeNull();
+      expect(t.getAttribute('aria-hidden')).toBe('true');
+      expect(t.querySelector('button, a, input, [tabindex]')).toBeNull();
+    }
+    await enterGrid(user);
+    await press(user, '{ArrowLeft}{ArrowLeft}{ArrowLeft}{ArrowLeft}{ArrowLeft}');  // 0:1, has a note
+    expect(area.querySelectorAll('[tabindex="0"]')).toHaveLength(1);
+    await user.tab();
+    expect((document.activeElement as HTMLElement).textContent).toBe('after');      // straight out: no trigger stop
+  });
+
   it('Tab leaves the grid', async () => {
     const { user } = setup();
     await enterGrid(user);
