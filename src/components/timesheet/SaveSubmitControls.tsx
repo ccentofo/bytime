@@ -1,7 +1,7 @@
 'use client';
 
 import { useId } from 'react';
-import { Badge, Button, Group, Stack, Text } from '@mantine/core';
+import { Badge, Button, Group, Loader, Stack, Text } from '@mantine/core';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { useTimesheetActions, useTimesheetState } from '@/components/timesheet/TimesheetContext';
 import { formatCalendarDate, isBefore } from '@/lib/calendar-date';
@@ -28,7 +28,7 @@ export function SaveSubmitControls({ onDiscard }: { onDiscard: () => void }) {
           : isBefore(today, submitOpensOn) ? `Opens ${formatCalendarDate(submitOpensOn, 'dddd, MMM D')}`
             : checks.totalPeriodHours <= 0 ? 'Add hours before submitting'
               : null;
-  const canSave = editable && hasUnsaved && !isLoadingPeriod;
+  const canSave = editable && hasUnsaved && !isLoadingPeriod && !state.isSaving;
   // UX-TIMESHEET-B-AUDIT H2: no Discard while a save is in flight — the save would land after the revert and move the
   // baseline under it (the reverted value would then count as an unsaved change).
   const canDiscard = hasUnsaved && !isLoadingPeriod && !state.isSaving;
@@ -45,10 +45,11 @@ export function SaveSubmitControls({ onDiscard }: { onDiscard: () => void }) {
           onClick={() => { if (canDiscard) onDiscard(); }}>
           Discard changes
         </Button>
-        <Button variant="default" leftSection={<Icons.save size={ICON_SIZE.button} />} loading={state.isSaving}
+        {/* Never Mantine's `loading`: it sets the real `disabled`, and a keyboard user's focus would drop to <body> (M2). */}
+        <Button variant="default" leftSection={state.isSaving ? <Loader size={ICON_SIZE.button} aria-hidden="true" /> : <Icons.save size={ICON_SIZE.button} />}
           aria-disabled={canSave ? undefined : 'true'} data-disabled={!canSave || undefined}
           onClick={() => { if (canSave) void requestSave(); }}>
-          Save
+          {state.isSaving ? 'Saving…' : 'Save'}
         </Button>
         <Button color="success" leftSection={<Icons.submit size={ICON_SIZE.button} />}
           aria-disabled={submitWhy ? 'true' : undefined} aria-describedby={submitWhy ? `${id}-submit-why` : undefined}
@@ -58,7 +59,7 @@ export function SaveSubmitControls({ onDiscard }: { onDiscard: () => void }) {
         </Button>
       </Group>
       {submitWhy && <Text id={`${id}-submit-why`} className={styles.reason}>{submitWhy}</Text>}
-      {/* Discard's reason while saving, for screen readers (the Save button already shows the save visually). */}
+      {/* Discard's reason while saving, for screen readers (the Save button already says "Saving…"). */}
       {state.isSaving && <span id={`${id}-discard-why`} className={styles.srOnly}>Saving…</span>}
     </Stack>
   );

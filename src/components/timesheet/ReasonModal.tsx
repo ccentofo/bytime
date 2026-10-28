@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Modal, Select, Textarea, Button, Group, Stack, Text, Table, Badge } from '@mantine/core';
+import { Modal, Select, Textarea, Button, Group, Loader, Stack, Text, Table, Badge } from '@mantine/core';
 import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { REASON_CODES, reasonNeedsComment, OTHER_REASON_COMMENT_REQUIRED } from '@/lib/reason-codes';
 import type { DirtyCell, ChargeCode } from '@/types/timesheet';
@@ -71,7 +71,7 @@ export function ReasonModal({
   }
 
   async function handleConfirm() {
-    if (!canSubmit) return;
+    if (!canSubmit || isSaving) return;
     await onConfirm(reasonCode!, comment.trim());
     setReasonCode(null);
     setComment('');
@@ -158,16 +158,18 @@ export function ReasonModal({
         />
 
         <Group justify="flex-end" mt="md">
-          <Button variant="default" onClick={handleClose} disabled={isSaving}>
+          {/* aria-disabled plus the handlers' guards, never `disabled` or `loading` (focus would drop, M2). */}
+          <Button variant="default" onClick={handleClose} aria-disabled={isSaving || undefined} data-disabled={isSaving || undefined}>
             Cancel
           </Button>
           <Button
             onClick={handleConfirm}
-            disabled={!canSubmit}
-            loading={isSaving}
+            aria-disabled={!canSubmit || isSaving || undefined}
+            data-disabled={!canSubmit || isSaving || undefined}
+            leftSection={isSaving ? <Loader size={16} aria-hidden="true" /> : undefined}
             color="signal"
           >
-            Confirm Save
+            {isSaving ? 'Saving…' : 'Confirm Save'}
           </Button>
         </Group>
       </Stack>

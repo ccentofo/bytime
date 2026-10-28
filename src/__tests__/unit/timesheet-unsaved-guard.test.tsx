@@ -347,6 +347,22 @@ describe('a save in flight (H2)', () => {
     expect(button('Discard changes').getAttribute('aria-describedby')).toBeNull();
   });
 
+  it('M2: Save never gets `disabled` during a pending save — it says "Saving…", is aria-disabled, keeps focus, ignores clicks', async () => {
+    const land = deferredSave();
+    const { user } = setup();
+    await edit(6);
+    await user.click(button('Save'));
+    const saving = button('Saving…');
+    expect(saving).toBe(document.activeElement);
+    expect(saving.hasAttribute('disabled')).toBe(false);
+    expect(saving.getAttribute('aria-disabled')).toBe('true');
+    await user.click(saving);
+    expect(actions.saveTimesheetBatch).toHaveBeenCalledTimes(1);
+    await land(okSave({ [`${CC}-6`]: 1 }));
+    await settle();
+    expect(button('Save')).toBe(document.activeElement);
+  });
+
   it('‹ during a slow save waits for it, then moves WITHOUT a confirm once the save covered everything', async () => {
     const land = deferredSave();
     const { user } = setup();

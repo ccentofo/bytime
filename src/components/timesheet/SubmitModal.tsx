@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Modal, Button, Group, Stack, Text, Textarea, Alert, Checkbox, Paper } from '@mantine/core';
+import { Modal, Button, Group, Loader, Stack, Text, Textarea, Alert, Checkbox, Paper } from '@mantine/core';
 import { Icons } from '@/components/ui/icons';
 
 type Props = {
@@ -29,7 +29,7 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
   }
 
   async function handleSubmit() {
-    if (!certified) return;
+    if (!certified || isSaving) return;
 
     // Append completeness warnings to the comment for audit trail
     let fullComment = comment.trim();
@@ -113,16 +113,18 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
         />
 
         <Group justify="flex-end" mt="md">
-          <Button variant="default" onClick={handleClose} disabled={isSaving}>
+          {/* aria-disabled plus the handlers' guards, never `disabled` or `loading` (focus would drop, M2). */}
+          <Button variant="default" onClick={handleClose} aria-disabled={isSaving || undefined} data-disabled={isSaving || undefined}>
             Cancel
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={!certified}
-            loading={isSaving}
+            aria-disabled={!certified || isSaving || undefined}
+            data-disabled={!certified || isSaving || undefined}
+            leftSection={isSaving ? <Loader size={16} aria-hidden="true" /> : undefined}
             color="success"
           >
-            Submit Timesheet
+            {isSaving ? 'Submitting…' : 'Submit Timesheet'}
           </Button>
         </Group>
       </Stack>

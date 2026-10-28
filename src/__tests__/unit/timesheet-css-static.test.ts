@@ -38,6 +38,14 @@ describe('timesheet reflow and text size (B-T13)', () => {
     }
   });
 
+  it('M2: no Mantine `loading` and no real `disabled` on any timesheet control (aria-disabled + a click guard instead)', () => {
+    for (const f of walk(DIR).filter((f) => f.endsWith('.tsx'))) {
+      const src = stripComments(readFileSync(f, 'utf8'));
+      expect(src, f).not.toMatch(/\sloading=/);
+      expect(src, f).not.toMatch(/(?<![-\w])disabled=/);
+    }
+  });
+
   it('no size="xs" (and no 10–13px inline font sizes) in the timesheet TSX', () => {
     for (const f of walk(DIR).filter((f) => f.endsWith('.tsx'))) {
       const src = stripComments(readFileSync(f, 'utf8'));
