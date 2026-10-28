@@ -17,6 +17,7 @@
 >
 > **Status:** v5.2 FINAL, 2026-10-28, lead architect. Self-contained. Pre-mortem history is in §13.
 > - v5.1 changed only the NoteModal button wording (§4.8).
+> - **v5.4 (§16), product owner polish:** an editor that never widens its column, one subtle edit ring, the note icon in the corner, and a hint with no "hover" wording. §16 overrides §4.6's focus ring and §14.5's hint.
 > - **v5.3 (§15) fixes two things the browser check found:** the compiled CSS dropped every `light-dark()` color, and the page and grid double-scroll. §15 overrides §14.1's token syntax and §4.7's scroller height.
 > - **v5.2 is the visual revision in §14.** It supersedes the grid's look, the note button, the day meters and the weekly notice's styling, wherever §4.1, §4.2, §4.6 and §4.8 say otherwise. Approved mockup: `ux-mockups/timesheet-grid-v2.html`.
 >
@@ -1113,3 +1114,82 @@ In light and dark, at 1280 px and at 400 % zoom (week view):
   - Home looks as designed in dark mode;
   - a red row-action menu item shows its hover;
   - the input focus ring in dark mode is light blue (UX-1 fix now active).
+
+
+## 16. v5.4: editing polish (2026-10-28, product owner review)
+
+**Product owner findings on v5.3:**
+1. Clicking into a cell widens its column.
+2. The hint "Hover a cell to add a note, or press N" is misleading: hovering doesn't add a note. Mouse users find the icon by hovering anyway, so the hint doesn't need to mention it.
+3. The bright blue box around the input hides the note icon.
+
+**Decisions (product owner):**
+- **N stays as the keyboard way to open a note** (nav mode, unchanged: Section 508 / WCAG 2.1.1). The visible hint may mention it.
+- For mouse users, the way to add a note is the note icon in the cell. The hover reveal works (confirmed by the product owner) and stays as is.
+
+### 16.1 The editor overlays the cell and never changes layout
+```css
+.day { position: relative; }            /* already, for the trigger */
+.editor {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  min-inline-size: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 0.25rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--mantine-color-text);
+  font: inherit;
+  text-align: center;
+  outline: none;                         /* the cell's ring (16.2) shows focus */
+}
+.editor[aria-invalid='true'] { box-shadow: inset 0 0 0 2px var(--invalid); }
+```
+- Add `--invalid` to the `.page` tokens: red-7 light, red-5 dark (in the §15.1 dark override block).
+- The visible `#err` text and `aria-invalid` are unchanged.
+- **Delete `min-inline-size: 3rem`** from `.editor`; it was what widened the column.
+
+### 16.2 One subtle ring, on the cell edge
+Replace the §4.6 focus rule (no outline plus body-coloured inner ring):
+```css
+.page { --ring: var(--mantine-color-signal-6); }   /* both schemes: ≥ 3:1 on body, tints and hover (≈4.4:1 light, ≈3.7:1 dark) */
+.cell:focus,
+.day:focus-within {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--ring);
+}
+@media (forced-colors: active) {
+  .cell:focus,
+  .day:focus-within { outline: 2px solid CanvasText; outline-offset: -2px; }
+}
+```
+- It's a `box-shadow`, so it paints under the cell's children: the note icon sits **on top of** the ring, never behind it.
+- Row headers and totals use the same `.cell:focus` rule.
+
+### 16.3 The note icon in the corner
+- `.noteTrigger`: `inset-block-start: 1px; inset-inline-end: 1px; inline-size: 1.25rem; block-size: 1.25rem; z-index: 1;` with the icon at `size={14}`.
+- Show/hide rules are unchanged: the cell has a note, is active, or is under the pointer (the hover reveal works; don't change it).
+
+### 16.4 Copy
+- **Visible hint above the grid:** "Click a cell to enter hours. Keyboard: arrow keys move, N adds a note." No "hover" wording anywhere. This is accurate: the arrow keys leave edit mode, and N works on a selected cell.
+- **The sr-only keys description** (`{id}-keys`) stays: "Arrow keys move. Type a number to enter hours. N adds or edits a note. Escape undoes the cell."
+
+### 16.5 Tests (each must fail when reverted)
+- **B-T13 (static):**
+  - `.editor` has `position: absolute`, `inset: 0` and no `min-inline-size` other than `0`;
+  - the focus rule uses `box-shadow` with `var(--ring)`, plus a `forced-colors` outline fallback, and no `outline:` other than `none` outside that media block;
+  - the trigger inset is `1px` with `z-index: 1`;
+  - `--invalid` and `--ring` are defined (`--invalid` in both blocks).
+- **B-T1:** the visible hint's text is exactly "Click a cell to enter hours. Keyboard: arrow keys move, N adds a note.", and no visible text in the timesheet page matches `/hover/i`. The sr keys description still mentions N.
+- **B-T5:** N on a selected cell (nav mode) still opens the note; N while editing types nothing and opens nothing (unchanged behaviour, now pinned).
+
+### 16.6 Product owner check
+- **Click a cell and type:** the column doesn't change width, there's one thin blue ring on the cell edge, and the note icon sits in the corner, fully visible.
+- **An invalid value** (`7.3`) shows a red ring and the message.
+- **Hover a cell:** the note icon appears; click it to open the note.
+- **The hint** reads "Click a cell to enter hours. Keyboard: arrow keys move, N adds a note."
+- **Arrow keys to a cell, then N:** the note opens.
