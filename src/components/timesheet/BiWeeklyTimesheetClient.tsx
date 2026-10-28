@@ -2,7 +2,7 @@
 
 import { Container, Paper, Skeleton, Stack } from '@mantine/core';
 import { TimesheetProvider, useTimesheet } from '@/components/timesheet/TimesheetContext';
-import { BiWeeklyTable } from '@/components/timesheet/BiWeeklyTable';
+import { TimesheetGrid } from '@/components/timesheet/TimesheetGrid';
 import { DailyNoteModal } from '@/components/timesheet/DailyNoteModal';
 import { PayPeriodSelector } from '@/components/timesheet/PayPeriodSelector';
 import { TimesheetToolbar } from '@/components/timesheet/TimesheetToolbar';
@@ -30,7 +30,7 @@ function TimesheetContent() {
             <Skeleton height={40} radius="sm" />
           </Stack>
         ) : (
-          <BiWeeklyTable />
+          <TimesheetGrid />
         )}
       </Paper>
       <DailyNoteModal />

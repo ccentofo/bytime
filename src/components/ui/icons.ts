@@ -6,6 +6,7 @@ import {
   IconDownload, IconEye, IconHistory, IconInfoCircle, IconKey, IconKeyOff, IconList, IconLock, IconLockOpen,
   IconLogout, IconMoon, IconPassword, IconPencil, IconPencilCog, IconPlus, IconReceipt, IconRefresh, IconReportMoney, IconRestore,
   IconScale, IconSearch, IconSun, IconTrash, IconUpload, IconUser, IconUsers, IconWand, IconX,
+  IconArrowBack, IconCalendarEvent, IconChevronLeft, IconDeviceFloppy, IconFileImport, IconLockSquareRounded, IconNote, IconSend,
 } from '@tabler/icons-react';
 
 /**
@@ -83,6 +84,17 @@ export const Icons = {
   signOut: IconLogout,
   themeLight: IconSun,
   themeDark: IconMoon,
+
+  // Timesheet (feature-plan-ux-timesheet-ui.md §4.1, §4.6)
+  note: IconNote,
+  import: IconFileImport,
+  lock: IconLockSquareRounded,
+  prevPeriod: IconChevronLeft,
+  nextPeriod: IconChevronRight,
+  save: IconDeviceFloppy,
+  discard: IconArrowBack,
+  submit: IconSend,
+  today: IconCalendarEvent,
 } as const;
 
 export type IconKey = keyof typeof Icons;
@@ -94,4 +106,5 @@ export const ICON_SIZE = { menu: 16, button: 16, nav: 18, stat: 20 } as const;
 export const ICON_ALIASES: ReadonlyArray<{ keys: readonly [IconKey, IconKey]; reason: string }> = [
   { keys: ['approve', 'statusSuccess'], reason: 'A check means "done / OK" both as an action (approve) and as a status.' },
   { keys: ['apiKey', 'apiKeys'], reason: 'The same key stands for an API key, whether creating one or the API keys settings page.' },
+  { keys: ['expand', 'nextPeriod'], reason: 'A right chevron means "forward": open a collapsed group, or go to the next pay period.' },
 ];

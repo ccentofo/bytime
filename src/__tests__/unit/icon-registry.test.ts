@@ -49,7 +49,6 @@ export const ICON_IMPORT_ALLOWLIST = [
   'src/components/timesheet/SubmitModal.tsx',
   'src/components/timesheet/TimesheetDashboard.tsx',
   'src/components/timesheet/TimesheetToolbar.tsx',
-  'src/components/timesheet/cells/HourCell.tsx',
 ];
 
 function sourceFiles(dir: string): string[] {

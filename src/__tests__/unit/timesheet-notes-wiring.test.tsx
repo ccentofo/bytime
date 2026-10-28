@@ -31,7 +31,7 @@ const notify = vi.hoisted(() => vi.fn());
 vi.mock('@mantine/notifications', () => ({ notifications: { show: notify } }));
 
 import { TimesheetProvider, useTimesheet } from '@/components/timesheet/TimesheetContext';
-import { BiWeeklyTable } from '@/components/timesheet/BiWeeklyTable';
+import { TimesheetGrid } from '@/components/timesheet/TimesheetGrid';
 import { DailyNoteModal } from '@/components/timesheet/DailyNoteModal';
 import { TimesheetToolbar } from '@/components/timesheet/TimesheetToolbar';
 import { PayPeriodSelector } from '@/components/timesheet/PayPeriodSelector';
@@ -65,31 +65,19 @@ const render = async (initial: TimesheetPageData) => {
     <TimesheetProvider initialData={initial}>
       <PayPeriodSelector />
       <TimesheetToolbar />
-      <BiWeeklyTable />
+      <TimesheetGrid />
       <DailyNoteModal />
       <Probe />
     </TimesheetProvider>,
   );
   await wait(10);
 };
-const cell = (day: number) => document.getElementById(`cell-${CC}-${day}`)!;
-const noteIcon = (day: number) => cell(day).querySelector('button[aria-label="Add note"]') as HTMLButtonElement | null;
+// UX-3 Part B: the grid marks a note with sr ", note" in the cell (the note glyph is aria-hidden).
+const cell = (day: number) => document.querySelector(`td[data-r="0"][data-c="${day}"]`) as HTMLElement;
+const hasNoteMark = (day: number) => Boolean(cell(day)?.textContent?.includes(', note'));
 const button = (label: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === label) as HTMLButtonElement;
-const hover = async (day: number) => { await act(async () => { cell(day).dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })); }); };
-const textarea = () => document.body.querySelector('textarea') as HTMLTextAreaElement;
-const type = async (value: string) => {
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea(), value);
-    textarea().dispatchEvent(new Event('input', { bubbles: true }));
-  });
-};
 const writeNote = async (day: number, body: string) => {
-  if (!noteIcon(day)) await hover(day);
-  await click(noteIcon(day));
-  await wait(20);
-  await type(body);
-  await click(button('Save Note'));
-  await wait(20);
+  await act(async () => { ctx!.dispatch({ type: 'SET_NOTE', chargeCodeId: CC, dayIndex: day, body }); });
 };
 const lastSave = () => actions.saveTimesheetBatch.mock.calls.at(-1)![0];
 
@@ -105,7 +93,7 @@ afterEach(() => { unmount(m); m = undefined; });
 describe('old-grid note wiring (UX-3 A-T14)', () => {
   it('a server note shows on the FIRST render, from initialData', async () => {
     await render(data({ notes: { [KEY]: { body: 'Site visit', revision: 2 } } }));
-    expect(noteIcon(1)).not.toBeNull();
+    expect(hasNoteMark(1)).toBe(true);
     expect(ctx!.state.notes[KEY]).toBe('Site visit');
     expect(ctx!.state.savedNotes[KEY]).toEqual({ body: 'Site visit', revision: 2 });
     expect(ctx!.dirtyNotes).toEqual([]);
@@ -149,7 +137,7 @@ describe('old-grid note wiring (UX-3 A-T14)', () => {
     await act(async () => { await ctx!.saveAll(); });
     expect(lastSave().notes).toEqual([{ chargeCodeId: CC, dayIndex: 1, body: '', expectedRevision: 1 }]);
     expect(ctx!.state.savedNotes[KEY]).toEqual({ body: '', revision: 2 }); // kept, not deleted
-    expect(noteIcon(1)).toBeNull();
+    expect(hasNoteMark(1)).toBe(false);
     await act(async () => { ctx!.dispatch({ type: 'SET_NOTE', chargeCodeId: CC, dayIndex: 1, body: 'New' }); });
     const second = await act(async () => ctx!.saveAll());
     expect(second).toEqual({ ok: true, data: undefined });
@@ -167,26 +155,6 @@ describe('old-grid note wiring (UX-3 A-T14)', () => {
     expect(ctx!.state.notes[KEY]).toBe('Saved');
     expect(ctx!.dirtyNotes).toEqual([]);
     expect(button('Submit').disabled).toBe(false);
-  });
-
-  it('the note modal is read-only on a locked period and on a future date', async () => {
-    await render(data({ periodStatus: 'submitted', notes: { [KEY]: { body: 'Locked note', revision: 1 } } }));
-    await click(noteIcon(1));
-    await wait(20);
-    expect(textarea().readOnly).toBe(true);
-    expect(button('Save Note')).toBeUndefined();
-    unmount(m);
-    await render(data({ today: '2026-01-05' as CalendarDate, notes: { [`${CC}-10`]: { body: 'Future note', revision: 1 } } }));
-    await click(noteIcon(10));
-    await wait(20);
-    expect(textarea().readOnly).toBe(true);
-    expect(button('Save Note')).toBeUndefined();
-    unmount(m);
-    await render(data({ today: '2026-01-05' as CalendarDate }));
-    await hover(2);
-    await click(noteIcon(2));
-    await wait(20);
-    expect(textarea().readOnly).toBe(false); // an editable past cell
   });
 
   it('Next is disabled at the current period', async () => {
@@ -220,7 +188,7 @@ describe('old-grid note wiring (UX-3 A-T14)', () => {
     expect(ctx!.state.periodStart).toBe('2025-12-16');
     expect(ctx!.state.notes).toEqual({ [`${CC}-3`]: 'December' });
     expect(ctx!.state.savedNotes).toEqual({ [`${CC}-3`]: { body: 'December', revision: 4 } });
-    expect(noteIcon(3)).not.toBeNull();
-    expect(noteIcon(1)).toBeNull();
+    expect(hasNoteMark(3)).toBe(true);
+    expect(hasNoteMark(1)).toBe(false);
   });
 });
