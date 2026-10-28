@@ -215,6 +215,22 @@ describe('page layout (B-T6)', () => {
     expect(text).not.toContain('Week of Dec 29');                                             // edge week unknown outside days
   });
 
+  it('v5.3 (§15.2): the "Past timesheets" link sits in the header area (by the status line); the grid\'s wrapper is the gridSlot, the page\'s last child', () => {
+    renderTimesheet(page({}), <TimesheetPage />);
+    const pageEl = document.querySelector('[class*="page"]') as HTMLElement;
+    expect(pageEl.className).toMatch(/page/);
+    const slot = pageEl.lastElementChild as HTMLElement;
+    expect(slot.className).toMatch(/gridSlot/);
+    expect(slot.querySelector('table[role="grid"]')).not.toBeNull();
+    expect([...pageEl.children].filter((c) => /gridSlot/.test(c.className))).toHaveLength(1);
+    const link = [...document.querySelectorAll('a')].find((a) => a.textContent === 'Past timesheets')!;
+    expect(link.getAttribute('href')).toBe('/timesheet/history');
+    expect(slot.contains(link)).toBe(false);                                         // nothing below the scroller
+    const status = document.querySelector('[class*="statusLine"]')!;
+    expect(link.parentElement).toBe(status.parentElement);                           // next to the status line
+    expect(Boolean(link.compareDocumentPosition(slot) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
   it('v5.2 (§14.5): the weekly notice is one p[role="note"] — not a Mantine Alert — icon hidden, lines joined with " · "', () => {
     const two = page({ entries: [{ chargeCodeId: CC, hours: [0, 0, 0, 0, 8, 8, 8, 8, 0, 0, 0, 4, 4, 4, 4] }], workweekStartDay: 1, today: '2026-01-20' as CalendarDate,
       outsideWeekHours: { '2026-01-16': 0, '2026-01-17': 0, '2026-01-18': 0 } });

@@ -29,10 +29,16 @@ a {
 
 /* Focus and input-focus colors (UX-1 fix round 1, M1). Mantine draws them with --mantine-primary-color-filled, which is
    signal-7 in BOTH schemes (white button text needs it) — only 2.63:1 on dark cards. Use signal-4 in dark (≥ 3:1,
-   WCAG 1.4.11). `:root` raises the specificity above Mantine's own rules, so CSS load order doesn't matter. */
+   WCAG 1.4.11). `:root` raises the specificity above Mantine's own rules, so CSS load order doesn't matter. Explicit
+   scheme selectors, never the CSS light/dark function: Lightning CSS's output for it needs a color-scheme declaration,
+   and Mantine sets the scheme with an attribute (feature-plan-ux-timesheet-ui.md §15.1). */
 :root .mantine-focus-auto:focus-visible,
 :root .mantine-focus-always:focus {
-  outline-color: light-dark(var(--mantine-color-signal-7), var(--mantine-color-signal-4));
+  outline-color: var(--mantine-color-signal-7);
+}
+:root[data-mantine-color-scheme='dark'] .mantine-focus-auto:focus-visible,
+:root[data-mantine-color-scheme='dark'] .mantine-focus-always:focus {
+  outline-color: var(--mantine-color-signal-4);
 }
 :root[data-mantine-color-scheme='dark'] .mantine-Input-wrapper:is([data-variant='default'], [data-variant='filled']) {
   --input-bd-focus: var(--mantine-color-signal-4);

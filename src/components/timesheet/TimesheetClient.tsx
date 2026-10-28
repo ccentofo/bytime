@@ -20,8 +20,9 @@ import styles from './Timesheet.module.css';
 
 /**
  * The timesheet page (feature-plan-ux-timesheet-ui.md §4.1, mockup "Employee timesheet"): the header band (title, the
- * period control below it; status, self-approval badge and Save/Submit on the right), the status line, the returned
- * banner, the weekly notice (exempt only), the grid and the "Past timesheets" link.
+ * period control below it; status, self-approval badge and Save/Submit on the right), the status line with the "Past
+ * timesheets" link, the returned banner, the weekly notice (exempt only), then the grid's slot, which fills the rest of
+ * the viewport (§15.2: one scroll container).
  */
 export function TimesheetClient({ initialData }: { initialData: TimesheetPageData }) {
   return (
@@ -46,37 +47,45 @@ export function TimesheetPage() {
   };
 
   return (
-    <Container fluid px="md" py="lg" className={styles.page}>
-      <PageHeader
-        title="Timesheet"
-        below={<PeriodControl go={guardPeriodChange} />}
-        actions={(
-          <Group gap="sm" align="flex-start" wrap="wrap">
-            <Badge variant="light" size="lg" color={PERIOD_STATUS_COLOR[periodStatus]}>{STATUS_WORD[periodStatus]}</Badge>
-            {/* certified-outputs C2 (CO-D6): a self-approval is visibly labelled wherever the timesheet appears. */}
-            {state.approvalBadge && <Badge variant="outline" color="gray" size="lg">{state.approvalBadge}</Badge>}
-            <SaveSubmitControls onDiscard={() => setDiscardOpen(true)} />
+    <>
+      <Container fluid px="md" py="lg" className={styles.page}>
+        <PageHeader
+          title="Timesheet"
+          below={<PeriodControl go={guardPeriodChange} />}
+          actions={(
+            <Group gap="sm" align="flex-start" wrap="wrap">
+              <Badge variant="light" size="lg" color={PERIOD_STATUS_COLOR[periodStatus]}>{STATUS_WORD[periodStatus]}</Badge>
+              {/* certified-outputs C2 (CO-D6): a self-approval is visibly labelled wherever the timesheet appears. */}
+              {state.approvalBadge && <Badge variant="outline" color="gray" size="lg">{state.approvalBadge}</Badge>}
+              <SaveSubmitControls onDiscard={() => setDiscardOpen(true)} />
+            </Group>
+          )}
+        />
+        {/* The header area (§15.2): everything above the grid keeps its natural height. */}
+        <Stack gap="sm" mb="sm">
+          {sessionAlert && (
+            // Visual only (role="note"): the announcer already spoke the message assertively (§4.5).
+            <Alert role="note" color="red" variant="light" icon={<Icons.statusError size={ICON_SIZE.button} />} data-testid="session-expired">
+              <Text size="sm">{sessionAlert.message}</Text>
+              {sessionAlert.signInHref && <Anchor href={sessionAlert.signInHref} target="_blank" rel="noopener" size="sm" fw={600}>Sign in (new tab)</Anchor>}
+            </Alert>
+          )}
+          <Group justify="space-between" align="baseline" gap="sm" wrap="wrap">
+            <StatusLine />
+            <Anchor component={Link} href="/timesheet/history" size="sm">Past timesheets</Anchor>
           </Group>
-        )}
-      />
-      <Stack gap="sm">
-        {sessionAlert && (
-          // Visual only (role="note"): the announcer already spoke the message assertively (§4.5).
-          <Alert role="note" color="red" variant="light" icon={<Icons.statusError size={ICON_SIZE.button} />} data-testid="session-expired">
-            <Text size="sm">{sessionAlert.message}</Text>
-            {sessionAlert.signInHref && <Anchor href={sessionAlert.signInHref} target="_blank" rel="noopener" size="sm" fw={600}>Sign in (new tab)</Anchor>}
-          </Alert>
-        )}
-        <StatusLine />
-        {periodStatus === 'rejected' && (
-          <Alert role="note" color="warning" variant="light" icon={<Icons.statusWarning size={ICON_SIZE.button} />} title="Returned for corrections" data-testid="returned-banner">
-            {state.reviewComment && <Text size="sm">&ldquo;{state.reviewComment}&rdquo;</Text>}
-          </Alert>
-        )}
-        <WeeklyNotice />
-        <TimesheetGrid />
-        <Anchor component={Link} href="/timesheet/history" size="sm">Past timesheets</Anchor>
-      </Stack>
+          {periodStatus === 'rejected' && (
+            <Alert role="note" color="warning" variant="light" icon={<Icons.statusWarning size={ICON_SIZE.button} />} title="Returned for corrections" data-testid="returned-banner">
+              {state.reviewComment && <Text size="sm">&ldquo;{state.reviewComment}&rdquo;</Text>}
+            </Alert>
+          )}
+          <WeeklyNotice />
+        </Stack>
+        {/* The page's last child and the only part that flexes: the grid fills the remaining height (one scroll container). */}
+        <div className={styles.gridSlot}>
+          <TimesheetGrid />
+        </div>
+      </Container>
       <ConfirmModal
         opened={discardOpen}
         title={`Discard ${unsavedCount} unsaved ${unsavedCount === 1 ? 'change' : 'changes'}?`}
@@ -85,6 +94,6 @@ export function TimesheetPage() {
         onConfirm={discard}
         onCancel={() => setDiscardOpen(false)}
       />
-    </Container>
+    </>
   );
 }

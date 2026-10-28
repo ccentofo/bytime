@@ -16,6 +16,7 @@ const walk = (dir: string): string[] => readdirSync(dir).flatMap((n) => {
   return statSync(full).isDirectory() ? walk(full) : [full];
 });
 const css = () => readFileSync(path.join(DIR, 'Timesheet.module.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+const DARK_PAGE = ":global([data-mantine-color-scheme='dark']) .page";
 const ruleOf = (sheet: string, selector: string) => {
   const i = sheet.indexOf(`${selector} {`);
   return i < 0 ? null : sheet.slice(i, sheet.indexOf('}', i) + 1);
@@ -54,23 +55,57 @@ describe('timesheet reflow and text size (B-T13)', () => {
     }
   });
 
-  it('the scroller is height-limited with sticky headers; the corner sits above both; the narrow/short override lifts both', () => {
+  it('one scroll container (§15.2): the page is the viewport and the scroller fills it, with sticky headers; the corner sits above both; the narrow/short override lifts all of it', () => {
     const sheet = css();
-    expect(ruleOf(sheet, '.scroller')).toMatch(/overflow: auto;[\s\S]*max-height: max\(18rem, calc\(100dvh - var\(--ts-chrome\)\)\);/);
+    const page = ruleOf(sheet, '.page')!;
+    expect(page).toMatch(/display: flex;\s*flex-direction: column;\s*box-sizing: border-box;/);
+    expect(page).toContain('block-size: calc(100dvh - var(--app-shell-header-offset, 0rem) - 2 * var(--app-shell-padding, 0rem));');
+    expect(sheet).toMatch(/\.page > \* \{\s*flex: 0 0 auto;\s*\}/);
+    expect(sheet).toMatch(/\.page > \.gridSlot \{\s*flex: 1 1 auto;\s*min-block-size: 0;\s*display: flex;\s*flex-direction: column;\s*\}/);
+    expect(ruleOf(sheet, '.gridArea')).toMatch(/flex: 1 1 auto;\s*min-block-size: 0;/);
+    const scroller = ruleOf(sheet, '.scroller')!;
+    expect(scroller).toMatch(/overflow: auto;\s*flex: 1 1 auto;\s*min-block-size: 18rem;\s*max-height: none;/);
+    expect(scroller).not.toMatch(/calc\(100dvh/);
+    expect(sheet).not.toMatch(/--ts-chrome/);
     expect(ruleOf(sheet, '.scroller thead th')).toMatch(/position: sticky;\s*top: 0;\s*z-index: 2;/);
     expect(ruleOf(sheet, ".scroller th[scope='row']")).toMatch(/position: sticky;\s*left: 0;\s*z-index: 1;/);
     expect(ruleOf(sheet, '.scroller thead th.corner')).toMatch(/left: 0;\s*z-index: 3;/);
     const media = sheet.slice(sheet.indexOf('@media (max-height: 40em), (max-width: 40em)'));
-    expect(media).toMatch(/\.scroller \{\s*max-height: none;\s*\}/);
+    expect(media).toMatch(/\.page \{\s*block-size: auto;\s*\}/);
+    expect(media).toMatch(/\.scroller \{\s*flex: none;\s*min-block-size: 0;\s*max-height: none;\s*\}/);
     expect(media).toMatch(/\.scroller thead th,\s*\.scroller th\[scope='row'\] \{\s*position: static;\s*\}/);
-    expect(ruleOf(sheet, '.page')).toMatch(/--ts-chrome: 15rem;/);
+    // The media block comes after the rules it overrides (same specificity: source order decides).
+    expect(sheet.indexOf('@media (max-height: 40em), (max-width: 40em)')).toBeGreaterThan(sheet.indexOf('.scroller {'));
   });
 
-  it('M3: no `-filled` color as TEXT color (it fails 4.5:1 in dark mode); the closed note and grand total use light-dark pairs', () => {
+  it('M3: no `-filled` color as TEXT color (it fails 4.5:1 in dark mode); the closed note and grand total use the scheme tokens', () => {
     const sheet = css();
     expect(sheet).not.toMatch(/(?<![-\w])color:\s*var\(--mantine-color-[\w-]+-filled\)/);
-    expect(ruleOf(sheet, '.closedNote')).toContain('color: light-dark(var(--mantine-color-warning-8), var(--mantine-color-warning-4));');
-    expect(ruleOf(sheet, '.grand')).toContain('color: light-dark(var(--mantine-color-signal-7), var(--mantine-color-signal-4));');
+    expect(ruleOf(sheet, '.closedNote')).toContain('color: var(--warn-text);');
+    expect(ruleOf(sheet, '.grand')).toContain('color: var(--accent-text);');
+    expect(ruleOf(sheet, '.page')).toContain('--warn-text: var(--mantine-color-warning-8);');
+    expect(ruleOf(sheet, '.page')).toContain('--accent-text: var(--mantine-color-signal-7);');
+    expect(ruleOf(sheet, DARK_PAGE)).toContain('--warn-text: var(--mantine-color-warning-4);');
+    expect(ruleOf(sheet, DARK_PAGE)).toContain('--accent-text: var(--mantine-color-signal-4);');
+  });
+
+  // v5.3 (§15.1): explicit scheme selectors, never the CSS light/dark function (Lightning CSS's output for it is dropped).
+  it('v5.3: .page has a dark override block defining every scheme-dependent token, and every token the sheet uses is defined', () => {
+    const sheet = css();
+    const tokensIn = (rule: string) => [...rule.matchAll(/(--[\w-]+):/g)].map((m) => m[1]);
+    const light = tokensIn(ruleOf(sheet, '.page')!);
+    const dark = tokensIn(ruleOf(sheet, DARK_PAGE) ?? '');
+    expect(light).toEqual(expect.arrayContaining(['--line', '--line-strong', '--weekend', '--hover-tint', '--group', '--chip', '--accent-text', '--warn-text', '--unsaved-bg', '--notice-bg', '--today-tint']));
+    // Every light token has a dark value, except the today tint (a translucent signal-6, the same in both schemes).
+    expect([...light].filter((t) => t !== '--today-tint').sort()).toEqual([...dark].sort());
+    // The dark block comes after the light one.
+    expect(sheet.indexOf(`${DARK_PAGE} {`)).toBeGreaterThan(sheet.indexOf('.page {'));
+    // Every token the sheet reads (other than Mantine's, the shell's and --ts-rh set inline by the grid) is defined on .page.
+    const used = new Set([...sheet.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]).filter((t) => !t.startsWith('--mantine-') && !t.startsWith('--app-shell-') && t !== '--ts-rh'));
+    for (const t of used) expect(light, t).toContain(t);
+    for (const [sel, token] of [['.cell:focus', '--accent-text'], ['.code', '--chip'], ['.unsaved::after', '--warn-text'], ['.hasNote .noteTrigger', '--accent-text'], ['.weeklyNotice', '--notice-bg']] as const) {
+      expect(ruleOf(sheet, sel), sel).toContain(`var(${token})`);
+    }
   });
 
   // v5.2 visual revision (§14.6 B-T13).
@@ -98,8 +133,10 @@ describe('timesheet reflow and text size (B-T13)', () => {
     expect(ruleOf(sheet, '.scroller')).toMatch(/border: 1px solid var\(--line-strong\);[\s\S]*border-radius: var\(--mantine-radius-md\);/);
     for (const token of ['--line:', '--line-strong:', '--weekend:', '--today-tint:', '--hover-tint:', '--group:']) expect(ruleOf(sheet, '.page'), token).toContain(token);
     // The separators are darker than the cell lines in both schemes (ink-3 > ink-2, dark-4 > dark-5 on a dark body).
-    expect(ruleOf(sheet, '.page')).toContain('--line: light-dark(var(--mantine-color-ink-2), var(--mantine-color-dark-5));');
-    expect(ruleOf(sheet, '.page')).toContain('--line-strong: light-dark(var(--mantine-color-ink-3), var(--mantine-color-dark-4));');
+    expect(ruleOf(sheet, '.page')).toContain('--line: var(--mantine-color-ink-2);');
+    expect(ruleOf(sheet, '.page')).toContain('--line-strong: var(--mantine-color-ink-3);');
+    expect(ruleOf(sheet, DARK_PAGE)).toContain('--line: var(--mantine-color-dark-5);');
+    expect(ruleOf(sheet, DARK_PAGE)).toContain('--line-strong: var(--mantine-color-dark-4);');
     expect(ruleOf(sheet, '.noteTrigger')).toMatch(/display: none;/);
     expect(sheet).toMatch(/\.hasNote \.noteTrigger,\s*\[data-active\] \.noteTrigger \{\s*display: grid;/);
   });
