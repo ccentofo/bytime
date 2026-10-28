@@ -151,8 +151,11 @@ describe('every tenant table is exported or on the never-exported list (certifie
     const render = (file: string) => new PgDialect().sqlToQuery(EXPORT_TABLES.find((t) => t.file === file)!.columns.find((c) => c.header === 'self_approved')!.expr!).sql.replace(/\s+/g, ' ');
     const period = render('timesheet_periods');
     expect(period).toContain(`"timesheet_periods"."status" = 'approved'`);
-    expect(period).toContain(`COALESCE((SELECT pe.source FROM period_events pe WHERE pe.period_id = "timesheet_periods"."id" AND pe.event = 'approved' ORDER BY pe.created_at DESC LIMIT 1), 'app') <> 'migration'`);
-    expect(period).toContain(`COALESCE((SELECT pe.actor_id FROM period_events pe WHERE pe.period_id = "timesheet_periods"."id" AND pe.event = 'approved' ORDER BY pe.created_at DESC LIMIT 1), "timesheet_periods"."reviewed_by") = "timesheet_periods"."user_id"`);
+    // UX-3 fix round 2 (M4): the outer column is written literally — the export's single-table select renders an
+    // interpolated column unqualified ("id"), which binds to pe.id. (This dialect render qualifies it, which hid the bug.)
+    expect(period).toContain(`COALESCE((SELECT pe.source FROM period_events pe WHERE pe.period_id = timesheet_periods.id AND pe.event = 'approved' ORDER BY pe.created_at DESC LIMIT 1), 'app') <> 'migration'`);
+    expect(period).toContain(`COALESCE((SELECT pe.actor_id FROM period_events pe WHERE pe.period_id = timesheet_periods.id AND pe.event = 'approved' ORDER BY pe.created_at DESC LIMIT 1), "timesheet_periods"."reviewed_by") = "timesheet_periods"."user_id"`);
+    expect(period).not.toMatch(/pe\.period_id = "timesheet_periods"\."id"/);
     const event = render('period_events');
     expect(event).toContain(`"period_events"."event" = 'approved' AND "period_events"."source" <> 'migration' AND "period_events"."actor_id" = "period_events"."user_id"`);
   });

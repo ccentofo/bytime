@@ -102,10 +102,13 @@ function table<T extends PgTable>(file: string, t: T, columns: ExportColumn<T>[]
  * (src/server/internal/approval-label.ts): the period's latest decision event matching its status (else
  * reviewed_by) was made by the employee themselves, and was not an imported approval.
  */
+// The subqueries name the outer column literally (timesheet_periods.id): an interpolated column renders unqualified in
+// the export's single-table select ("id"), which Postgres binds to pe.id (UX-3 fix round 2, M4). Only ever used with
+// .from(timesheetPeriods), never aliased. The reviewed_by / user_id interpolations outside the subqueries are correct.
 const PERIOD_SELF_APPROVED = sql<boolean>`COALESCE(${timesheetPeriods.status} = 'approved'
-  AND COALESCE((SELECT pe.source FROM period_events pe WHERE pe.period_id = ${timesheetPeriods.id} AND pe.event = 'approved'
+  AND COALESCE((SELECT pe.source FROM period_events pe WHERE pe.period_id = timesheet_periods.id AND pe.event = 'approved'
     ORDER BY pe.created_at DESC LIMIT 1), 'app') <> 'migration'
-  AND COALESCE((SELECT pe.actor_id FROM period_events pe WHERE pe.period_id = ${timesheetPeriods.id} AND pe.event = 'approved'
+  AND COALESCE((SELECT pe.actor_id FROM period_events pe WHERE pe.period_id = timesheet_periods.id AND pe.event = 'approved'
     ORDER BY pe.created_at DESC LIMIT 1), ${timesheetPeriods.reviewedBy}) = ${timesheetPeriods.userId}, false)`;
 const EVENT_SELF_APPROVED = sql<boolean>`COALESCE(${periodEvents.event} = 'approved' AND ${periodEvents.source} <> 'migration'
   AND ${periodEvents.actorId} = ${periodEvents.userId}, false)`;

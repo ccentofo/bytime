@@ -56,8 +56,10 @@ export async function pastPeriods(
   const [bounds] = await db
     .select({
       createdAt: users.createdAt,
-      firstEntry: sql<string | null>`(SELECT MIN(pp_te.entry_date)::text FROM timesheet_entries pp_te WHERE pp_te.user_id = ${users.id})`,
-      firstPeriod: sql<string | null>`(SELECT MIN(pp_tp.period_start)::text FROM timesheet_periods pp_tp WHERE pp_tp.user_id = ${users.id})`,
+      // The user id is a bound parameter: an interpolated column renders unqualified in a single-table select ("id"), which
+      // Postgres binds to the subquery's own table (fix round 2, M3).
+      firstEntry: sql<string | null>`(SELECT MIN(pp_te.entry_date)::text FROM timesheet_entries pp_te WHERE pp_te.user_id = ${userId})`,
+      firstPeriod: sql<string | null>`(SELECT MIN(pp_tp.period_start)::text FROM timesheet_periods pp_tp WHERE pp_tp.user_id = ${userId})`,
     })
     .from(users)
     .where(eq(users.id, userId))

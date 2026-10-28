@@ -41,6 +41,7 @@ const ALLOWLIST: Array<{ file: string; expr: string; why: string }> = [
   { file: 'src/lib/cron/heartbeat.ts', expr: 'name', why: 'the heartbeat cron name (a CronName string)' },
   { file: 'src/lib/signup/signals.ts', expr: '`${key}:last`', why: 'a signal_counters key (a string)' },
   { file: 'src/server/internal/team-period-status.ts', expr: 'tz', why: 'the workspace timezone NAME for AT TIME ZONE (a string; UX-2 §4.5.2)' },
+  { file: 'src/server/internal/past-periods.ts', expr: 'userId', why: 'the session user id (a UUID string), bound as a parameter: an interpolated column renders unqualified in a single-table select (UX-3 fix round 2, M3)' },
   { file: 'src/server/internal/team-period-status.ts', expr: 'periodEnd', why: "a 'YYYY-MM-DD' calendar-date string, cast ::date (UX-2 §4.5.2)" },
 ];
 
