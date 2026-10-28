@@ -1,5 +1,5 @@
 import { auth } from '@/auth';
-import { redirect } from 'next/navigation';
+import { loginRedirect } from '@/lib/session';
 import { getTimesheetPeriod } from '@/server/actions/timesheet';
 import { BiWeeklyTimesheetClient } from '@/components/timesheet/BiWeeklyTimesheetClient';
 import type { TimesheetPageData } from '@/types/timesheet';
@@ -17,7 +17,7 @@ export const dynamic = 'force-dynamic';
 export default async function TimesheetPage({ searchParams }: { searchParams: Promise<{ [key: string]: string | string[] | undefined }> }) {
   const session = await auth();
   if (!session?.user?.id) {
-    redirect('/login');
+    return loginRedirect();
   }
 
   const userId = session.user.id;

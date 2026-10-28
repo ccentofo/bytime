@@ -1,6 +1,6 @@
 import { auth } from '@/auth';
 import { cookies } from 'next/headers';
-import { redirect } from 'next/navigation';
+import { loginRedirect } from '@/lib/session';
 import { AppShellWrapper } from './AppShellWrapper';
 import { getWaitingCount } from '@/server/internal/approval-queue';
 import { getTenantState } from '@/lib/tenant/context';
@@ -31,7 +31,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // (same reasoning as billing_only: don't reveal the workspace's state to an anonymous visitor).
   if (tenant.kind === 'policy_hold') {
     if (!session?.user) {
-      redirect('/login');
+      return loginRedirect();
     }
     const role = (session.user as any).role ?? 'employee';
     return <PolicyHoldScreen canExport={role === 'admin' && canExport(tenant.tenant, new Date())} />;
@@ -39,7 +39,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   if (tenant.kind === 'billing_only') {
     if (!session?.user) {
-      redirect('/login');
+      return loginRedirect();
     }
     const role = (session.user as any).role ?? 'employee';
     if (role === 'admin') {
@@ -50,7 +50,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   // full / read_only below — both serve the normal app.
   if (!session?.user) {
-    redirect('/login');
+    return loginRedirect();
   }
 
   const user = {

@@ -17,6 +17,7 @@ type Props = {
   approvedBy: string;
   approvedAt: string;
   appUrl: string;
+  periodStart: string;
 };
 
 export function TimesheetApprovedEmail({
@@ -25,6 +26,7 @@ export function TimesheetApprovedEmail({
   approvedBy,
   approvedAt,
   appUrl,
+  periodStart,
 }: Props) {
   return (
     <Html>
@@ -39,7 +41,7 @@ export function TimesheetApprovedEmail({
           </Text>
           <Text style={textStyle}>No further action is required.</Text>
           <Section style={ctaStyle}>
-            <Link href={`${appUrl}/timesheet`} style={buttonStyle}>
+            <Link href={`${appUrl}/timesheet?period=${periodStart}`} style={buttonStyle}>
               View Timesheet
             </Link>
           </Section>

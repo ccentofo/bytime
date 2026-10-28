@@ -46,9 +46,9 @@ describe('landing (T6)', () => {
     expect(await redirectOf()).toBeNull();
   });
 
-  it('static: LoginForm pushes "/" after sign-in (the landing page decides)', () => {
+  it('static: LoginForm pushes "/" after sign-in (the landing page decides) — unless a sanitized next was given (UX-3 A4.8)', () => {
     const src = readFileSync(path.resolve(__dirname, '../../app/login/LoginForm.tsx'), 'utf8');
-    expect(src).toContain("router.push('/');");
+    expect(src).toContain("router.push(next ?? '/');");
     expect(src).not.toContain("router.push('/timesheet')");
   });
 });

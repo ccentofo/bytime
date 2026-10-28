@@ -95,6 +95,8 @@ export async function sendTimesheetApprovedEmail(data: {
   approvedBy: string;
   approvedAt: string;
   appUrl: string;
+  /** UX-3 A4.8: the period's start ('YYYY-MM-DD'), so the button opens that period. */
+  periodStart: string;
 }): Promise<SendOutcome> {
   return deliverEmail(
     'timesheet-approved',
@@ -106,6 +108,7 @@ export async function sendTimesheetApprovedEmail(data: {
       approvedBy: data.approvedBy,
       approvedAt: data.approvedAt,
       appUrl: data.appUrl,
+      periodStart: data.periodStart,
     }),
   );
 }
@@ -119,6 +122,8 @@ export async function sendTimesheetRejectedEmail(data: {
   rejectedAt: string;
   rejectionComment: string;
   appUrl: string;
+  /** UX-3 A4.8: the period's start ('YYYY-MM-DD'), so the button opens that period. */
+  periodStart: string;
 }): Promise<SendOutcome> {
   return deliverEmail(
     'timesheet-rejected',
@@ -131,6 +136,7 @@ export async function sendTimesheetRejectedEmail(data: {
       rejectedAt: data.rejectedAt,
       rejectionComment: data.rejectionComment,
       appUrl: data.appUrl,
+      periodStart: data.periodStart,
     }),
   );
 }

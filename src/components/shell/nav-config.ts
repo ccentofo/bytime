@@ -74,7 +74,7 @@ export function landingPath(role: NavRole): '/home' | '/timesheet' {
 export const SETTINGS_BACK = (role: NavRole): NavLeaf => ({ label: 'Back to the app', href: landingPath(role), icon: 'back' });
 
 /** True on a path segment boundary: `/a/b` covers `/a/b` and `/a/b/c`, never `/a/bc`. */
-function covers(prefix: string, pathname: string): boolean {
+export function covers(prefix: string, pathname: string): boolean {
   return pathname === prefix || pathname.startsWith(prefix.endsWith('/') ? prefix : `${prefix}/`);
 }
 

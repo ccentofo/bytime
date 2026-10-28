@@ -1,9 +1,11 @@
 import { auth } from '@/auth';
 import { redirect } from 'next/navigation';
+import { headers } from 'next/headers';
 import { getDbForAuth } from '@/db';
 import { users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { reviewScope } from '@/server/internal/approval-rules';
+import { safeNext } from '@/lib/safe-next';
 
 export type SessionUser = {
   id: string;
@@ -143,12 +145,23 @@ export async function assertCanAccessEmployee(actor: SessionUser, employeeId: st
 }
 
 /**
+ * Send a signed-out visitor to sign-in, remembering where they were (feature-plan-ux-timesheet.md A4.8): the proxy sets
+ * `x-cp-path` (pathname + search, overwriting any incoming value); safeNext keeps only allowlisted same-origin app paths;
+ * the value is URL-encoded into `?next=`. Async (headers() is async in Next 16) and never returns — every caller writes
+ * `return loginRedirect();` so TypeScript narrows and nothing falls through.
+ */
+export async function loginRedirect(): Promise<never> {
+  const next = safeNext((await headers()).get('x-cp-path'));
+  redirect(next ? `/login?next=${encodeURIComponent(next)}` : '/login');
+}
+
+/**
  * Page-guard helper for Server Components. Redirects (never throws) since pages render HTML,
  * not JSON error responses. Use in place of inline `role !== 'admin'` checks in every admin page.
  */
 export async function requirePageRole(required: 'admin' | 'approver'): Promise<SessionUser> {
   const user = await getSessionUser();
-  if (!user) redirect('/login');
+  if (!user) return loginRedirect();
   if (required === 'admin' && user.role !== 'admin') redirect('/timesheet');
   if (required === 'approver' && user.role !== 'admin' && user.role !== 'supervisor') redirect('/timesheet');
   return user;

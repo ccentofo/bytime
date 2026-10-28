@@ -18,6 +18,7 @@ type Props = {
   rejectedAt: string;
   rejectionComment: string;
   appUrl: string;
+  periodStart: string;
 };
 
 export function TimesheetRejectedEmail({
@@ -27,6 +28,7 @@ export function TimesheetRejectedEmail({
   rejectedAt,
   rejectionComment,
   appUrl,
+  periodStart,
 }: Props) {
   return (
     <Html>
@@ -49,7 +51,7 @@ export function TimesheetRejectedEmail({
             Please review the comment, make the necessary corrections, and re-submit your timesheet.
           </Text>
           <Section style={ctaStyle}>
-            <Link href={`${appUrl}/timesheet`} style={buttonStyle}>
+            <Link href={`${appUrl}/timesheet?period=${periodStart}`} style={buttonStyle}>
               Edit Timesheet
             </Link>
           </Section>

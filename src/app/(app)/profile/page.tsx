@@ -1,5 +1,5 @@
 import { auth } from '@/auth';
-import { redirect } from 'next/navigation';
+import { loginRedirect } from '@/lib/session';
 import { getPasswordInfo } from '@/server/actions/password';
 import { getMFAStatus } from '@/server/actions/mfa';
 import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function ProfilePage() {
   const session = await auth();
-  if (!session?.user) redirect('/login');
+  if (!session?.user) return loginRedirect();
 
   const fullName = (session.user as any).fullName ?? session.user.name ?? '';
   const email = session.user.email ?? '';
