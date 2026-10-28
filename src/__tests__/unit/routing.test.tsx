@@ -102,7 +102,7 @@ describe('/ (landing)', () => {
 
 describe('/login and /forgot-password', () => {
   it('apex /login renders the "Find your workspace" finder, not the sign-in form', async () => {
-    const out = html(await LoginPage());
+    const out = html(await LoginPage({ searchParams: Promise.resolve({}) }));
     expect(out).toContain('Find your workspace');
     expect(out).not.toContain('LOGIN_FORM');
   });
@@ -115,7 +115,7 @@ describe('/login and /forgot-password', () => {
 
   it.each(['unknown', 'closed', 'provisioning', 'mismatch'])('a %s workspace /login renders TenantUnavailable', async (kind) => {
     tenant.state = { kind };
-    const out = html(await LoginPage());
+    const out = html(await LoginPage({ searchParams: Promise.resolve({}) }));
     expect(out).not.toContain('LOGIN_FORM');
     expect(out).not.toContain('Find your workspace');
     expect(out).toMatch(/Workspace not found|Workspace closed|Setting up your workspace|could not be verified/);
@@ -123,7 +123,7 @@ describe('/login and /forgot-password', () => {
 
   it.each(['full', 'read_only', 'billing_only', 'policy_hold'])('a %s workspace /login shows the sign-in form', async (kind) => {
     tenant.state = { kind, tenant: {} };
-    expect(html(await LoginPage())).toContain('LOGIN_FORM');
+    expect(html(await LoginPage({ searchParams: Promise.resolve({}) }))).toContain('LOGIN_FORM');
   });
 });
 

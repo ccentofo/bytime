@@ -269,6 +269,7 @@ async function notifyEmployeeOfApprove(
         approvedBy: actorName,
         approvedAt,
         appUrl,
+        periodStart,
       }));
     }
   }
@@ -305,6 +306,7 @@ async function notifyEmployeeOfReject(
         rejectedAt,
         rejectionComment,
         appUrl,
+        periodStart,
       }));
     }
   }

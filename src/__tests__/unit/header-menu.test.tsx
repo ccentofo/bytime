@@ -7,7 +7,6 @@ import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
  */
 
 vi.mock('next-auth/react', () => ({ signOut: vi.fn() }));
-vi.mock('@/components/shell/SyncStatusIndicator', () => ({ SyncStatusIndicator: () => null }));
 
 import { AppHeader } from '@/components/shell/AppHeader';
 import { click, installDomStubs, mount, unmount, type Mounted } from '../helpers/dom';

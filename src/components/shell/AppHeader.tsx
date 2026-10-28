@@ -6,7 +6,6 @@ import { Logo } from '@/components/brand/Logo';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { DANGER_MENU_ITEM_CLASS } from '@/components/ui/RowActions';
 import { signOutToLogin } from '@/components/auth/sign-out';
-import { SyncStatusIndicator } from '@/components/shell/SyncStatusIndicator';
 
 type AppHeaderProps = {
   user?: {
@@ -48,7 +47,6 @@ export function AppHeader({ user, mobileNavOpened, onMobileNavToggle, isDemo = f
         )}
       </Group>
       <Group gap="sm">
-        <SyncStatusIndicator />
         <ActionIcon
           variant="subtle"
           size="lg"

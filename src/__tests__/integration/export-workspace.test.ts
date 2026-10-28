@@ -239,6 +239,32 @@ describe('workspace export (§5.2)', () => {
     expect([exported(legacy.id), exported(selfLast.id), exported(otherLast.id)]).toEqual(['true', 'true', 'false']);
   });
 
+  it('UX-3 fix round 2 (M4): export self_approved reads period_events — (a) an imported approval and (b) a later approval by another admin are false even though reviewed_by is the employee; both equal approvalLabel', async () => {
+    const db = getTestDb();
+    const other = await createTestUser({ role: 'admin' });
+    const t = (m: number) => new Date(Date.UTC(2026, 0, 12, 12, m));
+    const [batch] = await db.insert(schema.importBatches).values({ kind: 'periods', sourceSystem: 'Deltek', importedBy: admin.id, rowCount: 1, importedCount: 1, skippedCount: 0 }).returning();
+    // (a) The admin's own period, reviewed_by the admin, approved by an IMPORTED event whose actor is the admin.
+    const [imported] = await db.insert(schema.timesheetPeriods).values({ userId: admin.id, periodStart: '2025-10-01', status: 'approved', reviewedBy: admin.id, reviewedAt: t(0) }).returning();
+    // (b) The admin's own period, reviewed_by the admin, whose LATEST approved event's actor is another admin.
+    const [laterOther] = await db.insert(schema.timesheetPeriods).values({ userId: admin.id, periodStart: '2025-10-16', status: 'approved', reviewedBy: admin.id, reviewedAt: t(2) }).returning();
+    await db.insert(schema.periodEvents).values([
+      { periodId: imported.id, userId: admin.id, event: 'approved', actorId: admin.id, source: 'migration', importBatchId: batch.id, originalMetadata: { reviewer: 'boss@old' }, createdAt: t(0) },
+      { periodId: laterOther.id, userId: admin.id, event: 'approved', actorId: admin.id, createdAt: t(1) },
+      { periodId: laterOther.id, userId: admin.id, event: 'approved', actorId: other.id, createdAt: t(2) },
+    ]);
+
+    const files = await unzipBytes(await (await GET(exportRequest())).arrayBuffer());
+    const periods = parse(files['timesheet_periods.csv']);
+    const exported = (id: string) => periods.find((r) => r[0] === id)![periods[0].indexOf('self_approved')];
+    const { approvalLabels } = await import('@/server/internal/approval-label');
+    const rows = await db.select().from(schema.timesheetPeriods);
+    const labels = await approvalLabels(db as never, rows.map((r) => ({ id: r.id, userId: r.userId, status: r.status, reviewedBy: r.reviewedBy, reviewedAt: r.reviewedAt })), 'UTC');
+    expect(exported(imported.id), '(a) imported approval').toBe('false');
+    expect(exported(laterOther.id), '(b) latest approval by another admin').toBe('false');
+    for (const p of [imported, laterOther]) expect(exported(p.id), p.periodStart).toBe(String(labels.get(p.id)!.selfApproved));
+  });
+
   it('F5: a blocked export (policy hold) is a 403 with a reason, never a 500 or a partial archive', async () => {
     tenantState.blocked = true;
     try {

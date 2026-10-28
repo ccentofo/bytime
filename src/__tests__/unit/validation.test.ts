@@ -51,8 +51,13 @@ describe('validateHours', () => {
   it('returns 0 for zero hours', () => {
     expect(validateHours(0)).toBe(0);
   });
-  it('rounds to 2 decimal places', () => {
-    expect(validateHours(8.125)).toBe(8.13);
+  // UX-3 A4.4 (UX3-D3): quarter hours only, never rounded (was: rounds to 2 decimals).
+  it('A-T5: accepts quarter hours exactly; refuses anything else with the day, never rounding', () => {
+    for (const q of [0.25, 0.5, 0.75, 7.25, 23.75, 24]) expect(validateHours(q)).toBe(q);
+    expect(() => validateHours(7.3, 'Hours', '2026-10-05' as never)).toThrow('Hours must be in quarter hours (.00, .25, .50 or .75). 7.3 on Oct 5, 2026 isn\'t.');
+    expect(() => validateHours(7.2500001)).toThrow('quarter hours');
+    expect(() => validateHours(8.125)).toThrow('quarter hours');
+    expect(() => validateHours(0.1)).toThrow('quarter hours');
   });
   it('throws for negative hours', () => {
     expect(() => validateHours(-1)).toThrow('cannot be negative');
@@ -66,8 +71,8 @@ describe('validateHours', () => {
   it('throws for Infinity', () => {
     expect(() => validateHours(Infinity)).toThrow('must be a valid number');
   });
-  it('throws for non-numeric string', () => {
-    expect(() => validateHours('abc')).toThrow('must be a valid number');
+  it('A-T5: only a real number — strings (even numeric ones), \'\', \'0x8\', null are refused (was: coerced through Number())', () => {
+    for (const bad of ['abc', '8', '', '0x8', '7.25', null, undefined, true]) expect(() => validateHours(bad), String(bad)).toThrow('Hours must be a number.');
   });
 });
 

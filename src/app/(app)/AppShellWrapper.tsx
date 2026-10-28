@@ -48,6 +48,17 @@ export function AppShellWrapper({ user, waitingCount = null, initialCollapsed = 
     if (firstPath.current) { firstPath.current = false; return; }
     close();
   }, [pathname, close]);
+  // feature-plan-ux-timesheet.md A4.10 (UX3-D2): the old offline layer is gone; remove its IndexedDB database once, on
+  // any app page. Best effort — a blocked or failed delete is ignored and retried on the next app load.
+  useEffect(() => {
+    try {
+      const request = indexedDB.deleteDatabase('bytime-offline');
+      request.onblocked = () => {};
+      request.onerror = () => {};
+    } catch {
+      // indexedDB unavailable (e.g. private mode) — nothing to clean up
+    }
+  }, []);
   // Seed from the server-read cookie so the rail renders at the right width on the FIRST paint
   // (no flash-open-then-collapse on navigation).
   const [collapsed, setCollapsed] = useState(initialCollapsed);

@@ -3,7 +3,6 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MantineProvider } from '@mantine/core';
 
 vi.mock('next-auth/react', () => ({ signOut: vi.fn() }));
-vi.mock('@/components/shell/SyncStatusIndicator', () => ({ SyncStatusIndicator: () => null }));
 
 import { AppHeader } from '@/components/shell/AppHeader';
 

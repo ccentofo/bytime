@@ -61,13 +61,16 @@ export async function getPayPeriodConfig(): Promise<PeriodConfig> {
 export async function getNeighborPeriod(
   currentPeriodStart: CalendarDate,
   direction: 'prev' | 'next'
-): Promise<{ periodStart: CalendarDate; periodConfig: PeriodConfig; numDays: number }> {
+): Promise<{ periodStart: CalendarDate; periodConfig: PeriodConfig; numDays: number; isCurrent: boolean }> {
   await requireSession();
   const start = parseCalendarDate(currentPeriodStart);
   if (direction !== 'prev' && direction !== 'next') throw new UserFacingError('Invalid direction.');
   const schedule = await loadScheduleResolver(await getDb());
-  const neighbor = schedule.neighbor(start, direction);
-  return { periodStart: neighbor.start, periodConfig: neighbor.config, numDays: neighbor.numDays };
+  // feature-plan-ux-timesheet.md A4.6: "next" never goes past the period containing the workspace's today.
+  const current = schedule.periodContaining(await getWorkspaceToday());
+  const step = schedule.neighbor(start, direction);
+  const neighbor = direction === 'next' && step.start > current.start ? current : step;
+  return { periodStart: neighbor.start, periodConfig: neighbor.config, numDays: neighbor.numDays, isCurrent: neighbor.start === current.start };
 }
 
 // ---------------------------------------------------------------------------

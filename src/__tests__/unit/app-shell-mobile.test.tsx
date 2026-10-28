@@ -12,7 +12,6 @@ import { MantineProvider } from '@mantine/core';
 const nav = vi.hoisted(() => ({ pathname: '/home' }));
 vi.mock('next/navigation', () => ({ usePathname: () => nav.pathname, useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
 vi.mock('next-auth/react', () => ({ SessionProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>, signOut: vi.fn() }));
-vi.mock('@/components/shell/SyncStatusIndicator', () => ({ SyncStatusIndicator: () => null }));
 
 import { AppShellWrapper } from '@/app/(app)/AppShellWrapper';
 import { theme } from '@/theme';

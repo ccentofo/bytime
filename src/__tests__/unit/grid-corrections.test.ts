@@ -6,10 +6,10 @@ import path from 'path';
  * feature-plan-certified-outputs.md C4 / §9 rows "Grid assignable", "Corrections (CO-D8)", "Grid/review", "Leave
  * pre-set" (0-hour correction on a deactivated code): the one cell rule (UI + server), saveTimesheetBatch's per-cell
  * decisions inside its transaction (new cell → full assignable rule, rulings Q1/Q4; prior revision → correctable; a
- * legacy CLIN correction keeps its prior SLIN), the save mapping by kind, and the offline queue mapping.
+ * legacy CLIN correction keeps its prior SLIN), and the save mapping by kind.
  */
 
-const h = vi.hoisted(() => ({ locked: false }));
+const h = vi.hoisted(() => ({ locked: false, lockDates: [] as string[] }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/db', async () => {
   const { createFakeControlDb } = await import('../helpers/fake-control-db');
@@ -27,8 +27,10 @@ vi.mock('@/lib/session', () => {
 vi.mock('@/server/internal/periods', () => ({
   resolvePeriod: async () => ({ numDays: 15, config: { periodType: 'semimonthly' } }),
   lockEmployeeTimesheet: async () => {},
-  assertEntryDatesEditable: async () => {
-    if (h.locked) { const { UserFacingError } = await import('@/lib/errors'); throw new UserFacingError('Cannot modify a submitted timesheet. This period has been certified and is locked.'); }
+  // Like the real check: only the dates it is given can be refused (UX-3 A4.2 — note dates must be among them).
+  assertEntryDatesEditable: async (_userId: string, dates: string[]) => {
+    h.lockDates = dates;
+    if (h.locked && dates.length > 0) { const { UserFacingError } = await import('@/lib/errors'); throw new UserFacingError('Cannot modify a submitted timesheet. This period has been certified and is locked.'); }
   },
   getPeriodStatusFor: async () => ({ id: null, status: 'draft' }),
 }));
@@ -41,7 +43,6 @@ import type { FakeControlDb } from '../helpers/fake-control-db';
 import { saveTimesheetBatch } from '@/server/actions/timesheet';
 import { isCellEditable, newCellRefusal } from '@/lib/timesheet/cell-rules';
 import { cellRefForKind, timesheetReducer } from '@/components/timesheet/TimesheetContext';
-import { queueItemCellRef } from '@/lib/offline/sync-service';
 
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
 const ROOT = path.resolve(__dirname, '../../..');
@@ -50,20 +51,21 @@ const CLIN = '33333333-3333-4333-8333-333333333333';
 const IND = '44444444-4444-4444-8444-444444444444';
 const START = '2026-10-01';
 
-beforeEach(() => { db.reset(); h.locked = false; });
+beforeEach(() => { db.reset(); h.locked = false; h.lockDates = []; });
 
-/** Script the in-transaction reads for one charge-code cell, in the order the save makes them. */
+/** Script the in-transaction reads for one charge-code cell, in the order the save makes them (UX-3 A4.5 adds the day
+ * totals read before the inserts; the one after them reads [] — unscripted — so a day total is never over 24 here). */
 function chargeCodeFacts(o: { assigned: boolean; codeActive: boolean; clinActive?: boolean; slinStatus?: string | null; contractActive?: boolean; priorRevision: number }) {
   db.onSelect(chargeCodes, [{ id: CODE, clinId: CLIN, slinId: null }]);                                   // FOR SHARE re-read
   db.onSelect(userChargeCodes, o.assigned ? [{ id: CODE }] : []);                                          // active assignment
   db.onSelect(chargeCodes, [{ id: CODE, codeActive: o.codeActive, clinStatus: o.clinActive === false ? 'inactive' : 'active', slinStatus: o.slinStatus ?? null, contractStatus: o.contractActive === false ? 'inactive' : 'active' }]);
+  db.onSelect(timesheetEntries, []);                                                                       // A4.5: day totals before the save
   db.onSelect(timesheetEntries, [{ maxRevision: o.priorRevision }]);                                       // prior revision
 }
 const save = (cell: Record<string, unknown>, reason = true) => saveTimesheetBatch({
   periodStart: START as never,
   cells: [{ dayIndex: 2, hours: 6, isEdit: false, isLateEntry: true, ...cell }],
   ...(reason ? { changeReasonCode: 'CORRECTION', comment: 'fix' } : {}),
-  skipConflictCheck: true,
 });
 const inserted = () => db.inserts.filter((i) => i.table === timesheetEntries).map((i) => i.values);
 
@@ -152,17 +154,20 @@ describe('saveTimesheetBatch — per cell, inside the transaction, after the pri
   });
 
   it('legacy CLIN: a new CLIN-only cell is refused; an existing one is corrected keeping the prior SLIN; a different client SLIN is refused', async () => {
+    db.onSelect(timesheetEntries, []);                       // A4.5: the affected days' totals before the save
     db.onSelect(timesheetEntries, [{ maxRevision: 0 }]);
     expect(await save({ clinId: CLIN })).toMatchObject({ ok: false, error: expect.stringMatching(/CLIN-only row/) });
 
     db.reset();
     const PRIOR_SLIN = '55555555-5555-4555-8555-555555555555';
+    db.onSelect(timesheetEntries, []);                       // A4.5: the affected days' totals before the save
     db.onSelect(timesheetEntries, [{ maxRevision: 1 }]);
     db.onSelect(timesheetEntries, [{ slinId: PRIOR_SLIN }]);
     expect((await save({ clinId: CLIN, isEdit: true })).ok).toBe(true);
     expect(inserted()).toEqual([expect.objectContaining({ clinId: CLIN, slinId: PRIOR_SLIN, chargeCodeId: null, revisionNumber: 2 })]);
 
     db.reset();
+    db.onSelect(timesheetEntries, []);                       // A4.5: the affected days' totals before the save
     db.onSelect(timesheetEntries, [{ maxRevision: 1 }]);
     db.onSelect(timesheetEntries, [{ slinId: PRIOR_SLIN }]);
     expect(await save({ clinId: CLIN, slinId: '66666666-6666-4666-8666-666666666666', isEdit: true }))
@@ -171,10 +176,12 @@ describe('saveTimesheetBatch — per cell, inside the transaction, after the pri
 
   it('inactive indirect code: a correction is allowed; a new day is refused', async () => {
     db.onSelect(indirectChargeCodes, [{ id: IND, isActive: false, availableToAll: true }]);
+    db.onSelect(timesheetEntries, []);                       // A4.5: the affected days' totals before the save
     db.onSelect(timesheetEntries, [{ maxRevision: 1 }]);
     expect((await save({ indirectCodeId: IND, isEdit: true })).ok).toBe(true);
     db.reset();
     db.onSelect(indirectChargeCodes, [{ id: IND, isActive: false, availableToAll: true }]);
+    db.onSelect(timesheetEntries, []);                       // A4.5: the affected days' totals before the save
     db.onSelect(timesheetEntries, [{ maxRevision: 0 }]);
     expect(await save({ indirectCodeId: IND })).toMatchObject({ ok: false, error: expect.stringMatching(/is not available/) });
   });
@@ -198,18 +205,11 @@ describe('F8 — navigation replaces the code list', () => {
   });
 });
 
-describe('save mapping by kind (client and offline queue)', () => {
+describe('save mapping by kind', () => {
   it('charge → chargeCodeId, clin → clinId, indirect → indirectCodeId', () => {
     expect(cellRefForKind('charge', 'x')).toEqual({ chargeCodeId: 'x' });
     expect(cellRefForKind('clin', 'x')).toEqual({ clinId: 'x' });
     expect(cellRefForKind('indirect', 'x')).toEqual({ indirectCodeId: 'x' });
-  });
-
-  it('offline queue items map by kind; items queued before C4 (no kind) are treated as charge', () => {
-    expect(queueItemCellRef({ clinId: 'cc', kind: 'charge' })).toEqual({ chargeCodeId: 'cc' });
-    expect(queueItemCellRef({ clinId: 'clin', kind: 'clin' })).toEqual({ clinId: 'clin' });
-    expect(queueItemCellRef({ indirectCodeId: 'ind' })).toEqual({ indirectCodeId: 'ind' });
-    expect(queueItemCellRef({ clinId: 'cc' })).toEqual({ chargeCodeId: 'cc' });
   });
 
   it('wiring (static): the grid uses the rule, the label, the per-period code list; the save maps by kind', () => {
@@ -219,8 +219,6 @@ describe('save mapping by kind (client and offline queue)', () => {
       .toContain('Closed to new hours — you can correct existing hours');
     const ctx = readFileSync(path.join(ROOT, 'src/components/timesheet/TimesheetContext.tsx'), 'utf8');
     expect(ctx).toMatch(/chargeCodes: action\.chargeCodes,/);
-    // F8: offline seeding uses the NEW period's list.
-    expect(ctx).toMatch(/seedOfflineStore\(\{[\s\S]*?chargeCodes: period\.chargeCodes,/);
     expect(ctx).not.toMatch(/chargeCodes: state\.chargeCodes/);
     expect(ctx).toMatch(/\.\.\.cellRefForKind\(chargeCode\?\.kind/);
     expect(readFileSync(path.join(ROOT, 'src/app/(app)/timesheet/page.tsx'), 'utf8')).toMatch(/chargeCodes: period\.chargeCodes,/);
@@ -229,5 +227,23 @@ describe('save mapping by kind (client and offline queue)', () => {
     const tx = save.slice(save.indexOf('await db.transaction(async (tx) => {'));
     expect(tx.indexOf('if (priorRevision === 0) {')).toBeGreaterThan(tx.indexOf('const priorRevision = existing[0]?.maxRevision ?? 0;'));
     expect(save.slice(0, save.indexOf('await db.transaction(async (tx) => {'))).not.toMatch(/userChargeCodes|validateChargeCodeAssignment|validateClinAssignment/);
+  });
+});
+
+describe('UX-3 A4.2: a notes-only batch goes through the period lock', () => {
+  it('the note dates are passed to assertEntryDatesEditable, so a notes-only batch on a locked period is refused and writes nothing', async () => {
+    h.locked = true;
+    const result = await saveTimesheetBatch({ periodStart: START as never, cells: [], notes: [{ chargeCodeId: CODE, dayIndex: 3, body: 'After submitting', expectedRevision: 0 }] });
+    expect(result).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/locked/) });
+    expect(h.lockDates).toEqual(['2026-10-04']);
+    expect(db.inserts).toEqual([]);
+  });
+});
+
+describe('UX-3 fix round 1 (M1): no conflict-check bypass', () => {
+  it('saveTimesheetBatch\'s payload and writeNotes no longer accept or mention skipConflictCheck', () => {
+    for (const rel of ['src/server/actions/timesheet.ts', 'src/server/internal/timesheet-notes.ts']) {
+      expect(readFileSync(path.join(ROOT, rel), 'utf8'), rel).not.toMatch(/skipConflictCheck/);
+    }
   });
 });

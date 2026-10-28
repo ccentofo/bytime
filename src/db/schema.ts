@@ -341,6 +341,35 @@ export const timesheetEntries = pgTable('timesheet_entries', {
 ]);
 
 // ---------------------------------------------------------------------------
+// Timesheet Notes (feature-plan-ux-timesheet.md A4.1, UX3-D1) — DCAA append-only like timesheet_entries: one note per
+// cell (user + charge code / indirect code / legacy CLIN + day); every change is a new revision (body '' = cleared).
+// UPDATE/DELETE/TRUNCATE are blocked by DB triggers (migration 0017), with the same bypass as entries.
+// ---------------------------------------------------------------------------
+
+export const timesheetNotes = pgTable('timesheet_notes', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  entryDate: date('entry_date', { mode: 'string' }).notNull(),
+  chargeCodeId: uuid('charge_code_id').references(() => chargeCodes.id),
+  indirectCodeId: uuid('indirect_code_id').references(() => indirectChargeCodes.id),
+  clinId: uuid('clin_id').references(() => clins.id), // legacy CLIN-only rows
+  body: text('body').notNull(), // stored trimmed, at most 1000 characters; '' = cleared
+  revisionNumber: integer('revision_number').notNull(),
+  createdBy: uuid('created_by').notNull().references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  // The same cell identity and per-revision uniqueness as timesheet_entries (closes the concurrent-save race).
+  uniqueIndex('timesheet_notes_cell_rev_unique_idx').on(
+    table.userId,
+    sql`coalesce(${table.chargeCodeId}, ${table.indirectCodeId}, ${table.clinId})`,
+    table.entryDate,
+    table.revisionNumber,
+  ),
+  index('idx_timesheet_notes_user_date').on(table.userId, table.entryDate),
+  check('timesheet_notes_one_code_check', sql`num_nonnulls(${table.chargeCodeId}, ${table.indirectCodeId}, ${table.clinId}) = 1`),
+]);
+
+// ---------------------------------------------------------------------------
 // Timesheet Periods (tracks period lifecycle: draft → submitted → approved/rejected)
 // ---------------------------------------------------------------------------
 

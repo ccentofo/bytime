@@ -21,6 +21,10 @@ import { addDays, diffDays, isAfter, isBefore, formatCalendarDate, parseCalendar
 import { ConflictError, UserFacingError } from '@/lib/errors';
 import { newCellRefusal } from '@/lib/timesheet/cell-rules';
 import { CHARGEABLE_CODE } from '@/server/internal/chargeable';
+import { dayTotalRefusal, latestDayTotals } from '@/server/internal/day-totals';
+import { pastPeriods, PAST_PERIODS_PAGE_SIZE, type PastPeriodRow } from '@/server/internal/past-periods';
+import { resolveRequestedPeriod, selectedPeriodFacts, type SelectedPeriodFacts } from '@/server/internal/timesheet-period';
+import { latestNotesInPeriod, NOTE_CONFLICT, notedCodes, notesMap, validateNotes, writeNotes, type LatestNote, type NoteInput } from '@/server/internal/timesheet-notes';
 import { userAction, type ActionResult } from '@/lib/action-result';
 
 /**
@@ -65,8 +69,11 @@ export async function getRevisionMap(periodStart: CalendarDate): Promise<Record<
  * its length and schedule, the session user's entries and revision numbers, and its status.
  * The client does no schedule math; it renders exactly this.
  */
-export async function getTimesheetPeriod(periodStart: CalendarDate): Promise<{
+export async function getTimesheetPeriod(requested?: string | string[]): Promise<{
+  /** UX-3 A4.6: the canonical start — a mid-period date is snapped, garbage means the current period, a future one is clamped. */
   periodStart: CalendarDate;
+  /** UX-3 A4.6: the period containing the workspace's today. */
+  isCurrent: boolean;
   numDays: number;
   periodConfig: PeriodConfig;
   entries: TimesheetEntry[];
@@ -76,24 +83,38 @@ export async function getTimesheetPeriod(periodStart: CalendarDate): Promise<{
   approvalBadge: string | null;
   /** certified-outputs C4: THIS period's code list (assignable ∪ recorded); the client replaces its list with it. */
   chargeCodes: ChargeCode[];
-}> {
+  /** UX-3 A4.3: `{rowId}-{dayIndex}` → the latest note (cleared bodies '' included, with their revision). */
+  notes: Record<string, { body: string; revision: number }>;
+  /** UX-3 A4.6: the reviewer's comment on this period (e.g. why it was returned), else null. */
+  reviewComment: string | null;
+} & SelectedPeriodFacts> {
   const actor = await requireSession();
-  const start = parseCalendarDate(periodStart);
   const db = await getDb();
+  const [today, timeZone] = await Promise.all([getWorkspaceToday(), getWorkspaceTimezone()]);
+  const requestedPeriod = await resolveRequestedPeriod(db, requested, today);
+  const start = requestedPeriod.start;
   const [numDays, periodConfig, periodInfo] = await Promise.all([
     periodLengthFor(actor.id, start),
     configAt(db, start),
     getPeriodStatusFor(actor.id, start),
   ]);
-  const periodCodes = await getPeriodCodesForEmployee(actor.id, start, numDays);
+  const latestNotes = await latestNotesInPeriod(db, actor.id, start, numDays);
+  const periodCodes = await getPeriodCodesForEmployee(actor.id, start, numDays, latestNotes);
   const [entries, revisions] = await Promise.all([
     getTimesheetEntriesForEmployee(actor.id, start, periodCodes),
     revisionMapFor(actor.id, start, numDays),
   ]);
-  const approvalBadge = periodInfo.id
-    ? (await approvalLabels(db, [{ id: periodInfo.id, userId: actor.id, status: periodInfo.status, reviewedBy: periodInfo.reviewedBy, reviewedAt: periodInfo.reviewedAt }], await getWorkspaceTimezone())).get(periodInfo.id)?.badge ?? null
-    : null;
-  return { periodStart: start, numDays, periodConfig, entries, revisions, periodStatus: periodInfo.status, approvalBadge, chargeCodes: periodCodes };
+  const [approvalBadge, facts] = await Promise.all([
+    periodInfo.id
+      ? approvalLabels(db, [{ id: periodInfo.id, userId: actor.id, status: periodInfo.status, reviewedBy: periodInfo.reviewedBy, reviewedAt: periodInfo.reviewedAt }], timeZone)
+        .then((labels) => labels.get(periodInfo.id!)?.badge ?? null)
+      : null,
+    selectedPeriodFacts(db, actor.id, { start, numDays, config: periodConfig }, today, timeZone),
+  ]);
+  return {
+    periodStart: start, isCurrent: requestedPeriod.isCurrent, numDays, periodConfig, entries, revisions, periodStatus: periodInfo.status,
+    approvalBadge, chargeCodes: periodCodes, notes: notesMap(latestNotes), reviewComment: periodInfo.reviewComment ?? null, ...facts,
+  };
 }
 
 /** This employee's length for the period at `start`: their stored snapshot, else the schedule. */
@@ -171,10 +192,11 @@ export async function saveTimesheetBatch(data: {
     isLateEntry: boolean;
     expectedRevision?: number;
   }>;
+  /** feature-plan-ux-timesheet.md A4.2: notes, saved in the same transaction (no reason code — L3). */
+  notes?: NoteInput[];
   changeReasonCode?: string;
   comment?: string;
-  skipConflictCheck?: boolean;
-}): Promise<ActionResult<Record<string, number>>> {
+}): Promise<ActionResult<{ revisions: Record<string, number>; noteRevisions: Record<string, number> }>> {
   return userAction(async () => {
     const actor = await requireSession();
     const userId = actor.id;
@@ -182,6 +204,7 @@ export async function saveTimesheetBatch(data: {
     const start = parseCalendarDate(data.periodStart);
     const today = await getWorkspaceToday();
     const newRevisions: Record<string, number> = {};
+    let noteRevisions: Record<string, number> = {};
 
     // R2-2 / D3: period-lock integrity. `periodStart` must be a real period boundary and every
     // dayIndex must land inside that period; then every entry DATE is checked against the user's
@@ -195,6 +218,7 @@ export async function saveTimesheetBatch(data: {
     }
 
     validateUUID(userId, 'User ID');
+    const validatedHours = new Map<(typeof data.cells)[number], number>();
     for (const cell of data.cells) {
       // A cell is exactly ONE kind of code. A cell naming several would skip the charge-code
       // assignment check (the indirect branch below returns early) while still storing the
@@ -206,7 +230,8 @@ export async function saveTimesheetBatch(data: {
       if (cell.slinId && !cell.clinId) {
         throw new UserFacingError('A SLIN can only be given with a legacy CLIN entry.');
       }
-      validateHours(cell.hours, 'Hours');
+      // A4.4 (UX3-D3): a real number in quarter hours, stored exactly as validated (never the raw input).
+      validatedHours.set(cell, validateHours(cell.hours, 'Hours', addDays(start, cell.dayIndex)));
       if (cell.chargeCodeId) validateUUID(cell.chargeCodeId, 'Charge Code ID');
       if (cell.clinId) validateUUID(cell.clinId, 'CLIN ID');
       if (cell.indirectCodeId) validateUUID(cell.indirectCodeId, 'Indirect code ID');
@@ -218,6 +243,8 @@ export async function saveTimesheetBatch(data: {
         throw new UserFacingError(`Cannot save hours for future date: ${formatCalendarDate(entryDate, 'MMM D, YYYY')}`);
       }
     }
+    // A4.2: notes are shape-checked before the transaction (day in the period, one code, ≤ 1000 chars, no future date).
+    const notes = validateNotes(data.notes, start, numDays, today);
 
     // CLIN/SLIN of each charge code, filled inside the transaction (FOR SHARE re-read, C3).
     const chargeCodeCache = new Map<string, { clinId: string; slinId: string | null }>();
@@ -231,7 +258,8 @@ export async function saveTimesheetBatch(data: {
         await lockEmployeeTimesheet(tx, userId);
         await assertEntryDatesEditable(
           userId,
-          data.cells.map((cell) => addDays(start, cell.dayIndex)),
+          // A4.2: the period lock covers note dates too (a notes-only batch on a submitted period is refused).
+          [...data.cells.map((cell) => addDays(start, cell.dayIndex)), ...notes.map((n) => n.entryDate)],
           // Read the schedule through the same transaction: never a second connection while holding the lock.
           async (periodStart) => getNumDaysInPeriod(periodStart, await configAt(tx, periodStart)),
           tx,
@@ -264,29 +292,31 @@ export async function saveTimesheetBatch(data: {
           .select({ id: indirectChargeCodes.id, isActive: indirectChargeCodes.isActive, availableToAll: indirectChargeCodes.availableToAll })
           .from(indirectChargeCodes).where(inArray(indirectChargeCodes.id, indirectIds))).map((r) => [r.id, r]));
 
-        // Optimistic concurrency control
-        if (!data.skipConflictCheck) {
-          for (const cell of data.cells) {
-            if (cell.expectedRevision === undefined) continue;
-            const entryDate = addDays(start, cell.dayIndex);
-            const entryId = cell.chargeCodeId ?? cell.indirectCodeId ?? cell.clinId;
-            if (!entryId) continue;
+        // Optimistic concurrency control (always on: the offline sync's skip flag is gone — UX-3 fix round 1, M1)
+        for (const cell of data.cells) {
+          if (cell.expectedRevision === undefined) continue;
+          const entryDate = addDays(start, cell.dayIndex);
+          const entryId = cell.chargeCodeId ?? cell.indirectCodeId ?? cell.clinId;
+          if (!entryId) continue;
 
-            const whereClause = cellWhere(userId, cell, entryDate);
+          const whereClause = cellWhere(userId, cell, entryDate);
 
-            const currentRevision = await tx
-              .select({ maxRevision: sql<number>`COALESCE(MAX(${timesheetEntries.revisionNumber}), 0)` })
-              .from(timesheetEntries)
-              .where(whereClause!);
+          const currentRevision = await tx
+            .select({ maxRevision: sql<number>`COALESCE(MAX(${timesheetEntries.revisionNumber}), 0)` })
+            .from(timesheetEntries)
+            .where(whereClause!);
 
-            const dbRevision = currentRevision[0]?.maxRevision ?? 0;
-            if (dbRevision !== cell.expectedRevision) {
-              throw new ConflictError(
-                `Conflict detected: The entry for ${formatCalendarDate(entryDate, 'MMM D, YYYY')} was modified by another session (expected revision ${cell.expectedRevision}, but server has revision ${dbRevision}). Please refresh your timesheet and re-enter your changes.`
-              );
-            }
+          const dbRevision = currentRevision[0]?.maxRevision ?? 0;
+          if (dbRevision !== cell.expectedRevision) {
+            throw new ConflictError(
+              `Conflict detected: The entry for ${formatCalendarDate(entryDate, 'MMM D, YYYY')} was modified by another session (expected revision ${cell.expectedRevision}, but server has revision ${dbRevision}). Please refresh your timesheet and re-enter your changes.`
+            );
           }
         }
+
+        // A4.5 (UX3-D4, L1): each affected day's latest-revision total before the save, read through tx (in the lock).
+        const affectedDates = [...new Set(data.cells.map((cell) => addDays(start, cell.dayIndex)))];
+        const prevTotals = affectedDates.length ? await latestDayTotals(tx, userId, affectedDates) : {};
 
         for (const cell of data.cells) {
           const entryDate = addDays(start, cell.dayIndex);
@@ -379,7 +409,7 @@ export async function saveTimesheetBatch(data: {
               slinId: effectiveSlinId,
               indirectCodeId: cell.indirectCodeId ?? null,
               entryDate,
-              hours: cell.hours.toString(),
+              hours: String(validatedHours.get(cell)!),
               revisionNumber: nextRevision,
               changeReasonCode: requiresReason ? (data.changeReasonCode ?? undefined) : undefined,
               comment: requiresReason ? (data.comment ?? undefined) : undefined,
@@ -398,6 +428,17 @@ export async function saveTimesheetBatch(data: {
           const key = `${entryKey}-${cell.dayIndex}`;
           newRevisions[key] = nextRevision;
         }
+
+        // A4.5: a day over 24 across all codes is refused when the save raised it (L1: an imported day already over 24
+        // may be lowered). The totals include every cell of this batch, so 16 + 9 in one save is caught; the throw
+        // rolls the whole save back.
+        if (affectedDates.length) {
+          const refusal = dayTotalRefusal(affectedDates, prevTotals, await latestDayTotals(tx, userId, affectedDates));
+          if (refusal) throw new UserFacingError(refusal);
+        }
+
+        // A4.2: notes, in the same transaction (all-or-nothing with the hours); eligibility read through tx.
+        noteRevisions = await writeNotes(tx, { userId, actorId: actor.id, start, numDays, notes });
       });
     } catch (err) {
       // Another save inserted a cell's next revision first (the per-cell unique index); caught outside the
@@ -405,11 +446,25 @@ export async function saveTimesheetBatch(data: {
       if (isUniqueViolation(err, 'entries_user_code_date_rev_unique_idx')) {
         throw new ConflictError('Conflict detected: one of these entries was modified by another session. Please refresh your timesheet and re-enter your changes.');
       }
+      if (isUniqueViolation(err, 'timesheet_notes_cell_rev_unique_idx')) throw new ConflictError(NOTE_CONFLICT);
       throw err;
     }
 
-    return newRevisions;
+    return { revisions: newRevisions, noteRevisions };
   });
+}
+
+/**
+ * The session user's past timesheets, a page at a time (feature-plan-ux-timesheet.md A4.7). Own data only: the user
+ * comes from the session, never the input. `page` is a whole number ≥ 0; anything else is page 0.
+ */
+export async function getPastTimesheets(input?: { page?: unknown }): Promise<{ rows: PastPeriodRow[]; page: number; hasMore: boolean }> {
+  const actor = await requireSession();
+  const raw = input?.page;
+  const page = typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 ? raw : 0;
+  const db = await getDb();
+  const [today, timeZone] = await Promise.all([getWorkspaceToday(), getWorkspaceTimezone()]);
+  return pastPeriods(db, actor.id, page, PAST_PERIODS_PAGE_SIZE, today, timeZone);
 }
 
 /**
@@ -431,6 +486,8 @@ export async function getTimesheetForReview(
   canApprove: boolean;
   approvalBadge: string | null;
   approvalText: string | null;
+  /** UX-3 A4.3: the period's latest notes, read after submissionCount (C2 order). */
+  notes: Record<string, { body: string; revision: number }>;
 }> {
   const actor = await requireSession();
   await assertCanAccessEmployee(actor, employeeId);
@@ -440,8 +497,11 @@ export async function getTimesheetForReview(
     id: timesheetPeriods.id, status: timesheetPeriods.status, submissionCount: timesheetPeriods.submissionCount,
     reviewedBy: timesheetPeriods.reviewedBy, reviewedAt: timesheetPeriods.reviewedAt,
   }).from(timesheetPeriods).where(and(eq(timesheetPeriods.userId, employeeId), eq(timesheetPeriods.periodStart, start)));
-  // C4: the review shows every recorded hour (the same period code list as the employee's grid).
-  const codes = await getPeriodCodesForEmployee(employeeId, start, await periodLengthFor(employeeId, start));
+  // C4: the review shows every recorded hour (the same period code list as the employee's grid). UX-3 A4.3: notes are
+  // read after submissionCount above, like the entries, so a note can't change unseen behind an approval.
+  const numDays = await periodLengthFor(employeeId, start);
+  const latestNotes = await latestNotesInPeriod(db, employeeId, start, numDays);
+  const codes = await getPeriodCodesForEmployee(employeeId, start, numDays, latestNotes);
   const entries = await getTimesheetEntriesForEmployee(employeeId, start, codes);
   const facts = await loadApprovalFacts(db);
   const label = period
@@ -455,6 +515,7 @@ export async function getTimesheetForReview(
     canApprove: period?.status === 'submitted' && canApprove(facts, actor.id, employeeId),
     approvalBadge: label?.badge ?? null,
     approvalText: label?.text ?? null,
+    notes: notesMap(latestNotes),
   };
 }
 
@@ -546,14 +607,17 @@ async function getChargeCodesForEmployee(userId: string): Promise<ChargeCode[]> 
  * CLIN, indirect) with an entry in the period (0-hour rows included). Codes with recorded hours that are no longer
  * assignable come back with `assignable: false` (correction-only, CO-D8); legacy CLIN rows always do (ruling Q1).
  */
-async function getPeriodCodesForEmployee(userId: string, start: CalendarDate, numDays: number): Promise<ChargeCode[]> {
+async function getPeriodCodesForEmployee(userId: string, start: CalendarDate, numDays: number, latestNotes: LatestNote[]): Promise<ChargeCode[]> {
   const db = await getDb();
   const assignable = await getChargeCodesForEmployee(userId);
   const known = new Set(assignable.map((c) => `${c.kind}:${c.id}`));
-  const recorded = await db
+  const withEntries = await db
     .selectDistinct({ chargeCodeId: timesheetEntries.chargeCodeId, clinId: timesheetEntries.clinId, indirectCodeId: timesheetEntries.indirectCodeId })
     .from(timesheetEntries)
     .where(and(eq(timesheetEntries.userId, userId), gte(timesheetEntries.entryDate, start), lt(timesheetEntries.entryDate, addDays(start, numDays))));
+  // UX-3 A4.3: a code with a latest non-empty note in the period keeps its row (assignable: false, like recorded hours),
+  // so a note on a row whose assignment ended stays visible to the employee and the reviewer, and can be cleared.
+  const recorded = [...withEntries, ...notedCodes(latestNotes)];
   const chargeIds = [...new Set(recorded.flatMap((r) => (r.chargeCodeId && !known.has(`charge:${r.chargeCodeId}`) ? [r.chargeCodeId] : [])))];
   const clinIds = [...new Set(recorded.flatMap((r) => (!r.chargeCodeId && !r.indirectCodeId && r.clinId ? [r.clinId] : [])))];
   const indirectIds = [...new Set(recorded.flatMap((r) => (r.indirectCodeId && !known.has(`indirect:${r.indirectCodeId}`) ? [r.indirectCodeId] : [])))];

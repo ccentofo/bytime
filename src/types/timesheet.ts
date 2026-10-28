@@ -35,9 +35,10 @@ export interface TimesheetEntry {
   provenance?: Array<string | null>;
 }
 
-export interface NoteData {
-  comment: string;
-  reasonCode: string;
+/** A saved note (feature-plan-ux-timesheet.md A4.3): its latest body ('' = cleared) and revision. */
+export interface SavedNote {
+  body: string;
+  revision: number;
 }
 
 // Tracks which cells have been previously saved (for DCAA reason enforcement)
@@ -52,14 +53,16 @@ export interface TimesheetState {
   entries: TimesheetEntry[];           // current working values (includes unsaved edits)
   savedEntries: TimesheetEntry[];      // last-saved snapshot (from DB)
   savedCellRevisions: Record<string, number>; // key="clinId-dayIndex", value=max revision number
-  notes: Record<string, NoteData>;     // key = "chargeCodeId-dayIndex"
+  notes: Record<string, string>;       // working copy of note BODIES, key = "rowId-dayIndex" (UX-3 A4.9)
+  savedNotes: Record<string, SavedNote>; // the saved baseline; a cleared note stays as { body: '', revision: n }
   periodStart: CalendarDate;
   numDays: number; // the period's length, resolved by the server (never computed client-side)
-  activeNoteCell: { chargeCodeId: string; dayIndex: number } | null;
+  activeNoteCell: { chargeCodeId: string; dayIndex: number; editable: boolean } | null;
   userId: string;
   isSaving: boolean;
   isLoadingPeriod: boolean; // true while fetching data for a new period
   periodStatus: PeriodStatus; // current period's approval status
+  isCurrent: boolean; // UX-3 A4.6: the period on screen contains the workspace's today (Next is disabled)
   approvalBadge: string | null; // certified-outputs C2: "Self-approved" / "Self-rejected" (approvalLabel), else null
   flsaExempt: boolean; // true if user is FLSA exempt (salaried)
   periodConfig: PeriodConfig; // pay period configuration
@@ -72,14 +75,14 @@ export interface TimesheetState {
 
 export type TimesheetAction =
   | { type: 'SET_HOURS'; chargeCodeId: string; dayIndex: number; value: number }
-  | { type: 'SET_NOTE'; chargeCodeId: string; dayIndex: number; note: NoteData }
-  | { type: 'OPEN_NOTE_MODAL'; chargeCodeId: string; dayIndex: number }
+  | { type: 'SET_NOTE'; chargeCodeId: string; dayIndex: number; body: string }
+  | { type: 'OPEN_NOTE_MODAL'; chargeCodeId: string; dayIndex: number; editable: boolean }
   | { type: 'CLOSE_NOTE_MODAL' }
   | { type: 'BEGIN_PERIOD_LOAD' }
   | { type: 'PERIOD_LOAD_FAILED' }
-  | { type: 'SET_PERIOD_DATA'; periodStart: CalendarDate; numDays: number; entries: TimesheetEntry[]; revisions: Record<string, number>; periodStatus: PeriodStatus; periodConfig: PeriodConfig; approvalBadge?: string | null; chargeCodes: ChargeCode[] }
+  | { type: 'SET_PERIOD_DATA'; periodStart: CalendarDate; numDays: number; entries: TimesheetEntry[]; revisions: Record<string, number>; periodStatus: PeriodStatus; periodConfig: PeriodConfig; approvalBadge?: string | null; chargeCodes: ChargeCode[]; notes?: Record<string, SavedNote>; isCurrent?: boolean }
   | { type: 'SET_SAVING'; isSaving: boolean }
-  | { type: 'MARK_SAVED'; periodStart: CalendarDate; entries: TimesheetEntry[]; revisions: Record<string, number> }
+  | { type: 'MARK_SAVED'; periodStart: CalendarDate; entries: TimesheetEntry[]; revisions: Record<string, number>; sentNotes?: Record<string, string>; noteRevisions?: Record<string, number> }
   | { type: 'DISCARD_CHANGES' }
   | { type: 'SET_PERIOD_STATUS'; status: PeriodStatus }
   | { type: 'SET_TODAY'; today: CalendarDate };
@@ -110,4 +113,8 @@ export interface TimesheetPageData {
   dashboardData?: EmployeeDashboardData;
   periodConfig: PeriodConfig;
   readOnly: boolean;
+  /** UX-3 A4.9: the period's saved notes, so they show on first load (not only after navigating). */
+  notes?: Record<string, SavedNote>;
+  /** UX-3 A4.6: the period contains the workspace's today. */
+  isCurrent?: boolean;
 }

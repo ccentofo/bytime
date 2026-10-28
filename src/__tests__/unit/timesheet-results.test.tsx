@@ -19,7 +19,6 @@ vi.mock('@/server/actions/periods', () => ({
   getWorkspaceContext: vi.fn(async () => ({ today: '2026-01-20', timezone: 'America/New_York' })),
 }));
 vi.mock('@/server/actions/pay-period-config', () => ({ getNeighborPeriod: vi.fn() }));
-vi.mock('@/lib/offline/offline-store', () => ({ seedOfflineStore: vi.fn() }));
 // The modals are UI plumbing here: render them as plain buttons that call onConfirm.
 vi.mock('@/components/timesheet/SubmitModal', () => ({
   SubmitModal: ({ onConfirm }: { onConfirm: (c?: string) => void }) => <button onClick={() => onConfirm('done')}>MOCK_CONFIRM_SUBMIT</button>,
@@ -114,12 +113,13 @@ describe('TimesheetContext', () => {
   });
 
   it('a successful save marks the changes saved', async () => {
-    actions.saveTimesheetBatch.mockResolvedValue({ ok: true, data: { 'cc1-1': 1 } });
+    actions.saveTimesheetBatch.mockResolvedValue({ ok: true, data: { revisions: { 'cc1-1': 1 }, noteRevisions: {} } }); // UX-3 A4.2 shape
     await render(null);
     await makeDirty();
     await act(async () => { await ctx!.saveAll(); });
     expect(ctx!.dirtyCells).toHaveLength(0);
     expect(ctx!.state.savedCellRevisions['cc1-1']).toBe(1);
+    expect(Object.keys(ctx!.state.savedCellRevisions)).not.toContain('revisions'); // merged from data.revisions, not data
   });
 
   it('a save with nothing to save is a successful no-op', async () => {
@@ -170,7 +170,7 @@ describe('TimesheetToolbar', () => {
   });
 
   it('a successful save shows the success toast', async () => {
-    actions.saveTimesheetBatch.mockResolvedValue({ ok: true, data: { 'cc1-1': 1 } });
+    actions.saveTimesheetBatch.mockResolvedValue({ ok: true, data: { revisions: { 'cc1-1': 1 }, noteRevisions: {} } }); // UX-3 A4.2 shape
     await render(<TimesheetToolbar />);
     await makeDirty();
     await click('MOCK_CONFIRM_REASON');

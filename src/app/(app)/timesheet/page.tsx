@@ -1,12 +1,10 @@
 import { auth } from '@/auth';
-import { redirect } from 'next/navigation';
+import { loginRedirect } from '@/lib/session';
 import { getTimesheetPeriod } from '@/server/actions/timesheet';
-import { getCurrentPeriodStart } from '@/lib/date-utils';
 import { BiWeeklyTimesheetClient } from '@/components/timesheet/BiWeeklyTimesheetClient';
 import type { TimesheetPageData } from '@/types/timesheet';
 import { getUserByEmail } from '@/server/internal/users';
 import { getEmployeeDashboardData } from '@/server/actions/employee-dashboard';
-import { getCurrentEffectiveConfig } from '@/server/actions/pay-period-config';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { getTenantState } from '@/lib/tenant/context';
 import type { Metadata } from 'next';
@@ -15,22 +13,24 @@ export const metadata: Metadata = { title: 'Timesheet' };
 
 export const dynamic = 'force-dynamic';
 
-export default async function TimesheetPage() {
+// Next 16: `searchParams` is a Promise and a value may be an array (feature-plan-ux-timesheet.md A4.6, trap T-G).
+export default async function TimesheetPage({ searchParams }: { searchParams: Promise<{ [key: string]: string | string[] | undefined }> }) {
   const session = await auth();
   if (!session?.user?.id) {
-    redirect('/login');
+    return loginRedirect();
   }
 
   const userId = session.user.id;
 
-  // Land on the period containing the workspace's today, under the schedule in effect today.
+  // `?period=` opens that period: getTimesheetPeriod snaps a mid-period date, clamps a future one and treats anything
+  // else as the current period (resolveRequestedPeriod) — never an error page.
+  const { period: requested } = await searchParams;
   const today = await getWorkspaceToday();
-  const periodStart = getCurrentPeriodStart(today, await getCurrentEffectiveConfig());
 
   // Fetch ALL independent data in parallel (single await). getTimesheetPeriod resolves the
   // period's length and schedule on the server, the same way navigation does.
   const [period, fullUser, dashboardData, tenantState] = await Promise.all([
-    getTimesheetPeriod(periodStart),
+    getTimesheetPeriod(requested),
     getUserByEmail(session.user.email!),
     getEmployeeDashboardData(),
     getTenantState(),
@@ -51,6 +51,9 @@ export default async function TimesheetPage() {
     dashboardData,
     periodConfig: period.periodConfig,
     readOnly: tenantState.kind === 'read_only',
+    // UX-3 A4.9: the period's saved notes (shown on first load) and whether it is the current period.
+    notes: period.notes,
+    isCurrent: period.isCurrent,
   };
 
   return <BiWeeklyTimesheetClient initialData={pageData} />;

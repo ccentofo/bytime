@@ -23,6 +23,7 @@ import {
   userLaborCategories,
   payPeriodConfig,
   timesheetPeriods,
+  timesheetNotes,
   periodEvents,
   notificationPreferences,
   integrationEntityMappings,
@@ -101,10 +102,13 @@ function table<T extends PgTable>(file: string, t: T, columns: ExportColumn<T>[]
  * (src/server/internal/approval-label.ts): the period's latest decision event matching its status (else
  * reviewed_by) was made by the employee themselves, and was not an imported approval.
  */
+// The subqueries name the outer column literally (timesheet_periods.id): an interpolated column renders unqualified in
+// the export's single-table select ("id"), which Postgres binds to pe.id (UX-3 fix round 2, M4). Only ever used with
+// .from(timesheetPeriods), never aliased. The reviewed_by / user_id interpolations outside the subqueries are correct.
 const PERIOD_SELF_APPROVED = sql<boolean>`COALESCE(${timesheetPeriods.status} = 'approved'
-  AND COALESCE((SELECT pe.source FROM period_events pe WHERE pe.period_id = ${timesheetPeriods.id} AND pe.event = 'approved'
+  AND COALESCE((SELECT pe.source FROM period_events pe WHERE pe.period_id = timesheet_periods.id AND pe.event = 'approved'
     ORDER BY pe.created_at DESC LIMIT 1), 'app') <> 'migration'
-  AND COALESCE((SELECT pe.actor_id FROM period_events pe WHERE pe.period_id = ${timesheetPeriods.id} AND pe.event = 'approved'
+  AND COALESCE((SELECT pe.actor_id FROM period_events pe WHERE pe.period_id = timesheet_periods.id AND pe.event = 'approved'
     ORDER BY pe.created_at DESC LIMIT 1), ${timesheetPeriods.reviewedBy}) = ${timesheetPeriods.userId}, false)`;
 const EVENT_SELF_APPROVED = sql<boolean>`COALESCE(${periodEvents.event} = 'approved' AND ${periodEvents.source} <> 'migration'
   AND ${periodEvents.actorId} = ${periodEvents.userId}, false)`;
@@ -299,6 +303,19 @@ export const EXPORT_TABLES: ExportTableConfig[] = [
     { key: 'originalMetadata', header: 'original_metadata', description: 'For imported rows: the original reviewer, dates and comment from the source file, as data (JSON).' },
     { key: 'approvalContext', header: 'approval_context', description: 'Self-approvals only: the active-admin count at that moment and when self-approval was last switched on (JSON).' },
   ], [{ header: 'self_approved', description: SELF_APPROVED_DESCRIPTION, expr: EVENT_SELF_APPROVED }]),
+  // feature-plan-ux-timesheet.md A4.1: every revision of every note (the table is append-only, like the entries).
+  table('timesheet_notes', timesheetNotes, [
+    { key: 'id', header: 'id' },
+    { key: 'userId', header: 'user_id', description: 'The employee whose timesheet the note is on (users.csv id).' },
+    { key: 'entryDate', header: 'entry_date', description: 'The day the note is about (calendar date, YYYY-MM-DD).' },
+    { key: 'chargeCodeId', header: 'charge_code_id', description: 'The charge code row the note is on (charge_codes.csv id); blank for indirect or CLIN-only rows.' },
+    { key: 'indirectCodeId', header: 'indirect_code_id', description: 'The indirect code row the note is on (indirect_charge_codes.csv id); blank otherwise.' },
+    { key: 'clinId', header: 'clin_id', description: 'Legacy CLIN-only rows: the line item the note is on (clins.csv id); blank otherwise.' },
+    { key: 'body', header: 'body', description: 'The note text as of this revision. Blank means the note was removed at this revision.' },
+    { key: 'revisionNumber', header: 'revision_number', description: 'Revision of this note for this day and row, starting at 1. The highest revision is the current note; earlier ones are its history.' },
+    { key: 'createdBy', header: 'created_by', description: 'Who wrote this revision (users.csv id).' },
+    { key: 'createdAt', header: 'created_at', description: 'When this revision was saved (UTC).' },
+  ]),
   table('import_batches', importBatches, [
     { key: 'id', header: 'id' },
     { key: 'kind', header: 'kind', description: 'entries (time entries) or periods (timesheet periods and their approvals).' },

@@ -24,7 +24,10 @@ export const serializedBytes = (value: unknown): number => utf8.encode(JSON.stri
 
 /**
  * Import hours (fix round 1, F3): the whole trimmed value must be a number — "7,5" and "8h" are row errors, never
- * truncated to 7 / 8 — between 0 and 24, rounded to 2 decimals (validateHours' rule). Null = invalid.
+ * truncated to 7 / 8 — between 0 and 24, rounded to 2 decimals. Null = invalid.
+ *
+ * Deliberately NOT the app's validateHours (feature-plan-ux-timesheet.md L2): history import records another system's
+ * hours as-is, so the quarter-hour rule (UX3-D3) and the 24-hours-per-day rule (UX3-D4) don't apply here.
  */
 export function parseImportHours(value: unknown): number | null {
   const text = String(value ?? '').trim();

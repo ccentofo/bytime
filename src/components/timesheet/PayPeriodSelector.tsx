@@ -38,7 +38,10 @@ export function PayPeriodSelector() {
         setCurrentPeriodStart(options[options.length - 1]?.start ?? null);
       })
       .catch(() => {
-        if (!cancelled) setPeriodOptions([]); // the arrows still work; the list just stays empty
+        if (cancelled) return;
+        setPeriodOptions([]); // the arrows still work; the list just stays empty
+        // UX-3 fix round 1, L7: forget the old "current" so Next falls back to the server's isCurrent for this period.
+        setCurrentPeriodStart(null);
       });
     return () => {
       cancelled = true;
@@ -84,7 +87,9 @@ export function PayPeriodSelector() {
           size="lg"
           onClick={() => loadPeriod('next')}
           aria-label="Next pay period"
-          disabled={navBusy}
+          // UX-3 A4.9: never past the current period (a same-period reload would drop unsaved edits). The period list
+          // (re-fetched when "today" rolls over) decides once loaded; until then, the server's isCurrent for this period.
+          disabled={navBusy || (currentPeriodStart !== null ? isCurrentPeriod : state.isCurrent)}
         >
           <IconChevronRight size={20} />
         </ActionIcon>

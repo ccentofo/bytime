@@ -2,17 +2,37 @@
 
 import React, { createContext, useContext, useReducer, useCallback, useMemo, useEffect, useRef } from 'react';
 import { notifications } from '@mantine/notifications';
-import type { TimesheetState, TimesheetAction, TimesheetPageData, DirtyCell } from '@/types/timesheet';
+import type { TimesheetState, TimesheetAction, TimesheetPageData, DirtyCell, SavedNote } from '@/types/timesheet';
 import { addDays, isBefore, type CalendarDate } from '@/lib/calendar-date';
 import { saveTimesheetBatch, getTimesheetPeriod } from '@/server/actions/timesheet';
 import { submitPeriod, getWorkspaceContext } from '@/server/actions/periods';
 import { runAction, type RunResult } from '@/lib/run-action';
 import { getNeighborPeriod } from '@/server/actions/pay-period-config';
-import { seedOfflineStore } from '@/lib/offline/offline-store';
 
 // ---------------------------------------------------------------------------
 // Reducer
 // ---------------------------------------------------------------------------
+
+/** The working copy (bodies) of a saved-notes baseline. */
+function noteBodies(saved: Record<string, SavedNote>): Record<string, string> {
+  return Object.fromEntries(Object.entries(saved).map(([key, note]) => [key, note.body]));
+}
+
+/** A dirty note (UX-3 A4.9): its key, row and day, and the trimmed body to send. */
+export interface DirtyNote { key: string; rowId: string; dayIndex: number; body: string }
+
+/** Notes whose trimmed working body differs from the saved body (over the keys of both maps). */
+export function dirtyNotesOf(notes: Record<string, string>, savedNotes: Record<string, SavedNote>): DirtyNote[] {
+  const keys = new Set([...Object.keys(notes), ...Object.keys(savedNotes)]);
+  const out: DirtyNote[] = [];
+  for (const key of keys) {
+    const body = (notes[key] ?? '').trim();
+    if (body === (savedNotes[key]?.body ?? '')) continue;
+    const split = key.lastIndexOf('-'); // rowId is a UUID (it has dashes); the day index follows the last one
+    out.push({ key, rowId: key.slice(0, split), dayIndex: Number(key.slice(split + 1)), body });
+  }
+  return out;
+}
 
 /** Exported for tests (fix round 1, F8). */
 export function timesheetReducer(
@@ -34,7 +54,7 @@ export function timesheetReducer(
       const key = `${action.chargeCodeId}-${action.dayIndex}`;
       return {
         ...state,
-        notes: { ...state.notes, [key]: action.note },
+        notes: { ...state.notes, [key]: action.body },
       };
     }
 
@@ -44,6 +64,7 @@ export function timesheetReducer(
         activeNoteCell: {
           chargeCodeId: action.chargeCodeId,
           dayIndex: action.dayIndex,
+          editable: action.editable,
         },
       };
     }
@@ -70,7 +91,10 @@ export function timesheetReducer(
         entries: action.entries,
         savedEntries: action.entries.map((e) => ({ ...e, hours: [...e.hours] })),
         savedCellRevisions: action.revisions,
-        notes: {},
+        // UX-3 A4.9: the period's saved notes become both the working copy and the baseline.
+        notes: noteBodies(action.notes ?? {}),
+        savedNotes: action.notes ?? {},
+        isCurrent: action.isCurrent ?? false,
         periodStatus: action.periodStatus,
         approvalBadge: action.approvalBadge ?? null,
         // certified-outputs C4: each period has its own code list (assignable ∪ codes with recorded hours).
@@ -88,10 +112,17 @@ export function timesheetReducer(
       // A save that finishes after the user moved to another period must not touch that
       // period's baseline: revision keys (`code-dayIndex`) don't say which period they're for.
       if (action.periodStart !== state.periodStart) return { ...state, isSaving: false };
+      // UX-3 A4.9: the baseline moves for every note that was SENT — to the trimmed body, at the server's new revision
+      // when it wrote one (a no-op keeps the previous revision). A cleared note stays as { body: '', revision }.
+      const savedNotes = { ...state.savedNotes };
+      for (const [key, body] of Object.entries(action.sentNotes ?? {})) {
+        savedNotes[key] = { body, revision: action.noteRevisions?.[key] ?? state.savedNotes[key]?.revision ?? 0 };
+      }
       return {
         ...state,
         savedEntries: action.entries.map((e) => ({ ...e, hours: [...e.hours] })),
         savedCellRevisions: { ...state.savedCellRevisions, ...action.revisions },
+        savedNotes,
         isSaving: false,
       };
     }
@@ -100,6 +131,7 @@ export function timesheetReducer(
       return {
         ...state,
         entries: state.savedEntries.map((e) => ({ ...e, hours: [...e.hours] })),
+        notes: noteBodies(state.savedNotes),
       };
     }
 
@@ -124,6 +156,8 @@ interface TimesheetContextValue {
   state: TimesheetState;
   dispatch: React.Dispatch<TimesheetAction>;
   dirtyCells: DirtyCell[];
+  /** UX-3 A4.9: unsaved notes (Save/Discard enable on cells + notes; Submit is blocked while any is dirty). */
+  dirtyNotes: DirtyNote[];
   hasEdits: boolean;        // true if any dirty cell has a prior revision (isEdit=true)
   hasLateEntries: boolean;  // true if any dirty cell is a late first-time entry
   /** Resolves to the save's result — never throws. MARK_SAVED happens only on `ok` (launch-blockers P4). */
@@ -161,7 +195,10 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
     entries: initialData.entries,
     savedEntries: initialData.entries.map((e) => ({ ...e, hours: [...e.hours] })),
     savedCellRevisions: initialData.revisions ?? {},
-    notes: {},
+    // UX-3 A4.9: notes from the server show on first load.
+    notes: noteBodies(initialData.notes ?? {}),
+    savedNotes: initialData.notes ?? {},
+    isCurrent: initialData.isCurrent ?? false,
     periodStart: initialData.periodStart,
     numDays: initialData.numDays,
     activeNoteCell: null,
@@ -210,13 +247,22 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
     return dirty;
   }, [state.entries, state.savedEntries, state.savedCellRevisions, state.periodStart, state.today]);
 
+  const dirtyNotes = useMemo(() => dirtyNotesOf(state.notes, state.savedNotes), [state.notes, state.savedNotes]);
+
   // Are any dirty cells edits to previously-saved data?
   const hasEdits = useMemo(() => dirtyCells.some((c) => c.isEdit), [dirtyCells]);
   const hasLateEntries = useMemo(() => dirtyCells.some((c) => c.isLateEntry), [dirtyCells]);
 
   const saveAll = useCallback(
     async (changeReasonCode?: string, comment?: string): Promise<RunResult<void>> => {
-      if (dirtyCells.length === 0) return { ok: true, data: undefined }; // nothing to save is a successful no-op
+      // Nothing to save is a successful no-op. UX-3 A4.9: a notes-only save is a real save (no reason code needed).
+      if (dirtyCells.length === 0 && dirtyNotes.length === 0) return { ok: true, data: undefined };
+      const kindOf = (rowId: string) => {
+        const row = state.chargeCodes.find((cc) => cc.id === rowId);
+        return row?.kind ?? (row?.isIndirect ? 'indirect' : 'charge');
+      };
+      // The notes sent, each with the revision it was based on; the baseline moves only for these.
+      const sentNotes = Object.fromEntries(dirtyNotes.map((n) => [n.key, n.body]));
 
       dispatch({ type: 'SET_SAVING', isSaving: true });
       // silent: the toolbar shows the server's message itself.
@@ -236,6 +282,12 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
             expectedRevision: state.savedCellRevisions[revisionKey] ?? 0,
           };
         }),
+        notes: dirtyNotes.map((n) => ({
+          ...cellRefForKind(kindOf(n.rowId), n.rowId),
+          dayIndex: n.dayIndex,
+          body: n.body,
+          expectedRevision: state.savedNotes[n.key]?.revision ?? 0,
+        })),
         changeReasonCode,
         comment,
       }), { silent: true });
@@ -251,11 +303,13 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
         type: 'MARK_SAVED',
         periodStart: state.periodStart,
         entries: state.entries,
-        revisions: result.data,
+        revisions: result.data.revisions,
+        sentNotes,
+        noteRevisions: result.data.noteRevisions,
       });
       return { ok: true, data: undefined };
     },
-    [dirtyCells, state.periodStart, state.entries, state.chargeCodes, state.savedCellRevisions]
+    [dirtyCells, dirtyNotes, state.periodStart, state.entries, state.chargeCodes, state.savedCellRevisions, state.savedNotes]
   );
 
   // Each load gets a sequence number; a response that arrives after a newer load started is
@@ -270,20 +324,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
         const period = await getTimesheetPeriod(await resolveStart());
         if (seq !== loadSeq.current) return;
 
-        // Fire-and-forget offline seeding — wrapped in try/catch to prevent IndexedDB errors from crashing the app
-        try {
-          seedOfflineStore({
-            userId: state.userId,
-            periodStart: period.periodStart,
-            chargeCodes: period.chargeCodes, // F8: THIS period's list, not the one being left
-            entries: period.entries,
-            revisions: period.revisions,
-            periodStatus: period.periodStatus,
-          });
-        } catch {
-          // IndexedDB unavailable or corrupted — app continues without offline support
-        }
-
+        // F8: SET_PERIOD_DATA replaces the code list with THIS period's (never the one being left).
         dispatch({ type: 'SET_PERIOD_DATA', ...period });
       } catch (error) {
         if (seq !== loadSeq.current) return;
@@ -297,7 +338,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
         });
       }
     },
-    [state.userId]
+    []
   );
 
   const loadPeriod = useCallback(
@@ -352,7 +393,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
 
   return (
     <TimesheetContext.Provider
-      value={{ state, dispatch, dirtyCells, hasEdits, hasLateEntries, saveAll, loadPeriod, loadPeriodByDate, discardChanges, submitTimesheet }}
+      value={{ state, dispatch, dirtyCells, dirtyNotes, hasEdits, hasLateEntries, saveAll, loadPeriod, loadPeriodByDate, discardChanges, submitTimesheet }}
     >
       {children}
     </TimesheetContext.Provider>

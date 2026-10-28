@@ -1,114 +1,100 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { getTestDb, createTestUser, createTestContract, createTestClin, assignUserToClin, cleanupTestData, createTestIndirectCode } from './helpers';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { getPeriodStartForDate, DEFAULT_PERIOD_CONFIG } from '@/lib/date-utils';
+import { addDays, formatCalendarDate, todayIn, type CalendarDate } from '@/lib/calendar-date';
+import { getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, createTestIndirectCode, cleanupTestData, expectOk, expectFailure } from './helpers';
 
-describe('Timesheet Save — DCAA Append-Only', () => {
-  let user: any;
-  let clin: any;
+/**
+ * feature-plan-ux-timesheet.md A-T5 (A4.4, UX3-D3): hours are real numbers in quarter hours, stored exactly as given;
+ * anything else is refused (never rounded, never coerced); untouched history isn't re-validated (A3.6).
+ */
+
+vi.mock('@/db', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/db')>()),
+  getDb: async () => getTestDb(),
+  getDbForAuth: async () => getTestDb(),
+  getDbForUrl: () => getTestDb(),
+  getDbForWrite: async () => getTestDb(),
+}));
+vi.mock('@/lib/tenant/context', () => ({
+  getTenantSlug: async () => 'test-tenant',
+  getTenantOrThrow: async () => ({ id: '00000000-0000-4000-8000-0000000000a5', slug: 'test-tenant', plan: 'enterprise', status: 'active', dbUrl: 'test-db' }),
+  getTenantState: async () => ({ kind: 'full', tenant: { slug: 'test-tenant', dbUrl: 'test-db' } }),
+}));
+type FakeUser = { id: string; role: 'admin' | 'supervisor' | 'employee'; email: string; fullName: string };
+const session = vi.hoisted(() => ({ user: null as null | FakeUser }));
+vi.mock('@/lib/session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/session')>();
+  const current = () => {
+    if (!session.user) throw new actual.AuthorizationError('unauthenticated', 'Unauthorized: No active session');
+    return session.user;
+  };
+  return { ...actual, getSessionUser: async () => current(), requireSession: async () => current(), assertCanAccessEmployee: async () => {}, getEmployeeScope: async () => 'all' };
+});
+
+import { saveTimesheetBatch } from '@/server/actions/timesheet';
+
+describe('quarter hours, stored exactly (UX-3 A-T5)', () => {
+  let emp: Awaited<ReturnType<typeof createTestUser>>;
+  let code: Awaited<ReturnType<typeof createTestChargeCode>>;
+  let clinId: string;
+  let start: CalendarDate; // the previous period: past days (late entries need a reason)
+  const db = () => getTestDb();
+  const rows = () => db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.userId, emp.id));
+  const save = (hours: unknown, dayIndex = 1) => saveTimesheetBatch({
+    periodStart: start,
+    cells: [{ chargeCodeId: code.id, dayIndex, hours: hours as number, isEdit: false, isLateEntry: true }],
+    changeReasonCode: 'LATE_ENTRY', comment: 'late',
+  });
 
   beforeEach(async () => {
     await cleanupTestData();
-    user = await createTestUser();
-    const contract = await createTestContract();
-    clin = await createTestClin(contract.id);
-    await assignUserToClin(user.id, clin.id);
+    emp = await createTestUser({ role: 'employee' });
+    session.user = { id: emp.id, role: 'employee', email: emp.email, fullName: emp.fullName };
+    clinId = (await createTestClin((await createTestContract()).id)).id;
+    code = await createTestChargeCode(clinId);
+    await db().insert(schema.userChargeCodes).values({ userId: emp.id, chargeCodeId: code.id, isActive: true });
+    const current = getPeriodStartForDate(todayIn('America/New_York'), DEFAULT_PERIOD_CONFIG);
+    start = getPeriodStartForDate(addDays(current, -1), DEFAULT_PERIOD_CONFIG);
+  });
+  afterEach(async () => { session.user = null; await cleanupTestData(); });
+
+  it('7.25 is saved and stored as \'7.25\'', async () => {
+    await expectOk(save(7.25));
+    expect((await rows()).map((r) => r.hours)).toEqual(['7.25']);
   });
 
-  afterEach(async () => {
-    await cleanupTestData();
+  it('7.3 is refused with the day; 7.2500001 is refused (no normalization); nothing is stored', async () => {
+    const day = formatCalendarDate(addDays(start, 1), 'MMM D, YYYY');
+    await expectFailure(save(7.3), 'validation', new RegExp(`quarter hours \\(\\.00, \\.25, \\.50 or \\.75\\)\\. 7\\.3 on ${day} isn't`));
+    await expectFailure(save(7.2500001), 'validation', /quarter hours/);
+    expect(await rows()).toEqual([]);
   });
 
-  it('creates a new entry with revision 1 on first save', async () => {
-    const db = getTestDb();
-    const entryDate = '2026-05-20';
-
-    await db.insert(schema.timesheetEntries).values({
-      userId: user.id,
-      clinId: clin.id,
-      entryDate,
-      hours: '8',
-      revisionNumber: 1,
-      createdBy: user.id,
-    });
-
-    const entries = await db.select().from(schema.timesheetEntries)
-      .where(and(
-        eq(schema.timesheetEntries.userId, user.id),
-        eq(schema.timesheetEntries.clinId, clin.id),
-      ));
-
-    expect(entries).toHaveLength(1);
-    expect(entries[0].revisionNumber).toBe(1);
-    expect(entries[0].hours).toBe('8');
+  it('\'8\' and \'\' are refused ("must be a number"); nothing is stored', async () => {
+    await expectFailure(save('8'), 'validation', /Hours must be a number\./);
+    await expectFailure(save(''), 'validation', /Hours must be a number\./);
+    await expectFailure(save('0x8'), 'validation', /Hours must be a number\./);
+    expect(await rows()).toEqual([]);
   });
 
-  it('preserves old revision when saving a correction (append-only)', async () => {
-    const db = getTestDb();
-    const entryDate = '2026-05-20';
-
-    // First save
-    await db.insert(schema.timesheetEntries).values({
-      userId: user.id,
-      clinId: clin.id,
-      entryDate,
-      hours: '8',
-      revisionNumber: 1,
-      createdBy: user.id,
-    });
-
-    // Second save (correction)
-    await db.insert(schema.timesheetEntries).values({
-      userId: user.id,
-      clinId: clin.id,
-      entryDate,
-      hours: '7.5',
-      revisionNumber: 2,
-      changeReasonCode: 'CORRECTION',
-      comment: 'Fixed hours',
-      createdBy: user.id,
-    });
-
-    const entries = await db.select().from(schema.timesheetEntries)
-      .where(and(
-        eq(schema.timesheetEntries.userId, user.id),
-        eq(schema.timesheetEntries.clinId, clin.id),
-      ))
-      .orderBy(schema.timesheetEntries.revisionNumber);
-
-    // BOTH revisions must exist (append-only)
-    expect(entries).toHaveLength(2);
-    expect(entries[0].revisionNumber).toBe(1);
-    expect(entries[0].hours).toBe('8');
-    expect(entries[1].revisionNumber).toBe(2);
-    expect(entries[1].hours).toBe('7.5');
-    expect(entries[1].changeReasonCode).toBe('CORRECTION');
+  it('untouched history (an imported 7.33) is not re-validated when another cell is saved', async () => {
+    await db().insert(schema.timesheetEntries).values({ userId: emp.id, chargeCodeId: code.id, clinId, entryDate: start, hours: '7.33', revisionNumber: 1, createdBy: emp.id });
+    await expectOk(save(8, 2));
+    expect((await rows()).map((r) => r.hours).sort()).toEqual(['7.33', '8']);
   });
+});
 
-  it('stores createdAt timestamp for audit trail', async () => {
-    const db = getTestDb();
-    const before = new Date();
-
-    await db.insert(schema.timesheetEntries).values({
-      userId: user.id,
-      clinId: clin.id,
-      entryDate: '2026-05-20',
-      hours: '8',
-      revisionNumber: 1,
-      createdBy: user.id,
-    });
-
-    const [entry] = await db.select().from(schema.timesheetEntries)
-      .where(eq(schema.timesheetEntries.userId, user.id));
-
-    expect(entry.createdAt).toBeDefined();
-    expect(new Date(entry.createdAt).getTime()).toBeGreaterThanOrEqual(before.getTime());
-  });
+// Restored from the pre-UX-3 file (fix round 1, L4): an indirect entry stores clinId null.
+describe('Timesheet Save — indirect entries', () => {
+  let user: Awaited<ReturnType<typeof createTestUser>>;
+  beforeEach(async () => { await cleanupTestData(); user = await createTestUser(); });
+  afterEach(async () => { await cleanupTestData(); });
 
   it('supports indirect charge code entries (clinId null)', async () => {
     const db = getTestDb();
     const indirectCode = await createTestIndirectCode();
-
     await db.insert(schema.timesheetEntries).values({
       userId: user.id,
       clinId: null,
@@ -118,10 +104,7 @@ describe('Timesheet Save — DCAA Append-Only', () => {
       revisionNumber: 1,
       createdBy: user.id,
     });
-
-    const [entry] = await db.select().from(schema.timesheetEntries)
-      .where(eq(schema.timesheetEntries.indirectCodeId, indirectCode.id));
-
+    const [entry] = await db.select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.indirectCodeId, indirectCode.id));
     expect(entry.clinId).toBeNull();
     expect(entry.indirectCodeId).toBe(indirectCode.id);
     expect(entry.hours).toBe('2');

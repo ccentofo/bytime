@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
-import { Container, Stack, Title, Text, Button, Group, Alert, Paper } from '@mantine/core';
+import { Container, Stack, Title, Text, Button, Group, Paper } from '@mantine/core';
 import { IconAlertTriangle, IconRefresh } from '@tabler/icons-react';
 
 export default function TimesheetError({
@@ -28,17 +28,11 @@ export default function TimesheetError({
           <Title order={1} size="h3" ta="center">Timesheet Error</Title>
           <Text c="dimmed" ta="center" size="sm">
             {isNetworkError
-              ? 'Unable to connect to the server. Check your internet connection and try again. Your offline data is preserved.'
+              ? 'Unable to connect to the server. Check your internet connection and try again. Changes you hadn\'t saved yet weren\'t sent.'
               : isAuthError
               ? 'Your session may have expired. Please try again or sign in.'
               : 'An error occurred while loading your timesheet. Your data is safe — please try refreshing.'}
           </Text>
-          <Alert color="signal" variant="light" w="100%">
-            <Text size="xs">
-              💡 If you were working offline, your unsaved entries are stored locally
-              and will sync when the connection is restored.
-            </Text>
-          </Alert>
           <Group mt="sm">
             <Button
               leftSection={<IconRefresh size={16} />}

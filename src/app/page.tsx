@@ -1,5 +1,5 @@
 import { Container, Title, Text, Button, Group, Stack, Paper, SimpleGrid, ThemeIcon, Badge, Divider, Center, Anchor, VisuallyHidden } from '@mantine/core';
-import { IconClock, IconShieldCheck, IconCloudLock, IconReportAnalytics, IconUsers, IconDeviceFloppy, IconApi, IconMoon } from '@tabler/icons-react';
+import { IconClock, IconShieldCheck, IconReportAnalytics, IconUsers, IconDeviceFloppy, IconApi, IconMoon } from '@tabler/icons-react';
 import React from 'react';
 import { redirect } from 'next/navigation';
 import { Logo } from '@/components/brand/Logo';
@@ -93,7 +93,7 @@ export default async function LandingPage() {
       {/* Features Grid */}
       <div id="features">
         <Title order={2} ta="center" mb="xl">Built for DCAA Compliance</Title>
-        <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} spacing="lg" mb="xl">
+        <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="lg" mb="xl">
           <FeatureCard
             icon={<IconShieldCheck size={28} />}
             color="signal"
@@ -117,12 +117,6 @@ export default async function LandingPage() {
             color="ink"
             title="Digital Certification"
             description="DCAA-compliant submission with certification statement and supervisor approval."
-          />
-          <FeatureCard
-            icon={<IconCloudLock size={28} />}
-            color="ink"
-            title="Offline Support"
-            description="Log time without internet. Syncs automatically when connection returns."
           />
           <FeatureCard
             icon={<IconReportAnalytics size={28} />}

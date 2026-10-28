@@ -105,6 +105,16 @@ category (`charge_codes.labor_category_id`, now the starting category), so deplo
 - **The same no-rollback rule applies once a dated category change exists.** Older code prices every entry on a code
   with the code's starting category, which silently re-prices history. Fix forward instead.
 
+### Note: tenant migration 0017 (timesheet notes)
+
+`0017_timesheet_notes` only creates `timesheet_notes` (its FKs, the `timesheet_notes_cell_rev_unique_idx` unique index,
+a lookup index, the one-code CHECK) and its append-only triggers (the 0012 function, row-level UPDATE/DELETE and
+statement-level TRUNCATE). There is no backfill: notes were never saved before.
+
+- **Additive: deploy it before the app.** Older code ignores the table.
+- **Never roll the app back past it once notes exist.** Older code neither shows nor saves notes, so employees would
+  see their notes disappear (the rows stay, append-only). Fix forward instead.
+
 ## Production Deployment
 
 ### Automated (CI/CD)

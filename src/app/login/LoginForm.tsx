@@ -20,7 +20,8 @@ import { signIn } from 'next-auth/react';
 import { checkLockout } from '@/server/actions/login-attempts';
 import { Logo } from '@/components/brand/Logo';
 
-export function LoginForm() {
+/** `next`: where to go after signing in — already sanitized by the page (safeNext), else null (UX-3 A4.8). */
+export function LoginForm({ next = null }: { next?: string | null } = {}) {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -106,9 +107,10 @@ export function LoginForm() {
         return;
       }
 
-      // Success — a session now exists (MFA, if enabled, already passed).
-      // "/" picks the landing page by role (UX-2 §4.3: admins and supervisors → Home, employees → Timesheet).
-      router.push('/');
+      // Success — a session now exists (MFA, if enabled, already passed; this one path covers both steps).
+      // Back to the page that asked for sign-in (UX-3 A4.8), else "/", which picks the landing page by role
+      // (UX-2 §4.3: admins and supervisors → Home, employees → Timesheet).
+      router.push(next ?? '/');
       router.refresh();
     } catch {
       setError('Something went wrong signing in. Please try again.');
