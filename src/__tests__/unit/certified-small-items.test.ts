@@ -92,6 +92,13 @@ describe('clearTenantData (C1/C8)', () => {
     expect(at('tx.delete(schema.importBatches)')).toBeGreaterThan(at("allow_entry_delete"));
   });
 
+  it('UX-3 A4.1: deletes timesheet_notes inside the bypass, after entries and before the codes, CLINs and users it references', () => {
+    const notes = at('tx.delete(schema.timesheetNotes)');
+    expect(notes).toBeGreaterThan(at("allow_entry_delete"));
+    expect(notes).toBeGreaterThan(at('tx.delete(schema.timesheetEntries)'));
+    for (const t of ['chargeCodes', 'indirectChargeCodes', 'clins', 'users']) expect(notes, t).toBeLessThan(at(`tx.delete(schema.${t})`));
+  });
+
   it('resets workweek_start_day and history_import_closed_at with the timezone', () => {
     expect(src).toMatch(/timezone: 'America\/New_York', historyImportClosedAt: null, workweekStartDay: null/);
   });

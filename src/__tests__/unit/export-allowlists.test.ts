@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
-import { getTableName, is } from 'drizzle-orm';
+import { getTableColumns, getTableName, is } from 'drizzle-orm';
 import { PgDialect, PgTable } from 'drizzle-orm/pg-core';
 import * as schema from '@/db/schema';
 import { EXPORT_TABLES } from '@/lib/export/allowlists';
@@ -129,6 +129,14 @@ describe('every tenant table is exported or on the never-exported list (certifie
     expect(headers('period_events')).toEqual(expect.arrayContaining(['source', 'import_batch_id', 'original_metadata', 'approval_context', 'self_approved']));
     expect(EXPORT_TABLES.find((t) => t.file === 'period_events')!.columns.find((c) => c.header === 'actor_id')!.description)
       .toMatch(/imported rows .* admin who ran the import/);
+  });
+
+  it('A-T3 (UX-3 A4.1): timesheet notes are exported with every column, each described', () => {
+    const notes = EXPORT_TABLES.find((t) => t.file === 'timesheet_notes');
+    expect(notes, 'timesheet_notes is exported').toBeDefined();
+    const columns = Object.values(getTableColumns(schema.timesheetNotes)).map((c) => c.name).sort();
+    expect(notes!.columns.map((c) => c.header).sort()).toEqual(columns);
+    for (const c of notes!.columns) expect(c.description, c.header).not.toBe('');
   });
 
   it('timesheet entries carry provenance (source, batch, original metadata) and the derived label, in column order', () => {

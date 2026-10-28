@@ -16,6 +16,8 @@ export async function clearTenantData(db: PostgresJsDatabase<any>): Promise<void
     await tx.execute(sql`SET LOCAL cadenzpoint.allow_entry_delete = 'on'`);
     await tx.delete(schema.periodEvents);
     await tx.delete(schema.timesheetEntries);
+    // feature-plan-ux-timesheet.md A4.1: append-only like entries; references users, charge/indirect codes and CLINs.
+    await tx.delete(schema.timesheetNotes);
     await tx.delete(schema.timesheetPeriods);
     // feature-plan-certified-outputs.md C1/C8: append-only like the two above (same trigger function, same bypass);
     // referenced by entries/period_events (deleted above) and referencing users (deleted below).

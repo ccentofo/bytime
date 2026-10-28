@@ -23,6 +23,7 @@ import {
   userLaborCategories,
   payPeriodConfig,
   timesheetPeriods,
+  timesheetNotes,
   periodEvents,
   notificationPreferences,
   integrationEntityMappings,
@@ -299,6 +300,19 @@ export const EXPORT_TABLES: ExportTableConfig[] = [
     { key: 'originalMetadata', header: 'original_metadata', description: 'For imported rows: the original reviewer, dates and comment from the source file, as data (JSON).' },
     { key: 'approvalContext', header: 'approval_context', description: 'Self-approvals only: the active-admin count at that moment and when self-approval was last switched on (JSON).' },
   ], [{ header: 'self_approved', description: SELF_APPROVED_DESCRIPTION, expr: EVENT_SELF_APPROVED }]),
+  // feature-plan-ux-timesheet.md A4.1: every revision of every note (the table is append-only, like the entries).
+  table('timesheet_notes', timesheetNotes, [
+    { key: 'id', header: 'id' },
+    { key: 'userId', header: 'user_id', description: 'The employee whose timesheet the note is on (users.csv id).' },
+    { key: 'entryDate', header: 'entry_date', description: 'The day the note is about (calendar date, YYYY-MM-DD).' },
+    { key: 'chargeCodeId', header: 'charge_code_id', description: 'The charge code row the note is on (charge_codes.csv id); blank for indirect or CLIN-only rows.' },
+    { key: 'indirectCodeId', header: 'indirect_code_id', description: 'The indirect code row the note is on (indirect_charge_codes.csv id); blank otherwise.' },
+    { key: 'clinId', header: 'clin_id', description: 'Legacy CLIN-only rows: the line item the note is on (clins.csv id); blank otherwise.' },
+    { key: 'body', header: 'body', description: 'The note text as of this revision. Blank means the note was removed at this revision.' },
+    { key: 'revisionNumber', header: 'revision_number', description: 'Revision of this note for this day and row, starting at 1. The highest revision is the current note; earlier ones are its history.' },
+    { key: 'createdBy', header: 'created_by', description: 'Who wrote this revision (users.csv id).' },
+    { key: 'createdAt', header: 'created_at', description: 'When this revision was saved (UTC).' },
+  ]),
   table('import_batches', importBatches, [
     { key: 'id', header: 'id' },
     { key: 'kind', header: 'kind', description: 'entries (time entries) or periods (timesheet periods and their approvals).' },
