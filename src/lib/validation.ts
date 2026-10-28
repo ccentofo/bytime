@@ -4,7 +4,7 @@
  * Used as guards at the top of server action mutation functions.
  */
 
-import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { formatCalendarDate, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { UserFacingError } from '@/lib/errors';
 
 // ---------------------------------------------------------------------------
@@ -63,18 +63,33 @@ export function validateEmail(value: unknown, fieldName: string = 'Email'): stri
 // Numeric Validators
 // ---------------------------------------------------------------------------
 
-export function validateHours(value: unknown, fieldName: string = 'Hours'): number {
-  const num = Number(value);
-  if (isNaN(num) || !isFinite(num)) {
+/**
+ * One cell's hours from an app save (feature-plan-ux-timesheet.md A4.4, UX3-D3): a real JS number — never a string,
+ * so '' or '0x8' can't coerce through Number() and be stored raw — finite, 0–24, in QUARTER hours. Quarter hours are
+ * exact in binary floating point, so the check is `Number.isInteger(value * 4)` with NO normalization: 7.2500001 is
+ * refused, never rounded (trap T-D). Returns the value unchanged. History import has its own parser (L2).
+ */
+export function validateHours(value: unknown, fieldName: string = 'Hours', onDate?: CalendarDate): number {
+  if (typeof value !== 'number') {
+    throw new UserFacingError(`${fieldName} must be a number.`);
+  }
+  if (!Number.isFinite(value)) {
     throw new UserFacingError(`${fieldName} must be a valid number.`);
   }
-  if (num < 0) {
+  if (value < 0) {
     throw new UserFacingError(`${fieldName} cannot be negative.`);
   }
-  if (num > 24) {
+  if (value > 24) {
     throw new UserFacingError(`${fieldName} cannot exceed 24 hours per day.`);
   }
-  return Math.round(num * 100) / 100; // 2 decimal places
+  if (!Number.isInteger(value * 4)) {
+    throw new UserFacingError(
+      onDate
+        ? `${fieldName} must be in quarter hours (.00, .25, .50 or .75). ${value} on ${formatCalendarDate(onDate, 'MMM D, YYYY')} isn't.`
+        : `${fieldName} must be in quarter hours (.00, .25, .50 or .75). ${value} isn't.`,
+    );
+  }
+  return value;
 }
 
 export function validateMonetaryValue(value: unknown, fieldName: string): string | undefined {

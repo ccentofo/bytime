@@ -47,7 +47,8 @@ function correctionFacts() {
   db.onSelect(chargeCodes, [{ id: CODE, clinId: 'clin-1', slinId: null }]);
   db.onSelect(userChargeCodes, [{ id: CODE }]);
   db.onSelect(chargeCodes, [{ id: CODE, codeActive: true, clinStatus: 'active', slinStatus: null, contractStatus: 'active' }]);
-  db.onSelect(timesheetEntries, [{ maxRevision: 1 }]);
+  db.onSelect(timesheetEntries, []);                 // UX-3 A4.5: the day's total before the save
+  db.onSelect(timesheetEntries, [{ maxRevision: 1 }]); // prior revision (a correction)
 }
 const correct = (changeReasonCode: string, comment?: string) => saveTimesheetBatch({
   periodStart: '2026-10-01' as never,

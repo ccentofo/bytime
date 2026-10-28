@@ -21,6 +21,7 @@ import { addDays, diffDays, isAfter, isBefore, formatCalendarDate, parseCalendar
 import { ConflictError, UserFacingError } from '@/lib/errors';
 import { newCellRefusal } from '@/lib/timesheet/cell-rules';
 import { CHARGEABLE_CODE } from '@/server/internal/chargeable';
+import { dayTotalRefusal, latestDayTotals } from '@/server/internal/day-totals';
 import { latestNotesInPeriod, notedCodes, notesMap, validateNotes, writeNotes, type LatestNote, type NoteInput } from '@/server/internal/timesheet-notes';
 import { userAction, type ActionResult } from '@/lib/action-result';
 
@@ -202,6 +203,7 @@ export async function saveTimesheetBatch(data: {
     }
 
     validateUUID(userId, 'User ID');
+    const validatedHours = new Map<(typeof data.cells)[number], number>();
     for (const cell of data.cells) {
       // A cell is exactly ONE kind of code. A cell naming several would skip the charge-code
       // assignment check (the indirect branch below returns early) while still storing the
@@ -213,7 +215,8 @@ export async function saveTimesheetBatch(data: {
       if (cell.slinId && !cell.clinId) {
         throw new UserFacingError('A SLIN can only be given with a legacy CLIN entry.');
       }
-      validateHours(cell.hours, 'Hours');
+      // A4.4 (UX3-D3): a real number in quarter hours, stored exactly as validated (never the raw input).
+      validatedHours.set(cell, validateHours(cell.hours, 'Hours', addDays(start, cell.dayIndex)));
       if (cell.chargeCodeId) validateUUID(cell.chargeCodeId, 'Charge Code ID');
       if (cell.clinId) validateUUID(cell.clinId, 'CLIN ID');
       if (cell.indirectCodeId) validateUUID(cell.indirectCodeId, 'Indirect code ID');
@@ -297,6 +300,10 @@ export async function saveTimesheetBatch(data: {
             }
           }
         }
+
+        // A4.5 (UX3-D4, L1): each affected day's latest-revision total before the save, read through tx (in the lock).
+        const affectedDates = [...new Set(data.cells.map((cell) => addDays(start, cell.dayIndex)))];
+        const prevTotals = affectedDates.length ? await latestDayTotals(tx, userId, affectedDates) : {};
 
         for (const cell of data.cells) {
           const entryDate = addDays(start, cell.dayIndex);
@@ -389,7 +396,7 @@ export async function saveTimesheetBatch(data: {
               slinId: effectiveSlinId,
               indirectCodeId: cell.indirectCodeId ?? null,
               entryDate,
-              hours: cell.hours.toString(),
+              hours: String(validatedHours.get(cell)!),
               revisionNumber: nextRevision,
               changeReasonCode: requiresReason ? (data.changeReasonCode ?? undefined) : undefined,
               comment: requiresReason ? (data.comment ?? undefined) : undefined,
@@ -407,6 +414,14 @@ export async function saveTimesheetBatch(data: {
 
           const key = `${entryKey}-${cell.dayIndex}`;
           newRevisions[key] = nextRevision;
+        }
+
+        // A4.5: a day over 24 across all codes is refused when the save raised it (L1: an imported day already over 24
+        // may be lowered). The totals include every cell of this batch, so 16 + 9 in one save is caught; the throw
+        // rolls the whole save back.
+        if (affectedDates.length) {
+          const refusal = dayTotalRefusal(affectedDates, prevTotals, await latestDayTotals(tx, userId, affectedDates));
+          if (refusal) throw new UserFacingError(refusal);
         }
 
         // A4.2: notes, in the same transaction (all-or-nothing with the hours); eligibility read through tx.

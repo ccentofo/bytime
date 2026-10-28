@@ -54,11 +54,13 @@ const START = '2026-10-01';
 
 beforeEach(() => { db.reset(); h.locked = false; h.lockDates = []; });
 
-/** Script the in-transaction reads for one charge-code cell, in the order the save makes them. */
+/** Script the in-transaction reads for one charge-code cell, in the order the save makes them (UX-3 A4.5 adds the day
+ * totals read before the inserts; the one after them reads [] — unscripted — so a day total is never over 24 here). */
 function chargeCodeFacts(o: { assigned: boolean; codeActive: boolean; clinActive?: boolean; slinStatus?: string | null; contractActive?: boolean; priorRevision: number }) {
   db.onSelect(chargeCodes, [{ id: CODE, clinId: CLIN, slinId: null }]);                                   // FOR SHARE re-read
   db.onSelect(userChargeCodes, o.assigned ? [{ id: CODE }] : []);                                          // active assignment
   db.onSelect(chargeCodes, [{ id: CODE, codeActive: o.codeActive, clinStatus: o.clinActive === false ? 'inactive' : 'active', slinStatus: o.slinStatus ?? null, contractStatus: o.contractActive === false ? 'inactive' : 'active' }]);
+  db.onSelect(timesheetEntries, []);                                                                       // A4.5: day totals before the save
   db.onSelect(timesheetEntries, [{ maxRevision: o.priorRevision }]);                                       // prior revision
 }
 const save = (cell: Record<string, unknown>, reason = true) => saveTimesheetBatch({
@@ -154,17 +156,20 @@ describe('saveTimesheetBatch — per cell, inside the transaction, after the pri
   });
 
   it('legacy CLIN: a new CLIN-only cell is refused; an existing one is corrected keeping the prior SLIN; a different client SLIN is refused', async () => {
+    db.onSelect(timesheetEntries, []);                       // A4.5: the affected days' totals before the save
     db.onSelect(timesheetEntries, [{ maxRevision: 0 }]);
     expect(await save({ clinId: CLIN })).toMatchObject({ ok: false, error: expect.stringMatching(/CLIN-only row/) });
 
     db.reset();
     const PRIOR_SLIN = '55555555-5555-4555-8555-555555555555';
+    db.onSelect(timesheetEntries, []);                       // A4.5: the affected days' totals before the save
     db.onSelect(timesheetEntries, [{ maxRevision: 1 }]);
     db.onSelect(timesheetEntries, [{ slinId: PRIOR_SLIN }]);
     expect((await save({ clinId: CLIN, isEdit: true })).ok).toBe(true);
     expect(inserted()).toEqual([expect.objectContaining({ clinId: CLIN, slinId: PRIOR_SLIN, chargeCodeId: null, revisionNumber: 2 })]);
 
     db.reset();
+    db.onSelect(timesheetEntries, []);                       // A4.5: the affected days' totals before the save
     db.onSelect(timesheetEntries, [{ maxRevision: 1 }]);
     db.onSelect(timesheetEntries, [{ slinId: PRIOR_SLIN }]);
     expect(await save({ clinId: CLIN, slinId: '66666666-6666-4666-8666-666666666666', isEdit: true }))
@@ -173,10 +178,12 @@ describe('saveTimesheetBatch — per cell, inside the transaction, after the pri
 
   it('inactive indirect code: a correction is allowed; a new day is refused', async () => {
     db.onSelect(indirectChargeCodes, [{ id: IND, isActive: false, availableToAll: true }]);
+    db.onSelect(timesheetEntries, []);                       // A4.5: the affected days' totals before the save
     db.onSelect(timesheetEntries, [{ maxRevision: 1 }]);
     expect((await save({ indirectCodeId: IND, isEdit: true })).ok).toBe(true);
     db.reset();
     db.onSelect(indirectChargeCodes, [{ id: IND, isActive: false, availableToAll: true }]);
+    db.onSelect(timesheetEntries, []);                       // A4.5: the affected days' totals before the save
     db.onSelect(timesheetEntries, [{ maxRevision: 0 }]);
     expect(await save({ indirectCodeId: IND })).toMatchObject({ ok: false, error: expect.stringMatching(/is not available/) });
   });
