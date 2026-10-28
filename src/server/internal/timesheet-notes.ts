@@ -18,7 +18,12 @@ import { CHARGEABLE_CODE } from './chargeable';
 export const NOTE_MAX_LENGTH = 1000;
 export const NOTE_TOO_LONG = `A note can be at most ${NOTE_MAX_LENGTH} characters.`;
 export const NOTE_FUTURE_DATE = 'Notes can\'t be added to future dates.';
+/** Control characters other than tab and newline (browsers send textarea line breaks as LF). */
+const NOTE_CONTROL_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f]/;
+export const NOTE_CONTROL = 'A note can\'t contain control characters.';
 export const NOTE_ROW_NOT_ELIGIBLE = 'You can only add notes to rows on your timesheet.';
+/** A note's revision race lost to another save (the unique index) — UX-3 fix round 1, L6. */
+export const NOTE_CONFLICT = 'This timesheet changed in another tab or session. Reload to see the latest, then try again.';
 
 /** A note as the client sends it: the same cell reference as a save cell, plus the revision it last read (0 = none). */
 export interface NoteInput {
@@ -57,6 +62,8 @@ export function validateNotes(notes: unknown, start: CalendarDate, numDays: numb
     if (typeof n.body !== 'string') throw new UserFacingError('A note must be text.');
     const body = n.body.trim();
     if (body.length > NOTE_MAX_LENGTH) throw new UserFacingError(NOTE_TOO_LONG);
+    // UX-3 fix round 1, L1: a NUL or other control character would otherwise surface as a raw Postgres error.
+    if (NOTE_CONTROL_CHARS.test(body)) throw new UserFacingError(NOTE_CONTROL);
     if (!Number.isInteger(n.expectedRevision) || n.expectedRevision! < 0) throw new UserFacingError('Invalid note revision.');
     const entryDate = addDays(start, n.dayIndex!);
     if (isAfter(entryDate, today)) throw new UserFacingError(NOTE_FUTURE_DATE);
@@ -76,12 +83,12 @@ function noteCellWhere(userId: string, kind: Kind, codeId: string, entryDate: Ca
 /**
  * Write the batch's notes INSIDE saveTimesheetBatch's transaction (after the lock and the period-lock check, which
  * includes the note dates). Eligibility is read through `tx` — never getPeriodCodesForEmployee (a second connection
- * while holding the lock). Per note: optimistic check against `expectedRevision` (unless skipConflictCheck), a no-op
+ * while holding the lock). Per note: optimistic check against `expectedRevision` (always — there is no bypass), a no-op
  * when the latest body is unchanged, else insert latest + 1. Returns key → new revision for every note written.
  */
 export async function writeNotes(
   tx: DbTx,
-  o: { userId: string; actorId: string; start: CalendarDate; numDays: number; notes: ValidNote[]; skipConflictCheck?: boolean },
+  o: { userId: string; actorId: string; start: CalendarDate; numDays: number; notes: ValidNote[] },
 ): Promise<Record<string, number>> {
   const written: Record<string, number> = {};
   if (o.notes.length === 0) return written;
@@ -92,7 +99,7 @@ export async function writeNotes(
     const [latest] = await tx.select({ revision: timesheetNotes.revisionNumber, body: timesheetNotes.body })
       .from(timesheetNotes).where(where).orderBy(desc(timesheetNotes.revisionNumber)).limit(1);
     const latestRevision = latest?.revision ?? 0;
-    if (!o.skipConflictCheck && latestRevision !== note.expectedRevision) {
+    if (latestRevision !== note.expectedRevision) {
       throw new ConflictError(
         `Conflict detected: the note for ${formatCalendarDate(note.entryDate, 'MMM D, YYYY')} was changed in another session (expected revision ${note.expectedRevision}, but the server has revision ${latestRevision}). Please refresh your timesheet and re-enter your changes.`,
       );
@@ -110,9 +117,7 @@ export async function writeNotes(
         createdBy: o.actorId,
       });
     } catch (err) {
-      if (isUniqueViolation(err, 'timesheet_notes_cell_rev_unique_idx')) {
-        throw new ConflictError(`Conflict detected: the note for ${formatCalendarDate(note.entryDate, 'MMM D, YYYY')} was changed in another session. Please refresh your timesheet and re-enter your changes.`);
-      }
+      if (isUniqueViolation(err, 'timesheet_notes_cell_rev_unique_idx')) throw new ConflictError(NOTE_CONFLICT);
       throw err;
     }
     written[note.key] = latestRevision + 1;
@@ -123,7 +128,7 @@ export async function writeNotes(
 /**
  * A note may go on a row the employee's timesheet shows for this period (A4.2): a charge code they're actively assigned
  * to that passes CHARGEABLE_CODE, an active available-to-all indirect code, or any code (incl. a legacy CLIN) with an
- * entry or a note in the period. Four reads, whatever the batch size.
+ * entry or a latest non-empty note in the period. Four reads, whatever the batch size.
  */
 async function assertNotesEligible(tx: DbTx, userId: string, start: CalendarDate, numDays: number, notes: ValidNote[]): Promise<void> {
   const ids = (kind: Kind) => [...new Set(notes.filter((n) => n.kind === kind).map((n) => n.codeId))];
@@ -142,8 +147,9 @@ async function assertNotesEligible(tx: DbTx, userId: string, start: CalendarDate
       .where(and(inArray(indirectChargeCodes.id, indirectIds), eq(indirectChargeCodes.isActive, true), eq(indirectChargeCodes.availableToAll, true))),
     tx.selectDistinct({ chargeCodeId: timesheetEntries.chargeCodeId, indirectCodeId: timesheetEntries.indirectCodeId, clinId: timesheetEntries.clinId })
       .from(timesheetEntries).where(and(eq(timesheetEntries.userId, userId), inPeriod(timesheetEntries.entryDate))),
-    tx.selectDistinct({ chargeCodeId: timesheetNotes.chargeCodeId, indirectCodeId: timesheetNotes.indirectCodeId, clinId: timesheetNotes.clinId })
-      .from(timesheetNotes).where(and(eq(timesheetNotes.userId, userId), inPeriod(timesheetNotes.entryDate))),
+    // UX-3 fix round 1, L3: only a LATEST NON-EMPTY note keeps a row (what getPeriodCodesForEmployee shows). A note being
+    // cleared is non-empty until this save, so clearing is always allowed; a cleared-away row takes no new notes.
+    latestNotesInPeriod(tx, userId, start, numDays).then(notedCodes),
   ]);
 
   const ok = new Set<string>([...assignable.map((r) => `charge:${r.id}`), ...available.map((r) => `indirect:${r.id}`)]);

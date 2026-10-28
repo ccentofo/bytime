@@ -110,6 +110,11 @@ describe('past periods (UX-3 A-T9)', () => {
     const other = await createTestUser({ role: 'employee', createdAt: new Date('2026-09-02T15:00:00Z') });
     await period(other.id, '2026-09-16', 'approved');
     await hours(other.id, '2026-09-17', '9');
+    // L8: the other user's history OLDER than this employee's creation must not move this employee's bound.
+    await period(other.id, '2026-03-01', 'approved');
+    await hours(other.id, '2026-02-10', '4', { source: 'migration', changeReasonCode: 'MIGRATION' });
+    expect((await list()).rows.at(-1)!.start).toBe('2026-09-01');
+    expect((await list()).rows).toHaveLength(4);
     expect((await list()).rows.find((x) => x.start === '2026-09-16')).toMatchObject({ status: 'notSubmitted', hours: 0 });
     const zero = await getPastTimesheets({ page: 0 });
     expect(await getPastTimesheets({ page: -1 })).toEqual(zero);

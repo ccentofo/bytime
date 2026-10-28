@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
-import { getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, cleanupTestData } from './helpers';
+import { getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, createTestIndirectCode, cleanupTestData } from './helpers';
+
+/** UX-3 fix round 1 (L5): the named constraint is the one that failed (its name is in the database message on `cause`). */
+const violates = (constraint: string) => (err: unknown): boolean => {
+  const e = err as { message?: string; cause?: { message?: string } };
+  return `${e?.message ?? ''} ${e?.cause?.message ?? ''}`.includes(constraint);
+};
 
 /** Drizzle 0.45 wraps database errors ("Failed query: …"); the trigger's own message is on `cause`. */
 function isAppendOnlyError(err: unknown): boolean {
@@ -143,8 +149,14 @@ describe('append-only trigger on timesheet_notes (UX-3 A-T2)', () => {
   it('exactly one code column (CHECK); one row per cell revision (unique index)', async () => {
     const db = getTestDb();
     await note('2026-02-03');
-    await expect(db.insert(schema.timesheetNotes).values({ userId, chargeCodeId, entryDate: '2026-02-03', body: 'dup', revisionNumber: 1, createdBy: userId })).rejects.toThrow();
-    await expect(db.insert(schema.timesheetNotes).values({ userId, entryDate: '2026-02-04', body: 'none', revisionNumber: 1, createdBy: userId })).rejects.toThrow();
+    // L5: the RIGHT constraint fails (drizzle wraps the error; the database message is on `cause`).
+    await expect(db.insert(schema.timesheetNotes).values({ userId, chargeCodeId, entryDate: '2026-02-03', body: 'dup', revisionNumber: 1, createdBy: userId }))
+      .rejects.toSatisfy(violates('timesheet_notes_cell_rev_unique_idx'));
+    await expect(db.insert(schema.timesheetNotes).values({ userId, entryDate: '2026-02-04', body: 'none', revisionNumber: 1, createdBy: userId }))
+      .rejects.toSatisfy(violates('timesheet_notes_one_code_check'));
+    const otherCode = (await createTestIndirectCode()).id;
+    await expect(db.insert(schema.timesheetNotes).values({ userId, chargeCodeId, indirectCodeId: otherCode, entryDate: '2026-02-04', body: 'two', revisionNumber: 1, createdBy: userId }))
+      .rejects.toSatisfy(violates('timesheet_notes_one_code_check'));
   });
 
   it('cleanupTestData() (clearTenantData) succeeds with notes present', async () => {

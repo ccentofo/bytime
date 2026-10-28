@@ -9,7 +9,7 @@ This project is a modern, fault-tolerant, and highly intuitive Next.js applicati
 * **Database:** PostgreSQL (Strict relational schema).
 * **ORM:** Drizzle ORM (for type-safe, edge-compatible SQL queries).
 * **Authentication:** Auth.js (Email/Password for MVP, utilizing short-lived JWTs with role-based payloads, and secure HTTP-only refresh tokens).
-* **Offline/Fault Tolerance:** Client-side caching (IndexedDB/Dexie.js or WatermelonDB) to allow offline time logging, syncing automatically once the network connection returns.
+* **Offline editing: deferred.** Real offline time logging is a recorded future feature (feature-plan-ux-timesheet.md, out of scope). The earlier unused IndexedDB/Dexie layer was removed in UX-3 (UX3-D2); don't reintroduce client-side caching of timesheet data without a plan for it.
 
 ## 3. Core Business Rules (DCAA Compliance - NON-NEGOTIABLE)
 When building features, prioritize data integrity and auditability. These rules are absolute:

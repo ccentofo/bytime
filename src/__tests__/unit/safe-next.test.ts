@@ -15,7 +15,10 @@ describe('safeNext', () => {
     expect(safeNext('/home')).toBe('/home');
     expect(safeNext('/settings/integrations/gusto')).toBe('/settings/integrations/gusto');
     expect(safeNext('/profile/notifications')).toBe('/profile/notifications');
-    expect(safeNext('%2Ftimesheet%3Fperiod%3D2026-10-01')).toBe('/timesheet?period=2026-10-01'); // encoded once
+  });
+
+  it('M2: returns its input UNCHANGED (never a decoded rewrite) — encoded query characters keep their meaning', () => {
+    for (const v of ['/admin/users?search=a%23b', '/admin/users?search=a%26b%3Dc', '/admin/users?q=a+b', '/timesheet?x=%25', '/admin/users?search=caf%C3%A9']) expect(safeNext(v)).toBe(v);
   });
 
   it.each([
@@ -39,6 +42,12 @@ describe('safeNext', () => {
     ['an encoded newline', '/timesheet%0A'],
     ['a bad escape', '/timesheet%E0%A4%A'],
     ['empty', ''],
+    ['M2: double-encoded dot segments', '/timesheet/x/%252e%252e/%252e%252e/admin'],
+    ['M2: a value the parser would rewrite (fragment)', '/timesheet#x'],
+    ['M2: a value the parser would rewrite (unescaped space)', '/admin/users?search=a b'],
+    ['M2: an encoded "?" in the path', '/timesheet%3Fperiod=1'],
+    ['M2: an encoded "//" in the path', '/timesheet/%2F%2Fevil.com'],
+    ['M2: a fully encoded path (not in its final form)', '%2Ftimesheet%3Fperiod%3D2026-10-01'],
   ])('rejects %s', (_label, value) => {
     expect(safeNext(value)).toBeNull();
   });

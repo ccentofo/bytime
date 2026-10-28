@@ -66,7 +66,6 @@ const save = (cell: Record<string, unknown>, reason = true) => saveTimesheetBatc
   periodStart: START as never,
   cells: [{ dayIndex: 2, hours: 6, isEdit: false, isLateEntry: true, ...cell }],
   ...(reason ? { changeReasonCode: 'CORRECTION', comment: 'fix' } : {}),
-  skipConflictCheck: true,
 });
 const inserted = () => db.inserts.filter((i) => i.table === timesheetEntries).map((i) => i.values);
 
@@ -238,5 +237,13 @@ describe('UX-3 A4.2: a notes-only batch goes through the period lock', () => {
     expect(result).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/locked/) });
     expect(h.lockDates).toEqual(['2026-10-04']);
     expect(db.inserts).toEqual([]);
+  });
+});
+
+describe('UX-3 fix round 1 (M1): no conflict-check bypass', () => {
+  it('saveTimesheetBatch\'s payload and writeNotes no longer accept or mention skipConflictCheck', () => {
+    for (const rel of ['src/server/actions/timesheet.ts', 'src/server/internal/timesheet-notes.ts']) {
+      expect(readFileSync(path.join(ROOT, rel), 'utf8'), rel).not.toMatch(/skipConflictCheck/);
+    }
   });
 });

@@ -53,7 +53,7 @@ function correctionFacts() {
 const correct = (changeReasonCode: string, comment?: string) => saveTimesheetBatch({
   periodStart: '2026-10-01' as never,
   cells: [{ chargeCodeId: CODE, dayIndex: 2, hours: 5, isEdit: true, isLateEntry: false }],
-  changeReasonCode, comment, skipConflictCheck: true,
+  changeReasonCode, comment,
 });
 
 describe('OTHER reason requires a comment', () => {

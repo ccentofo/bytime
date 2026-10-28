@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
 import { getPeriodStartForDate, DEFAULT_PERIOD_CONFIG } from '@/lib/date-utils';
 import { addDays, formatCalendarDate, todayIn, type CalendarDate } from '@/lib/calendar-date';
-import { getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, cleanupTestData, expectOk, expectFailure } from './helpers';
+import { getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, createTestIndirectCode, cleanupTestData, expectOk, expectFailure } from './helpers';
 
 /**
  * feature-plan-ux-timesheet.md A-T5 (A4.4, UX3-D3): hours are real numbers in quarter hours, stored exactly as given;
@@ -83,5 +83,30 @@ describe('quarter hours, stored exactly (UX-3 A-T5)', () => {
     await db().insert(schema.timesheetEntries).values({ userId: emp.id, chargeCodeId: code.id, clinId, entryDate: start, hours: '7.33', revisionNumber: 1, createdBy: emp.id });
     await expectOk(save(8, 2));
     expect((await rows()).map((r) => r.hours).sort()).toEqual(['7.33', '8']);
+  });
+});
+
+// Restored from the pre-UX-3 file (fix round 1, L4): an indirect entry stores clinId null.
+describe('Timesheet Save — indirect entries', () => {
+  let user: Awaited<ReturnType<typeof createTestUser>>;
+  beforeEach(async () => { await cleanupTestData(); user = await createTestUser(); });
+  afterEach(async () => { await cleanupTestData(); });
+
+  it('supports indirect charge code entries (clinId null)', async () => {
+    const db = getTestDb();
+    const indirectCode = await createTestIndirectCode();
+    await db.insert(schema.timesheetEntries).values({
+      userId: user.id,
+      clinId: null,
+      indirectCodeId: indirectCode.id,
+      entryDate: '2026-05-20',
+      hours: '2',
+      revisionNumber: 1,
+      createdBy: user.id,
+    });
+    const [entry] = await db.select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.indirectCodeId, indirectCode.id));
+    expect(entry.clinId).toBeNull();
+    expect(entry.indirectCodeId).toBe(indirectCode.id);
+    expect(entry.hours).toBe('2');
   });
 });

@@ -141,6 +141,13 @@ describe('timesheet notes (UX-3 A-T1)', () => {
     expect((await noteRows()).map((r) => r.body)).toEqual(['First']);
   });
 
+  it('M1: a stale expectedRevision is still a conflict when a hand-crafted request carries skipConflictCheck: true', async () => {
+    await expectOk(saveNote('First', 0));
+    const crafted = { periodStart: start, cells: [], notes: [{ chargeCodeId: code.id, dayIndex: 1, body: 'Overwrite', expectedRevision: 0 }], skipConflictCheck: true };
+    await expectFailure(saveTimesheetBatch(crafted as Parameters<typeof saveTimesheetBatch>[0]), 'conflict');
+    expect((await noteRows()).map((r) => r.body)).toEqual(['First']);
+  });
+
   it('a note on a row whose assignment ended keeps the row (assignable: false) and can be cleared; a cleared note no longer does', async () => {
     await expectOk(saveNote('Kickoff', 0));
     await db().update(schema.userChargeCodes).set({ isActive: false }).where(eq(schema.userChargeCodes.userId, emp.id));
@@ -151,5 +158,8 @@ describe('timesheet notes (UX-3 A-T1)', () => {
     const after = await getTimesheetPeriod(start);
     expect(after.chargeCodes.find((c) => c.id === code.id)).toBeUndefined();
     expect(after.notes[`${code.id}-1`]).toEqual({ body: '', revision: 2 });
+    // L3: eligibility follows what the grid shows — with only a cleared note left, the hidden row takes no new note.
+    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [], notes: [{ chargeCodeId: code.id, dayIndex: 2, body: 'Back again', expectedRevision: 0 }] }), 'validation', /only add notes to rows on your timesheet/);
+    await expectFailure(saveNote('Back again', 2), 'validation', /only add notes to rows on your timesheet/);
   });
 });

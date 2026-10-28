@@ -38,7 +38,10 @@ export function PayPeriodSelector() {
         setCurrentPeriodStart(options[options.length - 1]?.start ?? null);
       })
       .catch(() => {
-        if (!cancelled) setPeriodOptions([]); // the arrows still work; the list just stays empty
+        if (cancelled) return;
+        setPeriodOptions([]); // the arrows still work; the list just stays empty
+        // UX-3 fix round 1, L7: forget the old "current" so Next falls back to the server's isCurrent for this period.
+        setCurrentPeriodStart(null);
       });
     return () => {
       cancelled = true;

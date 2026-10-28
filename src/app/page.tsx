@@ -93,7 +93,7 @@ export default async function LandingPage() {
       {/* Features Grid */}
       <div id="features">
         <Title order={2} ta="center" mb="xl">Built for DCAA Compliance</Title>
-        <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} spacing="lg" mb="xl">
+        <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="lg" mb="xl">
           <FeatureCard
             icon={<IconShieldCheck size={28} />}
             color="signal"

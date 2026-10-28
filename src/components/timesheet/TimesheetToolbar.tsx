@@ -188,7 +188,7 @@ export function TimesheetToolbar() {
     }
     notifications.show({
       title: 'Timesheet Saved',
-      message: `${dirtyCount} ${dirtyCount === 1 ? 'entry' : 'entries'} saved successfully.`,
+      message: `${dirtyCount} ${dirtyCount === 1 ? 'change' : 'changes'} saved.`, // UX-3 fix round 1, L9: notes count as changes
       color: 'success',
       icon: <IconCheck size={16} />,
     });
@@ -203,7 +203,7 @@ export function TimesheetToolbar() {
     setReasonModalOpen(false);
     notifications.show({
       title: 'Timesheet Saved',
-      message: `${dirtyCount} ${dirtyCount === 1 ? 'entry' : 'entries'} saved with reason: ${reasonCode}.`,
+      message: `${dirtyCount} ${dirtyCount === 1 ? 'change' : 'changes'} saved with reason: ${reasonCode}.`,
       color: 'success',
       icon: <IconCheck size={16} />,
     });

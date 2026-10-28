@@ -24,7 +24,7 @@ import { CHARGEABLE_CODE } from '@/server/internal/chargeable';
 import { dayTotalRefusal, latestDayTotals } from '@/server/internal/day-totals';
 import { pastPeriods, PAST_PERIODS_PAGE_SIZE, type PastPeriodRow } from '@/server/internal/past-periods';
 import { resolveRequestedPeriod, selectedPeriodFacts, type SelectedPeriodFacts } from '@/server/internal/timesheet-period';
-import { latestNotesInPeriod, notedCodes, notesMap, validateNotes, writeNotes, type LatestNote, type NoteInput } from '@/server/internal/timesheet-notes';
+import { latestNotesInPeriod, NOTE_CONFLICT, notedCodes, notesMap, validateNotes, writeNotes, type LatestNote, type NoteInput } from '@/server/internal/timesheet-notes';
 import { userAction, type ActionResult } from '@/lib/action-result';
 
 /**
@@ -196,7 +196,6 @@ export async function saveTimesheetBatch(data: {
   notes?: NoteInput[];
   changeReasonCode?: string;
   comment?: string;
-  skipConflictCheck?: boolean;
 }): Promise<ActionResult<{ revisions: Record<string, number>; noteRevisions: Record<string, number> }>> {
   return userAction(async () => {
     const actor = await requireSession();
@@ -293,27 +292,25 @@ export async function saveTimesheetBatch(data: {
           .select({ id: indirectChargeCodes.id, isActive: indirectChargeCodes.isActive, availableToAll: indirectChargeCodes.availableToAll })
           .from(indirectChargeCodes).where(inArray(indirectChargeCodes.id, indirectIds))).map((r) => [r.id, r]));
 
-        // Optimistic concurrency control
-        if (!data.skipConflictCheck) {
-          for (const cell of data.cells) {
-            if (cell.expectedRevision === undefined) continue;
-            const entryDate = addDays(start, cell.dayIndex);
-            const entryId = cell.chargeCodeId ?? cell.indirectCodeId ?? cell.clinId;
-            if (!entryId) continue;
+        // Optimistic concurrency control (always on: the offline sync's skip flag is gone — UX-3 fix round 1, M1)
+        for (const cell of data.cells) {
+          if (cell.expectedRevision === undefined) continue;
+          const entryDate = addDays(start, cell.dayIndex);
+          const entryId = cell.chargeCodeId ?? cell.indirectCodeId ?? cell.clinId;
+          if (!entryId) continue;
 
-            const whereClause = cellWhere(userId, cell, entryDate);
+          const whereClause = cellWhere(userId, cell, entryDate);
 
-            const currentRevision = await tx
-              .select({ maxRevision: sql<number>`COALESCE(MAX(${timesheetEntries.revisionNumber}), 0)` })
-              .from(timesheetEntries)
-              .where(whereClause!);
+          const currentRevision = await tx
+            .select({ maxRevision: sql<number>`COALESCE(MAX(${timesheetEntries.revisionNumber}), 0)` })
+            .from(timesheetEntries)
+            .where(whereClause!);
 
-            const dbRevision = currentRevision[0]?.maxRevision ?? 0;
-            if (dbRevision !== cell.expectedRevision) {
-              throw new ConflictError(
-                `Conflict detected: The entry for ${formatCalendarDate(entryDate, 'MMM D, YYYY')} was modified by another session (expected revision ${cell.expectedRevision}, but server has revision ${dbRevision}). Please refresh your timesheet and re-enter your changes.`
-              );
-            }
+          const dbRevision = currentRevision[0]?.maxRevision ?? 0;
+          if (dbRevision !== cell.expectedRevision) {
+            throw new ConflictError(
+              `Conflict detected: The entry for ${formatCalendarDate(entryDate, 'MMM D, YYYY')} was modified by another session (expected revision ${cell.expectedRevision}, but server has revision ${dbRevision}). Please refresh your timesheet and re-enter your changes.`
+            );
           }
         }
 
@@ -441,14 +438,15 @@ export async function saveTimesheetBatch(data: {
         }
 
         // A4.2: notes, in the same transaction (all-or-nothing with the hours); eligibility read through tx.
-        noteRevisions = await writeNotes(tx, { userId, actorId: actor.id, start, numDays, notes, skipConflictCheck: data.skipConflictCheck });
+        noteRevisions = await writeNotes(tx, { userId, actorId: actor.id, start, numDays, notes });
       });
     } catch (err) {
       // Another save inserted a cell's next revision first (the per-cell unique index); caught outside the
       // transaction because Postgres aborts the transaction on the violation.
-      if (isUniqueViolation(err, 'entries_user_code_date_rev_unique_idx') || isUniqueViolation(err, 'timesheet_notes_cell_rev_unique_idx')) {
+      if (isUniqueViolation(err, 'entries_user_code_date_rev_unique_idx')) {
         throw new ConflictError('Conflict detected: one of these entries was modified by another session. Please refresh your timesheet and re-enter your changes.');
       }
+      if (isUniqueViolation(err, 'timesheet_notes_cell_rev_unique_idx')) throw new ConflictError(NOTE_CONFLICT);
       throw err;
     }
 

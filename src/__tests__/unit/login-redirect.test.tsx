@@ -69,6 +69,29 @@ describe('loginRedirect', () => {
   });
 });
 
+describe('M2: round trip x-cp-path → loginRedirect → login page → LoginForm, unchanged', () => {
+  /** What the login page hands LoginForm after Next decodes the redirect's query once (URLSearchParams). */
+  const roundTrip = async (cpPath: string) => {
+    h.cpPath = cpPath;
+    const url = await redirectedTo(loginRedirect());
+    const next = new URL(url!, 'http://x').searchParams.get('next') ?? undefined;
+    const el = await LoginPage({ searchParams: Promise.resolve(next === undefined ? {} : { next }) }) as unknown as { props: { next: string | null } };
+    return { url, next: el.props.next };
+  };
+
+  it('/admin/users?search=a%23b round-trips unchanged (encoded once, decoded once)', async () => {
+    expect(await roundTrip('/admin/users?search=a%23b')).toEqual({ url: `/login?next=${encodeURIComponent('/admin/users?search=a%23b')}`, next: '/admin/users?search=a%23b' });
+  });
+
+  it('/timesheet?period=2026-10-01 round-trips unchanged', async () => {
+    expect((await roundTrip('/timesheet?period=2026-10-01')).next).toBe('/timesheet?period=2026-10-01');
+  });
+
+  it('/timesheet/x/%252e%252e/%252e%252e/admin → no next at all', async () => {
+    expect(await roundTrip('/timesheet/x/%252e%252e/%252e%252e/admin')).toEqual({ url: '/login', next: null });
+  });
+});
+
 describe('the proxy', () => {
   it('sets x-cp-path to pathname + search, overwriting an incoming value', async () => {
     const req = new NextRequest('https://acme.cadenzpoint.com/timesheet?period=2026-10-01', { headers: { 'x-cp-path': '//evil.com', host: 'acme.cadenzpoint.com' } });

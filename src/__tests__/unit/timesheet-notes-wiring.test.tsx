@@ -26,7 +26,8 @@ vi.mock('@/server/actions/periods', () => ({
 vi.mock('@/server/actions/pay-period-config', () => ({ getNeighborPeriod: actions.getNeighborPeriod }));
 vi.mock('@/components/timesheet/ReasonModal', () => ({ ReasonModal: ({ opened }: { opened: boolean }) => (opened ? <div>REASON_MODAL_OPEN</div> : null) }));
 vi.mock('@/components/timesheet/SubmitModal', () => ({ SubmitModal: () => null }));
-vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
+const notify = vi.hoisted(() => vi.fn());
+vi.mock('@mantine/notifications', () => ({ notifications: { show: notify } }));
 
 import { TimesheetProvider, useTimesheet } from '@/components/timesheet/TimesheetContext';
 import { BiWeeklyTable } from '@/components/timesheet/BiWeeklyTable';
@@ -101,6 +102,7 @@ beforeAll(installDomStubs);
 beforeEach(() => {
   ctx = null;
   for (const f of Object.values(actions)) f.mockReset();
+  notify.mockReset();
   actions.getPeriodOptions.mockResolvedValue([]);
 });
 afterEach(() => { unmount(m); m = undefined; });
@@ -128,6 +130,8 @@ describe('old-grid note wiring (UX-3 A-T14)', () => {
     expect(ctx!.dirtyNotes).toEqual([]);
     expect(ctx!.state.savedNotes[KEY]).toEqual({ body: 'Badge outage', revision: 1 });
     expect(button('Save').disabled).toBe(true);
+    // L9: the toast counts notes as changes, not "entries".
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ title: 'Timesheet Saved', message: '1 change saved.' }));
   });
 
   it('after an ok where the server no-ops (no new revision) the note is clean and keeps its revision', async () => {
@@ -202,6 +206,11 @@ describe('old-grid note wiring (UX-3 A-T14)', () => {
     actions.getPeriodOptions.mockResolvedValue([{ start: '2026-01-01', numDays: 15, label: 'Jan 1' }, { start: '2026-01-16', numDays: 16, label: 'Jan 16' }]);
     await render(data({ isCurrent: true }));
     expect((document.body.querySelector('button[aria-label="Next pay period"]') as HTMLButtonElement).disabled).toBe(false);
+    // L7: a later re-fetch (today rolled over) that FAILS forgets the old list's "current" and falls back to isCurrent.
+    actions.getPeriodOptions.mockRejectedValue(new Error('offline'));
+    await act(async () => { ctx!.dispatch({ type: 'SET_TODAY', today: '2026-01-21' as CalendarDate }); });
+    await wait(20);
+    expect((document.body.querySelector('button[aria-label="Next pay period"]') as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('a period load shows that period\'s server notes', async () => {

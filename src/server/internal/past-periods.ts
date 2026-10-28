@@ -30,7 +30,12 @@ export interface PastPeriodRow {
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
-const preview = (c: string | null) => (c && c.length > COMMENT_PREVIEW ? `${c.slice(0, COMMENT_PREVIEW)}…` : c);
+/** At most 140 characters — counted in code points, so an emoji or other astral character is never split (L10). */
+export function commentPreview(c: string | null): string | null {
+  if (!c) return c;
+  const chars = [...c];
+  return chars.length > COMMENT_PREVIEW ? `${chars.slice(0, COMMENT_PREVIEW).join('')}…` : c;
+}
 
 /**
  * The session user's past timesheets, newest first, one page at a time (feature-plan-ux-timesheet.md A4.7, UX3-Q1):
@@ -108,7 +113,7 @@ export async function pastPeriods(
       hours: round2(hours),
       submittedAt: row?.submittedAt ?? null,
       reviewedAt: row?.reviewedAt ?? null,
-      reviewComment: preview(row?.reviewComment ?? null),
+      reviewComment: commentPreview(row?.reviewComment ?? null),
       approvalBadge: row ? labels.get(row.id)?.badge ?? null : null,
       isCurrent: p.start === current.start,
     };
