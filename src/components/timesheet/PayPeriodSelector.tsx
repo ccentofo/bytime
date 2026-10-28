@@ -84,8 +84,9 @@ export function PayPeriodSelector() {
           size="lg"
           onClick={() => loadPeriod('next')}
           aria-label="Next pay period"
-          // UX-3 A4.9: never past the current period (a same-period reload would drop unsaved edits).
-          disabled={navBusy || state.isCurrent || isCurrentPeriod}
+          // UX-3 A4.9: never past the current period (a same-period reload would drop unsaved edits). The period list
+          // (re-fetched when "today" rolls over) decides once loaded; until then, the server's isCurrent for this period.
+          disabled={navBusy || (currentPeriodStart !== null ? isCurrentPeriod : state.isCurrent)}
         >
           <IconChevronRight size={20} />
         </ActionIcon>

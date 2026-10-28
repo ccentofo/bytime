@@ -15,12 +15,13 @@ const actions = vi.hoisted(() => ({
   getTimesheetPeriod: vi.fn(),
   getNeighborPeriod: vi.fn(),
   submitPeriod: vi.fn(),
+  getPeriodOptions: vi.fn(),
 }));
 vi.mock('@/server/actions/timesheet', () => ({ saveTimesheetBatch: actions.saveTimesheetBatch, getTimesheetPeriod: actions.getTimesheetPeriod }));
 vi.mock('@/server/actions/periods', () => ({
   submitPeriod: actions.submitPeriod,
   getWorkspaceContext: vi.fn(async () => ({ today: '2026-01-20', timezone: 'America/New_York' })),
-  getPeriodOptions: vi.fn(async () => []),
+  getPeriodOptions: actions.getPeriodOptions,
 }));
 vi.mock('@/server/actions/pay-period-config', () => ({ getNeighborPeriod: actions.getNeighborPeriod }));
 vi.mock('@/components/timesheet/ReasonModal', () => ({ ReasonModal: ({ opened }: { opened: boolean }) => (opened ? <div>REASON_MODAL_OPEN</div> : null) }));
@@ -100,6 +101,7 @@ beforeAll(installDomStubs);
 beforeEach(() => {
   ctx = null;
   for (const f of Object.values(actions)) f.mockReset();
+  actions.getPeriodOptions.mockResolvedValue([]);
 });
 afterEach(() => { unmount(m); m = undefined; });
 
@@ -193,6 +195,12 @@ describe('old-grid note wiring (UX-3 A-T14)', () => {
     expect((document.body.querySelector('button[aria-label="Next pay period"]') as HTMLButtonElement).disabled).toBe(true);
     unmount(m);
     await render(data({ isCurrent: false }));
+    expect((document.body.querySelector('button[aria-label="Next pay period"]') as HTMLButtonElement).disabled).toBe(false);
+    unmount(m);
+    // A tab left open across a period boundary: the server said "current", but the period list (fetched for the new
+    // today) has a newer current period — Next must not stay stuck.
+    actions.getPeriodOptions.mockResolvedValue([{ start: '2026-01-01', numDays: 15, label: 'Jan 1' }, { start: '2026-01-16', numDays: 16, label: 'Jan 16' }]);
+    await render(data({ isCurrent: true }));
     expect((document.body.querySelector('button[aria-label="Next pay period"]') as HTMLButtonElement).disabled).toBe(false);
   });
 
