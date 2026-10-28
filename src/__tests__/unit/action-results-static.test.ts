@@ -337,7 +337,9 @@ describe('action-result contract (static, launch-blockers P4)', () => {
     expect(body('pay-period-config.ts', 'getCurrentEffectiveConfig')).not.toMatch(/(?<![.\w])getEffectiveConfigAt\s*\(/);
     expect(body('pay-period-config.ts', 'getPayPeriodConfig')).not.toMatch(/(?<![.\w])getCurrentEffectiveConfig\s*\(/);
     expect(body('signup.ts', 'startSignup')).not.toMatch(/(?<![.\w])checkSlugAvailable\s*\(/);
-    expect(src('employee-dashboard.ts')).not.toMatch(/from '@\/server\/actions\//);
+    // The seventh lived in actions/employee-dashboard.ts, which is gone (UX-TIMESHEET-B-AUDIT L16: getEmployeeDashboardData
+    // had no callers after UX-3 Part B), so it can't come back there.
+    expect(fs.existsSync(path.join(ACTIONS_DIR, 'employee-dashboard.ts'))).toBe(false);
   });
 
   it('the action-to-action checks fire (fixtures)', () => {
