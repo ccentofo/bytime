@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type MouseEvent } from 'react';
-import { Button, SegmentedControl, Select } from '@mantine/core';
+import { Button, Select } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
 import { useGridRef } from '@/components/timesheet/NoteModal';
 import { Icons } from '@/components/ui/icons';
@@ -424,24 +424,16 @@ export function TimesheetGrid() {
         </Button>
         {!activeDay && <span id={`${gridId}-note-why`} className={styles.reason}>Choose a day cell first</span>}
       </div>
+      {/* Always a Select, whatever the number of weeks: a SegmentedControl clipped its labels at 320 px (UX-TIMESHEET-B-AUDIT M4). */}
       {narrow && weeks.length > 1 && (
-        weeks.length <= 3 ? (
-          <SegmentedControl
-            aria-label="Week"
-            value={String(requestedWeek)}
-            onChange={(v) => setRequested({ r: active.r, c: weeks[Number(v)][0] })}
-            data={weeks.map((w, i) => ({ value: String(i), label: weekLabel(w) }))}
-          />
-        ) : (
-          <Select
-            label="Week"
-            size="sm"
-            value={String(requestedWeek)}
-            allowDeselect={false}
-            onChange={(v) => { if (v !== null) setRequested({ r: active.r, c: weeks[Number(v)][0] }); }}
-            data={weeks.map((w, i) => ({ value: String(i), label: weekLabel(w) }))}
-          />
-        )
+        <Select
+          label="Week"
+          size="sm"
+          value={String(requestedWeek)}
+          allowDeselect={false}
+          onChange={(v) => { if (v !== null) setRequested({ r: active.r, c: weeks[Number(v)][0] }); }}
+          data={weeks.map((w, i) => ({ value: String(i), label: weekLabel(w) }))}
+        />
       )}
       <div className={styles.hint} aria-hidden="true">Arrows move · type a number to enter hours · N adds a note · Esc undoes the cell</div>
       <div className={styles.scroller} data-view={narrow ? 'week' : 'full'} style={{ ['--ts-rh' as string]: 'clamp(9rem, 28vw, 16rem)' }}>
