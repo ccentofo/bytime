@@ -15,7 +15,9 @@
 >
 > **Sources:** `UX-AUDIT.md` (V1–V5, A1–A4, A10, A11) and the approved mockup `ux-mockups/index.html` → "Employee timesheet".
 >
-> **Status:** v5.1 FINAL, 2026-10-28, lead architect. Self-contained. Pre-mortem history is in §13. v5.1 changes only the NoteModal button wording (§4.8) after a product-owner browser check of Part A.
+> **Status:** v5.2 FINAL, 2026-10-28, lead architect. Self-contained. Pre-mortem history is in §13.
+> - v5.1 changed only the NoteModal button wording (§4.8).
+> - **v5.2 is the visual revision in §14.** It supersedes the grid's look, the note button, the day meters and the weekly notice's styling, wherever §4.1, §4.2, §4.6 and §4.8 say otherwise. Approved mockup: `ux-mockups/timesheet-grid-v2.html`.
 >
 > **Branch:** `ux-timesheet-ui`, cut from `main` after Part A merges.
 
@@ -154,7 +156,7 @@
   - the status pill (Draft / Submitted / Approved / Returned), shown **once**;
   - the self-approval badge, when the server sends one;
   - **Discard changes**, **Save**, **Submit**.
-- **Disabled-looking controls** (‹, ›, Today, Discard, Save, Submit, the note button) use **`aria-disabled` plus a click guard, never `disabled`**, so a focused control never drops focus.
+- **Disabled-looking controls** (‹, ›, Today, Discard, Save, Submit) use **`aria-disabled` plus a click guard, never `disabled`**, so a focused control never drops focus.
 
 **Submit reason.** When a reason applies, Submit gets `aria-disabled="true"` and `aria-describedby="{id}-submit-why"`, with the reason as **visible** text (≥ 0.875 rem). When no reason applies, there's no `aria-describedby` and no reason element. Precedence, first match wins:
 
@@ -225,7 +227,7 @@ div.scroller  style="--ts-rh: clamp(9rem, 28vw, 16rem)"
   caption id="{id}-cap" class=sr-only  "Hours for {Oct 16 to 31, 2026}, {Draft}"
   thead > tr
     th scope="col" class=corner        "Charge code"
-    th scope="col" id="{id}-ch-{d}"    [aria-hidden] <span>Mon</span><span>{Oct 19 | Today}</span><span class=meter/>
+    th scope="col" id="{id}-ch-{d}"    [aria-hidden] <span>Mon</span><span>{Oct 19 | Today}</span>   (no meter, §14)
                                        [sr-only] "Monday Oct 19[, today], {h} hours[, no hours logged]"
                                        <span id="{id}-chn-{d}" hidden>Monday Oct 19</span>
     th scope="col" id="{id}-ch-total"  "Total"
@@ -445,11 +447,11 @@ Triggers: the sidebar link, the guard's `router.push`, or Back/Forward.
 | Unsaved | 2 px dashed bottom border plus a tint | sr ", unsaved"; header "{n} unsaved changes" |
 | Imported | small import glyph | sr ", imported" plus a provenance description |
 | Closed to new hours | diagonal hatch plus lock glyph on empty cells; row-header text | `aria-readonly` plus `why-closed` |
-| Note | note glyph (`aria-hidden`) | sr ", note" |
-| No hours on a past weekday | empty day meter | sr ", no hours logged" (on or after `userCreatedOn`) |
+| Note | the cell's note trigger, shown and blue (§14) | sr ", note" |
+| No hours on a past weekday | blank footer total (no meter, §14) | sr ", no hours logged" (on or after `userCreatedOn`) |
 | Future | lighter **text** only | `aria-readonly` plus `why-future` |
-| Today | blue top edge, bold day name, "Today" in place of the date | sr ", today" |
-| Weekend | shading | the day name |
+| Today | header: blue top edge, blue bold day name, "Today" in place of the date; body: a light column tint (§14) | sr ", today" |
+| Weekend | a faint body-cell tint (§14) | the day name |
 | Invalid | red border plus visible `#err` text | `aria-invalid` on the **input** plus `aria-describedby` |
 
 **Focus ring:**
@@ -489,10 +491,7 @@ Triggers: the sidebar link, the guard's `router.push`, or Back/Forward.
 
 ### 4.8 Notes UI
 - **Note editability:** period editable (draft or rejected, not read-only, not loading) ∧ the date isn't in the future. **Whether the row is closed doesn't matter** (the server accepts notes on any shown row). This is today's rule.
-- **The grid component renders the note button** above the table:
-  - "Add note" / "Edit note" for the active day cell;
-  - `aria-label="{Add|Edit} note, {rowName}, {Mon Oct 19}"`;
-  - `aria-disabled` with "Choose a day cell first" otherwise.
+- **Each day cell carries its own note trigger** (§14, v5.2). There is no note button above the table. N / n on a day cell also opens the note.
 - **`NoteModal`** (replaces `DailyNoteModal`):
   - **always mounted**; toggles `opened` and keeps the last cell during the exit transition;
   - a `Textarea` labelled "Note", with `data-autofocus` and a non-live counter "{n}/1000";
@@ -678,7 +677,7 @@ history.replaceState(null, '', isCurrent ? '/timesheet' : '/timesheet?period=' +
 | From | To |
 |---|---|
 | `BiWeeklyTimesheetClient` | `TimesheetClient` |
-| `BiWeeklyTable` | `TimesheetGrid` (+ `HourCell`, `CellEditor`, `RowHeaderCell`, `DayHeader`, `TotalCell`, the note button) |
+| `BiWeeklyTable` | `TimesheetGrid` (+ `HourCell` with its note trigger, `CellEditor`, `RowHeaderCell`, `DayHeader`, `TotalCell`) |
 | `TimesheetToolbar` | `TimesheetHeader`, `SaveSubmitControls`, `WeeklyNotice`, `useSubmitChecks` |
 | `PayPeriodSelector` | `PeriodControl` |
 | `DailyNoteModal` | `NoteModal` |
@@ -729,7 +728,7 @@ history.replaceState(null, '', isCurrent ? '/timesheet' : '/timesheet?period=' +
 | B-T2 | `unit/timesheet-grid-keyboard.test.tsx` (user-event) | every §4.3 navigation key; edges stop; group rows skipped; Tab leaves; handled keys `defaultPrevented`; **Alt+← and ⌘+← not handled**; PageUp/Down on `'rh'`/`'total'` do nothing; **exactly one `tabindex=0` after a period with fewer rows, after a week change, and with no body rows**; initial position at today | clamp only the column |
 | B-T3 | same | typing **7** → draft exactly **"7"**; `,` seeds `.`; Enter/↑/↓/Tab commit once; edit-mode Esc discards **and blur doesn't commit**; nav-mode Esc restores and announces; Delete → 0 and "Cleared"; read-only Enter announces; Enter on a total announces; a click inside the input doesn't reselect; full-width digits; IME composing (and keyCode 229) doesn't seed | remove the seed `preventDefault` |
 | B-T4 | same | 7.3 → stays in edit, `aria-invalid` on the input, visible `#err`, assertive; **invalid Tab restores and focus leaves the grid**; a day over 24 is blocked unless ≤ the saved total (L1); invalid blur restores | trap on invalid Tab |
-| B-T5 | `unit/timesheet-notes-ui.test.tsx` | N/n and the grid's note button open NoteModal; editable on a **closed** row; read-only when locked or future; the button reads "Done" (no button in NoteModal contains "Save") and the hint is its textarea's description; Done → dirty; Save sends `notes` only, with no ReasonModal; Remove → `''`; focus returns to the active cell for both openers; axe with the modal open | apply the hours-editability rule to notes |
+| B-T5 | `unit/timesheet-notes-ui.test.tsx` | N/n and a cell's note trigger open NoteModal (§14 has the trigger rules); editable on a **closed** row; read-only when locked or future; the button reads "Done" (no button in NoteModal contains "Save") and the hint is its textarea's description; Done → dirty; Save sends `notes` only, with no ReasonModal; Remove → `''`; focus returns to the active cell for both openers; axe with the modal open | apply the hours-editability rule to notes |
 | B-T6 | `unit/timesheet-page-layout.test.tsx` | one h1; `below` holds the period control; mounting with `flsaExempt: true, readOnly: true` keeps both (fixture with a complete week over 40 so the FLSA text shows; cells read-only); first mount shows server notes and the status line from `initialData`; the status line follows a commit; "Was due" for past drafts; `submittedOn`/`reviewedOn` used; returned banner; Submit reason precedence per §4.1, and **no `aria-describedby` when available**; Submit enables after `SET_TODAY`; the SubmitModal overtime figure **includes an incomplete final week** (today's meaning); WeeklyNotice is exempt-only and uses complete weeks; **focus stays on Save/Discard/Today/‹ after they become unavailable**; a Choose period value missing from the list is added; no dashboard; no old panel | use `disabled` on Save |
 | B-T7 | `unit/timesheet-unsaved-guard.test.tsx` | confirm on ‹ → Save and continue (ok → moves; ReasonModal cancel → stays; failure without ReasonModal → stays); Discard and continue → moves and `beforeunload` is removed, **re-armed by the next edit**; Cancel or Esc → stays and the Select snaps back; link listener rules (only when count > 0; modifiers, `_blank`, `#main-content`, same-path hash ignored; Past timesheets link → **one** confirm); **provider unmount, or a `syncGen` change, with a confirm open → resolves false and a later sign-out isn't blocked**; sign-out awaits the confirm; a cancelable `beforeunload` is `defaultPrevented` only while dirty; `requestSave` re-saves edits made during a save without a conflict; **`unauthenticated` save → the Alert with a `target=_blank` sign-in link, and the edits stay dirty** | sign out first; or leave the promise pending |
 | B-T8 | `unit/timesheet-url-sync.test.tsx` | `replaceState` from an effect on committed state (not `router.replace`); canonicalizes on mount; a late `showPeriod` response or failure after a newer load or a re-sync is ignored (`loadGen`/`syncGen`); **the latest of two quick ‹ clicks wins**; same-route re-sync: a probe child logging `periodStart` in `useLayoutEffect` **never logs the old period after the prop change**; edit mode resets on re-sync; **after ‹, exactly one `getTimesheetPeriod` call** | effect-based re-sync; or first-wins |
@@ -760,7 +759,8 @@ npx tsc --noEmit && npm run lint && npm run test && npm run test:tz && node --im
    - The period control sits under the "Timesheet" heading.
    - Status and actions are on the right.
    - No "—" in empty cells; each row is one line plus the code.
-   - Day headers show meters and "Today".
+   - Every cell has visible row and column lines; day headers show "Today" and no meters; weekends are a faint tint; no blue mark on every row.
+   - Hovering a cell shows its note icon; a cell with a note keeps a blue icon.
    - The weekly notice appears for exempt users only.
 2. **Keyboard only**
    - Tab into the grid; arrows move.
@@ -877,3 +877,138 @@ Follow `BLUEPRINT-STANDARD.md` §3.
 **Two-round limit reached; handed off as FINAL.** Anything left is caught in the code audit.
 
 **v5.1 (2026-10-28):** in the Part A browser check, a note was lost on reload. The likely cause: the old modal's "Save Note" button only updates the working copy, so it reads as if it had saved. NoteModal's button becomes **Done**, with a hint that the timesheet Save saves it. The §4.9 guard also warns on reload.
+
+
+## 14. v5.2 visual revision (2026-10-28)
+
+**Why:** in the product owner's browser review of the implemented grid, these made the grid harder to use than the old one:
+- no column lines, so it was hard to tell which cell you're in;
+- notes reachable only through a key or a button above the table;
+- a bright weekend stripe;
+- a blue dash on every row for today;
+- busy meters under the day names.
+
+The product owner approved `ux-mockups/timesheet-grid-v2.html`. **Match it.** Behaviour, keyboard, state, the single tab stop and every audit fix stay exactly as built. This changes looks and the note entry point only.
+
+**Product owner decisions:** empty cells stay blank. **No row striping** (lead ruling: the lines already separate rows, and stripes would compete with the weekend and today tints).
+
+### 14.1 Lines and structure (`Timesheet.module.css`)
+- **Every** `th`/`td` in the table gets `border-inline-end: 1px solid var(--line)` and `border-block-end: 1px solid var(--line)`.
+- **Heavier lines** (`2px solid var(--line-strong)`): after the row-header column, before the Total column, under the column headers, and above the footer.
+- The scroller keeps its current rules (sticky header and row header, `max(18rem…)`, the narrow and short media overrides). It gains a `1px solid var(--line-strong)` outer border and `border-radius: var(--mantine-radius-md)`. `overflow` stays `auto`: never `hidden` (T-G).
+- Day cells: `min-block-size: 2.875rem`, centered tabular numbers, 2 decimals, blank when 0 (unchanged).
+- Define the tokens once on `.page`:
+  ```css
+  .page {
+    --line: var(--mantine-color-default-border);
+    --line-strong: light-dark(var(--mantine-color-gray-4), var(--mantine-color-dark-3));
+    --weekend: light-dark(var(--mantine-color-gray-0), color-mix(in srgb, var(--mantine-color-body) 85%, black));
+    --today-tint: color-mix(in srgb, var(--mantine-color-signal-6) 9%, transparent);
+    --hover-tint: light-dark(var(--mantine-color-signal-0), color-mix(in srgb, var(--mantine-color-signal-6) 18%, transparent));
+    --group: light-dark(var(--mantine-color-gray-1), color-mix(in srgb, var(--mantine-color-body) 92%, white));
+  }
+  ```
+
+### 14.2 Tints and states
+| Element | Rule |
+|---|---|
+| Weekend | body day cells only: `background: var(--weekend)`. Not the header, group rows or footer. **Remove** the `default-hover` weekend rule. |
+| Today | header: `border-block-start: 3px solid var(--mantine-color-signal-6)`, day name and "Today" in `light-dark(signal-7, signal-4)`, weight 700. Body day cells: `background: var(--today-tint)`. **Delete `.todayCol`'s inset box-shadow** (the per-row dash). |
+| Hover | `@media (hover: hover)`: an editable day cell under the pointer gets `var(--hover-tint)`. Never on future or read-only cells. |
+| Active / focus | the existing §4.6 focus ring, unchanged. |
+| Unsaved | the existing tint plus a 2 px dashed bottom line inset 4 px. The dash colour is `light-dark(warning-8, warning-4)` (audit M3). |
+| Closed | the existing hatch; the lock glyph moves to the top-left corner. |
+| Future | dimmed text in the header and cells; no hover tint; no trigger unless a note exists. |
+| Group row ("Direct", "Indirect and leave") | `background: var(--group)`; label `0.875rem`, weight 700, `var(--mantine-color-dimmed)`; **no vertical lines** inside the group row. |
+| Day header | day name (weight 600) on line 1, date or "Today" on line 2 (dimmed, weight 500). **Delete the meter** (`.meter`, `.meterFill` and their markup). The sr text is unchanged, including ", no hours logged". |
+
+**Text contrast:** every text colour above must be ≥ 4.5:1 in both schemes; non-text marks (the today edge, lines next to the focus ring) ≥ 3:1. Never use a `-filled` colour for text (audit M3).
+
+### 14.3 Row header
+- **Line 1:** the row name (`rowName`, already de-duplicated by L13), weight 600.
+- **Line 2:** the code as a chip: `display: inline-block; font-family: var(--mantine-font-family-monospace); font-size: 0.875rem; font-weight: 500; padding: 0 0.375rem; border-radius: var(--mantine-radius-xs); background: light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-5)); color: var(--mantine-color-text)`.
+- A row with no name shows the code chip alone, with no empty line.
+- "Closed to new hours" stays on its own line below (audit M3 colours).
+- The DOM order is name, then code. The row header's accessible name becomes "{name} {code}". Update the editor's `aria-labelledby` expectations in tests only if they assert the order; the ids are unchanged.
+
+### 14.4 The per-cell note trigger (replaces the note button above the table)
+**Markup.** Inside each day `td`, after the value:
+```tsx
+{showTrigger && (
+  <span className={styles.noteTrigger} data-note-trigger aria-hidden="true" title={hasNote ? 'Edit note' : 'Add note'}>
+    <Icons.note size={14} />
+  </span>
+)}
+```
+- It's a `span`, **not a button**: no `tabIndex`, no role, `aria-hidden`.
+- The **grid has exactly one tab stop**, as before. Screen-reader and keyboard users use N / n (unchanged) and hear ", note" on cells that have one. The trigger is a pointer convenience with a full keyboard equivalent (WCAG 2.1.1 satisfied).
+
+**When it renders:** `showTrigger = noteViewable && (hasNote || isActive || pointerHover)`.
+- `noteViewable` = the note is editable (§4.8 rule), or it exists (read-only view).
+- `isActive` = the active cell, including while editing.
+- `pointerHover` is pure CSS: render the trigger whenever `noteViewable`, hide it with CSS unless `.hasNote`, `[data-active]` or `@media (hover: hover)` `:hover`. Don't add hover state in React.
+- So `HourCell` gets one new boolean prop, `noteViewable`, and the cell gets `data-active` when active. Memo stays on plain props.
+
+**CSS:**
+- `position: absolute; inset-block-start: 2px; inset-inline-end: 2px; inline-size: 1.5rem; block-size: 1.5rem; display: grid; place-items: center; border-radius: var(--mantine-radius-xs); cursor: pointer; color: var(--mantine-color-dimmed)`.
+- `.hasNote .noteTrigger { color: light-dark(var(--mantine-color-signal-7), var(--mantine-color-signal-4)); }`
+- Hover: `background: var(--mantine-color-default-hover)`.
+- The import glyph moves to the **top-left** corner. The old note glyph in `.glyphs` is removed (the trigger replaces it).
+
+**Click handling** (in the existing delegated `handleClick`, before the cell logic):
+1. If the click target is inside `[data-note-trigger]`:
+   - run the H1 blur path when editing a different cell (or the same cell: commit or restore the draft first, exactly as a blur would);
+   - set the requested position to that cell **without entering edit mode**;
+   - `openNote(row, d)`.
+
+   Focus then returns to that cell on close, through the existing `focusActive()` after the exit transition.
+2. A pointer-down on the trigger must not start an edit. Call `preventDefault()` on `mousedown` for `[data-note-trigger]`, so the cell's focus-then-edit path doesn't run first.
+
+**Remove:**
+- the note button above the table (`noteBar`), its `aria-label` logic and "Choose a day cell first";
+- `.noteBar` CSS.
+
+### 14.5 Hint line and weekly notice
+- **Visible hint** above the grid (`aria-hidden`, as now): "Click a cell or type a number to enter hours. Hover a cell to add a note, or press N."
+- The grid's `aria-describedby` keys text (`{id}-keys`, sr-only) stays: "Arrow keys move. Type a number to enter hours. N adds or edits a note. Escape undoes the cell."
+- **WeeklyNotice** keeps its content and rules (exempt only, complete weeks). It is no longer a Mantine `Alert`:
+  - one `<p role="note" data-testid="weekly-notice">`;
+  - an `aria-hidden` info icon, then the lines joined with " · ";
+  - styled `border: 1px solid var(--line); border-inline-start: 3px solid var(--mantine-color-signal-6); border-radius: var(--mantine-radius-sm); padding: 0.5rem 0.75rem; background: light-dark(var(--mantine-color-gray-0), color-mix(in srgb, var(--mantine-color-body) 92%, white)); font-size: 0.875rem; color: var(--mantine-color-text)`.
+
+### 14.6 Tests (update; each must fail when its rule is reverted)
+- **B-T1:**
+  - no button above the table;
+  - no meter element in day headers;
+  - group rows have no vertical-line class;
+  - row header DOM order is name, then code chip;
+  - axe passes with a trigger visible.
+- **B-T2:** exactly one tab stop with triggers rendered: `querySelectorAll('[tabindex="0"]')` inside the grid area = 1, and no trigger is focusable.
+- **B-T5, rewritten for the trigger:**
+  - a click on a cell's trigger opens NoteModal for **that** cell and doesn't enter edit mode;
+  - while editing another cell, a trigger click commits that draft once (H1 path), then opens the note;
+  - a future empty cell renders no trigger;
+  - a locked period shows a trigger only on cells with a note, and opens read-only;
+  - N/n unchanged;
+  - focus returns to the trigger's cell after Done and Cancel;
+  - `hasNote` cells keep the trigger with the note class.
+- **B-T13 (static):**
+  - no `.meter`;
+  - no `box-shadow` in `.todayCol` (or no `.todayCol` at all);
+  - the weekend rule doesn't use `default-hover`;
+  - `.cell` (or `th, td`) declares `border-inline-end`;
+  - no `-filled` variable as a text `color`;
+  - no `noteBar`.
+- **B-T6:** WeeklyNotice is a `p[role="note"]`, not an Alert.
+- **B-T14:** unchanged.
+- **Render cost (B-T10):** a commit still re-renders only the four expected cells. `noteViewable` must not depend on hover state.
+
+### 14.7 Browser check (product owner, §10 item 1, replaced)
+In light and dark, at 1280 px and at 400 % zoom (week view):
+- every cell has row and column lines;
+- weekends are faint;
+- today is a blue top edge plus a faint column, with no blue mark on each row;
+- hovering a cell shows the note icon; clicking it opens the note for that cell; a saved note leaves a blue icon;
+- no meters, no "Add note" button;
+- the overtime notice is one slim line;
+- the result looks like `ux-mockups/timesheet-grid-v2.html`.
