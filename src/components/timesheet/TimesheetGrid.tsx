@@ -471,7 +471,8 @@ export function TimesheetGrid() {
           data={weeks.map((w, i) => ({ value: String(i), label: weekLabel(w) }))}
         />
       )}
-      <div className={styles.hint} aria-hidden="true">Click a cell or type a number to enter hours. Hover a cell to add a note, or press N.</div>
+      {/* v5.4 (§16.4): no "hover" wording — the note icon is found by pointing at a cell; N is the keyboard way. */}
+      <div className={styles.hint} aria-hidden="true">Click a cell to enter hours. Keyboard: arrow keys move, N adds a note.</div>
       <div className={styles.scroller} data-view={narrow ? 'week' : 'full'} style={{ ['--ts-rh' as string]: 'clamp(9rem, 28vw, 16rem)' }}>
         <table role="grid" id={tableId} className={styles.grid} aria-labelledby={`${gridId}-cap`} aria-describedby={`${gridId}-keys`} onKeyDown={handleKeyDown} onClick={handleClick} onMouseDown={handleMouseDown} onFocus={handleGridFocus} onBlur={handleGridBlur}>
           <caption id={`${gridId}-cap`} className={styles.srOnly}>Hours for {periodWords(periodStart, periodEnd)}, {STATUS_WORD[periodStatus]}</caption>

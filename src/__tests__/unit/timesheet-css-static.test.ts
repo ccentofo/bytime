@@ -96,14 +96,14 @@ describe('timesheet reflow and text size (B-T13)', () => {
     const light = tokensIn(ruleOf(sheet, '.page')!);
     const dark = tokensIn(ruleOf(sheet, DARK_PAGE) ?? '');
     expect(light).toEqual(expect.arrayContaining(['--line', '--line-strong', '--weekend', '--hover-tint', '--group', '--chip', '--accent-text', '--warn-text', '--unsaved-bg', '--notice-bg', '--today-tint']));
-    // Every light token has a dark value, except the today tint (a translucent signal-6, the same in both schemes).
-    expect([...light].filter((t) => t !== '--today-tint').sort()).toEqual([...dark].sort());
+    // Every light token has a dark value, except the today tint and the focus ring (signal-6 in both schemes).
+    expect([...light].filter((t) => t !== '--today-tint' && t !== '--ring').sort()).toEqual([...dark].sort());
     // The dark block comes after the light one.
     expect(sheet.indexOf(`${DARK_PAGE} {`)).toBeGreaterThan(sheet.indexOf('.page {'));
     // Every token the sheet reads (other than Mantine's, the shell's and --ts-rh set inline by the grid) is defined on .page.
     const used = new Set([...sheet.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]).filter((t) => !t.startsWith('--mantine-') && !t.startsWith('--app-shell-') && t !== '--ts-rh'));
     for (const t of used) expect(light, t).toContain(t);
-    for (const [sel, token] of [['.cell:focus', '--accent-text'], ['.code', '--chip'], ['.unsaved::after', '--warn-text'], ['.hasNote .noteTrigger', '--accent-text'], ['.weeklyNotice', '--notice-bg']] as const) {
+    for (const [sel, token] of [['.cell:focus,\n.day:focus-within', '--ring'], ['.code', '--chip'], ['.unsaved::after', '--warn-text'], ['.hasNote .noteTrigger', '--accent-text'], ['.weeklyNotice', '--notice-bg']] as const) {
       expect(ruleOf(sheet, sel), sel).toContain(`var(${token})`);
     }
   });
@@ -139,6 +139,46 @@ describe('timesheet reflow and text size (B-T13)', () => {
     expect(ruleOf(sheet, DARK_PAGE)).toContain('--line-strong: var(--mantine-color-dark-4);');
     expect(ruleOf(sheet, '.noteTrigger')).toMatch(/display: none;/);
     expect(sheet).toMatch(/\.hasNote \.noteTrigger,\s*\[data-active\] \.noteTrigger \{\s*display: grid;/);
+  });
+
+  // v5.4 editing polish (§16.5 B-T13).
+  it('v5.4: the editor overlays its cell — absolute, inset 0, no minimum width but 0 (the column never widens)', () => {
+    const sheet = css();
+    const editor = ruleOf(sheet, '.editor')!;
+    expect(editor).toMatch(/position: absolute;/);
+    expect(editor).toMatch(/inset: 0;/);
+    expect([...editor.matchAll(/min-inline-size:\s*([^;]+);/g)].map((m) => m[1].trim())).toEqual(['0']);
+    expect(sheet).not.toMatch(/min-inline-size: 3rem/);
+    expect(ruleOf(sheet, ".editor[aria-invalid='true']")).toMatch(/box-shadow: inset 0 0 0 2px var\(--invalid\);/);
+    expect(ruleOf(sheet, '.day')).toMatch(/position: relative|block-size/);
+  });
+
+  it('v5.4: one focus ring — a box-shadow in var(--ring) — with a forced-colors outline; no other outline but none', () => {
+    const sheet = css();
+    const focus = ruleOf(sheet, '.cell:focus,\n.day:focus-within')!;
+    expect(focus).toMatch(/outline: none;/);
+    expect(focus).toMatch(/box-shadow: inset 0 0 0 2px var\(--ring\);/);
+    const forcedAt = sheet.indexOf('@media (forced-colors: active)');
+    expect(forcedAt).toBeGreaterThan(-1);
+    const forced = sheet.slice(forcedAt, sheet.indexOf('}\n}', forcedAt) + 3);
+    expect(forced).toMatch(/\.cell:focus,\s*\.day:focus-within \{\s*outline: 2px solid CanvasText;\s*outline-offset: -2px;/);
+    const outside = sheet.slice(0, forcedAt) + sheet.slice(forcedAt + forced.length);
+    expect([...outside.matchAll(/(?<![-\w])outline:\s*([^;]+);/g)].map((m) => m[1].trim()).filter((v) => v !== 'none')).toEqual([]);
+  });
+
+  it('v5.4: the note trigger is pinned 1px into the corner, above the ring and the editor (z-index 1)', () => {
+    const trigger = ruleOf(css(), '.noteTrigger')!;
+    expect(trigger).toMatch(/inset-block-start: 1px;/);
+    expect(trigger).toMatch(/inset-inline-end: 1px;/);
+    expect(trigger).toMatch(/inline-size: 1\.25rem;\s*block-size: 1\.25rem;/);
+    expect(trigger).toMatch(/z-index: 1;/);
+  });
+
+  it('v5.4: --ring and --invalid are defined (--invalid in both blocks)', () => {
+    const sheet = css();
+    expect(ruleOf(sheet, '.page')).toContain('--ring: var(--mantine-color-signal-6);');
+    expect(ruleOf(sheet, '.page')).toContain('--invalid: var(--mantine-color-red-7);');
+    expect(ruleOf(sheet, DARK_PAGE)).toContain('--invalid: var(--mantine-color-red-5);');
   });
 
   it('no overflow: hidden on the grid, its cells or the scroller', () => {

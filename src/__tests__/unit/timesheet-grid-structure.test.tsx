@@ -16,6 +16,7 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), replace: 
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
 import { TimesheetGrid } from '@/components/timesheet/TimesheetGrid';
+import { TimesheetPage } from '@/components/timesheet/TimesheetClient';
 import { CC, CC2, IND, chargeCode, pageData } from '../helpers/timesheet-fixtures';
 import { installTimesheetDomStubs, live, renderTimesheet } from '../helpers/timesheet-render';
 import { expectNoAxeViolations } from '../helpers/axe';
@@ -95,7 +96,19 @@ describe('grid structure (B-T1)', () => {
     for (const th of grid().querySelectorAll('thead th[id*="-ch-"]:not([id$="-ch-total"])')) {
       expect([...th.querySelector('[aria-hidden="true"]')!.children].map((c) => c.textContent)).toHaveLength(2); // name, date
     }
-    expect(area.querySelector('[class*="hint"]')!.textContent).toBe('Click a cell or type a number to enter hours. Hover a cell to add a note, or press N.');
+  });
+
+  it('v5.4 (§16.4): the visible hint is exact, nothing visible says "hover", and the sr keys description still mentions N', () => {
+    renderTimesheet(fixture(), <TimesheetPage />);
+    const hint = document.querySelector('[class*="gridArea"] [class*="hint"]')!;
+    expect(hint.textContent).toBe('Click a cell to enter hours. Keyboard: arrow keys move, N adds a note.');
+    // Visible text only: drop sr-only and hidden elements, then look for "hover" anywhere on the page.
+    const clone = document.body.cloneNode(true) as HTMLElement;
+    for (const el of clone.querySelectorAll('style, script, [class*="srOnly"], [hidden], caption')) el.remove();
+    expect(clone.textContent).not.toMatch(/hover/i);
+    const keys = document.getElementById(grid().getAttribute('aria-describedby')!)!;
+    expect(keys.textContent).toBe('Arrow keys move. Type a number to enter hours. N adds or edits a note. Escape undoes the cell.');
+    expect(keys.textContent).toMatch(/\bN\b/);
   });
 
   it('v5.2: group rows carry no vertical-line class; every other row cell does', () => {

@@ -82,6 +82,23 @@ describe('notes UI (B-T5)', () => {
     expect(dialog()).not.toBeNull();
   });
 
+  it('v5.4 (§16.5): N on a selected cell (nav mode) opens its note; N while editing types nothing and opens nothing', async () => {
+    const user = setup();
+    await enterGrid(user);
+    await user.keyboard('{ArrowLeft}{ArrowLeft}{ArrowLeft}');      // 0:3, nav mode
+    await user.keyboard('N');
+    expect(dialog()!.textContent).toContain('Sun, Jan 4');
+    await user.keyboard('{Escape}');
+    await settle();
+    expect(dialog()).toBeNull();
+    await user.keyboard('5');                                      // edit mode, draft "5"
+    expect(editor()!.value).toBe('5');
+    await user.keyboard('Nn');
+    expect(editor()!.value).toBe('5');
+    expect(dialog()).toBeNull();
+    expect(live.ctx!.state.activeNoteCell).toBeNull();
+  });
+
   it('a click on a cell\'s trigger opens NoteModal for THAT cell, selects it and doesn\'t enter edit mode', async () => {
     const user = setup();
     await user.click(trigger(0, 1)!);                              // Fri Jan 2, "Site visit"

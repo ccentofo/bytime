@@ -40,6 +40,10 @@
   --unsaved-bg: var(--mantine-color-warning-0);
   --notice-bg: var(--mantine-color-gray-0);
   --today-tint: color-mix(in srgb, var(--mantine-color-signal-6) 9%, transparent);
+  /* v5.4 (§16.2): the focus ring — signal-6 in both schemes, ≥ 3:1 on the body, the tints and the hover tint. */
+  --ring: var(--mantine-color-signal-6);
+  /* §16.1: an invalid draft's ring. */
+  --invalid: var(--mantine-color-red-7);
 }
 
 :global([data-mantine-color-scheme='dark']) .page {
@@ -53,6 +57,7 @@
   --warn-text: var(--mantine-color-warning-4);
   --unsaved-bg: var(--mantine-color-dark-6);
   --notice-bg: color-mix(in srgb, var(--mantine-color-body) 92%, white);
+  --invalid: var(--mantine-color-red-5);
 }
 
 .page > * {
@@ -198,10 +203,21 @@
   cursor: default;
 }
 
-.cell:focus {
-  outline: 2px solid var(--accent-text);
-  outline-offset: -2px;
-  box-shadow: inset 0 0 0 4px var(--mantine-color-body);
+/* v5.4 (§16.2): one subtle ring on the cell edge, for the focused cell or the cell whose editor is focused. A box-shadow
+   paints under the cell's children, so the note icon sits on top of it, never behind it. Row headers and totals use the
+   same .cell:focus rule. Forced colors (Windows High Contrast) drop box-shadows: an outline in CanvasText instead. */
+.cell:focus,
+.day:focus-within {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--ring);
+}
+
+@media (forced-colors: active) {
+  .cell:focus,
+  .day:focus-within {
+    outline: 2px solid CanvasText;
+    outline-offset: -2px;
+  }
 }
 
 .rowHeader {
@@ -305,10 +321,12 @@
    active, or is under the pointer; never focusable. */
 .noteTrigger {
   position: absolute;
-  inset-block-start: 2px;
-  inset-inline-end: 2px;
-  inline-size: 1.5rem;
-  block-size: 1.5rem;
+  /* v5.4 (§16.3): pinned in the corner, above the ring and the editor. */
+  inset-block-start: 1px;
+  inset-inline-end: 1px;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  z-index: 1;
   display: none;
   place-items: center;
   border-radius: var(--mantine-radius-xs);
@@ -380,20 +398,28 @@ tfoot .cell {
   border: 0;
 }
 
+/* v5.4 (§16.1): the editor overlays its cell (the .day is position: relative) and never changes the layout — no minimum
+   width, no border, transparent; the cell's ring (§16.2) shows focus. */
 .editor {
+  position: absolute;
+  inset: 0;
   inline-size: 100%;
-  min-inline-size: 3rem;
+  block-size: 100%;
+  min-inline-size: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 0.25rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--mantine-color-text);
   font: inherit;
   text-align: center;
-  border: 1px solid var(--mantine-color-signal-filled);
-  border-radius: 2px;
-  padding: 0.125rem;
-  background: var(--mantine-color-body);
-  color: var(--mantine-color-text);
+  outline: none;
 }
 
 .editor[aria-invalid='true'] {
-  border: 2px solid var(--mantine-color-red-filled);
+  box-shadow: inset 0 0 0 2px var(--invalid);
 }
 
 .err {
