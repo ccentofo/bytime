@@ -170,8 +170,9 @@ describe('note wiring on the timesheet page (UX-3 A-T14, ported to Part B)', () 
     await render(data({ isCurrent: true }));
     expect(unavailable(document.body.querySelector('button[aria-label="Next period"]'))).toBe(false);
     // L7: a later re-fetch (today rolled over) that FAILS forgets the old list's "current" and falls back to isCurrent.
+    // (The new today stays inside the period: past its end, SET_TODAY itself clears isCurrent — UX-TIMESHEET-B-AUDIT L9.)
     actions.getPeriodOptions.mockRejectedValue(new Error('offline'));
-    await act(async () => { ctx!.dispatch({ type: 'SET_TODAY', today: '2026-01-21' as CalendarDate }); });
+    await act(async () => { ctx!.dispatch({ type: 'SET_TODAY', today: '2026-01-14' as CalendarDate }); });
     await wait(20);
     expect(unavailable(document.body.querySelector('button[aria-label="Next period"]'))).toBe(true);
   });

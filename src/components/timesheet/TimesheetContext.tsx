@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Button, Group, Modal, Text } from '@mantine/core';
 import { confirmLeave, registerUnsavedGuard, type LeaveChoice } from '@/lib/timesheet/unsaved-guard';
 import type { TimesheetState, TimesheetAction, TimesheetPageData, DirtyCell, SavedNote, LoadGen, TimesheetPeriodData } from '@/types/timesheet';
-import { addDays, formatCalendarDate, isBefore, type CalendarDate } from '@/lib/calendar-date';
+import { addDays, formatCalendarDate, isAfter, isBefore, type CalendarDate } from '@/lib/calendar-date';
 import { STATUS_WORD, periodLabel as periodRangeLabel } from '@/lib/timesheet/labels';
 import { saveTimesheetBatch, getTimesheetPeriod } from '@/server/actions/timesheet';
 import { submitPeriod, getWorkspaceContext } from '@/server/actions/periods';
@@ -168,6 +168,8 @@ export function timesheetReducer(
     }
 
     case 'SET_PERIOD_STATUS': {
+      // L4: a submit that lands after the user moved to another period, or after a re-sync, changes nothing here.
+      if (action.periodStart !== state.periodStart || action.syncGen !== state.syncGen) return state;
       // Right after a submit in this session the submitted date is the workspace's today (§4.1).
       return {
         ...state,
@@ -178,7 +180,8 @@ export function timesheetReducer(
     }
 
     case 'SET_TODAY': {
-      return { ...state, today: action.today };
+      // L9: a tab left open past the period's end is no longer on the current period (the URL then gains ?period=).
+      return { ...state, today: action.today, isCurrent: state.isCurrent && !isAfter(action.today, state.periodEnd) };
     }
 
     default:
@@ -234,6 +237,8 @@ export interface TimesheetActionsValue {
 }
 
 export interface SessionAlert { message: string; signInHref: string | null }
+/** The alert and the load (and sync) it was raised under: any later landed load or re-sync hides it for good (L8). */
+type RaisedSessionAlert = SessionAlert & { shownLoadGen: number; syncGen: number };
 
 /** §4.4: what a save says when the session expired. */
 export const SESSION_EXPIRED = "Your session expired. Your changes aren't saved yet. Sign in again in a new tab, then come back and press Save.";
@@ -386,10 +391,10 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
 
   // ── useSaveFlow (§4.4). Refs are used only because an await intervenes; they're updated in layout effects.
   const saveAllRef = useRef(saveAll);
-  const flowRef = useRef({ hasUnsaved, needsReason: hasEdits || hasLateEntries, unsavedCount, periodStart: state.periodStart, syncGen: state.syncGen });
+  const flowRef = useRef({ hasUnsaved, needsReason: hasEdits || hasLateEntries, unsavedCount, periodStart: state.periodStart, syncGen: state.syncGen, shownLoadGen: state.shownLoadGen });
   useLayoutEffect(() => {
     saveAllRef.current = saveAll;
-    flowRef.current = { hasUnsaved, needsReason: hasEdits || hasLateEntries, unsavedCount, periodStart: state.periodStart, syncGen: state.syncGen };
+    flowRef.current = { hasUnsaved, needsReason: hasEdits || hasLateEntries, unsavedCount, periodStart: state.periodStart, syncGen: state.syncGen, shownLoadGen: state.shownLoadGen };
   });
   const runningRef = useRef<Promise<boolean> | null>(null);
   // The ReasonModal is open for the syncGen it was opened under; a re-sync closes it without a state update (§4.4).
@@ -397,7 +402,13 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
   const reasonOpen = reasonGen !== null && reasonGen === state.syncGen;
   const reasonResolveRef = useRef<((ok: boolean) => void) | null>(null);
 
-  const [sessionAlert, setSessionAlert] = useState<SessionAlert | null>(null);
+  const [raisedAlert, setRaisedAlert] = useState<RaisedSessionAlert | null>(null);
+  // L8: a period change or a re-sync hides it (derived, no effect); Discard and a successful save clear it.
+  const sessionAlert: SessionAlert | null = raisedAlert && raisedAlert.shownLoadGen === state.shownLoadGen && raisedAlert.syncGen === state.syncGen
+    ? { message: raisedAlert.message, signInHref: raisedAlert.signInHref } : null;
+  const setSessionAlert = useCallback((alert: SessionAlert | null) => {
+    setRaisedAlert(alert && { ...alert, shownLoadGen: flowRef.current.shownLoadGen, syncGen: flowRef.current.syncGen });
+  }, []);
   /** True when the result means nothing can succeed in this tab right now (the ReasonModal closes, the save stops). */
   const failSave = useCallback((result: { code: string; error: string }): boolean => {
     if (result.code === 'unauthenticated') {
@@ -415,7 +426,7 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
     announce(result.error, 'assertive');
     quietToast({ title: 'Save failed', message: result.error, color: 'red', error: true });
     return false;
-  }, [announce]);
+  }, [announce, setSessionAlert]);
 
   /** One save, with the ReasonModal when hours need a reason. Resolves true on success, false on cancel or failure. */
   const saveOnce = useCallback(async (): Promise<boolean> => {
@@ -430,25 +441,32 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
       reasonResolveRef.current = resolve;
       setReasonGen(genRef.current.syncGen);
     });
-  }, [failSave]);
+  }, [failSave, setSessionAlert]);
 
-  const handleReasonConfirm = useCallback(async (reasonCode: string, comment: string) => {
+  const handleReasonConfirm = useCallback(async (reasonCode: string, comment: string): Promise<boolean> => {
+    // L5: the modal this confirm belongs to — captured BEFORE the save, so a save that lands after a re-sync settled it
+    // (and maybe a newer modal opened) can't resolve or close the newer one.
+    const resolve = reasonResolveRef.current;
     const result = await saveAllRef.current(reasonCode, comment);
+    const stillOurs = resolve !== null && reasonResolveRef.current === resolve;
     if (!result.ok) {
       // A failed save keeps the ReasonModal open for a retry — except when the session expired or a different person is
       // signed in: then it closes and the save resolves false (nothing can succeed until that's fixed).
-      if (failSave(result)) {
+      if (failSave(result) && stillOurs) {
         setReasonGen(null);
-        reasonResolveRef.current?.(false);
         reasonResolveRef.current = null;
+        resolve(false);
       }
-      return;
+      return false;
     }
     setSessionAlert(null);
-    setReasonGen(null);
-    reasonResolveRef.current?.(true);
-    reasonResolveRef.current = null;
-  }, [failSave]);
+    if (stillOurs) {
+      setReasonGen(null);
+      reasonResolveRef.current = null;
+      resolve(true);
+    }
+    return true;
+  }, [failSave, setSessionAlert]);
 
   const handleReasonCancel = useCallback(() => {
     setReasonGen(null);
@@ -520,18 +538,20 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
 
   const discardChanges = useCallback(() => {
     flushSync(() => dispatch({ type: 'DISCARD_CHANGES' }));
-  }, []);
+    setSessionAlert(null); // L8: nothing unsaved is left for the alert to be about
+  }, [setSessionAlert]);
 
   const submitTimesheet = useCallback(
     async (comment?: string): Promise<RunResult<void>> => {
+      const { periodStart, syncGen } = state;
       dispatch({ type: 'SET_SAVING', isSaving: true });
-      const result = await runAction(submitPeriod({ expectedUserId: state.userId, periodStart: state.periodStart, comment }), { silent: true });
-      // Only a confirmed submission changes the status.
-      if (result.ok) dispatch({ type: 'SET_PERIOD_STATUS', status: 'submitted' });
+      const result = await runAction(submitPeriod({ expectedUserId: state.userId, periodStart, comment }), { silent: true });
+      // Only a confirmed submission changes the status — of the period it was for (L4).
+      if (result.ok) dispatch({ type: 'SET_PERIOD_STATUS', status: 'submitted', periodStart, syncGen });
       dispatch({ type: 'SET_SAVING', isSaving: false });
       return result.ok ? { ok: true, data: undefined } : result;
     },
-    [state.periodStart, state.userId],
+    [state],
   );
 
   // ── The unsaved-changes guard (§4.9). In-page period changes wait for confirmLeave(); on cancel nothing changes (the
@@ -634,8 +654,11 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
     if (window.location.pathname + window.location.search !== target) window.history.replaceState(null, '', target);
   }, [state.periodStart, state.isCurrent, state.syncGen]);
 
-  const [submitOpen, setSubmitOpen] = useState(false);
-  const openSubmit = useCallback(() => setSubmitOpen(true), []);
+  // L4: like the ReasonModal, the SubmitModal is open for the syncGen it was opened under — a re-sync closes it.
+  const [submitGen, setSubmitGen] = useState<number | null>(null);
+  const submitOpen = submitGen !== null && submitGen === state.syncGen;
+  const setSubmitOpen = (open: boolean) => setSubmitGen(open ? state.syncGen : null);
+  const openSubmit = useCallback(() => setSubmitGen(genRef.current.syncGen), []);
   const periodLabel = `${formatCalendarDate(state.periodStart, 'MMM D')} – ${formatCalendarDate(state.periodEnd, 'MMM D, YYYY')}`;
 
   async function handleSubmitConfirm(comment?: string) {

@@ -132,6 +132,27 @@ describe('period changes ask first (B-T7)', () => {
     expect(unload()).toBe(true);
   });
 
+  it('L6: while "Save and continue" is in flight, a second navigation request is ignored, not queued', async () => {
+    let release!: (v: unknown) => void;
+    actions.saveTimesheetBatch.mockReturnValueOnce(new Promise((r) => { release = r; }));
+    const { user } = setup(<a href="/home">Home</a>);
+    await edit(6);
+    await user.click(prev());
+    await user.click(dialogButton('Save and continue'));
+    await settle();
+    expect(actions.saveTimesheetBatch).toHaveBeenCalledTimes(1);
+    let second: boolean | undefined;
+    act(() => { void confirmLeave().then((r) => { second = r; }); });   // e.g. sign-out
+    await settle();
+    expect(second).toBe(false);
+    await user.click([...document.querySelectorAll('a')].find((a) => a.textContent === 'Home')!);   // e.g. a link
+    await act(async () => { release(okSave({ [`${CC}-6`]: 1 })); });
+    await settle();
+    expect(live.ctx!.state.periodStart).toBe('2025-12-16');          // the first destination ran
+    expect(router.push).not.toHaveBeenCalled();                      // the second never did
+    expect(dialog()).toBeUndefined();
+  });
+
   it('Cancel or Esc → stays, focus back on the trigger; the Choose period Select snaps back', async () => {
     const { user } = setup();
     await edit(6);

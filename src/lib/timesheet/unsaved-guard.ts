@@ -20,7 +20,8 @@ export interface UnsavedGuardRegistration {
 }
 
 let registration: UnsavedGuardRegistration | null = null;
-let pending: { token: symbol; promise: Promise<boolean>; settle: (ok: boolean) => void } | null = null;
+/** `saving`: a save is in flight for this request (the running save it waits for, or "Save and continue"). */
+let pending: { token: symbol; promise: Promise<boolean>; settle: (ok: boolean) => void; saving: boolean } | null = null;
 
 /**
  * Register the guard. The returned unregister is token-checked (a stale cleanup can't remove a newer registration); it
@@ -43,16 +44,18 @@ export function registerUnsavedGuard(r: UnsavedGuardRegistration): () => void {
  * True when it's fine to leave: nothing registered, nothing unsaved, "Save and continue" saved everything, or "Discard
  * and continue". False on Cancel (button, Esc, overlay), a cancelled ReasonModal or a failed save. Concurrent calls share
  * one confirm. A save already running lands FIRST (H2): the count is read after it, so the confirm offers only what is
- * still unsaved — and doesn't appear at all when that save covered everything.
+ * still unsaved — and doesn't appear at all when that save covered everything. While a save is in flight for the request
+ * (that wait, or "Save and continue"), a second request is IGNORED — false, not queued — so only the first destination
+ * runs (UX-TIMESHEET-B-AUDIT L6).
  */
 export function confirmLeave(): Promise<boolean> {
   const r = registration;
   if (!r || r.getCount() === 0) return Promise.resolve(true);
-  if (pending?.token === r.token) return pending.promise;
+  if (pending?.token === r.token) return pending.saving ? Promise.resolve(false) : pending.promise;
 
   let settle!: (ok: boolean) => void;
   const promise = new Promise<boolean>((resolve) => { settle = resolve; });
-  const entry = { token: r.token, promise, settle };
+  const entry = { token: r.token, promise, settle, saving: false };
   pending = entry;
   const finish = (ok: boolean) => {
     if (pending === entry) pending = null;
@@ -63,14 +66,19 @@ export function confirmLeave(): Promise<boolean> {
     try {
       const saving = r.whenSaved();
       if (saving) {
+        entry.saving = true;
         await saving.catch(() => undefined);
+        entry.saving = false;
         if (pending !== entry) return; // settled by unregister while the save ran
       }
       const n = r.getCount();
       if (n === 0) { finish(true); return; }
       const choice = await r.openConfirm(n);
       if (pending !== entry) return; // already settled by unregister
-      if (choice === 'save') finish(await r.requestSave());
+      if (choice === 'save') {
+        entry.saving = true;
+        finish(await r.requestSave());
+      }
       else if (choice === 'discard') { r.discard(); finish(true); }
       else finish(false);
     } catch {

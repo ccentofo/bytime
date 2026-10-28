@@ -7,7 +7,8 @@ import userEvent from '@testing-library/user-event';
 /**
  * UX-TIMESHEET-B-AUDIT M2 (and the brief's rule): the ReasonModal's and SubmitModal's buttons are never `disabled` and
  * never use Mantine's `loading` (which sets `disabled`) — they're aria-disabled with a click guard, so focus never drops
- * to <body>; while saving the confirm says "Saving…" / "Submitting…".
+ * to <body>; while saving the confirm says "Saving…" / "Submitting…". Plus L7 (the SubmitModal's Alerts aren't live
+ * regions) and L10 (the ReasonModal clears its fields only after a successful save).
  */
 
 vi.mock('server-only', () => ({}));
@@ -23,8 +24,8 @@ afterEach(() => cleanup());
 
 const button = (label: string) => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent?.trim() === label) as HTMLButtonElement;
 const late = [{ chargeCodeId: CC, dayIndex: 2, hours: 4, isEdit: false, isLateEntry: true }];
-const reasonModal = (o: { isSaving?: boolean; onConfirm?: (r: string, c: string) => Promise<void>; onClose?: () => void } = {}) => (
-  <ReasonModal opened onClose={o.onClose ?? vi.fn()} onConfirm={o.onConfirm ?? vi.fn(async () => {})} editedCells={[]} lateEntryCells={late}
+const reasonModal = (o: { isSaving?: boolean; onConfirm?: (r: string, c: string) => Promise<boolean>; onClose?: () => void } = {}) => (
+  <ReasonModal opened onClose={o.onClose ?? vi.fn()} onConfirm={o.onConfirm ?? vi.fn(async () => true)} editedCells={[]} lateEntryCells={late}
     chargeCodes={[chargeCode()]} periodStart={'2026-01-01' as CalendarDate} isSaving={o.isSaving ?? false} />
 );
 const submitModal = (o: { isSaving?: boolean; onConfirm?: (c?: string) => Promise<void>; onClose?: () => void } = {}) => (
@@ -34,7 +35,7 @@ const noDisabled = () => expect([...document.querySelectorAll('[role="dialog"] b
 
 describe('ReasonModal buttons (M2)', () => {
   it('Confirm Save is aria-disabled until a comment is given, and a click does nothing', async () => {
-    const onConfirm = vi.fn(async () => {});
+    const onConfirm = vi.fn(async () => true);
     const user = userEvent.setup();
     render(withTheme(reasonModal({ onConfirm })));
     const confirm = button('Confirm Save');
@@ -45,7 +46,7 @@ describe('ReasonModal buttons (M2)', () => {
   });
 
   it('while saving: "Saving…", both buttons aria-disabled (never disabled), clicks do nothing', async () => {
-    const onConfirm = vi.fn(async () => {});
+    const onConfirm = vi.fn(async () => true);
     const onClose = vi.fn();
     const user = userEvent.setup();
     const view = render(withTheme(reasonModal({ onConfirm, onClose })));
@@ -86,5 +87,30 @@ describe('SubmitModal buttons (M2)', () => {
     expect(button('Submitting…').getAttribute('aria-disabled')).toBe('true');
     expect(button('Cancel').getAttribute('aria-disabled')).toBe('true');
     noDisabled();
+  });
+});
+
+describe('L7: the SubmitModal\'s Alerts are not live regions', () => {
+  it('role="note" (Mantine\'s Alert defaults to role="alert")', () => {
+    render(withTheme(<SubmitModal opened onClose={vi.fn()} onConfirm={vi.fn(async () => {})} isSaving={false} periodLabel="Jan 1 – 15, 2026" completenessWarnings={['Mon Jan 5 has no hours']} />));
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.querySelectorAll('[role="alert"], [aria-live]')).toHaveLength(0);
+    expect(dialog.querySelectorAll('[role="note"]')).toHaveLength(2);
+  });
+});
+
+describe('L10: the ReasonModal keeps the typed reason after a failed save', () => {
+  it('a failed save keeps the comment for the retry; a successful one clears it', async () => {
+    const onConfirm = vi.fn(async () => false);
+    const user = userEvent.setup();
+    render(withTheme(reasonModal({ onConfirm })));
+    const textarea = () => document.querySelector('[role="dialog"] textarea') as HTMLTextAreaElement;
+    await user.type(textarea(), 'Forgot on Friday');
+    await user.click(button('Confirm Save'));
+    expect(onConfirm).toHaveBeenCalledWith('LATE_ENTRY', 'Forgot on Friday');
+    expect(textarea().value).toBe('Forgot on Friday');
+    onConfirm.mockResolvedValueOnce(true);
+    await user.click(button('Confirm Save'));
+    expect(textarea().value).toBe('');
   });
 });

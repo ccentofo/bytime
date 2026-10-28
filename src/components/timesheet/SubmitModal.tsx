@@ -54,7 +54,8 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
       closeOnEscape={!isSaving}
     >
       <Stack>
-        <Alert icon={<Icons.statusWarning size={16} />} color="warning" variant="light">
+        {/* role="note": Mantine's Alert defaults to a live role="alert"; these are static (UX-TIMESHEET-B-AUDIT L7). */}
+        <Alert role="note" icon={<Icons.statusWarning size={16} />} color="warning" variant="light">
           <Text size="sm" fw={600}>
             You are submitting your timesheet for {periodLabel}.
           </Text>
@@ -65,7 +66,7 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
         </Alert>
 
         {completenessWarnings && completenessWarnings.length > 0 && (
-          <Alert icon={<Icons.statusWarning size={16} />} color="warning" variant="light">
+          <Alert role="note" icon={<Icons.statusWarning size={16} />} color="warning" variant="light">
             <Text size="sm" fw={600} mb={4}>
               Period Completeness Warnings ({completenessWarnings.length}):
             </Text>

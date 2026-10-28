@@ -9,7 +9,8 @@ import type { DirtyCell, ChargeCode } from '@/types/timesheet';
 type Props = {
   opened: boolean;
   onClose: () => void;
-  onConfirm: (reasonCode: string, comment: string) => Promise<void>;
+  /** Resolves true when the save succeeded (the fields clear only then, so a retry keeps the typed reason — L10). */
+  onConfirm: (reasonCode: string, comment: string) => Promise<boolean>;
   editedCells: DirtyCell[];
   lateEntryCells: DirtyCell[];
   chargeCodes: ChargeCode[];
@@ -72,7 +73,7 @@ export function ReasonModal({
 
   async function handleConfirm() {
     if (!canSubmit || isSaving) return;
-    await onConfirm(reasonCode!, comment.trim());
+    if (!(await onConfirm(reasonCode!, comment.trim()))) return;
     setReasonCode(null);
     setComment('');
   }

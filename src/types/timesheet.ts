@@ -114,7 +114,8 @@ export type TimesheetAction =
   | { type: 'SET_SAVING'; isSaving: boolean }
   | { type: 'MARK_SAVED'; periodStart: CalendarDate; syncGen: number; entries: TimesheetEntry[]; revisions: Record<string, number>; sentNotes?: Record<string, string>; noteRevisions?: Record<string, number> }
   | { type: 'DISCARD_CHANGES' }
-  | { type: 'SET_PERIOD_STATUS'; status: PeriodStatus }
+  /** Applies only to the period (and sync) it was submitted for (UX-TIMESHEET-B-AUDIT L4). */
+  | { type: 'SET_PERIOD_STATUS'; status: PeriodStatus; periodStart: CalendarDate; syncGen: number }
   | { type: 'SET_TODAY'; today: CalendarDate };
 
 // Represents a single dirty cell to save
