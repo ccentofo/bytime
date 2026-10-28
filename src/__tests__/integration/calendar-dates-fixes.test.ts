@@ -106,6 +106,7 @@ describe('calendar-dates audit fixes', () => {
       actingAs(employee);
 
       await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart,
         changeReasonCode: 'LATE_ENTRY',
         cells: [{ indirectCodeId: indirect.id, chargeCodeId: unassignedCode.id, clinId: otherClin.id, dayIndex: 1, hours: 8, isEdit: false, isLateEntry: true }],
@@ -121,11 +122,13 @@ describe('calendar-dates audit fixes', () => {
       actingAs(employee);
 
       await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart, changeReasonCode: 'LATE_ENTRY',
         cells: [{ indirectCodeId: inactive.id, dayIndex: 1, hours: 8, isEdit: false, isLateEntry: true }],
       }), 'validation', /is not available/);
 
       await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart, changeReasonCode: 'LATE_ENTRY',
         cells: [{ chargeCodeId, slinId: crypto.randomUUID(), dayIndex: 1, hours: 8, isEdit: false, isLateEntry: true }],
       }), 'validation', /SLIN can only be given with a legacy CLIN/);

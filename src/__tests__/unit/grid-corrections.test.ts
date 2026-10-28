@@ -45,6 +45,9 @@ import { isCellEditable, newCellRefusal } from '@/lib/timesheet/cell-rules';
 import { cellRefForKind, initialTimesheetState, timesheetReducer } from '@/components/timesheet/TimesheetContext';
 import { chargeCode, pageData, periodData } from '../helpers/timesheet-fixtures';
 
+/** The session user the mocked requireSession returns (UX-TIMESHEET-B-AUDIT H3: expectedUserId must match it). */
+const SESSION_USER_ID = '11111111-1111-4111-8111-111111111111';
+
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
 const ROOT = path.resolve(__dirname, '../../..');
 const CODE = '22222222-2222-4222-8222-222222222222';
@@ -64,6 +67,7 @@ function chargeCodeFacts(o: { assigned: boolean; codeActive: boolean; clinActive
   db.onSelect(timesheetEntries, [{ maxRevision: o.priorRevision }]);                                       // prior revision
 }
 const save = (cell: Record<string, unknown>, reason = true) => saveTimesheetBatch({
+  expectedUserId: SESSION_USER_ID,
   periodStart: START as never,
   cells: [{ dayIndex: 2, hours: 6, isEdit: false, isLateEntry: true, ...cell }],
   ...(reason ? { changeReasonCode: 'CORRECTION', comment: 'fix' } : {}),
@@ -232,7 +236,7 @@ describe('save mapping by kind', () => {
 describe('UX-3 A4.2: a notes-only batch goes through the period lock', () => {
   it('the note dates are passed to assertEntryDatesEditable, so a notes-only batch on a locked period is refused and writes nothing', async () => {
     h.locked = true;
-    const result = await saveTimesheetBatch({ periodStart: START as never, cells: [], notes: [{ chargeCodeId: CODE, dayIndex: 3, body: 'After submitting', expectedRevision: 0 }] });
+    const result = await saveTimesheetBatch({ expectedUserId: SESSION_USER_ID, periodStart: START as never, cells: [], notes: [{ chargeCodeId: CODE, dayIndex: 3, body: 'After submitting', expectedRevision: 0 }] });
     expect(result).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/locked/) });
     expect(h.lockDates).toEqual(['2026-10-04']);
     expect(db.inserts).toEqual([]);

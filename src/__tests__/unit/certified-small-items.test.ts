@@ -38,6 +38,9 @@ import type { FakeControlDb } from '../helpers/fake-control-db';
 import { saveTimesheetBatch } from '@/server/actions/timesheet';
 import { OTHER_REASON_COMMENT_REQUIRED, reasonNeedsComment } from '@/lib/reason-codes';
 
+/** The session user the mocked requireSession returns (UX-TIMESHEET-B-AUDIT H3: expectedUserId must match it). */
+const SESSION_USER_ID = '11111111-1111-4111-8111-111111111111';
+
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
 const ROOT = path.resolve(__dirname, '../../..');
 const CODE = '22222222-2222-4222-8222-222222222222';
@@ -51,6 +54,7 @@ function correctionFacts() {
   db.onSelect(timesheetEntries, [{ maxRevision: 1 }]); // prior revision (a correction)
 }
 const correct = (changeReasonCode: string, comment?: string) => saveTimesheetBatch({
+  expectedUserId: SESSION_USER_ID,
   periodStart: '2026-10-01' as never,
   cells: [{ chargeCodeId: CODE, dayIndex: 2, hours: 5, isEdit: true, isLateEntry: false }],
   changeReasonCode, comment,

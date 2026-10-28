@@ -98,6 +98,7 @@ describe('Period-lock integrity (R2-2)', () => {
 
   it('rejects dayIndex = -1', async () => {
     await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: -1, hours: 4, isEdit: false, isLateEntry: false }],
       }), 'validation', /Invalid day index/i);
@@ -105,6 +106,7 @@ describe('Period-lock integrity (R2-2)', () => {
 
   it('rejects dayIndex = numDays (one past the last valid index)', async () => {
     await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: numDays, hours: 4, isEdit: false, isLateEntry: false }],
       }), 'validation', /Invalid day index/i);
@@ -112,6 +114,7 @@ describe('Period-lock integrity (R2-2)', () => {
 
   it('rejects a fractional dayIndex', async () => {
     await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: 1.5, hours: 4, isEdit: false, isLateEntry: false }],
       }), 'validation', /Invalid day index/i);
@@ -120,6 +123,7 @@ describe('Period-lock integrity (R2-2)', () => {
   it('rejects a periodStart that is not a real period boundary', async () => {
     const bogusPeriodStart = addDays(periodStart, 3); // mid-period, not a boundary
     await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart: bogusPeriodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: 0, hours: 4, isEdit: false, isLateEntry: false }],
       }), 'validation', /Invalid period start/i);
@@ -137,6 +141,7 @@ describe('Period-lock integrity (R2-2)', () => {
     });
 
     await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart, // current period — draft (no row)
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: -1, hours: 4, isEdit: false, isLateEntry: true }],
         // A valid reason code, so the late-entry rule can't be what rejects this.
@@ -170,6 +175,7 @@ describe('Period-lock integrity (R2-2)', () => {
     });
 
     await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart: previousPeriodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: 2, hours: 4, isEdit: false, isLateEntry: true }],
         changeReasonCode: 'LATE_ENTRY',
@@ -338,6 +344,7 @@ describe('Period-lock integrity (R2-2)', () => {
     // Today's cell: neither late nor an edit, so no reason code is needed.
     const todayIndex = diffDays(periodStart, todayIn('America/New_York'));
     const result = await expectOk(saveTimesheetBatch({
+      expectedUserId: sessionState.user!.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 6, isEdit: false, isLateEntry: false }],
     }));

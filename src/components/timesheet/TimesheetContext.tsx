@@ -17,6 +17,7 @@ import { ReasonModal } from '@/components/timesheet/ReasonModal';
 import { SubmitModal } from '@/components/timesheet/SubmitModal';
 import { useSubmitChecks, type SubmitChecks } from '@/components/timesheet/useSubmitChecks';
 import { GridRefContext, NoteModal, type GridHandle } from '@/components/timesheet/NoteModal';
+import { SESSION_USER_CHANGED } from '@/lib/timesheet/copy';
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -206,8 +207,11 @@ export interface TimesheetStateValue {
   hasEdits: boolean;        // true if any dirty cell has a prior revision (isEdit=true)
   hasLateEntries: boolean;  // true if any dirty cell is a late first-time entry
   checks: SubmitChecks;
-  /** Set when a save failed because the session expired: the new-tab sign-in link (§4.4). */
-  sessionExpiredHref: string | null;
+  /**
+   * The session alert (§4.4): the session expired (with the new-tab sign-in link), or a different person is signed in
+   * now (UX-TIMESHEET-B-AUDIT H3: no sign-in link — reload). Null otherwise.
+   */
+  sessionAlert: SessionAlert | null;
 }
 
 export interface TimesheetActionsValue {
@@ -225,6 +229,8 @@ export interface TimesheetActionsValue {
   /** Run an in-page period change (‹, ›, Choose period, Today) — behind the unsaved-changes guard (§4.9). */
   guardPeriodChange: (change: () => Promise<void>) => Promise<void>;
 }
+
+export interface SessionAlert { message: string; signInHref: string | null }
 
 /** §4.4: what a save says when the session expired. */
 export const SESSION_EXPIRED = "Your session expired. Your changes aren't saved yet. Sign in again in a new tab, then come back and press Save.";
@@ -322,6 +328,7 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
       dispatch({ type: 'SET_SAVING', isSaving: true });
       // silent: the save flow shows the server's message itself.
       const result = await runAction(saveTimesheetBatch({
+        expectedUserId: state.userId,
         periodStart,
         cells: dirtyCells.map((c) => {
           const chargeCode = state.chargeCodes.find((cc) => cc.id === c.chargeCodeId);
@@ -387,16 +394,24 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
   const reasonOpen = reasonGen !== null && reasonGen === state.syncGen;
   const reasonResolveRef = useRef<((ok: boolean) => void) | null>(null);
 
-  const [sessionExpiredHref, setSessionExpiredHref] = useState<string | null>(null);
-  const failSave = useCallback((result: { code: string; error: string }) => {
+  const [sessionAlert, setSessionAlert] = useState<SessionAlert | null>(null);
+  /** True when the result means nothing can succeed in this tab right now (the ReasonModal closes, the save stops). */
+  const failSave = useCallback((result: { code: string; error: string }): boolean => {
     if (result.code === 'unauthenticated') {
       // §4.4: the edits stay dirty; sign in again in a NEW tab (the session cookie is shared), then Save works here.
-      setSessionExpiredHref(`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+      setSessionAlert({ message: SESSION_EXPIRED, signInHref: `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}` });
       announce(SESSION_EXPIRED, 'assertive');
-      return;
+      return true;
+    }
+    if (result.error === SESSION_USER_CHANGED) {
+      // H3: someone else is signed in now. Nothing was written; the edits stay dirty; no sign-in link — reload.
+      setSessionAlert({ message: SESSION_USER_CHANGED, signInHref: null });
+      announce(SESSION_USER_CHANGED, 'assertive');
+      return true;
     }
     announce(result.error, 'assertive');
     quietToast({ title: 'Save failed', message: result.error, color: 'red', error: true });
+    return false;
   }, [announce]);
 
   /** One save, with the ReasonModal when hours need a reason. Resolves true on success, false on cancel or failure. */
@@ -404,7 +419,7 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
     if (!flowRef.current.needsReason) {
       const result = await saveAllRef.current();
       if (!result.ok) { failSave(result); return false; }
-      setSessionExpiredHref(null);
+      setSessionAlert(null);
       return true;
     }
     // A failed save keeps the ReasonModal open for a retry; the promise settles on success or Cancel.
@@ -417,17 +432,16 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
   const handleReasonConfirm = useCallback(async (reasonCode: string, comment: string) => {
     const result = await saveAllRef.current(reasonCode, comment);
     if (!result.ok) {
-      failSave(result);
-      // A failed save keeps the ReasonModal open for a retry — except when the session expired: then it closes and the
-      // save resolves false (nothing can succeed until the user signs in again).
-      if (result.code === 'unauthenticated') {
+      // A failed save keeps the ReasonModal open for a retry — except when the session expired or a different person is
+      // signed in: then it closes and the save resolves false (nothing can succeed until that's fixed).
+      if (failSave(result)) {
         setReasonGen(null);
         reasonResolveRef.current?.(false);
         reasonResolveRef.current = null;
       }
       return;
     }
-    setSessionExpiredHref(null);
+    setSessionAlert(null);
     setReasonGen(null);
     reasonResolveRef.current?.(true);
     reasonResolveRef.current = null;
@@ -504,13 +518,13 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
   const submitTimesheet = useCallback(
     async (comment?: string): Promise<RunResult<void>> => {
       dispatch({ type: 'SET_SAVING', isSaving: true });
-      const result = await runAction(submitPeriod({ periodStart: state.periodStart, comment }), { silent: true });
+      const result = await runAction(submitPeriod({ expectedUserId: state.userId, periodStart: state.periodStart, comment }), { silent: true });
       // Only a confirmed submission changes the status.
       if (result.ok) dispatch({ type: 'SET_PERIOD_STATUS', status: 'submitted' });
       dispatch({ type: 'SET_SAVING', isSaving: false });
       return result.ok ? { ok: true, data: undefined } : result;
     },
-    [state.periodStart],
+    [state.periodStart, state.userId],
   );
 
   // ── The unsaved-changes guard (§4.9). In-page period changes wait for confirmLeave(); on cancel nothing changes (the
@@ -608,6 +622,13 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
 
   async function handleSubmitConfirm(comment?: string) {
     const result = await submitTimesheet(comment);
+    if (!result.ok && result.error === SESSION_USER_CHANGED) {
+      // H3: nothing was certified. The submit can't succeed in this tab, so the modal closes and the session alert says why.
+      setSubmitOpen(false);
+      setSessionAlert({ message: SESSION_USER_CHANGED, signInHref: null });
+      announce(SESSION_USER_CHANGED, 'assertive');
+      return;
+    }
     if (!result.ok) {
       announce(result.error, 'assertive');
       quietToast({ title: 'Submit failed', message: result.error, color: 'red', error: true });
@@ -640,8 +661,8 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
 
 
   const stateValue = useMemo<TimesheetStateValue>(
-    () => ({ state, dirtyCells, dirtyNotes, hasUnsaved, unsavedCount, hasEdits, hasLateEntries, checks, sessionExpiredHref }),
-    [state, dirtyCells, dirtyNotes, hasUnsaved, unsavedCount, hasEdits, hasLateEntries, checks, sessionExpiredHref],
+    () => ({ state, dirtyCells, dirtyNotes, hasUnsaved, unsavedCount, hasEdits, hasLateEntries, checks, sessionAlert }),
+    [state, dirtyCells, dirtyNotes, hasUnsaved, unsavedCount, hasEdits, hasLateEntries, checks, sessionAlert],
   );
   const actionsValue = useMemo<TimesheetActionsValue>(
     () => ({ requestSave, saveAll, loadPeriod, loadPeriodByDate, discardChanges, openSubmit, submitTimesheet, guardPeriodChange }),

@@ -199,7 +199,7 @@ describe('approver rules (certified-outputs C2)', () => {
     await expectOk(designate(sup, designee, admin));
     await getTestDb().insert(schema.timesheetEntries).values({ userId: sup.id, clinId: clin.id, entryDate: prevStart(1), hours: '8', revisionNumber: 1, createdBy: sup.id });
     actingAs(sup);
-    await expectOk(submitPeriod({ periodStart: prevStart(1) }));
+    await expectOk(submitPeriod({ expectedUserId: sessionState.user!.id, periodStart: prevStart(1) }));
     await flushAfter();
     const to = emails.submitted.map((e) => e.supervisorEmail);
     expect(to).toContain(designee.email);
@@ -215,7 +215,7 @@ describe('approver rules (certified-outputs C2)', () => {
     const emp = await createTestUser({ role: 'employee' });
     await getTestDb().insert(schema.timesheetEntries).values({ userId: emp.id, clinId: clin.id, entryDate: prevStart(1), hours: '8', revisionNumber: 1, createdBy: emp.id });
     actingAs(emp);
-    const submitted = await expectOk(submitPeriod({ periodStart: prevStart(1) }));
+    const submitted = await expectOk(submitPeriod({ expectedUserId: sessionState.user!.id, periodStart: prevStart(1) }));
     actingAs(admin);
     const opened = await getTimesheetForReview(emp.id, prevStart(1));
     expect(opened.submissionCount).toBe(1);
@@ -223,7 +223,7 @@ describe('approver rules (certified-outputs C2)', () => {
     // Another reviewer path: reject (seen 1), the employee resubmits (count 2).
     await expectOk(rejectPeriod({ periodId: submitted.id!, comment: 'fix', seen: 1 }));
     actingAs(emp);
-    await expectOk(submitPeriod({ periodStart: prevStart(1) }));
+    await expectOk(submitPeriod({ expectedUserId: sessionState.user!.id, periodStart: prevStart(1) }));
     actingAs(admin);
     await expectFailure(approvePeriod({ periodId: submitted.id!, seen: opened.submissionCount }), 'conflict', /resubmitted after you opened it/);
     await expectFailure(approvePeriod({ periodId: submitted.id! } as never), 'validation', /reviewed version is missing/);

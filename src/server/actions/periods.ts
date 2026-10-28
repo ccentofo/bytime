@@ -23,6 +23,7 @@ import { getLastWeekdayInPeriod } from '@/lib/date-utils';
 import { addDays, formatInstant, isBefore, formatCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
 import { ConflictError, UserFacingError } from '@/lib/errors';
+import { SESSION_USER_CHANGED } from '@/lib/timesheet/copy';
 import { userAction, type ActionResult } from '@/lib/action-result';
 
 /**
@@ -115,12 +116,16 @@ async function notifyReviewersOfSubmission(userId: string, periodStart: Calendar
  * Creates the period record if it doesn't exist, or updates status to 'submitted'.
  */
 export async function submitPeriod(data: {
+  /** UX-TIMESHEET-B-AUDIT H3: whose timesheet the page shows; refused unless it is the session user. */
+  expectedUserId: string;
   periodStart: CalendarDate;
   comment?: string;
   completeness?: unknown; // structured warnings snapshot from the client (advisory)
 }): Promise<ActionResult<PeriodInfo>> {
   return userAction(async () => {
     const actor = await requireSession();
+    // H3: before any read or write — never certify the period of whoever signed in from another tab.
+    if (data.expectedUserId !== actor.id) throw new UserFacingError(SESSION_USER_CHANGED);
     const userId = actor.id;
     const db = await getDbForWrite();
     const periodStart = parseCalendarDate(data.periodStart);

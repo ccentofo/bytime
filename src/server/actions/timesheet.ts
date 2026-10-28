@@ -20,6 +20,7 @@ import { getNumDaysInPeriod } from '@/lib/date-utils';
 import { addDays, diffDays, isAfter, isBefore, formatCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { ConflictError, UserFacingError } from '@/lib/errors';
 import { newCellRefusal } from '@/lib/timesheet/cell-rules';
+import { SESSION_USER_CHANGED } from '@/lib/timesheet/copy';
 import { CHARGEABLE_CODE } from '@/server/internal/chargeable';
 import { dayTotalRefusal, latestDayTotals } from '@/server/internal/day-totals';
 import { pastPeriods, PAST_PERIODS_PAGE_SIZE, type PastPeriodRow } from '@/server/internal/past-periods';
@@ -165,6 +166,8 @@ function cellWhere(userId: string, cell: CellRef, entryDate: CalendarDate) {
  * Preserves all write-path guards: period-lock, late-entry, reason-code enforcement.
  */
 export async function saveTimesheetBatch(data: {
+  /** UX-TIMESHEET-B-AUDIT H3: whose timesheet the page shows; refused unless it is the session user. */
+  expectedUserId: string;
   periodStart: CalendarDate;
   cells: Array<{
     chargeCodeId?: string;  // set for direct entries (new charge-code model)
@@ -184,6 +187,8 @@ export async function saveTimesheetBatch(data: {
 }): Promise<ActionResult<{ revisions: Record<string, number>; noteRevisions: Record<string, number> }>> {
   return userAction(async () => {
     const actor = await requireSession();
+    // H3: before any read or write — a different account signed in from another tab must not receive these edits.
+    if (data.expectedUserId !== actor.id) throw new UserFacingError(SESSION_USER_CHANGED);
     const userId = actor.id;
     const db = await getDbForWrite();
     const start = parseCalendarDate(data.periodStart);

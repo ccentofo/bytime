@@ -128,6 +128,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
     actingAs(employee);
     await expectOk(saveTimesheetBatch({
+      expectedUserId: sessionState.user!.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
     }));
@@ -147,11 +148,13 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
     actingAs(employee);
     await expectOk(saveTimesheetBatch({
+      expectedUserId: sessionState.user!.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
     }));
 
     await expectOk(saveTimesheetBatch({
+      expectedUserId: sessionState.user!.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 6, isEdit: true, isLateEntry: false }],
       changeReasonCode: 'CORRECTION',
@@ -177,11 +180,13 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
     actingAs(employee);
     await expectOk(saveTimesheetBatch({
+      expectedUserId: sessionState.user!.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
     }));
 
     await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 6, isEdit: true, isLateEntry: false }],
       }), 'validation', /reason code/i);
@@ -195,6 +200,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
     actingAs(employee);
     await expectOk(saveTimesheetBatch({
+      expectedUserId: sessionState.user!.id,
       periodStart,
       cells: [
         { chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 5, isEdit: false, isLateEntry: false },
@@ -215,6 +221,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
   it('enforces RBAC: unassigned user cannot save, and re-saving after unassignment fails again', async () => {
     actingAs(employee);
     await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
       }), 'forbidden', /Unauthorized/);
@@ -224,6 +231,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
     actingAs(employee);
     await expectOk(saveTimesheetBatch({
+      expectedUserId: sessionState.user!.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
     }));
@@ -233,6 +241,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
     actingAs(employee);
     await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex - 1, hours: 4, isEdit: false, isLateEntry: false }],
       }), 'forbidden', /Unauthorized/);
@@ -276,6 +285,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
     actingAs(employee);
     await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
       }), 'validation', /certified and is locked/i);
@@ -287,6 +297,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
     actingAs(employee);
     await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex + 1, hours: 8, isEdit: false, isLateEntry: false }],
       }), 'validation', /future date/i);
@@ -298,6 +309,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
     actingAs(employee);
     await expectOk(saveTimesheetBatch({
+      expectedUserId: sessionState.user!.id,
       periodStart,
       cells: [{ indirectCodeId: indirect.id, dayIndex: todayIndex, hours: 2, isEdit: false, isLateEntry: false }],
     }));
@@ -316,6 +328,7 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
 
     actingAs(employee);
     await expectOk(saveTimesheetBatch({
+      expectedUserId: sessionState.user!.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 8, isEdit: false, isLateEntry: false }],
     }));

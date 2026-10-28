@@ -135,10 +135,11 @@ describe('D9 — calendar-date correctness regardless of clock/timezone', () => 
       expect(options.map((o) => o.start)).toContain(periodStart);
 
       await expectOk(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: 13, hours: 8, isEdit: false, isLateEntry: false }],
       }));
-      await expectOk(submitPeriod({ periodStart }));
+      await expectOk(submitPeriod({ expectedUserId: sessionState.user!.id, periodStart }));
 
       const [period] = await db.select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.userId, employee.id));
       expect(period.status).toBe('submitted');
@@ -168,6 +169,7 @@ describe('D9 — calendar-date correctness regardless of clock/timezone', () => 
       actingAs(employee);
       const periodStart = '2026-01-01' as CalendarDate; // semimonthly default, 1st–15th
       await expectOk(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: 14, hours: 8, isEdit: false, isLateEntry: false }], // day 14 = Jan 15
       }));
@@ -201,11 +203,13 @@ describe('D9 — calendar-date correctness regardless of clock/timezone', () => 
       const periodStart = '2026-01-01' as CalendarDate;
 
       await expectFailure(saveTimesheetBatch({
+          expectedUserId: sessionState.user!.id,
           periodStart,
           cells: [{ chargeCodeId: chargeCode.id, dayIndex: 14, hours: 8, isEdit: false, isLateEntry: false }], // day 14 = Jan 15 (tomorrow)
         }), 'validation', /future date/i);
 
       await expectOk(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: 13, hours: 8, isEdit: false, isLateEntry: false }], // day 13 = Jan 14 (today)
       }));
@@ -234,10 +238,12 @@ describe('D9 — calendar-date correctness regardless of clock/timezone', () => 
     actingAs(employee);
     const periodStart = '2026-01-01' as CalendarDate;
     await expectOk(saveTimesheetBatch({
+      expectedUserId: sessionState.user!.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: 4, hours: 8, isEdit: false, isLateEntry: false }],
     }));
     await expectOk(saveTimesheetBatch({
+      expectedUserId: sessionState.user!.id,
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: 4, hours: 5, isEdit: true, isLateEntry: false }],
       changeReasonCode: 'CORRECTION',

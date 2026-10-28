@@ -124,6 +124,7 @@ describe('DCAA integrity under concurrency (§5.5)', () => {
   it('a save is all-or-nothing: a failing cell leaves nothing written', async () => {
     const todayIndex = diffDays(currentStart, todayIn('America/New_York'));
     await expectFailure(saveTimesheetBatch({
+      expectedUserId: sessionState.user!.id,
       periodStart: currentStart,
       cells: [
         { chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 4, isEdit: false, isLateEntry: false },
@@ -143,11 +144,12 @@ describe('DCAA integrity under concurrency (§5.5)', () => {
     // Both resolve to ActionResults (launch-blockers P4); an unexpected throw fails the test.
     const [save, submit] = await Promise.all([
       saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart: previousStart,
         cells: [{ chargeCodeId: chargeCode.id, dayIndex: 1, hours: 2, isEdit: false, isLateEntry: true }],
         changeReasonCode: 'LATE_ENTRY',
       }),
-      submitPeriod({ periodStart: previousStart }),
+      submitPeriod({ expectedUserId: sessionState.user!.id, periodStart: previousStart }),
     ]);
     expect(submit.ok, `submit failed: ${submit.ok ? '' : submit.error}`).toBe(true);
     // Both transactions write only after taking the lock, so transaction-id order = lock order (now() is the
@@ -167,6 +169,7 @@ describe('DCAA integrity under concurrency (§5.5)', () => {
     }
     // After submission, any save into the period is refused.
     await expectFailure(saveTimesheetBatch({
+      expectedUserId: sessionState.user!.id,
       periodStart: previousStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: 2, hours: 2, isEdit: false, isLateEntry: true }],
       changeReasonCode: 'LATE_ENTRY',
@@ -178,7 +181,7 @@ describe('DCAA integrity under concurrency (§5.5)', () => {
     await getTestDb().insert(schema.timesheetEntries).values({
       userId: employee.id, chargeCodeId: chargeCode.id, clinId: chargeCode.clinId, entryDate: previousStart, hours: '8', revisionNumber: 1, createdBy: employee.id,
     });
-    await expectOk(submitPeriod({ periodStart: previousStart }));
+    await expectOk(submitPeriod({ expectedUserId: sessionState.user!.id, periodStart: previousStart }));
     const [period] = await getTestDb().select().from(schema.timesheetPeriods).where(eq(schema.timesheetPeriods.userId, employee.id));
     actingAs(admin);
     const results = await Promise.all([

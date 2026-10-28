@@ -47,7 +47,7 @@ describe('timesheet notes (UX-3 A-T1)', () => {
   const db = () => getTestDb();
   const noteRows = () => db().select().from(schema.timesheetNotes).where(eq(schema.timesheetNotes.userId, emp.id));
   const saveNote = (body: string, expectedRevision: number, o: Record<string, unknown> = {}) =>
-    saveTimesheetBatch({ periodStart: start, cells: [], notes: [{ chargeCodeId: code.id, dayIndex: 1, body, expectedRevision, ...o }] });
+    saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [], notes: [{ chargeCodeId: code.id, dayIndex: 1, body, expectedRevision, ...o }] });
   const period = (status: 'submitted' | 'approved' | 'rejected') =>
     db().insert(schema.timesheetPeriods).values({ userId: emp.id, periodStart: start, status, periodNumDays: getNumDaysInPeriod(start, DEFAULT_PERIOD_CONFIG), submissionCount: 1, submittedAt: new Date() });
 
@@ -73,7 +73,7 @@ describe('timesheet notes (UX-3 A-T1)', () => {
     const rows = (await noteRows()).sort((a, b) => a.revisionNumber - b.revisionNumber);
     expect(rows.map((r) => [r.revisionNumber, r.body, r.createdBy])).toEqual([[1, 'Site visit', emp.id], [2, 'Site visit, badge outage', emp.id], [3, '', emp.id]]);
     // A brand-new cell cleared before it ever existed writes nothing.
-    expect(await expectOk(saveTimesheetBatch({ periodStart: start, cells: [], notes: [{ chargeCodeId: code.id, dayIndex: 2, body: '  ', expectedRevision: 0 }] }))).toEqual({ revisions: {}, noteRevisions: {} });
+    expect(await expectOk(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [], notes: [{ chargeCodeId: code.id, dayIndex: 2, body: '  ', expectedRevision: 0 }] }))).toEqual({ revisions: {}, noteRevisions: {} });
   });
 
   it('a NOTES-ONLY batch on a submitted period is refused and writes no note row (the period lock covers note dates)', async () => {
@@ -91,6 +91,7 @@ describe('timesheet notes (UX-3 A-T1)', () => {
   it('a mixed hours + notes batch on a submitted period is refused; nothing is written', async () => {
     await period('submitted');
     await expectFailure(saveTimesheetBatch({
+      expectedUserId: session.user!.id,
       periodStart: start,
       cells: [{ chargeCodeId: code.id, dayIndex: 1, hours: 4, isEdit: false, isLateEntry: true }],
       notes: [{ chargeCodeId: code.id, dayIndex: 1, body: 'x', expectedRevision: 0 }],
@@ -107,6 +108,7 @@ describe('timesheet notes (UX-3 A-T1)', () => {
 
   it('a mixed batch where the note fails rolls back the hours too', async () => {
     await expectFailure(saveTimesheetBatch({
+      expectedUserId: session.user!.id,
       periodStart: start,
       cells: [{ chargeCodeId: code.id, dayIndex: 1, hours: 4, isEdit: false, isLateEntry: true }],
       notes: [{ chargeCodeId: code.id, dayIndex: 1, body: 'x', expectedRevision: 7 }], // stale
@@ -118,12 +120,12 @@ describe('timesheet notes (UX-3 A-T1)', () => {
 
   it('a row not on the employee\'s timesheet is refused; an available-to-all indirect code is allowed', async () => {
     const stranger = await createTestChargeCode(clinId); // not assigned, no entries, no notes
-    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [], notes: [{ chargeCodeId: stranger.id, dayIndex: 1, body: 'x', expectedRevision: 0 }] }), 'validation', /only add notes to rows on your timesheet/);
+    await expectFailure(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [], notes: [{ chargeCodeId: stranger.id, dayIndex: 1, body: 'x', expectedRevision: 0 }] }), 'validation', /only add notes to rows on your timesheet/);
     const hidden = await createTestIndirectCode({ availableToAll: false });
-    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [], notes: [{ indirectCodeId: hidden.id, dayIndex: 1, body: 'x', expectedRevision: 0 }] }), 'validation', /only add notes to rows/);
-    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [], notes: [{ clinId, dayIndex: 1, body: 'x', expectedRevision: 0 }] }), 'validation', /only add notes to rows/);
+    await expectFailure(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [], notes: [{ indirectCodeId: hidden.id, dayIndex: 1, body: 'x', expectedRevision: 0 }] }), 'validation', /only add notes to rows/);
+    await expectFailure(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [], notes: [{ clinId, dayIndex: 1, body: 'x', expectedRevision: 0 }] }), 'validation', /only add notes to rows/);
     const leave = await createTestIndirectCode();
-    await expectOk(saveTimesheetBatch({ periodStart: start, cells: [], notes: [{ indirectCodeId: leave.id, dayIndex: 1, body: 'Doctor', expectedRevision: 0 }] }));
+    await expectOk(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [], notes: [{ indirectCodeId: leave.id, dayIndex: 1, body: 'Doctor', expectedRevision: 0 }] }));
     expect(await noteRows()).toHaveLength(1);
   });
 
@@ -131,7 +133,7 @@ describe('timesheet notes (UX-3 A-T1)', () => {
     await expectOk(saveNote('a'.repeat(1000), 0));
     await expectFailure(saveNote('b'.repeat(1001), 1), 'validation', /at most 1000 characters/);
     const next = addDays(current, getNumDaysInPeriod(current, DEFAULT_PERIOD_CONFIG));
-    await expectFailure(saveTimesheetBatch({ periodStart: next, cells: [], notes: [{ chargeCodeId: code.id, dayIndex: 0, body: 'x', expectedRevision: 0 }] }), 'validation', /future dates/);
+    await expectFailure(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: next, cells: [], notes: [{ chargeCodeId: code.id, dayIndex: 0, body: 'x', expectedRevision: 0 }] }), 'validation', /future dates/);
     expect(await noteRows()).toHaveLength(1);
   });
 
@@ -143,7 +145,7 @@ describe('timesheet notes (UX-3 A-T1)', () => {
 
   it('M1: a stale expectedRevision is still a conflict when a hand-crafted request carries skipConflictCheck: true', async () => {
     await expectOk(saveNote('First', 0));
-    const crafted = { periodStart: start, cells: [], notes: [{ chargeCodeId: code.id, dayIndex: 1, body: 'Overwrite', expectedRevision: 0 }], skipConflictCheck: true };
+    const crafted = { expectedUserId: session.user!.id, periodStart: start, cells: [], notes: [{ chargeCodeId: code.id, dayIndex: 1, body: 'Overwrite', expectedRevision: 0 }], skipConflictCheck: true };
     await expectFailure(saveTimesheetBatch(crafted as Parameters<typeof saveTimesheetBatch>[0]), 'conflict');
     expect((await noteRows()).map((r) => r.body)).toEqual(['First']);
   });
@@ -159,7 +161,7 @@ describe('timesheet notes (UX-3 A-T1)', () => {
     expect(after.chargeCodes.find((c) => c.id === code.id)).toBeUndefined();
     expect(after.notes[`${code.id}-1`]).toEqual({ body: '', revision: 2 });
     // L3: eligibility follows what the grid shows — with only a cleared note left, the hidden row takes no new note.
-    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [], notes: [{ chargeCodeId: code.id, dayIndex: 2, body: 'Back again', expectedRevision: 0 }] }), 'validation', /only add notes to rows on your timesheet/);
+    await expectFailure(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [], notes: [{ chargeCodeId: code.id, dayIndex: 2, body: 'Back again', expectedRevision: 0 }] }), 'validation', /only add notes to rows on your timesheet/);
     await expectFailure(saveNote('Back again', 2), 'validation', /only add notes to rows on your timesheet/);
   });
 });

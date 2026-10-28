@@ -48,7 +48,7 @@ describe('24 hours per day (UX-3 A-T6)', () => {
   const db = () => getTestDb();
   const rows = () => db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.userId, emp.id));
   const cell = (chargeCodeId: string, hours: number, dayIndex = 1, isEdit = false) => ({ chargeCodeId, dayIndex, hours, isEdit, isLateEntry: !isEdit });
-  const save = (...cells: ReturnType<typeof cell>[]) => saveTimesheetBatch({ periodStart: start, cells, changeReasonCode: 'CORRECTION', comment: 'fix' });
+  const save = (...cells: ReturnType<typeof cell>[]) => saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells, changeReasonCode: 'CORRECTION', comment: 'fix' });
   const dayLabel = () => formatCalendarDate(addDays(start, 1), 'ddd, MMM D, YYYY');
 
   beforeEach(async () => {
@@ -88,7 +88,7 @@ describe('24 hours per day (UX-3 A-T6)', () => {
   });
 
   it('a notes-only batch skips the day-total reads; a batch with cells makes two', async () => {
-    await expectOk(saveTimesheetBatch({ periodStart: start, cells: [], notes: [{ chargeCodeId: a, dayIndex: 1, body: 'x', expectedRevision: 0 }] }));
+    await expectOk(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [], notes: [{ chargeCodeId: a, dayIndex: 1, body: 'x', expectedRevision: 0 }] }));
     expect(spy.calls).toBe(0);
     await expectOk(save(cell(a, 8)));
     expect(spy.calls).toBe(2);

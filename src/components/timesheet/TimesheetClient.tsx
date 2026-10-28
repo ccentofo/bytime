@@ -6,7 +6,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { useState } from 'react';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
-import { SESSION_EXPIRED, TimesheetProvider, useTimesheetActions, useTimesheetState } from '@/components/timesheet/TimesheetContext';
+import { TimesheetProvider, useTimesheetActions, useTimesheetState } from '@/components/timesheet/TimesheetContext';
 import { TimesheetGrid } from '@/components/timesheet/TimesheetGrid';
 import { PeriodControl } from '@/components/timesheet/PeriodControl';
 import { SaveSubmitControls } from '@/components/timesheet/SaveSubmitControls';
@@ -33,7 +33,7 @@ export function TimesheetClient({ initialData }: { initialData: TimesheetPageDat
 
 /** The page body, inside a TimesheetProvider (exported for tests). */
 export function TimesheetPage() {
-  const { state, unsavedCount, sessionExpiredHref } = useTimesheetState();
+  const { state, unsavedCount, sessionAlert } = useTimesheetState();
   const { discardChanges, guardPeriodChange } = useTimesheetActions();
   const { periodStatus } = state;
 
@@ -60,11 +60,11 @@ export function TimesheetPage() {
         )}
       />
       <Stack gap="sm">
-        {sessionExpiredHref && (
+        {sessionAlert && (
           // Visual only (role="note"): the announcer already spoke the message assertively (§4.5).
           <Alert role="note" color="red" variant="light" icon={<Icons.statusError size={ICON_SIZE.button} />} data-testid="session-expired">
-            <Text size="sm">{SESSION_EXPIRED}</Text>
-            <Anchor href={sessionExpiredHref} target="_blank" rel="noopener" size="sm" fw={600}>Sign in (new tab)</Anchor>
+            <Text size="sm">{sessionAlert.message}</Text>
+            {sessionAlert.signInHref && <Anchor href={sessionAlert.signInHref} target="_blank" rel="noopener" size="sm" fw={600}>Sign in (new tab)</Anchor>}
           </Alert>
         )}
         <StatusLine />
