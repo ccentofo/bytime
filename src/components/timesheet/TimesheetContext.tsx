@@ -7,6 +7,7 @@ import { Button, Group, Modal, Text } from '@mantine/core';
 import { confirmLeave, registerUnsavedGuard, type LeaveChoice } from '@/lib/timesheet/unsaved-guard';
 import type { TimesheetState, TimesheetAction, TimesheetPageData, DirtyCell, SavedNote, LoadGen, TimesheetPeriodData } from '@/types/timesheet';
 import { addDays, formatCalendarDate, isBefore, type CalendarDate } from '@/lib/calendar-date';
+import { STATUS_WORD, periodLabel as periodRangeLabel } from '@/lib/timesheet/labels';
 import { saveTimesheetBatch, getTimesheetPeriod } from '@/server/actions/timesheet';
 import { submitPeriod, getWorkspaceContext } from '@/server/actions/periods';
 import { runAction, type RunResult } from '@/lib/run-action';
@@ -54,7 +55,7 @@ const EMPTY_PERIOD: Omit<TimesheetState, 'userId' | 'today' | 'readOnly' | 'flsa
   chargeCodes: [], entries: [], savedEntries: [], savedCellRevisions: {}, periodStatus: 'draft', approvalBadge: null,
   notes: {}, savedNotes: {}, reviewComment: null, summary: null, submitOpensOn: '1970-01-01' as CalendarDate,
   workweekStartDay: null, outsideWeekHours: {}, userCreatedOn: '1970-01-01' as CalendarDate, isCurrent: false,
-  submittedOn: null, reviewedOn: null, isSaving: false, isLoadingPeriod: false, syncGen: 0, loadGen: 0, activeNoteCell: null,
+  submittedOn: null, reviewedOn: null, isSaving: false, isLoadingPeriod: false, syncGen: 0, loadGen: 0, shownLoadGen: 0, activeNoteCell: null,
 };
 
 /** Exported for tests (fix round 1, F8). */
@@ -133,6 +134,8 @@ export function timesheetReducer(
         reviewedOn: action.reviewedOn ?? null,
         isLoadingPeriod: false,
         syncGen: action.resync ? state.syncGen + 1 : state.syncGen,
+        // Only an in-page load (it carries its generations) counts as shown — never the first apply or a re-sync.
+        shownLoadGen: action.gen && !action.resync ? state.loadGen : state.shownLoadGen,
         activeNoteCell: null,
       };
     }
@@ -614,6 +617,15 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [hasUnsaved]);
+
+  // M5: after an in-page load lands (‹, ›, Choose period, Today), say which period is showing — politely, once per load;
+  // not on mount and not on a re-sync (shownLoadGen changes only when a load's data is applied).
+  const announcedLoadRef = useRef(state.shownLoadGen);
+  useEffect(() => {
+    if (state.shownLoadGen === announcedLoadRef.current) return;
+    announcedLoadRef.current = state.shownLoadGen;
+    announce(`Showing ${periodRangeLabel(state.periodStart, state.periodEnd)}, ${STATUS_WORD[state.periodStatus]}`);
+  }, [state.shownLoadGen, state.periodStart, state.periodEnd, state.periodStatus, announce]);
 
   // URL sync (§4.10): after the committed period changes — never from a fetch continuation — and only when the URL
   // differs. replaceState doesn't re-run the server components (trap T-H); on mount it canonicalizes to the period shown.

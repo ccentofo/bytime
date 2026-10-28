@@ -91,6 +91,11 @@ export interface TimesheetState {
   syncGen: number;
   /** Bumped by BEGIN_PERIOD_LOAD; a load result carrying an older loadGen is ignored (latest load wins). */
   loadGen: number;
+  /**
+   * The loadGen of the last in-page load that LANDED (0 until one does; a re-sync or a failed load doesn't change it).
+   * Its change is what announces "Showing {period}, {status}" (UX-TIMESHEET-B-AUDIT M5).
+   */
+  shownLoadGen: number;
   activeNoteCell: { chargeCodeId: string; dayIndex: number; editable: boolean } | null;
 }
 

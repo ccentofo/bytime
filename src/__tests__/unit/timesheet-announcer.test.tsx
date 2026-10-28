@@ -14,11 +14,11 @@ import path from 'path';
  * cases are added with the steps that build them.)
  */
 
-const actions = vi.hoisted(() => ({ saveTimesheetBatch: vi.fn() }));
+const actions = vi.hoisted(() => ({ saveTimesheetBatch: vi.fn(), getTimesheetPeriod: vi.fn(), getNeighborPeriod: vi.fn() }));
 const notify = vi.hoisted(() => vi.fn());
-vi.mock('@/server/actions/timesheet', () => ({ saveTimesheetBatch: actions.saveTimesheetBatch, getTimesheetPeriod: vi.fn() }));
+vi.mock('@/server/actions/timesheet', () => ({ saveTimesheetBatch: actions.saveTimesheetBatch, getTimesheetPeriod: actions.getTimesheetPeriod }));
 vi.mock('@/server/actions/periods', () => ({ submitPeriod: vi.fn(), getWorkspaceContext: vi.fn(async () => ({ today: '2026-01-20' })), getPeriodOptions: vi.fn(async () => []) }));
-vi.mock('@/server/actions/pay-period-config', () => ({ getNeighborPeriod: vi.fn() }));
+vi.mock('@/server/actions/pay-period-config', () => ({ getNeighborPeriod: actions.getNeighborPeriod }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }), usePathname: () => '/timesheet' }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: notify } }));
 
@@ -30,7 +30,7 @@ import { enterGrid, installTimesheetDomStubs, live, renderTimesheet } from '../h
 import type { CalendarDate } from '@/lib/calendar-date';
 
 beforeAll(() => installTimesheetDomStubs());
-beforeEach(() => { actions.saveTimesheetBatch.mockReset(); notify.mockReset(); });
+beforeEach(() => { for (const f of Object.values(actions)) f.mockReset(); notify.mockReset(); });
 afterEach(() => cleanup());
 
 const polite = () => document.querySelector('[data-testid="ts-announce-polite"]') as HTMLElement;
@@ -133,5 +133,48 @@ describe('announcer (B-T14)', () => {
     const live = [...document.querySelectorAll('[aria-live], [role="status"], [role="alert"], [role="log"]')];
     expect(live).toEqual([polite(), assertive()]);
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  });
+});
+
+describe('the period change is announced (M5)', () => {
+  const DEC16 = periodData({ chargeCodes: [chargeCode()], periodStart: '2025-12-16' as CalendarDate, numDays: 16, periodStatus: 'approved' });
+  const prev = () => document.querySelector('button[aria-label="Previous period"]') as HTMLButtonElement;
+  beforeEach(() => {
+    actions.getNeighborPeriod.mockResolvedValue({ periodStart: '2025-12-16', numDays: 16, periodConfig: periodData().periodConfig, isCurrent: false });
+  });
+
+  it('not on mount', async () => {
+    renderTimesheet(data(), <TimesheetPage />);
+    await settle();
+    expect(polite().textContent).toBe('');
+  });
+
+  it('after an in-page load lands: "Showing {period label}, {status}", politely', async () => {
+    actions.getTimesheetPeriod.mockResolvedValue(DEC16);
+    renderTimesheet(data(), <TimesheetPage />);
+    await userEvent.setup().click(prev());
+    await settle();
+    expect(live.ctx!.state.periodStart).toBe('2025-12-16');
+    expect(polite().textContent).toBe('Showing Dec 16 – 31, 2025, Approved');
+    expect(assertive().textContent).toBe('');
+  });
+
+  it('not on a re-sync', async () => {
+    const view = renderTimesheet(data(), <TimesheetPage />);
+    view.rerenderWith(pageData({ chargeCodes: [chargeCode()], periodStart: '2025-12-16' as CalendarDate, numDays: 16 }));
+    await settle();
+    expect(live.ctx!.state.periodStart).toBe('2025-12-16');
+    expect(polite().textContent).toBe('');
+  });
+
+  it('not when the load fails (the error is announced instead)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    actions.getTimesheetPeriod.mockRejectedValue(new Error('network'));
+    renderTimesheet(data(), <TimesheetPage />);
+    await userEvent.setup().click(prev());
+    await settle();
+    expect(polite().textContent).toBe('');
+    expect(assertive().textContent).toBe('Could not load that pay period. Check your connection and try again.');
+    vi.restoreAllMocks();
   });
 });

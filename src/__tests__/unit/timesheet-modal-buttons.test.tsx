@@ -23,8 +23,8 @@ afterEach(() => cleanup());
 
 const button = (label: string) => [...document.querySelectorAll('[role="dialog"] button')].find((b) => b.textContent?.trim() === label) as HTMLButtonElement;
 const late = [{ chargeCodeId: CC, dayIndex: 2, hours: 4, isEdit: false, isLateEntry: true }];
-const reasonModal = (o: { isSaving?: boolean; onConfirm?: (r: string, c: string) => Promise<boolean | void>; onClose?: () => void } = {}) => (
-  <ReasonModal opened onClose={o.onClose ?? vi.fn()} onConfirm={o.onConfirm ?? vi.fn(async () => true)} editedCells={[]} lateEntryCells={late}
+const reasonModal = (o: { isSaving?: boolean; onConfirm?: (r: string, c: string) => Promise<void>; onClose?: () => void } = {}) => (
+  <ReasonModal opened onClose={o.onClose ?? vi.fn()} onConfirm={o.onConfirm ?? vi.fn(async () => {})} editedCells={[]} lateEntryCells={late}
     chargeCodes={[chargeCode()]} periodStart={'2026-01-01' as CalendarDate} isSaving={o.isSaving ?? false} />
 );
 const submitModal = (o: { isSaving?: boolean; onConfirm?: (c?: string) => Promise<void>; onClose?: () => void } = {}) => (
@@ -34,7 +34,7 @@ const noDisabled = () => expect([...document.querySelectorAll('[role="dialog"] b
 
 describe('ReasonModal buttons (M2)', () => {
   it('Confirm Save is aria-disabled until a comment is given, and a click does nothing', async () => {
-    const onConfirm = vi.fn(async () => true);
+    const onConfirm = vi.fn(async () => {});
     const user = userEvent.setup();
     render(withTheme(reasonModal({ onConfirm })));
     const confirm = button('Confirm Save');
@@ -45,7 +45,7 @@ describe('ReasonModal buttons (M2)', () => {
   });
 
   it('while saving: "Saving…", both buttons aria-disabled (never disabled), clicks do nothing', async () => {
-    const onConfirm = vi.fn(async () => true);
+    const onConfirm = vi.fn(async () => {});
     const onClose = vi.fn();
     const user = userEvent.setup();
     const view = render(withTheme(reasonModal({ onConfirm, onClose })));
