@@ -363,6 +363,18 @@ export function TimesheetGrid() {
     const cRaw = el.dataset.c!;
     const c: Col = cRaw === RH || cRaw === TOTAL ? cRaw : Number(cRaw);
     const table = e.currentTarget;
+    // A click that arrives while still editing came without a focus change (a screen-reader activation, an iOS tap):
+    // no mousedown blurred the editor. The click on the active cell itself keeps the draft; anywhere else runs the blur
+    // path first — commit, or restore and say so — then focuses the cell, so the input blurs while still mounted and
+    // suppressBlurCommit stops that blur committing twice (UX-TIMESHEET-B-AUDIT H1).
+    if (mode === 'edit' && activeDay) {
+      if (r === active.r && c === active.c) { (table.querySelector('input[data-cell-editor]') as HTMLInputElement | null)?.focus(); return; }
+      const committed = commitDraft(activeDay);
+      if (!committed.ok) announce(`${draft} isn't valid; restored ${draftOf(activeDay.value) || '0.00'}`, 'assertive');
+      suppressBlurCommit.current = true;
+      focusPos(table, active);
+      flushSync(() => { setMode('nav'); setError(null); });
+    }
     flushSync(() => setRequested({ r, c }));
     const row = typeof r === 'number' ? rowList[r] : undefined;
     const info = row && typeof c === 'number' ? dayCell(row, c) : null;

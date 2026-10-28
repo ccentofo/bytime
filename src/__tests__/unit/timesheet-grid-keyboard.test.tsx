@@ -63,6 +63,8 @@ const stops = () => [...grid().querySelectorAll('[tabindex="0"]')];
 const pos = () => { const el = stops()[0] as HTMLElement; return `${el.dataset.r}:${el.dataset.c}`; };
 const focused = () => { const el = document.activeElement as HTMLElement; return el?.dataset?.r !== undefined ? `${el.dataset.r}:${el.dataset.c}` : el?.tagName; };
 const input = () => grid().querySelector('input[data-cell-editor]') as HTMLInputElement | null;
+/** The cell whose editor is open (r:c). */
+const editing = () => { const td = input()?.closest('td') as HTMLElement | null; return td ? `${td.dataset.r}:${td.dataset.c}` : null; };
 const value = (r: number, d: number) => live.ctx!.state.entries[r].hours[d];
 const polite = () => document.querySelector('[data-testid="ts-announce-polite"]')!.textContent;
 const assertive = () => document.querySelector('[data-testid="ts-announce-assertive"]')!.textContent;
@@ -306,6 +308,47 @@ describe('validation (B-T4)', () => {
     await user.keyboard('{Control>}a{/Control}12{Enter}');
     expect(input()!.getAttribute('aria-invalid')).toBe('true'); // 32 > 30
     expect(value(1, 2)).toBe(8);
+  });
+
+  // UX-TIMESHEET-B-AUDIT H1: a click with no focus change first (a screen-reader activation, an iOS tap) — no mousedown,
+  // so the editor never blurred before the click.
+  it('a click on another cell with no prior blur commits a valid draft exactly once, then moves (H1)', async () => {
+    const { user } = setup();
+    await enterGrid(user);
+    await press(user, '{ArrowLeft}{ArrowLeft}{ArrowLeft}5');   // 0:3, draft "5"
+    expect(input()!.value).toBe('5');
+    dispatched.setHours = 0;
+    fireEvent.click(cell(0, 4));
+    expect(value(0, 3)).toBe(5);
+    expect(dispatched.setHours).toBe(1);
+    expect(editing()).toBe('0:4');                                  // editing the clicked cell, with its own value
+    expect(input()!.value).toBe('');
+    expect(document.activeElement).toBe(input());
+    fireEvent.blur(input()!);                                       // a later native blur commits nothing more
+    expect(dispatched.setHours).toBe(1);
+  });
+
+  it('a click on another cell with no prior blur restores an invalid draft and announces it (H1)', async () => {
+    const { user } = setup();
+    await enterGrid(user);
+    await press(user, '{ArrowLeft}{ArrowLeft}{ArrowLeft}7.3');
+    dispatched.setHours = 0;
+    fireEvent.click(cell(1, 3));
+    expect(value(0, 3)).toBe(0);
+    expect(dispatched.setHours).toBe(0);
+    expect(editing()).toBe('1:3');
+    await settle();
+    expect(assertive()).toBe("7.3 isn't valid; restored 0.00");
+  });
+
+  it('a click on the cell being edited (no prior blur) keeps the draft (H1)', async () => {
+    const { user } = setup();
+    await enterGrid(user);
+    await press(user, '{ArrowLeft}{ArrowLeft}{ArrowLeft}5');
+    fireEvent.click(cell(0, 3));
+    expect(input()!.value).toBe('5');
+    expect(document.activeElement).toBe(input());
+    expect(value(0, 3)).toBe(0);
   });
 
   it('an invalid blur restores and announces', async () => {
