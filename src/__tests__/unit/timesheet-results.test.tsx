@@ -19,6 +19,7 @@ vi.mock('@/server/actions/periods', () => ({
   getWorkspaceContext: vi.fn(async () => ({ today: '2026-01-20', timezone: 'America/New_York' })),
 }));
 vi.mock('@/server/actions/pay-period-config', () => ({ getNeighborPeriod: vi.fn() }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }), usePathname: () => '/timesheet' }));
 // The modals are UI plumbing here: render them as plain buttons that call onConfirm.
 vi.mock('@/components/timesheet/SubmitModal', () => ({
   SubmitModal: ({ onConfirm }: { onConfirm: (c?: string) => void }) => <button onClick={() => onConfirm('done')}>MOCK_CONFIRM_SUBMIT</button>,
@@ -32,7 +33,7 @@ vi.mock('@mantine/notifications', () => ({ notifications: { show: notify } }));
 import { TimesheetProvider, useTimesheet } from '@/components/timesheet/TimesheetContext';
 import { TimesheetToolbar } from '@/components/timesheet/TimesheetToolbar';
 import type { TimesheetPageData } from '@/types/timesheet';
-import type { CalendarDate } from '@/lib/calendar-date';
+import { chargeCode, pageData } from '../helpers/timesheet-fixtures';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -46,18 +47,8 @@ beforeAll(() => {
   });
 });
 
-const initialData: TimesheetPageData = {
-  userId: 'u1',
-  chargeCodes: [{ id: 'cc1', projectName: 'Proj', clin: 'CC-1', description: 'Code 1', kind: 'charge', assignable: true }],
-  entries: [{ chargeCodeId: 'cc1', hours: Array(15).fill(0) }],
-  periodStart: '2026-01-01' as CalendarDate,
-  numDays: 15,
-  today: '2026-01-20' as CalendarDate,
-  revisions: {},
-  periodStatus: 'draft',
-  periodConfig: { periodType: 'semimonthly', anchorDate: '2026-01-01' as CalendarDate, weekStartDay: 1 },
-  readOnly: false,
-};
+// feature-plan-ux-timesheet-ui.md §4.4: { ...pageContext, period } (fixtures gain `name`).
+const initialData: TimesheetPageData = pageData({ chargeCodes: [chargeCode({ id: 'cc1', projectName: 'Proj', clin: 'CC-1' })] });
 
 let container: HTMLDivElement;
 let root: Root;
@@ -163,18 +154,20 @@ describe('TimesheetToolbar', () => {
     actions.saveTimesheetBatch.mockResolvedValue({ ok: false, code: 'validation', error: 'This period has been certified and is locked.' });
     await render(<TimesheetToolbar />);
     await makeDirty();
-    await click('MOCK_CONFIRM_REASON'); // a first-time entry on a past day goes through the reason path
+    await click('Save');                 // the provider's save flow: a first-time entry on a past day needs a reason
+    await click('MOCK_CONFIRM_REASON');
     expect(actions.saveTimesheetBatch).toHaveBeenCalledTimes(1);
-    expect(shown()).toEqual([expect.objectContaining({ title: 'Save Failed', message: 'This period has been certified and is locked.' })]);
-    expect(shown().map((n) => n.title)).not.toContain('Timesheet Saved');
+    expect(shown()).toEqual([expect.objectContaining({ title: 'Save failed', message: 'This period has been certified and is locked.' })]);
+    expect(shown().map((n) => n.title)).not.toContain('Timesheet saved');
   });
 
   it('a successful save shows the success toast', async () => {
     actions.saveTimesheetBatch.mockResolvedValue({ ok: true, data: { revisions: { 'cc1-1': 1 }, noteRevisions: {} } }); // UX-3 A4.2 shape
     await render(<TimesheetToolbar />);
     await makeDirty();
+    await click('Save');
     await click('MOCK_CONFIRM_REASON');
-    expect(shown().map((n) => n.title)).toEqual(['Timesheet Saved']);
+    expect(shown().map((n) => n.title)).toEqual(['Timesheet saved']);
   });
 
   it('a failed submit shows the server’s message and never the success toast', async () => {
@@ -182,7 +175,7 @@ describe('TimesheetToolbar', () => {
     await render(<TimesheetToolbar />);
     await click('MOCK_CONFIRM_SUBMIT');
     expect(actions.submitPeriod).toHaveBeenCalledTimes(1);
-    expect(shown()).toEqual([expect.objectContaining({ title: 'Submit Failed', message: 'Cannot submit an empty timesheet.' })]);
+    expect(shown()).toEqual([expect.objectContaining({ title: 'Submit failed', message: 'Cannot submit an empty timesheet.' })]);
     expect(ctx!.state.periodStatus).toBe('draft');
   });
 });

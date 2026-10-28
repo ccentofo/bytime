@@ -24,6 +24,7 @@ vi.mock('@/server/actions/periods', () => ({
   getPeriodOptions: actions.getPeriodOptions,
 }));
 vi.mock('@/server/actions/pay-period-config', () => ({ getNeighborPeriod: actions.getNeighborPeriod }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }), usePathname: () => '/timesheet' }));
 vi.mock('@/components/timesheet/ReasonModal', () => ({ ReasonModal: ({ opened }: { opened: boolean }) => (opened ? <div>REASON_MODAL_OPEN</div> : null) }));
 vi.mock('@/components/timesheet/SubmitModal', () => ({ SubmitModal: () => null }));
 const notify = vi.hoisted(() => vi.fn());
@@ -34,26 +35,20 @@ import { BiWeeklyTable } from '@/components/timesheet/BiWeeklyTable';
 import { DailyNoteModal } from '@/components/timesheet/DailyNoteModal';
 import { TimesheetToolbar } from '@/components/timesheet/TimesheetToolbar';
 import { PayPeriodSelector } from '@/components/timesheet/PayPeriodSelector';
-import type { TimesheetPageData } from '@/types/timesheet';
+import type { TimesheetPageData, TimesheetPeriodData } from '@/types/timesheet';
+import { chargeCode, pageData, periodData } from '../helpers/timesheet-fixtures';
 import type { CalendarDate } from '@/lib/calendar-date';
 import { click, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
 
 const CC = '22222222-2222-4222-8222-222222222222';
 const KEY = `${CC}-1`;
 
-const data = (o: Partial<TimesheetPageData> = {}): TimesheetPageData => ({
-  userId: 'u1',
-  chargeCodes: [{ id: CC, projectName: 'Navy', clin: 'NAV-1', description: 'Code 1', kind: 'charge', assignable: true }],
+// feature-plan-ux-timesheet-ui.md §4.4 shape: { ...pageContext, period }.
+const data = (o: Partial<TimesheetPeriodData> = {}): TimesheetPageData => pageData({
+  chargeCodes: [chargeCode({ id: CC })],
   entries: [{ chargeCodeId: CC, hours: [8, ...Array(14).fill(0)] }],
-  periodStart: '2026-01-01' as CalendarDate,
-  numDays: 15,
   today: '2026-01-20' as CalendarDate, // after the period: every day is past, Submit is open
   revisions: { [`${CC}-0`]: 1 },
-  periodStatus: 'draft',
-  periodConfig: { periodType: 'semimonthly', anchorDate: '2026-01-01' as CalendarDate, weekStartDay: 1 },
-  readOnly: false,
-  notes: {},
-  isCurrent: false,
   ...o,
 });
 
@@ -131,7 +126,7 @@ describe('old-grid note wiring (UX-3 A-T14)', () => {
     expect(ctx!.state.savedNotes[KEY]).toEqual({ body: 'Badge outage', revision: 1 });
     expect(button('Save').disabled).toBe(true);
     // L9: the toast counts notes as changes, not "entries".
-    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ title: 'Timesheet Saved', message: '1 change saved.' }));
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ title: 'Timesheet saved', message: '1 change saved.' }));
   });
 
   it('after an ok where the server no-ops (no new revision) the note is clean and keeps its revision', async () => {
@@ -215,11 +210,11 @@ describe('old-grid note wiring (UX-3 A-T14)', () => {
 
   it('a period load shows that period\'s server notes', async () => {
     await render(data({ notes: { [KEY]: { body: 'January', revision: 1 } } }));
-    actions.getNeighborPeriod.mockResolvedValue({ periodStart: '2025-12-16', numDays: 16, periodConfig: data().periodConfig, isCurrent: false });
-    actions.getTimesheetPeriod.mockResolvedValue({
-      ...data(), periodStart: '2025-12-16', numDays: 16, entries: [{ chargeCodeId: CC, hours: Array(16).fill(0) }], revisions: {},
+    actions.getNeighborPeriod.mockResolvedValue({ periodStart: '2025-12-16', numDays: 16, periodConfig: periodData().periodConfig, isCurrent: false });
+    actions.getTimesheetPeriod.mockResolvedValue(periodData({
+      chargeCodes: [chargeCode({ id: CC })], periodStart: '2025-12-16' as CalendarDate, numDays: 16, entries: [{ chargeCodeId: CC, hours: Array(16).fill(0) }], revisions: {},
       notes: { [`${CC}-3`]: { body: 'December', revision: 4 } }, isCurrent: false,
-    });
+    }));
     await click(document.body.querySelector('button[aria-label="Previous pay period"]'));
     await wait(30);
     expect(ctx!.state.periodStart).toBe('2025-12-16');

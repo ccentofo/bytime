@@ -5,14 +5,14 @@ import { timesheetEntries, clins, contracts, slins, indirectChargeCodes, chargeC
 import { provenanceText } from '@/lib/provenance';
 import { INDIRECT_CATEGORY_LABELS } from '@/lib/indirect-categories';
 import { eq, and, gte, lt, desc, sql, isNull, inArray } from 'drizzle-orm';
-import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
+import type { ChargeCode, TimesheetEntry, TimesheetPeriodData } from '@/types/timesheet';
+import { getTenantState } from '@/lib/tenant/context';
 import { validateUUID, validateHours } from '@/lib/validation';
 import { requireSession, assertCanAccessEmployee, AuthorizationError } from '@/lib/session';
 import { isUniqueViolation } from '@/lib/db-errors';
 import { assertEntryDatesEditable, lockEmployeeTimesheet, resolvePeriod } from '@/server/internal/periods';
 import { configAt, existingPeriodLength } from '@/server/internal/pay-period-config';
 import { getPeriodStatusFor, type PeriodStatus } from '@/server/internal/periods';
-import type { PeriodConfig } from '@/lib/date-utils';
 import { getWorkspaceTimezone, getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { canApprove, loadApprovalFacts } from '@/server/internal/approval-rules';
 import { approvalLabels } from '@/server/internal/approval-label';
@@ -23,7 +23,7 @@ import { newCellRefusal } from '@/lib/timesheet/cell-rules';
 import { CHARGEABLE_CODE } from '@/server/internal/chargeable';
 import { dayTotalRefusal, latestDayTotals } from '@/server/internal/day-totals';
 import { pastPeriods, PAST_PERIODS_PAGE_SIZE, type PastPeriodRow } from '@/server/internal/past-periods';
-import { resolveRequestedPeriod, selectedPeriodFacts, type SelectedPeriodFacts } from '@/server/internal/timesheet-period';
+import { resolveRequestedPeriod, selectedPeriodFacts } from '@/server/internal/timesheet-period';
 import { latestNotesInPeriod, NOTE_CONFLICT, notedCodes, notesMap, validateNotes, writeNotes, type LatestNote, type NoteInput } from '@/server/internal/timesheet-notes';
 import { userAction, type ActionResult } from '@/lib/action-result';
 
@@ -69,28 +69,10 @@ export async function getRevisionMap(periodStart: CalendarDate): Promise<Record<
  * its length and schedule, the session user's entries and revision numbers, and its status.
  * The client does no schedule math; it renders exactly this.
  */
-export async function getTimesheetPeriod(requested?: string | string[]): Promise<{
-  /** UX-3 A4.6: the canonical start — a mid-period date is snapped, garbage means the current period, a future one is clamped. */
-  periodStart: CalendarDate;
-  /** UX-3 A4.6: the period containing the workspace's today. */
-  isCurrent: boolean;
-  numDays: number;
-  periodConfig: PeriodConfig;
-  entries: TimesheetEntry[];
-  revisions: Record<string, number>;
-  periodStatus: PeriodStatus;
-  /** certified-outputs C2: "Self-approved"/"Self-rejected" for this period (approvalLabel), else null. */
-  approvalBadge: string | null;
-  /** certified-outputs C4: THIS period's code list (assignable ∪ recorded); the client replaces its list with it. */
-  chargeCodes: ChargeCode[];
-  /** UX-3 A4.3: `{rowId}-{dayIndex}` → the latest note (cleared bodies '' included, with their revision). */
-  notes: Record<string, { body: string; revision: number }>;
-  /** UX-3 A4.6: the reviewer's comment on this period (e.g. why it was returned), else null. */
-  reviewComment: string | null;
-} & SelectedPeriodFacts> {
+export async function getTimesheetPeriod(requested?: string | string[]): Promise<TimesheetPeriodData> {
   const actor = await requireSession();
   const db = await getDb();
-  const [today, timeZone] = await Promise.all([getWorkspaceToday(), getWorkspaceTimezone()]);
+  const [today, timeZone, tenantState] = await Promise.all([getWorkspaceToday(), getWorkspaceTimezone(), getTenantState()]);
   const requestedPeriod = await resolveRequestedPeriod(db, requested, today);
   const start = requestedPeriod.start;
   const [numDays, periodConfig, periodInfo] = await Promise.all([
@@ -114,6 +96,9 @@ export async function getTimesheetPeriod(requested?: string | string[]): Promise
   return {
     periodStart: start, isCurrent: requestedPeriod.isCurrent, numDays, periodConfig, entries, revisions, periodStatus: periodInfo.status,
     approvalBadge, chargeCodes: periodCodes, notes: notesMap(latestNotes), reviewComment: periodInfo.reviewComment ?? null, ...facts,
+    // feature-plan-ux-timesheet-ui.md §4.14: the page context the server computed for this load (applied by the client
+    // through SET_PAGE_CONTEXT, so a period load also refreshes today / read-only).
+    today, readOnly: tenantState.kind === 'read_only',
   };
 }
 
@@ -565,6 +550,7 @@ async function getChargeCodesForEmployee(userId: string): Promise<ChargeCode[]> 
     projectName: r.contractName,
     clin: r.code,
     description: r.name,
+    name: r.name, // §4.14
     clinId: r.clinId,
     clinNumber: r.clinNumber,
     slinId: r.slinId ?? undefined,
@@ -593,6 +579,7 @@ async function getChargeCodesForEmployee(userId: string): Promise<ChargeCode[]> 
     projectName: INDIRECT_CATEGORY_LABELS[r.category] ?? r.category,
     clin: r.code,
     description: r.description ?? r.name,
+    name: r.name, // §4.14: the indirect code's own name (not its category, UX-AUDIT V4)
     isIndirect: true,
     indirectCategory: r.category,
     kind: 'indirect' as const,
@@ -636,7 +623,7 @@ async function getPeriodCodesForEmployee(userId: string, start: CalendarDate, nu
     .where(inArray(chargeCodes.id, chargeIds))
     .orderBy(contracts.name, clins.clinNumber, chargeCodes.code))
     .map((r) => ({
-      id: r.id, projectName: r.contractName, clin: r.code, description: r.name, clinId: r.clinId, clinNumber: r.clinNumber,
+      id: r.id, projectName: r.contractName, clin: r.code, description: r.name, name: r.name, clinId: r.clinId, clinNumber: r.clinNumber,
       slinId: r.slinId ?? undefined, slinNumber: r.slinNumber ?? undefined, workLocation: r.workLocation ?? null, billable: r.billable,
       className: r.className ?? undefined, isIndirect: false, kind: 'charge' as const, assignable: false,
     }));
@@ -647,12 +634,13 @@ async function getPeriodCodesForEmployee(userId: string, start: CalendarDate, nu
     .orderBy(contracts.name, clins.clinNumber))
     .map((r) => ({
       id: r.id, projectName: r.contractName, clin: `CLIN ${r.clinNumber}`, description: r.description ?? `CLIN ${r.clinNumber}`,
+      name: r.description ?? `CLIN ${r.clinNumber}`,
       clinId: r.id, clinNumber: r.clinNumber, isIndirect: false, kind: 'clin' as const, assignable: false,
     }));
   const extraIndirect: ChargeCode[] = indirectIds.length === 0 ? [] : (await db
     .select().from(indirectChargeCodes).where(inArray(indirectChargeCodes.id, indirectIds)).orderBy(indirectChargeCodes.category, indirectChargeCodes.code))
     .map((r) => ({
-      id: r.id, projectName: INDIRECT_CATEGORY_LABELS[r.category] ?? r.category, clin: r.code, description: r.description ?? r.name,
+      id: r.id, projectName: INDIRECT_CATEGORY_LABELS[r.category] ?? r.category, clin: r.code, description: r.description ?? r.name, name: r.name,
       isIndirect: true, indirectCategory: r.category, kind: 'indirect' as const, assignable: false,
     }));
 

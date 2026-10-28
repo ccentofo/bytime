@@ -7,6 +7,7 @@ import { DailyNoteModal } from '@/components/timesheet/DailyNoteModal';
 import { PayPeriodSelector } from '@/components/timesheet/PayPeriodSelector';
 import { TimesheetToolbar } from '@/components/timesheet/TimesheetToolbar';
 import type { TimesheetPageData } from '@/types/timesheet';
+import type { EmployeeDashboardData } from '@/server/actions/employee-dashboard';
 import { TimesheetDashboard } from '@/components/timesheet/TimesheetDashboard';
 
 function TimesheetContent() {
@@ -39,14 +40,16 @@ function TimesheetContent() {
 
 type Props = {
   initialData: TimesheetPageData;
+  /** The old dashboard, until the page layout step removes it (§12 step 5). */
+  dashboardData?: EmployeeDashboardData;
 };
 
-export function BiWeeklyTimesheetClient({ initialData }: Props) {
+export function BiWeeklyTimesheetClient({ initialData, dashboardData }: Props) {
   return (
     <>
-      {initialData.dashboardData && (
+      {dashboardData && (
         <Container fluid px="md" pt="xl">
-          <TimesheetDashboard data={initialData.dashboardData} />
+          <TimesheetDashboard data={dashboardData} />
         </Container>
       )}
       <TimesheetProvider initialData={initialData}>

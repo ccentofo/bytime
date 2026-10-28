@@ -1,13 +1,18 @@
 'use client';
 
-import React, { createContext, useContext, useReducer, useCallback, useMemo, useEffect, useRef } from 'react';
-import { notifications } from '@mantine/notifications';
-import type { TimesheetState, TimesheetAction, TimesheetPageData, DirtyCell, SavedNote } from '@/types/timesheet';
-import { addDays, isBefore, type CalendarDate } from '@/lib/calendar-date';
+import React, { createContext, useContext, useReducer, useCallback, useMemo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
+import type { TimesheetState, TimesheetAction, TimesheetPageData, DirtyCell, SavedNote, LoadGen, TimesheetPeriodData } from '@/types/timesheet';
+import { addDays, formatCalendarDate, isBefore, type CalendarDate } from '@/lib/calendar-date';
 import { saveTimesheetBatch, getTimesheetPeriod } from '@/server/actions/timesheet';
 import { submitPeriod, getWorkspaceContext } from '@/server/actions/periods';
 import { runAction, type RunResult } from '@/lib/run-action';
 import { getNeighborPeriod } from '@/server/actions/pay-period-config';
+import { quietToast } from '@/lib/timesheet/toast';
+import { AnnouncerProvider, useAnnounce } from '@/components/timesheet/TimesheetAnnouncer';
+import { ReasonModal } from '@/components/timesheet/ReasonModal';
+import { SubmitModal } from '@/components/timesheet/SubmitModal';
+import { useSubmitChecks, type SubmitChecks } from '@/components/timesheet/useSubmitChecks';
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -34,6 +39,19 @@ export function dirtyNotesOf(notes: Record<string, string>, savedNotes: Record<s
   return out;
 }
 
+const copyEntries = (entries: TimesheetState['entries']) => entries.map((e) => ({ ...e, hours: [...e.hours] }));
+const isStale = (state: TimesheetState, gen: LoadGen | undefined) => gen !== undefined && (gen.loadGen !== state.loadGen || gen.syncGen !== state.syncGen);
+
+/** The state before any period is applied (the initializer runs SET_PERIOD_DATA on it). */
+const EMPTY_PERIOD: Omit<TimesheetState, 'userId' | 'today' | 'readOnly' | 'flsaExempt'> = {
+  periodStart: '1970-01-01' as CalendarDate, periodEnd: '1970-01-01' as CalendarDate, numDays: 0,
+  periodConfig: { periodType: 'semimonthly', anchorDate: '1970-01-01' as CalendarDate, weekStartDay: 1 },
+  chargeCodes: [], entries: [], savedEntries: [], savedCellRevisions: {}, periodStatus: 'draft', approvalBadge: null,
+  notes: {}, savedNotes: {}, reviewComment: null, summary: null, submitOpensOn: '1970-01-01' as CalendarDate,
+  workweekStartDay: null, outsideWeekHours: {}, userCreatedOn: '1970-01-01' as CalendarDate, isCurrent: false,
+  submittedOn: null, reviewedOn: null, isSaving: false, isLoadingPeriod: false, syncGen: 0, loadGen: 0, activeNoteCell: null,
+};
+
 /** Exported for tests (fix round 1, F8). */
 export function timesheetReducer(
   state: TimesheetState,
@@ -52,21 +70,11 @@ export function timesheetReducer(
 
     case 'SET_NOTE': {
       const key = `${action.chargeCodeId}-${action.dayIndex}`;
-      return {
-        ...state,
-        notes: { ...state.notes, [key]: action.body },
-      };
+      return { ...state, notes: { ...state.notes, [key]: action.body } };
     }
 
     case 'OPEN_NOTE_MODAL': {
-      return {
-        ...state,
-        activeNoteCell: {
-          chargeCodeId: action.chargeCodeId,
-          dayIndex: action.dayIndex,
-          editable: action.editable,
-        },
-      };
+      return { ...state, activeNoteCell: { chargeCodeId: action.chargeCodeId, dayIndex: action.dayIndex, editable: action.editable } };
     }
 
     case 'CLOSE_NOTE_MODAL': {
@@ -74,33 +82,53 @@ export function timesheetReducer(
     }
 
     case 'BEGIN_PERIOD_LOAD': {
-      // Keep showing the current period (read-only while loading) until the server returns the
-      // new one. The client never guesses the next period itself.
-      return { ...state, isLoadingPeriod: true };
+      // Keep showing the current period until the server returns the new one; a newer load supersedes this one.
+      return { ...state, isLoadingPeriod: true, loadGen: state.loadGen + 1 };
     }
 
     case 'PERIOD_LOAD_FAILED': {
+      if (isStale(state, action.gen)) return state;
       return { ...state, isLoadingPeriod: false };
     }
 
+    case 'SET_PAGE_CONTEXT': {
+      // feature-plan-ux-timesheet-ui.md §4.4: the only way the page context changes.
+      if (isStale(state, action.gen)) return state;
+      return { ...state, today: action.today, readOnly: action.readOnly, flsaExempt: action.flsaExempt ?? state.flsaExempt };
+    }
+
     case 'SET_PERIOD_DATA': {
+      // A load that a newer load or a re-sync superseded is ignored (latest wins, §4.4). Page context never changes here.
+      if (isStale(state, action.gen)) return state;
+      const notes = action.notes ?? {};
       return {
         ...state,
         periodStart: action.periodStart,
+        periodEnd: addDays(action.periodStart, action.numDays - 1),
         numDays: action.numDays,
-        entries: action.entries,
-        savedEntries: action.entries.map((e) => ({ ...e, hours: [...e.hours] })),
-        savedCellRevisions: action.revisions,
-        // UX-3 A4.9: the period's saved notes become both the working copy and the baseline.
-        notes: noteBodies(action.notes ?? {}),
-        savedNotes: action.notes ?? {},
-        isCurrent: action.isCurrent ?? false,
-        periodStatus: action.periodStatus,
-        approvalBadge: action.approvalBadge ?? null,
+        periodConfig: action.periodConfig,
         // certified-outputs C4: each period has its own code list (assignable ∪ codes with recorded hours).
         chargeCodes: action.chargeCodes,
-        periodConfig: action.periodConfig,
+        entries: action.entries,
+        savedEntries: copyEntries(action.entries),
+        savedCellRevisions: action.revisions,
+        periodStatus: action.periodStatus,
+        approvalBadge: action.approvalBadge ?? null,
+        // UX-3 A4.9: the period's saved notes become both the working copy and the baseline.
+        notes: noteBodies(notes),
+        savedNotes: notes,
+        reviewComment: action.reviewComment ?? null,
+        summary: action.summary ?? null,
+        submitOpensOn: action.submitOpensOn,
+        workweekStartDay: action.workweekStartDay ?? null,
+        outsideWeekHours: action.outsideWeekHours ?? {},
+        userCreatedOn: action.userCreatedOn,
+        isCurrent: action.isCurrent ?? false,
+        submittedOn: action.submittedOn ?? null,
+        reviewedOn: action.reviewedOn ?? null,
         isLoadingPeriod: false,
+        syncGen: action.resync ? state.syncGen + 1 : state.syncGen,
+        activeNoteCell: null,
       };
     }
 
@@ -109,9 +137,9 @@ export function timesheetReducer(
     }
 
     case 'MARK_SAVED': {
-      // A save that finishes after the user moved to another period must not touch that
-      // period's baseline: revision keys (`code-dayIndex`) don't say which period they're for.
-      if (action.periodStart !== state.periodStart) return { ...state, isSaving: false };
+      // A save that finishes after the user moved to another period — or after a re-sync replaced the data — must not
+      // touch the baseline: revision keys (`code-dayIndex`) don't say which period they're for.
+      if (action.periodStart !== state.periodStart || action.syncGen !== state.syncGen) return { ...state, isSaving: false };
       // UX-3 A4.9: the baseline moves for every note that was SENT — to the trimmed body, at the server's new revision
       // when it wrote one (a no-op keeps the previous revision). A cleared note stays as { body: '', revision }.
       const savedNotes = { ...state.savedNotes };
@@ -120,7 +148,7 @@ export function timesheetReducer(
       }
       return {
         ...state,
-        savedEntries: action.entries.map((e) => ({ ...e, hours: [...e.hours] })),
+        savedEntries: copyEntries(action.entries),
         savedCellRevisions: { ...state.savedCellRevisions, ...action.revisions },
         savedNotes,
         isSaving: false,
@@ -128,15 +156,17 @@ export function timesheetReducer(
     }
 
     case 'DISCARD_CHANGES': {
-      return {
-        ...state,
-        entries: state.savedEntries.map((e) => ({ ...e, hours: [...e.hours] })),
-        notes: noteBodies(state.savedNotes),
-      };
+      return { ...state, entries: copyEntries(state.savedEntries), notes: noteBodies(state.savedNotes) };
     }
 
     case 'SET_PERIOD_STATUS': {
-      return { ...state, periodStatus: action.status, approvalBadge: null };
+      // Right after a submit in this session the submitted date is the workspace's today (§4.1).
+      return {
+        ...state,
+        periodStatus: action.status,
+        approvalBadge: null,
+        submittedOn: action.status === 'submitted' ? state.today : state.submittedOn,
+      };
     }
 
     case 'SET_TODAY': {
@@ -148,30 +178,49 @@ export function timesheetReducer(
   }
 }
 
+/** The page context of `initialData` (§4.4). */
+export function pageContextOf(d: TimesheetPageData): Pick<TimesheetState, 'userId' | 'today' | 'readOnly' | 'flsaExempt'> {
+  return { userId: d.userId, today: d.today, readOnly: d.readOnly, flsaExempt: d.flsaExempt };
+}
+
+/** The initial state: the page context, then the period applied by the same SET_PERIOD_DATA as every later load. */
+export function initialTimesheetState(d: TimesheetPageData): TimesheetState {
+  return timesheetReducer({ ...EMPTY_PERIOD, ...pageContextOf(d) }, { type: 'SET_PERIOD_DATA', ...d.period });
+}
+
 // ---------------------------------------------------------------------------
-// Context
+// Contexts (feature-plan-ux-timesheet-ui.md §4.4: dispatch lives in its own context)
 // ---------------------------------------------------------------------------
 
-interface TimesheetContextValue {
+export interface TimesheetStateValue {
   state: TimesheetState;
-  dispatch: React.Dispatch<TimesheetAction>;
   dirtyCells: DirtyCell[];
-  /** UX-3 A4.9: unsaved notes (Save/Discard enable on cells + notes; Submit is blocked while any is dirty). */
+  /** UX-3 A4.9: unsaved notes (they count toward Save/Discard and block Submit). */
   dirtyNotes: DirtyNote[];
+  hasUnsaved: boolean;
+  unsavedCount: number;
   hasEdits: boolean;        // true if any dirty cell has a prior revision (isEdit=true)
   hasLateEntries: boolean;  // true if any dirty cell is a late first-time entry
+  checks: SubmitChecks;
+}
+
+export interface TimesheetActionsValue {
+  /** Save every unsaved change (ReasonModal when hours need a reason). Resolves true when nothing is left unsaved. */
+  requestSave: () => Promise<boolean>;
   /** Resolves to the save's result — never throws. MARK_SAVED happens only on `ok` (launch-blockers P4). */
   saveAll: (changeReasonCode?: string, comment?: string) => Promise<RunResult<void>>;
   loadPeriod: (direction: 'prev' | 'next') => Promise<void>;
   loadPeriodByDate: (periodStart: CalendarDate) => Promise<void>;
   discardChanges: () => void;
+  /** Opens SubmitModal (certification). */
+  openSubmit: () => void;
   /** Resolves to the submit's result — never throws. The status becomes 'submitted' only on `ok`. */
   submitTimesheet: (comment?: string) => Promise<RunResult<void>>;
 }
 
-const TimesheetContext = createContext<TimesheetContextValue | undefined>(
-  undefined
-);
+const StateContext = createContext<TimesheetStateValue | undefined>(undefined);
+const DispatchContext = createContext<React.Dispatch<TimesheetAction> | undefined>(undefined);
+const ActionsContext = createContext<TimesheetActionsValue | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
 // Provider
@@ -190,30 +239,16 @@ export function cellRefForKind(kind: 'charge' | 'clin' | 'indirect', id: string)
 }
 
 export function TimesheetProvider({ initialData, children }: ProviderProps) {
-  const initialState: TimesheetState = {
-    chargeCodes: initialData.chargeCodes,
-    entries: initialData.entries,
-    savedEntries: initialData.entries.map((e) => ({ ...e, hours: [...e.hours] })),
-    savedCellRevisions: initialData.revisions ?? {},
-    // UX-3 A4.9: notes from the server show on first load.
-    notes: noteBodies(initialData.notes ?? {}),
-    savedNotes: initialData.notes ?? {},
-    isCurrent: initialData.isCurrent ?? false,
-    periodStart: initialData.periodStart,
-    numDays: initialData.numDays,
-    activeNoteCell: null,
-    userId: initialData.userId,
-    isSaving: false,
-    isLoadingPeriod: false,
-    periodStatus: initialData.periodStatus ?? 'draft',
-    approvalBadge: initialData.approvalBadge ?? null,
-    flsaExempt: initialData.flsaExempt ?? false,
-    periodConfig: initialData.periodConfig,
-    today: initialData.today,
-    readOnly: initialData.readOnly,
-  };
+  return (
+    <AnnouncerProvider>
+      <TimesheetStateProvider initialData={initialData}>{children}</TimesheetStateProvider>
+    </AnnouncerProvider>
+  );
+}
 
-  const [state, dispatch] = useReducer(timesheetReducer, initialState);
+function TimesheetStateProvider({ initialData, children }: ProviderProps) {
+  const [state, dispatch] = useReducer(timesheetReducer, initialData, initialTimesheetState);
+  const announce = useAnnounce();
 
   // Compute dirty cells by comparing entries to savedEntries
   const dirtyCells = useMemo<DirtyCell[]>(() => {
@@ -234,13 +269,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
           // to dodge the late-entry rule); this is advisory for the UI only, saveTimesheetBatch
           // re-derives it authoritatively server-side.
           const isLateEntry = !isEdit && saved === 0 && current > 0 && isBefore(cellDate, state.today);
-          dirty.push({
-            chargeCodeId: entry.chargeCodeId,
-            dayIndex: i,
-            hours: current,
-            isEdit,
-            isLateEntry,
-          });
+          dirty.push({ chargeCodeId: entry.chargeCodeId, dayIndex: i, hours: current, isEdit, isLateEntry });
         }
       }
     }
@@ -248,10 +277,11 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
   }, [state.entries, state.savedEntries, state.savedCellRevisions, state.periodStart, state.today]);
 
   const dirtyNotes = useMemo(() => dirtyNotesOf(state.notes, state.savedNotes), [state.notes, state.savedNotes]);
-
-  // Are any dirty cells edits to previously-saved data?
   const hasEdits = useMemo(() => dirtyCells.some((c) => c.isEdit), [dirtyCells]);
   const hasLateEntries = useMemo(() => dirtyCells.some((c) => c.isLateEntry), [dirtyCells]);
+  const unsavedCount = dirtyCells.length + dirtyNotes.length;
+  const hasUnsaved = unsavedCount > 0;
+  const checks = useSubmitChecks(state);
 
   const saveAll = useCallback(
     async (changeReasonCode?: string, comment?: string): Promise<RunResult<void>> => {
@@ -263,11 +293,13 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
       };
       // The notes sent, each with the revision it was based on; the baseline moves only for these.
       const sentNotes = Object.fromEntries(dirtyNotes.map((n) => [n.key, n.body]));
+      const sentEntries = state.entries;
+      const { periodStart, syncGen } = state;
 
       dispatch({ type: 'SET_SAVING', isSaving: true });
-      // silent: the toolbar shows the server's message itself.
+      // silent: the save flow shows the server's message itself.
       const result = await runAction(saveTimesheetBatch({
-        periodStart: state.periodStart,
+        periodStart,
         cells: dirtyCells.map((c) => {
           const chargeCode = state.chargeCodes.find((cc) => cc.id === c.chargeCodeId);
           const revisionKey = `${c.chargeCodeId}-${c.dayIndex}`;
@@ -293,83 +325,157 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
       }), { silent: true });
 
       if (!result.ok) {
-        // Nothing was saved: keep the unsaved changes (dirty cells) exactly as they are.
+        // Nothing was saved: keep the unsaved changes exactly as they are.
         dispatch({ type: 'SET_SAVING', isSaving: false });
         return result;
       }
 
-      // Only a confirmed save moves the saved snapshot.
-      dispatch({
+      // Only a confirmed save moves the saved snapshot — committed synchronously (trap T-N), so the save flow's re-check
+      // after this sees the new baseline.
+      flushSync(() => dispatch({
         type: 'MARK_SAVED',
-        periodStart: state.periodStart,
-        entries: state.entries,
+        periodStart,
+        syncGen,
+        entries: sentEntries,
         revisions: result.data.revisions,
         sentNotes,
         noteRevisions: result.data.noteRevisions,
-      });
+      }));
       return { ok: true, data: undefined };
     },
-    [dirtyCells, dirtyNotes, state.periodStart, state.entries, state.chargeCodes, state.savedCellRevisions, state.savedNotes]
+    [dirtyCells, dirtyNotes, state],
   );
 
-  // Each load gets a sequence number; a response that arrives after a newer load started is
-  // dropped, so out-of-order responses can never show (or save against) the wrong period.
-  const loadSeq = useRef(0);
+  // ── useSaveFlow (§4.4). Refs are used only because an await intervenes; they're updated in layout effects.
+  const saveAllRef = useRef(saveAll);
+  const flowRef = useRef({ hasUnsaved, needsReason: hasEdits || hasLateEntries, unsavedCount });
+  useLayoutEffect(() => {
+    saveAllRef.current = saveAll;
+    flowRef.current = { hasUnsaved, needsReason: hasEdits || hasLateEntries, unsavedCount };
+  });
+  const runningRef = useRef<Promise<boolean> | null>(null);
+  const [reasonOpen, setReasonOpen] = useState(false);
+  const reasonResolveRef = useRef<((ok: boolean) => void) | null>(null);
+
+  const failSave = useCallback((error: string) => {
+    announce(error, 'assertive');
+    quietToast({ title: 'Save failed', message: error, color: 'red', error: true });
+  }, [announce]);
+
+  /** One save, with the ReasonModal when hours need a reason. Resolves true on success, false on cancel or failure. */
+  const saveOnce = useCallback(async (): Promise<boolean> => {
+    if (!flowRef.current.needsReason) {
+      const result = await saveAllRef.current();
+      if (!result.ok) { failSave(result.error); return false; }
+      return true;
+    }
+    // A failed save keeps the ReasonModal open for a retry; the promise settles on success or Cancel.
+    return new Promise<boolean>((resolve) => {
+      reasonResolveRef.current = resolve;
+      setReasonOpen(true);
+    });
+  }, [failSave]);
+
+  const handleReasonConfirm = useCallback(async (reasonCode: string, comment: string) => {
+    const result = await saveAllRef.current(reasonCode, comment);
+    if (!result.ok) { failSave(result.error); return; }
+    setReasonOpen(false);
+    reasonResolveRef.current?.(true);
+    reasonResolveRef.current = null;
+  }, [failSave]);
+
+  const handleReasonCancel = useCallback(() => {
+    setReasonOpen(false);
+    reasonResolveRef.current?.(false);
+    reasonResolveRef.current = null;
+  }, []);
+
+  const requestSave = useCallback((): Promise<boolean> => {
+    // A save already running is awaited first; then the same re-check applies (saves are serialized).
+    const run = (runningRef.current ?? Promise.resolve(true)).then(async () => {
+      let saved = 0;
+      // Edits made during a save are saved again before resolving (bounded, so a failing loop can't spin).
+      for (let round = 0; round < 5 && flowRef.current.hasUnsaved; round++) {
+        const count = flowRef.current.unsavedCount;
+        if (!(await saveOnce())) return false;
+        saved += count;
+      }
+      if (saved > 0) {
+        const message = saved === 1 ? 'Saved' : `${saved} changes saved`;
+        announce(message);
+        quietToast({ title: 'Timesheet saved', message: saved === 1 ? '1 change saved.' : `${saved} changes saved.`, color: 'success' });
+      }
+      return !flowRef.current.hasUnsaved;
+    });
+    runningRef.current = run;
+    void run.finally(() => { if (runningRef.current === run) runningRef.current = null; });
+    return run;
+  }, [saveOnce, announce]);
+
+  // ── Period loads: the latest load wins (loadGen), and a re-sync supersedes any load in flight (syncGen).
+  const genRef = useRef<LoadGen>({ loadGen: state.loadGen, syncGen: state.syncGen });
+  useLayoutEffect(() => { genRef.current = { loadGen: state.loadGen, syncGen: state.syncGen }; });
 
   const showPeriod = useCallback(
     async (resolveStart: () => Promise<CalendarDate>) => {
-      const seq = ++loadSeq.current;
-      dispatch({ type: 'BEGIN_PERIOD_LOAD' });
+      flushSync(() => dispatch({ type: 'BEGIN_PERIOD_LOAD' }));
+      const gen = { ...genRef.current };
       try {
-        const period = await getTimesheetPeriod(await resolveStart());
-        if (seq !== loadSeq.current) return;
-
+        const period: TimesheetPeriodData = await getTimesheetPeriod(await resolveStart());
+        dispatch({ type: 'SET_PAGE_CONTEXT', today: period.today, readOnly: period.readOnly, gen });
         // F8: SET_PERIOD_DATA replaces the code list with THIS period's (never the one being left).
-        dispatch({ type: 'SET_PERIOD_DATA', ...period });
+        dispatch({ type: 'SET_PERIOD_DATA', ...period, gen });
       } catch (error) {
-        if (seq !== loadSeq.current) return;
-        // Stay on the current period rather than showing cached data of unknown freshness.
         console.error('Failed to load pay period:', error);
-        dispatch({ type: 'PERIOD_LOAD_FAILED' });
-        notifications.show({
-          title: 'Could not load that pay period',
-          message: 'Check your connection and try again.',
-          color: 'red',
-        });
+        dispatch({ type: 'PERIOD_LOAD_FAILED', gen });
+        if (gen.loadGen === genRef.current.loadGen && gen.syncGen === genRef.current.syncGen) {
+          announce('Could not load that pay period. Check your connection and try again.', 'assertive');
+          quietToast({ title: 'Could not load that pay period', message: 'Check your connection and try again.', color: 'red', error: true });
+        }
       }
     },
-    []
+    [announce],
   );
 
   const loadPeriod = useCallback(
     (direction: 'prev' | 'next') =>
       showPeriod(async () => (await getNeighborPeriod(state.periodStart, direction)).periodStart),
-    [showPeriod, state.periodStart]
+    [showPeriod, state.periodStart],
   );
 
-  const loadPeriodByDate = useCallback(
-    (periodStart: CalendarDate) => showPeriod(async () => periodStart),
-    [showPeriod]
-  );
+  const loadPeriodByDate = useCallback((periodStart: CalendarDate) => showPeriod(async () => periodStart), [showPeriod]);
 
   const discardChanges = useCallback(() => {
-    dispatch({ type: 'DISCARD_CHANGES' });
+    flushSync(() => dispatch({ type: 'DISCARD_CHANGES' }));
   }, []);
 
   const submitTimesheet = useCallback(
     async (comment?: string): Promise<RunResult<void>> => {
       dispatch({ type: 'SET_SAVING', isSaving: true });
-      const result = await runAction(submitPeriod({
-        periodStart: state.periodStart,
-        comment,
-      }), { silent: true });
+      const result = await runAction(submitPeriod({ periodStart: state.periodStart, comment }), { silent: true });
       // Only a confirmed submission changes the status.
       if (result.ok) dispatch({ type: 'SET_PERIOD_STATUS', status: 'submitted' });
       dispatch({ type: 'SET_SAVING', isSaving: false });
       return result.ok ? { ok: true, data: undefined } : result;
     },
-    [state.periodStart]
+    [state.periodStart],
   );
+
+  const [submitOpen, setSubmitOpen] = useState(false);
+  const openSubmit = useCallback(() => setSubmitOpen(true), []);
+  const periodLabel = `${formatCalendarDate(state.periodStart, 'MMM D')} – ${formatCalendarDate(state.periodEnd, 'MMM D, YYYY')}`;
+
+  async function handleSubmitConfirm(comment?: string) {
+    const result = await submitTimesheet(comment);
+    if (!result.ok) {
+      announce(result.error, 'assertive');
+      quietToast({ title: 'Submit failed', message: result.error, color: 'red', error: true });
+      return;
+    }
+    setSubmitOpen(false);
+    announce('Submitted');
+    quietToast({ title: 'Timesheet submitted', message: `Your timesheet for ${periodLabel} has been submitted for supervisor review.`, color: 'signal' });
+  }
 
   // D4: re-ask the server for "today" on focus and every few minutes, so a tab left open
   // overnight (or across a timezone's midnight) rolls its late/future-date flags over correctly
@@ -391,23 +497,70 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
     };
   }, []);
 
+  const stateValue = useMemo<TimesheetStateValue>(
+    () => ({ state, dirtyCells, dirtyNotes, hasUnsaved, unsavedCount, hasEdits, hasLateEntries, checks }),
+    [state, dirtyCells, dirtyNotes, hasUnsaved, unsavedCount, hasEdits, hasLateEntries, checks],
+  );
+  const actionsValue = useMemo<TimesheetActionsValue>(
+    () => ({ requestSave, saveAll, loadPeriod, loadPeriodByDate, discardChanges, openSubmit, submitTimesheet }),
+    [requestSave, saveAll, loadPeriod, loadPeriodByDate, discardChanges, openSubmit, submitTimesheet],
+  );
+
   return (
-    <TimesheetContext.Provider
-      value={{ state, dispatch, dirtyCells, dirtyNotes, hasEdits, hasLateEntries, saveAll, loadPeriod, loadPeriodByDate, discardChanges, submitTimesheet }}
-    >
-      {children}
-    </TimesheetContext.Provider>
+    <DispatchContext.Provider value={dispatch}>
+      <ActionsContext.Provider value={actionsValue}>
+        <StateContext.Provider value={stateValue}>
+          {children}
+          <ReasonModal
+            opened={reasonOpen}
+            onClose={handleReasonCancel}
+            onConfirm={handleReasonConfirm}
+            editedCells={dirtyCells.filter((c) => c.isEdit)}
+            lateEntryCells={dirtyCells.filter((c) => c.isLateEntry)}
+            chargeCodes={state.chargeCodes}
+            periodStart={state.periodStart}
+            isSaving={state.isSaving}
+          />
+          <SubmitModal
+            opened={submitOpen}
+            onClose={() => setSubmitOpen(false)}
+            onConfirm={handleSubmitConfirm}
+            isSaving={state.isSaving}
+            periodLabel={periodLabel}
+            flsaExempt={state.flsaExempt}
+            totalPeriodHours={checks.totalPeriodHours}
+            uncompensatedHours={checks.uncompensatedHours}
+            completenessWarnings={checks.completenessWarnings}
+          />
+        </StateContext.Provider>
+      </ActionsContext.Provider>
+    </DispatchContext.Provider>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Custom hook
+// Hooks
 // ---------------------------------------------------------------------------
 
-export function useTimesheet(): TimesheetContextValue {
-  const ctx = useContext(TimesheetContext);
-  if (!ctx) {
-    throw new Error('useTimesheet must be used within a <TimesheetProvider>');
-  }
+export function useTimesheetState(): TimesheetStateValue {
+  const ctx = useContext(StateContext);
+  if (!ctx) throw new Error('useTimesheetState must be used within a <TimesheetProvider>');
   return ctx;
+}
+
+export function useTimesheetDispatch(): React.Dispatch<TimesheetAction> {
+  const ctx = useContext(DispatchContext);
+  if (!ctx) throw new Error('useTimesheetDispatch must be used within a <TimesheetProvider>');
+  return ctx;
+}
+
+export function useTimesheetActions(): TimesheetActionsValue {
+  const ctx = useContext(ActionsContext);
+  if (!ctx) throw new Error('useTimesheetActions must be used within a <TimesheetProvider>');
+  return ctx;
+}
+
+/** Everything at once (state, dispatch and actions) — for components that need all three. */
+export function useTimesheet(): TimesheetStateValue & TimesheetActionsValue & { dispatch: React.Dispatch<TimesheetAction> } {
+  return { ...useTimesheetState(), ...useTimesheetActions(), dispatch: useTimesheetDispatch() };
 }

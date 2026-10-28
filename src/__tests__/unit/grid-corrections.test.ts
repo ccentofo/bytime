@@ -42,7 +42,8 @@ import { chargeCodes, indirectChargeCodes, timesheetEntries, userChargeCodes } f
 import type { FakeControlDb } from '../helpers/fake-control-db';
 import { saveTimesheetBatch } from '@/server/actions/timesheet';
 import { isCellEditable, newCellRefusal } from '@/lib/timesheet/cell-rules';
-import { cellRefForKind, timesheetReducer } from '@/components/timesheet/TimesheetContext';
+import { cellRefForKind, initialTimesheetState, timesheetReducer } from '@/components/timesheet/TimesheetContext';
+import { chargeCode, pageData, periodData } from '../helpers/timesheet-fixtures';
 
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
 const ROOT = path.resolve(__dirname, '../../..');
@@ -189,18 +190,12 @@ describe('saveTimesheetBatch — per cell, inside the transaction, after the pri
 
 describe('F8 — navigation replaces the code list', () => {
   it('SET_PERIOD_DATA replaces chargeCodes with the new period\'s list (no fallback to the old one)', () => {
-    const old = [{ id: 'a', projectName: 'P', clin: 'A', description: 'A', kind: 'charge', assignable: true }];
-    const next = [{ id: 'b', projectName: 'P', clin: 'B', description: 'B', kind: 'charge', assignable: false }];
-    const state = { chargeCodes: old, entries: [], savedEntries: [], savedCellRevisions: {}, notes: {} } as never;
-    const out = timesheetReducer(state, {
-      type: 'SET_PERIOD_DATA', periodStart: '2026-10-16' as never, numDays: 16, entries: [], revisions: {}, periodStatus: 'draft',
-      periodConfig: { periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1 } as never, chargeCodes: next as never,
-    }) as unknown as { chargeCodes: unknown };
+    const old = [chargeCode({ id: 'a', clin: 'A', description: 'A', name: 'A' })];
+    const next = [chargeCode({ id: 'b', clin: 'B', description: 'B', name: 'B', assignable: false })];
+    const state = initialTimesheetState(pageData({ chargeCodes: old }));
+    const out = timesheetReducer(state, { type: 'SET_PERIOD_DATA', ...periodData({ periodStart: '2026-10-16' as never, numDays: 16, entries: [], chargeCodes: next }) });
     expect(out.chargeCodes).toBe(next);
-    const empty = timesheetReducer(state, {
-      type: 'SET_PERIOD_DATA', periodStart: '2026-10-16' as never, numDays: 16, entries: [], revisions: {}, periodStatus: 'draft',
-      periodConfig: { periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1 } as never, chargeCodes: [],
-    }) as unknown as { chargeCodes: unknown[] };
+    const empty = timesheetReducer(state, { type: 'SET_PERIOD_DATA', ...periodData({ periodStart: '2026-10-16' as never, numDays: 16, entries: [], chargeCodes: [] }) });
     expect(empty.chargeCodes).toEqual([]);
   });
 });
@@ -221,7 +216,8 @@ describe('save mapping by kind', () => {
     expect(ctx).toMatch(/chargeCodes: action\.chargeCodes,/);
     expect(ctx).not.toMatch(/chargeCodes: state\.chargeCodes/);
     expect(ctx).toMatch(/\.\.\.cellRefForKind\(chargeCode\?\.kind/);
-    expect(readFileSync(path.join(ROOT, 'src/app/(app)/timesheet/page.tsx'), 'utf8')).toMatch(/chargeCodes: period\.chargeCodes,/);
+    // UX-3 Part B §4.4: the page passes the WHOLE period (its own code list included) as initialData.period.
+    expect(readFileSync(path.join(ROOT, 'src/app/(app)/timesheet/page.tsx'), 'utf8')).toMatch(/\n\s+period,\n/);
     const ts = readFileSync(path.join(ROOT, 'src/server/actions/timesheet.ts'), 'utf8');
     const save = ts.slice(ts.indexOf('export async function saveTimesheetBatch'));
     const tx = save.slice(save.indexOf('await db.transaction(async (tx) => {'));
