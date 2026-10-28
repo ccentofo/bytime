@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type MouseEvent } from 'react';
-import { Button } from '@mantine/core';
+import { Button, SegmentedControl, Select } from '@mantine/core';
+import { useMediaQuery } from '@mantine/hooks';
 import { useGridRef } from '@/components/timesheet/NoteModal';
 import { Icons } from '@/components/ui/icons';
 import { flushSync } from 'react-dom';
@@ -49,7 +50,9 @@ export function TimesheetGrid() {
   const dispatch = useTimesheetDispatch();
   const announce = useAnnounce();
   const gridId = useId();
-  const { chargeCodes, entries, savedEntries, savedCellRevisions, periodStart, periodEnd, numDays, today, notes, userCreatedOn, periodStatus, readOnly, isLoadingPeriod, syncGen } = state;
+  const { chargeCodes, entries, savedEntries, savedCellRevisions, periodStart, periodEnd, numDays, today, notes, userCreatedOn, periodStatus, readOnly, isLoadingPeriod, syncGen, workweekStartDay } = state;
+  // Week view below 40em (§4.7): the first paint is the full grid (useMediaQuery reads in an effect), then it switches.
+  const narrow = useMediaQuery('(max-width: 40em)', false) ?? false;
   const periodEditable = (periodStatus === 'draft' || periodStatus === 'rejected') && !readOnly && !isLoadingPeriod;
   const locked = periodStatus === 'submitted' || periodStatus === 'approved';
 
@@ -80,21 +83,37 @@ export function TimesheetGrid() {
   }, [chargeCodes, entries, savedEntries, numDays]);
 
   const dirty = useMemo(() => new Set(dirtyCells.map((c) => `${c.chargeCodeId}-${c.dayIndex}`)), [dirtyCells]);
-  const visibleDays = useMemo(() => Array.from({ length: numDays }, (_, d) => d), [numDays]);
+  const allDays = useMemo(() => Array.from({ length: numDays }, (_, d) => d), [numDays]);
+  // Weeks aligned to the workspace workweek (Sunday when unset), clipped to the period; day indexes are PERIOD indexes.
+  const weeks = useMemo(() => {
+    const out: number[][] = [];
+    for (const d of allDays) {
+      const startsWeek = d === 0 || dayOfWeek(addDays(periodStart, d)) === (workweekStartDay ?? 0);
+      if (startsWeek) out.push([]);
+      out[out.length - 1].push(d);
+    }
+    return out;
+  }, [allDays, periodStart, workweekStartDay]);
+  const weekOf = (d: number) => Math.max(0, weeks.findIndex((w) => w.includes(d)));
   const bodyCount = rows.size;
   const todayOffset = diffDays(periodStart, today);
   const todayIndex = todayOffset >= 0 && todayOffset < numDays ? todayOffset : null;
 
   // ── Grid-local state (§4.3).
-  const [requested, setRequested] = useState<Pos>(() => initialPos(bodyCount, visibleDays, todayIndex));
+  const [requested, setRequested] = useState<Pos>(() => initialPos(bodyCount, allDays, todayIndex));
+  // The selected week follows the active DAY; it stays put while the active column is the row header or the total.
+  const [week, setWeek] = useState(() => (todayIndex !== null ? weekOf(todayIndex) : 0));
+  const requestedWeek = typeof requested.c === 'number' ? weekOf(Math.min(requested.c, numDays - 1)) : Math.min(week, weeks.length - 1);
+  if (requestedWeek !== week) setWeek(requestedWeek);
+  const visibleDays = narrow ? (weeks[requestedWeek] ?? allDays) : allDays;
   const [mode, setMode] = useState<'nav' | 'edit'>('nav');
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [cancelledGen, setCancelledGen] = useState(0);
   const suppressBlurCommit = useRef(false);
 
-  // A period or re-sync change cancels an open edit — during render, with this component's own setState (§4.3).
-  const periodKey = `${periodStart}|${syncGen}`;
+  // A period, re-sync or view change cancels an open edit — during render, with this component's own setState (§4.3).
+  const periodKey = `${periodStart}|${syncGen}|${narrow ? 'week' : 'full'}`;
   const [seenPeriodKey, setSeenPeriodKey] = useState(periodKey);
   if (seenPeriodKey !== periodKey) {
     setSeenPeriodKey(periodKey);
@@ -250,7 +269,14 @@ export function TimesheetGrid() {
       case 'ArrowLeft':
       case 'ArrowRight': {
         e.preventDefault();
-        const next = columns[colIdx + (key === 'ArrowLeft' ? -1 : 1)];
+        const step = key === 'ArrowLeft' ? -1 : 1;
+        // Week view, at a week edge: continue into the adjacent week (stopping at the period edges).
+        if (narrow && typeof active.c === 'number') {
+          const neighbourDay = active.c + step;
+          const atWeekEdge = !visibleDays.includes(neighbourDay);
+          if (atWeekEdge && neighbourDay >= 0 && neighbourDay < numDays) { moveTo(table, { r: active.r, c: neighbourDay }); return; }
+        }
+        const next = columns[colIdx + step];
         if (next !== undefined) moveTo(table, { r: active.r, c: next });
         return;
       }
@@ -264,7 +290,7 @@ export function TimesheetGrid() {
       case 'Home':
       case 'End': {
         e.preventDefault();
-        if (mod) moveTo(table, key === 'Home' ? { r: bodyCount > 0 ? 0 : 'foot', c: visibleDays[0] ?? RH } : { r: 'foot', c: TOTAL });
+        if (mod) moveTo(table, key === 'Home' ? { r: bodyCount > 0 ? 0 : 'foot', c: allDays[0] ?? RH } : { r: 'foot', c: TOTAL });
         else moveTo(table, { r: active.r, c: key === 'Home' ? RH : TOTAL });
         return;
       }
@@ -364,6 +390,11 @@ export function TimesheetGrid() {
   }
 
   const editingKey = mode === 'edit' && activeDay?.editable ? `${activeDay.row.r}:${activeDay.d}` : null;
+  const weekLabel = (w: number[]) => {
+    const first = addDays(periodStart, w[0]);
+    const last = addDays(periodStart, w[w.length - 1]);
+    return w.length === 1 ? formatCalendarDate(first, 'MMM D') : `${formatCalendarDate(first, 'MMM D')} – ${formatCalendarDate(last, first.slice(0, 7) === last.slice(0, 7) ? 'D' : 'MMM D')}`;
+  };
 
   return (
     <div className={styles.gridArea}>
@@ -381,8 +412,27 @@ export function TimesheetGrid() {
         </Button>
         {!activeDay && <span id={`${gridId}-note-why`} className={styles.reason}>Choose a day cell first</span>}
       </div>
+      {narrow && weeks.length > 1 && (
+        weeks.length <= 3 ? (
+          <SegmentedControl
+            aria-label="Week"
+            value={String(requestedWeek)}
+            onChange={(v) => setRequested({ r: active.r, c: weeks[Number(v)][0] })}
+            data={weeks.map((w, i) => ({ value: String(i), label: weekLabel(w) }))}
+          />
+        ) : (
+          <Select
+            label="Week"
+            size="sm"
+            value={String(requestedWeek)}
+            allowDeselect={false}
+            onChange={(v) => { if (v !== null) setRequested({ r: active.r, c: weeks[Number(v)][0] }); }}
+            data={weeks.map((w, i) => ({ value: String(i), label: weekLabel(w) }))}
+          />
+        )
+      )}
       <div className={styles.hint} aria-hidden="true">Arrows move · type a number to enter hours · N adds a note · Esc undoes the cell</div>
-      <div className={styles.scroller} style={{ ['--ts-rh' as string]: 'clamp(9rem, 28vw, 16rem)' }}>
+      <div className={styles.scroller} data-view={narrow ? 'week' : 'full'} style={{ ['--ts-rh' as string]: 'clamp(9rem, 28vw, 16rem)' }}>
         <table role="grid" id={tableId} className={styles.grid} aria-labelledby={`${gridId}-cap`} aria-describedby={`${gridId}-keys`} onKeyDown={handleKeyDown} onClick={handleClick}>
           <caption id={`${gridId}-cap`} className={styles.srOnly}>Hours for {periodWords(periodStart, periodEnd)}, {STATUS_WORD[periodStatus]}</caption>
           <thead>

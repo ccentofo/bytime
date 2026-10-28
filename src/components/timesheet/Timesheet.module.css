@@ -12,8 +12,45 @@
   color: var(--mantine-color-dimmed);
 }
 
+/* Reflow and zoom (feature-plan-ux-timesheet-ui.md §4.7, trap T-G): sticky headers need a height-limited scroller with no
+   overflow: hidden in between; both are lifted on short or narrow viewports (400% zoom, landscape phones). */
+.page {
+  --ts-chrome: 15rem;
+}
+
 .scroller {
   overflow: auto;
+  max-height: max(18rem, calc(100dvh - var(--ts-chrome)));
+  scroll-padding-top: 3.5rem;
+  scroll-padding-left: var(--ts-rh);
+}
+
+.scroller thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.scroller th[scope='row'] {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+.scroller thead th.corner {
+  left: 0;
+  z-index: 3;
+}
+
+@media (max-height: 40em), (max-width: 40em) {
+  .scroller {
+    max-height: none;
+  }
+
+  .scroller thead th,
+  .scroller th[scope='row'] {
+    position: static;
+  }
 }
 
 .grid {

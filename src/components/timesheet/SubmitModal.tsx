@@ -74,7 +74,7 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
                 <Text key={idx} size="sm">• {warning}</Text>
               ))}
             </Stack>
-            <Text size="xs" c="dimmed" mt={8}>
+            <Text size="sm" c="dimmed" mt={8}>
               These warnings are recorded in the audit trail. You may still submit if the gaps are intentional.
             </Text>
           </Alert>
@@ -87,7 +87,7 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
             {(uncompensatedHours ?? 0) > 0 && (
               <Text size="sm">Uncompensated Overtime: <strong>{(uncompensatedHours ?? 0).toFixed(2)} hours</strong></Text>
             )}
-            <Text size="xs" c="dimmed" mt={4}>
+            <Text size="sm" c="dimmed" mt={4}>
               As an FLSA-exempt employee, you are required to record all hours actually worked,
               including any uncompensated overtime, per DCAA total time accounting requirements.
             </Text>
