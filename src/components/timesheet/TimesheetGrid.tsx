@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type MouseEvent } from 'react';
+import { useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type FocusEvent, type KeyboardEvent, type MouseEvent } from 'react';
 import { Button, Select } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
 import { useGridRef } from '@/components/timesheet/NoteModal';
@@ -42,8 +42,8 @@ const TOTALS_CALCULATED = 'Totals are calculated.';
 /**
  * The accessible timesheet grid (feature-plan-ux-timesheet-ui.md §4.2, §4.3): a `<table role="grid">` with one tab stop
  * (the ACTIVE position, derived during render by clamping the requested one), WAI-ARIA data-grid navigation, and one
- * editing input inside the active cell. Handlers are plain per-render closures on the table; the only ref is
- * suppressBlurCommit, written only inside handlers (trap T-M).
+ * editing input inside the active cell. Handlers are plain per-render closures on the table; the refs (suppressBlurCommit,
+ * gridHadFocus) are written only inside handlers (trap T-M).
  */
 export function TimesheetGrid() {
   const { state, dirtyCells } = useTimesheetState();
@@ -111,6 +111,9 @@ export function TimesheetGrid() {
   const [error, setError] = useState<string | null>(null);
   const [cancelledGen, setCancelledGen] = useState(0);
   const suppressBlurCommit = useRef(false);
+  // Whether focus was inside the grid when it last moved (written in the table's focus handlers only). A focused cell or
+  // editor that unmounts fires no blur, so this stays true and the layout effect below can put focus back (M1).
+  const gridHadFocus = useRef(false);
 
   // A period, re-sync or view change cancels an open edit — during render, with this component's own setState (§4.3).
   const periodKey = `${periodStart}|${syncGen}|${narrow ? 'week' : 'full'}`;
@@ -127,6 +130,15 @@ export function TimesheetGrid() {
   useEffect(() => {
     if (cancelledGen > 0) announce('Edit cancelled');
   }, [cancelledGen, announce]);
+
+  // UX-TIMESHEET-B-AUDIT M1 (§3 inv. 4): an edit cancelled by a view switch (resize / zoom across 40em), or a re-sync with
+  // fewer rows, unmounts the focused editor or cell and focus falls to <body>. If the grid held focus, put it back on the
+  // active cell (the one tab stop) before paint.
+  const tableId = `${gridId}-table`;
+  useLayoutEffect(() => {
+    const lost = document.activeElement === null || document.activeElement === document.body;
+    if (gridHadFocus.current && lost) (document.getElementById(tableId)?.querySelector('[tabindex="0"]') as HTMLElement | null)?.focus();
+  }, [cancelledGen, syncGen, narrow, tableId]);
 
   const active = clampPos(requested, bodyCount, visibleDays);
   const isActive = (r: Row, c: Col) => active.r === r && active.c === c;
@@ -168,7 +180,6 @@ export function TimesheetGrid() {
   const openNote = (row: GridRow, d: number) => {
     dispatch({ type: 'OPEN_NOTE_MODAL', chargeCodeId: row.cc.id, dayIndex: d, editable: noteEditable(d) });
   };
-  const tableId = `${gridId}-table`;
   const gridRef = useGridRef();
   useImperativeHandle(gridRef, () => ({
     focusActive: () => {
@@ -387,7 +398,7 @@ export function TimesheetGrid() {
     if (next !== null) { setDraft(next); setError(null); }
   }
 
-  function handleEditorBlur() {
+  function handleEditorBlur(e: FocusEvent<HTMLInputElement>) {
     if (suppressBlurCommit.current) {
       suppressBlurCommit.current = false;
       setMode('nav');
@@ -397,9 +408,21 @@ export function TimesheetGrid() {
     if (!activeDay) { setMode('nav'); return; }
     const committed = commitDraft(activeDay);
     if (!committed.ok) announce(`${draft} isn't valid; restored ${draftOf(activeDay.value) || '0.00'}`, 'assertive');
+    // A window blur (switching apps or tabs) leaves the input the document's active element; once it unmounts focus would
+    // be on <body> when the window comes back. Move it to the cell first — suppressing any blur that move causes (M1).
+    const table = e.currentTarget.closest('table');
+    if (document.activeElement === e.currentTarget && table) {
+      suppressBlurCommit.current = true;
+      focusPos(table, active);
+      suppressBlurCommit.current = false;
+    }
     setMode('nav');
     setError(null);
   }
+
+  // Focus tracking for M1: inside the grid, or moved somewhere else (relatedTarget outside the table, or none).
+  function handleGridFocus() { gridHadFocus.current = true; }
+  function handleGridBlur(e: FocusEvent<HTMLTableElement>) { gridHadFocus.current = e.currentTarget.contains(e.relatedTarget as Node | null); }
 
   const editingKey = mode === 'edit' && activeDay?.editable ? `${activeDay.row.r}:${activeDay.d}` : null;
   const weekLabel = (w: number[]) => {
@@ -437,7 +460,7 @@ export function TimesheetGrid() {
       )}
       <div className={styles.hint} aria-hidden="true">Arrows move · type a number to enter hours · N adds a note · Esc undoes the cell</div>
       <div className={styles.scroller} data-view={narrow ? 'week' : 'full'} style={{ ['--ts-rh' as string]: 'clamp(9rem, 28vw, 16rem)' }}>
-        <table role="grid" id={tableId} className={styles.grid} aria-labelledby={`${gridId}-cap`} aria-describedby={`${gridId}-keys`} onKeyDown={handleKeyDown} onClick={handleClick}>
+        <table role="grid" id={tableId} className={styles.grid} aria-labelledby={`${gridId}-cap`} aria-describedby={`${gridId}-keys`} onKeyDown={handleKeyDown} onClick={handleClick} onFocus={handleGridFocus} onBlur={handleGridBlur}>
           <caption id={`${gridId}-cap`} className={styles.srOnly}>Hours for {periodWords(periodStart, periodEnd)}, {STATUS_WORD[periodStatus]}</caption>
           <thead>
             <tr>

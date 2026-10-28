@@ -23,7 +23,7 @@ vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
 import { TimesheetPage } from '@/components/timesheet/TimesheetClient';
 import { useTimesheetState } from '@/components/timesheet/TimesheetContext';
-import { chargeCode, pageData, periodData } from '../helpers/timesheet-fixtures';
+import { CC2, chargeCode, pageData, periodData } from '../helpers/timesheet-fixtures';
 import { enterGrid, installTimesheetDomStubs, live, renderTimesheet } from '../helpers/timesheet-render';
 import type { CalendarDate } from '@/lib/calendar-date';
 
@@ -148,5 +148,20 @@ describe('generations and re-sync (B-T8, §4.4)', () => {
     expect(document.querySelector('input[data-cell-editor]')).not.toBeNull();
     view.rerenderWith(pageData({ chargeCodes: [chargeCode()], periodStart: '2025-12-16' as CalendarDate, numDays: 16 }));
     expect(document.querySelector('input[data-cell-editor]')).toBeNull();
+    // M1: focus is on the grid's active cell (the one tab stop), not <body>.
+    expect(document.activeElement).toBe(document.querySelector('table[role="grid"] [tabindex="0"]'));
+  });
+
+  it('M1: a re-sync with fewer rows, while a removed row is focused, puts focus on the clamped active cell', async () => {
+    const two = [chargeCode(), chargeCode({ id: CC2, clin: 'B' })];
+    const view = renderTimesheet(pageData({ chargeCodes: two }), <TimesheetPage />);
+    const user = userEvent.setup();
+    await enterGrid(user);
+    await user.keyboard('{ArrowDown}');
+    expect((document.activeElement as HTMLElement).dataset.r).toBe('1');
+    view.rerenderWith(pageData({ chargeCodes: [chargeCode()], periodStart: '2025-12-16' as CalendarDate, numDays: 16 }));
+    const active = document.activeElement as HTMLElement;
+    expect(active).toBe(document.querySelector('table[role="grid"] [tabindex="0"]'));
+    expect(active.dataset.r).toBe('0');
   });
 });

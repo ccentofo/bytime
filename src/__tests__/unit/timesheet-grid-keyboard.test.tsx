@@ -351,6 +351,37 @@ describe('validation (B-T4)', () => {
     expect(value(0, 3)).toBe(0);
   });
 
+  it('M1: a window blur while editing (the input stays the active element) commits and leaves focus on the cell, not <body>', async () => {
+    const { user } = setup();
+    await enterGrid(user);
+    await press(user, '{ArrowLeft}{ArrowLeft}{ArrowLeft}5');
+    dispatched.setHours = 0;
+    fireEvent.blur(input()!);                    // a window blur: no focus move inside the document
+    expect(input()).toBeNull();
+    expect(value(0, 3)).toBe(5);
+    expect(dispatched.setHours).toBe(1);
+    expect(focused()).toBe('0:3');
+    // The suppression used for that move doesn't leak: the next edit's blur commits normally.
+    await press(user, '6');
+    await user.click([...document.querySelectorAll('button')].find((b) => b.textContent === 'after')!);
+    expect(value(0, 3)).toBe(6);
+  });
+
+  it('M1: the suppression used for that move never outlives it (a browser that fires no blur for the move)', async () => {
+    const { user } = setup();
+    await enterGrid(user);
+    await press(user, '{ArrowLeft}{ArrowLeft}{ArrowLeft}5');
+    const td = cell(0, 3);
+    Object.defineProperty(td, 'focus', { value: () => {}, configurable: true }); // the move causes no nested blur here
+    fireEvent.blur(input()!);
+    expect(value(0, 3)).toBe(5);
+    delete (td as { focus?: unknown }).focus;
+    await user.click(cell(0, 4));                // edit another cell; its blur must commit
+    await press(user, '3');
+    await user.click([...document.querySelectorAll('button')].find((b) => b.textContent === 'after')!);
+    expect(value(0, 4)).toBe(3);
+  });
+
   it('an invalid blur restores and announces', async () => {
     const { user } = setup();
     await user.click(cell(0, 3));

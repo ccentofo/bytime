@@ -127,8 +127,18 @@ describe('week view (B-T9)', () => {
     setNarrow(true);
     expect(document.querySelector('input[data-cell-editor]')).toBeNull();
     expect(dayCols()).toEqual(['0', '1', '2', '3']);                         // the week follows the active day
+    expect(focused()).toBe('0:0');                                          // M1: focus is back on the cell, not <body>
     await act(async () => { await new Promise((r) => setTimeout(r, 80)); });
     expect(document.querySelector('[data-testid="ts-announce-polite"]')!.textContent).toBe('Edit cancelled');
+  });
+
+  it('M1: no focus is taken when the grid didn\'t have it', () => {
+    media.narrow = false;
+    renderTimesheet(fixture(), <><TimesheetGrid /><button type="button">outside</button></>);
+    const outside = [...document.querySelectorAll('button')].find((b) => b.textContent === 'outside')!;
+    outside.focus();
+    setNarrow(true);
+    expect(document.activeElement).toBe(outside);
   });
 
   it('wide: every day column renders and there is no week picker', () => {
