@@ -3,6 +3,9 @@ import '@testing-library/react';
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { act, cleanup } from '@testing-library/react';
 import { useEffect } from 'react';
+import userEvent from '@testing-library/user-event';
+import { readFileSync } from 'fs';
+import path from 'path';
 
 /**
  * feature-plan-ux-timesheet-ui.md B-T14 (§4.5, trap T-E): both live regions exist and are empty at mount; they are the
@@ -21,7 +24,7 @@ vi.mock('@mantine/notifications', () => ({ notifications: { show: notify } }));
 
 import { TimesheetGrid } from '@/components/timesheet/TimesheetGrid';
 import { useAnnounce } from '@/components/timesheet/TimesheetAnnouncer';
-import { CC, chargeCode, pageData } from '../helpers/timesheet-fixtures';
+import { CC, chargeCode, pageData, periodData } from '../helpers/timesheet-fixtures';
 import { installTimesheetDomStubs, live, renderTimesheet } from '../helpers/timesheet-render';
 import type { CalendarDate } from '@/lib/calendar-date';
 
@@ -87,5 +90,20 @@ describe('announcer (B-T14)', () => {
     observer.disconnect();
     expect(seen).toContain('');
     expect(seen.at(-1)).toBe('Cleared');
+  });
+
+  it('"Edit cancelled" is announced from an effect when a period change cancels an open edit (step 3)', async () => {
+    const user = userEvent.setup();
+    renderTimesheet(data(), <TimesheetGrid />);
+    await user.tab();
+    await user.keyboard('7');
+    expect(document.querySelector('input[data-cell-editor]')).not.toBeNull();
+    act(() => live.ctx!.dispatch({ type: 'SET_PERIOD_DATA', ...periodData({ periodStart: '2025-12-16' as CalendarDate, numDays: 16 }) }));
+    expect(document.querySelector('input[data-cell-editor]')).toBeNull();
+    await settle();
+    expect(polite().textContent).toBe('Edit cancelled');
+    // Never during render: the call sits in an effect keyed on the cancellation generation.
+    const src = readFileSync(path.resolve(__dirname, '../../components/timesheet/TimesheetGrid.tsx'), 'utf8');
+    expect(src).toMatch(/useEffect\(\(\) => \{\n\s+if \(cancelledGen > 0\) announce\('Edit cancelled'\);\n\s+\}, \[cancelledGen, announce\]\);/);
   });
 });

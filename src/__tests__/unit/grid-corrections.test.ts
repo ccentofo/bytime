@@ -211,7 +211,7 @@ describe('save mapping by kind', () => {
     // UX-3 Part B §4.2: the grid applies the one cell rule per day cell; a correction-only row says "Closed to new hours"
     // (copy.ts) in its header, and its read-only cells are described "… You can correct hours already recorded."
     const grid = readFileSync(path.join(ROOT, 'src/components/timesheet/TimesheetGrid.tsx'), 'utf8');
-    expect(grid).toMatch(/isCellEditable\(\{ periodEditable, isFutureDate: day\.future, assignable: cc\.assignable, priorRevision \}\)/);
+    expect(grid).toMatch(/isCellEditable\(\{ periodEditable, isFutureDate: future, assignable: row\.cc\.assignable, priorRevision: savedCellRevisions\[`\$\{row\.cc\.id\}-\$\{d\}`\] \?\? 0 \}\)/);
     expect(grid).toContain('{CLOSED_TO_NEW_HOURS}. You can correct hours already recorded.');
     expect(readFileSync(path.join(ROOT, 'src/components/timesheet/cells/RowHeaderCell.tsx'), 'utf8')).toMatch(/\{p\.closed && <span className=\{styles\.closedNote\}> \{CLOSED_TO_NEW_HOURS\}<\/span>\}/);
     expect(readFileSync(path.join(ROOT, 'src/lib/timesheet/copy.ts'), 'utf8')).toContain("export const CLOSED_TO_NEW_HOURS = 'Closed to new hours';");

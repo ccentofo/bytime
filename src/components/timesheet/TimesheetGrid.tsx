@@ -1,16 +1,20 @@
 'use client';
 
-import { useId, useMemo, useState } from 'react';
-import { useTimesheetState } from '@/components/timesheet/TimesheetContext';
+import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type MouseEvent } from 'react';
+import { flushSync } from 'react-dom';
+import { useTimesheetDispatch, useTimesheetState } from '@/components/timesheet/TimesheetContext';
+import { useAnnounce } from '@/components/timesheet/TimesheetAnnouncer';
 import { HourCell } from '@/components/timesheet/cells/HourCell';
 import { TotalCell } from '@/components/timesheet/cells/TotalCell';
 import { RowHeaderCell } from '@/components/timesheet/cells/RowHeaderCell';
 import { DayHeader } from '@/components/timesheet/cells/DayHeader';
+import { CellEditor } from '@/components/timesheet/cells/CellEditor';
 import { addDays, dayOfWeek, diffDays, isAfter, isBefore, type CalendarDate } from '@/lib/calendar-date';
 import { isCellEditable } from '@/lib/timesheet/cell-rules';
 import { CLOSED_TO_NEW_HOURS } from '@/lib/timesheet/copy';
 import { STATUS_WORD, periodWords } from '@/lib/timesheet/labels';
-import { RH, TOTAL, clampPos, initialPos, type Pos } from '@/lib/timesheet/grid-positions';
+import { RH, TOTAL, clampPos, columnsOf, initialPos, rowsOf, type Col, type Pos, type Row } from '@/lib/timesheet/grid-positions';
+import { draftOf, normalizeDraft, seedChar, validateDraft } from '@/lib/timesheet/cell-input';
 import type { ChargeCode } from '@/types/timesheet';
 import styles from './Timesheet.module.css';
 
@@ -26,20 +30,28 @@ interface GridRow {
   total: number;
 }
 
+/** A day cell's facts for the handlers (computed from the same render as the cells). */
+interface DayCellInfo { row: GridRow; d: number; editable: boolean; reason: string | null; value: number; saved: number }
+
+const TOTALS_CALCULATED = 'Totals are calculated.';
+
 /**
- * The accessible timesheet grid (feature-plan-ux-timesheet-ui.md §4.2): a `<table role="grid">` with a caption, column
- * and row headers, one tbody per non-empty group, a totals footer and hidden reason descriptions. Exactly one element has
- * tabIndex 0 — the ACTIVE position, derived during render by clamping the requested one (trap T-P).
+ * The accessible timesheet grid (feature-plan-ux-timesheet-ui.md §4.2, §4.3): a `<table role="grid">` with one tab stop
+ * (the ACTIVE position, derived during render by clamping the requested one), WAI-ARIA data-grid navigation, and one
+ * editing input inside the active cell. Handlers are plain per-render closures on the table; the only ref is
+ * suppressBlurCommit, written only inside handlers (trap T-M).
  */
 export function TimesheetGrid() {
   const { state, dirtyCells } = useTimesheetState();
+  const dispatch = useTimesheetDispatch();
+  const announce = useAnnounce();
   const gridId = useId();
-  const { chargeCodes, entries, savedEntries, savedCellRevisions, periodStart, periodEnd, numDays, today, notes, userCreatedOn, periodStatus, readOnly, isLoadingPeriod } = state;
+  const { chargeCodes, entries, savedEntries, savedCellRevisions, periodStart, periodEnd, numDays, today, notes, userCreatedOn, periodStatus, readOnly, isLoadingPeriod, syncGen } = state;
   const periodEditable = (periodStatus === 'draft' || periodStatus === 'rejected') && !readOnly && !isLoadingPeriod;
   const locked = periodStatus === 'submitted' || periodStatus === 'approved';
 
   // Rows precomputed once per render: Map(rowKey → row), in display order (Direct, then Indirect and leave).
-  const { groups, rows, dayTotals, grand } = useMemo(() => {
+  const { groups, rows, rowList, dayTotals, savedDayTotals, grand } = useMemo(() => {
     const byId = new Map(entries.map((e) => [e.chargeCodeId, e]));
     const savedById = new Map(savedEntries.map((e) => [e.chargeCodeId, e]));
     const direct = chargeCodes.filter((c) => c.kind !== 'indirect');
@@ -51,11 +63,15 @@ export function TimesheetGrid() {
       const provenance = Array.from({ length: numDays }, (_, d) => byId.get(cc.id)?.provenance?.[d] ?? null);
       map.set(cc.id, { cc, r, hours, saved, provenance, total: round2(hours.reduce((s, h) => s + h, 0)) });
     });
-    const totals = Array.from({ length: numDays }, (_, d) => round2([...map.values()].reduce((s, row) => s + row.hours[d], 0)));
+    const list = [...map.values()];
+    const totals = Array.from({ length: numDays }, (_, d) => round2(list.reduce((s, row) => s + row.hours[d], 0)));
+    const savedTotals = Array.from({ length: numDays }, (_, d) => round2(list.reduce((s, row) => s + row.saved[d], 0)));
     return {
       groups: [{ label: 'Direct', codes: direct }, { label: 'Indirect and leave', codes: indirect }].filter((g) => g.codes.length > 0),
       rows: map,
+      rowList: list,
       dayTotals: totals,
+      savedDayTotals: savedTotals,
       grand: round2(totals.reduce((s, h) => s + h, 0)),
     };
   }, [chargeCodes, entries, savedEntries, numDays]);
@@ -66,13 +82,44 @@ export function TimesheetGrid() {
   const todayOffset = diffDays(periodStart, today);
   const todayIndex = todayOffset >= 0 && todayOffset < numDays ? todayOffset : null;
 
-  const [requested] = useState<Pos>(() => initialPos(bodyCount, visibleDays, todayIndex));
+  // ── Grid-local state (§4.3).
+  const [requested, setRequested] = useState<Pos>(() => initialPos(bodyCount, visibleDays, todayIndex));
+  const [mode, setMode] = useState<'nav' | 'edit'>('nav');
+  const [draft, setDraft] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [cancelledGen, setCancelledGen] = useState(0);
+  const suppressBlurCommit = useRef(false);
+
+  // A period or re-sync change cancels an open edit — during render, with this component's own setState (§4.3).
+  const periodKey = `${periodStart}|${syncGen}`;
+  const [seenPeriodKey, setSeenPeriodKey] = useState(periodKey);
+  if (seenPeriodKey !== periodKey) {
+    setSeenPeriodKey(periodKey);
+    if (mode === 'edit') {
+      setMode('nav');
+      setError(null);
+      setCancelledGen((g) => g + 1);
+    }
+  }
+  // ...and the cancellation is announced from an effect, never during render.
+  useEffect(() => {
+    if (cancelledGen > 0) announce('Edit cancelled');
+  }, [cancelledGen, announce]);
+
   const active = clampPos(requested, bodyCount, visibleDays);
-  const isActive = (r: Pos['r'], c: Pos['c']) => active.r === r && active.c === c;
+  const isActive = (r: Row, c: Col) => active.r === r && active.c === c;
+  const columns = columnsOf(visibleDays);
+  const rowOrder = rowsOf(bodyCount);
 
   const why = {
     future: `${gridId}-why-future`, closed: `${gridId}-why-closed`, locked: `${gridId}-why-locked`,
     readonly: `${gridId}-why-readonly`, total: `${gridId}-why-total`,
+  };
+  const reasonText = {
+    future: "Future date. Hours can't be entered yet.",
+    closed: `${CLOSED_TO_NEW_HOURS}. You can correct hours already recorded.`,
+    locked: `This timesheet is ${periodStatus === 'approved' ? 'approved' : 'submitted'} and can't be changed.`,
+    readonly: 'This workspace is read-only.',
   };
   const days = visibleDays.map((d) => {
     const date = addDays(periodStart, d);
@@ -81,92 +128,298 @@ export function TimesheetGrid() {
     return { d, date, weekend: isWeekendDay(date), isToday: date === today, future: isAfter(date, today), noHours };
   });
 
+  /** Editability and the read-only reason of one day cell (the same rule the cells render with). */
+  function dayCell(row: GridRow, d: number): DayCellInfo & { whyKey: keyof typeof reasonText | null; closed: boolean } {
+    const future = isAfter(addDays(periodStart, d), today);
+    const editable = isCellEditable({ periodEditable, isFutureDate: future, assignable: row.cc.assignable, priorRevision: savedCellRevisions[`${row.cc.id}-${d}`] ?? 0 });
+    const closed = periodEditable && !future && !editable;
+    const whyKey: keyof typeof reasonText | null = editable ? null : readOnly ? 'readonly' : locked ? 'locked' : future ? 'future' : closed ? 'closed' : null;
+    return { row, d, editable, closed, whyKey, reason: whyKey ? reasonText[whyKey] : null, value: row.hours[d], saved: row.saved[d] };
+  }
+
+  const activeRow = typeof active.r === 'number' ? rowList[active.r] : undefined;
+  const activeDay = activeRow && typeof active.c === 'number' ? dayCell(activeRow, active.c) : null;
+
+  // ── Focus and movement (handlers only).
+  const focusPos = (table: HTMLElement, p: Pos) => {
+    const target = [...table.querySelectorAll<HTMLElement>('[data-r][data-c]')].find((el) => el.dataset.r === String(p.r) && el.dataset.c === String(p.c));
+    target?.focus();
+  };
+  const moveTo = (table: HTMLElement, p: Pos) => {
+    flushSync(() => setRequested(p));
+    focusPos(table, p);
+  };
+  const enterEdit = (table: HTMLElement, initialDraft: string, caret: 'select' | 'end') => {
+    flushSync(() => { setMode('edit'); setDraft(initialDraft); setError(null); });
+    const input = table.querySelector('input[data-cell-editor]') as HTMLInputElement | null;
+    if (!input) return;
+    input.focus(); // synchronous inside the gesture (iOS keyboard, trap T-B)
+    if (caret === 'select') input.select();
+    else input.setSelectionRange(input.value.length, input.value.length);
+  };
+
+  /** Commit the draft of the active day cell: SET_HOURS once when the value changed. */
+  const commitDraft = (cellInfo: DayCellInfo): { ok: true } | { ok: false; error: string } => {
+    const result = validateDraft(draft, { current: cellInfo.value, dayTotal: dayTotals[cellInfo.d], savedDayTotal: savedDayTotals[cellInfo.d] });
+    if (!result.ok) return result;
+    if (result.value !== cellInfo.value) dispatch({ type: 'SET_HOURS', chargeCodeId: cellInfo.row.cc.id, dayIndex: cellInfo.d, value: result.value });
+    return { ok: true };
+  };
+  const showInvalid = (message: string) => {
+    setError(message);
+    announce(message, 'assertive');
+  };
+
+  function handleEditKey(e: KeyboardEvent<HTMLTableElement>, table: HTMLElement) {
+    if (!activeDay) return;
+    const key = e.key;
+    // Each key commit focuses its target cell BEFORE edit mode ends, so the input always blurs while still mounted —
+    // and suppressBlurCommit stops that blur from committing a second time (or committing a draft Esc discarded, T-D).
+    if (key === 'Escape') {
+      e.preventDefault();
+      suppressBlurCommit.current = true;
+      focusPos(table, active);
+      flushSync(() => { setMode('nav'); setError(null); });
+      return;
+    }
+    if (key === 'Enter' || key === 'ArrowUp' || key === 'ArrowDown') {
+      e.preventDefault();
+      const committed = commitDraft(activeDay);
+      if (!committed.ok) { showInvalid(committed.error); return; }
+      const idx = rowOrder.indexOf(active.r);
+      const next: Pos = key === 'Enter' ? active : { r: rowOrder[Math.min(Math.max(0, idx + (key === 'ArrowUp' ? -1 : 1)), rowOrder.length - 1)], c: active.c };
+      suppressBlurCommit.current = true;
+      focusPos(table, next);
+      flushSync(() => { setMode('nav'); setError(null); setRequested(next); });
+      return;
+    }
+    if (key === 'Tab') {
+      const step = e.shiftKey ? -1 : 1;
+      const dayIdx = visibleDays.indexOf(activeDay.d);
+      const nextDay = visibleDays[dayIdx + step];
+      const committed = commitDraft(activeDay);
+      if (!committed.ok) {
+        // Invalid: restore the earlier value, say so, and let Tab leave the grid natively — never trap.
+        suppressBlurCommit.current = true;
+        announce(`${draft} isn't valid; restored ${draftOf(activeDay.value) || '0.00'}`, 'assertive');
+        return;
+      }
+      if (nextDay === undefined) {
+        // Last (or first) visible day: commit and let Tab leave the grid; the blur ends edit mode.
+        suppressBlurCommit.current = true;
+        return;
+      }
+      e.preventDefault();
+      const next: Pos = { r: active.r, c: nextDay };
+      suppressBlurCommit.current = true;
+      focusPos(table, next);
+      flushSync(() => { setMode('nav'); setError(null); setRequested(next); });
+    }
+    // ← / → move the caret (not handled).
+  }
+
+  function handleNavKey(e: KeyboardEvent<HTMLTableElement>, table: HTMLElement) {
+    const { key } = e;
+    const mod = e.ctrlKey || e.metaKey;
+    // Modifier rule: only Ctrl/Meta + Home/End are handled with a modifier; Alt+← and ⌘+← (browser Back) pass through.
+    if ((mod || e.altKey) && !(mod && !e.altKey && (key === 'Home' || key === 'End'))) return;
+    const colIdx = columns.indexOf(active.c);
+    const rowIdx = rowOrder.indexOf(active.r);
+
+    switch (key) {
+      case 'ArrowLeft':
+      case 'ArrowRight': {
+        e.preventDefault();
+        const next = columns[colIdx + (key === 'ArrowLeft' ? -1 : 1)];
+        if (next !== undefined) moveTo(table, { r: active.r, c: next });
+        return;
+      }
+      case 'ArrowUp':
+      case 'ArrowDown': {
+        e.preventDefault();
+        const next = rowOrder[rowIdx + (key === 'ArrowUp' ? -1 : 1)];
+        if (next !== undefined) moveTo(table, { r: next, c: active.c });
+        return;
+      }
+      case 'Home':
+      case 'End': {
+        e.preventDefault();
+        if (mod) moveTo(table, key === 'Home' ? { r: bodyCount > 0 ? 0 : 'foot', c: visibleDays[0] ?? RH } : { r: 'foot', c: TOTAL });
+        else moveTo(table, { r: active.r, c: key === 'Home' ? RH : TOTAL });
+        return;
+      }
+      case 'PageUp':
+      case 'PageDown': {
+        if (typeof active.c !== 'number') return; // row header / total: nothing
+        e.preventDefault();
+        const target = Math.min(Math.max(0, active.c + (key === 'PageUp' ? -7 : 7)), numDays - 1);
+        moveTo(table, { r: active.r, c: target });
+        return;
+      }
+      case 'Enter':
+      case 'F2':
+      case ' ': {
+        e.preventDefault();
+        if (activeDay) {
+          if (activeDay.editable) enterEdit(table, draftOf(activeDay.value), key === 'F2' ? 'end' : 'select');
+          else if (activeDay.reason) announce(activeDay.reason);
+        } else if (active.c === TOTAL) {
+          announce(TOTALS_CALCULATED);
+        }
+        return;
+      }
+      case 'Delete':
+      case 'Backspace': {
+        if (!activeDay) return;
+        e.preventDefault();
+        if (!activeDay.editable) { if (activeDay.reason) announce(activeDay.reason); return; }
+        dispatch({ type: 'SET_HOURS', chargeCodeId: activeDay.row.cc.id, dayIndex: activeDay.d, value: 0 });
+        announce('Cleared');
+        return;
+      }
+      case 'Escape': {
+        if (!activeDay || activeDay.value === activeDay.saved) return;
+        e.preventDefault();
+        dispatch({ type: 'SET_HOURS', chargeCodeId: activeDay.row.cc.id, dayIndex: activeDay.d, value: activeDay.saved });
+        announce(`Restored to ${activeDay.saved.toFixed(2)}`);
+        return;
+      }
+      default: {
+        const seed = seedChar(key);
+        if (seed === null || !activeDay) return;
+        if (e.nativeEvent.isComposing || e.keyCode === 229) return; // IME composing: no type-to-edit
+        e.preventDefault(); // the seeding keystroke must not also reach the new input (trap T-C)
+        if (activeDay.editable) enterEdit(table, seed, 'end');
+        else if (activeDay.reason) announce(activeDay.reason);
+      }
+    }
+  }
+
+  function handleKeyDown(e: KeyboardEvent<HTMLTableElement>) {
+    const table = e.currentTarget;
+    if (mode === 'edit' && (e.target as HTMLElement).matches('input[data-cell-editor]')) handleEditKey(e, table);
+    else if (mode === 'nav') handleNavKey(e, table);
+  }
+
+  function handleClick(e: MouseEvent<HTMLTableElement>) {
+    const target = e.target as HTMLElement;
+    if (target.closest('input[data-cell-editor]')) return; // clicks inside the active input don't reselect
+    const el = target.closest('[data-r][data-c]') as HTMLElement | null;
+    if (!el) return;
+    const r: Row = el.dataset.r === 'foot' ? 'foot' : Number(el.dataset.r);
+    const cRaw = el.dataset.c!;
+    const c: Col = cRaw === RH || cRaw === TOTAL ? cRaw : Number(cRaw);
+    const table = e.currentTarget;
+    flushSync(() => setRequested({ r, c }));
+    const row = typeof r === 'number' ? rowList[r] : undefined;
+    const info = row && typeof c === 'number' ? dayCell(row, c) : null;
+    if (info?.editable) enterEdit(table, draftOf(info.value), 'select');
+    else focusPos(table, { r, c });
+  }
+
+  function handleDraftChange(e: ChangeEvent<HTMLInputElement>) {
+    const next = normalizeDraft(e.target.value);
+    if (next !== null) { setDraft(next); setError(null); }
+  }
+
+  function handleEditorBlur() {
+    if (suppressBlurCommit.current) {
+      suppressBlurCommit.current = false;
+      setMode('nav');
+      setError(null);
+      return;
+    }
+    if (!activeDay) { setMode('nav'); return; }
+    const committed = commitDraft(activeDay);
+    if (!committed.ok) announce(`${draft} isn't valid; restored ${draftOf(activeDay.value) || '0.00'}`, 'assertive');
+    setMode('nav');
+    setError(null);
+  }
+
+  const editingKey = mode === 'edit' && activeDay?.editable ? `${activeDay.row.r}:${activeDay.d}` : null;
+
   return (
     <div className={styles.gridArea}>
-    <div className={styles.hint} aria-hidden="true">Arrows move · type a number to enter hours · N adds a note · Esc undoes the cell</div>
-    <div className={styles.scroller} style={{ ['--ts-rh' as string]: 'clamp(9rem, 28vw, 16rem)' }}>
-      <table role="grid" className={styles.grid} aria-labelledby={`${gridId}-cap`} aria-describedby={`${gridId}-keys`}>
-        <caption id={`${gridId}-cap`} className={styles.srOnly}>Hours for {periodWords(periodStart, periodEnd)}, {STATUS_WORD[periodStatus]}</caption>
-        <thead>
-          <tr>
-            <th scope="col" className={[styles.corner, styles.colHead].join(' ')}>Charge code</th>
-            {days.map((day) => (
-              <DayHeader key={day.d} gridId={gridId} d={day.d} date={day.date} isToday={day.isToday} weekend={day.weekend} hours={dayTotals[day.d]} noHoursLogged={day.noHours} />
-            ))}
-            <th scope="col" id={`${gridId}-ch-total`} className={[styles.colHead, styles.totalHead].join(' ')}>Total</th>
-          </tr>
-        </thead>
-        {groups.map((group) => (
-          <tbody key={group.label}>
-            <tr className={styles.groupRow}>
-              <th scope="rowgroup" colSpan={visibleDays.length + 2}>{group.label}</th>
+      <div className={styles.hint} aria-hidden="true">Arrows move · type a number to enter hours · N adds a note · Esc undoes the cell</div>
+      <div className={styles.scroller} style={{ ['--ts-rh' as string]: 'clamp(9rem, 28vw, 16rem)' }}>
+        <table role="grid" className={styles.grid} aria-labelledby={`${gridId}-cap`} aria-describedby={`${gridId}-keys`} onKeyDown={handleKeyDown} onClick={handleClick}>
+          <caption id={`${gridId}-cap`} className={styles.srOnly}>Hours for {periodWords(periodStart, periodEnd)}, {STATUS_WORD[periodStatus]}</caption>
+          <thead>
+            <tr>
+              <th scope="col" className={[styles.corner, styles.colHead].join(' ')}>Charge code</th>
+              {days.map((day) => (
+                <DayHeader key={day.d} gridId={gridId} d={day.d} date={day.date} isToday={day.isToday} weekend={day.weekend} hours={dayTotals[day.d]} noHoursLogged={day.noHours} />
+              ))}
+              <th scope="col" id={`${gridId}-ch-total`} className={[styles.colHead, styles.totalHead].join(' ')}>Total</th>
             </tr>
-            {group.codes.map((cc) => {
-              const row = rows.get(cc.id)!;
-              return (
-                <tr key={cc.id}>
-                  <RowHeaderCell gridId={gridId} rowKey={cc.id} r={row.r} code={cc.clin} name={cc.name} closed={!cc.assignable} isActive={isActive(row.r, 'rh')} />
-                  {days.map((day) => {
-                    const key = `${cc.id}-${day.d}`;
-                    const priorRevision = savedCellRevisions[key] ?? 0;
-                    const editable = isCellEditable({ periodEditable, isFutureDate: day.future, assignable: cc.assignable, priorRevision });
-                    const closed = periodEditable && !day.future && !editable;
-                    const whyId = editable ? null
-                      : readOnly ? why.readonly
-                        : locked ? why.locked
-                          : day.future ? why.future
-                            : closed ? why.closed
-                              : null;
-                    return (
-                      <HourCell
-                        key={day.d}
-                        r={row.r}
-                        c={day.d}
-                        rowKey={cc.id}
-                        gridId={gridId}
-                        value={row.hours[day.d]}
-                        savedValue={row.saved[day.d]}
-                        editable={editable}
-                        whyId={whyId}
-                        hasNote={Boolean(notes[key]?.trim())}
-                        provenanceId={row.provenance[day.d] ? `${gridId}-prov-${row.r}-${day.d}` : null}
-                        isActive={isActive(row.r, day.d)}
-                        unsaved={dirty.has(key)}
-                        editor={null}
-                        future={day.future}
-                        weekend={day.weekend}
-                        today={day.isToday}
-                        closedEmpty={closed}
-                      />
-                    );
-                  })}
-                  <TotalCell r={row.r} c={TOTAL} value={row.total} isActive={isActive(row.r, 'total')} whyId={why.total} />
-                </tr>
-              );
-            })}
-          </tbody>
-        ))}
-        <tfoot>
-          <tr>
-            <th scope="row" id={`${gridId}-rh-foot`} data-r="foot" data-c={RH} tabIndex={isActive('foot', 'rh') ? 0 : -1} className={[styles.cell, styles.rowHeader].join(' ')}>Daily total</th>
-            {days.map((day) => (
-              <TotalCell key={day.d} r="foot" c={day.d as never} value={dayTotals[day.d]} isActive={isActive('foot', day.d)} whyId={why.total}
-                srExtra={day.noHours ? ', no hours, past workday' : undefined} weekend={day.weekend} today={day.isToday} />
-            ))}
-            <TotalCell r="foot" c={TOTAL} value={grand} isActive={isActive('foot', 'total')} whyId={why.total} grand />
-          </tr>
-        </tfoot>
-      </table>
-      <p id={`${gridId}-keys`} className={styles.srOnly}>Arrow keys move between days and codes. Type a number to enter hours. Press N to add a note. Escape undoes the cell.</p>
-      <div hidden>
-        <span id={why.future}>Future date. Hours can&apos;t be entered yet.</span>
-        <span id={why.closed}>{CLOSED_TO_NEW_HOURS}. You can correct hours already recorded.</span>
-        <span id={why.locked}>This timesheet is {periodStatus === 'approved' ? 'approved' : 'submitted'} and can&apos;t be changed.</span>
-        <span id={why.readonly}>This workspace is read-only.</span>
-        <span id={why.total}>Totals are calculated.</span>
-        {[...rows.values()].flatMap((row) => row.provenance.map((p, d) => (p ? <span key={`${row.r}-${d}`} id={`${gridId}-prov-${row.r}-${d}`}>{p}</span> : null)))}
+          </thead>
+          {groups.map((group) => (
+            <tbody key={group.label}>
+              <tr className={styles.groupRow}>
+                <th scope="rowgroup" colSpan={visibleDays.length + 2}>{group.label}</th>
+              </tr>
+              {group.codes.map((cc) => {
+                const row = rows.get(cc.id)!;
+                return (
+                  <tr key={cc.id}>
+                    <RowHeaderCell gridId={gridId} rowKey={cc.id} r={row.r} code={cc.clin} name={cc.name} closed={!cc.assignable} isActive={isActive(row.r, RH)} />
+                    {days.map((day) => {
+                      const key = `${cc.id}-${day.d}`;
+                      const info = dayCell(row, day.d);
+                      const editing = editingKey === `${row.r}:${day.d}`;
+                      return (
+                        <HourCell
+                          key={day.d}
+                          r={row.r}
+                          c={day.d}
+                          rowKey={cc.id}
+                          gridId={gridId}
+                          value={row.hours[day.d]}
+                          savedValue={row.saved[day.d]}
+                          editable={info.editable}
+                          whyId={info.whyKey ? why[info.whyKey] : null}
+                          hasNote={Boolean(notes[key]?.trim())}
+                          provenanceId={row.provenance[day.d] ? `${gridId}-prov-${row.r}-${day.d}` : null}
+                          isActive={isActive(row.r, day.d)}
+                          unsaved={dirty.has(key)}
+                          editor={editing ? (
+                            <CellEditor gridId={gridId} rowKey={cc.id} d={day.d} draft={draft} invalid={error !== null} onChange={handleDraftChange} onBlur={handleEditorBlur} />
+                          ) : null}
+                          future={day.future}
+                          weekend={day.weekend}
+                          today={day.isToday}
+                          closedEmpty={info.closed}
+                        />
+                      );
+                    })}
+                    <TotalCell r={row.r} c={TOTAL} value={row.total} isActive={isActive(row.r, TOTAL)} whyId={why.total} />
+                  </tr>
+                );
+              })}
+            </tbody>
+          ))}
+          <tfoot>
+            <tr>
+              <th scope="row" id={`${gridId}-rh-foot`} data-r="foot" data-c={RH} tabIndex={isActive('foot', RH) ? 0 : -1} className={[styles.cell, styles.rowHeader].join(' ')}>Daily total</th>
+              {days.map((day) => (
+                <TotalCell key={day.d} r="foot" c={day.d as never} value={dayTotals[day.d]} isActive={isActive('foot', day.d)} whyId={why.total}
+                  srExtra={day.noHours ? ', no hours, past workday' : undefined} weekend={day.weekend} today={day.isToday} />
+              ))}
+              <TotalCell r="foot" c={TOTAL} value={grand} isActive={isActive('foot', TOTAL)} whyId={why.total} grand />
+            </tr>
+          </tfoot>
+        </table>
+        <p id={`${gridId}-keys`} className={styles.srOnly}>Arrow keys move between days and codes. Type a number to enter hours. Press N to add a note. Escape undoes the cell.</p>
+        <div hidden>
+          <span id={why.future}>{reasonText.future}</span>
+          <span id={why.closed}>{reasonText.closed}</span>
+          <span id={why.locked}>{reasonText.locked}</span>
+          <span id={why.readonly}>{reasonText.readonly}</span>
+          <span id={why.total}>{TOTALS_CALCULATED}</span>
+          {rowList.flatMap((row) => row.provenance.map((p, d) => (p ? <span key={`${row.r}-${d}`} id={`${gridId}-prov-${row.r}-${d}`}>{p}</span> : null)))}
+        </div>
       </div>
-    </div>
+      {error && <div id={`${gridId}-err`} className={styles.err}>{error}</div>}
     </div>
   );
 }
