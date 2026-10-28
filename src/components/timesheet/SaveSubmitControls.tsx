@@ -29,7 +29,9 @@ export function SaveSubmitControls({ onDiscard }: { onDiscard: () => void }) {
             : checks.totalPeriodHours <= 0 ? 'Add hours before submitting'
               : null;
   const canSave = editable && hasUnsaved && !isLoadingPeriod;
-  const canDiscard = hasUnsaved && !isLoadingPeriod;
+  // UX-TIMESHEET-B-AUDIT H2: no Discard while a save is in flight — the save would land after the revert and move the
+  // baseline under it (the reverted value would then count as an unsaved change).
+  const canDiscard = hasUnsaved && !isLoadingPeriod && !state.isSaving;
 
   return (
     <Stack gap={4} align="flex-end">
@@ -39,6 +41,7 @@ export function SaveSubmitControls({ onDiscard }: { onDiscard: () => void }) {
         )}
         <Button variant="subtle" leftSection={<Icons.discard size={ICON_SIZE.button} />}
           aria-disabled={canDiscard ? undefined : 'true'} data-disabled={!canDiscard || undefined}
+          aria-describedby={state.isSaving ? `${id}-discard-why` : undefined}
           onClick={() => { if (canDiscard) onDiscard(); }}>
           Discard changes
         </Button>
@@ -55,6 +58,8 @@ export function SaveSubmitControls({ onDiscard }: { onDiscard: () => void }) {
         </Button>
       </Group>
       {submitWhy && <Text id={`${id}-submit-why`} className={styles.reason}>{submitWhy}</Text>}
+      {/* Discard's reason while saving, for screen readers (the Save button already shows the save visually). */}
+      {state.isSaving && <span id={`${id}-discard-why`} className={styles.srOnly}>Saving…</span>}
     </Stack>
   );
 }

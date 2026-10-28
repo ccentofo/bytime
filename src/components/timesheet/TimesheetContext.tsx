@@ -383,10 +383,10 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
 
   // ── useSaveFlow (§4.4). Refs are used only because an await intervenes; they're updated in layout effects.
   const saveAllRef = useRef(saveAll);
-  const flowRef = useRef({ hasUnsaved, needsReason: hasEdits || hasLateEntries, unsavedCount });
+  const flowRef = useRef({ hasUnsaved, needsReason: hasEdits || hasLateEntries, unsavedCount, periodStart: state.periodStart, syncGen: state.syncGen });
   useLayoutEffect(() => {
     saveAllRef.current = saveAll;
-    flowRef.current = { hasUnsaved, needsReason: hasEdits || hasLateEntries, unsavedCount };
+    flowRef.current = { hasUnsaved, needsReason: hasEdits || hasLateEntries, unsavedCount, periodStart: state.periodStart, syncGen: state.syncGen };
   });
   const runningRef = useRef<Promise<boolean> | null>(null);
   // The ReasonModal is open for the syncGen it was opened under; a re-sync closes it without a state update (§4.4).
@@ -460,11 +460,15 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
   }, [state.syncGen]);
 
   const requestSave = useCallback((): Promise<boolean> => {
+    // The period this save is for (H2): the re-check below stops once another period, or a re-sync, replaced it.
+    const forPeriod = { periodStart: flowRef.current.periodStart, syncGen: flowRef.current.syncGen };
+    const samePeriod = () => flowRef.current.periodStart === forPeriod.periodStart && flowRef.current.syncGen === forPeriod.syncGen;
     // A save already running is awaited first; then the same re-check applies (saves are serialized).
     const run = (runningRef.current ?? Promise.resolve(true)).then(async () => {
       let saved = 0;
-      // Edits made during a save are saved again before resolving (bounded, so a failing loop can't spin).
-      for (let round = 0; round < 5 && flowRef.current.hasUnsaved; round++) {
+      // Edits made during a save are saved again before resolving (bounded, so a failing loop can't spin) — but only
+      // the period's own: what's unsaved after a period change or a re-sync belongs to a period this save wasn't for.
+      for (let round = 0; round < 5 && samePeriod() && flowRef.current.hasUnsaved; round++) {
         const count = flowRef.current.unsavedCount;
         if (!(await saveOnce())) return false;
         saved += count;
@@ -474,7 +478,7 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
         announce(message);
         quietToast({ title: 'Timesheet saved', message: saved === 1 ? '1 change saved.' : `${saved} changes saved.`, color: 'success' });
       }
-      return !flowRef.current.hasUnsaved;
+      return samePeriod() && !flowRef.current.hasUnsaved;
     });
     runningRef.current = run;
     void run.finally(() => { if (runningRef.current === run) runningRef.current = null; });
@@ -566,6 +570,8 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
   useLayoutEffect(() => registerUnsavedGuard({
     token: Symbol('timesheet'),
     getCount: () => guardRef.current.count,
+    // H2: the confirm waits for a running save; MARK_SAVED commits in flushSync, so the count read after it is current.
+    whenSaved: () => runningRef.current,
     requestSave: () => guardRef.current.requestSave(),
     discard: () => guardRef.current.discard(),
     openConfirm: (n) => guardRef.current.openConfirm(n),

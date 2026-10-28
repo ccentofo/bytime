@@ -9,6 +9,8 @@ export type LeaveChoice = 'save' | 'discard' | 'cancel';
 export interface UnsavedGuardRegistration {
   token: symbol;
   getCount(): number;
+  /** UX-TIMESHEET-B-AUDIT H2: the save running now (settles when it lands), or null when none is. */
+  whenSaved(): Promise<unknown> | null;
   /** Save everything; true when nothing is left unsaved. */
   requestSave(): Promise<boolean>;
   /** Discard everything (synchronously committed). */
@@ -40,7 +42,8 @@ export function registerUnsavedGuard(r: UnsavedGuardRegistration): () => void {
 /**
  * True when it's fine to leave: nothing registered, nothing unsaved, "Save and continue" saved everything, or "Discard
  * and continue". False on Cancel (button, Esc, overlay), a cancelled ReasonModal or a failed save. Concurrent calls share
- * one confirm.
+ * one confirm. A save already running lands FIRST (H2): the count is read after it, so the confirm offers only what is
+ * still unsaved — and doesn't appear at all when that save covered everything.
  */
 export function confirmLeave(): Promise<boolean> {
   const r = registration;
@@ -58,7 +61,14 @@ export function confirmLeave(): Promise<boolean> {
 
   void (async () => {
     try {
-      const choice = await r.openConfirm(r.getCount());
+      const saving = r.whenSaved();
+      if (saving) {
+        await saving.catch(() => undefined);
+        if (pending !== entry) return; // settled by unregister while the save ran
+      }
+      const n = r.getCount();
+      if (n === 0) { finish(true); return; }
+      const choice = await r.openConfirm(n);
       if (pending !== entry) return; // already settled by unregister
       if (choice === 'save') finish(await r.requestSave());
       else if (choice === 'discard') { r.discard(); finish(true); }

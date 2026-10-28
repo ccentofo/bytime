@@ -326,3 +326,90 @@ describe('save flow (B-T7)', () => {
     expect(live.ctx!.dirtyCells).toHaveLength(1);
   });
 });
+
+describe('a save in flight (H2)', () => {
+  const deferredSave = () => { let release!: (v: unknown) => void; actions.saveTimesheetBatch.mockReturnValueOnce(new Promise((r) => { release = r; })); return (v: unknown) => act(async () => { release(v); }); };
+  const reasonOpen = () => [...document.querySelectorAll('button')].some((b) => b.textContent === 'MOCK_REASON_CONFIRM');
+
+  it('Discard changes is aria-disabled (never disabled) while saving, with the reason "Saving…"; a click does nothing', async () => {
+    const land = deferredSave();
+    const { user } = setup();
+    await edit(6);
+    await user.click(button('Save'));
+    const discard = button('Discard changes');
+    expect(discard.getAttribute('aria-disabled')).toBe('true');
+    expect(discard.hasAttribute('disabled')).toBe(false);
+    expect(document.getElementById(discard.getAttribute('aria-describedby')!)!.textContent).toBe('Saving…');
+    await user.click(discard);
+    expect([...document.querySelectorAll('[role="dialog"]')].some((d) => /Discard/.test(d.textContent ?? ''))).toBe(false);
+    await land(okSave({ [`${CC}-6`]: 1 }));
+    await settle();
+    expect(button('Discard changes').getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('‹ during a slow save waits for it, then moves WITHOUT a confirm once the save covered everything', async () => {
+    const land = deferredSave();
+    const { user } = setup();
+    await edit(6);
+    await user.click(button('Save'));
+    await user.click(prev());
+    await settle();
+    expect(dialog()).toBeUndefined();                          // no confirm while the save runs
+    expect(actions.getTimesheetPeriod).not.toHaveBeenCalled();
+    await land(okSave({ [`${CC}-6`]: 1 }));
+    await settle();
+    expect(dialog()).toBeUndefined();
+    expect(live.ctx!.state.periodStart).toBe('2025-12-16');
+    expect(actions.saveTimesheetBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('‹ during a slow save, with an edit made meanwhile that stays unsaved: the confirm then counts only that edit', async () => {
+    const land = deferredSave();
+    const { user } = setup();
+    await edit(6);
+    await user.click(button('Save'));
+    await edit(2, 3, CC2);                                     // made during the save: a late entry (needs a reason)
+    await user.click(prev());                                  // 2 unsaved now; 1 once the save lands
+    await land(okSave({ [`${CC}-6`]: 1 }));
+    await settle();
+    expect(dialog()).toBeUndefined();                          // the Save's own re-check asks for a reason first
+    await user.click(button('MOCK_REASON_CANCEL'));
+    await settle();
+    expect(dialog()!.textContent).toContain('You have 1 unsaved change');
+    expect(dialog()!.textContent).not.toContain('2 unsaved');
+    expect(actions.saveTimesheetBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('a save landing after a period change neither moves the baseline nor opens a ReasonModal for the new period', async () => {
+    const land = deferredSave();
+    setup();
+    await edit(6);
+    act(() => { void live.ctx!.requestSave(); });
+    await vi.waitFor(() => expect(actions.saveTimesheetBatch).toHaveBeenCalledTimes(1));
+    await act(async () => { await live.ctx!.loadPeriodByDate('2025-12-16' as CalendarDate); }); // bypasses the guard
+    expect(live.ctx!.state.periodStart).toBe('2025-12-16');
+    await edit(3, 5);                                          // a late entry in the NEW period (needs a reason)
+    await land(okSave({ [`${CC}-6`]: 1 }));
+    await settle();
+    expect(reasonOpen()).toBe(false);
+    expect(actions.saveTimesheetBatch).toHaveBeenCalledTimes(1);
+    expect(live.ctx!.state.savedCellRevisions).toEqual({});
+    expect(live.ctx!.state.savedEntries.every((e) => e.hours.every((h) => h === 0))).toBe(true);
+    expect(live.ctx!.dirtyCells).toEqual([expect.objectContaining({ chargeCodeId: CC, dayIndex: 3, hours: 5 })]);
+  });
+
+  it('…and the same after a re-sync', async () => {
+    const land = deferredSave();
+    const { view } = setup();
+    await edit(6);
+    act(() => { void live.ctx!.requestSave(); });
+    await vi.waitFor(() => expect(actions.saveTimesheetBatch).toHaveBeenCalledTimes(1));
+    view.rerenderWith(pageData({ today: '2026-01-07' as CalendarDate, chargeCodes: [chargeCode(), chargeCode({ id: CC2, clin: 'B' })] }));
+    await edit(2, 5);                                          // a late entry after the re-sync
+    await land(okSave({ [`${CC}-6`]: 1 }));
+    await settle();
+    expect(reasonOpen()).toBe(false);
+    expect(live.ctx!.state.savedCellRevisions).toEqual({});
+    expect(live.ctx!.dirtyCells).toEqual([expect.objectContaining({ dayIndex: 2, hours: 5 })]);
+  });
+});
