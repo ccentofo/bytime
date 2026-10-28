@@ -52,7 +52,8 @@ const SUPERVISOR_REPORTS_GROUP: NavGroup = {
 export function mainNav(role: NavRole): NavEntry[] {
   if (role === 'admin') return [HOME, MY_TIMESHEET, APPROVALS, CONTRACTS_GROUP, PEOPLE_GROUP, ADMIN_REPORTS_GROUP, SETTINGS];
   if (role === 'supervisor') return [HOME, MY_TIMESHEET, APPROVALS, SUPERVISOR_REPORTS_GROUP];
-  return [{ label: 'Timesheet', href: '/timesheet', icon: 'timeEntry' }];
+  // feature-plan-ux-timesheet-ui.md §4.11: approvers reach Past timesheets from the link on the timesheet.
+  return [{ label: 'Timesheet', href: '/timesheet', icon: 'timeEntry' }, { label: 'Past timesheets', href: '/timesheet/history', icon: 'history' }];
 }
 
 /** The Settings area's own menu (admins only — every page guards with requirePageRole('admin')). */

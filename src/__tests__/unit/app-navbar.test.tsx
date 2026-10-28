@@ -93,9 +93,9 @@ describe('AppNavbar — expanded (T3)', () => {
     expect(m!.container.textContent).toContain('Settings');
   });
 
-  it('employee: just Timesheet', async () => {
+  it('employee: Timesheet and Past timesheets', async () => {
     m = await mount(<AppNavbar userRole="employee" />);
-    expect([...m.container.querySelectorAll('a')].map((a) => a.textContent)).toEqual(['Timesheet']);
+    expect([...m.container.querySelectorAll('a')].map((a) => a.textContent)).toEqual(['Timesheet', 'Past timesheets']);
   });
 
   it('axe clean (expanded, admin, a group open)', async () => {
