@@ -3,7 +3,6 @@
 import { Container, Paper, Skeleton, Stack } from '@mantine/core';
 import { TimesheetProvider, useTimesheet } from '@/components/timesheet/TimesheetContext';
 import { TimesheetGrid } from '@/components/timesheet/TimesheetGrid';
-import { DailyNoteModal } from '@/components/timesheet/DailyNoteModal';
 import { PayPeriodSelector } from '@/components/timesheet/PayPeriodSelector';
 import { TimesheetToolbar } from '@/components/timesheet/TimesheetToolbar';
 import type { TimesheetPageData } from '@/types/timesheet';
@@ -33,7 +32,6 @@ function TimesheetContent() {
           <TimesheetGrid />
         )}
       </Paper>
-      <DailyNoteModal />
     </Container>
   );
 }

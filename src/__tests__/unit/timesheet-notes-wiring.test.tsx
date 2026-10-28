@@ -32,7 +32,6 @@ vi.mock('@mantine/notifications', () => ({ notifications: { show: notify } }));
 
 import { TimesheetProvider, useTimesheet } from '@/components/timesheet/TimesheetContext';
 import { TimesheetGrid } from '@/components/timesheet/TimesheetGrid';
-import { DailyNoteModal } from '@/components/timesheet/DailyNoteModal';
 import { TimesheetToolbar } from '@/components/timesheet/TimesheetToolbar';
 import { PayPeriodSelector } from '@/components/timesheet/PayPeriodSelector';
 import type { TimesheetPageData, TimesheetPeriodData } from '@/types/timesheet';
@@ -66,7 +65,6 @@ const render = async (initial: TimesheetPageData) => {
       <PayPeriodSelector />
       <TimesheetToolbar />
       <TimesheetGrid />
-      <DailyNoteModal />
       <Probe />
     </TimesheetProvider>,
   );

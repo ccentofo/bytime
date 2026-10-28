@@ -13,6 +13,7 @@ import { AnnouncerProvider, useAnnounce } from '@/components/timesheet/Timesheet
 import { ReasonModal } from '@/components/timesheet/ReasonModal';
 import { SubmitModal } from '@/components/timesheet/SubmitModal';
 import { useSubmitChecks, type SubmitChecks } from '@/components/timesheet/useSubmitChecks';
+import { GridRefContext, NoteModal, type GridHandle } from '@/components/timesheet/NoteModal';
 
 // ---------------------------------------------------------------------------
 // Reducer
@@ -497,6 +498,9 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
     };
   }, []);
 
+  // The grid's focusActive handle, held here for NoteModal (§4.3, §4.8).
+  const gridRef = useRef<GridHandle | null>(null);
+
   const stateValue = useMemo<TimesheetStateValue>(
     () => ({ state, dirtyCells, dirtyNotes, hasUnsaved, unsavedCount, hasEdits, hasLateEntries, checks }),
     [state, dirtyCells, dirtyNotes, hasUnsaved, unsavedCount, hasEdits, hasLateEntries, checks],
@@ -510,7 +514,10 @@ function TimesheetStateProvider({ initialData, children }: ProviderProps) {
     <DispatchContext.Provider value={dispatch}>
       <ActionsContext.Provider value={actionsValue}>
         <StateContext.Provider value={stateValue}>
+          <GridRefContext.Provider value={gridRef}>
           {children}
+          <NoteModal />
+          </GridRefContext.Provider>
           <ReasonModal
             opened={reasonOpen}
             onClose={handleReasonCancel}

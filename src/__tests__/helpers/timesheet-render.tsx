@@ -50,3 +50,8 @@ export function renderTimesheet(data: TimesheetPageData, children: ReactNode): R
   const result = render(tree(data));
   return Object.assign(result, { rerenderWith: (next: TimesheetPageData) => result.rerender(tree(next)) });
 }
+
+/** Tab until focus is inside the grid (the note button above the table comes first in tab order, §4.1). */
+export async function enterGrid(user: { tab: () => Promise<void> }): Promise<void> {
+  for (let i = 0; i < 6 && !document.activeElement?.closest('table[role="grid"]'); i++) await user.tab();
+}

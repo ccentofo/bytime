@@ -31,7 +31,7 @@ vi.mock('@/components/timesheet/TimesheetContext', async (importOriginal) => {
 
 import { TimesheetGrid } from '@/components/timesheet/TimesheetGrid';
 import { CC, CC2, IND, chargeCode, pageData, periodData } from '../helpers/timesheet-fixtures';
-import { installTimesheetDomStubs, live, renderTimesheet } from '../helpers/timesheet-render';
+import { enterGrid, installTimesheetDomStubs, live, renderTimesheet } from '../helpers/timesheet-render';
 import type { CalendarDate } from '@/lib/calendar-date';
 import type { TimesheetPeriodData } from '@/types/timesheet';
 
@@ -74,13 +74,13 @@ describe('navigation (B-T2)', () => {
     const { user } = setup();
     expect(stops()).toHaveLength(1);
     expect(pos()).toBe('0:6');
-    await user.tab();
+    await enterGrid(user);
     expect(focused()).toBe('0:6');
   });
 
   it('← → ↑ ↓, Home / End move the one tab stop; edges stop; group rows are skipped; the footer is the last row', async () => {
     const { user } = setup();
-    await user.tab();
+    await enterGrid(user);
     await press(user, '{Home}');
     expect(focused()).toBe('0:rh');
     await press(user, '{ArrowLeft}');
@@ -105,7 +105,7 @@ describe('navigation (B-T2)', () => {
 
   it('Ctrl/Meta + Home / End go to the first day of the first row / the grand total', async () => {
     const { user } = setup();
-    await user.tab();
+    await enterGrid(user);
     await press(user, '{Control>}{End}{/Control}');
     expect(focused()).toBe('foot:total');
     await press(user, '{Control>}{Home}{/Control}');
@@ -116,7 +116,7 @@ describe('navigation (B-T2)', () => {
 
   it('PageUp / PageDown on a day move 7 days, clamped to the period; on the row header or total they do nothing', async () => {
     const { user } = setup();
-    await user.tab();
+    await enterGrid(user);
     await press(user, '{PageDown}');
     expect(focused()).toBe('0:13');
     await press(user, '{PageDown}');
@@ -131,7 +131,7 @@ describe('navigation (B-T2)', () => {
 
   it('handled keys are defaultPrevented; Alt+← and ⌘+← (browser Back) and Tab are not handled', async () => {
     const { user } = setup();
-    await user.tab();
+    await enterGrid(user);
     const el = () => document.activeElement as HTMLElement;
     for (const key of ['PageDown', 'PageUp', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End']) {
       expect(fireEvent.keyDown(el(), { key }), key).toBe(false);
@@ -146,14 +146,14 @@ describe('navigation (B-T2)', () => {
 
   it('Tab leaves the grid', async () => {
     const { user } = setup();
-    await user.tab();
+    await enterGrid(user);
     await user.tab();
     expect((document.activeElement as HTMLElement).textContent).toBe('after');
   });
 
   it('exactly one tabindex=0 after a period with fewer rows and with no body rows (the position is clamped)', async () => {
     const { user } = setup();
-    await user.tab();
+    await enterGrid(user);
     await press(user, '{ArrowDown}{ArrowDown}');
     expect(pos()).toBe('2:6');
     act(() => live.ctx!.dispatch({ type: 'SET_PERIOD_DATA', ...periodData({ chargeCodes: [chargeCode({ id: CC })], numDays: 15 }) }));
@@ -168,7 +168,7 @@ describe('navigation (B-T2)', () => {
 describe('editing (B-T3)', () => {
   it('typing 7 on an editable day enters edit with the draft exactly "7"; "," seeds "."; full-width digits are accepted', async () => {
     const { user } = setup();
-    await user.tab();
+    await enterGrid(user);
     await press(user, '{ArrowLeft}{ArrowLeft}{ArrowLeft}');   // 0:3 (Sat, past, empty, editable)
     await press(user, '7');
     expect(input()!.value).toBe('7');
@@ -185,7 +185,7 @@ describe('editing (B-T3)', () => {
 
   it('Enter, ↑, ↓ and Tab each commit once', async () => {
     const { user } = setup();
-    await user.tab();
+    await enterGrid(user);
     await press(user, '{ArrowLeft}{ArrowLeft}{ArrowLeft}'); // 0:3
     await press(user, '6{Enter}');
     expect(value(0, 3)).toBe(6);
@@ -205,7 +205,7 @@ describe('editing (B-T3)', () => {
 
   it('edit-mode Esc discards the draft and the blur does not commit', async () => {
     const { user } = setup();
-    await user.tab();
+    await enterGrid(user);
     await press(user, '{ArrowLeft}{ArrowLeft}{ArrowLeft}');
     await press(user, '9{Escape}');
     expect(input()).toBeNull();
@@ -216,7 +216,7 @@ describe('editing (B-T3)', () => {
 
   it('nav-mode Esc restores a changed cell and announces; Delete sets 0 and announces "Cleared"', async () => {
     const { user } = setup();
-    await user.tab();
+    await enterGrid(user);
     await press(user, '{Control>}{Home}{/Control}');      // 0:0, saved 8
     await press(user, '{Delete}');
     expect(value(0, 0)).toBe(0);
@@ -230,7 +230,7 @@ describe('editing (B-T3)', () => {
 
   it('Enter on a read-only day announces its reason; Enter on a total announces "Totals are calculated."', async () => {
     const { user } = setup();
-    await user.tab();
+    await enterGrid(user);
     await press(user, '{ArrowRight}{ArrowRight}{ArrowRight}{Enter}');  // 0:9, future
     expect(input()).toBeNull();
     await settle();
@@ -256,7 +256,7 @@ describe('editing (B-T3)', () => {
 
   it('IME composing (and keyCode 229) does not seed', async () => {
     const { user } = setup();
-    await user.tab();
+    await enterGrid(user);
     fireEvent.keyDown(document.activeElement!, { key: '7', isComposing: true });
     expect(input()).toBeNull();
     fireEvent.keyDown(document.activeElement!, { key: '7', keyCode: 229 });
@@ -267,7 +267,7 @@ describe('editing (B-T3)', () => {
 describe('validation (B-T4)', () => {
   it('7.3 stays in edit with aria-invalid on the input, a visible error, announced assertively', async () => {
     const { user } = setup();
-    await user.tab();
+    await enterGrid(user);
     await press(user, '{ArrowLeft}{ArrowLeft}{ArrowLeft}');
     await press(user, '7.3{Enter}');
     expect(input()).not.toBeNull();
@@ -281,7 +281,7 @@ describe('validation (B-T4)', () => {
 
   it('an invalid Tab restores the earlier value, announces, and lets focus leave the grid', async () => {
     const { user } = setup();
-    await user.tab();
+    await enterGrid(user);
     await press(user, '{ArrowLeft}{ArrowLeft}{ArrowLeft}');
     await press(user, '7.3');
     await user.tab();
@@ -312,7 +312,7 @@ describe('validation (B-T4)', () => {
     const { user } = setup();
     await user.click(cell(0, 3));
     await user.keyboard('7.3');
-    await user.click(document.querySelector('button')!);
+    await user.click([...document.querySelectorAll('button')].find((b) => b.textContent === 'after')!);
     expect(input()).toBeNull();
     expect(value(0, 3)).toBe(0);
     await settle();

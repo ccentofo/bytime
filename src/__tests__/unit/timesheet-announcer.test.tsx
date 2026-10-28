@@ -25,7 +25,7 @@ vi.mock('@mantine/notifications', () => ({ notifications: { show: notify } }));
 import { TimesheetGrid } from '@/components/timesheet/TimesheetGrid';
 import { useAnnounce } from '@/components/timesheet/TimesheetAnnouncer';
 import { CC, chargeCode, pageData, periodData } from '../helpers/timesheet-fixtures';
-import { installTimesheetDomStubs, live, renderTimesheet } from '../helpers/timesheet-render';
+import { enterGrid, installTimesheetDomStubs, live, renderTimesheet } from '../helpers/timesheet-render';
 import type { CalendarDate } from '@/lib/calendar-date';
 
 beforeAll(() => installTimesheetDomStubs());
@@ -95,7 +95,7 @@ describe('announcer (B-T14)', () => {
   it('"Edit cancelled" is announced from an effect when a period change cancels an open edit (step 3)', async () => {
     const user = userEvent.setup();
     renderTimesheet(data(), <TimesheetGrid />);
-    await user.tab();
+    await enterGrid(user);
     await user.keyboard('7');
     expect(document.querySelector('input[data-cell-editor]')).not.toBeNull();
     act(() => live.ctx!.dispatch({ type: 'SET_PERIOD_DATA', ...periodData({ periodStart: '2025-12-16' as CalendarDate, numDays: 16 }) }));
@@ -105,5 +105,16 @@ describe('announcer (B-T14)', () => {
     // Never during render: the call sits in an effect keyed on the cancellation generation.
     const src = readFileSync(path.resolve(__dirname, '../../components/timesheet/TimesheetGrid.tsx'), 'utf8');
     expect(src).toMatch(/useEffect\(\(\) => \{\n\s+if \(cancelledGen > 0\) announce\('Edit cancelled'\);\n\s+\}, \[cancelledGen, announce\]\);/);
+  });
+
+  it('the note counter is not live (step 4)', async () => {
+    const user = userEvent.setup();
+    renderTimesheet(data(), <TimesheetGrid />);
+    await enterGrid(user);
+    await user.keyboard('N');
+    const counter = document.querySelector('[data-testid="note-counter"]')!;
+    expect(counter.textContent).toBe('0/1000');
+    expect(counter.closest('[aria-live], [role="status"], [role="alert"]')).toBeNull();
+    expect(counter.hasAttribute('aria-live')).toBe(false);
   });
 });

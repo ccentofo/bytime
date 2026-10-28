@@ -1,6 +1,9 @@
 'use client';
 
-import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type MouseEvent } from 'react';
+import { useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type MouseEvent } from 'react';
+import { Button } from '@mantine/core';
+import { useGridRef } from '@/components/timesheet/NoteModal';
+import { Icons } from '@/components/ui/icons';
 import { flushSync } from 'react-dom';
 import { useTimesheetDispatch, useTimesheetState } from '@/components/timesheet/TimesheetContext';
 import { useAnnounce } from '@/components/timesheet/TimesheetAnnouncer';
@@ -9,7 +12,7 @@ import { TotalCell } from '@/components/timesheet/cells/TotalCell';
 import { RowHeaderCell } from '@/components/timesheet/cells/RowHeaderCell';
 import { DayHeader } from '@/components/timesheet/cells/DayHeader';
 import { CellEditor } from '@/components/timesheet/cells/CellEditor';
-import { addDays, dayOfWeek, diffDays, isAfter, isBefore, type CalendarDate } from '@/lib/calendar-date';
+import { addDays, dayOfWeek, diffDays, formatCalendarDate, isAfter, isBefore, type CalendarDate } from '@/lib/calendar-date';
 import { isCellEditable } from '@/lib/timesheet/cell-rules';
 import { CLOSED_TO_NEW_HOURS } from '@/lib/timesheet/copy';
 import { STATUS_WORD, periodWords } from '@/lib/timesheet/labels';
@@ -139,6 +142,23 @@ export function TimesheetGrid() {
 
   const activeRow = typeof active.r === 'number' ? rowList[active.r] : undefined;
   const activeDay = activeRow && typeof active.c === 'number' ? dayCell(activeRow, active.c) : null;
+
+  // ── Notes (§4.8): editable when the period is editable and the day isn't in the future — the row's closure doesn't
+  // matter (the server accepts notes on any shown row). Not the hours rule.
+  const noteEditable = (d: number) => periodEditable && !isAfter(addDays(periodStart, d), today);
+  const openNote = (row: GridRow, d: number) => {
+    dispatch({ type: 'OPEN_NOTE_MODAL', chargeCodeId: row.cc.id, dayIndex: d, editable: noteEditable(d) });
+  };
+  const tableId = `${gridId}-table`;
+  const gridRef = useGridRef();
+  useImperativeHandle(gridRef, () => ({
+    focusActive: () => {
+      (document.getElementById(tableId)?.querySelector('[tabindex="0"]') as HTMLElement | null)?.focus();
+    },
+  }), [tableId]);
+  const activeNoteKey = activeDay ? `${activeDay.row.cc.id}-${activeDay.d}` : null;
+  const activeHasNote = activeNoteKey ? Boolean(notes[activeNoteKey]?.trim()) : false;
+  const noteVerb = activeHasNote ? 'Edit' : 'Add';
 
   // ── Focus and movement (handlers only).
   const focusPos = (table: HTMLElement, p: Pos) => {
@@ -277,6 +297,13 @@ export function TimesheetGrid() {
         announce('Cleared');
         return;
       }
+      case 'n':
+      case 'N': {
+        if (!activeDay) return;
+        e.preventDefault();
+        openNote(activeDay.row, activeDay.d);
+        return;
+      }
       case 'Escape': {
         if (!activeDay || activeDay.value === activeDay.saved) return;
         e.preventDefault();
@@ -340,9 +367,23 @@ export function TimesheetGrid() {
 
   return (
     <div className={styles.gridArea}>
+      <div className={styles.noteBar}>
+        <Button
+          variant="default"
+          size="sm"
+          leftSection={<Icons.note size={16} />}
+          aria-label={activeDay ? `${noteVerb} note, ${activeDay.row.cc.name}, ${formatCalendarDate(addDays(periodStart, activeDay.d), 'ddd MMM D')}` : undefined}
+          aria-disabled={activeDay ? undefined : 'true'}
+          aria-describedby={activeDay ? undefined : `${gridId}-note-why`}
+          onClick={() => { if (activeDay) openNote(activeDay.row, activeDay.d); }}
+        >
+          {noteVerb} note
+        </Button>
+        {!activeDay && <span id={`${gridId}-note-why`} className={styles.reason}>Choose a day cell first</span>}
+      </div>
       <div className={styles.hint} aria-hidden="true">Arrows move · type a number to enter hours · N adds a note · Esc undoes the cell</div>
       <div className={styles.scroller} style={{ ['--ts-rh' as string]: 'clamp(9rem, 28vw, 16rem)' }}>
-        <table role="grid" className={styles.grid} aria-labelledby={`${gridId}-cap`} aria-describedby={`${gridId}-keys`} onKeyDown={handleKeyDown} onClick={handleClick}>
+        <table role="grid" id={tableId} className={styles.grid} aria-labelledby={`${gridId}-cap`} aria-describedby={`${gridId}-keys`} onKeyDown={handleKeyDown} onClick={handleClick}>
           <caption id={`${gridId}-cap`} className={styles.srOnly}>Hours for {periodWords(periodStart, periodEnd)}, {STATUS_WORD[periodStatus]}</caption>
           <thead>
             <tr>

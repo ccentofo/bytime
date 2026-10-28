@@ -212,3 +212,15 @@ tfoot .cell {
   font-size: 0.875rem;
   font-weight: 600;
 }
+
+.noteBar {
+  display: flex;
+  align-items: center;
+  gap: var(--mantine-spacing-sm);
+  flex-wrap: wrap;
+}
+
+.reason {
+  font-size: 0.875rem;
+  color: var(--mantine-color-dimmed);
+}
