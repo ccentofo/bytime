@@ -96,6 +96,29 @@ describe('page layout (B-T6)', () => {
     expect([...document.querySelectorAll('.mantine-Badge-root')].map((b) => b.textContent)).toEqual(['Approved', 'Self-approved']);
   });
 
+  it('M6: reading and tab order is h1 → the period control → status and Save/Submit (‹ comes before Save)', async () => {
+    renderTimesheet(page({}), <TimesheetPage />);
+    const h1 = document.querySelector('h1')!;
+    const prev = document.querySelector('button[aria-label="Previous period"]') as HTMLButtonElement;
+    const save = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Save') as HTMLButtonElement;
+    const status = [...document.querySelectorAll('.mantine-Badge-root')].find((b) => b.textContent === 'Draft')!;
+    const before = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(before(h1, prev)).toBe(true);
+    expect(before(prev, status)).toBe(true);
+    expect(before(prev, save)).toBe(true);
+    // Tab order from the top of the page: ‹ is reached before Save.
+    const user = userEvent.setup();
+    const reached: string[] = [];
+    for (let i = 0; i < 20 && reached.length < 2; i++) {
+      await user.tab();
+      const el = document.activeElement;
+      if (el === prev) reached.push('prev');
+      if (el === save) reached.push('save');
+    }
+    expect(reached).toEqual(['prev', 'save']);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  });
+
   it('flsaExempt: true and readOnly: true are both kept: the FLSA notice shows (a complete week over 40) and every cell is read-only', () => {
     renderTimesheet(page({ entries: [{ chargeCodeId: CC, hours: [0, 0, 0, 0, 10, 10, 10, 10, 10, ...Array(6).fill(0)] }], workweekStartDay: 1 }, { flsaExempt: true, readOnly: true }), <TimesheetPage />);
     expect(document.querySelector('[data-testid="weekly-notice"]')!.textContent).toContain('Week of Jan 5: 10 hours over 40 (uncompensated).');
