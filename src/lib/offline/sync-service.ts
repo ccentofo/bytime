@@ -187,7 +187,7 @@ async function syncPendingEntries(): Promise<boolean> {
 
       if (result?.ok) {
         // On success: remove from queue, update local entries to synced
-        const newRevisions = result.data;
+        const newRevisions = result.data.revisions;
         const itemIds = items.map((i) => i.id!).filter(Boolean);
         await offlineDb.syncQueue.bulkDelete(itemIds);
 

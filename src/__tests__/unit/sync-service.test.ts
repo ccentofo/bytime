@@ -48,7 +48,7 @@ afterEach(() => {
 
 describe('offline sync', () => {
   it('success removes the queued items and marks the local entries synced', async () => {
-    save.mockResolvedValue({ ok: true, data: { 'clin-1-4': 1, 'clin-1-5': 1 } });
+    save.mockResolvedValue({ ok: true, data: { revisions: { 'clin-1-4': 1, 'clin-1-5': 1 }, noteRevisions: {} } });
     await triggerSync();
     expect(store.queue).toHaveLength(0);
     expect(store.entryStatus.get('clin-1|2026-01-05')?.syncStatus).toBe('synced');

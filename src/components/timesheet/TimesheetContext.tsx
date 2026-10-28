@@ -251,7 +251,7 @@ export function TimesheetProvider({ initialData, children }: ProviderProps) {
         type: 'MARK_SAVED',
         periodStart: state.periodStart,
         entries: state.entries,
-        revisions: result.data,
+        revisions: result.data.revisions,
       });
       return { ok: true, data: undefined };
     },

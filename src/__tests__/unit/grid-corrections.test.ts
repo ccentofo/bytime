@@ -9,7 +9,7 @@ import path from 'path';
  * legacy CLIN correction keeps its prior SLIN), the save mapping by kind, and the offline queue mapping.
  */
 
-const h = vi.hoisted(() => ({ locked: false }));
+const h = vi.hoisted(() => ({ locked: false, lockDates: [] as string[] }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/db', async () => {
   const { createFakeControlDb } = await import('../helpers/fake-control-db');
@@ -27,8 +27,10 @@ vi.mock('@/lib/session', () => {
 vi.mock('@/server/internal/periods', () => ({
   resolvePeriod: async () => ({ numDays: 15, config: { periodType: 'semimonthly' } }),
   lockEmployeeTimesheet: async () => {},
-  assertEntryDatesEditable: async () => {
-    if (h.locked) { const { UserFacingError } = await import('@/lib/errors'); throw new UserFacingError('Cannot modify a submitted timesheet. This period has been certified and is locked.'); }
+  // Like the real check: only the dates it is given can be refused (UX-3 A4.2 — note dates must be among them).
+  assertEntryDatesEditable: async (_userId: string, dates: string[]) => {
+    h.lockDates = dates;
+    if (h.locked && dates.length > 0) { const { UserFacingError } = await import('@/lib/errors'); throw new UserFacingError('Cannot modify a submitted timesheet. This period has been certified and is locked.'); }
   },
   getPeriodStatusFor: async () => ({ id: null, status: 'draft' }),
 }));
@@ -50,7 +52,7 @@ const CLIN = '33333333-3333-4333-8333-333333333333';
 const IND = '44444444-4444-4444-8444-444444444444';
 const START = '2026-10-01';
 
-beforeEach(() => { db.reset(); h.locked = false; });
+beforeEach(() => { db.reset(); h.locked = false; h.lockDates = []; });
 
 /** Script the in-transaction reads for one charge-code cell, in the order the save makes them. */
 function chargeCodeFacts(o: { assigned: boolean; codeActive: boolean; clinActive?: boolean; slinStatus?: string | null; contractActive?: boolean; priorRevision: number }) {
@@ -229,5 +231,15 @@ describe('save mapping by kind (client and offline queue)', () => {
     const tx = save.slice(save.indexOf('await db.transaction(async (tx) => {'));
     expect(tx.indexOf('if (priorRevision === 0) {')).toBeGreaterThan(tx.indexOf('const priorRevision = existing[0]?.maxRevision ?? 0;'));
     expect(save.slice(0, save.indexOf('await db.transaction(async (tx) => {'))).not.toMatch(/userChargeCodes|validateChargeCodeAssignment|validateClinAssignment/);
+  });
+});
+
+describe('UX-3 A4.2: a notes-only batch goes through the period lock', () => {
+  it('the note dates are passed to assertEntryDatesEditable, so a notes-only batch on a locked period is refused and writes nothing', async () => {
+    h.locked = true;
+    const result = await saveTimesheetBatch({ periodStart: START as never, cells: [], notes: [{ chargeCodeId: CODE, dayIndex: 3, body: 'After submitting', expectedRevision: 0 }] });
+    expect(result).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/locked/) });
+    expect(h.lockDates).toEqual(['2026-10-04']);
+    expect(db.inserts).toEqual([]);
   });
 });

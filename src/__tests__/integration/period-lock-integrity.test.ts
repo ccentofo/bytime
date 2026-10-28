@@ -334,7 +334,8 @@ describe('Period-lock integrity (R2-2)', () => {
       periodStart,
       cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex, hours: 6, isEdit: false, isLateEntry: false }],
     }));
-    expect(Object.keys(result)).toHaveLength(1);
+    expect(Object.keys(result.revisions)).toHaveLength(1); // UX-3 A4.2: the result is { revisions, noteRevisions }
+    expect(result.noteRevisions).toEqual({});
 
     const db = getTestDb();
     const rows = await db.select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.chargeCodeId, chargeCode.id));
