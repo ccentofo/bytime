@@ -1,0 +1,89 @@
+/**
+ * The unsaved-changes guard (feature-plan-ux-timesheet-ui.md §4.9). The timesheet provider registers itself while
+ * mounted; anything that leaves the page (a period change, an in-app link, sign-out) awaits `confirmLeave()` first.
+ * Client-side module state, never touched during render.
+ */
+
+export type LeaveChoice = 'save' | 'discard' | 'cancel';
+
+export interface UnsavedGuardRegistration {
+  token: symbol;
+  getCount(): number;
+  /** UX-TIMESHEET-B-AUDIT H2: the save running now (settles when it lands), or null when none is. */
+  whenSaved(): Promise<unknown> | null;
+  /** Save everything; true when nothing is left unsaved. */
+  requestSave(): Promise<boolean>;
+  /** Discard everything (synchronously committed). */
+  discard(): void;
+  /** Show "You have {n} unsaved changes"; resolves with the choice once the confirm has closed. */
+  openConfirm(n: number): Promise<LeaveChoice>;
+}
+
+let registration: UnsavedGuardRegistration | null = null;
+/** `saving`: a save is in flight for this request (the running save it waits for, or "Save and continue"). */
+let pending: { token: symbol; promise: Promise<boolean>; settle: (ok: boolean) => void; saving: boolean } | null = null;
+
+/**
+ * Register the guard. The returned unregister is token-checked (a stale cleanup can't remove a newer registration); it
+ * settles a pending confirm with false and clears the shared promise, so nothing waits on an unmounted timesheet.
+ */
+export function registerUnsavedGuard(r: UnsavedGuardRegistration): () => void {
+  registration = r;
+  return () => {
+    if (registration?.token !== r.token) return;
+    registration = null;
+    if (pending?.token === r.token) {
+      const { settle } = pending;
+      pending = null;
+      settle(false);
+    }
+  };
+}
+
+/**
+ * True when it's fine to leave: nothing registered, nothing unsaved, "Save and continue" saved everything, or "Discard
+ * and continue". False on Cancel (button, Esc, overlay), a cancelled ReasonModal or a failed save. Concurrent calls share
+ * one confirm. A save already running lands FIRST (H2): the count is read after it, so the confirm offers only what is
+ * still unsaved — and doesn't appear at all when that save covered everything. While a save is in flight for the request
+ * (that wait, or "Save and continue"), a second request is IGNORED — false, not queued — so only the first destination
+ * runs (UX-TIMESHEET-B-AUDIT L6).
+ */
+export function confirmLeave(): Promise<boolean> {
+  const r = registration;
+  if (!r || r.getCount() === 0) return Promise.resolve(true);
+  if (pending?.token === r.token) return pending.saving ? Promise.resolve(false) : pending.promise;
+
+  let settle!: (ok: boolean) => void;
+  const promise = new Promise<boolean>((resolve) => { settle = resolve; });
+  const entry = { token: r.token, promise, settle, saving: false };
+  pending = entry;
+  const finish = (ok: boolean) => {
+    if (pending === entry) pending = null;
+    settle(ok);
+  };
+
+  void (async () => {
+    try {
+      const saving = r.whenSaved();
+      if (saving) {
+        entry.saving = true;
+        await saving.catch(() => undefined);
+        entry.saving = false;
+        if (pending !== entry) return; // settled by unregister while the save ran
+      }
+      const n = r.getCount();
+      if (n === 0) { finish(true); return; }
+      const choice = await r.openConfirm(n);
+      if (pending !== entry) return; // already settled by unregister
+      if (choice === 'save') {
+        entry.saving = true;
+        finish(await r.requestSave());
+      }
+      else if (choice === 'discard') { r.discard(); finish(true); }
+      else finish(false);
+    } catch {
+      finish(false);
+    }
+  })();
+  return promise;
+}

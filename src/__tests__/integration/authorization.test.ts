@@ -313,6 +313,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
 
     actingAs(asFake(employee));
     await expectOk(saveTimesheetBatch({
+      expectedUserId: employee.id,
       // @ts-expect-error — simulating a malicious/legacy client that still sends userId;
       // the action no longer declares this param, so it must be silently ignored.
       userId: otherEmployee.id,

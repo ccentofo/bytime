@@ -1,0 +1,180 @@
+// @vitest-environment jsdom
+import '@testing-library/react';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+import { act, cleanup } from '@testing-library/react';
+import { useEffect } from 'react';
+import userEvent from '@testing-library/user-event';
+import { readFileSync } from 'fs';
+import path from 'path';
+
+/**
+ * feature-plan-ux-timesheet-ui.md B-T14 (§4.5, trap T-E): both live regions exist and are empty at mount; they are the
+ * only live regions (no live totals); toasts carry no live role, and success is spoken once — by the announcer; error
+ * toasts don't auto-close; a repeated message is re-announced. (The status line, note counter and "Edit cancelled"
+ * cases are added with the steps that build them.)
+ */
+
+const actions = vi.hoisted(() => ({ saveTimesheetBatch: vi.fn(), getTimesheetPeriod: vi.fn(), getNeighborPeriod: vi.fn() }));
+const notify = vi.hoisted(() => vi.fn());
+vi.mock('@/server/actions/timesheet', () => ({ saveTimesheetBatch: actions.saveTimesheetBatch, getTimesheetPeriod: actions.getTimesheetPeriod }));
+vi.mock('@/server/actions/periods', () => ({ submitPeriod: vi.fn(), getWorkspaceContext: vi.fn(async () => ({ today: '2026-01-20' })), getPeriodOptions: vi.fn(async () => []) }));
+vi.mock('@/server/actions/pay-period-config', () => ({ getNeighborPeriod: actions.getNeighborPeriod }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }), usePathname: () => '/timesheet' }));
+vi.mock('@mantine/notifications', () => ({ notifications: { show: notify } }));
+
+import { TimesheetGrid } from '@/components/timesheet/TimesheetGrid';
+import { TimesheetPage } from '@/components/timesheet/TimesheetClient';
+import { useAnnounce } from '@/components/timesheet/TimesheetAnnouncer';
+import { CC, chargeCode, pageData, periodData } from '../helpers/timesheet-fixtures';
+import { enterGrid, installTimesheetDomStubs, live, renderTimesheet } from '../helpers/timesheet-render';
+import type { CalendarDate } from '@/lib/calendar-date';
+
+beforeAll(() => installTimesheetDomStubs());
+beforeEach(() => { for (const f of Object.values(actions)) f.mockReset(); notify.mockReset(); });
+afterEach(() => cleanup());
+
+const polite = () => document.querySelector('[data-testid="ts-announce-polite"]') as HTMLElement;
+const assertive = () => document.querySelector('[data-testid="ts-announce-assertive"]') as HTMLElement;
+const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 80)); });
+// Today is the period's first day, so a new entry on it is neither late nor an edit: no ReasonModal.
+const data = () => pageData({ today: '2026-01-01' as CalendarDate, chargeCodes: [chargeCode()] });
+
+const held: { announce: ReturnType<typeof useAnnounce> | null } = { announce: null };
+function AnnounceProbe() { const announce = useAnnounce(); useEffect(() => { held.announce = announce; }); return null; }
+
+describe('announcer (B-T14)', () => {
+  it('both regions exist, are empty at mount, and are the only live regions (no live totals)', () => {
+    renderTimesheet(data(), <TimesheetGrid />);
+    expect(polite().getAttribute('role')).toBe('status');
+    expect(polite().getAttribute('aria-live')).toBe('polite');
+    expect(assertive().getAttribute('role')).toBe('alert');
+    expect(assertive().getAttribute('aria-live')).toBe('assertive');
+    expect([polite().textContent, assertive().textContent]).toEqual(['', '']);
+    const live = [...document.querySelectorAll('[aria-live], [role="status"], [role="alert"], [role="log"]')];
+    expect(live).toEqual([polite(), assertive()]);
+  });
+
+  it('a save: the toast has no live role, success is spoken once by the announcer (polite)', async () => {
+    actions.saveTimesheetBatch.mockResolvedValue({ ok: true, data: { revisions: { [`${CC}-0`]: 1 }, noteRevisions: {} } });
+    renderTimesheet(data(), <TimesheetGrid />);
+    act(() => live.ctx!.dispatch({ type: 'SET_HOURS', chargeCodeId: CC, dayIndex: 0, value: 8 }));
+    await act(async () => { expect(await live.ctx!.requestSave()).toBe(true); });
+    await settle();
+    expect(polite().textContent).toBe('Saved');
+    expect(assertive().textContent).toBe('');
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0][0]).toMatchObject({ title: 'Timesheet saved', role: 'none' });
+    expect(notify.mock.calls[0][0].autoClose).not.toBe(false);
+  });
+
+  it('a failed save: assertive, and the error toast has no live role and does not auto-close', async () => {
+    actions.saveTimesheetBatch.mockResolvedValue({ ok: false, code: 'validation', error: 'This period has been certified and is locked.' });
+    renderTimesheet(data(), <TimesheetGrid />);
+    act(() => live.ctx!.dispatch({ type: 'SET_HOURS', chargeCodeId: CC, dayIndex: 0, value: 8 }));
+    await act(async () => { expect(await live.ctx!.requestSave()).toBe(false); });
+    await settle();
+    expect(assertive().textContent).toBe('This period has been certified and is locked.');
+    expect(polite().textContent).toBe('');
+    expect(notify.mock.calls[0][0]).toMatchObject({ title: 'Save failed', role: 'none', autoClose: false });
+  });
+
+  it('a repeated message is re-announced (cleared, then set again)', async () => {
+    renderTimesheet(data(), <><TimesheetGrid /><AnnounceProbe /></>);
+    act(() => held.announce!('Cleared'));
+    await settle();
+    expect(polite().textContent).toBe('Cleared');
+    const seen: string[] = [];
+    const observer = new MutationObserver(() => seen.push(polite().textContent ?? ''));
+    observer.observe(polite(), { childList: true, characterData: true, subtree: true });
+    act(() => held.announce!('Cleared'));
+    await settle();
+    observer.disconnect();
+    expect(seen).toContain('');
+    expect(seen.at(-1)).toBe('Cleared');
+  });
+
+  it('"Edit cancelled" is announced from an effect when a period change cancels an open edit (step 3)', async () => {
+    const user = userEvent.setup();
+    renderTimesheet(data(), <TimesheetGrid />);
+    await enterGrid(user);
+    await user.keyboard('7');
+    expect(document.querySelector('input[data-cell-editor]')).not.toBeNull();
+    act(() => live.ctx!.dispatch({ type: 'SET_PERIOD_DATA', ...periodData({ periodStart: '2025-12-16' as CalendarDate, numDays: 16 }) }));
+    expect(document.querySelector('input[data-cell-editor]')).toBeNull();
+    await settle();
+    expect(polite().textContent).toBe('Edit cancelled');
+    // Never during render: the call sits in an effect keyed on the cancellation generation.
+    const src = readFileSync(path.resolve(__dirname, '../../components/timesheet/TimesheetGrid.tsx'), 'utf8');
+    expect(src).toMatch(/useEffect\(\(\) => \{\n\s+if \(cancelledGen > 0\) announce\('Edit cancelled'\);\n\s+\}, \[cancelledGen, announce\]\);/);
+  });
+
+  it('the note counter is not live (step 4)', async () => {
+    const user = userEvent.setup();
+    renderTimesheet(data(), <TimesheetGrid />);
+    await enterGrid(user);
+    await user.keyboard('N');
+    const counter = document.querySelector('[data-testid="note-counter"]')!;
+    expect(counter.textContent).toBe('0/1000');
+    expect(counter.closest('[aria-live], [role="status"], [role="alert"]')).toBeNull();
+    expect(counter.hasAttribute('aria-live')).toBe(false);
+  });
+
+  it('the status line is a plain paragraph, not a live region (step 5)', () => {
+    renderTimesheet(data(), <TimesheetPage />);
+    const line = document.querySelector('[data-testid="status-line"]')!;
+    expect(line.tagName).toBe('P');
+    expect(line.closest('[aria-live], [role="status"], [role="alert"]')).toBeNull();
+  });
+
+  it('on the full page — with the returned banner and the weekly notice showing — the announcer\'s two regions are still the only live regions', async () => {
+    renderTimesheet(pageData({ periodStatus: 'rejected', reviewComment: 'Fix Tuesday', chargeCodes: [chargeCode()], entries: [{ chargeCodeId: CC, hours: [0, 0, 0, 0, 8, 8, 8, 8, 0, ...Array(6).fill(0)] }], workweekStartDay: 1, today: '2026-01-20' as CalendarDate }, { flsaExempt: true }), <TimesheetPage />);
+    expect(document.querySelector('[data-testid="returned-banner"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="weekly-notice"]')).not.toBeNull();
+    const live = [...document.querySelectorAll('[aria-live], [role="status"], [role="alert"], [role="log"]')];
+    expect(live).toEqual([polite(), assertive()]);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  });
+});
+
+describe('the period change is announced (M5)', () => {
+  const DEC16 = periodData({ chargeCodes: [chargeCode()], periodStart: '2025-12-16' as CalendarDate, numDays: 16, periodStatus: 'approved' });
+  const prev = () => document.querySelector('button[aria-label="Previous period"]') as HTMLButtonElement;
+  beforeEach(() => {
+    actions.getNeighborPeriod.mockResolvedValue({ periodStart: '2025-12-16', numDays: 16, periodConfig: periodData().periodConfig, isCurrent: false });
+  });
+
+  it('not on mount', async () => {
+    renderTimesheet(data(), <TimesheetPage />);
+    await settle();
+    expect(polite().textContent).toBe('');
+  });
+
+  it('after an in-page load lands: "Showing {period label}, {status}", politely', async () => {
+    actions.getTimesheetPeriod.mockResolvedValue(DEC16);
+    renderTimesheet(data(), <TimesheetPage />);
+    await userEvent.setup().click(prev());
+    await settle();
+    expect(live.ctx!.state.periodStart).toBe('2025-12-16');
+    expect(polite().textContent).toBe('Showing Dec 16 – 31, 2025, Approved');
+    expect(assertive().textContent).toBe('');
+  });
+
+  it('not on a re-sync', async () => {
+    const view = renderTimesheet(data(), <TimesheetPage />);
+    view.rerenderWith(pageData({ chargeCodes: [chargeCode()], periodStart: '2025-12-16' as CalendarDate, numDays: 16 }));
+    await settle();
+    expect(live.ctx!.state.periodStart).toBe('2025-12-16');
+    expect(polite().textContent).toBe('');
+  });
+
+  it('not when the load fails (the error is announced instead)', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    actions.getTimesheetPeriod.mockRejectedValue(new Error('network'));
+    renderTimesheet(data(), <TimesheetPage />);
+    await userEvent.setup().click(prev());
+    await settle();
+    expect(polite().textContent).toBe('');
+    expect(assertive().textContent).toBe('Could not load that pay period. Check your connection and try again.');
+    vi.restoreAllMocks();
+  });
+});

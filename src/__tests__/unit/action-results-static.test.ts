@@ -284,7 +284,8 @@ function voidAwaitedWrappers(source: string, actionNames: string[]): string[] {
 /** Files whose action calls the per-call-site check must cover. */
 function callSiteFiles(): string[] {
   const clientFiles = walk(SRC).filter((f) => /^\s*['"]use client['"]/.test(read(f)));
-  const extra = [path.join(SRC, 'components/timesheet/TimesheetToolbar.tsx')];
+  // UX-3 Part B: the save / submit flow lives in the provider (useSaveFlow), which is a client file already listed.
+  const extra = [path.join(SRC, 'components/timesheet/TimesheetContext.tsx')];
   return [...new Set([...clientFiles, ...extra])];
 }
 
@@ -293,7 +294,7 @@ const RESULT_RETURNING_PROPS = new Set(['onImport']);
 
 /** Non-action functions whose results must also be consumed, per file (they return ActionResult). */
 const RESULT_RETURNING_CALLS: Record<string, string[]> = {
-  'components/timesheet/TimesheetToolbar.tsx': ['saveAll', 'submitTimesheet'],
+  'components/timesheet/TimesheetContext.tsx': ['saveAll', 'submitTimesheet', 'saveAllRef.current'],
 };
 
 // ---------------------------------------------------------------------------
@@ -336,7 +337,9 @@ describe('action-result contract (static, launch-blockers P4)', () => {
     expect(body('pay-period-config.ts', 'getCurrentEffectiveConfig')).not.toMatch(/(?<![.\w])getEffectiveConfigAt\s*\(/);
     expect(body('pay-period-config.ts', 'getPayPeriodConfig')).not.toMatch(/(?<![.\w])getCurrentEffectiveConfig\s*\(/);
     expect(body('signup.ts', 'startSignup')).not.toMatch(/(?<![.\w])checkSlugAvailable\s*\(/);
-    expect(src('employee-dashboard.ts')).not.toMatch(/from '@\/server\/actions\//);
+    // The seventh lived in actions/employee-dashboard.ts, which is gone (UX-TIMESHEET-B-AUDIT L16: getEmployeeDashboardData
+    // had no callers after UX-3 Part B), so it can't come back there.
+    expect(fs.existsSync(path.join(ACTIONS_DIR, 'employee-dashboard.ts'))).toBe(false);
   });
 
   it('the action-to-action checks fire (fixtures)', () => {

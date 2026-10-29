@@ -131,7 +131,7 @@ describe.skipIf(!cpReady)('migration import (certified-outputs C1)', () => {
     await getTestDb().insert(schema.timesheetEntries).values({
       userId: user.id, chargeCodeId, clinId: clin.id, entryDate: prevStart(1), hours: '8', revisionNumber: 1, createdBy: user.id,
     });
-    return actorStore.run(asFake(user), () => submitPeriod({ periodStart: prevStart(1) }));
+    return actorStore.run(asFake(user), () => submitPeriod({ expectedUserId: user.id, periodStart: prevStart(1) }));
   }
 
   beforeEach(async () => {
@@ -350,6 +350,7 @@ describe.skipIf(!cpReady)('migration import (certified-outputs C1)', () => {
       const code = await createTestChargeCode(clin.id);
       await getTestDb().insert(schema.userChargeCodes).values({ userId: employee.id, chargeCodeId: code.id, isActive: true });
       await expectFailure(actorStore.run(asFake(employee), () => saveTimesheetBatch({
+        expectedUserId: employee.id,
         periodStart: currentStart(),
         cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 2, isEdit: false, isLateEntry: true }],
         changeReasonCode: 'MIGRATION',
@@ -408,7 +409,7 @@ describe.skipIf(!cpReady)('migration import (certified-outputs C1)', () => {
       await getTestDb().insert(schema.timesheetEntries).values({ userId: employeeB.id, chargeCodeId: code.id, clinId: clin.id, entryDate: prevStart(1), hours: '8', revisionNumber: 1, createdBy: employeeB.id });
       const [imp, sub] = await Promise.all([
         importEntries([entryRow(), indirectRow()]),
-        actorStore.run(asFake(employeeB), () => submitPeriod({ periodStart: prevStart(1) })),
+        actorStore.run(asFake(employeeB), () => submitPeriod({ expectedUserId: employeeB.id, periodStart: prevStart(1) })),
       ]);
       expect(sub.ok).toBe(true);
       if (imp.ok) {
@@ -442,8 +443,8 @@ describe.skipIf(!cpReady)('migration import (certified-outputs C1)', () => {
         // Every call must RESOLVE (an ActionResult); a deadlock (40P01) would reject one of them.
         const results = await Promise.all([
           importEntries([entryRow(), entryRow({ employeeEmail: employeeB.email })]),
-          actorStore.run(asFake(employee), () => submitPeriod({ periodStart: prevStart(1) })),
-          actorStore.run(asFake(employeeB), () => submitPeriod({ periodStart: prevStart(1) })),
+          actorStore.run(asFake(employee), () => submitPeriod({ expectedUserId: employee.id, periodStart: prevStart(1) })),
+          actorStore.run(asFake(employeeB), () => submitPeriod({ expectedUserId: employeeB.id, periodStart: prevStart(1) })),
         ]);
         expect(results[1].ok && results[2].ok, `round ${round}: ${JSON.stringify(results)}`).toBe(true);
         expect(results[0].ok || /can only be imported before/.test((results[0] as { error: string }).error)).toBe(true);

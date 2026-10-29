@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Modal, Button, Group, Stack, Text, Textarea, Alert, Checkbox, Paper } from '@mantine/core';
-import { IconAlertTriangle } from '@tabler/icons-react';
+import { Modal, Button, Group, Loader, Stack, Text, Textarea, Alert, Checkbox, Paper } from '@mantine/core';
+import { Icons } from '@/components/ui/icons';
 
 type Props = {
   opened: boolean;
@@ -29,7 +29,7 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
   }
 
   async function handleSubmit() {
-    if (!certified) return;
+    if (!certified || isSaving) return;
 
     // Append completeness warnings to the comment for audit trail
     let fullComment = comment.trim();
@@ -54,7 +54,8 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
       closeOnEscape={!isSaving}
     >
       <Stack>
-        <Alert icon={<IconAlertTriangle size={16} />} color="warning" variant="light">
+        {/* role="note": Mantine's Alert defaults to a live role="alert"; these are static (UX-TIMESHEET-B-AUDIT L7). */}
+        <Alert role="note" icon={<Icons.statusWarning size={16} />} color="warning" variant="light">
           <Text size="sm" fw={600}>
             You are submitting your timesheet for {periodLabel}.
           </Text>
@@ -65,7 +66,7 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
         </Alert>
 
         {completenessWarnings && completenessWarnings.length > 0 && (
-          <Alert icon={<IconAlertTriangle size={16} />} color="warning" variant="light">
+          <Alert role="note" icon={<Icons.statusWarning size={16} />} color="warning" variant="light">
             <Text size="sm" fw={600} mb={4}>
               Period Completeness Warnings ({completenessWarnings.length}):
             </Text>
@@ -74,7 +75,7 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
                 <Text key={idx} size="sm">• {warning}</Text>
               ))}
             </Stack>
-            <Text size="xs" c="dimmed" mt={8}>
+            <Text size="sm" c="dimmed" mt={8}>
               These warnings are recorded in the audit trail. You may still submit if the gaps are intentional.
             </Text>
           </Alert>
@@ -87,7 +88,7 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
             {(uncompensatedHours ?? 0) > 0 && (
               <Text size="sm">Uncompensated Overtime: <strong>{(uncompensatedHours ?? 0).toFixed(2)} hours</strong></Text>
             )}
-            <Text size="xs" c="dimmed" mt={4}>
+            <Text size="sm" c="dimmed" mt={4}>
               As an FLSA-exempt employee, you are required to record all hours actually worked,
               including any uncompensated overtime, per DCAA total time accounting requirements.
             </Text>
@@ -113,16 +114,18 @@ export function SubmitModal({ opened, onClose, onConfirm, isSaving, periodLabel,
         />
 
         <Group justify="flex-end" mt="md">
-          <Button variant="default" onClick={handleClose} disabled={isSaving}>
+          {/* aria-disabled plus the handlers' guards, never `disabled` or `loading` (focus would drop, M2). */}
+          <Button variant="default" onClick={handleClose} aria-disabled={isSaving || undefined} data-disabled={isSaving || undefined}>
             Cancel
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={!certified}
-            loading={isSaving}
+            aria-disabled={!certified || isSaving || undefined}
+            data-disabled={!certified || isSaving || undefined}
+            leftSection={isSaving ? <Loader size={16} aria-hidden="true" /> : undefined}
             color="success"
           >
-            Submit Timesheet
+            {isSaving ? 'Submitting…' : 'Submit Timesheet'}
           </Button>
         </Group>
       </Stack>

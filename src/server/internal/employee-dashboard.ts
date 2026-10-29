@@ -5,6 +5,7 @@ import { timesheetEntries, timesheetPeriods } from '@/db/schema';
 import { getLastWeekdayInPeriod, type PeriodConfig } from '@/lib/date-utils';
 import { addDays, dayOfWeek, formatCalendarDate, isAfter, isBefore, type CalendarDate } from '@/lib/calendar-date';
 import { LATEST_REVISION } from './cost-basis';
+import { periodProgress } from '@/lib/timesheet/period-progress';
 
 export interface CurrentPeriodSummary {
   periodStart: CalendarDate;
@@ -60,15 +61,14 @@ export async function currentPeriodSummary(
   for (const r of perDay) dailyHours[r.day] = round2(Number(r.hours));
   const filledDays = Object.entries(dailyHours).filter(([, h]) => h > 0).map(([d]) => d as CalendarDate);
 
-  let expectedWorkdays = 0;
   let daysRemaining = 0;
   for (let i = 0; i < period.numDays; i++) {
     const date = addDays(start, i);
-    if (!isWeekday(date)) continue;
-    if (isAfter(date, today)) daysRemaining++;
-    else expectedWorkdays++;
+    if (isWeekday(date) && isAfter(date, today)) daysRemaining++;
   }
   const lastWeekday = getLastWeekdayInPeriod(start, period.config);
+  // feature-plan-ux-timesheet-ui.md §4.4: the one progress rule, shared with the timesheet screen.
+  const progress = periodProgress({ start, numDays: period.numDays, dailyHours, today, submitOpensOn: lastWeekday });
   const row = periodRows[0];
   return {
     periodStart: start,
@@ -78,10 +78,10 @@ export async function currentPeriodSummary(
     submittedAt: row?.submittedAt ?? null,
     reviewedAt: row?.reviewedAt ?? null,
     reviewComment: row?.reviewComment ?? null,
-    totalHoursEntered: round2(Object.values(dailyHours).reduce((s, h) => s + h, 0)),
-    expectedWorkdays,
+    totalHoursEntered: progress.total,
+    expectedWorkdays: progress.expectedWorkdays,
     daysWithEntries: filledDays.length,
-    workdaysFilled: filledDays.filter((d) => isWeekday(d) && !isAfter(d, today)).length,
+    workdaysFilled: progress.workdaysFilled,
     daysRemaining,
     submissionDeadline: formatCalendarDate(lastWeekday, 'MMM D, YYYY'),
     canSubmitToday: !isBefore(today, lastWeekday),

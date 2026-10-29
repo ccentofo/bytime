@@ -2,7 +2,8 @@ import 'server-only';
 import { and, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 import type { ReadDb } from '@/db';
 import { timesheetEntries, timesheetPeriods, users } from '@/db/schema';
-import { addDays, calendarDayOf, formatCalendarDate, min as minDate, type CalendarDate } from '@/lib/calendar-date';
+import { addDays, calendarDayOf, min as minDate, type CalendarDate } from '@/lib/calendar-date';
+import { periodLabel } from '@/lib/timesheet/labels';
 import { loadScheduleResolver, type ResolvedPeriod } from './pay-period-config';
 import { approvalLabels } from './approval-label';
 import { LATEST_REVISION } from './cost-basis';
@@ -10,6 +11,12 @@ import { LATEST_REVISION } from './cost-basis';
 type Reader = Pick<ReadDb, 'select'>;
 
 export const PAST_PERIODS_PAGE_SIZE = 26;
+
+/**
+ * One page, plus the CURRENT period's start as of this response — the client marks "(current)" from the latest response
+ * only, and refreshes page 0 when it moved (a new period started since; UX-TIMESHEET-B-AUDIT L12).
+ */
+export interface PastPeriodsPage { rows: PastPeriodRow[]; page: number; hasMore: boolean; currentStart: CalendarDate }
 const COMMENT_PREVIEW = 140;
 
 export type PastPeriodStatus = 'notSubmitted' | 'submitted' | 'approved' | 'rejected';
@@ -51,7 +58,7 @@ export async function pastPeriods(
   pageSize: number,
   today: CalendarDate,
   timeZone: string,
-): Promise<{ rows: PastPeriodRow[]; page: number; hasMore: boolean }> {
+): Promise<PastPeriodsPage> {
   // 1. The earliest bound, in one query.
   const [bounds] = await db
     .select({
@@ -77,7 +84,7 @@ export async function pastPeriods(
   // 3. This page.
   const slice = all.slice(page * pageSize, (page + 1) * pageSize);
   const hasMore = all.length > (page + 1) * pageSize;
-  if (slice.length === 0) return { rows: [], page, hasMore: false };
+  if (slice.length === 0) return { rows: [], page, hasMore: false, currentStart: current.start };
 
   // 4. Latest-revision hours per day over the page's whole range (5. and the period rows), in parallel.
   const rangeStart = slice[slice.length - 1].start;
@@ -110,7 +117,7 @@ export async function pastPeriods(
     return {
       start: p.start,
       numDays: p.numDays,
-      label: `${formatCalendarDate(p.start, 'MMM D')} – ${formatCalendarDate(end, 'MMM D, YYYY')}`,
+      label: periodLabel(p.start, end), // the timesheet's own format, "Oct 16 – 31, 2026" (L15)
       status: !row || row.status === 'draft' ? 'notSubmitted' : row.status,
       hours: round2(hours),
       submittedAt: row?.submittedAt ?? null,
@@ -120,5 +127,5 @@ export async function pastPeriods(
       isCurrent: p.start === current.start,
     };
   });
-  return { rows, page, hasMore };
+  return { rows, page, hasMore, currentStart: current.start };
 }

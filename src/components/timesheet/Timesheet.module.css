@@ -1,114 +1,462 @@
-/* ============================================================
-   Fit-to-width timesheet grid
-   grid-template-columns is set inline (depends on numDays)
-   ============================================================ */
+/* The timesheet (feature-plan-ux-timesheet-ui.md §4.2, §4.6, §4.7). Minimum text 0.875rem; no dense mode; no opacity on
+   focusable cells (T-F); no overflow: hidden on the grid, its cells or their ancestors (T-G). */
+
+.gridArea {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mantine-spacing-xs);
+  flex: 1 1 auto;
+  min-block-size: 0;
+}
+
+.hint {
+  font-size: 0.875rem;
+  color: var(--mantine-color-dimmed);
+}
+
+/* Reflow and zoom (feature-plan-ux-timesheet-ui.md §4.7, §15.2, trap T-G): ONE scroll container. At desktop sizes the
+   page is exactly the viewport below the app header and never scrolls; the grid's slot takes the remaining height and the
+   scroller fills it, scrolling both ways with sticky headers. No overflow: hidden in between. On short or narrow
+   viewports (400% zoom, landscape phones) the page scrolls normally and stickiness is lifted (the media block below). */
+.page {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  block-size: calc(100dvh - var(--app-shell-header-offset, 0rem) - 2 * var(--app-shell-padding, 0rem));
+  min-block-size: 0;
+
+  /* Colour tokens (§14.1, §15.1): the light value here, the dark value in the override rule below — never the CSS
+     light/dark function in a .css file (Lightning CSS compiles it to variables that only a color-scheme declaration
+     defines; Mantine sets the scheme with an attribute, so the whole declaration was dropped). The lines follow the approved mockup (faint hairlines,
+     separators a touch darker; product owner, 2026-10-28). */
+  --line: var(--mantine-color-ink-2);
+  --line-strong: var(--mantine-color-ink-3);
+  --weekend: var(--mantine-color-gray-0);
+  --hover-tint: var(--mantine-color-signal-0);
+  --group: var(--mantine-color-gray-1);
+  --chip: var(--mantine-color-gray-1);
+  --accent-text: var(--mantine-color-signal-7);
+  --warn-text: var(--mantine-color-warning-8);
+  --unsaved-bg: var(--mantine-color-warning-0);
+  --notice-bg: var(--mantine-color-gray-0);
+  --today-tint: color-mix(in srgb, var(--mantine-color-signal-6) 9%, transparent);
+  /* v5.4 (§16.2): the focus ring — signal-6 in both schemes, ≥ 3:1 on the body, the tints and the hover tint. */
+  --ring: var(--mantine-color-signal-6);
+  /* §16.1: an invalid draft's ring. */
+  --invalid: var(--mantine-color-red-7);
+}
+
+:global([data-mantine-color-scheme='dark']) .page {
+  --line: var(--mantine-color-dark-5);
+  --line-strong: var(--mantine-color-dark-4);
+  --weekend: color-mix(in srgb, var(--mantine-color-body) 85%, black);
+  --hover-tint: color-mix(in srgb, var(--mantine-color-signal-6) 18%, transparent);
+  --group: color-mix(in srgb, var(--mantine-color-body) 92%, white);
+  --chip: var(--mantine-color-dark-5);
+  --accent-text: var(--mantine-color-signal-4);
+  --warn-text: var(--mantine-color-warning-4);
+  --unsaved-bg: var(--mantine-color-dark-6);
+  --notice-bg: color-mix(in srgb, var(--mantine-color-body) 92%, white);
+  --invalid: var(--mantine-color-red-5);
+}
+
+.page > * {
+  flex: 0 0 auto;
+}
+
+/* The grid's wrapper (TimesheetClient): the page's last child, the only one that flexes. */
+.page > .gridSlot {
+  flex: 1 1 auto;
+  min-block-size: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.scroller {
+  overflow: auto;
+  flex: 1 1 auto;
+  min-block-size: 18rem;
+  max-height: none;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--mantine-radius-md);
+  scroll-padding-top: 3.5rem;
+  scroll-padding-left: var(--ts-rh);
+}
+
+.scroller thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.scroller th[scope='row'] {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+.scroller thead th.corner {
+  left: 0;
+  z-index: 3;
+}
+
+@media (max-height: 40em), (max-width: 40em) {
+  .page {
+    block-size: auto;
+  }
+
+  .scroller {
+    flex: none;
+    min-block-size: 0;
+    max-height: none;
+  }
+
+  .scroller thead th,
+  .scroller th[scope='row'] {
+    position: static;
+  }
+}
 
 .grid {
-  display: grid;
-  width: 100%;
-  border: 1px solid var(--mantine-color-default-border);
-  border-radius: var(--mantine-radius-sm);
-  overflow: hidden; /* clip border-radius */
-  box-sizing: border-box;
+  border-collapse: separate;
+  border-spacing: 0;
+  inline-size: 100%;
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
 }
 
-/* ---- Shared cell base ---- */
+.colHead,
+.dayHeader {
+  background: var(--mantine-color-body);
+  /* §14.1: column and row lines; a heavier line under the column headers. */
+  border-inline-end: 1px solid var(--line);
+  border-block-end: 2px solid var(--line-strong);
+  padding: 0.375rem 0.25rem;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.corner {
+  text-align: start;
+  vertical-align: bottom;
+  inline-size: var(--ts-rh);
+  padding-inline: 0.75rem;
+  border-inline-end: 2px solid var(--line-strong);
+}
+
+.dayHeader {
+  min-inline-size: 3.5rem;
+  border-top: 3px solid transparent;
+}
+
+.todayHead {
+  border-top-color: var(--mantine-color-signal-6);
+}
+
+.dayName {
+  font-weight: 600;
+}
+
+.todayHead .dayName,
+.todayHead .dayDate {
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+.futureHead .dayName,
+.futureHead .dayDate {
+  color: var(--mantine-color-dimmed);
+  font-weight: 500;
+}
+
+.dayHeadVisible {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.dayDate {
+  color: var(--mantine-color-dimmed);
+  font-weight: 500;
+}
+
+/* A slim band; no vertical lines inside it (its cell has no .cell class). */
+.groupRow th {
+  text-align: start;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--mantine-color-dimmed);
+  padding: 0.375rem 0.75rem;
+  background: var(--group);
+  border-block-end: 1px solid var(--line);
+}
+
+/* §14.1: every cell has a column line and a row line. */
 .cell {
-  box-sizing: border-box;
+  position: relative;
+  padding: 0.375rem 0.25rem;
+  border-inline-end: 1px solid var(--line);
+  border-block-end: 1px solid var(--line);
+  text-align: center;
+  cursor: default;
+}
+
+/* v5.4 (§16.2): one subtle ring on the cell edge, for the focused cell or the cell whose editor is focused. A box-shadow
+   paints under the cell's children, so the note icon sits on top of it, never behind it. Row headers and totals use the
+   same .cell:focus rule. Forced colors (Windows High Contrast) drop box-shadows: an outline in CanvasText instead. */
+.cell:focus,
+.day:focus-within {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--ring);
+}
+
+@media (forced-colors: active) {
+  .cell:focus,
+  .day:focus-within {
+    outline: 2px solid CanvasText;
+    outline-offset: -2px;
+  }
+}
+
+.rowHeader {
+  text-align: start;
+  inline-size: var(--ts-rh);
+  background: var(--mantine-color-body);
+  font-weight: 400;
+  padding-inline: 0.75rem;
+  /* §14.1: a heavier line after the row-header column. */
+  border-inline-end: 2px solid var(--line-strong);
+}
+
+/* §14.3: the row name on line 1, the code as a chip on line 2. */
+.name {
+  display: block;
+  font-weight: 600;
+}
+
+.code {
+  display: inline-block;
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: 0 0.375rem;
+  border-radius: var(--mantine-radius-xs);
+  background: var(--chip);
+  color: var(--mantine-color-text);
+}
+
+.name + .code {
+  margin-block-start: 0.125rem;
+}
+
+.closedNote {
+  display: block;
+  /* UX-TIMESHEET-B-AUDIT M3: warning-filled was 3.51:1 on the dark background; the indicator pair passes in both. */
+  color: var(--warn-text);
+  font-weight: 600;
+}
+
+.day {
+  min-inline-size: 3.5rem;
+  /* Table cells treat block-size as a minimum (min-block-size doesn't apply to them). */
+  block-size: 2.875rem;
+}
+
+.value {
+  display: inline-block;
+  min-block-size: 1.25rem;
+}
+
+.future .value {
+  color: var(--mantine-color-dimmed);
+}
+
+/* §14.2: faint tints on body day cells only (weekend, then today over it). background-color, never the shorthand: the
+   shorthand would also clear a closed cell's hatch (background-image). */
+.day.weekend {
+  background-color: var(--weekend);
+}
+
+.day.todayCol {
+  background-color: var(--today-tint);
+}
+
+@media (hover: hover) {
+  .day.editable:hover {
+    background-color: var(--hover-tint);
+  }
+}
+
+/* After the tints and hover (same specificity), so an unsaved cell always shows as unsaved. */
+.day.unsaved {
+  background-color: var(--unsaved-bg);
+}
+
+/* A dashed line inset 4px at the bottom (audit M3 colours). */
+.unsaved::after {
+  content: '';
+  position: absolute;
+  inset-inline: 4px;
+  inset-block-end: 3px;
+  border-block-end: 2px dashed var(--warn-text);
+}
+
+.closed {
+  background-image: repeating-linear-gradient(135deg, transparent 0 6px, var(--mantine-color-default-border) 6px 7px);
+}
+
+/* The import and lock glyphs sit top-left; the note trigger owns the top-right corner (§14.4). */
+.glyphs {
+  position: absolute;
+  inset-block-start: 0.125rem;
+  inset-inline-start: 0.125rem;
+  display: inline-flex;
+  gap: 0.125rem;
+  color: var(--mantine-color-dimmed);
+}
+
+/* §14.4: the per-cell note trigger — a pointer convenience (N is the keyboard way). Shown when the cell has a note, is
+   active, or is under the pointer; never focusable. */
+.noteTrigger {
+  position: absolute;
+  /* v5.4 (§16.3): pinned in the corner, above the ring and the editor. */
+  inset-block-start: 1px;
+  inset-inline-end: 1px;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  z-index: 1;
+  display: none;
+  place-items: center;
+  border-radius: var(--mantine-radius-xs);
+  cursor: pointer;
+  color: var(--mantine-color-dimmed);
+}
+
+.hasNote .noteTrigger,
+[data-active] .noteTrigger {
+  display: grid;
+}
+
+@media (hover: hover) {
+  .day:hover .noteTrigger {
+    display: grid;
+  }
+
+  .noteTrigger:hover {
+    background: var(--mantine-color-default-hover);
+  }
+}
+
+.hasNote .noteTrigger {
+  color: var(--accent-text);
+}
+
+.total {
+  font-weight: 600;
+}
+
+/* §14.1: a heavier line before the Total column. */
+.totalHead,
+.totalCol {
+  border-inline-start: 2px solid var(--line-strong);
+}
+
+/* Row totals read right-aligned, as in the mockup. */
+.totalCol {
+  text-align: end;
+  padding-inline: 0.875rem;
+}
+
+.totalHead {
+  min-inline-size: 4rem;
+}
+
+.grand {
+  /* M3: signal-filled was 3.03:1 in dark mode. */
+  color: var(--accent-text);
+  font-weight: 800;
+}
+
+/* §14.1: a heavier line above the footer. */
+tfoot .cell {
+  border-block-start: 2px solid var(--line-strong);
+  font-weight: 700;
+}
+
+/* Visually hidden, still read by screen readers (feature-plan-ux-timesheet-ui.md §4.2, §4.5). */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
   overflow: hidden;
-  border-bottom: 1px solid var(--mantine-color-default-border);
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
-/* ---- Header row ---- */
-.headerCell {
-  composes: cell;
-  background: var(--mantine-color-body);
-  border-bottom: 2px solid var(--mantine-color-default-border);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px 4px;
+/* v5.4 (§16.1): the editor overlays its cell (the .day is position: relative) and never changes the layout — no minimum
+   width, no border, transparent; the cell's ring (§16.2) shows focus. */
+.editor {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  min-inline-size: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0 0.25rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--mantine-color-text);
+  font: inherit;
   text-align: center;
+  outline: none;
 }
 
-.headerCellCC {
-  composes: headerCell;
-  justify-content: flex-start;
-  padding: 8px;
-  border-right: 2px solid var(--mantine-color-default-border);
+.editor[aria-invalid='true'] {
+  box-shadow: inset 0 0 0 2px var(--invalid);
 }
 
-.headerCellTotal {
-  composes: headerCell;
-  border-left: 2px solid var(--mantine-color-default-border);
+.err {
+  color: var(--mantine-color-red-text);
+  font-size: 0.875rem;
+  font-weight: 600;
 }
 
-/* ---- Body rows ---- */
-.bodyCell {
-  composes: cell;
+.reason {
+  font-size: 0.875rem;
+  color: var(--mantine-color-dimmed);
+}
+
+.periodLabel {
+  white-space: nowrap;
+}
+
+.periodSelect {
+  inline-size: 14rem;
+}
+
+.statusLine {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+/* §14.5: the weekly notice, one slim line. */
+.weeklyNotice {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px 4px;
-}
-
-.bodyCellCC {
-  composes: bodyCell;
-  justify-content: flex-start;
-  align-items: flex-start;
-  padding: 8px;
-  border-right: 2px solid var(--mantine-color-default-border);
-  background: var(--mantine-color-body);
-}
-
-.bodyCellTotal {
-  composes: bodyCell;
-  border-left: 2px solid var(--mantine-color-default-border);
-}
-
-/* Odd row striping */
-.rowOdd .bodyCell,
-.rowOdd .bodyCellCC,
-.rowOdd .bodyCellTotal {
-  background: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-8));
-}
-
-/* Weekend column shading */
-.weekend {
-  background: light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-7)) !important;
-}
-
-/* ---- Footer row ---- */
-.footerCell {
-  composes: cell;
-  border-top: 2px solid var(--mantine-color-default-border);
-  border-bottom: none;
-  background: var(--mantine-color-body);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px 4px;
-  text-align: center;
-}
-
-.footerCellCC {
-  composes: footerCell;
-  justify-content: flex-start;
-  padding: 8px;
-  border-right: 2px solid var(--mantine-color-default-border);
-}
-
-.footerCellTotal {
-  composes: footerCell;
-  border-left: 2px solid var(--mantine-color-default-border);
-}
-
-/* ---- Mobile guard: allow scroll below tablet ---- */
-@media (max-width: 1023px) {
-  .gridWrapper {
-    overflow-x: auto;
-  }
-  .grid {
-    min-width: 700px; /* prevent crushing on phones */
-  }
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-inline-start: 3px solid var(--mantine-color-signal-6);
+  border-radius: var(--mantine-radius-sm);
+  padding: 0.5rem 0.75rem;
+  background: var(--notice-bg);
+  font-size: 0.875rem;
+  color: var(--mantine-color-text);
 }

@@ -132,7 +132,7 @@ describe('Submission notifications are scoped (R2-10)', () => {
     });
 
     actingAs(employee);
-    await expectOk(submitPeriod({ periodStart }));
+    await expectOk(submitPeriod({ expectedUserId: sessionState.user!.id, periodStart }));
     await flushAfter(); // sends are scheduled with after() (feature-plan-launch-blockers.md P1)
 
     const notifiedEmails = emailState.sendTimesheetSubmittedEmail.mock.calls.map((call) => call[0].supervisorEmail);
@@ -165,7 +165,7 @@ describe('Submission notifications are scoped (R2-10)', () => {
     await db.insert(schema.timesheetPeriods).values({ userId: submittingAdmin.id, periodStart, status: 'rejected' });
 
     actingAs(submittingAdmin);
-    await expectOk(submitPeriod({ periodStart }));
+    await expectOk(submitPeriod({ expectedUserId: sessionState.user!.id, periodStart }));
     await flushAfter();
 
     const notifiedEmails = emailState.sendTimesheetSubmittedEmail.mock.calls.map((call) => call[0].supervisorEmail);

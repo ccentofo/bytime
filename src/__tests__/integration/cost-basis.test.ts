@@ -262,7 +262,7 @@ describe('cost basis (certified-outputs C3)', () => {
       const dayIndex = diffDays(start, today);
       const [upd, save] = await Promise.all([
         als.run(as(admin), () => updateChargeCode(code.id, { clinId: clinB.id })),
-        als.run(as(emp), () => saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex, hours: round + 1, isEdit: round > 0, isLateEntry: false }], ...(round > 0 ? { changeReasonCode: 'CORRECTION', comment: 'race' } : {}) })),
+        als.run(as(emp), () => saveTimesheetBatch({ expectedUserId: emp.id, periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex, hours: round + 1, isEdit: round > 0, isLateEntry: false }], ...(round > 0 ? { changeReasonCode: 'CORRECTION', comment: 'race' } : {}) })),
       ]);
       expect(save.ok, JSON.stringify(save)).toBe(true);
       const [stored] = await db().select().from(schema.chargeCodes).where(eq(schema.chargeCodes.id, code.id));

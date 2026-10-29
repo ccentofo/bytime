@@ -47,8 +47,7 @@ vi.mock('@/auth', () => ({
       : null,
 }));
 
-import { saveTimesheetBatch, getTimesheetForReview } from '@/server/actions/timesheet';
-import { getEmployeeDashboardData } from '@/server/actions/employee-dashboard';
+import { saveTimesheetBatch, getTimesheetForReview, getTimesheetPeriod, getPastTimesheets } from '@/server/actions/timesheet';
 import { importMigrationPeriods } from '@/server/actions/migration';
 import { updateWorkspaceTimezone } from '@/server/actions/workspace-settings';
 import { GET as getApprovedTimesheets } from '@/app/api/v1/timesheets/approved/route';
@@ -106,6 +105,7 @@ describe('calendar-dates audit fixes', () => {
       actingAs(employee);
 
       await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart,
         changeReasonCode: 'LATE_ENTRY',
         cells: [{ indirectCodeId: indirect.id, chargeCodeId: unassignedCode.id, clinId: otherClin.id, dayIndex: 1, hours: 8, isEdit: false, isLateEntry: true }],
@@ -121,11 +121,13 @@ describe('calendar-dates audit fixes', () => {
       actingAs(employee);
 
       await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart, changeReasonCode: 'LATE_ENTRY',
         cells: [{ indirectCodeId: inactive.id, dayIndex: 1, hours: 8, isEdit: false, isLateEntry: true }],
       }), 'validation', /is not available/);
 
       await expectFailure(saveTimesheetBatch({
+        expectedUserId: sessionState.user!.id,
         periodStart, changeReasonCode: 'LATE_ENTRY',
         cells: [{ chargeCodeId, slinId: crypto.randomUUID(), dayIndex: 1, hours: 8, isEdit: false, isLateEntry: true }],
       }), 'validation', /SLIN can only be given with a legacy CLIN/);
@@ -176,7 +178,9 @@ describe('calendar-dates audit fixes', () => {
     actingAs(admin);
     await expect(getTimesheetForReview(employee.id, '2026-01-05' as CalendarDate)).resolves.toBeDefined();
     actingAs(employee);
-    await expect(getEmployeeDashboardData()).resolves.toBeDefined();
+    // The employee's own reads (the dashboard action is gone, UX-TIMESHEET-B-AUDIT L16): the timesheet and Past timesheets.
+    await expect(getTimesheetPeriod()).resolves.toBeDefined();
+    await expect(getPastTimesheets()).resolves.toBeDefined();
   });
 
   it('importMigrationPeriods stores the length snapshot and reports off-schedule starts clearly', async () => {

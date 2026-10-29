@@ -15,7 +15,7 @@ const actions = vi.hoisted(() => ({
   approvePeriod: vi.fn(async () => ({ ok: true, data: undefined })),
   rejectPeriod: vi.fn(),
   getScopedPeriods: vi.fn(async () => [] as unknown[]),
-  getTimesheetForReview: vi.fn(async () => ({ chargeCodes: [], entries: [], periodStatus: 'submitted', submissionCount: 1, canApprove: true, approvalBadge: null, approvalText: null })),
+  getTimesheetForReview: vi.fn(async () => ({ chargeCodes: [], entries: [], periodStatus: 'submitted', submissionCount: 1, canApprove: true, approvalBadge: null, approvalText: null, notes: {} })),
 }));
 vi.mock('@/server/actions/periods', () => ({ approvePeriod: actions.approvePeriod, rejectPeriod: actions.rejectPeriod, getScopedPeriods: actions.getScopedPeriods }));
 vi.mock('@/server/actions/timesheet', () => ({ getTimesheetForReview: actions.getTimesheetForReview }));

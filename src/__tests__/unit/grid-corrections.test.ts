@@ -42,7 +42,11 @@ import { chargeCodes, indirectChargeCodes, timesheetEntries, userChargeCodes } f
 import type { FakeControlDb } from '../helpers/fake-control-db';
 import { saveTimesheetBatch } from '@/server/actions/timesheet';
 import { isCellEditable, newCellRefusal } from '@/lib/timesheet/cell-rules';
-import { cellRefForKind, timesheetReducer } from '@/components/timesheet/TimesheetContext';
+import { cellRefForKind, initialTimesheetState, timesheetReducer } from '@/components/timesheet/TimesheetContext';
+import { chargeCode, pageData, periodData } from '../helpers/timesheet-fixtures';
+
+/** The session user the mocked requireSession returns (UX-TIMESHEET-B-AUDIT H3: expectedUserId must match it). */
+const SESSION_USER_ID = '11111111-1111-4111-8111-111111111111';
 
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
 const ROOT = path.resolve(__dirname, '../../..');
@@ -63,6 +67,7 @@ function chargeCodeFacts(o: { assigned: boolean; codeActive: boolean; clinActive
   db.onSelect(timesheetEntries, [{ maxRevision: o.priorRevision }]);                                       // prior revision
 }
 const save = (cell: Record<string, unknown>, reason = true) => saveTimesheetBatch({
+  expectedUserId: SESSION_USER_ID,
   periodStart: START as never,
   cells: [{ dayIndex: 2, hours: 6, isEdit: false, isLateEntry: true, ...cell }],
   ...(reason ? { changeReasonCode: 'CORRECTION', comment: 'fix' } : {}),
@@ -189,18 +194,12 @@ describe('saveTimesheetBatch — per cell, inside the transaction, after the pri
 
 describe('F8 — navigation replaces the code list', () => {
   it('SET_PERIOD_DATA replaces chargeCodes with the new period\'s list (no fallback to the old one)', () => {
-    const old = [{ id: 'a', projectName: 'P', clin: 'A', description: 'A', kind: 'charge', assignable: true }];
-    const next = [{ id: 'b', projectName: 'P', clin: 'B', description: 'B', kind: 'charge', assignable: false }];
-    const state = { chargeCodes: old, entries: [], savedEntries: [], savedCellRevisions: {}, notes: {} } as never;
-    const out = timesheetReducer(state, {
-      type: 'SET_PERIOD_DATA', periodStart: '2026-10-16' as never, numDays: 16, entries: [], revisions: {}, periodStatus: 'draft',
-      periodConfig: { periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1 } as never, chargeCodes: next as never,
-    }) as unknown as { chargeCodes: unknown };
+    const old = [chargeCode({ id: 'a', clin: 'A', description: 'A', name: 'A' })];
+    const next = [chargeCode({ id: 'b', clin: 'B', description: 'B', name: 'B', assignable: false })];
+    const state = initialTimesheetState(pageData({ chargeCodes: old }));
+    const out = timesheetReducer(state, { type: 'SET_PERIOD_DATA', ...periodData({ periodStart: '2026-10-16' as never, numDays: 16, entries: [], chargeCodes: next }) });
     expect(out.chargeCodes).toBe(next);
-    const empty = timesheetReducer(state, {
-      type: 'SET_PERIOD_DATA', periodStart: '2026-10-16' as never, numDays: 16, entries: [], revisions: {}, periodStatus: 'draft',
-      periodConfig: { periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1 } as never, chargeCodes: [],
-    }) as unknown as { chargeCodes: unknown[] };
+    const empty = timesheetReducer(state, { type: 'SET_PERIOD_DATA', ...periodData({ periodStart: '2026-10-16' as never, numDays: 16, entries: [], chargeCodes: [] }) });
     expect(empty.chargeCodes).toEqual([]);
   });
 });
@@ -213,15 +212,19 @@ describe('save mapping by kind', () => {
   });
 
   it('wiring (static): the grid uses the rule, the label, the per-period code list; the save maps by kind', () => {
-    const cell = readFileSync(path.join(ROOT, 'src/components/timesheet/cells/HourCell.tsx'), 'utf8');
-    expect(cell).toMatch(/isCellEditable\(\{ periodEditable, isFutureDate, assignable: row\?\.assignable \?\? true, priorRevision \}\)/);
-    expect(readFileSync(path.join(ROOT, 'src/components/timesheet/cells/ChargeCodeCell.tsx'), 'utf8'))
-      .toContain('Closed to new hours — you can correct existing hours');
+    // UX-3 Part B §4.2: the grid applies the one cell rule per day cell; a correction-only row says "Closed to new hours"
+    // (copy.ts) in its header, and its read-only cells are described "… You can correct hours already recorded."
+    const grid = readFileSync(path.join(ROOT, 'src/components/timesheet/TimesheetGrid.tsx'), 'utf8');
+    expect(grid).toMatch(/isCellEditable\(\{ periodEditable, isFutureDate: future, assignable: row\.cc\.assignable, priorRevision: savedCellRevisions\[`\$\{row\.cc\.id\}-\$\{d\}`\] \?\? 0 \}\)/);
+    expect(grid).toContain('{CLOSED_TO_NEW_HOURS}. You can correct hours already recorded.');
+    expect(readFileSync(path.join(ROOT, 'src/components/timesheet/cells/RowHeaderCell.tsx'), 'utf8')).toMatch(/\{p\.closed && <span className=\{styles\.closedNote\}> \{CLOSED_TO_NEW_HOURS\}<\/span>\}/);
+    expect(readFileSync(path.join(ROOT, 'src/lib/timesheet/copy.ts'), 'utf8')).toContain("export const CLOSED_TO_NEW_HOURS = 'Closed to new hours';");
     const ctx = readFileSync(path.join(ROOT, 'src/components/timesheet/TimesheetContext.tsx'), 'utf8');
     expect(ctx).toMatch(/chargeCodes: action\.chargeCodes,/);
     expect(ctx).not.toMatch(/chargeCodes: state\.chargeCodes/);
     expect(ctx).toMatch(/\.\.\.cellRefForKind\(chargeCode\?\.kind/);
-    expect(readFileSync(path.join(ROOT, 'src/app/(app)/timesheet/page.tsx'), 'utf8')).toMatch(/chargeCodes: period\.chargeCodes,/);
+    // UX-3 Part B §4.4: the page passes the WHOLE period (its own code list included) as initialData.period.
+    expect(readFileSync(path.join(ROOT, 'src/app/(app)/timesheet/page.tsx'), 'utf8')).toMatch(/\n\s+period,\n/);
     const ts = readFileSync(path.join(ROOT, 'src/server/actions/timesheet.ts'), 'utf8');
     const save = ts.slice(ts.indexOf('export async function saveTimesheetBatch'));
     const tx = save.slice(save.indexOf('await db.transaction(async (tx) => {'));
@@ -233,7 +236,7 @@ describe('save mapping by kind', () => {
 describe('UX-3 A4.2: a notes-only batch goes through the period lock', () => {
   it('the note dates are passed to assertEntryDatesEditable, so a notes-only batch on a locked period is refused and writes nothing', async () => {
     h.locked = true;
-    const result = await saveTimesheetBatch({ periodStart: START as never, cells: [], notes: [{ chargeCodeId: CODE, dayIndex: 3, body: 'After submitting', expectedRevision: 0 }] });
+    const result = await saveTimesheetBatch({ expectedUserId: SESSION_USER_ID, periodStart: START as never, cells: [], notes: [{ chargeCodeId: CODE, dayIndex: 3, body: 'After submitting', expectedRevision: 0 }] });
     expect(result).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/locked/) });
     expect(h.lockDates).toEqual(['2026-10-04']);
     expect(db.inserts).toEqual([]);

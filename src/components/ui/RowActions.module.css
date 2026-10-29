@@ -2,7 +2,12 @@
    MenuItem only sets inline when a `color` prop is passed. `color="red"` would hard-code shade 6 (3.28:1). */
 .danger {
   --menu-item-color: var(--mantine-color-red-text);
-  --menu-item-hover: light-dark(var(--mantine-color-red-0), var(--mantine-color-dark-5));
+  --menu-item-hover: var(--mantine-color-red-0);
+}
+
+/* Dark hover by scheme selector (feature-plan-ux-timesheet-ui.md §15.1: no CSS light/dark function in .css files). */
+:global([data-mantine-color-scheme='dark']) .danger {
+  --menu-item-hover: var(--mantine-color-dark-5);
 }
 
 /* aria-disabled (not disabled) items and buttons: still focusable and announced, visibly unavailable (§4.4 rule 4). */

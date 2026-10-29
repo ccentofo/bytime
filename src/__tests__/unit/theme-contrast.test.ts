@@ -115,9 +115,12 @@ describe('T1: contrast (rule R, both schemes)', () => {
     const m = value?.match(/light-dark\(var\(--mantine-color-signal-(\d)\),\s*var\(--mantine-color-signal-(\d)\)\)/);
     return m ? { light: merged.colors.signal[Number(m[1])], dark: merged.colors.signal[Number(m[2])] } : null;
   };
+  // feature-plan-ux-timesheet-ui.md §15.1: the light ring is the plain rule, the dark ring an explicit scheme-selector rule
+  // (no CSS light/dark function in .css files — Lightning CSS's output for it is dropped under Mantine's attribute scheme).
   const ring = () => {
-    const rule = css.match(/:root \.mantine-focus-auto:focus-visible,\s*:root \.mantine-focus-always:focus \{\s*outline-color: ([^;]+);/);
-    return lightDark(rule?.[1]) ?? { light: primaryFilled, dark: primaryFilled };
+    const light = css.match(/:root \.mantine-focus-auto:focus-visible,\s*:root \.mantine-focus-always:focus \{\s*outline-color: var\(--mantine-color-signal-(\d)\);/);
+    const dark = css.match(/:root\[data-mantine-color-scheme='dark'\] \.mantine-focus-auto:focus-visible,\s*:root\[data-mantine-color-scheme='dark'\] \.mantine-focus-always:focus \{\s*outline-color: var\(--mantine-color-signal-(\d)\);/);
+    return { light: light ? merged.colors.signal[Number(light[1])] : primaryFilled, dark: dark ? merged.colors.signal[Number(dark[1])] : primaryFilled };
   };
   const inputFocusDark = () => {
     const rule = css.match(/:root\[data-mantine-color-scheme='dark'\] \.mantine-Input-wrapper:is\(\[data-variant='default'\], \[data-variant='filled'\]\) \{\s*--input-bd-focus: var\(--mantine-color-signal-(\d)\);/);
@@ -162,7 +165,8 @@ describe('T1: contrast (rule R, both schemes)', () => {
   });
 
   it('static: the overrides exist (globals.css ring, input focus border, SegmentedControl outline; theme indicator vars)', () => {
-    expect(css).toMatch(/:root \.mantine-focus-auto:focus-visible,\s*:root \.mantine-focus-always:focus \{\s*outline-color: light-dark\(var\(--mantine-color-signal-7\), var\(--mantine-color-signal-4\)\);/);
+    expect(css).toMatch(/:root \.mantine-focus-auto:focus-visible,\s*:root \.mantine-focus-always:focus \{\s*outline-color: var\(--mantine-color-signal-7\);/);
+    expect(css).toMatch(/:root\[data-mantine-color-scheme='dark'\] \.mantine-focus-auto:focus-visible,\s*:root\[data-mantine-color-scheme='dark'\] \.mantine-focus-always:focus \{\s*outline-color: var\(--mantine-color-signal-4\);/);
     expect(css).toContain("--input-bd-focus: var(--mantine-color-signal-4);");
     expect(css).toContain('--segmented-control-outline: 2px solid var(--mantine-color-signal-4);');
     // A caller's own color still wins (the theme var steps aside).

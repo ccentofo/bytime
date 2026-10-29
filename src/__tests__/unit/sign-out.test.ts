@@ -15,12 +15,17 @@ vi.mock('next-auth/react', () => ({
 vi.mock('@/components/approvals/ApprovalNotices', () => ({
   clearDesigneeNoticeDismissals: vi.fn(() => { calls.push('clearDismissals'); }),
 }));
+// UX-3 Part B §4.9: sign-out awaits the unsaved-changes guard first.
+const guard = vi.hoisted(() => ({ allow: true }));
+vi.mock('@/lib/timesheet/unsaved-guard', () => ({
+  confirmLeave: vi.fn(async () => { calls.push('confirmLeave'); return guard.allow; }),
+}));
 
 import { signOut } from 'next-auth/react';
 import { signOutToLogin } from '@/components/auth/sign-out';
 
 const ROOT = path.resolve(__dirname, '../../..');
-afterEach(() => { calls.length = 0; vi.unstubAllGlobals(); });
+afterEach(() => { calls.length = 0; guard.allow = true; vi.unstubAllGlobals(); });
 
 describe('signOutToLogin', () => {
   it('clears the designee-notice dismissals, signs out with redirect: false, then navigates to the relative /login', async () => {
@@ -29,7 +34,7 @@ describe('signOutToLogin', () => {
     await signOutToLogin();
     expect(signOut).toHaveBeenCalledWith({ redirect: false });
     expect(assign).toHaveBeenCalledWith('/login');
-    expect(calls).toEqual(['clearDismissals', 'signOut:{"redirect":false}', 'assign:/login']);
+    expect(calls).toEqual(['confirmLeave', 'clearDismissals', 'signOut:{"redirect":false}', 'assign:/login']);
   });
 
   it('navigates only after signOut has resolved (the session is cleared first)', async () => {
@@ -81,5 +86,16 @@ describe('static: no signOut with callbackUrl or without redirect: false', () =>
     expect(badSignOutCalls("signOut({ redirect: false, callbackUrl: '/x' })")).toHaveLength(1);
     expect(badSignOutCalls('await signOut({ redirect: false })')).toEqual([]);
     expect(badSignOutCalls('export const { handlers, signIn, signOut, auth } = NextAuth({')).toEqual([]);
+  });
+});
+
+describe('signOutToLogin and unsaved timesheet changes (UX-3 Part B §4.9)', () => {
+  it('a cancelled confirm stops sign-out: no dismissal clearing, no signOut, no navigation', async () => {
+    guard.allow = false;
+    const assign = vi.fn();
+    vi.stubGlobal('window', { location: { assign } });
+    await signOutToLogin();
+    expect(calls).toEqual(['confirmLeave']);
+    expect(assign).not.toHaveBeenCalled();
   });
 });

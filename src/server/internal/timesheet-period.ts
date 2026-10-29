@@ -38,6 +38,9 @@ export interface SelectedPeriodFacts {
   outsideWeekHours: Record<string, number>;
   /** The user's creation day in the workspace timezone. */
   userCreatedOn: CalendarDate;
+  /** feature-plan-ux-timesheet-ui.md §4.14: when the period was submitted / last reviewed, as workspace calendar days. */
+  submittedOn: CalendarDate | null;
+  reviewedOn: CalendarDate | null;
 }
 
 /**
@@ -66,5 +69,7 @@ export async function selectedPeriodFacts(
     workweekStartDay,
     outsideWeekHours,
     userCreatedOn: calendarDayOf(user?.createdAt ?? new Date(), timeZone),
+    submittedOn: summary.submittedAt ? calendarDayOf(summary.submittedAt, timeZone) : null,
+    reviewedOn: summary.reviewedAt ? calendarDayOf(summary.reviewedAt, timeZone) : null,
   };
 }

@@ -38,6 +38,9 @@ import type { FakeControlDb } from '../helpers/fake-control-db';
 import { saveTimesheetBatch } from '@/server/actions/timesheet';
 import { OTHER_REASON_COMMENT_REQUIRED, reasonNeedsComment } from '@/lib/reason-codes';
 
+/** The session user the mocked requireSession returns (UX-TIMESHEET-B-AUDIT H3: expectedUserId must match it). */
+const SESSION_USER_ID = '11111111-1111-4111-8111-111111111111';
+
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
 const ROOT = path.resolve(__dirname, '../../..');
 const CODE = '22222222-2222-4222-8222-222222222222';
@@ -51,6 +54,7 @@ function correctionFacts() {
   db.onSelect(timesheetEntries, [{ maxRevision: 1 }]); // prior revision (a correction)
 }
 const correct = (changeReasonCode: string, comment?: string) => saveTimesheetBatch({
+  expectedUserId: SESSION_USER_ID,
   periodStart: '2026-10-01' as never,
   cells: [{ chargeCodeId: CODE, dayIndex: 2, hours: 5, isEdit: true, isLateEntry: false }],
   changeReasonCode, comment,
@@ -74,10 +78,11 @@ describe('OTHER reason requires a comment', () => {
     expect(reasonNeedsComment('CORRECTION', '')).toBe(false);
   });
 
-  it('client: the reason modal blocks OTHER without a comment; the note modal has no reason code (UX-3 L3)', () => {
+  it('client: the reason modal blocks OTHER without a comment; NoteModal has no reason code (UX-3 L3)', () => {
     const modal = readFileSync(path.join(ROOT, 'src/components/timesheet/ReasonModal.tsx'), 'utf8');
     expect(modal).toMatch(/const canSubmit = reasonCode !== null && comment\.trim\(\)\.length > 0 && !reasonNeedsComment\(reasonCode, comment\);/);
-    const note = stripComments(readFileSync(path.join(ROOT, 'src/components/timesheet/DailyNoteModal.tsx'), 'utf8'));
+    // UX-3 Part B §4.8: NoteModal (which replaced DailyNoteModal) has no reason code.
+    const note = stripComments(readFileSync(path.join(ROOT, 'src/components/timesheet/NoteModal.tsx'), 'utf8'));
     expect(note).not.toMatch(/REASON_CODES|reasonCode|reasonNeedsComment|<Select/);
   });
 });

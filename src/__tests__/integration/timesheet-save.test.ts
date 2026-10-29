@@ -43,6 +43,7 @@ describe('quarter hours, stored exactly (UX-3 A-T5)', () => {
   const db = () => getTestDb();
   const rows = () => db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.userId, emp.id));
   const save = (hours: unknown, dayIndex = 1) => saveTimesheetBatch({
+    expectedUserId: session.user!.id,
     periodStart: start,
     cells: [{ chargeCodeId: code.id, dayIndex, hours: hours as number, isEdit: false, isLateEntry: true }],
     changeReasonCode: 'LATE_ENTRY', comment: 'late',

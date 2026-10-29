@@ -25,7 +25,7 @@ describe('nav-config (T2)', () => {
       ['Home', '/home'], ['My timesheet', '/timesheet'], ['Approvals', '/admin/approvals'],
       ['Reports', [['Downloads', '/admin/reports'], ['Audit trail', '/admin/audit-trail']]],
     ]);
-    expect(shape(mainNav('employee'))).toEqual([['Timesheet', '/timesheet']]);
+    expect(shape(mainNav('employee'))).toEqual([['Timesheet', '/timesheet'], ['Past timesheets', '/timesheet/history']]);
     for (const role of ['admin', 'supervisor', 'employee'] as const) {
       expect(navLeaves(mainNav(role)).map((l) => l.href)).not.toContain('/admin/setup');
     }

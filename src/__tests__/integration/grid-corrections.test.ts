@@ -76,8 +76,8 @@ describe('grid corrections (certified-outputs C4)', () => {
     expect(period.chargeCodes.find((c) => c.id === code.id)).toMatchObject({ kind: 'charge', assignable: false });
     expect(period.entries.find((e) => e.chargeCodeId === code.id)?.hours[0]).toBe(8);
 
-    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 1, hours: 4, isEdit: false, isLateEntry: true }], ...fix }), 'validation', /no longer active/);
-    const r = await saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 0, isEdit: true, isLateEntry: false }], ...fix });
+    await expectFailure(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 1, hours: 4, isEdit: false, isLateEntry: true }], ...fix }), 'validation', /no longer active/);
+    const r = await saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 0, isEdit: true, isLateEntry: false }], ...fix });
     expect(r.ok, JSON.stringify(r)).toBe(true);
     const zeroed = await latest(and(eq(schema.timesheetEntries.chargeCodeId, code.id), eq(schema.timesheetEntries.entryDate, start)));
     expect(zeroed).toMatchObject({ revisionNumber: 2, changeReasonCode: 'CORRECTION', clinId: clin.id });
@@ -95,23 +95,23 @@ describe('grid corrections (certified-outputs C4)', () => {
     const count = async () => (await db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.chargeCodeId, code.id))).length;
 
     expect((await getTimesheetPeriod(start)).chargeCodes.find((c) => c.id === code.id)).toMatchObject({ kind: 'charge', assignable: false });
-    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 1, hours: 4, isEdit: false, isLateEntry: true }], ...fix }), 'validation', /no longer active \(or its CLIN, SLIN or contract isn't\)/);
+    await expectFailure(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 1, hours: 4, isEdit: false, isLateEntry: true }], ...fix }), 'validation', /no longer active \(or its CLIN, SLIN or contract isn't\)/);
 
     // All-or-nothing: a new cell on the closed SLIN + a valid correction → the whole save is refused, nothing written.
     const before = await count();
-    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [
+    await expectFailure(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [
       { chargeCodeId: code.id, dayIndex: 0, hours: 5, isEdit: true, isLateEntry: false },
       { chargeCodeId: code.id, dayIndex: 2, hours: 3, isEdit: false, isLateEntry: true },
     ], ...fix }), 'validation', /SLIN/);
     expect(await count()).toBe(before);
 
-    const r = await saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 5, isEdit: true, isLateEntry: false }], ...fix });
+    const r = await saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 5, isEdit: true, isLateEntry: false }], ...fix });
     expect(r.ok, JSON.stringify(r)).toBe(true);
     expect(await count()).toBe(before + 1);
 
     await db().update(schema.slins).set({ status: 'active' }).where(eq(schema.slins.id, slin.id));
     expect((await getTimesheetPeriod(start)).chargeCodes.find((c) => c.id === code.id)).toMatchObject({ assignable: true });
-    const again = await saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 1, hours: 4, isEdit: false, isLateEntry: true }], ...fix });
+    const again = await saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 1, hours: 4, isEdit: false, isLateEntry: true }], ...fix });
     expect(again.ok, JSON.stringify(again)).toBe(true);
   });
 
@@ -123,9 +123,9 @@ describe('grid corrections (certified-outputs C4)', () => {
     expect((await getTimesheetPeriod(start)).chargeCodes.find((c) => c.id === code.id)).toMatchObject({ assignable: false });
     expect((await getTimesheetPeriod(other)).chargeCodes.map((c) => c.id)).not.toContain(code.id);
 
-    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 2, hours: 4, isEdit: false, isLateEntry: true }], ...fix }), 'forbidden', /not assigned to charge code/);
-    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 6, isEdit: true, isLateEntry: false }] }), 'validation', /reason code is required/);
-    const r = await saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 6, isEdit: true, isLateEntry: false }], ...fix });
+    await expectFailure(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 2, hours: 4, isEdit: false, isLateEntry: true }], ...fix }), 'forbidden', /not assigned to charge code/);
+    await expectFailure(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 6, isEdit: true, isLateEntry: false }] }), 'validation', /reason code is required/);
+    const r = await saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 6, isEdit: true, isLateEntry: false }], ...fix });
     expect(r.ok, JSON.stringify(r)).toBe(true);
   });
 
@@ -143,8 +143,8 @@ describe('grid corrections (certified-outputs C4)', () => {
       },
     ]) {
       await deactivate();
-      await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 3, hours: 2, isEdit: false, isLateEntry: true }], ...fix }), 'validation', /no longer active/);
-      const r = await saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 3, isEdit: true, isLateEntry: false }], ...fix });
+      await expectFailure(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 3, hours: 2, isEdit: false, isLateEntry: true }], ...fix }), 'validation', /no longer active/);
+      const r = await saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 3, isEdit: true, isLateEntry: false }], ...fix });
       expect(r.ok, JSON.stringify(r)).toBe(true);
     }
   });
@@ -154,7 +154,7 @@ describe('grid corrections (certified-outputs C4)', () => {
     await db().insert(schema.userChargeCodes).values({ userId: emp.id, chargeCodeId: code.id, isActive: false });
     await entry({ chargeCodeId: code.id, clinId: clin.id });
     await db().insert(schema.timesheetPeriods).values({ userId: emp.id, periodStart: start, status: 'submitted', submittedAt: new Date() });
-    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 2, isEdit: true, isLateEntry: false }], ...fix }), 'validation', /locked|submitted/i);
+    await expectFailure(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 2, isEdit: true, isLateEntry: false }], ...fix }), 'validation', /locked|submitted/i);
   });
 
   it('legacy CLIN row (ruling Q1): listed as a CLIN row; a new day is refused; a correction keeps the recorded SLIN; a different SLIN is refused', async () => {
@@ -163,9 +163,9 @@ describe('grid corrections (certified-outputs C4)', () => {
     await entry({ clinId: clin.id, slinId: slin.id });
 
     expect((await getTimesheetPeriod(start)).chargeCodes.find((c) => c.id === clin.id)).toMatchObject({ kind: 'clin', assignable: false, clin: `CLIN ${clin.clinNumber}` });
-    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [{ clinId: clin.id, dayIndex: 1, hours: 3, isEdit: false, isLateEntry: true }], ...fix }), 'validation', /CLIN-only row/);
-    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [{ clinId: clin.id, slinId: slinB.id, dayIndex: 0, hours: 5, isEdit: true, isLateEntry: false }], ...fix }), 'validation', /keeps the SLIN/);
-    const r = await saveTimesheetBatch({ periodStart: start, cells: [{ clinId: clin.id, dayIndex: 0, hours: 5, isEdit: true, isLateEntry: false }], ...fix });
+    await expectFailure(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ clinId: clin.id, dayIndex: 1, hours: 3, isEdit: false, isLateEntry: true }], ...fix }), 'validation', /CLIN-only row/);
+    await expectFailure(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ clinId: clin.id, slinId: slinB.id, dayIndex: 0, hours: 5, isEdit: true, isLateEntry: false }], ...fix }), 'validation', /keeps the SLIN/);
+    const r = await saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ clinId: clin.id, dayIndex: 0, hours: 5, isEdit: true, isLateEntry: false }], ...fix });
     expect(r.ok, JSON.stringify(r)).toBe(true);
     const corrected = await latest(and(eq(schema.timesheetEntries.clinId, clin.id), eq(schema.timesheetEntries.entryDate, start)));
     expect(corrected).toMatchObject({ revisionNumber: 2, slinId: slin.id, chargeCodeId: null });
@@ -177,8 +177,8 @@ describe('grid corrections (certified-outputs C4)', () => {
     await entry({ indirectCodeId: ind.id });
     await db().update(schema.indirectChargeCodes).set({ isActive: false }).where(eq(schema.indirectChargeCodes.id, ind.id));
     expect((await getTimesheetPeriod(start)).chargeCodes.find((c) => c.id === ind.id)).toMatchObject({ kind: 'indirect', assignable: false });
-    await expectFailure(saveTimesheetBatch({ periodStart: start, cells: [{ indirectCodeId: ind.id, dayIndex: 1, hours: 2, isEdit: false, isLateEntry: true }], ...fix }), 'validation', /is not available/);
-    expect((await saveTimesheetBatch({ periodStart: start, cells: [{ indirectCodeId: ind.id, dayIndex: 0, hours: 2, isEdit: true, isLateEntry: false }], ...fix })).ok).toBe(true);
+    await expectFailure(saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ indirectCodeId: ind.id, dayIndex: 1, hours: 2, isEdit: false, isLateEntry: true }], ...fix }), 'validation', /is not available/);
+    expect((await saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ indirectCodeId: ind.id, dayIndex: 0, hours: 2, isEdit: true, isLateEntry: false }], ...fix })).ok).toBe(true);
   });
 
   it('F7: a charge cell whose revisions carry two clin_ids (pre-C3 CLIN change) — the revision map gives the latest, the save succeeds', async () => {
@@ -190,7 +190,7 @@ describe('grid corrections (certified-outputs C4)', () => {
     await entry({ chargeCodeId: code.id, clinId: clin.id, hours: '6', revisionNumber: 2, changeReasonCode: 'CORRECTION', comment: 'x' });
     const period = await getTimesheetPeriod(start);
     expect(period.revisions[`${code.id}-0`]).toBe(2);
-    const r = await saveTimesheetBatch({ periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 7, isEdit: true, isLateEntry: false, expectedRevision: period.revisions[`${code.id}-0`] }], ...fix });
+    const r = await saveTimesheetBatch({ expectedUserId: session.user!.id, periodStart: start, cells: [{ chargeCodeId: code.id, dayIndex: 0, hours: 7, isEdit: true, isLateEntry: false, expectedRevision: period.revisions[`${code.id}-0`] }], ...fix });
     expect(r.ok, JSON.stringify(r)).toBe(true);
   });
 

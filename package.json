@@ -72,8 +72,10 @@
     "stripe": "^17.0.0"
   },
   "devDependencies": {
+    "@testing-library/dom": "10.4.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "14.6.1",
     "@types/bcryptjs": "^3.0.0",
     "@types/node": "^20",
     "@types/papaparse": "^5.5.2",

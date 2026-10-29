@@ -14,6 +14,8 @@ import {
   Table,
   Alert,
   SegmentedControl,
+  List,
+  VisuallyHidden,
 } from '@mantine/core';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { notifications } from '@mantine/notifications';
@@ -26,6 +28,7 @@ import { getTimesheetForReview } from '@/server/actions/timesheet';
 import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { formatDateTime } from '@/lib/format';
 import { PERIOD_STATUS_COLOR } from '@/lib/ui/status-colors';
+import { rowLabel } from '@/lib/timesheet/labels';
 import { PageHeader } from '@/components/ui/PageHeader';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
 
@@ -112,7 +115,32 @@ type ReviewData = {
   canApprove: boolean;
   approvalBadge: string | null;
   approvalText: string | null;
+  /** UX-3 A4.3: the period's latest notes, keyed `${chargeCodeId}-${dayIndex}` (missing → none). */
+  notes?: Record<string, { body: string; revision: number }>;
 };
+
+/** One line of the drawer's Notes list (feature-plan-ux-timesheet-ui.md §4.12). */
+export interface ReviewNote { dayIndex: number; rowIndex: number; key: string; text: string }
+
+/**
+ * The drawer's Notes list (§4.12): non-empty notes only, sorted by date then row, each
+ * "{ddd, MMM D} · {code} {rowName} · {body}"; a note whose row isn't in the review reads "Removed code".
+ */
+export function reviewNotes(notes: ReviewData['notes'], chargeCodes: ChargeCode[], start: CalendarDate): ReviewNote[] {
+  const out: ReviewNote[] = [];
+  for (const [key, note] of Object.entries(notes ?? {})) {
+    if (!note?.body) continue;
+    const dash = key.lastIndexOf('-');                       // charge-code ids contain dashes; the day index doesn't
+    const id = key.slice(0, dash);
+    const dayIndex = Number(key.slice(dash + 1));
+    if (dash < 0 || !Number.isInteger(dayIndex)) continue;
+    const rowIndex = chargeCodes.findIndex((cc) => cc.id === id);
+    const cc = chargeCodes[rowIndex];
+    const row = cc ? rowLabel(cc) : 'Removed code';
+    out.push({ dayIndex, rowIndex: rowIndex < 0 ? chargeCodes.length : rowIndex, key, text: `${formatCalendarDate(addDays(start, dayIndex), 'ddd, MMM D')} · ${row} · ${note.body}` });
+  }
+  return out.sort((a, b) => a.dayIndex - b.dayIndex || a.rowIndex - b.rowIndex || a.key.localeCompare(b.key));
+}
 
 type Props = {
   initialPeriods: Period[];
@@ -318,6 +346,8 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
   if (reviewData && selectedPeriod) {
     const numDays = selectedPeriod.periodNumDays;
     const start = selectedPeriod.periodStart;
+    const notes = reviewData.notes ?? {};
+    const noteLines = reviewNotes(notes, reviewData.chargeCodes, start);
 
     reviewContent = (
       <Stack mt="md">
@@ -343,7 +373,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
               return (
                 <Table.Tr key={cc.id}>
                   <Table.Td>
-                    {cc.clin} — {cc.projectName}
+                    {rowLabel(cc)}
                     {!cc.assignable && <Text size="xs" c="dimmed">Closed to new hours (recorded hours shown)</Text>}
                   </Table.Td>
                   {Array.from({ length: numDays }, (_, i) => {
@@ -353,6 +383,11 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
                       <Table.Td key={i} style={{ textAlign: 'center' }} title={provenance ?? undefined}>
                         {(hours[i] ?? 0) === 0 ? '—' : (hours[i] ?? 0).toFixed(2)}
                         {provenance && <Text span size="xs" c="signal" data-testid="imported-indicator"> •</Text>}
+                        {notes[`${cc.id}-${i}`]?.body && (
+                          <span data-testid="note-indicator">
+                            {' '}<Icons.note size={12} aria-hidden="true" /><VisuallyHidden>, note</VisuallyHidden>
+                          </span>
+                        )}
                       </Table.Td>
                     );
                   })}
@@ -365,6 +400,15 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
           </Table.Tbody>
         </Table>
         </Table.ScrollContainer>
+        {noteLines.length > 0 && (
+          <>
+            {/* A real heading (L14), with the look of the drawer's other labels. */}
+            <Text component="h3" fw={600} size="sm" m={0} id="review-notes-heading">Notes</Text>
+            <List size="sm" spacing={4} aria-labelledby="review-notes-heading" data-testid="review-notes">
+              {noteLines.map((n) => <List.Item key={n.key}>{n.text}</List.Item>)}
+            </List>
+          </>
+        )}
       </Stack>
     );
   }

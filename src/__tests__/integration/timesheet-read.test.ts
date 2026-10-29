@@ -8,7 +8,9 @@ import { getTestDb, createTestUser, createTestContract, createTestClin, createTe
 
 /**
  * feature-plan-ux-timesheet.md A-T4: what getTimesheetPeriod / getTimesheetForReview return for a period — the latest
- * note per cell (cleared bodies carry their revision), and the review's notes read after submissionCount.
+ * note per cell (cleared bodies carry their revision), and the review's notes read after submissionCount. Plus the
+ * feature-plan-ux-timesheet-ui.md §4.14 additions (UX-TIMESHEET-B-AUDIT M7): submittedOn / reviewedOn in the workspace
+ * zone, readOnly, today and chargeCodes[].name.
  */
 
 vi.mock('@/db', async (importOriginal) => ({
@@ -18,10 +20,11 @@ vi.mock('@/db', async (importOriginal) => ({
   getDbForUrl: () => getTestDb(),
   getDbForWrite: async () => getTestDb(),
 }));
+const tenant = vi.hoisted(() => ({ kind: 'full' as 'full' | 'read_only' }));
 vi.mock('@/lib/tenant/context', () => ({
   getTenantSlug: async () => 'test-tenant',
   getTenantOrThrow: async () => ({ id: '00000000-0000-4000-8000-0000000000a4', slug: 'test-tenant', plan: 'enterprise', status: 'active', dbUrl: 'test-db' }),
-  getTenantState: async () => ({ kind: 'full', tenant: { slug: 'test-tenant', dbUrl: 'test-db' } }),
+  getTenantState: async () => ({ kind: tenant.kind, tenant: { slug: 'test-tenant', dbUrl: 'test-db' } }),
 }));
 type FakeUser = { id: string; role: 'admin' | 'supervisor' | 'employee'; email: string; fullName: string };
 const session = vi.hoisted(() => ({ user: null as null | FakeUser }));
@@ -134,6 +137,70 @@ describe('timesheet read: the selected period (UX-3 A-T4)', () => {
     const sunday = await getTimesheetPeriod(MAR);
     expect(sunday.workweekStartDay).toBeNull();
     expect(sunday.outsideWeekHours).toEqual({ '2026-03-16': 0, '2026-03-17': 7, '2026-03-18': 0, '2026-03-19': 0, '2026-03-20': 0, '2026-03-21': 0 });
+  });
+});
+
+describe('timesheet read: §4.14 additions (UX-3 Part B, UX-TIMESHEET-B-AUDIT M7)', () => {
+  // Mar 1–15, 2026, a past period. Workspace zone Pacific/Honolulu (UTC−10, no DST), so a UTC timestamp just after
+  // midnight is still the previous day there.
+  const MAR = '2026-03-01' as CalendarDate;
+  let emp: Awaited<ReturnType<typeof createTestUser>>;
+  const db = () => getTestDb();
+
+  beforeEach(async () => {
+    await cleanupTestData();
+    tenant.kind = 'full';
+    emp = await createTestUser({ role: 'employee', createdAt: new Date('2026-01-01T12:00:00Z') }); // before March
+    session.user = fake(emp);
+    await db().update(schema.workspaceSettings).set({ timezone: 'Pacific/Honolulu' });
+  });
+  afterEach(async () => {
+    tenant.kind = 'full';
+    session.user = null;
+    await db().update(schema.workspaceSettings).set({ timezone: 'America/New_York' });
+    await cleanupTestData();
+  });
+
+  it('submittedOn / reviewedOn are the WORKSPACE calendar days of a submission and review near midnight UTC', async () => {
+    await db().insert(schema.timesheetPeriods).values({
+      userId: emp.id, periodStart: MAR, status: 'approved', periodNumDays: 15, submissionCount: 1,
+      submittedAt: new Date('2026-03-14T05:30:00Z'),   // Mar 13, 19:30 in Honolulu (Mar 14 in UTC)
+      reviewedAt: new Date('2026-03-16T09:00:00Z'),    // Mar 15, 23:00 in Honolulu (Mar 16 in UTC)
+    });
+    const p = await getTimesheetPeriod(MAR);
+    expect(p.submittedOn).toBe('2026-03-13');
+    expect(p.reviewedOn).toBe('2026-03-15');
+  });
+
+  it('a period never submitted has neither date', async () => {
+    const p = await getTimesheetPeriod(MAR);
+    expect(p.submittedOn).toBeNull();
+    expect(p.reviewedOn).toBeNull();
+  });
+
+  it('today is the workspace\'s today; readOnly follows the tenant state', async () => {
+    const full = await getTimesheetPeriod(MAR);
+    expect(full.today).toBe(todayIn('Pacific/Honolulu'));
+    expect(full.readOnly).toBe(false);
+    tenant.kind = 'read_only';
+    expect((await getTimesheetPeriod(MAR)).readOnly).toBe(true);
+  });
+
+  it('chargeCodes[].name: a direct code\'s name, an indirect code\'s own name (not its category), a legacy CLIN\'s description', async () => {
+    const contract = await createTestContract({ name: 'Atlas' });
+    const clin = await createTestClin(contract.id, { clinNumber: '0001' });
+    const code = await createTestChargeCode(clin.id, { name: 'Systems engineering' });
+    await db().insert(schema.userChargeCodes).values({ userId: emp.id, chargeCodeId: code.id, isActive: true });
+    const leave = await createTestIndirectCode({ name: 'Jury duty', category: 'leave', description: 'Court-ordered leave' });
+    const legacy = await createTestClin(contract.id, { clinNumber: '0002', description: 'Legacy support' });
+    // A legacy CLIN-only entry in the period lists the CLIN row (correction-only).
+    await db().insert(schema.timesheetEntries).values({ userId: emp.id, clinId: legacy.id, entryDate: '2026-03-03', hours: '4', revisionNumber: 1, createdBy: emp.id });
+    const p = await getTimesheetPeriod(MAR);
+    const byId = new Map(p.chargeCodes.map((c) => [c.id, c]));
+    expect(byId.get(code.id)).toMatchObject({ kind: 'charge', name: 'Systems engineering' });
+    expect(byId.get(leave.id)).toMatchObject({ kind: 'indirect', name: 'Jury duty' });
+    expect(byId.get(leave.id)!.name).not.toBe(byId.get(leave.id)!.projectName); // the category is the projectName, never the name
+    expect(byId.get(legacy.id)).toMatchObject({ kind: 'clin', name: 'Legacy support' });
   });
 });
 
