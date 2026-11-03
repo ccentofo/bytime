@@ -14,6 +14,8 @@ export interface ParseResult {
   totalRows: number;
   validRows: number;
   errorRows: number;
+  /** Required columns absent from the header (feature-plan-ux-page-fixes.md C10); then there are no rows. */
+  missingColumns: string[];
 }
 
 /**
@@ -41,6 +43,7 @@ export function parseCSV(
       totalRows: 0,
       validRows: 0,
       errorRows: 0,
+      missingColumns,
     };
   }
 
@@ -73,6 +76,7 @@ export function parseCSV(
     totalRows: rows.length,
     validRows: rows.filter((r) => r.isValid).length,
     errorRows: rows.filter((r) => !r.isValid).length,
+    missingColumns: [],
   };
 }
 
