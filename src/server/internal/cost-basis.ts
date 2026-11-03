@@ -1,10 +1,10 @@
 import 'server-only';
-import { and, desc, eq, gte, inArray, lt, lte, sql, type SQL } from 'drizzle-orm';
+import { and, countDistinct, desc, eq, gte, inArray, lt, lte, max, min, sql, sum, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { DbTx, ReadDb } from '@/db';
 import type { CalendarDate } from '@/lib/calendar-date';
 import { chargeCodeLaborCategoryOnSql, hourlyRateOnSql } from './labor-rates';
-import { chargeCodes, clins, laborCategories, slins, timesheetEntries, userLaborCategories, users } from '@/db/schema';
+import { chargeCodes, clins, contracts, laborCategories, slins, timesheetEntries, userLaborCategories, users } from '@/db/schema';
 
 /**
  * THE labor-category resolution for costing (feature-plan-certified-outputs.md C3, CO-D10). The only module that may
@@ -177,6 +177,8 @@ export interface UnpricedFilters {
   contractId?: string;
   clinId?: string;
   slinId?: string;
+  /** feature-plan-ux-kit-contracts.md §4.4: 'conflict' = overlapping categories only. */
+  reason?: 'conflict';
 }
 
 export interface UnpricedEntryRow {
@@ -273,6 +275,10 @@ export interface OverlapRow {
   userId: string;
   employeeName: string;
   level: 'slin' | 'clin';
+  /** UX-4b §4.4: where the pair applies, so it attaches to a conflict group by level and scopes by the filters. */
+  contractId: string;
+  clinId: string;
+  slinId: string | null;
   clinNumber: string;
   slinNumber: string | null;
   a: { assignmentId: string; lcatCode: string; title: string; effectiveDate: string; endDate: string | null };
@@ -290,6 +296,7 @@ export async function overlappingAssignments(db: Pick<ReadDb, 'select'>): Promis
       effectiveDate: userLaborCategories.effectiveDate, endDate: userLaborCategories.endDate,
       lcId: laborCategories.id, lcatCode: laborCategories.lcatCode, title: laborCategories.title,
       clinId: laborCategories.clinId, clinNumber: clins.clinNumber, slinId: laborCategories.slinId, slinNumber: slins.slinNumber,
+      contractId: clins.contractId,
     })
     .from(userLaborCategories)
     .innerJoin(laborCategories, eq(laborCategories.id, userLaborCategories.laborCategoryId))
@@ -303,6 +310,7 @@ export async function overlappingAssignments(db: Pick<ReadDb, 'select'>): Promis
 export function findOverlaps(rows: Array<{
   assignmentId: string; userId: string; employeeName: string; effectiveDate: string; endDate: string | null;
   lcId: string; lcatCode: string; title: string; clinId: string; clinNumber: string; slinId: string | null; slinNumber: string | null;
+  contractId?: string;
 }>): OverlapRow[] {
   const out: OverlapRow[] = [];
   const key = (r: (typeof rows)[number]) => `${r.userId}|${r.slinId ? `slin:${r.slinId}` : `clin:${r.clinId}`}`;
@@ -316,7 +324,10 @@ export function findOverlaps(rows: Array<{
         const overlap = x.effectiveDate <= (y.endDate ?? '9999-12-31') && y.effectiveDate <= (x.endDate ?? '9999-12-31');
         if (!overlap) continue;
         const side = (r: typeof x) => ({ assignmentId: r.assignmentId, lcatCode: r.lcatCode, title: r.title, effectiveDate: r.effectiveDate, endDate: r.endDate });
-        out.push({ userId: x.userId, employeeName: x.employeeName, level: x.slinId ? 'slin' : 'clin', clinNumber: x.clinNumber, slinNumber: x.slinNumber, a: side(x), b: side(y) });
+        out.push({
+          userId: x.userId, employeeName: x.employeeName, level: x.slinId ? 'slin' : 'clin',
+          contractId: x.contractId ?? '', clinId: x.clinId, slinId: x.slinId, clinNumber: x.clinNumber, slinNumber: x.slinNumber, a: side(x), b: side(y),
+        });
       }
     }
   }
@@ -336,3 +347,230 @@ export function unpricedFixText(r: Pick<UnpricedEntryRow, 'reason' | 'employeeNa
     ? `Set a labor category on charge code ${r.chargeCode}, or give ${r.employeeName} a labor category on ${where} effective ${r.entryDate}.`
     : `Give ${r.employeeName} a labor category on ${where} effective ${r.entryDate}.`;
 }
+
+// ── The Unpriced hours report, grouped (feature-plan-ux-kit-contracts.md §4.4, U1) ───────────────────────────────────
+
+export type UnpricedFix =
+  | { kind: 'set-code-category'; chargeCodeId: string }
+  | { kind: 'assign-category'; userId: string }
+  | { kind: 'end-overlap'; userId: string; assignmentIds: string[] };
+
+/** One thing to fix: the unpriced hours of one reason × employee × location (× charge code, for no-category). */
+export interface UnpricedGroup {
+  key: string;
+  reason: Exclude<CostBasis, 'priced'>;
+  /** The level the cost basis decided at ('slin' / 'clin' for a conflict; null for no-category). */
+  level: CostBasisLevel;
+  userId: string; employeeName: string;
+  contractId: string; contractName: string;
+  clinId: string; clinNumber: string;
+  /** Set only when the group's location is a SLIN (level 'slin'). */
+  slinId: string | null; slinNumber: string | null;
+  /** Set only for no-category groups recorded on a charge code. */
+  chargeCodeId: string | null; chargeCode: string | null;
+  hours: number; first: string; last: string; entries: number;
+  /** Conflict groups: the overlapping assignment pairs behind them. */
+  overlaps: OverlapRow[];
+  fix: UnpricedFix;
+}
+
+export interface UnpricedReport {
+  totals: { hours: number; groups: number; employees: number; overlaps: number };
+  groups: UnpricedGroup[];
+  /** Pairs with no affected hours at all (Home's overlap alert always leads somewhere). */
+  unattachedOverlaps: OverlapRow[];
+  /** Pairs with conflict hours, none of them in the current filters (shown only when a filter is set). */
+  outOfViewOverlaps: OverlapRow[];
+  truncated: boolean;
+}
+
+const round2u = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Per-entry unpriced rows (latest revisions, hours > 0, inner-joined to clins so indirect/leave never count) with the
+ * group location computed IN the subquery: `loc` is the SLIN when the basis decided at the SLIN level, else the CLIN;
+ * `code_key` is the charge code for no-category rows only. The outer queries group by these plain columns — never an
+ * interpolated literal in both SELECT and GROUP BY (Postgres sees two different parameters).
+ */
+function unpricedEntrySubquery(db: Pick<ReadDb, 'select'>, filters: UnpricedFilters, alias = 'u') {
+  return db
+    .select({
+      basis: sql<CostBasis>`cost_basis.basis`.as('basis'),
+      level: sql<CostBasisLevel>`cost_basis.level`.as('level'),
+      userId: sql<string>`${timesheetEntries.userId}`.as('user_id'),
+      employeeName: sql<string>`${users.fullName}`.as('employee_name'),
+      contractId: sql<string>`${clins.contractId}`.as('contract_id'),
+      contractName: sql<string>`${contracts.name}`.as('contract_name'),
+      clinId: sql<string>`${clins.id}`.as('clin_id'),
+      clinNumber: sql<string>`${clins.clinNumber}`.as('clin_number'),
+      loc: sql<string>`CASE WHEN cost_basis.level = 'slin' THEN ${timesheetEntries.slinId} ELSE ${timesheetEntries.clinId} END`.as('loc'),
+      locSlinId: sql<string | null>`CASE WHEN cost_basis.level = 'slin' THEN ${timesheetEntries.slinId} END`.as('loc_slin_id'),
+      locSlinNumber: sql<string | null>`CASE WHEN cost_basis.level = 'slin' THEN ${slins.slinNumber} END`.as('loc_slin_number'),
+      codeKey: sql<string | null>`CASE WHEN cost_basis.basis = 'no-category' THEN ${timesheetEntries.chargeCodeId} END`.as('code_key'),
+      codeText: sql<string | null>`CASE WHEN cost_basis.basis = 'no-category' THEN ${chargeCodes.code} END`.as('code_text'),
+      entryDate: sql<string>`${timesheetEntries.entryDate}`.as('entry_date'),
+      hours: sql<string>`CAST(${timesheetEntries.hours} AS NUMERIC)`.as('hours'),
+    })
+    .from(timesheetEntries)
+    .innerJoin(clins, eq(timesheetEntries.clinId, clins.id))
+    .innerJoin(contracts, eq(clins.contractId, contracts.id))
+    .innerJoin(users, eq(timesheetEntries.userId, users.id))
+    .leftJoin(slins, eq(timesheetEntries.slinId, slins.id))
+    .leftJoin(chargeCodes, eq(timesheetEntries.chargeCodeId, chargeCodes.id))
+    .leftJoinLateral(COST_BASIS_LATERAL, sql`true`)
+    .where(and(
+      LATEST_REVISION,
+      sql`cost_basis.basis <> 'priced'`,
+      sql`CAST(${timesheetEntries.hours} AS NUMERIC) > 0`,
+      filters.reason === 'conflict' ? sql`cost_basis.basis = 'conflict'` : undefined,
+      filters.startDate ? gte(timesheetEntries.entryDate, filters.startDate) : undefined,
+      filters.endDate ? lte(timesheetEntries.entryDate, filters.endDate) : undefined,
+      filters.contractId ? eq(clins.contractId, filters.contractId) : undefined,
+      filters.clinId ? eq(timesheetEntries.clinId, filters.clinId) : undefined,
+      filters.slinId ? eq(timesheetEntries.slinId, filters.slinId) : undefined,
+    ))
+    .as(alias);
+}
+
+export type GroupRow = {
+  basis: CostBasis; level: CostBasisLevel; userId: string; employeeName: string; contractId: string; contractName: string;
+  clinId: string; clinNumber: string; loc: string; locSlinId: string | null; locSlinNumber: string | null;
+  codeKey: string | null; codeText: string | null; hours: string; first: string; last: string; entries: number;
+};
+
+/**
+ * The groups, largest first, with a deterministic tiebreak on the full key; `limit + 1` tells `truncated`. Every
+ * selected display column is functionally dependent on the key, so grouping by it never splits a group.
+ */
+export function unpricedGroupsQuery(db: Pick<ReadDb, 'select'>, filters: UnpricedFilters, limit: number, offset: number) {
+  const u = unpricedEntrySubquery(db, filters);
+  const total = sum(u.hours);
+  return db
+    .select({
+      basis: u.basis, level: u.level, userId: u.userId, employeeName: u.employeeName, contractId: u.contractId, contractName: u.contractName,
+      clinId: u.clinId, clinNumber: u.clinNumber, loc: u.loc, locSlinId: u.locSlinId, locSlinNumber: u.locSlinNumber,
+      codeKey: u.codeKey, codeText: u.codeText,
+      hours: total, first: min(u.entryDate), last: max(u.entryDate), entries: sql<number>`COUNT(*)::int`,
+    })
+    .from(u)
+    .groupBy(u.basis, u.level, u.userId, u.loc, u.codeKey, u.employeeName, u.contractId, u.contractName, u.clinId, u.clinNumber, u.locSlinId, u.locSlinNumber, u.codeText)
+    .orderBy(desc(total), u.basis, u.level, u.userId, u.loc, u.codeKey)
+    .limit(limit + 1)
+    .offset(offset);
+}
+
+export async function unpricedGroupRows(
+  db: Pick<ReadDb, 'select'>,
+  filters: UnpricedFilters,
+  { limit = 1000, offset = 0 }: { limit?: number; offset?: number } = {},
+): Promise<{ rows: GroupRow[]; truncated: boolean }> {
+  const rows = await unpricedGroupsQuery(db, filters, limit, offset);
+  return { rows: (rows as GroupRow[]).slice(0, limit), truncated: rows.length > limit };
+}
+
+/** Exact totals over the same rows: hours, distinct employees, and the group count (count(*) over the grouped rows). */
+export function unpricedTotalsQuery(db: Pick<ReadDb, 'select'>, filters: UnpricedFilters) {
+  const u = unpricedEntrySubquery(db, filters);
+  const g = db.select({ userId: u.userId, hours: sum(u.hours).as('g_hours') })
+    .from(u).groupBy(u.basis, u.level, u.userId, u.loc, u.codeKey).as('g');
+  return db.select({ hours: sum(g.hours), groups: sql<number>`COUNT(*)::int`, employees: countDistinct(g.userId) }).from(g);
+}
+
+export async function unpricedTotals(db: Pick<ReadDb, 'select'>, filters: UnpricedFilters): Promise<{ hours: number; groups: number; employees: number }> {
+  const [row] = await unpricedTotalsQuery(db, filters);
+  return { hours: round2u(Number(row?.hours ?? 0)), groups: Number(row?.groups ?? 0), employees: Number(row?.employees ?? 0) };
+}
+
+/** Each conflict location's date range with NO filters — decides whether an overlapping pair has any affected hours. */
+async function unfilteredConflictRanges(db: Pick<ReadDb, 'select'>) {
+  const u = unpricedEntrySubquery(db, { reason: 'conflict' });
+  return db.select({ level: u.level, userId: u.userId, loc: u.loc, first: min(u.entryDate), last: max(u.entryDate) })
+    .from(u).groupBy(u.level, u.userId, u.loc);
+}
+
+/** The pair's overlap window [from, to] (to null = open). */
+const pairWindow = (p: OverlapRow) => ({
+  from: p.a.effectiveDate > p.b.effectiveDate ? p.a.effectiveDate : p.b.effectiveDate,
+  to: p.a.endDate === null ? p.b.endDate : p.b.endDate === null ? p.a.endDate : (p.a.endDate < p.b.endDate ? p.a.endDate : p.b.endDate),
+});
+const intersects = (p: OverlapRow, first: string, last: string) => {
+  const w = pairWindow(p);
+  return w.from <= last && (w.to === null || w.to >= first);
+};
+/** A pair applies at a group's location by LEVEL: a SLIN-level pair to a SLIN group, a CLIN-level pair to a CLIN group. */
+const pairAt = (p: OverlapRow, level: CostBasisLevel, userId: string, loc: string) =>
+  p.userId === userId && (level === 'slin' ? p.level === 'slin' && p.slinId === loc : level === 'clin' && p.level === 'clin' && p.clinId === loc);
+
+const toGroup = (r: GroupRow, overlaps: OverlapRow[]): UnpricedGroup => {
+  const reason = r.basis === 'conflict' ? 'conflict' : 'no-category';
+  const attached = reason === 'conflict' ? overlaps.filter((p) => pairAt(p, r.level, r.userId, r.loc) && intersects(p, r.first, r.last)) : [];
+  const fix: UnpricedFix = reason === 'conflict'
+    ? { kind: 'end-overlap', userId: r.userId, assignmentIds: [...new Set(attached.flatMap((p) => [p.a.assignmentId, p.b.assignmentId]))] }
+    : r.codeKey ? { kind: 'set-code-category', chargeCodeId: r.codeKey } : { kind: 'assign-category', userId: r.userId };
+  return {
+    key: [r.basis, r.level ?? '', r.userId, r.loc, r.codeKey ?? ''].join('|'),
+    reason, level: r.level, userId: r.userId, employeeName: r.employeeName, contractId: r.contractId, contractName: r.contractName,
+    clinId: r.clinId, clinNumber: r.clinNumber, slinId: r.locSlinId, slinNumber: r.locSlinNumber,
+    chargeCodeId: r.codeKey, chargeCode: r.codeText,
+    hours: round2u(Number(r.hours)), first: r.first, last: r.last, entries: Number(r.entries), overlaps: attached, fix,
+  };
+};
+
+/** Overlapping pairs in the filters' contract / CLIN / SLIN scope. */
+const inScope = (p: OverlapRow, f: UnpricedFilters) =>
+  (!f.contractId || p.contractId === f.contractId) && (!f.clinId || p.clinId === f.clinId) && (!f.slinId || p.slinId === f.slinId);
+
+/**
+ * The whole report (§4.4.1): up to `limit` groups (truncated beyond, totals still exact), each conflict group with
+ * its pairs, plus the pairs with no affected hours (judged WITHOUT filters) and, under a filter, the pairs whose
+ * hours are all outside it. totals.overlaps counts every pair in scope — with no filters, Home's overlap count.
+ */
+export async function unpricedReport(db: Pick<ReadDb, 'select'>, filters: UnpricedFilters, { limit = 1000 }: { limit?: number } = {}): Promise<UnpricedReport> {
+  const [{ rows, truncated }, totals, allPairs, ranges] = await Promise.all([
+    unpricedGroupRows(db, filters, { limit }),
+    unpricedTotals(db, filters),
+    overlappingAssignments(db),
+    unfilteredConflictRanges(db),
+  ]);
+  return assembleUnpricedReport({ rows, truncated, totals, allPairs, ranges, filters });
+}
+
+/**
+ * Pure: the report from its query results (exported for unit tests). Pairs are scoped by the filters' contract / CLIN /
+ * SLIN; a conflict group takes the pairs at its location (by level) whose overlap window meets its dates; a pair with
+ * no conflict hours at all (judged on the UNFILTERED ranges) is unattached; under a filter, a pair with hours but none
+ * in view is out of view.
+ */
+export function assembleUnpricedReport(input: {
+  rows: GroupRow[]; truncated: boolean; totals: { hours: number; groups: number; employees: number };
+  allPairs: OverlapRow[]; ranges: Array<{ level: CostBasisLevel; userId: string; loc: string; first: string | null; last: string | null }>;
+  filters: UnpricedFilters;
+}): UnpricedReport {
+  const { rows, truncated, totals, allPairs, ranges, filters } = input;
+  const pairs = allPairs.filter((p) => inScope(p, filters));
+  const groups = rows.map((r) => toGroup(r, pairs));
+  const attachedPairs = new Set(groups.flatMap((g) => g.overlaps));
+  // A group always has entries, so MIN/MAX are never null here.
+  const hasAnyHours = (p: OverlapRow) => ranges.some((r) => pairAt(p, r.level, r.userId, r.loc) && intersects(p, r.first ?? '', r.last ?? ''));
+  const filtered = !!(filters.startDate || filters.endDate || filters.contractId || filters.clinId || filters.slinId || filters.reason);
+  const unattached = pairs.filter((p) => !attachedPairs.has(p) && !hasAnyHours(p));
+  const outOfView = filtered ? pairs.filter((p) => !attachedPairs.has(p) && hasAnyHours(p)) : [];
+  return { totals: { ...totals, overlaps: pairs.length }, groups, unattachedOverlaps: unattached, outOfViewOverlaps: outOfView, truncated };
+}
+
+/** Every group for the Excel download, fetched in pages of `pageSize` (no cap), in the report's deterministic order. */
+export async function allUnpricedGroups(db: Pick<ReadDb, 'select'>, filters: UnpricedFilters, pageSize = 5000): Promise<UnpricedGroup[]> {
+  const pairs = (await overlappingAssignments(db)).filter((p) => inScope(p, filters));
+  const out: UnpricedGroup[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const { rows, truncated } = await unpricedGroupRows(db, filters, { limit: pageSize, offset });
+    out.push(...rows.map((r) => toGroup(r, pairs)));
+    if (!truncated) return out;
+  }
+}
+
+/** Every overlapping pair in the filters' contract / CLIN / SLIN scope (the Excel "Overlaps" sheet). */
+export async function overlapsInScope(db: Pick<ReadDb, 'select'>, filters: UnpricedFilters): Promise<OverlapRow[]> {
+  return (await overlappingAssignments(db)).filter((p) => inScope(p, filters));
+}
+

@@ -150,3 +150,22 @@ describe('listChargeCodes hasHours correlation (C5, L6)', () => {
   });
 });
 
+// feature-plan-ux-kit-contracts.md §4.4.7 / U-4: the Unpriced report's "Set category on code" lands here with ?code={id}.
+describe('?code= deep link (U-4)', () => {
+  it('opens the labor-category dialog for that code', async () => {
+    m = await mount(<ChargeCodesClient initialCodes={CODES} costClasses={[]} contracts={[]} laborCategories={[]} openCategoryForId="cc1" />);
+    expect(dialogTitled('Labor category — NAV-01')).toBeDefined();
+  });
+
+  it('an id not in the list opens nothing', async () => {
+    m = await mount(<ChargeCodesClient initialCodes={CODES} costClasses={[]} contracts={[]} laborCategories={[]} openCategoryForId="99999999-9999-4999-8999-999999999999" />);
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('the page passes ?code= through only when it is a UUID', () => {
+    const page = readFileSync('src/app/(app)/admin/charge-codes/page.tsx', 'utf8');
+    expect(page).toMatch(/const openCategoryForId = code && UUID\.test\(code\) \? code : undefined;/);
+    expect(page).toContain('openCategoryForId={openCategoryForId}');
+  });
+});
+

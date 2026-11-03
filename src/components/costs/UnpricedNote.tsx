@@ -1,7 +1,7 @@
 'use client';
 
 import { Anchor, Text } from '@mantine/core';
-import { UNPRICED_REPORT_HREF, unpricedHoursLabel } from '@/lib/cost-labels';
+import { unpricedHoursLabel, unpricedReportHref } from '@/lib/cost-labels';
 
 /**
  * "X hours unpriced" next to a cost or funding total (feature-plan-certified-outputs.md C3, CO-D17), linking to the
@@ -14,9 +14,8 @@ export function UnpricedNote({ hours, scope = {}, size = 'xs' }: {
 }) {
   const label = unpricedHoursLabel(hours);
   if (!label) return null;
-  const params = new URLSearchParams(Object.entries(scope).filter(([, v]) => !!v) as Array<[string, string]>);
-  // Fix round 1 (F11): land on the report itself, not the top of the Labor Categories page.
-  const href = `${params.size ? `${UNPRICED_REPORT_HREF}&${params.toString()}` : UNPRICED_REPORT_HREF}#cost-basis-reports`;
+  // UX-4b §4.4.9: the report's own page, scoped with `?` + URLSearchParams (no `&` concatenation, no #anchor).
+  const href = unpricedReportHref(scope);
   return (
     <Text size={size} c="warning">
       <Anchor href={href} size={size} c="warning" underline="always">{label}</Anchor>

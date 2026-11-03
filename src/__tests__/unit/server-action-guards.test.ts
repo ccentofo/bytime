@@ -155,6 +155,9 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getUserLaborCategoryAssignments: 'reads one user\'s LCAT assignments; no write',
     getUnpricedHoursReport: 'certified-outputs C3: reads unpriced entries via cost-basis.ts; no write',
     getOverlappingAssignmentsReport: 'certified-outputs C3: reads overlapping assignments via cost-basis.ts; no write',
+    getUnpricedReport: 'UX-4b §4.4: reads the grouped unpriced report via cost-basis.ts; no write',
+    getUnpricedSummary: 'UX-4b §4.4: reads the unpriced totals via cost-basis.ts; no write',
+    getUnpricedExportData: 'UX-4b §4.4.8: reads the unpriced groups, pairs and entries for the Excel download; no write',
   },
   'pay-period-config.ts': {
     getConfigHistory: 'reads schedule history; no write',

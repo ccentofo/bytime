@@ -180,7 +180,7 @@ export function attentionItems(v: HomeView): AttentionItem[] {
       items.push({
         key: 'overlaps',
         title: `${plural(a.overlaps, 'overlapping labor-category assignment', 'overlapping labor-category assignments')}`,
-        action: { label: 'Review', href: '/admin/labor-categories' },
+        action: { label: 'Review', href: '/admin/reports/unpriced?reason=conflict' }, // UX-4b §4.4.9: the overlaps, wherever they are
       });
     }
   }

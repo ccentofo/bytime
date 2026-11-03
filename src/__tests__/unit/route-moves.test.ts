@@ -86,5 +86,20 @@ describe('route moves (UX-4b C-6)', () => {
     expect(offenders.map((f) => path.relative(ROOT, f))).toEqual([]);
     expect(readFileSync(path.join(ROOT, 'src/lib/home/attention.ts'), 'utf8')).toContain("action: { label: 'Open contracts', href: '/admin/contracts' }");
   });
+
+  it('the old report links on Labor categories: report=overlaps → ?reason=conflict FIRST, then any report → the Unpriced page', async () => {
+    const all = await rules();
+    const lc = all.filter((r) => r.source === '/admin/labor-categories') as Array<{ destination: string; permanent: boolean; has?: Array<{ type: string; key: string; value?: string }> }>;
+    expect(lc).toEqual([
+      expect.objectContaining({ has: [{ type: 'query', key: 'report', value: 'overlaps' }], destination: '/admin/reports/unpriced?reason=conflict', permanent: false }),
+      expect.objectContaining({ has: [{ type: 'query', key: 'report' }], destination: '/admin/reports/unpriced', permanent: false }),
+    ]);
+  });
+
+  it('no source file links to /admin/labor-categories?report any more; Home\'s overlap item opens the conflict view', () => {
+    const offenders = files(path.join(ROOT, 'src')).filter((f) => /\/admin\/labor-categories\?report/.test(stripComments(readFileSync(f, 'utf8'))));
+    expect(offenders.map((f) => path.relative(ROOT, f))).toEqual([]);
+    expect(readFileSync(path.join(ROOT, 'src/lib/home/attention.ts'), 'utf8')).toContain("href: '/admin/reports/unpriced?reason=conflict'");
+  });
 });
 

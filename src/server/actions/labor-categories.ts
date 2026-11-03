@@ -11,9 +11,10 @@ import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { userAction } from '@/lib/action-result';
 import { UserFacingError } from '@/lib/errors';
 import {
-  overlappingAssignments, unpricedEntries, unpricedFixText,
-  type OverlapRow, type UnpricedEntryRow, type UnpricedFilters,
+  overlappingAssignments, unpricedEntries, unpricedFixText, unpricedReport, unpricedTotals, allUnpricedGroups, overlapsInScope,
+  type OverlapRow, type UnpricedEntryRow, type UnpricedFilters, type UnpricedReport, type UnpricedGroup,
 } from '@/server/internal/cost-basis';
+import { parseUnpricedFilters } from '@/lib/unpriced-filters';
 
 // ---------------------------------------------------------------------------
 // Labor Category CRUD
@@ -267,6 +268,43 @@ export async function getUnpricedHoursReport(filters: UnpricedFilters = {}): Pro
   };
   const { rows, truncated } = await unpricedEntries(await getDb(), clean);
   return { truncated, rows: rows.map((r) => ({ ...r, fix: unpricedFixText(r) })) };
+}
+
+/**
+ * The grouped Unpriced hours report (feature-plan-ux-kit-contracts.md §4.4.2): up to 1,000 groups with exact totals,
+ * the overlapping pairs behind conflicts, and the pairs with no affected hours. Filters arrive raw from a URL and are
+ * cleaned by parseUnpricedFilters (invalid values ignored). Admin only.
+ */
+export async function getUnpricedReport(filters: Record<string, string | string[] | undefined> = {}): Promise<UnpricedReport> {
+  await requireAdmin();
+  return unpricedReport(await getDb(), parseUnpricedFilters(filters));
+}
+
+const EXPORT_ENTRY_LIMIT = 50_000;
+
+/**
+ * Everything for the Unpriced Excel download (§4.4.8): ALL groups (paged, no cap), every pair in scope, and up to
+ * 50,000 entries (`entriesTruncated` past that). With reason=conflict, entries are kept only when their basis is a
+ * conflict. Filters are already validated by the route. Admin only.
+ */
+export async function getUnpricedExportData(filters: UnpricedFilters): Promise<{
+  groups: UnpricedGroup[]; overlaps: OverlapRow[]; entries: UnpricedHoursReportRow[]; entriesTruncated: boolean;
+}> {
+  await requireAdmin();
+  const db = await getDb();
+  const [groups, overlaps, entries] = await Promise.all([
+    allUnpricedGroups(db, filters),
+    overlapsInScope(db, filters),
+    unpricedEntries(db, filters, EXPORT_ENTRY_LIMIT),
+  ]);
+  const rows = entries.rows.filter((r) => filters.reason !== 'conflict' || r.reason === 'conflict');
+  return { groups, overlaps, entries: rows.map((r) => ({ ...r, fix: unpricedFixText(r) })), entriesTruncated: entries.truncated };
+}
+
+/** Unpriced totals only (Labor categories' notice, the Downloads row). Admin only. */
+export async function getUnpricedSummary(): Promise<{ hours: number; groups: number; employees: number }> {
+  await requireAdmin();
+  return unpricedTotals(await getDb(), {});
 }
 
 /** "Overlapping labor-category assignments" (C3): pairs that make the overlapped days' entries unpriced. Admin only. */

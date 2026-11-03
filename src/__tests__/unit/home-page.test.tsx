@@ -64,13 +64,13 @@ describe('Home (T10)', () => {
     expect(attentionItems(view()).map((i) => [i.key, i.action?.href ?? null])).toEqual([
       ['waiting', '/admin/approvals'],
       ['last-period', null],
-      ['unpriced', '/admin/labor-categories?report=unpriced'],
+      ['unpriced', '/admin/reports/unpriced'],
       ['self-approval', '/admin/users'],
       ['setup', '/admin/setup'],
       ['workweek', '/settings/workspace'],
       ['pay-schedule', '/settings/pay-schedule'],
       ['contracts', '/admin/contracts'],
-      ['overlaps', '/admin/labor-categories'],
+      ['overlaps', '/admin/reports/unpriced?reason=conflict'],
     ]);
     const items = attentionItems(view());
     expect(items[0]).toMatchObject({ title: '6 timesheets waiting for your approval', sentence: 'Ann, Bob, Cat, Dan and 1 more. Oldest: Sep 16 – Sep 30, 2026.' });
