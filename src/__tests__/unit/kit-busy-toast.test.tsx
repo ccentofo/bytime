@@ -100,6 +100,7 @@ export const PART1_FILES = [
   'src/app/(app)/admin/labor-categories/RateScheduleModal.tsx',
   'src/app/(app)/admin/reports/ReportsClient.tsx',
   'src/app/(app)/admin/assignments/AssignmentsClient.tsx',
+  'src/app/(app)/admin/assignments/LaborCategoryAssignmentsPanel.tsx',
   'src/app/(app)/admin/reports/unpriced/UnpricedClient.tsx',
 ];
 

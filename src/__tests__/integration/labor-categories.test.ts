@@ -25,7 +25,12 @@ vi.mock('@/lib/session', async (importOriginal) => {
   return { ...actual, requireSession: admin, requireAdmin: admin, requireAdminFresh: admin };
 });
 
-import { assignUserToLaborCategory } from '@/server/actions/labor-categories';
+vi.mock('@/server/internal/workspace-settings', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/internal/workspace-settings')>()),
+  getWorkspaceToday: async () => '2026-11-03',
+}));
+
+import { assignUserToLaborCategory, getLaborCategoryPeopleCounts } from '@/server/actions/labor-categories';
 
 describe('assignUserToLaborCategory refuses an unassignable category (C4, T-C4b)', () => {
   let employeeId: string;
@@ -62,5 +67,33 @@ describe('assignUserToLaborCategory refuses an unassignable category (C4, T-C4b)
     const id = await lcatOn({});
     const row = await expectOk(assign(id));
     expect(row).toMatchObject({ userId: employeeId, laborCategoryId: id });
+  });
+});
+
+describe('getLaborCategoryPeopleCounts (feature-plan-ux-kit-contracts.md §4.2, L-1)', () => {
+  const db = () => getTestDb();
+  beforeEach(async () => {
+    await cleanupTestData();
+    session.adminId = (await createTestUser({ role: 'admin' })).id;
+  });
+  afterEach(async () => { await cleanupTestData(); });
+
+  it('counts distinct employees active on the workspace today; ended and future assignments are not counted', async () => {
+    const contract = await createTestContract({});
+    const clin = await createTestClin(contract.id, {});
+    const [a] = await db().insert(schema.laborCategories).values({ clinId: clin.id, lcatCode: 'PC-A', title: 'A' }).returning();
+    const [b] = await db().insert(schema.laborCategories).values({ clinId: clin.id, lcatCode: 'PC-B', title: 'B' }).returning();
+    const [u1, u2, u3, u4, u5] = await Promise.all([1, 2, 3, 4, 5].map(() => createTestUser({ role: 'employee' })));
+    const row = (userId: string, laborCategoryId: string, effectiveDate: string, endDate: string | null = null) =>
+      ({ userId, laborCategoryId, effectiveDate, endDate, assignedBy: session.adminId });
+    await db().insert(schema.userLaborCategories).values([
+      row(u1.id, a.id, '2026-01-01'),                 // open-ended → counted
+      row(u2.id, a.id, '2026-01-01', '2026-11-03'),   // ends today (inclusive) → counted
+      row(u3.id, a.id, '2026-01-01', '2026-11-02'),   // ended yesterday → not counted
+      row(u4.id, a.id, '2026-11-04'),                 // starts tomorrow → not counted
+      row(u1.id, a.id, '2026-11-03'),                 // the same employee twice → once
+      row(u5.id, b.id, '2026-11-03'),                 // starts today → counted on B
+    ]);
+    expect(await getLaborCategoryPeopleCounts()).toEqual({ [a.id]: 2, [b.id]: 1 });
   });
 });

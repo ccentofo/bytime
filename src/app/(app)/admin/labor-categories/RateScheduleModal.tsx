@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useTransition } from 'react';
-import { Button, Group, Modal, Stack, Text, TextInput, Title } from '@mantine/core';
+import { Button, Group, Modal, Stack, Text, Title } from '@mantine/core';
+import { MoneyInput } from '@/components/ui/MoneyInput';
 import { DateInput } from '@mantine/dates';
 import { runAction } from '@/lib/run-action';
 import { formatCalendarDate, isCalendarDate, compare, type CalendarDate } from '@/lib/calendar-date';
@@ -145,8 +146,9 @@ export function RateScheduleModal({ opened, onClose, category, canWrite, onSaved
             {mode.kind === 'add' && <DateInput label="Effective date" value={date} onChange={onDate} data-testid="rate-date" />}
             {mode.kind !== 'remove' && (
               <Group grow>
-                <TextInput label="Hourly ($)" value={hourly} onChange={(e) => onHourly(e.currentTarget.value)} data-testid="rate-hourly" />
-                <TextInput label="Ceiling ($)" placeholder="optional" value={ceiling} onChange={(e) => onCeiling(e.currentTarget.value)} data-testid="rate-ceiling" />
+                {/* UX-4b §4.2.6: MoneyInput (9,999.99 is validateRate's ceiling, checked on blur; the server enforces it). */}
+                <MoneyInput label="Hourly" max={9_999.99} value={hourly} onChange={onHourly} data-testid="rate-hourly" />
+                <MoneyInput label="Ceiling" placeholder="optional" max={9_999.99} value={ceiling} onChange={onCeiling} data-testid="rate-ceiling" />
               </Group>
             )}
             <ImpactPanel gate={gate} testIdPrefix="rate" />

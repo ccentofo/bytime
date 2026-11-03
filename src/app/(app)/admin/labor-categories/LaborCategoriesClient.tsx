@@ -1,46 +1,31 @@
 'use client';
 
-import { useState, useTransition } from 'react';
-import {
-  Button,
-  Modal,
-  TextInput,
-  Select,
-  Group,
-  Stack,
-  Title,
-  Text,
-  Badge,
-  Paper,
-  Divider,
-} from '@mantine/core';
-import { DateInput } from '@mantine/dates';
+import { useMemo, useState } from 'react';
+import Link from 'next/link';
+import { Anchor, Button, Modal, TextInput, Select, Group, Stack, Text } from '@mantine/core';
+import { notifications } from '@mantine/notifications';
+import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { RowActions } from '@/components/ui/RowActions';
-import { useBusyRows } from '@/components/ui/useRowState';
-import { notifications } from '@mantine/notifications';
-import { runAction } from '@/lib/run-action';
-import { toastError } from '@/lib/toast';
-import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
-import { useAppTable } from '@/components/table/mrtDefaults';
-import {
-  createLaborCategory,
-  updateLaborCategory,
-  getAllLaborCategories,
-  getAssignableLaborCategories,
-  assignUserToLaborCategory,
-  endUserLaborCategoryAssignment,
-  getUserLaborCategoryAssignments,
-} from '@/server/actions/labor-categories';
-import { getClinsByContract } from '@/server/actions/clins';
-import { formatDate } from '@/lib/format';
-import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
+import { useLastTarget } from '@/components/ui/useRowState';
+import { useBusy } from '@/components/ui/useBusy';
+import { StatusBadge } from '@/components/ui/StatusBadge';
+import { Notice } from '@/components/ui/Notice';
+import { MoneyInput } from '@/components/ui/MoneyInput';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { formatCalendarDate, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { useAppTable, numericColumn, type AppTableExpandable } from '@/components/table/mrtDefaults';
+import { runAction } from '@/lib/run-action';
+import { toastError } from '@/lib/toast';
+import { formatCount, formatCurrency, formatHours } from '@/lib/format';
+import { UNPRICED_REPORT_HREF } from '@/lib/cost-labels';
+import { formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { rateDisplay, type RateChange, type RateSchedule, type RateScheduleView } from '@/lib/labor-rates';
+import { createLaborCategory, updateLaborCategory, getAllLaborCategories } from '@/server/actions/labor-categories';
+import { getClinsByContract } from '@/server/actions/clins';
 import { RateScheduleModal } from './RateScheduleModal';
 import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
+import classes from './LaborCategories.module.css';
 
 // ---------------------------------------------------------------------------
 // Types (derived from server action return types)
@@ -59,6 +44,7 @@ type LaborCategory = {
   updatedAt: Date;
   clinNumber: string;
   clinDescription: string | null;
+  contractId: string;
   contractName: string;
   contractNumber: string;
   slinNumber: string | null;
@@ -66,62 +52,17 @@ type LaborCategory = {
   rateChanges: RateChange[];
 };
 
-type UserLcatAssignment = {
-  id: string;
-  userId: string;
-  laborCategoryId: string;
-  effectiveDate: CalendarDate;
-  endDate: CalendarDate | null;
-  createdAt: Date;
-  userName: string;
-  userEmail: string;
-  lcatCode: string;
-  lcatTitle: string;
-  clinNumber: string;
-  contractName: string;
-  contractNumber: string;
-};
-
-type AssignableLcat = {
-  id: string;
-  lcatCode: string;
-  title: string;
-  clinId: string;
-  clinNumber: string;
-  contractName: string;
-  contractNumber: string;
-};
-
 type Contract = {
   id: string;
   contractNumber: string;
   name: string;
-  description: string | null;
   status: 'active' | 'inactive' | 'closed';
-  startDate: CalendarDate | null;
-  endDate: CalendarDate | null;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-type User = {
-  id: string;
-  email: string;
-  fullName: string;
-  role: 'admin' | 'supervisor' | 'employee';
-  isActive: boolean;
-  createdAt: Date;
-  updatedAt: Date;
 };
 
 type Clin = {
   id: string;
-  contractId: string;
   clinNumber: string;
   description: string | null;
-  status: 'active' | 'inactive' | 'closed';
-  createdAt: Date;
-  updatedAt: Date;
 };
 
 type LcatForm = {
@@ -133,12 +74,22 @@ type LcatForm = {
   ceilingRate: string;
 };
 
+/** A table row: a contract group, or one category under it (feature-plan-ux-kit-contracts.md §4.2.5). */
+type Row = {
+  level: 'contract' | 'lcat';
+  id: string;
+  contract: { id: string; name: string; number: string; count: number };
+  lc?: LaborCategory;
+  children?: Row[];
+};
+
 type Props = {
   initialLaborCategories: LaborCategory[];
-  initialAssignments: UserLcatAssignment[];
   contracts: Contract[];
-  users: User[];
-  assignableLcats: AssignableLcat[];
+  /** Employees holding each category on the workspace's today (absent = 0). */
+  peopleCounts: Record<string, number>;
+  /** All-time unpriced hours (the notice); 0 hides it. */
+  unpricedHours: number;
   /** The workspace's today (server — never the browser clock), for the current-rate display. */
   today: CalendarDate;
 };
@@ -152,35 +103,19 @@ const EMPTY_LCAT_FORM: LcatForm = {
   ceilingRate: '',
 };
 
-function formatRate(rate: string | null): string {
-  if (!rate) return '—';
-  const num = parseFloat(rate);
-  if (isNaN(num)) return '—';
-  return `$${num.toFixed(2)}`;
-}
+/** validateRate's ceiling (lib/validation.ts) — MoneyInput checks it on blur; the server enforces it. */
+const MAX_RATE = 9_999.99;
 
-export function LaborCategoriesClient({
-  initialLaborCategories,
-  initialAssignments,
-  contracts,
-  users,
-  assignableLcats: initialAssignableLcats,
-  today,
-}: Props) {
+const rate = (v: string | null) => formatCurrency(v);
+
+export function LaborCategoriesClient({ initialLaborCategories, contracts, peopleCounts, unpricedHours, today }: Props) {
   const canWrite = useCanWrite();
-  const [isPending, startTransition] = useTransition();
+  const busy = useBusy();
   const [laborCats, setLaborCats] = useState<LaborCategory[]>(initialLaborCategories);
-  const [assignments, setAssignments] = useState<UserLcatAssignment[]>(initialAssignments);
-  const [assignableLcats, setAssignableLcats] = useState<AssignableLcat[]>(initialAssignableLcats);
 
   // Dated rates D2: the Rates modal and the current-rate lookups (all from the same laborCats state).
   const [ratesFor, setRatesFor] = useState<LaborCategory | null>(null);
-  const busyRows = useBusyRows();
   const scheduleOf = (lc: LaborCategory): RateSchedule => ({ starting: { hourlyRate: lc.hourlyRate, ceilingRate: lc.ceilingRate }, changes: lc.rateChanges ?? [] });
-  const currentRateOf = (laborCategoryId: string): string | null => {
-    const lc = laborCats.find((x) => x.id === laborCategoryId);
-    return lc ? rateDisplay(scheduleOf(lc), today).current.hourlyRate : null;
-  };
   function mergeSchedule(view: RateScheduleView) {
     setLaborCats((prev) => prev.map((lc) => (lc.id === view.laborCategoryId
       ? { ...lc, hourlyRate: view.starting.hourlyRate, ceilingRate: view.starting.ceilingRate, rateChanges: view.changes }
@@ -192,16 +127,8 @@ export function LaborCategoriesClient({
   const [editingLcat, setEditingLcat] = useState<LaborCategory | null>(null);
   const [lcatForm, setLcatForm] = useState<LcatForm>(EMPTY_LCAT_FORM);
   const [clinOptions, setClinOptions] = useState<{ value: string; label: string }[]>([]);
-
-  // Assignment form state
-  const [assignUserId, setAssignUserId] = useState<string | null>(null);
-  const [assignLcatId, setAssignLcatId] = useState<string | null>(null);
-  const [assignEffectiveDate, setAssignEffectiveDate] = useState<string | null>(null);
-  const [assignEndDate, setAssignEndDate] = useState<string | null>(null);
   const [confirmDeactivateLcat, setConfirmDeactivateLcat] = useState<LaborCategory | null>(null);
-  const [confirmEndAssignment, setConfirmEndAssignment] = useState<UserLcatAssignment | null>(null);
-  // certified-outputs C3: optional INCLUSIVE end date (default today) — a promotion can end yesterday and start today.
-  const [endAssignmentDate, setEndAssignmentDate] = useState<CalendarDate | null>(null);
+  const shownDeactivate = useLastTarget(confirmDeactivateLcat);
 
   // --- LCAT Modal handlers ---
 
@@ -215,7 +142,7 @@ export function LaborCategoriesClient({
   function openEditLcatModal(lcat: LaborCategory) {
     setEditingLcat(lcat);
     setLcatForm({
-      contractId: null, // Will be set after CLIN lookup; not needed for edit
+      contractId: null, // not needed for edit
       clinId: lcat.clinId,
       lcatCode: lcat.lcatCode,
       title: lcat.title,
@@ -229,7 +156,7 @@ export function LaborCategoriesClient({
     setLcatForm((f) => ({ ...f, contractId, clinId: null }));
     setClinOptions([]);
     if (!contractId) return;
-    startTransition(async () => {
+    void busy.run('clins', async () => {
       const fetchedClins = await getClinsByContract(contractId);
       setClinOptions(
         (fetchedClins as Clin[]).map((c) => ({
@@ -240,198 +167,156 @@ export function LaborCategoriesClient({
     });
   }
 
-  /**
-   * Refetch the categories AND the assignable list together (feature-plan-ux-page-fixes.md C4): a created, edited,
-   * reactivated or deactivated category changes which ones can be assigned. A selection that's no longer assignable
-   * is cleared.
-   */
   async function refreshLaborCategories() {
-    const [all, assignable] = await Promise.all([getAllLaborCategories(), getAssignableLaborCategories()]);
-    setLaborCats(all as LaborCategory[]);
-    setAssignableLcats(assignable as AssignableLcat[]);
-    setAssignLcatId((id) => (id && !assignable.some((a) => a.id === id) ? null : id));
+    setLaborCats((await getAllLaborCategories()) as LaborCategory[]);
   }
 
-  function handleLcatSubmit() {
+  async function handleLcatSubmit() {
     // Dated rates D1.6: editing never sends rates (they change only through the Rates schedule); create sets the starting rate.
     if (!lcatForm.lcatCode.trim() || !lcatForm.title.trim() || (!editingLcat && !lcatForm.hourlyRate.trim())) return;
-
-    startTransition(async () => {
-      try {
-        if (editingLcat) {
-          const result = await runAction(updateLaborCategory(editingLcat.id, {
-            lcatCode: lcatForm.lcatCode.trim(),
-            title: lcatForm.title.trim(),
-          }), { errorTitle: 'Couldn’t update labor category' });
-          if (!result.ok) return;
-          notifications.show({
-            title: 'Labor Category Updated',
-            message: `${lcatForm.lcatCode} has been updated.`,
-            color: 'success',
-          });
-        } else {
-          if (!lcatForm.clinId) return;
-          const result = await runAction(createLaborCategory({
-            clinId: lcatForm.clinId,
-            lcatCode: lcatForm.lcatCode.trim(),
-            title: lcatForm.title.trim(),
-            hourlyRate: lcatForm.hourlyRate.trim(),
-            ceilingRate: lcatForm.ceilingRate.trim() || undefined,
-          }), { errorTitle: 'Couldn’t create labor category' });
-          if (!result.ok) return;
-          notifications.show({
-            title: 'Labor Category Created',
-            message: `${lcatForm.lcatCode} has been created.`,
-            color: 'success',
-          });
-        }
-
-        await refreshLaborCategories();
-        setLcatModalOpen(false);
-      } catch {
-        toastError({ title: 'Error', message: 'Something went wrong. Please refresh and try again.' });
+    try {
+      if (editingLcat) {
+        const result = await runAction(updateLaborCategory(editingLcat.id, {
+          lcatCode: lcatForm.lcatCode.trim(),
+          title: lcatForm.title.trim(),
+        }), { errorTitle: 'Couldn’t update labor category' });
+        if (!result.ok) return;
+        notifications.show({ title: 'Labor Category Updated', message: `${lcatForm.lcatCode} has been updated.`, color: 'success' });
+      } else {
+        if (!lcatForm.clinId) return;
+        const result = await runAction(createLaborCategory({
+          clinId: lcatForm.clinId,
+          lcatCode: lcatForm.lcatCode.trim(),
+          title: lcatForm.title.trim(),
+          hourlyRate: lcatForm.hourlyRate.trim(),
+          ceilingRate: lcatForm.ceilingRate.trim() || undefined,
+        }), { errorTitle: 'Couldn’t create labor category' });
+        if (!result.ok) return;
+        notifications.show({ title: 'Labor Category Created', message: `${lcatForm.lcatCode} has been created.`, color: 'success' });
       }
-    });
+      await refreshLaborCategories();
+      setLcatModalOpen(false);
+    } catch {
+      toastError({ title: 'Error', message: 'Something went wrong. Please refresh and try again.' });
+    }
   }
 
-  function handleToggleStatus(lcat: LaborCategory) {
+  async function handleToggleStatus(lcat: LaborCategory) {
     const newStatus = lcat.status === 'active' ? 'inactive' : 'active';
-    if (newStatus === 'active') busyRows.start(lcat.id); // Reactivate runs without a confirm: loader on its row
-    startTransition(async () => {
-      try {
-        const result = await runAction(updateLaborCategory(lcat.id, { status: newStatus }), { errorTitle: 'Couldn’t update status' });
-        if (!result.ok) return;
-        await refreshLaborCategories();
-        notifications.show({
-          title: 'Status Updated',
-          message: `${lcat.lcatCode} is now ${newStatus}.`,
-          color: newStatus === 'active' ? 'success' : 'gray',
-        });
-        setConfirmDeactivateLcat(null);
-      } catch {
-        toastError({ title: 'Error', message: 'Something went wrong. Please refresh and try again.' });
-      } finally {
-        busyRows.done(lcat.id);
-      }
-    });
+    try {
+      const result = await runAction(updateLaborCategory(lcat.id, { status: newStatus }), { errorTitle: 'Couldn’t update status' });
+      if (!result.ok) return;
+      await refreshLaborCategories();
+      notifications.show({
+        title: 'Status Updated',
+        message: `${lcat.lcatCode} is now ${newStatus}.`,
+        color: newStatus === 'active' ? 'success' : 'gray',
+      });
+      setConfirmDeactivateLcat(null);
+    } catch {
+      toastError({ title: 'Error', message: 'Something went wrong. Please refresh and try again.' });
+    }
   }
 
-  // --- Assignment handlers ---
+  // --- Rows: grouped by contract (in the server's contract → CLIN → code order) ---
 
-  function handleAssignSubmit() {
-    if (!assignUserId || !assignLcatId || !assignEffectiveDate) return;
-    startTransition(async () => {
-      try {
-        if (!isCalendarDate(assignEffectiveDate)) return;
-        const endDate: CalendarDate | undefined = assignEndDate && isCalendarDate(assignEndDate) ? assignEndDate : undefined;
-        const result = await runAction(assignUserToLaborCategory({
-          userId: assignUserId,
-          laborCategoryId: assignLcatId,
-          effectiveDate: assignEffectiveDate,
-          endDate,
-        }), { errorTitle: 'Assignment Failed' });
-        if (!result.ok) return;
-        const refreshed = await getUserLaborCategoryAssignments();
-        setAssignments(refreshed);
-        setAssignUserId(null);
-        setAssignLcatId(null);
-        setAssignEffectiveDate(null);
-        setAssignEndDate(null);
-        notifications.show({
-          title: 'Assignment Created',
-          message: 'User has been assigned to the labor category.',
-          color: 'success',
-        });
-      } catch {
-        toastError({ title: 'Assignment Failed', message: 'Something went wrong. Please refresh and try again.' });
+  const rows = useMemo<Row[]>(() => {
+    const groups = new Map<string, Row>();
+    for (const lc of laborCats) {
+      let group = groups.get(lc.contractId);
+      if (!group) {
+        group = { level: 'contract', id: lc.contractId, contract: { id: lc.contractId, name: lc.contractName, number: lc.contractNumber, count: 0 }, children: [] };
+        groups.set(lc.contractId, group);
       }
-    });
-  }
+      group.contract.count += 1;
+      group.children!.push({ level: 'lcat', id: lc.id, contract: group.contract, lc });
+    }
+    return [...groups.values()];
+  }, [laborCats]);
 
-  function handleEndAssignment(assignment: UserLcatAssignment) {
-    startTransition(async () => {
-      try {
-        const result = await runAction(endUserLaborCategoryAssignment(assignment.id, endAssignmentDate ?? undefined), { errorTitle: 'Couldn’t end assignment' });
-        if (!result.ok) return;
-        const refreshed = await getUserLaborCategoryAssignments();
-        setAssignments(refreshed);
-        notifications.show({
-          title: 'Assignment Ended',
-          message: `${assignment.userName}'s assignment to ${assignment.lcatCode} has been ended.`,
-          color: 'warning',
-        });
-        setConfirmEndAssignment(null);
-        setEndAssignmentDate(null);
-      } catch {
-        toastError({ title: 'Error', message: 'Something went wrong. Please refresh and try again.' });
-      }
-    });
-  }
+  // --- Table ---
 
-  // --- LCAT Table columns ---
+  const rateCell = (lc: LaborCategory, which: 'hourlyRate' | 'ceilingRate') => {
+    // The rate in effect today, and the next later change (dimmed) if one exists.
+    const { current, next } = rateDisplay(scheduleOf(lc), today);
+    const testId = which === 'hourlyRate' ? 'lcat-current-hourly' : undefined;
+    return (
+      <>
+        <span data-testid={testId}>{rate(current[which])}</span>
+        {next && (
+          <div className={classes.next} data-testid={which === 'hourlyRate' ? 'lcat-next-hourly' : undefined}>
+            → {rate(next[which])} from {formatCalendarDate(next.effectiveDate, 'MMM D, YYYY')}
+          </div>
+        )}
+      </>
+    );
+  };
 
-  const lcatColumns: MRT_ColumnDef<LaborCategory>[] = [
+  const columns: MRT_ColumnDef<Row>[] = [
     {
-      id: 'contract',
-      header: 'Contract',
-      accessorFn: (row) => `${row.contractName} (${row.contractNumber})`,
-      size: 220,
-    },
-    { accessorKey: 'clinNumber', header: 'CLIN', size: 100 },
-    {
-      accessorKey: 'slinNumber',
-      header: 'SLIN',
-      size: 100,
-      Cell: ({ cell }) => cell.getValue<string | null>() ?? '—',
-    },
-    { accessorKey: 'lcatCode', header: 'LCAT Code', size: 120 },
-    { accessorKey: 'title', header: 'Title', size: 200 },
-    {
-      id: 'hourlyRate',
-      header: 'Hourly Rate',
-      // The rate in effect today, and the next later change (dimmed) if one exists.
-      Cell: ({ row }) => {
-        const { current, next } = rateDisplay(scheduleOf(row.original), today);
+      id: 'category', header: 'Category', enableSorting: false,
+      Cell: ({ row: { original: r } }) => {
+        if (r.level === 'contract') {
+          return (
+            <span className={classes.oneLine}>
+              <Text fw={600} span>{r.contract.name}</Text>{' '}
+              <span className={`${classes.sub} ${classes.mono}`}>{r.contract.number}</span>{' '}
+              <span className={classes.sub}>· {formatCount(r.contract.count)} {r.contract.count === 1 ? 'category' : 'categories'}</span>
+            </span>
+          );
+        }
+        const lc = r.lc!;
         return (
-          <Stack gap={0}>
-            <Text size="sm" data-testid="lcat-current-hourly">{formatRate(current.hourlyRate)}</Text>
-            {next && <Text size="xs" c="dimmed" data-testid="lcat-next-hourly">→ {formatRate(next.hourlyRate)} from {formatCalendarDate(next.effectiveDate, 'MMM D, YYYY')}</Text>}
-          </Stack>
+          <span className={classes.oneLine}>
+            {lc.title} <span className={classes.sub}>· CLIN {lc.clinNumber}{lc.slinNumber ? ` · SLIN ${lc.slinNumber}` : ''}</span>
+          </span>
         );
       },
-      size: 150,
     },
     {
-      id: 'ceilingRate',
-      header: 'Ceiling Rate',
-      Cell: ({ row }) => {
-        const { current, next } = rateDisplay(scheduleOf(row.original), today);
+      id: 'code', header: 'Code', enableSorting: false,
+      Cell: ({ row: { original: r } }) => (r.lc ? <span className={classes.mono}>{r.lc.lcatCode}</span> : null),
+    },
+    numericColumn<Row>({ id: 'hourlyRate', header: 'Hourly rate', enableSorting: false, Cell: ({ row: { original: r } }) => (r.lc ? rateCell(r.lc, 'hourlyRate') : null) }),
+    numericColumn<Row>({ id: 'ceilingRate', header: 'Ceiling rate', enableSorting: false, Cell: ({ row: { original: r } }) => (r.lc ? rateCell(r.lc, 'ceilingRate') : null) }),
+    numericColumn<Row>({
+      id: 'people', header: 'People', enableSorting: false,
+      Cell: ({ row: { original: r } }) => {
+        if (!r.lc) return null;
+        const n = peopleCounts[r.lc.id] ?? 0;
+        if (n === 0) return formatCount(0);
         return (
-          <Stack gap={0}>
-            <Text size="sm">{formatRate(current.ceilingRate)}</Text>
-            {next && <Text size="xs" c="dimmed">→ {formatRate(next.ceilingRate)} from {formatCalendarDate(next.effectiveDate, 'MMM D, YYYY')}</Text>}
-          </Stack>
+          <Anchor component={Link} href={`/admin/assignments?tab=labor-categories&laborCategoryId=${r.lc.id}`}
+            aria-label={`${formatCount(n)} ${n === 1 ? 'person' : 'people'} in ${r.lc.lcatCode}`}>
+            {formatCount(n)}
+          </Anchor>
         );
       },
-      size: 150,
-    },
+    }),
     {
-      accessorKey: 'status',
-      header: 'Status',
-      Cell: ({ cell }) => {
-        const status = cell.getValue<string>() as keyof typeof RECORD_STATUS_COLOR;
-        return <Badge color={RECORD_STATUS_COLOR[status] ?? 'gray'}>{status}</Badge>;
-      },
-      size: 110,
+      id: 'status', header: 'Status', enableSorting: false,
+      Cell: ({ row: { original: r } }) => (r.lc ? <StatusBadge status={r.lc.status} /> : null),
     },
   ];
 
-  const lcatTable = useAppTable({
-    columns: lcatColumns,
-    data: laborCats,
+  const expandable = useMemo<AppTableExpandable<Row>>(() => ({
+    getSubRows: (r) => r.children,
+    label: (r) => (r.level === 'contract' ? `categories for ${r.contract.name}` : r.lc!.lcatCode),
+    searchText: (r) => (r.level === 'contract' ? `${r.contract.name} ${r.contract.number}` : `${r.lc!.title} ${r.lc!.lcatCode}`),
+    rowId: (r) => `${r.level}:${r.id}`,
+    defaultExpanded: true, // groups start expanded (§4.2.5)
+  }), []);
+
+  const lcatTable = useAppTable<Row>({
+    columns,
+    data: rows,
+    expandable,
+    hairline: true,
+    compact: rows.length <= 25,
     enableRowActions: true,
-    renderRowActions: ({ row }) => {
-      const lcat = row.original;
+    renderRowActions: ({ row: { original: r } }) => {
+      if (!r.lc) return null;
+      const lcat = r.lc;
       return (
         <RowActions
           rowLabel={lcat.lcatCode}
@@ -440,85 +325,36 @@ export function LaborCategoriesClient({
             { key: 'rates', label: 'Rates', icon: 'rates', onSelect: () => setRatesFor(lcat) },
             lcat.status === 'active'
               ? { key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger', onSelect: () => setConfirmDeactivateLcat(lcat) }
-              : { key: 'reactivate', label: 'Reactivate', icon: 'reactivate', busy: busyRows.isBusy(lcat.id), onSelect: () => handleToggleStatus(lcat) },
+              : { key: 'reactivate', label: 'Reactivate', icon: 'reactivate', busy: busy.is(`row:${lcat.id}`), onSelect: () => { void busy.run(`row:${lcat.id}`, () => handleToggleStatus(lcat)); } },
           ]}
         />
       );
     },
-  });
-
-  // --- Assignment Table columns ---
-
-  const assignmentColumns: MRT_ColumnDef<UserLcatAssignment>[] = [
-    { accessorKey: 'userName', header: 'Employee', size: 180 },
-    {
-      id: 'contract',
-      header: 'Contract',
-      accessorFn: (row) => `${row.contractName} (${row.contractNumber})`,
-      size: 200,
-    },
-    { accessorKey: 'clinNumber', header: 'CLIN', size: 100 },
-    {
-      id: 'lcat',
-      header: 'LCAT',
-      accessorFn: (row) => `${row.lcatCode} — ${row.lcatTitle}`,
-      size: 200,
-    },
-    {
-      id: 'currentRate',
-      header: 'Rate',
-      // The assigned category's CURRENT rate (from its schedule in laborCats), never a starting rate.
-      accessorFn: (row) => currentRateOf(row.laborCategoryId),
-      Cell: ({ cell }) => `${formatRate(cell.getValue<string | null>())}/hr`,
-      size: 120,
-    },
-    {
-      accessorKey: 'effectiveDate',
-      header: 'Effective Date',
-      Cell: ({ cell }) => formatDate(cell.getValue<CalendarDate>()),
-      size: 140,
-    },
-    {
-      accessorKey: 'endDate',
-      header: 'End Date',
-      Cell: ({ cell }) => formatDate(cell.getValue<CalendarDate | null>()),
-      size: 140,
-    },
-  ];
-
-  const assignmentTable = useAppTable({
-    columns: assignmentColumns,
-    data: assignments,
-    enableRowActions: true,
-    renderRowActions: ({ row }) => (
-      <RowActions
-        rowLabel={`${row.original.userName} — ${row.original.lcatCode}`}
-        items={[{
-          key: 'end', label: 'End assignment…', icon: 'endAssignment',
-          hidden: row.original.endDate !== null, // already ended
-          onSelect: () => setConfirmEndAssignment(row.original),
-        }]}
-      />
-    ),
+    emptyState: { title: 'No labor categories yet', body: 'Add a labor category to set a billing rate on a CLIN.' },
   });
 
   return (
     <>
-      {/* ---- Section A: Labor Categories ---- */}
       <PageHeader
-        title="Labor Categories"
+        title="Labor categories"
+        description="Each category's billing rate on a CLIN. Charge codes and employees use these to price hours."
         actions={
           <WriteButton leftSection={<Icons.create size={ICON_SIZE.button} />} onClick={openAddLcatModal}>
-            Add Labor Category
+            Add labor category
           </WriteButton>
         }
+        notices={unpricedHours > 0 && (
+          <Notice action={{ label: 'See what to fix', href: UNPRICED_REPORT_HREF }}>
+            <b>{formatHours(unpricedHours)} hours have no labor-category rate,</b> so their cost isn&apos;t counted.
+          </Notice>
+        )}
       />
       <MantineReactTable table={lcatTable} />
 
       {/* ---- Add/Edit LCAT Modal ---- */}
       <Modal
         opened={lcatModalOpen}
-        onClose={() => setLcatModalOpen(false)}
+        onClose={() => { if (!busy.is('save')) setLcatModalOpen(false); }}
         title={editingLcat ? 'Edit Labor Category' : 'Add Labor Category'}
         size="md"
       >
@@ -568,18 +404,20 @@ export function LaborCategoriesClient({
           />
           {!editingLcat && (
             <>
-              <TextInput
-                label="Starting hourly rate ($)"
+              <MoneyInput
+                label="Starting hourly rate"
                 required
-                placeholder="125.00"
+                placeholder="$125.00"
+                max={MAX_RATE}
                 value={lcatForm.hourlyRate}
-                onChange={(e) => setLcatForm((f) => ({ ...f, hourlyRate: e.target.value }))}
+                onChange={(v) => setLcatForm((f) => ({ ...f, hourlyRate: v }))}
               />
-              <TextInput
-                label="Starting ceiling rate ($)"
-                placeholder="150.00 (optional)"
+              <MoneyInput
+                label="Starting ceiling rate"
+                placeholder="$150.00 (optional)"
+                max={MAX_RATE}
                 value={lcatForm.ceilingRate}
-                onChange={(e) => setLcatForm((f) => ({ ...f, ceilingRate: e.target.value }))}
+                onChange={(v) => setLcatForm((f) => ({ ...f, ceilingRate: v }))}
               />
             </>
           )}
@@ -588,8 +426,8 @@ export function LaborCategoriesClient({
               Cancel
             </Button>
             <WriteButton
-              onClick={handleLcatSubmit}
-              loading={isPending}
+              {...busy.props('save')}
+              onClick={() => { void busy.run('save', handleLcatSubmit); }}
               disabled={
                 !lcatForm.lcatCode.trim() ||
                 !lcatForm.title.trim() ||
@@ -603,60 +441,6 @@ export function LaborCategoriesClient({
         </Stack>
       </Modal>
 
-      {/* ---- Section B: User LCAT Assignments ---- */}
-      <Divider my="xl" />
-      <Title order={4} mb="lg">User Labor Category Assignments</Title>
-
-      <Paper withBorder p="md" mb="xl">
-        <Title order={4} mb="sm">Create Assignment</Title>
-        <Group align="flex-end" wrap="wrap">
-          <Select
-            label="User"
-            placeholder="Select employee"
-            data={users.map((u) => ({ value: u.id, label: u.fullName }))}
-            value={assignUserId}
-            onChange={setAssignUserId}
-            searchable
-            style={{ minWidth: 200 }}
-          />
-          <Select
-            label="Labor Category"
-            placeholder="Select labor category"
-            data={assignableLcats.map((lc) => ({
-              value: lc.id,
-              label: `${lc.contractName} — ${lc.clinNumber} — ${lc.lcatCode}: ${lc.title} (${formatRate(currentRateOf(lc.id))}/hr)`,
-            }))}
-            value={assignLcatId}
-            onChange={setAssignLcatId}
-            searchable
-            style={{ minWidth: 400 }}
-          />
-          <DateInput
-            label="Effective Date"
-            value={assignEffectiveDate}
-            onChange={setAssignEffectiveDate}
-            required
-            style={{ minWidth: 160 }}
-          />
-          <DateInput
-            label="End Date"
-            value={assignEndDate}
-            onChange={setAssignEndDate}
-            clearable
-            style={{ minWidth: 160 }}
-          />
-          <WriteButton
-            onClick={handleAssignSubmit}
-            loading={isPending}
-            disabled={!assignUserId || !assignLcatId || !assignEffectiveDate}
-          >
-            Assign
-          </WriteButton>
-        </Group>
-      </Paper>
-
-      <MantineReactTable table={assignmentTable} />
-
       <RateScheduleModal
         opened={!!ratesFor}
         onClose={() => setRatesFor(null)}
@@ -668,37 +452,12 @@ export function LaborCategoriesClient({
       <ConfirmModal
         opened={!!confirmDeactivateLcat}
         title="Deactivate labor category?"
-        message={confirmDeactivateLcat ? `This deactivates ${confirmDeactivateLcat.lcatCode} — ${confirmDeactivateLcat.title}.` : ''}
+        message={shownDeactivate ? `This deactivates ${shownDeactivate.lcatCode} — ${shownDeactivate.title}.` : ''}
         confirmLabel="Deactivate"
-        loading={isPending}
-        onConfirm={() => confirmDeactivateLcat && handleToggleStatus(confirmDeactivateLcat)}
+        loading={busy.is('status')}
+        onConfirm={() => { if (confirmDeactivateLcat) void busy.run('status', () => handleToggleStatus(confirmDeactivateLcat)); }}
         onCancel={() => setConfirmDeactivateLcat(null)}
       />
-
-      <Modal
-        opened={!!confirmEndAssignment}
-        onClose={() => { setConfirmEndAssignment(null); setEndAssignmentDate(null); }}
-        title="End assignment?"
-      >
-        {confirmEndAssignment && (
-          <Stack>
-            <Text size="sm">
-              This ends {confirmEndAssignment.userName}&apos;s assignment to {confirmEndAssignment.lcatCode}. The last day is
-              included; leave the date empty to end it today. It can&apos;t be before the assignment&apos;s effective date.
-            </Text>
-            <DateInput
-              label="Last day (optional)"
-              value={endAssignmentDate}
-              onChange={(d) => setEndAssignmentDate(d && isCalendarDate(d) ? d : null)}
-              clearable
-            />
-            <Group justify="flex-end">
-              <Button variant="default" onClick={() => { setConfirmEndAssignment(null); setEndAssignmentDate(null); }}>Cancel</Button>
-              <WriteButton color="warning" loading={isPending} onClick={() => handleEndAssignment(confirmEndAssignment)}>End Assignment</WriteButton>
-            </Group>
-          </Stack>
-        )}
-      </Modal>
     </>
   );
 }

@@ -148,20 +148,21 @@ describe('F11 — small cost-view fixes', () => {
 });
 
 describe('endUserLaborCategoryAssignment — optional end date (promotion: end yesterday, start today)', () => {
+  const ULC1 = '0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c'; // a UUID: the id is validated first (UX-4b §4.3)
   it('an explicit end date on/after the effective date is used; before it is refused; default is today', async () => {
     db.onSelect(userLaborCategories, [{ effectiveDate: '2026-01-01' }]);
     db.onReturning('update', userLaborCategories, [{ id: 'ulc1', endDate: '2026-10-24' }]);
-    expect((await endUserLaborCategoryAssignment('ulc1', '2026-10-24' as never)).ok).toBe(true);
+    expect((await endUserLaborCategoryAssignment(ULC1, '2026-10-24' as never)).ok).toBe(true);
     expect(db.updates[0].set).toMatchObject({ endDate: '2026-10-24' });
 
     db.reset();
     db.onSelect(userLaborCategories, [{ effectiveDate: '2026-10-01' }]);
-    expect(await endUserLaborCategoryAssignment('ulc1', '2026-09-30' as never)).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/can't be before/) });
+    expect(await endUserLaborCategoryAssignment(ULC1, '2026-09-30' as never)).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/can't be before/) });
 
     db.reset();
     db.onSelect(userLaborCategories, [{ effectiveDate: '2026-01-01' }]);
     db.onReturning('update', userLaborCategories, [{ id: 'ulc1' }]);
-    await endUserLaborCategoryAssignment('ulc1');
+    await endUserLaborCategoryAssignment(ULC1);
     expect(db.updates[0].set).toMatchObject({ endDate: '2026-10-25' });
   });
 });

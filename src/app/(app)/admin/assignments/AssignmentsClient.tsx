@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState, useTransition } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   Select,
   Group,
@@ -29,6 +30,10 @@ import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { PageHeader } from '@/components/ui/PageHeader';
 import type { CalendarDate } from '@/lib/calendar-date';
 import { WriteButton } from '@/components/shell/WorkspaceMode';
+import { parseAssignmentsParams, type AssignmentsTab } from '@/lib/assignments-params';
+import {
+  LaborCategoryAssignmentsPanel, type AssignableLcat, type LcatAssignment, type LcatFilterKey,
+} from './LaborCategoryAssignmentsPanel';
 
 type User = {
   id: string;
@@ -119,9 +124,36 @@ type Props = {
   chargeCodes: ChargeCode[];
   initialChargeCodeAssignments: ChargeCodeAssignment[];
   workspaceTimezone: string;
+  /** The server's allowlisted `tab` — used only when the URL can't be read (the client re-derives it). */
+  initialTab: AssignmentsTab;
+  /** The "Labor categories" tab's data (feature-plan-ux-kit-contracts.md §4.3). */
+  lcat: {
+    initialAssignments: LcatAssignment[];
+    assignableLcats: AssignableLcat[];
+    rateByCategory: Record<string, string | null>;
+    categoryNames: Record<string, { lcatCode: string; clinNumber: string }>;
+    today: CalendarDate;
+  };
 };
 
-export function AssignmentsClient({ initialAssignments, users, contracts, chargeCodes, initialChargeCodeAssignments, workspaceTimezone }: Props) {
+export function AssignmentsClient({ initialAssignments, users, contracts, chargeCodes, initialChargeCodeAssignments, workspaceTimezone, initialTab, lcat }: Props) {
+  // §4.3: the tab and the labor-category filters live in the URL. A tab switch or a removed chip REPLACES the URL with
+  // window.history.replaceState (no server round-trip; Next keeps useSearchParams in sync), so switching tabs drops
+  // the filters.
+  const searchParams = useSearchParams();
+  const params = parseAssignmentsParams((k) => searchParams?.get(k));
+  const tab = searchParams ? params.tab : initialTab;
+  function switchTab(value: string | null) {
+    if (!value || value === tab) return;
+    window.history.replaceState(null, '', `?tab=${encodeURIComponent(value)}`);
+  }
+  function removeFilter(key: LcatFilterKey) {
+    const next = new URLSearchParams(searchParams?.toString() ?? '');
+    next.delete(key);
+    if (key === 'userId') next.delete('assignments'); // the highlight belongs to that employee's overlap
+    window.history.replaceState(null, '', `?${next.toString()}`);
+  }
+
   const [isPending, startTransition] = useTransition();
   const [assignments, setAssignments] = useState<Assignment[]>(initialAssignments);
 
@@ -376,10 +408,11 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
     <>
       <PageHeader title="User Assignments" />
 
-      <Tabs defaultValue="charge-codes">
+      <Tabs value={tab} onChange={switchTab}>
         <Tabs.List mb="md">
           <Tabs.Tab value="charge-codes">Charge Code Access</Tabs.Tab>
           <Tabs.Tab value="approval-scope">Approval Scope</Tabs.Tab>
+          <Tabs.Tab value="labor-categories">Labor categories</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="charge-codes">
@@ -502,6 +535,15 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
 
           {/* Supervisor Assignments Table */}
           <MantineReactTable table={table} />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="labor-categories">
+          <LaborCategoryAssignmentsPanel
+            {...lcat}
+            users={users}
+            filters={tab === 'labor-categories' ? params : { laborCategoryId: null, userId: null, assignments: [] }}
+            onRemoveFilter={removeFilter}
+          />
         </Tabs.Panel>
       </Tabs>
 

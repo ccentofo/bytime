@@ -18,10 +18,7 @@ vi.mock('@/server/actions/labor-category-rates', () => ({
   previewRateChangeImpact: actions.preview, addLaborCategoryRateChange: actions.add,
   correctLaborCategoryRate: actions.correct, removeLaborCategoryRateChange: actions.remove,
 }));
-vi.mock('@/server/actions/labor-categories', () => ({
-  createLaborCategory: vi.fn(), updateLaborCategory: vi.fn(), getAllLaborCategories: vi.fn(), getAssignableLaborCategories: vi.fn(),
-  assignUserToLaborCategory: vi.fn(), endUserLaborCategoryAssignment: vi.fn(), getUserLaborCategoryAssignments: vi.fn(),
-}));
+vi.mock('@/server/actions/labor-categories', () => ({ createLaborCategory: vi.fn(), updateLaborCategory: vi.fn(), getAllLaborCategories: vi.fn() }));
 vi.mock('@/server/actions/clins', () => ({ getClinsByContract: vi.fn() }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 vi.mock('@mantine/dates', () => ({
@@ -44,7 +41,7 @@ beforeAll(() => {
 const L = '11111111-1111-4111-8111-111111111111';
 const category = (changes: Array<{ id: string; effectiveDate: string; hourlyRate: string; ceilingRate: string | null }>) => ({
   id: L, clinId: 'c1', slinId: null, lcatCode: 'SE-III', title: 'Senior Engineer', hourlyRate: '100.00', ceilingRate: '150.00', status: 'active' as const,
-  createdAt: new Date(), updatedAt: new Date(), clinNumber: '0001', clinDescription: null, contractName: 'NAVAIR', contractNumber: 'N1', slinNumber: null,
+  createdAt: new Date(), updatedAt: new Date(), clinNumber: '0001', clinDescription: null, contractId: 'k1', contractName: 'NAVAIR', contractNumber: 'N1', slinNumber: null,
   rateChanges: changes as never,
 });
 
@@ -59,10 +56,9 @@ async function render(today: string, changes: Parameters<typeof category>[0]) {
       <MantineProvider env="test">
         <LaborCategoriesClient
           initialLaborCategories={[category(changes)] as never}
-          initialAssignments={[{ id: 'a1', userId: 'u1', laborCategoryId: L, effectiveDate: '2026-01-01', endDate: null, createdAt: new Date(), userName: 'Pat', userEmail: 'p@x', lcatCode: 'SE-III', lcatTitle: 'Senior Engineer', clinNumber: '0001', contractName: 'NAVAIR', contractNumber: 'N1' }] as never}
           contracts={[]}
-          users={[]}
-          assignableLcats={[{ id: L, lcatCode: 'SE-III', title: 'Senior Engineer', clinId: 'c1', slinId: null, clinNumber: '0001', contractName: 'NAVAIR', contractNumber: 'N1', slinNumber: null }] as never}
+          peopleCounts={{}}
+          unpricedHours={0}
           today={today as CalendarDate}
         />
       </MantineProvider>,
@@ -105,11 +101,8 @@ describe('Display (D2): current rate on the injected today + the next change', (
     expect(q('lcat-next-hourly')!.textContent).toBe('→ $110.00 from Jan 1, 2027');
   });
 
-  it('the assignments table shows the assigned category\'s CURRENT rate (not the starting rate)', async () => {
-    await render('2027-02-01', twoChanges);
-    expect(document.body.textContent).toContain('$110.00/hr');
-    expect(document.body.textContent).not.toContain('$100.00/hr');
-  });
+  // UX-4b §4.3 (L1): the assignments moved to People → Assignments; their Rate is the page's rateByCategory (the
+  // current rate, computed on the server — assignments-lcat-tab.test.tsx and labor-categories-assignable.test.tsx).
 });
 
 describe('UI (D2): the Rates modal gate', () => {
@@ -125,7 +118,7 @@ describe('UI (D2): the Rates modal gate', () => {
     expect(q('lcat-current-hourly')!.textContent).toBe('$100.00');
     await openAdd();
     await type('rate-date', '2027-01-01');
-    expect((q('rate-hourly') as HTMLInputElement).value).toBe('100.00'); // prefilled from the rate in effect on that date
+    expect((q('rate-hourly') as HTMLInputElement).value).toBe('$100.00'); // prefilled from the rate in effect on that date (MoneyInput, UX-4b §4.2.6)
     await type('rate-hourly', '110');
     expect(btn('rate-save').disabled).toBe(true); // no preview yet
 
@@ -176,7 +169,7 @@ describe('UI (D2): the Rates modal gate', () => {
     await click(q('rate-preview'));
     await click(q('rate-save'));
     expect(q('rate-error')!.textContent).toBe('There is already a rate change on 2028-01-01 for this labor category. Correct that one instead.');
-    expect((q('rate-hourly') as HTMLInputElement).value).toBe('130');
+    expect((q('rate-hourly') as HTMLInputElement).value).toBe('$130');
     expect(q('lcat-current-hourly')!.textContent).toBe('$100.00');
   });
 });
@@ -189,7 +182,7 @@ describe('UI (D2): Correct and Remove (audit L3)', () => {
     await openRates();
     expect(q('rate-remove-starting')).toBeNull(); // the starting rate can't be removed
     await click(q('rate-correct-x1'));
-    expect((q('rate-hourly') as HTMLInputElement).value).toBe('110.00');
+    expect((q('rate-hourly') as HTMLInputElement).value).toBe('$110.00');
     await type('rate-hourly', '112');
     await click(q('rate-preview'));
     expect(actions.preview).toHaveBeenCalledWith({ kind: 'correct', laborCategoryId: L, target: 'x1', hourlyRate: '112', ceilingRate: null });
@@ -293,9 +286,11 @@ describe('Static (wording): the old footer sentence is gone from src/', () => {
     expect(readFileSync(path.join(ROOT, 'src/app/(app)/settings/api-keys/ApiKeysClient.tsx'), 'utf8')).toMatch(/<Code>hourlyRate<\/Code> is the labor-category rate in effect on that entry&apos;s date/);
   });
 
-  it('the assignment dropdown label uses the current rate from the page\'s schedules', () => {
-    const client = readFileSync(path.resolve(__dirname, '../../app/(app)/admin/labor-categories/LaborCategoriesClient.tsx'), 'utf8');
-    expect(client).toMatch(/\(\$\{formatRate\(currentRateOf\(lc\.id\)\)\}\/hr\)/);
+  it('the assignment dropdown label uses the current rate from the page\'s schedules (rateByCategory, UX-4b §4.3)', () => {
+    const panel = readFileSync(path.resolve(__dirname, '../../app/(app)/admin/assignments/LaborCategoryAssignmentsPanel.tsx'), 'utf8');
+    expect(panel).toMatch(/\(\$\{perHour\(rateByCategory\[lc\.id\]\)\}\)/);
+    const page = readFileSync(path.resolve(__dirname, '../../app/(app)/admin/assignments/page.tsx'), 'utf8');
+    expect(page).toContain('rateDisplay(schedule, today).current?.hourlyRate ?? null');
   });
 
   it('the assignment selects no longer return a starting rate', () => {

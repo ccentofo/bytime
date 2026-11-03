@@ -51,7 +51,9 @@ vi.mock('@/lib/session', async (importOriginal) => {
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { getDetailedCostReport, getEmployeeSummaryReport } from '@/server/actions/reports';
 import { getContractsOverview } from '@/server/actions/contracts';
-import { getUnpricedHoursReport, getOverlappingAssignmentsReport, endUserLaborCategoryAssignment } from '@/server/actions/labor-categories';
+import { getUnpricedExportData, getOverlappingAssignmentsReport, endUserLaborCategoryAssignment } from '@/server/actions/labor-categories';
+// UX-4b §9: getUnpricedHoursReport is removed; its per-entry rows (with the fix text) come from the Excel export's data.
+const unpricedEntryRows = async () => (await getUnpricedExportData({})).entries;
 import { updateChargeCode, reactivateChargeCode, deactivateChargeCode, listChargeCodes } from '@/server/actions/charge-codes';
 import { correctChargeCodeCategory } from '@/server/actions/charge-code-categories';
 import { saveTimesheetBatch, getChargeCodesForUser } from '@/server/actions/timesheet';
@@ -124,8 +126,7 @@ describe('cost basis (certified-outputs C3)', () => {
     await assign(emp.id, b.id, '2026-02-01');
     await entry({ clinId: clinA.id });
     expect((await getDetailedCostReport(...RANGE))[0]).toMatchObject({ costBasis: 'unpriced', unpricedReason: 'conflict', totalCost: 0 });
-    const report = await getUnpricedHoursReport({});
-    expect(report.rows).toEqual([expect.objectContaining({ reason: 'conflict', hours: 8, fix: expect.stringMatching(/has SE2 and SE3 on CLIN .* effective 2026-03-02 — end one\./) })]);
+    expect(await unpricedEntryRows()).toEqual([expect.objectContaining({ reason: 'conflict', hours: 8, fix: expect.stringMatching(/has SE2 and SE3 on CLIN .* effective 2026-03-02 — end one\./) })]);
     expect((await getOverlappingAssignmentsReport()).map((o) => [o.a.lcatCode, o.b.lcatCode].sort())).toEqual([['SE2', 'SE3']]);
   });
 
@@ -134,7 +135,7 @@ describe('cost basis (certified-outputs C3)', () => {
     await entry({ chargeCodeId: cc.id, clinId: clinA.id });
     const [row] = await getDetailedCostReport(...RANGE);
     expect(row).toMatchObject({ costBasis: 'unpriced', unpricedReason: 'no-category', totalHours: 8, totalCost: 0, unpricedHours: 8 });
-    expect((await getUnpricedHoursReport({})).rows[0].fix).toMatch(/^Set a labor category on charge code .*, or give .* a labor category on CLIN .* effective 2026-03-02\.$/);
+    expect((await unpricedEntryRows())[0].fix).toMatch(/^Set a labor category on charge code .*, or give .* a labor category on CLIN .* effective 2026-03-02\.$/);
     // UX-4b (§9): the Contracts read replaces the dashboard summary; the period report moved to Excel (R-2).
     const c = (await getContractsOverview()).contracts.find((s) => s.id === contract.id)!;
     expect(c).toMatchObject({ hours: 8, pricedCost: 0, unpricedHours: 8 });
@@ -174,7 +175,7 @@ describe('cost basis (certified-outputs C3)', () => {
     await assign(emp.id, b.id, '2026-02-01');
     await entry({ clinId: clinA.id, slinId: s1.id });
     expect((await getDetailedCostReport(...RANGE))[0]).toMatchObject({ costBasis: 'unpriced', unpricedReason: 'conflict', totalCost: 0 });
-    expect((await getUnpricedHoursReport({})).rows[0]).toMatchObject({ reason: 'conflict', level: 'slin' });
+    expect((await unpricedEntryRows())[0]).toMatchObject({ reason: 'conflict', level: 'slin' });
   });
 
   it('T5: SLIN beats CLIN — a CLIN-level category A and a SLIN-level category B on the entry\'s SLIN → B', async () => {

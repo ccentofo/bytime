@@ -74,10 +74,14 @@ describe('useBusyRows (L5)', () => {
   });
 
   it('static: no table keeps a single busy-row id any more', () => {
-    for (const rel of ['users/UsersClient.tsx', 'indirect-codes/IndirectCodesClient.tsx', 'charge-codes/ChargeCodesClient.tsx', 'labor-categories/LaborCategoriesClient.tsx']) {
+    for (const rel of ['users/UsersClient.tsx', 'indirect-codes/IndirectCodesClient.tsx', 'charge-codes/ChargeCodesClient.tsx']) {
       const s = readFileSync(path.join(ROOT, 'src/app/(app)/admin', rel), 'utf8');
       expect(s, rel).toContain('const busyRows = useBusyRows();');
       expect(s, rel).not.toMatch(/setBusyRow|busyRow ===/);
     }
+    // UX-4b §3.5: Labor categories moved to useBusy, one key per row (like Contracts).
+    const lc = readFileSync(path.join(ROOT, 'src/app/(app)/admin/labor-categories/LaborCategoriesClient.tsx'), 'utf8');
+    expect(lc).toContain('busy: busy.is(`row:${lcat.id}`)');
+    expect(lc).not.toMatch(/setBusyRow|busyRow ===/);
   });
 });

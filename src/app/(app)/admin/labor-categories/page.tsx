@@ -1,6 +1,5 @@
-import { getAllLaborCategories, getUserLaborCategoryAssignments, getAssignableLaborCategories } from '@/server/actions/labor-categories';
+import { getAllLaborCategories, getLaborCategoryPeopleCounts, getUnpricedSummary } from '@/server/actions/labor-categories';
 import { getContracts } from '@/server/actions/contracts';
-import { getUsers } from '@/server/actions/users';
 import { LaborCategoriesClient } from './LaborCategoriesClient';
 import { requirePageRole } from '@/lib/session';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
@@ -10,27 +9,28 @@ export const metadata: Metadata = { title: 'Labor categories' };
 
 export const dynamic = 'force-dynamic';
 
-// UX-4b §4.4: the Unpriced hours and Overlapping assignments reports moved to Downloads › Unpriced hours
-// (/admin/reports/unpriced; old ?report= links redirect there).
+/**
+ * Labor categories (feature-plan-ux-kit-contracts.md §4.2): only categories and their rates. Assigning people moved to
+ * People → Assignments ("Labor categories" tab, §4.3); the Unpriced hours report moved to Downloads › Unpriced hours
+ * (/admin/reports/unpriced; old ?report= links redirect there). Five loads.
+ */
 export default async function LaborCategoriesPage() {
   await requirePageRole('admin');
 
-  const [laborCats, assignments, contracts, users, assignableLcats, today] = await Promise.all([
+  const [laborCats, contracts, peopleCounts, unpriced, today] = await Promise.all([
     getAllLaborCategories(),
-    getUserLaborCategoryAssignments(),
-    getContracts(),
-    getUsers(),
-    getAssignableLaborCategories(),
+    getContracts(), // the Add modal's contract list
+    getLaborCategoryPeopleCounts(),
+    getUnpricedSummary(),
     getWorkspaceToday(), // dated rates D2: "today" for the current-rate display — the workspace's, from the server
   ]);
 
   return (
     <LaborCategoriesClient
       initialLaborCategories={laborCats}
-      initialAssignments={assignments}
       contracts={contracts}
-      users={users}
-      assignableLcats={assignableLcats}
+      peopleCounts={peopleCounts}
+      unpricedHours={unpriced.hours}
       today={today}
     />
   );

@@ -2,11 +2,11 @@
 
 import { getDb, getDbForWrite } from '@/db';
 import { laborCategories, laborCategoryRates, userLaborCategories, users, clins, contracts, slins } from '@/db/schema';
-import { eq, and, asc, inArray } from 'drizzle-orm';
+import { eq, and, asc, inArray, isNull, or, gte, lte, countDistinct } from 'drizzle-orm';
 import type { RateChange } from '@/lib/labor-rates';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { validateRequired, validateStringLength, validateOptionalString, validateRate, validateUUID } from '@/lib/validation';
-import { isBefore, isCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { isBefore, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { userAction } from '@/lib/action-result';
 import { UserFacingError } from '@/lib/errors';
@@ -54,6 +54,7 @@ export async function getAllLaborCategories() {
       updatedAt: laborCategories.updatedAt,
       clinNumber: clins.clinNumber,
       clinDescription: clins.description,
+      contractId: contracts.id, // feature-plan-ux-kit-contracts.md §4.2 (additive): the page groups by contract
       contractName: contracts.name,
       contractNumber: contracts.contractNumber,
       slinNumber: slins.slinNumber,
@@ -76,6 +77,26 @@ export async function getAllLaborCategories() {
     byCategory.set(c.laborCategoryId, list);
   }
   return rows.map((r) => ({ ...r, rateChanges: byCategory.get(r.id) ?? [] }));
+}
+
+/**
+ * How many employees hold each labor category on the workspace's today (feature-plan-ux-kit-contracts.md §4.2): one
+ * grouped query, COUNT(DISTINCT user_id) of assignments with effective_date ≤ today and no end date or end_date ≥ today
+ * (end_date is the INCLUSIVE last day). Ended and future assignments aren't counted; a category nobody holds is absent.
+ */
+export async function getLaborCategoryPeopleCounts(): Promise<Record<string, number>> {
+  await requireAdmin();
+  const db = await getDb();
+  const today = await getWorkspaceToday();
+  const rows = await db
+    .select({ laborCategoryId: userLaborCategories.laborCategoryId, people: countDistinct(userLaborCategories.userId) })
+    .from(userLaborCategories)
+    .where(and(
+      lte(userLaborCategories.effectiveDate, today),
+      or(isNull(userLaborCategories.endDate), gte(userLaborCategories.endDate, today)),
+    ))
+    .groupBy(userLaborCategories.laborCategoryId);
+  return Object.fromEntries(rows.map((r) => [r.laborCategoryId, Number(r.people)]));
 }
 
 /**
@@ -229,6 +250,7 @@ export async function assignUserToLaborCategory(data: {
 export async function endUserLaborCategoryAssignment(id: string, endDate?: CalendarDate) {
   return userAction(async () => {
     await requireAdminFresh();
+    validateUUID(id, 'Assignment'); // feature-plan-ux-kit-contracts.md §4.3: after the guard
     const db = await getDbForWrite();
     const end = endDate !== undefined ? parseCalendarDate(endDate) : await getWorkspaceToday();
     const [current] = await db.select({ effectiveDate: userLaborCategories.effectiveDate })
@@ -248,26 +270,6 @@ export async function endUserLaborCategoryAssignment(id: string, endDate?: Calen
 export interface UnpricedHoursReportRow extends UnpricedEntryRow {
   /** How to fix it (CO-D17) — rendered with links to Charge Codes / this page / the overlap report. */
   fix: string;
-}
-
-/**
- * "Unpriced hours" (feature-plan-certified-outputs.md C3, CO-D10/CO-D17): latest-revision entries with no applicable
- * labor category (`no-category`) or two at the deciding level (`conflict`), each with how to fix it. Admin only — it
- * exists because of dollar views.
- */
-export async function getUnpricedHoursReport(filters: UnpricedFilters = {}): Promise<{ rows: UnpricedHoursReportRow[]; truncated: boolean }> {
-  await requireAdmin();
-  // The filters come from the page URL: keep only well-formed ids and dates (anything else would fail in Postgres).
-  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const clean: UnpricedFilters = {
-    ...(filters.startDate && isCalendarDate(filters.startDate) ? { startDate: filters.startDate } : {}),
-    ...(filters.endDate && isCalendarDate(filters.endDate) ? { endDate: filters.endDate } : {}),
-    ...(filters.contractId && UUID.test(filters.contractId) ? { contractId: filters.contractId } : {}),
-    ...(filters.clinId && UUID.test(filters.clinId) ? { clinId: filters.clinId } : {}),
-    ...(filters.slinId && UUID.test(filters.slinId) ? { slinId: filters.slinId } : {}),
-  };
-  const { rows, truncated } = await unpricedEntries(await getDb(), clean);
-  return { truncated, rows: rows.map((r) => ({ ...r, fix: unpricedFixText(r) })) };
 }
 
 /**

@@ -1,0 +1,20 @@
+/* feature-plan-ux-kit-contracts.md §4.2 (mockup "Labor categories"): one-line rows, the group sub-line, the next rate. */
+.oneLine {
+  white-space: nowrap;
+}
+
+.sub {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-sm);
+}
+
+.mono {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: var(--mantine-font-size-sm);
+}
+
+.next {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+  white-space: nowrap;
+}

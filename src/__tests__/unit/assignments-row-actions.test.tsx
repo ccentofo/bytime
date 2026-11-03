@@ -12,6 +12,9 @@ vi.mock('@/server/actions/charge-codes', () => ({
 vi.mock('@/server/actions/assignments', () => ({ assignUserToClin: vi.fn(), unassignUserFromClin: vi.fn(), getAssignments: vi.fn(async () => []) }));
 vi.mock('@/server/actions/clins', () => ({ getClinsByContract: vi.fn(async () => []) }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
+// UX-4b §4.3: the client reads its tab from the URL and hosts the Labor categories tab.
+vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams('') }));
+vi.mock('@/server/actions/labor-categories', () => ({ assignUserToLaborCategory: vi.fn(), endUserLaborCategoryAssignment: vi.fn(), getUserLaborCategoryAssignments: vi.fn() }));
 
 import { AssignmentsClient } from '@/app/(app)/admin/assignments/AssignmentsClient';
 import { buttonsByText, installDomStubs, mount, unmount, type Mounted } from '../helpers/dom';
@@ -28,7 +31,7 @@ afterEach(() => { unmount(m); m = undefined; });
 describe('Assignments table (L10)', () => {
   it('column filters are shown; Deactivate is offered on the active row only', async () => {
     m = await mount(
-      <AssignmentsClient initialAssignments={[]} users={[]} contracts={[]} chargeCodes={[]} workspaceTimezone="America/New_York"
+      <AssignmentsClient initialTab="charge-codes" lcat={{ initialAssignments: [], assignableLcats: [], rateByCategory: {}, categoryNames: {}, today: '2026-11-03' as never }} initialAssignments={[]} users={[]} contracts={[]} chargeCodes={[]} workspaceTimezone="America/New_York"
         initialChargeCodeAssignments={[cc('Pat Doe', 'NAV-01', true), cc('Lee Roe', 'NAV-02', false)]} />,
     );
     // MRT keeps the filter controls mounted inside a Collapse even when hidden — so check they're actually RENDERED.
