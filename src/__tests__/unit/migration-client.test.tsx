@@ -104,4 +104,75 @@ describe('History import (C11, T-C11)', () => {
     expect(buttonsByText('Validate (1 rows)')).toHaveLength(0);
     expect(m.container.textContent).toContain("Couldn't read that file. Make sure it's a CSV.");
   });
+
+  // UX-4A-AUDIT.md L7 -------------------------------------------------------------------------------------------------
+  const deferredOf = <T,>() => { let resolve!: (v: T) => void; const promise = new Promise<T>((r) => { resolve = r; }); return { promise, resolve }; };
+
+  it('L7: a validation that finishes after another file was chosen is dropped', async () => {
+    const pending = deferredOf<unknown>();
+    actions.validateMigrationData.mockImplementationOnce(() => pending.promise as never);
+    m = await mount(<MigrationClient />);
+    const first = await choose('Timesheet entries CSV', 'old.csv');
+    await act(async () => { first.cfg.complete({ data: [entry('old@x.test')] }); });
+    await click(buttonByText('Validate (1 rows)'));
+    const second = await choose('Timesheet entries CSV', 'new.csv');
+    await act(async () => { second.cfg.complete({ data: [entry('new@x.test'), entry('new2@x.test')] }); });
+    await act(async () => { pending.resolve({ ok: true, data: [{ rowIndex: 1, data: { employeeEmail: 'old@x.test' }, errors: [], isValid: true }] }); });
+    await wait();
+    expect(m.container.textContent).not.toContain('old@x.test');
+    expect(buttonsByText('Import 1 Valid Rows')).toHaveLength(0);
+    expect(buttonByText('Validate (2 rows)')).toBeDefined();
+  });
+
+  it('L7: an import that finishes after another file was chosen doesn\'t show its summary over the new file', async () => {
+    const pending = deferredOf<unknown>();
+    actions.importMigrationData.mockImplementationOnce(() => pending.promise);
+    m = await mount(<MigrationClient />);
+    const first = await choose('Timesheet entries CSV', 'old.csv');
+    await act(async () => { first.cfg.complete({ data: [entry('old@x.test')] }); });
+    await click(buttonByText('Validate (1 rows)'));
+    const source = field('Source system') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(source, 'Deltek');
+      source.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await click(buttonByText('Import 1 Valid Rows'));
+    const second = await choose('Timesheet entries CSV', 'new.csv');
+    await act(async () => { second.cfg.complete({ data: [entry('new@x.test')] }); });
+    await act(async () => { pending.resolve({ ok: true, data: { imported: 1, skipped: 0, errors: [] } }); });
+    await wait();
+    expect(m.container.textContent).not.toMatch(/1 imported/);
+  });
+
+  it('L7: on the period tab too, a late validation or import from the previous file is dropped', async () => {
+    const validating = deferredOf<unknown>();
+    const importing = deferredOf<unknown>();
+    actions.validateMigrationPeriods.mockImplementationOnce(() => validating.promise as never);
+    m = await mount(<MigrationClient />);
+    await click([...m.container.querySelectorAll('[role="tab"]')].find((t) => t.textContent === 'Period Status'));
+    const period = (email: string) => ({ 'Employee Email': email, 'Period Start': '2025-01-01', Status: 'approved' });
+    const first = await choose('Period status CSV', 'p-old.csv');
+    await act(async () => { first.cfg.complete({ data: [period('old@x.test')] }); });
+    await click(buttonByText('Validate (1 rows)'));
+    const second = await choose('Period status CSV', 'p-new.csv');
+    await act(async () => { second.cfg.complete({ data: [period('new@x.test')] }); });
+    await act(async () => { validating.resolve({ ok: true, data: [{ rowIndex: 1, data: {}, errors: [], isValid: true }] }); });
+    await wait();
+    expect(buttonsByText('Import 1 Period Records')).toHaveLength(0);       // the stale validation didn't land
+
+    // Validate the new file, start its import, then pick a third file before the import returns.
+    await click(buttonByText('Validate (1 rows)'));
+    const source = field('Source system') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(source, 'Deltek');
+      source.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    actions.importMigrationPeriods.mockImplementationOnce(() => importing.promise as never);
+    await click(buttonByText('Import 1 Period Records'));
+    const third = await choose('Period status CSV', 'p-third.csv');
+    await act(async () => { third.cfg.complete({ data: [period('third@x.test')] }); });
+    await act(async () => { importing.resolve({ ok: true, data: { imported: 1, skipped: 0, errors: [] } }); });
+    await wait();
+    expect(m.container.textContent).not.toMatch(/1 imported/);
+  });
 });

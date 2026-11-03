@@ -204,9 +204,11 @@ export function MigrationClient() {
 
   function handleValidateEntries() {
     if (entryRows.length === 0) return;
+    const req = entryParseReq.current;   // UX-4A-AUDIT.md L7: drop the results if another file is picked meanwhile
     startTransition(async () => {
       // Batched like the import (a whole file in one request can exceed the 1 MB server-action limit).
       const report = await runMigrationBatches(entryRows, (r) => r.employeeEmail, (batch) => validateMigrationData(batch));
+      if (req !== entryParseReq.current) return;
       if (report.stopped) {
         notifications.show({ title: 'Validation failed', message: report.stopped.message, color: 'red' });
         return;
@@ -225,17 +227,21 @@ export function MigrationClient() {
 
   function handleImportEntries() {
     if (!entryValidated || entryRows.length === 0 || !sourceOk) return;
+    const req = entryParseReq.current;
     startTransition(async () => {
       const report = await runMigrationBatches(entryRows, (r) => r.employeeEmail,
         (batch) => importMigrationData({ rows: batch, sourceSystem, fileName: entryFileName }));
+      if (req !== entryParseReq.current) return;
       setEntrySummary(summarize(report));
     });
   }
 
   function handleValidatePeriods() {
     if (periodRows.length === 0) return;
+    const req = periodParseReq.current;
     startTransition(async () => {
       const report = await runMigrationBatches(periodRows, (r) => r.employeeEmail, (batch) => validateMigrationPeriods(batch));
+      if (req !== periodParseReq.current) return;
       if (report.stopped) {
         notifications.show({ title: 'Validation failed', message: report.stopped.message, color: 'red' });
         return;
@@ -254,9 +260,11 @@ export function MigrationClient() {
 
   function handleImportPeriods() {
     if (!periodValidated || periodRows.length === 0 || !sourceOk) return;
+    const req = periodParseReq.current;
     startTransition(async () => {
       const report = await runMigrationBatches(periodRows, (r) => r.employeeEmail,
         (batch) => importMigrationPeriods({ rows: batch, sourceSystem, fileName: periodFileName }));
+      if (req !== periodParseReq.current) return;
       setPeriodSummary(summarize(report));
     });
   }
