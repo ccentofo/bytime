@@ -291,9 +291,11 @@ export function ContractsClient({ overview }: { overview: ContractsOverview }) {
 
   const expandable = useMemo<AppTableExpandable<Row>>(() => ({
     getSubRows: (r) => r.children,
-    label: (r) => (r.level === 'contract' ? `CLINs for ${r.contract.name}` : r.level === 'clin' ? `SLINs for CLIN ${r.clin!.clinNumber}` : `SLIN ${r.slin!.slinNumber}`),
+    // UX-4B1-AUDIT L4: CLIN numbers repeat across contracts, so a CLIN toggle names its contract.
+    label: (r) => (r.level === 'contract' ? `CLINs for ${r.contract.name}` : r.level === 'clin' ? `SLINs for CLIN ${r.clin!.clinNumber} on ${r.contract.name}` : `SLIN ${r.slin!.slinNumber}`),
+    // L6: the "CLIN" / "SLIN" prefix the cell shows is searchable too ("CLIN 0002").
     searchText: (r) => (r.level === 'contract' ? [r.contract.name, r.contract.contractNumber, r.contract.description]
-      : r.level === 'clin' ? [r.clin!.clinNumber, r.clin!.description] : [r.slin!.slinNumber, r.slin!.description]).filter(Boolean).join(' '),
+      : r.level === 'clin' ? [`CLIN ${r.clin!.clinNumber}`, r.clin!.description] : [`SLIN ${r.slin!.slinNumber}`, r.slin!.description]).filter(Boolean).join(' '),
     rowId: (r) => `${r.level}:${r.id}`,
     defaultExpanded: overview.contracts.length === 1 ? { [`contract:${overview.contracts[0].id}`]: true } : {},
   }), [overview.contracts]);

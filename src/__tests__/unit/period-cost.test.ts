@@ -87,6 +87,19 @@ describe('getPeriodCostByPeriod (R-2 companion)', () => {
     ]);
   });
 
+  it('UX-4B1-AUDIT L7: contracts by name, then number, then id; a row whose hours, cost and unpriced are all 0 is skipped', async () => {
+    db.onSelect(payPeriodConfig, SCHEDULE);
+    const r = (contractId: string, name: string, number: string, hours: number) => ({
+      clinId: `cl-${contractId}`, contractId, contractName: name, contractNumber: number, entryDate: '2026-11-03', hours: String(hours), pricedCost: String(hours * 10), unpricedHours: '0',
+    });
+    db.onSelect(timesheetEntries, [
+      r('k3', 'Same', 'B-2', 1), r('k2', 'Same', 'A-1', 1), r('k9', 'Same', 'A-1', 1), r('k1', 'Same', 'A-1', 1),
+      r('k0', 'Cleared', 'C-0', 0),                                  // cleared to 0 in this period
+    ]);
+    const report = await getPeriodCostByPeriod(3);
+    expect(report.rows.map((x) => x.contractId)).toEqual(['k1', 'k2', 'k9', 'k3']);
+  });
+
   it('guard first; n outside {3, 6, 12} is refused before any read', async () => {
     await expect(getPeriodCostByPeriod(4)).rejects.toThrow('Choose 3, 6 or 12 pay periods.');
     expect(db.ops).toEqual([]);

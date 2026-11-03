@@ -55,7 +55,8 @@ async function render(role: 'admin' | 'supervisor' = 'admin') {
 }
 const deferred = <T,>() => { let resolve!: (v: T) => void; const promise = new Promise<T>((r) => { resolve = r; }); return { promise, resolve }; };
 const row = (key: string) => document.body.querySelector(`[data-testid="report-${key}"]`) as HTMLElement;
-const titles = () => [...document.body.querySelectorAll('[data-testid^="report-"] h3')].map((t) => t.textContent);
+// UX-4B1-AUDIT L12: row titles are h2 under the page's h1 (no skipped level).
+const titles = () => [...document.body.querySelectorAll('[data-testid^="report-"] h2')].map((t) => t.textContent);
 const btnIn = (r: HTMLElement, text: string) => [...r.querySelectorAll('button, a')].find((b) => b.textContent?.trim() === text) as HTMLElement;
 const xlsx = () => new Response('x', { status: 200, headers: { 'content-disposition': 'attachment; filename="r.xlsx"' } });
 
@@ -64,6 +65,7 @@ describe('Downloads layout (R-1)', () => {
     await render();
     expect(document.body.querySelector('h1')?.textContent).toBe('Downloads');
     expect(titles()).toEqual(['Signed timesheet', 'Contract costs', 'Hours summary', 'Cost by pay period', 'Unpriced hours']);
+    expect(document.body.querySelectorAll('[data-testid^="report-"] h3')).toHaveLength(0);
     expect(row('summary').textContent).toContain('Total hours per employee by contract and CLIN (direct time only).');
     expect(row('unpriced').querySelector('[data-testid="unpriced-summary"]')!.textContent).toBe('All time · 1,719.00 hours · 6 things to fix');
     expect(btnIn(row('unpriced'), 'View').getAttribute('href')).toBe('/admin/reports/unpriced');

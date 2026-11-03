@@ -136,6 +136,24 @@ describe('Contracts page (C-2)', () => {
     expect(has('Army')).toBe(false);
   });
 
+  it('UX-4B1-AUDIT L4: a CLIN toggle names its contract (CLIN numbers repeat across contracts)', async () => {
+    m = await mount(<ContractsClient overview={overview([ARMY, DISA])} />);
+    await click(button('Show CLINs for DISA Cyber Operations'));
+    expect(button('Show SLINs for CLIN 0002 on DISA Cyber Operations')).not.toBeNull();
+    expect(m.container.querySelector('button[aria-label="Show SLINs for CLIN 0002"]')).toBeNull();
+  });
+
+  it('UX-4B1-AUDIT L6: "CLIN 0002" / "SLIN 0002AB" (the prefix the cell shows) are searchable', async () => {
+    m = await mount(<ContractsClient overview={overview([ARMY, DISA])} />);
+    await typeSearch('SLIN 0002AB');
+    expect(has('SLIN 0002AB · Backup')).toBe(true);
+    expect(has('Migration support')).toBe(false);
+    await typeSearch('CLIN 0002');
+    expect(has('CLIN 0002 · Network operations')).toBe(true);
+    expect(has('CLIN 0002 · Cloud infrastructure')).toBe(true);
+    expect(has('Help desk')).toBe(false);
+  });
+
   it('the Unpriced cell links to the report scoped to its row, built with "?"; 0 shows "0.00"', async () => {
     m = await mount(<ContractsClient overview={overview([ARMY, DISA])} />);
     const armyLink = row('Army IT Support').querySelector('a[data-testid="unpriced-link"]') as HTMLAnchorElement;
@@ -184,6 +202,21 @@ describe('editing CLIN funding (C-3)', () => {
     expect(row('Help desk').textContent).toContain('$400,000');
     expect(row('Help desk').textContent).toContain('$307,590');
     expect(h.refresh).toHaveBeenCalled();
+  });
+
+  it('UX-4B1-AUDIT L3: the UI shows what the server RETURNED, not what was typed', async () => {
+    h.updateClin.mockResolvedValueOnce({ ok: true, data: { id: 'a1', clinNumber: '0001', description: 'Help desk (renamed)', fundedAmount: '350000.00', status: 'active' } });
+    const d = await openClinEdit();
+    const input = document.getElementById(funded(d).htmlFor) as HTMLInputElement;
+    const user = userEvent.setup();
+    await act(() => user.clear(input));
+    await act(() => user.type(input, '400,000'));
+    await click([...d.querySelectorAll('button')].find((b) => b.textContent === 'Save changes'));
+    await wait(300);
+    expect(row('Help desk').textContent).toContain('Help desk (renamed)');
+    expect(row('Help desk').textContent).toContain('$350,000');
+    expect(row('Help desk').textContent).toContain('$257,590');
+    expect(row('Help desk').textContent).not.toContain('$400,000');
   });
 });
 

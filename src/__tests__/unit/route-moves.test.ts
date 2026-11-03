@@ -103,3 +103,12 @@ describe('route moves (UX-4b C-6)', () => {
   });
 });
 
+describe('removed dead code stays removed (UX-4B1-AUDIT L9)', () => {
+  it('no src file defines or imports UnpricedNote, PricedBasisNote or getOverlappingAssignmentsReport', () => {
+    const offenders = files(path.join(ROOT, 'src'))
+      .filter((f) => /\b(UnpricedNote|PricedBasisNote|getOverlappingAssignmentsReport)\b/.test(stripComments(readFileSync(f, 'utf8'))))
+      .map((f) => path.relative(ROOT, f));
+    expect(offenders).toEqual([]);
+  });
+});
+

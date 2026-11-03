@@ -11,7 +11,7 @@ import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { userAction } from '@/lib/action-result';
 import { UserFacingError } from '@/lib/errors';
 import {
-  overlappingAssignments, unpricedEntries, unpricedFixText, unpricedReport, unpricedTotals, allUnpricedGroups, overlapsInScope, unpricedScopeNames,
+  unpricedEntries, unpricedFixText, unpricedReport, unpricedTotals, allUnpricedGroups, overlapsInScope, unpricedScopeNames,
   type OverlapRow, type UnpricedEntryRow, type UnpricedReport, type UnpricedGroup, type UnpricedScopeNames,
 } from '@/server/internal/cost-basis';
 import { parseUnpricedFilters } from '@/lib/unpriced-filters';
@@ -313,12 +313,6 @@ export async function getUnpricedExportData(filters: Record<string, string | str
 export async function getUnpricedSummary(): Promise<{ hours: number; groups: number; employees: number }> {
   await requireAdmin();
   return unpricedTotals(await getDb(), {});
-}
-
-/** "Overlapping labor-category assignments" (C3): pairs that make the overlapped days' entries unpriced. Admin only. */
-export async function getOverlappingAssignmentsReport(): Promise<OverlapRow[]> {
-  await requireAdmin();
-  return overlappingAssignments(await getDb());
 }
 
 /**

@@ -226,7 +226,8 @@ export function useAppTable<T extends MRT_RowData>(options: MRT_TableOptions<T> 
       getColumnCanGlobalFilter: (column: { id: string }) => column.id === firstId,
       onGlobalFilterChange: (updater: string | undefined | ((prev: string) => string | undefined)) => {
         const next = (typeof updater === 'function' ? updater(globalFilter) : updater) ?? '';
-        if (!globalFilter && next) setSearchExpanded(true);
+        // UX-4B1-AUDIT L1: any change of query re-opens everything, so newly matched ancestors show expanded.
+        if (next && next !== globalFilter) setSearchExpanded(true);
         setGlobalFilter(next);
       },
       onExpandedChange: (updater: MRT_ExpandedState | ((prev: MRT_ExpandedState) => MRT_ExpandedState)) => {

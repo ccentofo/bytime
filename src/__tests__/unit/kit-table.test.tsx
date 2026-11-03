@@ -179,4 +179,55 @@ describe('expandable rows (K-5)', () => {
     expect(has('Cloud infrastructure')).toBe(true);                 // DISA still is
     expect(has('Help desk')).toBe(false);
   });
+
+  it('UX-4B1-AUDIT L2: search, Hide, clear, search again → everything expanded again', async () => {
+    m = await mount(<Tree />);
+    await typeSearch('o');
+    await click(toggle('Hide CLINs for NAVAIR Systems Support'));
+    expect(has('Base year')).toBe(false);
+    await typeSearch('');
+    await typeSearch('o');
+    expect(has('Base year')).toBe(true);
+  });
+
+  it('UX-4B1-AUDIT L1: changing the query (without clearing) re-opens everything, so new matches show expanded', async () => {
+    m = await mount(<Tree />);
+    await typeSearch('o');
+    await click(toggle('Hide CLINs for NAVAIR Systems Support'));
+    expect(has('Base year')).toBe(false);
+    await typeSearch('ope');                                        // matches Army's and DISA's trees, not NAVAIR's
+    await typeSearch('o');                                          // back to a query that matches NAVAIR
+    expect(has('Base year')).toBe(true);
+  });
 });
+
+// UX-4B1-AUDIT L2: a tree with more groups than the compact threshold paginates; expanding and searching still work.
+const MANY: Node[] = Array.from({ length: 30 }, (_, i) => {
+  const n = String(i + 1).padStart(2, '0');
+  return { id: `g${n}`, level: 'contract' as const, name: `Group ${n}`, children: [{ id: `c${n}`, level: 'clin' as const, name: `Child ${n} line` }] };
+});
+function PagedTree() {
+  const table = useAppTable<Node>({ columns: COLS, data: MANY, expandable: EXPANDABLE, compact: MANY.length <= 25 });
+  return <MantineReactTable table={table} />;
+}
+
+describe('a paginated tree (UX-4B1-AUDIT L2)', () => {
+  it('paginates; expand shows the children; a search shows matches on later pages with their children', async () => {
+    m = await mount(<PagedTree />);
+    expect(has('Group 01')).toBe(true);
+    expect(has('Group 28')).toBe(false);                            // on a later page
+    await click(toggle('Show CLINs for Group 01'));
+    expect(has('Child 01 line')).toBe(true);
+    // Pages hold top-level rows; a group expands within its page (§3.4.3.4): the last group's child stays on page 1.
+    await click(toggle('Show CLINs for Group 10'));
+    expect(has('Child 10 line')).toBe(true);
+    expect(rowTexts().filter((t) => t.startsWith('Group')).length).toBe(10);
+    await typeSearch('Group 28');
+    expect(has('Group 28')).toBe(true);
+    expect(has('Child 28 line')).toBe(true);
+    expect(has('Group 01')).toBe(false);
+    await typeSearch('Child 29');
+    expect(rowTexts().filter((t) => t.includes('Group') || t.includes('Child'))).toEqual(['Group 29', 'Child 29 line']);
+  });
+});
+

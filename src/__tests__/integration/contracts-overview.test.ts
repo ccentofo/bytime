@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { getTestDb, cleanupTestData, createTestContract, createTestClin, expectOk, expectFailure } from './helpers';
+import * as schema from '@/db/schema';
+import { getTestDb, cleanupTestData, createTestContract, createTestClin, createTestChargeCode, createTestUser, expectOk, expectFailure } from './helpers';
 import { seedContractsC1Fixture, C1_EXPECTED } from './contracts-c1-fixture';
 
 /**
@@ -62,6 +63,36 @@ describe('getContractsOverview (C-1)', () => {
     expect(overview.totals).toEqual(C1_EXPECTED.totals);
     const home = await contractBurnSummary(getTestDb());
     expect(overview.totals.unpricedHoursAll).toBe(Math.round(home.reduce((s, c) => s + c.unpricedHours, 0) * 100) / 100);
+  });
+});
+
+/**
+ * UX-4B1-AUDIT L14: a separate case (the C-1 fixture and its literals are unchanged). Every C-1 SLIN entry has one
+ * revision, so dropping LATEST_REVISION from the per-SLIN query went unnoticed. Here a SLIN entry has revision 1 of
+ * 6.00 and revision 2 of 3.00: the SLIN (and its CLIN) count 3.00 hours, priced at 3.00 × 100.00.
+ */
+describe('getContractsOverview: the per-SLIN query uses the latest revision (L14)', () => {
+  beforeEach(async () => { await cleanupTestData(); });
+  afterEach(async () => { await cleanupTestData(); });
+
+  it('a SLIN entry revised from 6.00 to 3.00 counts 3.00 hours and 300.00 of cost', async () => {
+    const db = getTestDb();
+    const emp = await createTestUser({ fullName: 'Rev Ision' });
+    const contract = await createTestContract({ name: 'L14 Revisions', contractNumber: 'L14' });
+    const clin = await createTestClin(contract.id, { clinNumber: '0001' });
+    const [slin] = await db.insert(schema.slins).values({ clinId: clin.id, slinNumber: '0001AA' }).returning();
+    const [lc] = await db.insert(schema.laborCategories).values({ clinId: clin.id, slinId: slin.id, lcatCode: 'L14', title: 'L14', hourlyRate: '100.00' }).returning();
+    await db.insert(schema.userLaborCategories).values({ userId: emp.id, laborCategoryId: lc.id, effectiveDate: '2026-01-01' });
+    const code = await createTestChargeCode(clin.id, { code: 'L14-AA', slinId: slin.id });
+    const entry = (hours: string, revisionNumber: number) => db.insert(schema.timesheetEntries).values({
+      userId: emp.id, chargeCodeId: code.id, clinId: clin.id, slinId: slin.id, entryDate: '2026-03-02', hours, revisionNumber, createdBy: emp.id,
+    });
+    await entry('6.00', 1);
+    await entry('3.00', 2);
+
+    const c = (await getContractsOverview()).contracts.find((x) => x.name === 'L14 Revisions')!;
+    expect(money(c.clins[0].slins[0])).toEqual({ hours: 3, pricedCost: 300, unpricedHours: 0 });
+    expect(money(c.clins[0])).toEqual({ hours: 3, pricedCost: 300, unpricedHours: 0 });
   });
 });
 

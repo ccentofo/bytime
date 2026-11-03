@@ -416,15 +416,20 @@ export async function getPeriodCostByPeriod(n: number): Promise<PeriodCostReport
 
   const out: PeriodCostRow[] = [];
   periods.forEach((p, i) => {
-    const contractsInPeriod = [...buckets[i].entries()].sort(([, a], [, b]) => a.name.localeCompare(b.name));
+    // UX-4B1-AUDIT L7: a deterministic order (name, then number, then id) …
+    const contractsInPeriod = [...buckets[i].entries()].sort(([idA, a], [idB, b]) =>
+      a.name.localeCompare(b.name) || a.number.localeCompare(b.number) || idA.localeCompare(idB));
     for (const [contractId, c] of contractsInPeriod) {
       const perClin = [...c.clins.values()];
-      out.push({
+      const row = {
         periodStart: p.start, periodEnd: p.end, contractId, contractName: c.name, contractNumber: c.number,
         hours: sumRounded(perClin.map((s) => round2(s.hours))),
         pricedCost: sumRounded(perClin.map((s) => round2(s.cost))),
         unpricedHours: sumRounded(perClin.map((s) => round2(s.unpriced))),
-      });
+      };
+      // … and no all-zero rows (a contract whose only hours in the period were cleared to 0).
+      if (row.hours === 0 && row.pricedCost === 0 && row.unpricedHours === 0) continue;
+      out.push(row);
     }
   });
   return { periods, rows: out };

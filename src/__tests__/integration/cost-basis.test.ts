@@ -51,7 +51,10 @@ vi.mock('@/lib/session', async (importOriginal) => {
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { getDetailedCostReport, getEmployeeSummaryReport } from '@/server/actions/reports';
 import { getContractsOverview } from '@/server/actions/contracts';
-import { getUnpricedExportData, getOverlappingAssignmentsReport, endUserLaborCategoryAssignment } from '@/server/actions/labor-categories';
+import { getUnpricedExportData, endUserLaborCategoryAssignment } from '@/server/actions/labor-categories';
+// UX-4B1-AUDIT L9: getOverlappingAssignmentsReport is removed; the pairs come from the internal reader.
+import { overlappingAssignments } from '@/server/internal/cost-basis';
+const overlapPairs = async () => overlappingAssignments(getTestDb());
 // UX-4b §9: getUnpricedHoursReport is removed; its per-entry rows (with the fix text) come from the Excel export's data.
 const unpricedEntryRows = async () => (await getUnpricedExportData({})).entries;
 import { updateChargeCode, reactivateChargeCode, deactivateChargeCode, listChargeCodes } from '@/server/actions/charge-codes';
@@ -127,7 +130,7 @@ describe('cost basis (certified-outputs C3)', () => {
     await entry({ clinId: clinA.id });
     expect((await getDetailedCostReport(...RANGE))[0]).toMatchObject({ costBasis: 'unpriced', unpricedReason: 'conflict', totalCost: 0 });
     expect(await unpricedEntryRows()).toEqual([expect.objectContaining({ reason: 'conflict', hours: 8, fix: expect.stringMatching(/has SE2 and SE3 on CLIN .* effective 2026-03-02 — end one\./) })]);
-    expect((await getOverlappingAssignmentsReport()).map((o) => [o.a.lcatCode, o.b.lcatCode].sort())).toEqual([['SE2', 'SE3']]);
+    expect((await overlapPairs()).map((o) => [o.a.lcatCode, o.b.lcatCode].sort())).toEqual([['SE2', 'SE3']]);
   });
 
   it('no applicable category → unpriced "no-category": hours counted, no cost, listed with how to fix, footer count everywhere', async () => {
@@ -220,7 +223,7 @@ describe('cost basis (certified-outputs C3)', () => {
     await entry({ clinId: clinA.id, entryDate: D2 });
     const rows = await getDetailedCostReport(...RANGE);
     expect(rows.map((r) => [r.entryDate, r.lcatCode, r.totalCost])).toEqual([[D1, 'JR', 640], [D2, 'SR', 880]]);
-    expect(await getOverlappingAssignmentsReport()).toEqual([]);
+    expect(await overlapPairs()).toEqual([]);
     await expectFailure(endUserLaborCategoryAssignment(a.id, '2025-12-31' as CalendarDate), 'validation', /can't be before/);
   });
 

@@ -156,7 +156,7 @@ export function ReportsClient({ filterOptions, role, periodOptions, today, unpri
   const report = (row: Row, title: string, description: ReactNode, inputs: ReactNode, buttons: ReactNode) => (
     <div className={classes.report} data-testid={`report-${row}`}>
       <div>
-        <h3 className={classes.title}>{title}</h3>
+        <h2 className={classes.title}>{title}</h2>
         <div className={classes.description}>{description}</div>
         {rowError(row)}
       </div>
