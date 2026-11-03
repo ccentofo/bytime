@@ -288,15 +288,11 @@ export function AuditTrailClient({ initialSummary, contracts, users, workspaceTi
     // the hidden Comment / Entered By columns (feature-plan-ux-foundations.md §4.4).
     enableToolbarInternalActions: true,
     renderToolbarInternalActions: ({ table }) => <MRT_ShowHideColumnsButton table={table} />,
-    // Correction-row highlight: `data-correction` also drives globals.css's dark-mode
-    // text-contrast rule — keep both in sync if this ever changes.
+    // Correction-row highlight (feature-plan-ux-page-fixes.md C14): the tint comes from globals.css's
+    // --audit-correction-bg (light and dark values), and `data-correction` also draws the row's warning edge there.
     mantineTableBodyRowProps: ({ row }) => ({
       'data-correction': row.original.revisionNumber > 1 ? 'true' : undefined,
-      style: row.original.revisionNumber > 1
-        ? {
-            backgroundColor: 'light-dark(var(--mantine-color-warning-0), var(--mantine-color-warning-1))',
-          }
-        : undefined,
+      style: row.original.revisionNumber > 1 ? { backgroundColor: 'var(--audit-correction-bg)' } : undefined,
     }),
     state: {
       isLoading: isPending && hasSearched,
