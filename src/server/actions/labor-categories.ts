@@ -194,6 +194,7 @@ export async function assignUserToLaborCategory(data: {
     const actor = await requireAdminFresh();
     // feature-plan-ux-page-fixes.md C4 (R4): only an assignable category — the same rule as getAssignableLaborCategories
     // (an active category on an active CLIN of an active contract). After the guard, so guard-first tests still hold.
+    validateUUID(data.userId, 'Employee');   // UX-4A-AUDIT.md L4
     validateUUID(data.laborCategoryId, 'Labor category');
     const db = await getDbForWrite();
     const [lcat] = await db

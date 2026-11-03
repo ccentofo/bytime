@@ -39,6 +39,13 @@ describe('assignUserToLaborCategory (C4)', () => {
     expect(db.inserts).toHaveLength(0);
   });
 
+  it('L4: a non-UUID employee id → a validation error, nothing read or written', async () => {
+    db.onSelect(laborCategories, [{ lcatStatus: 'active', clinStatus: 'active', contractStatus: 'active' }]);
+    const r = await assignUserToLaborCategory({ userId: 'not-a-uuid', laborCategoryId: LC, effectiveDate: '2026-11-01' as CalendarDate });
+    expect(r).toEqual({ ok: false, code: 'validation', error: 'Employee is not a valid identifier.' });
+    expect(db.inserts).toHaveLength(0);
+  });
+
   it('an unknown id → "That labor category no longer exists."', async () => {
     db.onSelect(laborCategories, []);
     expect(await assign()).toEqual({ ok: false, code: 'validation', error: 'That labor category no longer exists.' });
