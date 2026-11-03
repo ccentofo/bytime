@@ -381,7 +381,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
             label="Show on every timesheet"
             description="When off, employees can't add this code or record new hours on it. Where hours are already recorded, the row stays in that period for corrections and notes."
             checked={form.availableToAll}
-            onChange={(e) => setForm((f) => ({ ...f, availableToAll: e.currentTarget.checked }))}
+            onChange={(e) => { const checked = e.currentTarget.checked; setForm((f) => ({ ...f, availableToAll: checked })); }}
           />
           {/* While the hide confirm is open its error shows there instead (one error location). */}
           {formError && !hideConfirm && (
