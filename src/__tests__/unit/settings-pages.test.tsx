@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
+import { act } from 'react';
 import path from 'path';
 
 /**
@@ -12,9 +13,10 @@ import path from 'path';
 const actions = vi.hoisted(() => ({
   getValidScheduleChangeDates: vi.fn(async () => ({ immediate: false, dates: ['2027-01-01'], problem: null })),
   updateWorkspaceTimezone: vi.fn<(...a: unknown[]) => Promise<unknown>>(async (tz) => ({ ok: true, data: tz })),
+  updateWorkweekStartDay: vi.fn<(...a: unknown[]) => Promise<unknown>>(async (day) => ({ ok: true, data: day })),
 }));
 vi.mock('@/server/actions/pay-period-config', () => ({ updatePayPeriodConfig: vi.fn(), getValidScheduleChangeDates: actions.getValidScheduleChangeDates }));
-vi.mock('@/server/actions/workspace-settings', () => ({ updateWorkspaceTimezone: actions.updateWorkspaceTimezone, updateWorkweekStartDay: vi.fn() }));
+vi.mock('@/server/actions/workspace-settings', () => ({ updateWorkspaceTimezone: actions.updateWorkspaceTimezone, updateWorkweekStartDay: actions.updateWorkweekStartDay }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
 import { WorkspaceSettingsClient } from '@/app/(app)/settings/workspace/WorkspaceSettingsClient';
@@ -109,5 +111,61 @@ describe('Workspace timezone (feature-plan-ux-page-fixes.md C8, T-C8)', () => {
     await wait();
     expect(dialogTitled('Change the workspace timezone?')!.querySelector('[role="alert"]')!.textContent).toBe('Unknown timezone.');
     expect(notifications.show).not.toHaveBeenCalled();
+  });
+});
+
+describe('Workspace Save buttons keep focus (UX-4A-AUDIT.md M3)', () => {
+  const field = (text: string) => {
+    const l = [...m!.container.querySelectorAll('label')].find((x) => x.textContent?.replace(/\s*\*\s*$/, '').trim() === text);
+    return l ? document.getElementById(l.htmlFor) as HTMLInputElement : null;
+  };
+  const choose = async (label: string, option: string) => {
+    const input = field(label)!;
+    await click(input);
+    const list = document.getElementById(input.getAttribute('aria-controls') ?? '')!;
+    await click([...list.querySelectorAll('[role="option"]')].find((o) => o.textContent?.trim() === option));
+  };
+  const inDialog = (d: HTMLElement, label: string) => [...d.querySelectorAll('button')].find((b) => b.textContent?.trim() === label) as HTMLButtonElement;
+
+  it('timezone: aria-disabled with its reason, never disabled — before, during and after a confirmed save; focus comes back to it', async () => {
+    let resolve!: (v: unknown) => void;
+    actions.updateWorkspaceTimezone.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
+    m = await mount(<WorkspaceSettingsClient initialTimezone="America/New_York" initialWorkweekStartDay={1} />);
+    const save = () => buttonByText('Save Timezone');
+    expect(save().hasAttribute('disabled')).toBe(false);
+    expect(save().getAttribute('aria-disabled')).toBe('true');
+    expect(document.getElementById(save().getAttribute('aria-describedby')!)!.textContent).toBe('Choose a different timezone to save.');
+    await click(save());
+    expect(dialogTitled('Change the workspace timezone?')).toBeUndefined();     // the guard
+
+    await choose('Timezone', 'America/Chicago');
+    expect(save().getAttribute('aria-disabled')).toBeNull();
+    save().focus();
+    await click(save());
+    await click(inDialog(dialogTitled('Change the workspace timezone?')!, 'Change timezone'));
+    expect(save().hasAttribute('disabled')).toBe(false);                    // while saving
+    expect(save().getAttribute('aria-disabled')).toBe('true');
+    await act(async () => { resolve({ ok: true, data: 'America/Chicago' }); });
+    await wait(400);                                                         // the Modal closes and returns focus
+    expect(dialogTitled('Change the workspace timezone?')).toBeUndefined();
+    expect(save().hasAttribute('disabled')).toBe(false);
+    expect(save().getAttribute('aria-disabled')).toBe('true');               // saved = chosen again
+    expect(document.activeElement).toBe(save());
+  });
+
+  it('workweek: aria-disabled with "Choose a different day to save.", never disabled; focus comes back after the confirm', async () => {
+    m = await mount(<WorkspaceSettingsClient initialTimezone="America/New_York" initialWorkweekStartDay={1} />);
+    const save = () => buttonByText('Save Workweek');
+    expect(save().hasAttribute('disabled')).toBe(false);
+    expect(document.getElementById(save().getAttribute('aria-describedby')!)!.textContent).toBe('Choose a different day to save.');
+    await choose('Workweek starts on', 'Sunday');
+    save().focus();
+    await click(save());
+    await click(inDialog(dialogTitled('Change the workweek?')!, 'Change workweek'));
+    await wait(400);
+    expect(actions.updateWorkweekStartDay).toHaveBeenCalledWith(0);
+    expect(save().hasAttribute('disabled')).toBe(false);
+    expect(save().getAttribute('aria-disabled')).toBe('true');
+    expect(document.activeElement).toBe(save());
   });
 });
