@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
+import QRCode from 'qrcode';
 import {
   Paper,
   Title,
@@ -15,12 +16,13 @@ import {
   Code,
   SimpleGrid,
   Divider,
+  Loader,
+  CopyButton,
 } from '@mantine/core';
-import { IconShieldCheck, IconShieldOff, IconAlertCircle, IconCheck, IconQrcode } from '@tabler/icons-react';
+import { IconShieldCheck, IconShieldOff, IconAlertCircle, IconCheck, IconCopy } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { initMFASetup, completeMFASetup, disableMFA } from '@/server/actions/mfa';
 import { runAction } from '@/lib/run-action';
-import Image from 'next/image';
 
 interface Props {
   mfaEnabled: boolean;
@@ -37,6 +39,24 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [disablePassword, setDisablePassword] = useState('');
   const [error, setError] = useState('');
+
+  // The QR code is drawn HERE, in the browser, from the otpauth URI: it carries the TOTP shared secret, so it must never
+  // be sent to a QR service (feature-plan-hotfix-mfa-qr.md). The result is keyed by the URI it was drawn for, so a stale
+  // image never shows for a new setup; null dataUrl = drawing failed (the manual key below still works).
+  const [drawnQr, setDrawnQr] = useState<{ uri: string; dataUrl: string | null } | null>(null);
+  useEffect(() => {
+    if (!qrUri) return;
+    let cancelled = false;
+    QRCode.toDataURL(qrUri, { width: 200, margin: 1, errorCorrectionLevel: 'M' })
+      .then((url) => { if (!cancelled) setDrawnQr({ uri: qrUri, dataUrl: url }); })
+      .catch(() => { if (!cancelled) setDrawnQr({ uri: qrUri, dataUrl: null }); });
+    return () => { cancelled = true; };
+  }, [qrUri]);
+  const qr = drawnQr && drawnQr.uri === qrUri ? drawnQr : null;
+  const qrDataUrl = qr?.dataUrl ?? null;
+  const qrFailed = qr !== null && qr.dataUrl === null;
+  // The setup key in groups of 4 for reading; the copy button copies the raw key.
+  const groupedKey = pendingSecret.match(/.{1,4}/g)?.join(' ') ?? '';
 
   async function handleStartSetup() {
     setError('');
@@ -82,11 +102,6 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
       }
     });
   }
-
-  // Generate QR code image URL using Google Charts API (no external dependency)
-  const qrImageUrl = qrUri
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrUri)}`
-    : '';
 
   return (
     <Paper withBorder p="lg" radius="md" mt="xl">
@@ -153,15 +168,35 @@ export function MFASetup({ mfaEnabled, recoveryCodesRemaining }: Props) {
           <Text size="sm">
             1. Open your authenticator app and scan this QR code:
           </Text>
-          {qrImageUrl && (
-            <Group justify="center">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={qrImageUrl} alt="QR Code for 2FA setup" width={200} height={200} />
+          <Group justify="center" mih={200} data-testid="mfa-qr">
+            {qrDataUrl ? (
+              // A data: URL drawn in the browser (next/image adds nothing for it).
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={qrDataUrl} alt="QR code for your authenticator app" width={200} height={200} />
+            ) : qrFailed ? (
+              <Alert icon={<IconAlertCircle size={16} />} color="warning" variant="light">
+                Couldn&apos;t draw the QR code. Enter the key below in your authenticator app instead.
+              </Alert>
+            ) : (
+              <Group gap="xs">
+                <Loader size="sm" />
+                <Text size="sm">Generating QR code…</Text>
+              </Group>
+            )}
+          </Group>
+          <Stack gap={4}>
+            <Text size="sm" c="dimmed">Can&apos;t scan? Enter this key in your authenticator app:</Text>
+            <Group gap="xs">
+              <Code data-testid="mfa-setup-key">{groupedKey}</Code>
+              <CopyButton value={pendingSecret}>
+                {({ copied, copy }) => (
+                  <Button size="xs" variant="light" leftSection={copied ? <IconCheck size={14} /> : <IconCopy size={14} />} onClick={copy}>
+                    {copied ? 'Copied' : 'Copy key'}
+                  </Button>
+                )}
+              </CopyButton>
             </Group>
-          )}
-          <Text size="xs" c="dimmed">
-            Can't scan? Enter this code manually: <Code>{pendingSecret}</Code>
-          </Text>
+          </Stack>
           <Divider label="2. Enter the 6-digit code to verify" labelPosition="left" />
           <PinInput
             length={6}

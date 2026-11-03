@@ -126,6 +126,43 @@ describe('MFA sign-in flow and suspended-workspace sign-in (F10)', () => {
     expect(result?.id).toBe(user.id);
   });
 
+  // feature-plan-hotfix-mfa-qr.md §7 --------------------------------------
+  // next-auth's client builds the POST body with URLSearchParams, which serialises an undefined mfaCode as "undefined".
+  it('hotfix §7: mfaCode "undefined" / "" / "null" means no code was submitted → mfa_required, and no failed attempt is recorded', async () => {
+    const db = getTestDb();
+    const bcrypt = (await import('bcryptjs')).default;
+    const hash = await bcrypt.hash(PASSWORD, 4);
+    const email = `mfa-nocode-${Date.now()}@bytime.dev`;
+    await db.insert(schema.users).values({
+      email, fullName: 'MFA User', role: 'employee', passwordHash: hash, isActive: true,
+      totpEnabled: true, totpSecret: encrypt('JBSWY3DPEHPK3PXP'),
+    });
+    const failures = async () => (await db.select().from(schema.loginAttempts).where(eq(schema.loginAttempts.email, email))).filter((a) => !a.successful).length;
+
+    for (const mfaCode of ['undefined', '', 'null', '  undefined  ']) {
+      await expect(authorizeCredentials({ email, password: PASSWORD, mfaCode }), JSON.stringify(mfaCode)).rejects.toMatchObject({ code: 'mfa_required' });
+    }
+    expect(await failures()).toBe(0); // the lockout count is unchanged
+  });
+
+  it('hotfix §7: a valid TOTP still signs in; "000000" is still mfa_invalid and still counts toward the lockout', async () => {
+    const db = getTestDb();
+    const bcrypt = (await import('bcryptjs')).default;
+    const hash = await bcrypt.hash(PASSWORD, 4);
+    const secret = 'JBSWY3DPEHPK3PXP';
+    const email = `mfa-still-${Date.now()}@bytime.dev`;
+    const [user] = await db.insert(schema.users).values({
+      email, fullName: 'MFA User', role: 'employee', passwordHash: hash, isActive: true,
+      totpEnabled: true, totpSecret: encrypt(secret),
+    }).returning();
+    const failures = async () => (await db.select().from(schema.loginAttempts).where(eq(schema.loginAttempts.email, email))).filter((a) => !a.successful).length;
+
+    await expect(authorizeCredentials({ email, password: PASSWORD, mfaCode: '000000' })).rejects.toMatchObject({ code: 'mfa_invalid' });
+    expect(await failures()).toBe(1);
+    const result = await authorizeCredentials({ email, password: PASSWORD, mfaCode: currentTotpCode(secret) });
+    expect(result?.id).toBe(user.id);
+  });
+
   // R2-12 ---------------------------------------------------------------
   it('rejects a reused TOTP code — the same code cannot sign in twice, even within its own window', async () => {
     const db = getTestDb();
