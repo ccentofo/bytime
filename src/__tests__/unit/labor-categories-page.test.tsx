@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
  */
 
 const h = vi.hoisted(() => ({
+  updateLaborCategory: vi.fn(),
   getAllLaborCategories: vi.fn(), getLaborCategoryPeopleCounts: vi.fn(), getUnpricedSummary: vi.fn(),
   getContracts: vi.fn(), getWorkspaceToday: vi.fn(), getClinsByContract: vi.fn(),
 }));
@@ -17,7 +18,7 @@ vi.mock('@/server/actions/labor-category-rates', () => ({
 }));
 // Only what the page and client may use: any other export (the old assignment / report reads) would be undefined.
 vi.mock('@/server/actions/labor-categories', () => ({
-  createLaborCategory: vi.fn(), updateLaborCategory: vi.fn(), getAllLaborCategories: h.getAllLaborCategories,
+  createLaborCategory: vi.fn(), updateLaborCategory: h.updateLaborCategory, getAllLaborCategories: h.getAllLaborCategories,
   getLaborCategoryPeopleCounts: h.getLaborCategoryPeopleCounts, getUnpricedSummary: h.getUnpricedSummary,
 }));
 vi.mock('@/server/actions/contracts', () => ({ getContracts: h.getContracts }));
@@ -30,7 +31,7 @@ import LaborCategoriesPage from '@/app/(app)/admin/labor-categories/page';
 import { LaborCategoriesClient } from '@/app/(app)/admin/labor-categories/LaborCategoriesClient';
 import { act } from 'react';
 import userEvent from '@testing-library/user-event';
-import { click, installDomStubs, mount, unmount, type Mounted } from '../helpers/dom';
+import { chooseRowAction, click, installDomStubs, mount, unmount, type Mounted } from '../helpers/dom';
 import type { CalendarDate } from '@/lib/calendar-date';
 
 beforeAll(installDomStubs);
@@ -138,5 +139,17 @@ describe('Labor categories page (L-1)', () => {
     for (const f of [h.getAllLaborCategories, h.getContracts, h.getLaborCategoryPeopleCounts, h.getUnpricedSummary, h.getWorkspaceToday]) expect(f).toHaveBeenCalledTimes(1);
     expect(el.props).toMatchObject({ initialLaborCategories: CATS, contracts: CONTRACTS, peopleCounts: { [A1]: 2 }, unpricedHours: 12.5, today: '2026-11-03' });
     expect(Object.keys(el.props).sort()).toEqual(['contracts', 'initialLaborCategories', 'peopleCounts', 'today', 'unpricedHours']);
+  });
+
+  it('UX-4B1-AUDIT M4: Reactivate on two rows runs both at once (rows never share a busy group)', async () => {
+    const pending: Array<(v: unknown) => void> = [];
+    h.updateLaborCategory.mockImplementation(() => new Promise((r) => { pending.push(r); }));
+    h.getAllLaborCategories.mockResolvedValue(CATS);
+    const twoInactive = [CATS[0], CATS[1], { ...CATS[2], status: 'inactive' as const }];
+    m = await mount(<LaborCategoriesClient initialLaborCategories={twoInactive as never} contracts={CONTRACTS as never} peopleCounts={{}} unpricedHours={0} today={'2026-11-03' as CalendarDate} />);
+    await chooseRowAction('SA-I', 'Reactivate');
+    await chooseRowAction('PM-II', 'Reactivate');
+    expect(h.updateLaborCategory.mock.calls.map((c) => c[0])).toEqual([A2, N1]);
+    await act(async () => { for (const r of pending) r({ ok: true, data: {} }); });
   });
 });

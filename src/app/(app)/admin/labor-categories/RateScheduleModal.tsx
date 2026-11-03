@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useId, useState } from 'react';
 import { Button, Group, Modal, Stack, Text, Title } from '@mantine/core';
 import { MoneyInput } from '@/components/ui/MoneyInput';
+import { useBusy } from '@/components/ui/useBusy';
 import { DateInput } from '@mantine/dates';
 import { runAction } from '@/lib/run-action';
 import { formatCalendarDate, isCalendarDate, compare, type CalendarDate } from '@/lib/calendar-date';
@@ -42,7 +43,11 @@ export function RateScheduleModal({ opened, onClose, category, canWrite, onSaved
   const [hourly, setHourly] = useState('');
   const [ceiling, setCeiling] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [isPending, startTransition] = useTransition();
+  const [dateError, setDateError] = useState<string | null>(null);
+  // UX-4B1-AUDIT L13: Preview and Save are never `disabled` / `loading`; they block each other while one runs (group),
+  // and a step that can't run yet is aria-disabled with the reason (hintId).
+  const busy = useBusy();
+  const hintId = useId();
   const gate = useImpactGate();
 
   // A different category opened: show its schedule (render-time state sync, no effect).
@@ -62,6 +67,7 @@ export function RateScheduleModal({ opened, onClose, category, canWrite, onSaved
   function start(next: Mode) {
     setMode(next);
     setError(null);
+    setDateError(null);
     gate.reset();
     if (next?.kind === 'add') { setDate(null); setHourly(''); setCeiling(''); }
     if (next?.kind === 'correct') {
@@ -74,6 +80,7 @@ export function RateScheduleModal({ opened, onClose, category, canWrite, onSaved
   // A value field changed: clear the preview, the reason and the checkbox (typing the reason never does).
   function onDate(value: string | null) {
     setDate(value);
+    setDateError(null);
     gate.reset();
     if (value && isCalendarDate(value)) {
       const inEffect = rateOn(schedule!, value as CalendarDate);
@@ -88,9 +95,10 @@ export function RateScheduleModal({ opened, onClose, category, canWrite, onSaved
 
   function preview() {
     if (!mode) return;
+    if (mode.kind === 'add' && !date) { setDateError('Choose an effective date.'); return; }
     setError(null);
     const ticket = gate.begin();
-    startTransition(async () => {
+    void busy.run('preview', async () => {
       const input = mode.kind === 'add'
         ? { kind: 'add' as const, laborCategoryId: category!.id, effectiveDate: date ?? '', hourlyRate: hourly, ceilingRate: ceilingValue }
         : mode.kind === 'correct'
@@ -100,13 +108,13 @@ export function RateScheduleModal({ opened, onClose, category, canWrite, onSaved
       if (!gate.isCurrent(ticket)) return; // the values changed while it ran — never apply it (audit M1)
       if (!r.ok) { setError(r.error); return; }
       gate.setImpact(r.data);
-    });
+    }, { group: 'rate' });
   }
 
   function save() {
     if (!mode || !gate.ready) return;
     setError(null);
-    startTransition(async () => {
+    void busy.run('save', async () => {
       const reason = gate.reason.trim() || undefined;
       const r = await runAction(mode.kind === 'add'
         ? addLaborCategoryRateChange({ laborCategoryId: category!.id, effectiveDate: date ?? '', hourlyRate: hourly, ceilingRate: ceilingValue, reason })
@@ -118,13 +126,17 @@ export function RateScheduleModal({ opened, onClose, category, canWrite, onSaved
       onSaved(r.data);
       setMode(null);
       gate.reset();
-    });
+    }, { group: 'rate' });
   }
 
   function discard() { setMode(null); gate.reset(); setError(null); }
   function close() { discard(); onClose(); } // reopening never shows a half-done form (audit L5)
 
   const saveLabel = mode?.kind === 'add' ? 'Add' : mode?.kind === 'correct' ? 'Save correction' : 'Remove change';
+  const previewBlocked = mode?.kind === 'add' && !date;
+  const hint = previewBlocked ? 'Choose an effective date, then preview the change.'
+    : !gate.impact ? 'Preview the change before saving it.'
+      : !gate.ready ? 'Enter a reason and tick the box to save.' : null;
 
   return (
     <Modal opened={opened} onClose={close} title={`Rates — ${category.lcatCode}: ${category.title}`} size="lg">
@@ -143,7 +155,7 @@ export function RateScheduleModal({ opened, onClose, category, canWrite, onSaved
         {mode && (
           <Stack gap="xs">
             <Title order={5}>{mode.kind === 'add' ? 'Add a rate change' : mode.kind === 'correct' ? `Correct ${rows.find((r) => r.ref === mode.target)?.label}` : `Remove the change from ${rows.find((r) => r.ref === mode.changeId)?.label}`}</Title>
-            {mode.kind === 'add' && <DateInput label="Effective date" value={date} onChange={onDate} data-testid="rate-date" />}
+            {mode.kind === 'add' && <DateInput label="Effective date" value={date} onChange={onDate} error={dateError ?? undefined} data-testid="rate-date" />}
             {mode.kind !== 'remove' && (
               <Group grow>
                 {/* UX-4b §4.2.6: MoneyInput (9,999.99 is validateRate's ceiling, checked on blur; the server enforces it). */}
@@ -155,9 +167,12 @@ export function RateScheduleModal({ opened, onClose, category, canWrite, onSaved
             {error && <Text size="sm" c="red" data-testid="rate-error">{error}</Text>}
             <Group justify="flex-end">
               <Button variant="default" onClick={discard}>Cancel</Button>
-              <Button variant="light" onClick={preview} loading={isPending} disabled={mode.kind === 'add' && !date} data-testid="rate-preview">Preview</Button>
-              <Button onClick={save} loading={isPending} disabled={!gate.ready} color={mode.kind === 'remove' ? 'red' : undefined} data-testid="rate-save">{saveLabel}</Button>
+              <Button variant="light" {...busy.props('preview', { group: 'rate', blocked: previewBlocked })} aria-describedby={previewBlocked ? hintId : undefined}
+                onClick={preview} data-testid="rate-preview">Preview</Button>
+              <Button {...busy.props('save', { group: 'rate', blocked: !gate.ready })} aria-describedby={!gate.ready ? hintId : undefined}
+                onClick={save} color={mode.kind === 'remove' ? 'red' : undefined} data-testid="rate-save">{saveLabel}</Button>
             </Group>
+            {hint && <Text size="xs" c="dimmed" ta="right" id={hintId} data-testid="rate-hint">{hint}</Text>}
           </Stack>
         )}
       </Stack>

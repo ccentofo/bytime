@@ -107,7 +107,7 @@ export function ReportsClient({ filterOptions, role, periodOptions, today, unpri
       if ('error' in t) { setError(row, t.error); return; }
       const result = await downloadFile(t.url, t.name, t.opts);
       if (!result.ok) setError(row, result.error);
-    });
+    }, { group: row }); // a row's buttons block each other (UX-4B1-AUDIT M4), never another row's
   }
 
   function downloadPdf() {
@@ -190,7 +190,7 @@ export function ReportsClient({ filterOptions, role, periodOptions, today, unpri
               onChange={(v) => { setPdfPeriodStart(v && isCalendarDate(v) ? v : null); setError('pdf', null); }}
             />
           </>,
-          <Button {...busy.props('pdf:pdf')} onClick={downloadPdf}>Download PDF</Button>,
+          <Button {...busy.props('pdf:pdf', { group: 'pdf' })} onClick={downloadPdf}>Download PDF</Button>,
         )}
 
         {isAdmin && report('costs', 'Contract costs',
@@ -212,15 +212,15 @@ export function ReportsClient({ filterOptions, role, periodOptions, today, unpri
             <PeriodPresetSelect label="Dates" presets={costPresets} value={costRange} onChange={(v) => { setCostRange(v); setError('costs', null); }} />
           </>,
           <>
-            <Button variant="default" {...busy.props('costs:excel')} onClick={() => downloadCosts('excel')}>Excel</Button>
-            <Button variant="default" {...busy.props('costs:csv')} onClick={() => downloadCosts('csv')}>CSV</Button>
+            <Button variant="default" {...busy.props('costs:excel', { group: 'costs' })} onClick={() => downloadCosts('excel')}>Excel</Button>
+            <Button variant="default" {...busy.props('costs:csv', { group: 'costs' })} onClick={() => downloadCosts('csv')}>CSV</Button>
           </>,
         )}
 
         {report('summary', 'Hours summary',
           'Total hours per employee by contract and CLIN (direct time only).',
           <PeriodPresetSelect label="Dates" presets={basePresets} value={summaryRange} onChange={(v) => { setSummaryRange(v); setError('summary', null); }} />,
-          <Button variant="default" {...busy.props('summary:excel')} onClick={downloadSummary}>Excel</Button>,
+          <Button variant="default" {...busy.props('summary:excel', { group: 'summary' })} onClick={downloadSummary}>Excel</Button>,
         )}
 
         {isAdmin && report('periodCost', 'Cost by pay period',
@@ -231,7 +231,7 @@ export function ReportsClient({ filterOptions, role, periodOptions, today, unpri
             value={periodCount}
             onChange={(v) => { if (v) setPeriodCount(v); setError('periodCost', null); }}
           />,
-          <Button variant="default" {...busy.props('periodCost:excel')} onClick={downloadPeriodCost}>Excel</Button>,
+          <Button variant="default" {...busy.props('periodCost:excel', { group: 'periodCost' })} onClick={downloadPeriodCost}>Excel</Button>,
         )}
 
         {isAdmin && report('unpriced', 'Unpriced hours',
@@ -239,7 +239,7 @@ export function ReportsClient({ filterOptions, role, periodOptions, today, unpri
           <Text size="sm" c="dimmed" data-testid="unpriced-summary">{unpricedText}</Text>,
           <>
             <Button variant="default" component={Link} href={UNPRICED_REPORT_HREF}>View</Button>
-            <Button variant="default" {...busy.props('unpriced:excel')} onClick={downloadUnpriced}>Excel</Button>
+            <Button variant="default" {...busy.props('unpriced:excel', { group: 'unpriced' })} onClick={downloadUnpriced}>Excel</Button>
           </>,
         )}
       </Paper>

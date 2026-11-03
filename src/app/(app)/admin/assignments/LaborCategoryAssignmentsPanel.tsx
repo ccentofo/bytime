@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { Button, Group, Modal, Paper, Select, Stack, Text, Title, VisuallyHidden } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
 import { notifications } from '@mantine/notifications';
@@ -86,6 +86,12 @@ export function LaborCategoryAssignmentsPanel({
   const [assignLcatId, setAssignLcatId] = useState<string | null>(null);
   const [assignEffectiveDate, setAssignEffectiveDate] = useState<string | null>(null);
   const [assignEndDate, setAssignEndDate] = useState<string | null>(null);
+  // UX-4B1-AUDIT L13: Assign is never `disabled`; an incomplete form is aria-disabled with the reason, and a click shows
+  // which fields are missing.
+  const [showAssignErrors, setShowAssignErrors] = useState(false);
+  const assignHintId = useId();
+  const missing = { user: !assignUserId, lcat: !assignLcatId, date: !assignEffectiveDate || !isCalendarDate(assignEffectiveDate) };
+  const assignIncomplete = missing.user || missing.lcat || missing.date;
 
   const [confirmEnd, setConfirmEnd] = useState<LcatAssignment | null>(null);
   const shownEnd = useLastTarget(confirmEnd);
@@ -120,6 +126,7 @@ export function LaborCategoryAssignmentsPanel({
       setAssignLcatId(null);
       setAssignEffectiveDate(null);
       setAssignEndDate(null);
+      setShowAssignErrors(false);
       notifications.show({ title: 'Assignment Created', message: 'User has been assigned to the labor category.', color: 'success' });
     } catch {
       toastError({ title: 'Assignment Failed', message: 'Something went wrong. Please refresh and try again.' });
@@ -208,6 +215,7 @@ export function LaborCategoryAssignmentsPanel({
             value={assignUserId}
             onChange={setAssignUserId}
             searchable
+            error={showAssignErrors && missing.user ? 'Choose an employee.' : undefined}
             style={{ minWidth: 200 }}
           />
           <Select
@@ -220,18 +228,30 @@ export function LaborCategoryAssignmentsPanel({
             value={assignLcatId}
             onChange={setAssignLcatId}
             searchable
+            error={showAssignErrors && missing.lcat ? 'Choose a labor category.' : undefined}
             style={{ minWidth: 400 }}
           />
-          <DateInput label="Effective Date" value={assignEffectiveDate} onChange={setAssignEffectiveDate} required style={{ minWidth: 160 }} />
+          <DateInput
+            label="Effective Date" value={assignEffectiveDate} onChange={setAssignEffectiveDate} required style={{ minWidth: 160 }}
+            error={showAssignErrors && missing.date ? 'Enter the effective date.' : undefined}
+          />
           <DateInput label="End Date" value={assignEndDate} onChange={setAssignEndDate} clearable style={{ minWidth: 160 }} />
           <WriteButton
-            {...busy.props('assign')}
-            onClick={() => { void busy.run('assign', handleAssign); }}
-            disabled={!assignUserId || !assignLcatId || !assignEffectiveDate}
+            {...busy.props('assign', { blocked: assignIncomplete })}
+            aria-describedby={assignIncomplete ? assignHintId : undefined}
+            onClick={() => {
+              if (assignIncomplete) { setShowAssignErrors(true); return; }
+              void busy.run('assign', handleAssign);
+            }}
           >
             Assign
           </WriteButton>
         </Group>
+        {assignIncomplete && (
+          <Text size="xs" c="dimmed" mt={6} id={assignHintId} data-testid="assign-hint">
+            Choose an employee, a labor category and an effective date.
+          </Text>
+        )}
       </Paper>
 
       {chips.length > 0 && (

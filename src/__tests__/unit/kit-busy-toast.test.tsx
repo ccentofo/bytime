@@ -34,21 +34,25 @@ describe('useBusy (K-6)', () => {
     busy = useBusy();
     return (
       <>
-        <Button {...busy.props('costs:excel', { icon: <span data-testid="icon-excel" /> })}>Excel</Button>
-        <Button {...busy.props('costs:csv')}>CSV</Button>
+        <Button {...busy.props('costs:excel', { icon: <span data-testid="icon-excel" />, group: 'costs' })}>Excel</Button>
+        <Button {...busy.props('costs:csv', { group: 'costs' })}>CSV</Button>
         <Button {...busy.props('pdf')}>PDF</Button>
+        <Button {...busy.props('row:A')}>Row A</Button>
+        <Button {...busy.props('row:B')}>Row B</Button>
+        <Button {...busy.props('row:C')}>Row C</Button>
+        <Button {...busy.props('form', { blocked: true })}>Blocked</Button>
       </>
     );
   }
   const btn = (t: string) => [...m!.container.querySelectorAll('button')].find((b) => b.textContent === t) as HTMLButtonElement;
 
-  it('re-entry on the same key (or its group) is ignored until the first run ends', async () => {
+  it('re-entry on the same key (or its explicit group) is ignored until the first run ends', async () => {
     m = await mount(<Probe />);
     const d = deferred();
     const fn = vi.fn(() => d.promise);
     let first!: Promise<unknown>;
-    await act(async () => { first = busy.run('costs:excel', fn); });
-    await act(async () => { void busy.run('costs:excel', fn); void busy.run('costs:csv', fn); });
+    await act(async () => { first = busy.run('costs:excel', fn, { group: 'costs' }); });
+    await act(async () => { void busy.run('costs:excel', fn, { group: 'costs' }); void busy.run('costs:csv', fn, { group: 'costs' }); });
     expect(fn).toHaveBeenCalledTimes(1);
     await act(async () => { d.resolve(); await first; });
     await act(async () => { await busy.run('costs:csv', async () => {}); });
@@ -58,7 +62,7 @@ describe('useBusy (K-6)', () => {
   it('a composite key shows its own Loader; its group is aria-disabled; other groups are free; never `disabled`', async () => {
     m = await mount(<Probe />);
     const d = deferred();
-    await act(async () => { void busy.run('costs:excel', () => d.promise); });
+    await act(async () => { void busy.run('costs:excel', () => d.promise, { group: 'costs' }); });
     expect(busy.is('costs:excel')).toBe(true);
     expect(btn('Excel').querySelector('.mantine-Loader-root')).not.toBeNull();
     expect(btn('Excel').getAttribute('aria-busy')).toBe('true');
@@ -69,6 +73,36 @@ describe('useBusy (K-6)', () => {
     await act(async () => { d.resolve(); });
     expect(btn('Excel').querySelector('[data-testid="icon-excel"]')).not.toBeNull();
     expect(btn('Excel').getAttribute('aria-disabled')).toBeNull();
+  });
+
+  it('UX-4B1-AUDIT M4: without a group only the same key blocks — two rows run at once, each with its Loader', async () => {
+    m = await mount(<Probe />);
+    const a = deferred();
+    const b = deferred();
+    const fnB = vi.fn(() => b.promise);
+    await act(async () => { void busy.run('row:A', () => a.promise); });
+    await act(async () => { void busy.run('row:B', fnB); });
+    expect(fnB).toHaveBeenCalledTimes(1);
+    for (const r of ['Row A', 'Row B']) {
+      expect(btn(r).querySelector('.mantine-Loader-root'), r).not.toBeNull();
+      expect(btn(r).getAttribute('aria-busy'), r).toBe('true');
+    }
+    expect(btn('Row C').getAttribute('aria-disabled')).toBeNull();            // an idle row is free
+    // A colon is just part of the key: no implied group (the group is what run() was given).
+    await act(async () => { void busy.run('costs:excel', () => a.promise); });
+    expect(btn('CSV').getAttribute('aria-disabled')).toBeNull();
+    const csv = vi.fn(async () => {});
+    await act(async () => { await busy.run('costs:csv', csv); });
+    expect(csv).toHaveBeenCalledTimes(1);
+    await act(async () => { a.resolve(); b.resolve(); });
+  });
+
+  it('blocked: aria-disabled and data-disabled with no Loader, never `disabled`', async () => {
+    m = await mount(<Probe />);
+    expect(btn('Blocked').getAttribute('aria-disabled')).toBe('true');
+    expect(btn('Blocked').hasAttribute('data-disabled')).toBe(true);
+    expect(btn('Blocked').hasAttribute('disabled')).toBe(false);
+    expect(btn('Blocked').querySelector('.mantine-Loader-root')).toBeNull();
   });
 
   it('props never include `disabled` or Mantine `loading`', async () => {

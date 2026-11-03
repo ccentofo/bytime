@@ -96,6 +96,16 @@ describe('dates (K-9)', () => {
     expect(parseFlexibleDate('  Oct 1, 2026 ')).toBe('2026-10-01');
   });
 
+  it('UX-4B1-AUDIT M3: any case, optional leading zeros and comma, "Sept", extra spaces → YYYY-MM-DD', () => {
+    const cases: Array<[string, string]> = [
+      ['oct 1, 2026', '2026-10-01'], ['OCT 1, 2026', '2026-10-01'], ['Oct 01, 2026', '2026-10-01'], ['Oct 1 2026', '2026-10-01'],
+      ['1/05/2026', '2026-01-05'], ['01/5/2026', '2026-01-05'], ['2026-1-5', '2026-01-05'], ['Sept 1, 2026', '2026-09-01'],
+      ['september 1, 2026', '2026-09-01'], ['  Oct   1,   2026  ', '2026-10-01'], ['OCTOBER 1, 2026', '2026-10-01'],
+    ];
+    for (const [typed, want] of cases) expect(parseFlexibleDate(typed), typed).toBe(want);
+    for (const v of ['Oct 1, 2', 'oct 1, 2', '2026-02-30', '2026-1-', 'Sept 31, 2026', '13/1/2026']) expect(parseFlexibleDate(v), v).toBeNull();
+  });
+
   it('partial or impossible input → null (never a wrong date)', () => {
     for (const v of ['Oct 1, 2', 'Oct 1, 202', '2026-02-30', '2026-13-01', '13/01/2026', 'Oct', '', 'yesterday']) {
       expect(parseFlexibleDate(v), v).toBeNull();

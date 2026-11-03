@@ -8,8 +8,9 @@ import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
  * rate). The table's Rate column reads the same map, so an assignment shows its category's current rate.
  */
 
+const assign = vi.hoisted(() => vi.fn());
 vi.mock('@/server/actions/labor-categories', () => ({
-  assignUserToLaborCategory: vi.fn(), endUserLaborCategoryAssignment: vi.fn(), getUserLaborCategoryAssignments: vi.fn(),
+  assignUserToLaborCategory: assign, endUserLaborCategoryAssignment: vi.fn(), getUserLaborCategoryAssignments: vi.fn(),
 }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
@@ -52,3 +53,20 @@ describe('the assign form (C4, moved)', () => {
     expect(row.textContent).toContain('$110.00/hr');
   });
 });
+
+describe('UX-4B1-AUDIT L13: the Assign button keeps focus', () => {
+  it('never `disabled`; incomplete → aria-disabled with the reason; a click shows the missing fields and calls nothing', async () => {
+    await render();
+    const button = [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Assign')!;
+    expect(button.hasAttribute('disabled')).toBe(false);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    const hint = document.body.querySelector('[data-testid="assign-hint"]')!;
+    expect(button.getAttribute('aria-describedby')).toBe(hint.id);
+    expect(hint.textContent).toBe('Choose an employee, a labor category and an effective date.');
+    expect(document.body.textContent).not.toContain('Choose an employee.');
+    await click(button);
+    expect(assign).not.toHaveBeenCalled();
+    for (const msg of ['Choose an employee.', 'Choose a labor category.', 'Enter the effective date.']) expect(document.body.textContent).toContain(msg);
+  });
+});
+
