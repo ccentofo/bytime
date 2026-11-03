@@ -8,6 +8,7 @@ import { updateWorkspaceTimezone, updateWorkweekStartDay } from '@/server/action
 import { PageHeader } from '@/components/ui/PageHeader';
 import { WriteButton } from '@/components/shell/WorkspaceMode';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
 /**
  * Settings → Workspace (feature-plan-ux-navigation-home.md §4.4): timezone, FLSA workweek and the data export — split
@@ -37,12 +38,19 @@ export function WorkspaceSettingsClient({ initialTimezone, initialWorkweekStartD
   const [timezone, setTimezone] = useState<string | null>(initialTimezone);
   const [savedTimezone, setSavedTimezone] = useState<string>(initialTimezone);
   const [isTimezonePending, startTimezoneTransition] = useTransition();
+  // feature-plan-ux-page-fixes.md C8: a timezone change asks first; its error shows inside the confirm.
+  const [confirmTimezone, setConfirmTimezone] = useState(false);
+  const [timezoneError, setTimezoneError] = useState<string | null>(null);
 
   function handleSaveTimezone() {
     if (!timezone) return;
     startTimezoneTransition(async () => {
-      const result = await runAction(updateWorkspaceTimezone(timezone), { errorTitle: 'Save failed' });
-      if (!result.ok) return;
+      const result = await runAction(updateWorkspaceTimezone(timezone), { silent: true });
+      if (!result.ok) {
+        setTimezoneError(result.error);
+        return;
+      }
+      setConfirmTimezone(false);
       const stored = result.data;
       setSavedTimezone(stored);
       setTimezone(stored);
@@ -84,6 +92,7 @@ export function WorkspaceSettingsClient({ initialTimezone, initialWorkweekStartD
         </Text>
         <Group align="flex-end">
           <Select
+            label="Timezone"
             data={timezoneOptions(timezone)}
             value={timezone}
             onChange={setTimezone}
@@ -91,10 +100,24 @@ export function WorkspaceSettingsClient({ initialTimezone, initialWorkweekStartD
             allowDeselect={false}
             w={320}
           />
-          <WriteButton onClick={handleSaveTimezone} loading={isTimezonePending} disabled={!timezone || timezone === savedTimezone}>
+          <WriteButton
+            onClick={() => { setTimezoneError(null); setConfirmTimezone(true); }}
+            disabled={!timezone || timezone === savedTimezone}
+          >
             Save Timezone
           </WriteButton>
         </Group>
+        <ConfirmModal
+          opened={confirmTimezone}
+          tone="neutral"
+          title="Change the workspace timezone?"
+          message={`“Today” for every employee will follow ${timezone} instead of ${savedTimezone}. Late-entry and future-date rules, pay-period boundaries and timestamps change immediately.`}
+          confirmLabel="Change timezone"
+          loading={isTimezonePending}
+          error={timezoneError}
+          onConfirm={handleSaveTimezone}
+          onCancel={() => setConfirmTimezone(false)}
+        />
       </Paper>
 
       <Paper withBorder p="lg" radius="md" mb="xl">
@@ -105,6 +128,7 @@ export function WorkspaceSettingsClient({ initialTimezone, initialWorkweekStartD
         </Text>
         <Group align="flex-end">
           <Select
+            label="Workweek starts on"
             data={DAY_NAMES.map((d, i) => ({ value: String(i), label: d }))}
             value={workweekDay}
             onChange={setWorkweekDay}

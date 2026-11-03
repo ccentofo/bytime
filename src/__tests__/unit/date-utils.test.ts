@@ -7,6 +7,7 @@ import {
   getPeriodEndDate,
   getLastWeekdayInPeriod,
   DEFAULT_PERIOD_CONFIG,
+  sameSchedule,
   type PeriodConfig,
 } from '@/lib/date-utils';
 import type { CalendarDate } from '@/lib/calendar-date';
@@ -199,5 +200,28 @@ describe('period config snapshot — DCAA integrity', () => {
 
   it('DEFAULT_PERIOD_CONFIG is semimonthly (used only as the no-config-row fallback, never a parameter default)', () => {
     expect(DEFAULT_PERIOD_CONFIG.periodType).toBe('semimonthly');
+  });
+});
+
+describe('sameSchedule (feature-plan-ux-page-fixes.md C7, T-C7a)', () => {
+  const bi = (anchor: string, ws = 1): PeriodConfig => ({ periodType: 'biweekly', anchorDate: d(anchor), weekStartDay: ws });
+  it('biweekly: anchors ±14 days apart (including negative) are the same schedule; 7 days apart is not', () => {
+    expect(sameSchedule(bi('2026-01-05'), bi('2026-01-19'))).toBe(true);
+    expect(sameSchedule(bi('2026-01-05'), bi('2025-12-22'))).toBe(true);   // -14
+    expect(sameSchedule(bi('2026-01-05'), bi('2025-12-08'))).toBe(true);   // -28
+    expect(sameSchedule(bi('2026-01-05'), bi('2026-01-12'))).toBe(false);  // 7
+    expect(sameSchedule(bi('2026-01-05'), bi('2025-12-29'))).toBe(false);  // -7
+    expect(sameSchedule(bi('2026-01-05'), bi('2026-01-19', 0))).toBe(false); // week start differs
+  });
+  it('semimonthly and monthly ignore the anchor and week start; weekly compares only the week start', () => {
+    expect(sameSchedule(semimonthlyConfig, { ...semimonthlyConfig, anchorDate: d('2020-07-09'), weekStartDay: 0 })).toBe(true);
+    expect(sameSchedule(monthlyConfig, { ...monthlyConfig, anchorDate: d('2021-03-03') })).toBe(true);
+    expect(sameSchedule(weeklyConfig, { ...weeklyConfig, anchorDate: d('2026-03-02') })).toBe(true);
+    expect(sameSchedule(weeklyConfig, { ...weeklyConfig, weekStartDay: 0 })).toBe(false);
+    expect(sameSchedule(semimonthlyConfig, monthlyConfig)).toBe(false);
+  });
+  it('a null or invalid biweekly anchor → false, never a throw', () => {
+    expect(sameSchedule(bi('2026-01-05'), { ...bi('2026-01-05'), anchorDate: null as unknown as CalendarDate })).toBe(false);
+    expect(sameSchedule({ ...bi('2026-01-05'), anchorDate: 'not-a-date' as CalendarDate }, bi('2026-01-05'))).toBe(false);
   });
 });
