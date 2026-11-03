@@ -19,7 +19,7 @@ vi.mock('@/server/actions/labor-category-rates', () => ({
   correctLaborCategoryRate: actions.correct, removeLaborCategoryRateChange: actions.remove,
 }));
 vi.mock('@/server/actions/labor-categories', () => ({
-  createLaborCategory: vi.fn(), updateLaborCategory: vi.fn(), getAllLaborCategories: vi.fn(),
+  createLaborCategory: vi.fn(), updateLaborCategory: vi.fn(), getAllLaborCategories: vi.fn(), getAssignableLaborCategories: vi.fn(),
   assignUserToLaborCategory: vi.fn(), endUserLaborCategoryAssignment: vi.fn(), getUserLaborCategoryAssignments: vi.fn(),
 }));
 vi.mock('@/server/actions/clins', () => ({ getClinsByContract: vi.fn() }));

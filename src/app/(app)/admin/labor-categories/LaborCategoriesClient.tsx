@@ -26,6 +26,7 @@ import {
   createLaborCategory,
   updateLaborCategory,
   getAllLaborCategories,
+  getAssignableLaborCategories,
   assignUserToLaborCategory,
   endUserLaborCategoryAssignment,
   getUserLaborCategoryAssignments,
@@ -169,7 +170,7 @@ export function LaborCategoriesClient({
   const [isPending, startTransition] = useTransition();
   const [laborCats, setLaborCats] = useState<LaborCategory[]>(initialLaborCategories);
   const [assignments, setAssignments] = useState<UserLcatAssignment[]>(initialAssignments);
-  const [assignableLcats] = useState<AssignableLcat[]>(initialAssignableLcats);
+  const [assignableLcats, setAssignableLcats] = useState<AssignableLcat[]>(initialAssignableLcats);
 
   // Dated rates D2: the Rates modal and the current-rate lookups (all from the same laborCats state).
   const [ratesFor, setRatesFor] = useState<LaborCategory | null>(null);
@@ -238,6 +239,18 @@ export function LaborCategoriesClient({
     });
   }
 
+  /**
+   * Refetch the categories AND the assignable list together (feature-plan-ux-page-fixes.md C4): a created, edited,
+   * reactivated or deactivated category changes which ones can be assigned. A selection that's no longer assignable
+   * is cleared.
+   */
+  async function refreshLaborCategories() {
+    const [all, assignable] = await Promise.all([getAllLaborCategories(), getAssignableLaborCategories()]);
+    setLaborCats(all as LaborCategory[]);
+    setAssignableLcats(assignable as AssignableLcat[]);
+    setAssignLcatId((id) => (id && !assignable.some((a) => a.id === id) ? null : id));
+  }
+
   function handleLcatSubmit() {
     // Dated rates D1.6: editing never sends rates (they change only through the Rates schedule); create sets the starting rate.
     if (!lcatForm.lcatCode.trim() || !lcatForm.title.trim() || (!editingLcat && !lcatForm.hourlyRate.trim())) return;
@@ -272,8 +285,7 @@ export function LaborCategoriesClient({
           });
         }
 
-        const refreshed = await getAllLaborCategories();
-        setLaborCats(refreshed as LaborCategory[]);
+        await refreshLaborCategories();
         setLcatModalOpen(false);
       } catch {
         notifications.show({
@@ -292,8 +304,7 @@ export function LaborCategoriesClient({
       try {
         const result = await runAction(updateLaborCategory(lcat.id, { status: newStatus }), { errorTitle: 'Couldn’t update status' });
         if (!result.ok) return;
-        const refreshed = await getAllLaborCategories();
-        setLaborCats(refreshed as LaborCategory[]);
+        await refreshLaborCategories();
         notifications.show({
           title: 'Status Updated',
           message: `${lcat.lcatCode} is now ${newStatus}.`,

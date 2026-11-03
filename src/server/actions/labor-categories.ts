@@ -5,7 +5,7 @@ import { laborCategories, laborCategoryRates, userLaborCategories, users, clins,
 import { eq, and, asc, inArray } from 'drizzle-orm';
 import type { RateChange } from '@/lib/labor-rates';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
-import { validateRequired, validateStringLength, validateOptionalString, validateRate } from '@/lib/validation';
+import { validateRequired, validateStringLength, validateOptionalString, validateRate, validateUUID } from '@/lib/validation';
 import { isBefore, isCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { userAction } from '@/lib/action-result';
@@ -192,7 +192,21 @@ export async function assignUserToLaborCategory(data: {
 }) {
   return userAction(async () => {
     const actor = await requireAdminFresh();
+    // feature-plan-ux-page-fixes.md C4 (R4): only an assignable category — the same rule as getAssignableLaborCategories
+    // (an active category on an active CLIN of an active contract). After the guard, so guard-first tests still hold.
+    validateUUID(data.laborCategoryId, 'Labor category');
     const db = await getDbForWrite();
+    const [lcat] = await db
+      .select({ lcatStatus: laborCategories.status, clinStatus: clins.status, contractStatus: contracts.status })
+      .from(laborCategories)
+      .innerJoin(clins, eq(laborCategories.clinId, clins.id))
+      .innerJoin(contracts, eq(clins.contractId, contracts.id))
+      .where(eq(laborCategories.id, data.laborCategoryId))
+      .limit(1);
+    if (!lcat) throw new UserFacingError('That labor category no longer exists.');
+    if (lcat.lcatStatus !== 'active' || lcat.clinStatus !== 'active' || lcat.contractStatus !== 'active') {
+      throw new UserFacingError("This labor category can't be assigned because it, its CLIN or its contract is inactive.");
+    }
     // R2-6: explicit allowlist — never spread the caller's object into .values().
     const rows = await db.insert(userLaborCategories).values({
       userId: data.userId,
