@@ -127,6 +127,8 @@ export function QBOConfigClient({
   const [qboCustomers, setQboCustomers] = useState<Array<{ id: string; name: string }>>([]);
   const [qboItems, setQboItems] = useState<Array<{ id: string; name: string }>>([]);
   const [loadingQBO, setLoadingQBO] = useState(false);
+  // UX-4A-AUDIT.md M2: one flag for "QuickBooks data loaded", so each tab is mappable even when another list is empty.
+  const [qboLoaded, setQboLoaded] = useState(false);
   const [confirmDisconnectOpen, setConfirmDisconnectOpen] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
 
@@ -149,6 +151,7 @@ export function QBOConfigClient({
     setQboVendors(vendors);
     setQboCustomers(customers);
     setQboItems(items);
+    setQboLoaded(true);
     notifications.show({ title: 'QBO data loaded', message: `${employees.length} employees, ${vendors.length} vendors, ${customers.length} customers, ${items.length} service items`, color: 'success' });
   }
 
@@ -322,7 +325,7 @@ export function QBOConfigClient({
         </Group>
       </Paper>
 
-      {qboEmployees.length === 0 && (
+      {!qboLoaded && (
         <Alert color="signal" variant="light" mb="xl">
           Click <strong>&quot;Load QBO Data&quot;</strong> to fetch employees, customers, and service items from QuickBooks Online for mapping.
         </Alert>
@@ -358,7 +361,7 @@ export function QBOConfigClient({
             bytimeEntities={bytimeEmployees.map((e) => ({ id: e.id, name: e.fullName, detail: e.email }))}
             externalEntities={qboEmployees.map((e) => ({ value: e.id, label: `${e.name}${e.email ? ` (${e.email})` : ''}` }))}
             mappings={mappings}
-            loaded={qboEmployees.length > 0}
+            loaded={qboLoaded}
             busyRows={busyRows}
             onSave={handleSaveMapping}
             onClear={handleClearMapping}
@@ -377,7 +380,7 @@ export function QBOConfigClient({
             bytimeEntities={bytimeEmployees.map((e) => ({ id: e.id, name: e.fullName, detail: e.email }))}
             externalEntities={qboVendors.map((v) => ({ value: v.id, label: `${v.name}${v.email ? ` (${v.email})` : ''}` }))}
             mappings={mappings}
-            loaded={qboEmployees.length > 0}
+            loaded={qboLoaded}
             busyRows={busyRows}
             onSave={handleSaveMapping}
             onClear={handleClearMapping}
@@ -392,7 +395,7 @@ export function QBOConfigClient({
             bytimeEntities={bytimeContracts.map((c) => ({ id: c.id, name: c.name, detail: c.contractNumber }))}
             externalEntities={qboCustomers.map((c) => ({ value: c.id, label: c.name }))}
             mappings={mappings}
-            loaded={qboEmployees.length > 0}
+            loaded={qboLoaded}
             busyRows={busyRows}
             onSave={handleSaveMapping}
             onClear={handleClearMapping}
@@ -407,7 +410,7 @@ export function QBOConfigClient({
             bytimeEntities={bytimeClins.map((c) => ({ id: c.id, name: c.clinNumber, detail: c.description ?? '' }))}
             externalEntities={qboItems.map((i) => ({ value: i.id, label: i.name }))}
             mappings={mappings}
-            loaded={qboEmployees.length > 0}
+            loaded={qboLoaded}
             busyRows={busyRows}
             onSave={handleSaveMapping}
             onClear={handleClearMapping}

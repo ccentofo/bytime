@@ -9,6 +9,8 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
  */
 
 const h = vi.hoisted(() => ({
+  qboEmployees: [{ id: 'q2', name: 'Other Person' }, { id: 'q3', name: 'Bob QBO' }] as Array<{ id: string; name: string }>,
+  qboCustomers: [] as Array<{ id: string; name: string }>,
   refresh: vi.fn(),
   saveMapping: vi.fn<(...a: unknown[]) => Promise<unknown>>(),
   deleteMapping: vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ ok: true, data: undefined })),
@@ -19,9 +21,9 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: h.refresh }) })
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 vi.mock('@/server/actions/integrations', () => ({ saveMapping: h.saveMapping, deleteMapping: h.deleteMapping, disconnectIntegration: vi.fn(), toggleAutoSync: vi.fn() }));
 vi.mock('@/server/actions/qbo', () => ({
-  fetchQBOEmployeesForMapping: async () => ({ ok: true, data: [{ id: 'q2', name: 'Other Person' }, { id: 'q3', name: 'Bob QBO' }] }),
+  fetchQBOEmployeesForMapping: async () => ({ ok: true, data: h.qboEmployees }),
   fetchQBOVendorsForMapping: async () => ({ ok: true, data: [] }),
-  fetchQBOCustomersForMapping: async () => ({ ok: true, data: [] }),
+  fetchQBOCustomersForMapping: async () => ({ ok: true, data: h.qboCustomers }),
   fetchQBOServiceItemsForMapping: async () => ({ ok: true, data: [] }),
   triggerQBOSync: h.triggerQBOSync,
 }));
@@ -37,7 +39,7 @@ import { buttonByText, click, installDomStubs, mount, unmount, wait, type Mounte
 
 beforeAll(installDomStubs);
 let m: Mounted | undefined;
-beforeEach(() => { vi.clearAllMocks(); });
+beforeEach(() => { vi.clearAllMocks(); h.saveMapping.mockReset(); });   // no queued Once results leak between tests
 afterEach(() => { unmount(m); m = undefined; });
 
 const connection = (provider: string) => ({
@@ -117,6 +119,26 @@ describe('QuickBooks mapping rows (C13)', () => {
     await click(panel().querySelector('[aria-label="Remove mapping for Ann"]'));
     await wait();
     expect(row('Ann').textContent).toContain('Unmapped');
+  });
+
+  // UX-4A-AUDIT.md M2: each tab used to need QuickBooks employees before it could map anything.
+  it('M2: a company with no QuickBooks employees can still map contracts to customers', async () => {
+    h.qboEmployees = [];
+    h.qboCustomers = [{ id: 'cust-1', name: 'Navy Customer' }];
+    try {
+      m = await mount(<QBOConfigClient connection={connection('quickbooks')} mappings={[]} syncLogs={[]}
+        bytimeEmployees={EMPLOYEES} bytimeContracts={[{ id: 'k1', contractNumber: 'N-1', name: 'NAVAIR' }]} bytimeClins={[]} workspaceTimezone="America/New_York" />);
+      await click(buttonByText('Load QBO Data'));
+      await wait();
+      expect(m.container.textContent).not.toContain('to fetch employees, customers, and service items');
+      await click([...m.container.querySelectorAll('[role="tab"]')].find((t) => t.textContent?.startsWith('Contracts')));
+      h.saveMapping.mockResolvedValueOnce({ ok: true, data: { id: 'map-c-1' } });
+      await choose('QuickBooks match for NAVAIR', 'Navy Customer');
+      expect(h.saveMapping).toHaveBeenCalledWith(expect.objectContaining({ entityType: 'contract', bytimeEntityId: 'k1', externalEntityId: 'cust-1' }));
+    } finally {
+      h.qboEmployees = [{ id: 'q2', name: 'Other Person' }, { id: 'q3', name: 'Bob QBO' }];
+      h.qboCustomers = [];
+    }
   });
 
   it('Sync refreshes the route', async () => {
