@@ -164,4 +164,46 @@ describe('Contracts CLIN drawer (C1)', () => {
     expect(addButton().getAttribute('aria-disabled')).toBe('true');
     expect(document.getElementById(addButton().getAttribute('aria-describedby')!)!.textContent).toBe("Couldn't load CLINs");
   });
+
+  // UX-4A-AUDIT.md L2: the token paths the auditors' mutations got through ------------------------------------------
+  const slin = (id: string, clinId: string, slinNumber: string) => ({
+    id, clinId, slinNumber, description: null, fundedAmount: null, status: 'active' as const, createdAt: new Date(), updatedAt: new Date(),
+  });
+  const expandA1 = () => click(drawer().querySelector('button[aria-label="Expand SLINs"]'));
+
+  it('L2: a SLIN read from a previous opening of the drawer that resolves late doesn\'t overwrite the current one', async () => {
+    const stale = deferred<unknown[]>();
+    const fresh = deferred<unknown[]>();
+    h.getClinsByContract.mockResolvedValue([clin('a1', 'a', 'A-CLIN-1')]);
+    h.getSlinsByClin.mockReturnValueOnce(stale.promise).mockReturnValueOnce(fresh.promise);
+    await render();
+    await open(A);
+    await expandA1();                                         // first read, still pending
+    await open(B);
+    await open(A);                                            // a new opening: a new token
+    await expandA1();
+    await act(async () => { fresh.resolve([slin('s2', 'a1', 'FRESH-SLIN')]); });
+    await act(async () => { stale.resolve([slin('s1', 'a1', 'STALE-SLIN')]); });
+    await wait();
+    expect(drawer().textContent).toContain('FRESH-SLIN');
+    expect(drawer().textContent).not.toContain('STALE-SLIN');
+  });
+
+  it('L2: a CLIN status change that resolves after the drawer was reopened doesn\'t overwrite the fresh list', async () => {
+    const toggled = deferred<unknown>();
+    const inactive = { ...clin('a1', 'a', 'A-CLIN-1'), status: 'inactive' as const };
+    h.getClinsByContract.mockResolvedValue([inactive]);
+    h.updateClin.mockReturnValueOnce(toggled.promise);
+    await render();
+    await open(A);
+    await click([...drawer().querySelectorAll('button')].find((x) => x.textContent?.trim() === 'Activate'));
+    expect(h.updateClin).toHaveBeenCalledWith('a1', { status: 'active' });
+    await open(B);
+    await open(A);                                            // the fresh read still says inactive
+    await act(async () => { toggled.resolve({ ok: true, data: { ...inactive, status: 'active' } }); });
+    await wait();
+    const row = [...drawer().querySelectorAll('tr')].find((tr) => tr.textContent?.includes('A-CLIN-1'))!;
+    expect(row.textContent).toContain('Activate');
+    expect(row.textContent).not.toContain('Deactivate');
+  });
 });
