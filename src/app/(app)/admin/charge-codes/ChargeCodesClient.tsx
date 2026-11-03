@@ -42,7 +42,12 @@ type ChargeCodeRow = {
   createdAt: Date;
   /** Dated rates D3: laborCategoryId is the STARTING category; these are its dated changes. */
   categoryChanges: CategoryChange[];
+  /** The code has recorded hours, so its CLIN can't change (feature-plan-ux-page-fixes.md C5). */
+  hasHours: boolean;
 };
+
+/** The Contract Select's option for an edited code's own CLIN when that CLIN (or its contract) is inactive (C5). */
+const CURRENT_PAIR = '__current__';
 
 type ClinOption = { id: string; clinNumber: string; description: string | null };
 type ContractOption = { id: string; name: string; contractNumber: string; clins: ClinOption[] };
@@ -88,7 +93,8 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
     setCodes((prev) => prev.map((c) => (c.id === view.chargeCodeId ? { ...c, laborCategoryId: view.starting, categoryChanges: view.changes } : c)));
   }
   const [modalOpen, setModalOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingRow, setEditingRow] = useState<ChargeCodeRow | null>(null);
+  const editingId = editingRow?.id ?? null;
   const [form, setForm] = useState<CodeForm>(EMPTY_FORM);
   const [isPending, startTransition] = useTransition();
   const [newClassName, setNewClassName] = useState('');
@@ -105,20 +111,20 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
   }
 
   function openCreate() {
-    setEditingId(null);
+    setEditingRow(null);
     setForm(EMPTY_FORM);
     setModalOpen(true);
   }
 
   function openEdit(row: ChargeCodeRow) {
-    // Find the contract for this code's CLIN
+    // The page lists only ACTIVE contract + CLIN pairs: a code on an inactive CLIN gets its pair as an extra option.
     const contract = contracts.find((c) => c.clins.some((cl) => cl.id === row.clinId));
-    setEditingId(row.id);
+    setEditingRow(row);
     setForm({
       code: row.code,
       name: row.name,
       description: row.description ?? '',
-      contractId: contract?.id ?? '',
+      contractId: contract?.id ?? CURRENT_PAIR,
       clinId: row.clinId,
       classId: row.classId ?? '',
       workLocation: row.workLocation ?? '',
@@ -128,16 +134,19 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
   }
 
   async function handleSave() {
+    // A CLIN is required on create; on edit only when the contract was changed (choosing a contract clears the CLIN).
     if (!form.code.trim() || !form.name.trim() || !form.clinId) {
-      notifications.show({ title: 'Required fields missing', message: 'Code, Name, and CLIN are required.', color: 'red' });
+      notifications.show({ title: 'Required fields missing', message: editingRow ? 'Code and Name are required, and a CLIN when you change the contract.' : 'Code, Name, and CLIN are required.', color: 'red' });
       return;
     }
+    // Edit: send clinId only when it changed — the server refuses a CLIN change once hours or labor categories exist.
+    const clinChange = editingRow && form.clinId !== editingRow.clinId ? { clinId: form.clinId } : {};
     startTransition(async () => {
       const result = editingId
         ? await runAction(updateChargeCode(editingId, {
             code: form.code.trim(), name: form.name.trim(),
             description: form.description || undefined,
-            clinId: form.clinId, classId: form.classId || null,
+            ...clinChange, classId: form.classId || null,
             workLocation: (form.workLocation as 'onsite' | 'telework' | 'other') || null,
             billable: form.billable,
           }), { errorTitle: 'Couldn’t update charge code' })
@@ -213,10 +222,22 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
     });
   }
 
+  // C5: what the edit form may do with the code's CLIN.
+  const editClinActive = !editingRow || contracts.some((c) => c.clins.some((cl) => cl.id === editingRow.clinId));
+  const lockReason: 'hours' | 'categories' | null = !editingRow ? null
+    : editingRow.hasHours ? 'hours'
+      : (editingRow.laborCategoryId || editingRow.categoryChanges?.length) ? 'categories' : null;
+  const contractOptions = [
+    ...(editingRow && !editClinActive && !lockReason
+      ? [{ value: CURRENT_PAIR, label: `${editingRow.contractNumber} · CLIN ${editingRow.clinNumber} (inactive)` }] : []),
+    ...contracts.map((c) => ({ value: c.id, label: `${c.contractNumber} — ${c.name}` })),
+  ];
   const selectedContract = contracts.find((c) => c.id === form.contractId);
-  const clinOptions = selectedContract?.clins.map((cl) => ({
-    value: cl.id, label: `${cl.clinNumber}${cl.description ? ` — ${cl.description}` : ''}`,
-  })) ?? [];
+  const clinOptions = form.contractId === CURRENT_PAIR && editingRow
+    ? [{ value: editingRow.clinId, label: `${editingRow.clinNumber} (inactive)` }]
+    : selectedContract?.clins.map((cl) => ({
+      value: cl.id, label: `${cl.clinNumber}${cl.description ? ` — ${cl.description}` : ''}`,
+    })) ?? [];
 
   const columns: MRT_ColumnDef<ChargeCodeRow>[] = [
     { accessorKey: 'code', header: 'Code', size: 160 },
@@ -301,14 +322,31 @@ export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborC
           <Textarea label="Description" placeholder="Optional description"
             value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
 
-          <Select label="Contract" placeholder="Select contract" required
-            data={contracts.map((c) => ({ value: c.id, label: `${c.contractNumber} — ${c.name}` }))}
-            value={form.contractId} onChange={(v) => setForm((f) => ({ ...f, contractId: v ?? '', clinId: '' }))} />
+          {lockReason && editingRow ? (
+            // C5: the server won't move this code to another CLIN — show where it is, read-only, and why.
+            <TextInput
+              label="Contract and CLIN"
+              readOnly
+              value={`${editingRow.contractNumber} — ${editingRow.contractName} · CLIN ${editingRow.clinNumber}`}
+              description={lockReason === 'hours'
+                ? "This code has recorded hours, so its CLIN can't change. Create a new charge code to use a different CLIN."
+                : "Remove this code's labor categories before moving it to another CLIN."}
+              data-testid="charge-code-clin-locked"
+            />
+          ) : (
+            <>
+              <Select label="Contract" placeholder="Select contract" required
+                data={contractOptions}
+                description={editingRow && !editClinActive ? 'This CLIN or its contract is inactive. Choose another CLIN to move the code, or leave it to edit the other fields.' : undefined}
+                value={form.contractId} onChange={(v) => setForm((f) => ({ ...f, contractId: v ?? '', clinId: '' }))} />
 
-          <Select label="CLIN" placeholder="Select CLIN" required
-            data={clinOptions} value={form.clinId}
-            onChange={(v) => setForm((f) => ({ ...f, clinId: v ?? '' }))}
-            disabled={!form.contractId} />
+              {/* null, not '': Mantine keeps showing the previous option's label for a value it can't find. */}
+              <Select label="CLIN" placeholder="Select CLIN" required
+                data={clinOptions} value={form.clinId || null}
+                onChange={(v) => setForm((f) => ({ ...f, clinId: v ?? '' }))}
+                disabled={!form.contractId} />
+            </>
+          )}
 
           <Select label="Work Location" placeholder="Not specified"
             data={WORK_LOCATION_OPTIONS} value={form.workLocation}

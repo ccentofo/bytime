@@ -52,7 +52,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { getDetailedCostReport, getEmployeeSummaryReport } from '@/server/actions/reports';
 import { getContractSummaries, getPeriodCostReport } from '@/server/actions/dashboard';
 import { getUnpricedHoursReport, getOverlappingAssignmentsReport, endUserLaborCategoryAssignment } from '@/server/actions/labor-categories';
-import { updateChargeCode, reactivateChargeCode, deactivateChargeCode } from '@/server/actions/charge-codes';
+import { updateChargeCode, reactivateChargeCode, deactivateChargeCode, listChargeCodes } from '@/server/actions/charge-codes';
 import { correctChargeCodeCategory } from '@/server/actions/charge-code-categories';
 import { saveTimesheetBatch, getChargeCodesForUser } from '@/server/actions/timesheet';
 import { GET as getV1Costs } from '@/app/api/v1/costs/route';
@@ -301,5 +301,17 @@ describe('cost basis (certified-outputs C3)', () => {
     const log = await db().select().from(schema.adminChangeLog).where(eq(schema.adminChangeLog.entityId, code.id));
     expect(log.map((l) => l.action)).toEqual(['deactivated', 'reactivated']);
     expect(log[1].newValue).toEqual({ isActive: true, stillAssigned: 1 });
+  });
+
+  // feature-plan-ux-page-fixes.md C5 / T-C5c: listChargeCodes.hasHours is correlated to EACH code (the outer
+  // charge_codes.id written literally): true for the code with entries, false for an unused code — even while another
+  // code has entries.
+  it('T-C5c: hasHours is true for a used code and false for an unused one while another code has entries', async () => {
+    const used = await createTestChargeCode(clinA.id);
+    const unused = await createTestChargeCode(clinB.id);
+    await entry({ chargeCodeId: used.id, clinId: clinA.id });
+    const rows = await listChargeCodes();
+    expect(rows.find((r) => r.id === used.id)!.hasHours).toBe(true);
+    expect(rows.find((r) => r.id === unused.id)!.hasHours).toBe(false);
   });
 });

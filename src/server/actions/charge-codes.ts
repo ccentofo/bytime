@@ -2,7 +2,7 @@
 
 import { getDb, getDbForWrite } from '@/db';
 import { chargeCodes, chargeCodeLaborCategories, costClasses, userChargeCodes, clins, contracts, slins, laborCategories, users, timesheetEntries } from '@/db/schema';
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, and, inArray, sql } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { UserFacingError } from '@/lib/errors';
 import {
@@ -59,6 +59,10 @@ export async function listChargeCodes() {
       billable: chargeCodes.billable,
       isActive: chargeCodes.isActive,
       createdAt: chargeCodes.createdAt,
+      // feature-plan-ux-page-fixes.md C5: a code with recorded hours can't change CLIN (the server refuses it), so the
+      // edit form shows its CLIN read-only. The outer column is written LITERALLY (charge_codes.id): an interpolated
+      // ${chargeCodes.id} renders unqualified in a single-table select and would bind to te.id (UX-3 lesson).
+      hasHours: sql<boolean>`exists(select 1 from timesheet_entries te where te.charge_code_id = charge_codes.id)`,
     })
     .from(chargeCodes)
     .innerJoin(clins, eq(chargeCodes.clinId, clins.id))

@@ -15,6 +15,8 @@ export function installDomStubs(): void {
     writable: true,
     value: (query: string) => ({ matches: false, media: query, onchange: null, addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false }),
   });
+  // Mantine's Combobox scrolls the selected option into view on a timer; jsdom has no layout (an uncaught TypeError).
+  Element.prototype.scrollIntoView ??= function scrollIntoView() {};
 }
 
 export interface Mounted { container: HTMLDivElement; root: Root }
