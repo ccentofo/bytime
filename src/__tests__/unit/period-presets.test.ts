@@ -91,4 +91,14 @@ describe('resolvePeriodRange (K-10 companion)', () => {
     expect(await resolvePeriodRange({ kind: 'custom', start: '2026-02-01', end: '2026-01-31' }))
       .toEqual({ ok: false, code: 'validation', error: 'The end date must be on or after the start date.' });
   });
+
+  it('UX-4B1-AUDIT L8: a malformed custom date → "Enter valid dates." (a validation result, not an internal error)', async () => {
+    for (const [start, end] of [['2026-02-30', '2026-03-01'], ['2026-01-01', 'soon'], [undefined, '2026-01-01']]) {
+      expect(await resolvePeriodRange({ kind: 'custom', start, end } as never)).toEqual({ ok: false, code: 'validation', error: 'Enter valid dates.' });
+    }
+  });
+
+  it('UX-4B1-AUDIT L11: a one-day custom range reads "Nov 1, 2026", not "Nov 1 – 1, 2026"', async () => {
+    expect(await resolvePeriodRange({ kind: 'custom', start: '2026-11-01', end: '2026-11-01' })).toEqual(ok({ start: '2026-11-01', end: '2026-11-01', label: 'Nov 1, 2026' }));
+  });
 });

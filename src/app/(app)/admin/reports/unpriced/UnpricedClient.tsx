@@ -10,11 +10,12 @@ import { Notice } from '@/components/ui/Notice';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { PeriodPresetSelect, CUSTOM_PRESET, periodSelectionReady, type PeriodSelection } from '@/components/ui/PeriodPresetSelect';
 import { useBusy } from '@/components/ui/useBusy';
+import { FilterChip } from '@/components/ui/FilterChip';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { useAppTable, numericColumn } from '@/components/table/mrtDefaults';
 import { resolvePeriodRange } from '@/server/actions/periods';
-import type { OverlapRow, UnpricedGroup, UnpricedReport } from '@/server/internal/cost-basis';
-import { unpricedFiltersQuery, type UnpricedFilterInput } from '@/lib/unpriced-filters';
+import type { OverlapRow, UnpricedGroup, UnpricedReport, UnpricedScopeNames } from '@/server/internal/cost-basis';
+import { lineScopeLabel, unpricedFiltersQuery, type UnpricedFilterInput } from '@/lib/unpriced-filters';
 import { CURRENT_RATES_NOTE, UNPRICED_REPORT_HREF } from '@/lib/cost-labels';
 import { formatCount, formatDate, formatHours } from '@/lib/format';
 import { downloadFile } from '@/lib/download';
@@ -77,7 +78,8 @@ function OverlapTable({ pairs }: { pairs: OverlapRow[] }) {
 }
 
 export function UnpricedClient({ report, filters, period, contracts }: {
-  report: UnpricedReport;
+  /** `scope` names the CLIN / SLIN behind the filters (the scope chip, UX-4B1-AUDIT M2). */
+  report: UnpricedReport & { scope?: UnpricedScopeNames };
   filters: UnpricedFilterInput;
   period?: string;
   contracts: Array<{ id: string; name: string; contractNumber: string }>;
@@ -85,11 +87,15 @@ export function UnpricedClient({ report, filters, period, contracts }: {
   const router = useRouter();
   const busy = useBusy();
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const [selection, setSelection] = useState<PeriodSelection>(() => (
-    filters.startDate || filters.endDate
-      ? { preset: PRESETS.some((p) => p.value === period) ? period! : CUSTOM_PRESET, start: (filters.startDate ?? null) as CalendarDate | null, end: (filters.endDate ?? null) as CalendarDate | null }
-      : { preset: 'allTime', start: null, end: null }
-  ));
+  // UX-4B1-AUDIT L10: the period comes from the URL on every render (back / forward stay in sync). A choice that hasn't
+  // navigated yet (a half-filled custom range, a preset resolving) is a draft for THIS URL only.
+  const urlSelection: PeriodSelection = filters.startDate || filters.endDate
+    ? { preset: PRESETS.some((p) => p.value === period) ? period! : CUSTOM_PRESET, start: (filters.startDate ?? null) as CalendarDate | null, end: (filters.endDate ?? null) as CalendarDate | null }
+    : { preset: 'allTime', start: null, end: null };
+  const urlKey = `${filters.startDate ?? ''}|${filters.endDate ?? ''}|${period ?? ''}`;
+  const [draft, setDraft] = useState<{ key: string; selection: PeriodSelection } | null>(null);
+  const selection = draft && draft.key === urlKey ? draft.selection : urlSelection;
+  const setSelection = (next: PeriodSelection) => setDraft({ key: urlKey, selection: next });
   const [periodError, setPeriodError] = useState<string | null>(null);
 
   const go = (next: UnpricedFilterInput, nextPeriod?: string) => {
@@ -177,6 +183,13 @@ export function UnpricedClient({ report, filters, period, contracts }: {
           onChange={(v) => go({ ...filters, contractId: v || undefined, clinId: undefined, slinId: undefined }, selection.preset)}
         />
         <PeriodPresetSelect label="Period" presets={PRESETS} value={selection} onChange={(v) => { void changePeriod(v); }} w={220} />
+        {(filters.clinId || filters.slinId) && (
+          <FilterChip
+            label={(report.scope && lineScopeLabel(report.scope)) ?? (filters.slinId ? 'SLIN' : 'CLIN')}
+            onRemove={() => go({ ...filters, clinId: undefined, slinId: undefined }, selection.preset)}
+            data-testid="unpriced-scope-chip"
+          />
+        )}
         <Switch
           label="Show overlaps only" mb={8}
           checked={filters.reason === 'conflict'}
@@ -191,7 +204,7 @@ export function UnpricedClient({ report, filters, period, contracts }: {
 
       {nothing ? (
         <Paper withBorder radius="md" p="xl" data-testid="unpriced-empty">
-          <Text ta="center">No unpriced hours. Every recorded hour has a labor-category rate.</Text>
+          <Text ta="center">{filtered ? 'No unpriced hours in this view.' : 'No unpriced hours. Every recorded hour has a labor-category rate.'}</Text>
         </Paper>
       ) : report.groups.length > 0 ? (
         <MantineReactTable table={table} />

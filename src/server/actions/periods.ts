@@ -141,8 +141,9 @@ export async function resolvePeriodRange(preset: PeriodPreset): Promise<ActionRe
     if (kind === 'allTime') return { start: null, end: null, label: 'All time' };
     if (kind === 'custom') {
       const { start, end } = preset as { start: unknown; end: unknown };
-      const s = parseCalendarDate(start);
-      const e = parseCalendarDate(end);
+      // UX-4B1-AUDIT L8: a malformed date is the user's message, never an internal error.
+      let s: CalendarDate, e: CalendarDate;
+      try { s = parseCalendarDate(start); e = parseCalendarDate(end); } catch { throw new UserFacingError('Enter valid dates.'); }
       if (isBefore(e, s)) throw new UserFacingError('The end date must be on or after the start date.');
       return { start: s, end: e, label: periodLabel(s, e) };
     }

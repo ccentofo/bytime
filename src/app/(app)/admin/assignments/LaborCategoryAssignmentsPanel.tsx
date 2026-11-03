@@ -1,11 +1,12 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { Button, CloseButton, Group, Modal, Paper, Select, Stack, Text, Title, VisuallyHidden } from '@mantine/core';
+import { Button, Group, Modal, Paper, Select, Stack, Text, Title, VisuallyHidden } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
 import { notifications } from '@mantine/notifications';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { RowActions } from '@/components/ui/RowActions';
+import { FilterChip } from '@/components/ui/FilterChip';
 import { useBusy } from '@/components/ui/useBusy';
 import { useLastTarget } from '@/components/ui/useRowState';
 import { useAppTable } from '@/components/table/mrtDefaults';
@@ -235,12 +236,7 @@ export function LaborCategoryAssignmentsPanel({
 
       {chips.length > 0 && (
         <Group gap="xs" mb="sm" data-testid="lcat-filter-chips">
-          {chips.map((c) => (
-            <span key={c.key} className={classes.chip} data-testid={`lcat-chip-${c.key}`}>
-              {c.label}
-              <CloseButton size="xs" aria-label={`Remove filter ${c.label}`} onClick={() => onRemoveFilter(c.key)} />
-            </span>
-          ))}
+          {chips.map((c) => <FilterChip key={c.key} label={c.label} onRemove={() => onRemoveFilter(c.key)} data-testid={`lcat-chip-${c.key}`} />)}
         </Group>
       )}
 

@@ -28,7 +28,7 @@ vi.mock('@/lib/session', async (importOriginal) => {
   return { ...actual, requireSession: admin, requireAdmin: admin, requireAdminFresh: admin, getSessionUser: admin };
 });
 
-import { unpricedReport, overlappingAssignments } from '@/server/internal/cost-basis';
+import { unpricedReport, overlappingAssignments, overlapsInScope, allUnpricedGroups } from '@/server/internal/cost-basis';
 import { contractBurnSummary } from '@/server/internal/dashboard';
 import { GET } from '@/app/api/reports/unpriced-xlsx/route';
 
@@ -58,7 +58,7 @@ async function seed() {
   await entry(rob.id, slinCode, '2026-03-04', '6.00');             // on SLIN s1, no SLIN categories → decided at CLIN c1 → conflict
   await entry(pat.id, code, '2026-03-02', '7.00');                 // priced (not unpriced)
   await db.insert(schema.timesheetEntries).values({ userId: emily.id, indirectCodeId: oh.id, entryDate: '2026-03-02', hours: '8.00', revisionNumber: 1, createdBy: emily.id });
-  return { emily, rob, army, other, c1, code };
+  return { emily, rob, army, other, c1, s1, code };
 }
 
 describe('unpricedGroups / unpricedReport (U-1, U-1b)', () => {
@@ -83,6 +83,21 @@ describe('unpricedGroups / unpricedReport (U-1, U-1b)', () => {
     expect(g.overlaps).toHaveLength(1);
     expect(g.overlaps[0]).toMatchObject({ level: 'clin', slinId: null });
     expect(g.fix).toMatchObject({ kind: 'end-overlap', assignmentIds: expect.arrayContaining([g.overlaps[0].a.assignmentId, g.overlaps[0].b.assignmentId]) });
+  });
+
+  it('UX-4B1-AUDIT M1: SLIN-scoped (with or without the CLIN), the SLIN entry still gets its CLIN-level pair; the Excel lists it', async () => {
+    const { c1, s1 } = await seed();
+    for (const filters of [{ slinId: s1.id }, { clinId: c1.id, slinId: s1.id }]) {
+      const r = await unpricedReport(getTestDb(), filters);
+      const g = r.groups.find((x) => x.reason === 'conflict')!;
+      expect(g.overlaps, JSON.stringify(filters)).toHaveLength(1);
+      expect(g.overlaps[0]).toMatchObject({ level: 'clin', clinId: c1.id, slinId: null });
+      expect(g.fix).toMatchObject({ kind: 'end-overlap', assignmentIds: expect.arrayContaining([g.overlaps[0].a.assignmentId, g.overlaps[0].b.assignmentId]) });
+      expect(r.totals.overlaps).toBeGreaterThanOrEqual(1);
+      expect([...r.unattachedOverlaps, ...r.outOfViewOverlaps]).toEqual([]);
+      expect((await overlapsInScope(getTestDb(), filters)).map((p) => p.employeeName)).toEqual(['Robert Taylor']);
+      expect((await allUnpricedGroups(getTestDb(), filters)).find((x) => x.reason === 'conflict')!.overlaps).toHaveLength(1);
+    }
   });
 
   it('truncation keeps exact totals', async () => {

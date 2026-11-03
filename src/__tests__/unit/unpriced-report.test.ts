@@ -79,6 +79,32 @@ describe('assembleUnpricedReport (U-1, U-1b)', () => {
     expect(r.groups[1].overlaps).toEqual([slinPair]);
   });
 
+  it('UX-4B1-AUDIT M1: under a SLIN filter the CLIN-level pair still attaches and counts; another CLIN\'s pair stays out', () => {
+    const clinPair = pair({ level: 'clin', clinId: 'c1', slinId: null });
+    const otherClin = pair({ level: 'clin', clinId: 'c2', slinId: null, userId: 'u9', a: side('a9', '2027-01-01'), b: side('b9', '2027-02-01') });
+    const r = assembleUnpricedReport({
+      rows: [row({ basis: 'conflict', level: 'clin', userId: 'u2', loc: 'c1' })],   // SLIN s1 entries decided at CLIN c1
+      truncated: false, totals, allPairs: [clinPair, otherClin],
+      ranges: [{ level: 'clin', userId: 'u2', loc: 'c1', first: '2026-03-02', last: '2026-03-20' }],
+      filters: { slinId: 's1' }, slinClinId: 'c1',
+    });
+    expect(r.groups[0].overlaps).toEqual([clinPair]);
+    expect(r.groups[0].fix).toEqual({ kind: 'end-overlap', userId: 'u2', assignmentIds: ['a1', 'b1'] });
+    expect(r.totals.overlaps).toBe(1);
+    expect(r.unattachedOverlaps).toEqual([]);
+    // Attachment never depends on the scope: even without the SLIN's CLIN, the exact location match attaches the pair.
+    const noClin = assembleUnpricedReport({
+      rows: [row({ basis: 'conflict', level: 'clin', userId: 'u2', loc: 'c1' })], truncated: false, totals, allPairs: [clinPair],
+      ranges: [{ level: 'clin', userId: 'u2', loc: 'c1', first: '2026-03-02', last: '2026-03-20' }], filters: { slinId: 's1' },
+    });
+    expect(noClin.groups[0].overlaps).toEqual([clinPair]);
+    expect(noClin.totals.overlaps).toBe(1);
+    // An unattached CLIN-level pair on the SLIN's CLIN is in scope; one elsewhere isn't.
+    const future = pair({ level: 'clin', clinId: 'c1', slinId: null, userId: 'u5', a: side('a5', '2027-01-01'), b: side('b5', '2027-02-01') });
+    const r2 = assembleUnpricedReport({ rows: [], truncated: false, totals, allPairs: [future, otherClin], ranges: [], filters: { slinId: 's1' }, slinClinId: 'c1' });
+    expect(r2.unattachedOverlaps).toEqual([future]);
+  });
+
   it('a pair attaches only to the same employee and only when its window meets the group\'s dates', () => {
     const otherUser = pair({ userId: 'u9' });
     const ended = pair({ a: side('a3', '2025-01-01', '2025-06-30'), b: side('b3', '2025-03-01', '2025-12-31') });

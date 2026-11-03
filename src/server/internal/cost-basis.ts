@@ -516,9 +516,21 @@ const toGroup = (r: GroupRow, overlaps: OverlapRow[]): UnpricedGroup => {
   };
 };
 
-/** Overlapping pairs in the filters' contract / CLIN / SLIN scope. */
-const inScope = (p: OverlapRow, f: UnpricedFilters) =>
-  (!f.contractId || p.contractId === f.contractId) && (!f.clinId || p.clinId === f.clinId) && (!f.slinId || p.slinId === f.slinId);
+/**
+ * Overlapping pairs in the filters' contract / CLIN / SLIN scope. Under a SLIN filter, a CLIN-level pair on that SLIN's
+ * CLIN is in scope too: a SLIN entry is decided at the CLIN level when the SLIN has no candidates (UX-4B1-AUDIT M1).
+ */
+const inScope = (p: OverlapRow, f: UnpricedFilters, slinClinId: string | null = null) =>
+  (!f.contractId || p.contractId === f.contractId) && (!f.clinId || p.clinId === f.clinId)
+  && (!f.slinId || p.slinId === f.slinId || (p.level === 'clin' && slinClinId !== null && p.clinId === slinClinId));
+
+/** The CLIN of the filtered SLIN (the URL's clinId when given, else one lookup), or null with no SLIN filter. */
+async function slinClinOf(db: Pick<ReadDb, 'select'>, f: UnpricedFilters): Promise<string | null> {
+  if (!f.slinId) return null;
+  if (f.clinId) return f.clinId;
+  const [row] = await db.select({ clinId: slins.clinId }).from(slins).where(eq(slins.id, f.slinId));
+  return row?.clinId ?? null;
+}
 
 /**
  * The whole report (§4.4.1): up to `limit` groups (truncated beyond, totals still exact), each conflict group with
@@ -526,41 +538,46 @@ const inScope = (p: OverlapRow, f: UnpricedFilters) =>
  * hours are all outside it. totals.overlaps counts every pair in scope — with no filters, Home's overlap count.
  */
 export async function unpricedReport(db: Pick<ReadDb, 'select'>, filters: UnpricedFilters, { limit = 1000 }: { limit?: number } = {}): Promise<UnpricedReport> {
-  const [{ rows, truncated }, totals, allPairs, ranges] = await Promise.all([
+  const [{ rows, truncated }, totals, allPairs, ranges, slinClinId] = await Promise.all([
     unpricedGroupRows(db, filters, { limit }),
     unpricedTotals(db, filters),
     overlappingAssignments(db),
     unfilteredConflictRanges(db),
+    slinClinOf(db, filters),
   ]);
-  return assembleUnpricedReport({ rows, truncated, totals, allPairs, ranges, filters });
+  return assembleUnpricedReport({ rows, truncated, totals, allPairs, ranges, filters, slinClinId });
 }
 
 /**
- * Pure: the report from its query results (exported for unit tests). Pairs are scoped by the filters' contract / CLIN /
- * SLIN; a conflict group takes the pairs at its location (by level) whose overlap window meets its dates; a pair with
- * no conflict hours at all (judged on the UNFILTERED ranges) is unattached; under a filter, a pair with hours but none
- * in view is out of view.
+ * Pure: the report from its query results (exported for unit tests). A conflict group takes, from ALL pairs, the ones at
+ * its location (by level, user and location — already exact) whose overlap window meets its dates (UX-4B1-AUDIT M1: a
+ * SLIN view keeps the CLIN-level pairs behind its entries). The other lists are scoped by the filters' contract / CLIN
+ * / SLIN: a pair with no conflict hours at all (judged on the UNFILTERED ranges) is unattached; under a filter, a pair
+ * with hours but none in view is out of view. totals.overlaps counts the scoped and attached pairs.
  */
 export function assembleUnpricedReport(input: {
   rows: GroupRow[]; truncated: boolean; totals: { hours: number; groups: number; employees: number };
   allPairs: OverlapRow[]; ranges: Array<{ level: CostBasisLevel; userId: string; loc: string; first: string | null; last: string | null }>;
   filters: UnpricedFilters;
+  /** The filtered SLIN's CLIN (slinClinOf), so CLIN-level pairs there count as in scope. */
+  slinClinId?: string | null;
 }): UnpricedReport {
   const { rows, truncated, totals, allPairs, ranges, filters } = input;
-  const pairs = allPairs.filter((p) => inScope(p, filters));
-  const groups = rows.map((r) => toGroup(r, pairs));
+  const pairs = allPairs.filter((p) => inScope(p, filters, input.slinClinId ?? null));
+  const groups = rows.map((r) => toGroup(r, allPairs));
   const attachedPairs = new Set(groups.flatMap((g) => g.overlaps));
   // A group always has entries, so MIN/MAX are never null here.
   const hasAnyHours = (p: OverlapRow) => ranges.some((r) => pairAt(p, r.level, r.userId, r.loc) && intersects(p, r.first ?? '', r.last ?? ''));
   const filtered = !!(filters.startDate || filters.endDate || filters.contractId || filters.clinId || filters.slinId || filters.reason);
   const unattached = pairs.filter((p) => !attachedPairs.has(p) && !hasAnyHours(p));
   const outOfView = filtered ? pairs.filter((p) => !attachedPairs.has(p) && hasAnyHours(p)) : [];
-  return { totals: { ...totals, overlaps: pairs.length }, groups, unattachedOverlaps: unattached, outOfViewOverlaps: outOfView, truncated };
+  const counted = new Set([...pairs, ...attachedPairs]);
+  return { totals: { ...totals, overlaps: counted.size }, groups, unattachedOverlaps: unattached, outOfViewOverlaps: outOfView, truncated };
 }
 
 /** Every group for the Excel download, fetched in pages of `pageSize` (no cap), in the report's deterministic order. */
 export async function allUnpricedGroups(db: Pick<ReadDb, 'select'>, filters: UnpricedFilters, pageSize = 5000): Promise<UnpricedGroup[]> {
-  const pairs = (await overlappingAssignments(db)).filter((p) => inScope(p, filters));
+  const pairs = await overlappingAssignments(db); // attached by exact location, so never out of scope (M1)
   const out: UnpricedGroup[] = [];
   for (let offset = 0; ; offset += pageSize) {
     const { rows, truncated } = await unpricedGroupRows(db, filters, { limit: pageSize, offset });
@@ -569,8 +586,35 @@ export async function allUnpricedGroups(db: Pick<ReadDb, 'select'>, filters: Unp
   }
 }
 
-/** Every overlapping pair in the filters' contract / CLIN / SLIN scope (the Excel "Overlaps" sheet). */
+/** Every overlapping pair in the filters' contract / CLIN / SLIN scope (the Excel "Overlaps" sheet; M1 for SLINs). */
 export async function overlapsInScope(db: Pick<ReadDb, 'select'>, filters: UnpricedFilters): Promise<OverlapRow[]> {
-  return (await overlappingAssignments(db)).filter((p) => inScope(p, filters));
+  const [pairs, slinClinId] = await Promise.all([overlappingAssignments(db), slinClinOf(db, filters)]);
+  return pairs.filter((p) => inScope(p, filters, slinClinId));
+}
+
+export interface UnpricedScopeNames {
+  contract: string | null;
+  clinNumber: string | null;
+  slinNumber: string | null;
+}
+
+/**
+ * The names behind the filters' contract / CLIN / SLIN ids (UX-4B1-AUDIT M2, L8): the page's scope chip and the Excel
+ * scope line. A SLIN brings its CLIN's number. Unknown ids give null. At most two small reads, none with no ids.
+ */
+export async function unpricedScopeNames(db: Pick<ReadDb, 'select'>, f: UnpricedFilters): Promise<UnpricedScopeNames> {
+  const [contract, line] = await Promise.all([
+    f.contractId
+      ? db.select({ name: contracts.name, number: contracts.contractNumber }).from(contracts).where(eq(contracts.id, f.contractId))
+      : Promise.resolve([]),
+    f.slinId
+      ? db.select({ clinNumber: clins.clinNumber, slinNumber: slins.slinNumber }).from(slins).innerJoin(clins, eq(slins.clinId, clins.id)).where(eq(slins.id, f.slinId))
+      : f.clinId
+        ? db.select({ clinNumber: clins.clinNumber, slinNumber: sql<string | null>`NULL` }).from(clins).where(eq(clins.id, f.clinId))
+        : Promise.resolve([]),
+  ]);
+  const c = contract[0] as { name: string; number: string } | undefined;
+  const l = line[0] as { clinNumber: string; slinNumber: string | null } | undefined;
+  return { contract: c ? `${c.name} (${c.number})` : null, clinNumber: l?.clinNumber ?? null, slinNumber: l?.slinNumber ?? null };
 }
 

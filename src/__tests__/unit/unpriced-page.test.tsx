@@ -14,6 +14,10 @@ vi.mock('@/server/actions/periods', () => ({ resolvePeriodRange: vi.fn(async () 
 
 import { UnpricedClient } from '@/app/(app)/admin/reports/unpriced/UnpricedClient';
 import type { OverlapRow, UnpricedGroup, UnpricedReport } from '@/server/internal/cost-basis';
+import { act } from 'react';
+import { MantineProvider } from '@mantine/core';
+import { theme } from '@/theme';
+import { WorkspaceModeProvider } from '@/components/shell/WorkspaceMode';
 import { click, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
 
 beforeAll(installDomStubs);
@@ -122,5 +126,42 @@ describe('Unpriced hours page (U-2)', () => {
     await wait();
     expect(fetchMock.mock.calls[0][0]).toBe('/api/reports/unpriced-xlsx?start=2026-01-01&end=2026-01-31');
     expect(m.container.querySelector('[data-testid="download-error"]')!.textContent).toBe('There are no unpriced hours or overlapping assignments to download.');
+  });
+
+  it('UX-4B1-AUDIT M2: a CLIN / SLIN scope shows as a chip; removing it drops clinId and slinId (the contract stays)', async () => {
+    const K = '11111111-1111-4111-8111-111111111111', C = '22222222-2222-4222-8222-222222222222', S = '33333333-3333-4333-8333-333333333333';
+    m = await mount(<UnpricedClient report={{ ...report(), scope: { contract: 'NAVAIR (N-1)', clinNumber: '0001', slinNumber: '0001AA' } }}
+      filters={{ contractId: K, clinId: C, slinId: S }} contracts={contracts} />);
+    const chip = m.container.querySelector('[data-testid="unpriced-scope-chip"]')!;
+    expect(chip.textContent).toBe('CLIN 0001 · SLIN 0001AA');
+    await click(chip.querySelector('button[aria-label="Remove filter CLIN 0001 · SLIN 0001AA"]'));
+    expect(h.push).toHaveBeenLastCalledWith(`/admin/reports/unpriced?contractId=${K}`);
+    unmount(m);
+    m = await mount(<UnpricedClient report={{ ...report(), scope: { contract: 'NAVAIR (N-1)', clinNumber: null, slinNumber: null } }} filters={{ contractId: K }} contracts={contracts} />);
+    expect(m.container.querySelector('[data-testid="unpriced-scope-chip"]')).toBeNull();
+  });
+
+  it('UX-4B1-AUDIT L10: under filters the empty state reads "No unpriced hours in this view."', async () => {
+    m = await mount(<UnpricedClient report={report({ groups: [], totals: { hours: 0, groups: 0, employees: 0, overlaps: 0 } })} filters={{ reason: 'conflict' }} contracts={contracts} />);
+    expect(m.container.querySelector('[data-testid="unpriced-empty"]')!.textContent).toBe('No unpriced hours in this view.');
+  });
+
+  it('UX-4B1-AUDIT L10: the period follows the URL — a back / forward re-render replaces an unsent choice', async () => {
+    const ui = (filters: Parameters<typeof UnpricedClient>[0]['filters'], period?: string) => (
+      // The same tree as mount(), so React updates the page in place (a remount would hide a stale draft).
+      <MantineProvider env="test" theme={theme}><WorkspaceModeProvider mode="full"><UnpricedClient report={report()} filters={filters} period={period} contracts={contracts} /></WorkspaceModeProvider></MantineProvider>
+    );
+    m = await mount(<UnpricedClient report={report()} filters={{ startDate: '2026-10-01', endDate: '2026-10-15' }} period="lastPeriod" contracts={contracts} />);
+    const periodInput = () => document.getElementById([...m!.container.querySelectorAll('label')].find((l) => l.textContent?.trim() === 'Period')!.htmlFor) as HTMLInputElement;
+    expect(periodInput().value).toBe('Last pay period');
+    // A choice the URL hasn't caught up with (the router is mocked, so nothing navigates).
+    await click(periodInput());
+    await click([...document.getElementById(periodInput().getAttribute('aria-controls')!)!.querySelectorAll('[role="option"]')].find((o) => o.textContent === 'Custom dates…'));
+    expect(periodInput().value).toBe('Custom dates…');
+    // Back to All time (the URL changes under the page).
+    await act(async () => { m!.root.render(ui({})); });
+    expect(periodInput().value).toBe('All time');
+    await act(async () => { m!.root.render(ui({ startDate: '2026-11-01', endDate: '2026-11-03' }, 'thisMonth')); });
+    expect(periodInput().value).toBe('This month');
   });
 });

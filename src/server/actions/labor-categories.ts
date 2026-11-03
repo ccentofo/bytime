@@ -11,8 +11,8 @@ import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { userAction } from '@/lib/action-result';
 import { UserFacingError } from '@/lib/errors';
 import {
-  overlappingAssignments, unpricedEntries, unpricedFixText, unpricedReport, unpricedTotals, allUnpricedGroups, overlapsInScope,
-  type OverlapRow, type UnpricedEntryRow, type UnpricedFilters, type UnpricedReport, type UnpricedGroup,
+  overlappingAssignments, unpricedEntries, unpricedFixText, unpricedReport, unpricedTotals, allUnpricedGroups, overlapsInScope, unpricedScopeNames,
+  type OverlapRow, type UnpricedEntryRow, type UnpricedReport, type UnpricedGroup, type UnpricedScopeNames,
 } from '@/server/internal/cost-basis';
 import { parseUnpricedFilters } from '@/lib/unpriced-filters';
 
@@ -277,30 +277,36 @@ export interface UnpricedHoursReportRow extends UnpricedEntryRow {
  * the overlapping pairs behind conflicts, and the pairs with no affected hours. Filters arrive raw from a URL and are
  * cleaned by parseUnpricedFilters (invalid values ignored). Admin only.
  */
-export async function getUnpricedReport(filters: Record<string, string | string[] | undefined> = {}): Promise<UnpricedReport> {
+export async function getUnpricedReport(filters: Record<string, string | string[] | undefined> = {}): Promise<UnpricedReport & { scope: UnpricedScopeNames }> {
   await requireAdmin();
-  return unpricedReport(await getDb(), parseUnpricedFilters(filters));
+  const db = await getDb();
+  const clean = parseUnpricedFilters(filters);
+  const [report, scope] = await Promise.all([unpricedReport(db, clean), unpricedScopeNames(db, clean)]);
+  return { ...report, scope }; // UX-4B1-AUDIT M2: the CLIN / SLIN behind the scope chip
 }
 
 const EXPORT_ENTRY_LIMIT = 50_000;
 
 /**
- * Everything for the Unpriced Excel download (§4.4.8): ALL groups (paged, no cap), every pair in scope, and up to
- * 50,000 entries (`entriesTruncated` past that). With reason=conflict, entries are kept only when their basis is a
- * conflict. Filters are already validated by the route. Admin only.
+ * Everything for the Unpriced Excel download (§4.4.8): ALL groups (paged, no cap), every pair in scope, up to 50,000
+ * entries (`entriesTruncated` past that), and the scope's names. With reason=conflict, entries are kept only when
+ * their basis is a conflict. The filters are cleaned here too (UX-4B1-AUDIT L8: an action never trusts its caller),
+ * so an invalid id or date is ignored, never sent to Postgres. Admin only.
  */
-export async function getUnpricedExportData(filters: UnpricedFilters): Promise<{
-  groups: UnpricedGroup[]; overlaps: OverlapRow[]; entries: UnpricedHoursReportRow[]; entriesTruncated: boolean;
+export async function getUnpricedExportData(filters: Record<string, string | string[] | undefined | null> = {}): Promise<{
+  groups: UnpricedGroup[]; overlaps: OverlapRow[]; entries: UnpricedHoursReportRow[]; entriesTruncated: boolean; scope: UnpricedScopeNames;
 }> {
   await requireAdmin();
   const db = await getDb();
-  const [groups, overlaps, entries] = await Promise.all([
-    allUnpricedGroups(db, filters),
-    overlapsInScope(db, filters),
-    unpricedEntries(db, filters, EXPORT_ENTRY_LIMIT),
+  const clean = parseUnpricedFilters(filters);
+  const [groups, overlaps, entries, scope] = await Promise.all([
+    allUnpricedGroups(db, clean),
+    overlapsInScope(db, clean),
+    unpricedEntries(db, clean, EXPORT_ENTRY_LIMIT),
+    unpricedScopeNames(db, clean),
   ]);
-  const rows = entries.rows.filter((r) => filters.reason !== 'conflict' || r.reason === 'conflict');
-  return { groups, overlaps, entries: rows.map((r) => ({ ...r, fix: unpricedFixText(r) })), entriesTruncated: entries.truncated };
+  const rows = entries.rows.filter((r) => clean.reason !== 'conflict' || r.reason === 'conflict');
+  return { groups, overlaps, entries: rows.map((r) => ({ ...r, fix: unpricedFixText(r) })), entriesTruncated: entries.truncated, scope };
 }
 
 /** Unpriced totals only (Labor categories' notice, the Downloads row). Admin only. */

@@ -1,4 +1,5 @@
-import { isCalendarDate } from '@/lib/calendar-date';
+import { formatCalendarDate, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { periodLabel } from '@/lib/timesheet/labels';
 
 /**
  * The Unpriced hours report's filters from a URL (feature-plan-ux-kit-contracts.md §4.4.2), shared by the page, its
@@ -42,4 +43,39 @@ export function unpricedFiltersQuery(f: UnpricedFilterInput): string {
   if (f.endDate) p.set('end', f.endDate);
   if (f.reason) p.set('reason', f.reason);
   return p.toString();
+}
+
+/**
+ * The keys a download link may carry, each checked on its own (UX-4B1-AUDIT L8): a present value must be valid, but a
+ * legacy key next to its preferred one (`startDate` beside `start`) is allowed — `start`/`end` win in the parser.
+ */
+export const UNPRICED_FILTER_KEYS = ['contractId', 'clinId', 'slinId', 'start', 'end', 'startDate', 'endDate', 'reason'] as const;
+
+export function invalidUnpricedFilterKeys(raw: Record<string, string | undefined | null>): string[] {
+  return UNPRICED_FILTER_KEYS.filter((k) => {
+    const v = raw[k];
+    if (v === undefined || v === null || v === '') return false;
+    if (k === 'reason') return v !== 'conflict';
+    if (k.endsWith('Id')) return !UUID.test(v);
+    return !isCalendarDate(v);
+  });
+}
+
+/** "CLIN 0001" / "CLIN 0001 · SLIN 0001AA", or null with no CLIN (the Unpriced page's scope chip, M2). */
+export function lineScopeLabel(names: { clinNumber: string | null; slinNumber: string | null }): string | null {
+  if (!names.clinNumber) return null;
+  return `CLIN ${names.clinNumber}${names.slinNumber ? ` · SLIN ${names.slinNumber}` : ''}`;
+}
+
+/**
+ * The Excel's scope line (L8): the range — both ends, "From …", "Through …" or All time —, then the contract and the
+ * CLIN / SLIN, then "overlapping categories only" for reason=conflict. E.g. "From Oct 1, 2026 · Army (W1) · CLIN 0001".
+ */
+export function unpricedScopeLabel(f: UnpricedFilterInput, names: { contract: string | null; clinNumber: string | null; slinNumber: string | null }): string {
+  const day = (d: string) => formatCalendarDate(d as CalendarDate, 'MMM D, YYYY');
+  const range = f.startDate && f.endDate ? periodLabel(f.startDate as CalendarDate, f.endDate as CalendarDate)
+    : f.startDate ? `From ${day(f.startDate)}`
+      : f.endDate ? `Through ${day(f.endDate)}`
+        : 'All time';
+  return [range, names.contract, lineScopeLabel(names), f.reason ? 'overlapping categories only' : null].filter(Boolean).join(' · ');
 }

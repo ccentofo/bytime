@@ -21,7 +21,8 @@ const group = (employeeName: string, hours: number) => ({
   slinId: null, slinNumber: null, chargeCodeId: 'cc', chargeCode: 'ARMY-0001', hours, first: '2026-03-02', last: '2026-03-03', entries: 2, overlaps: [], fix: { kind: 'set-code-category', chargeCodeId: 'cc' },
 });
 const req = (q = '') => new NextRequest(`http://localhost/api/reports/unpriced-xlsx${q}`);
-beforeEach(() => { h.calls = []; h.data = { groups: [], overlaps: [], entries: [], entriesTruncated: false }; });
+const NO_SCOPE = { contract: null, clinNumber: null, slinNumber: null };
+beforeEach(() => { h.calls = []; h.data = { groups: [], overlaps: [], entries: [], entriesTruncated: false, scope: NO_SCOPE }; });
 
 describe('unpriced-xlsx (U-3 companion)', () => {
   it('an invalid filter → 400 before the action runs', async () => {
@@ -40,7 +41,7 @@ describe('unpriced-xlsx (U-3 companion)', () => {
     h.data = {
       groups: [group('Jane Smith', 412.5), group('John Doe', 380)], overlaps: [],
       entries: [{ entryDate: '2026-03-02', employeeName: 'Jane Smith', chargeCode: 'ARMY-0001', clinNumber: '0001', slinNumber: null, hours: 8, reason: 'no-category', fix: 'x' }],
-      entriesTruncated: true,
+      entriesTruncated: true, scope: NO_SCOPE,
     };
     const res = await GET(req('?startDate=2026-01-01'));                 // the legacy name is accepted
     expect(res.status).toBe(200);
@@ -54,3 +55,44 @@ describe('unpriced-xlsx (U-3 companion)', () => {
     expect(String(every.getRow(every.rowCount).getCell(1).value)).toMatch(/^Only the first 50,000 entries are listed\./);
   });
 });
+
+const pair = {
+  userId: 'u9', employeeName: 'Dee Future', level: 'clin', contractId: 'k', clinId: 'c', slinId: null, clinNumber: '0001', slinNumber: null,
+  a: { assignmentId: 'a1', lcatCode: 'SE-II', title: 'Eng II', effectiveDate: '2027-01-01', endDate: null },
+  b: { assignmentId: 'b1', lcatCode: 'SE-III', title: 'Eng III', effectiveDate: '2027-02-01', endDate: '2027-06-30' },
+};
+const sheetsOf = async (res: Response) => { const wb = new ExcelJS.Workbook(); await wb.xlsx.load(Buffer.from(await res.arrayBuffer()) as never); return wb; };
+
+describe('unpriced-xlsx (UX-4B1-AUDIT L5, L8)', () => {
+  it('L5: no groups but an overlap → 200, and the Overlaps sheet lists the pair', async () => {
+    h.data = { groups: [], overlaps: [pair], entries: [], entriesTruncated: false, scope: NO_SCOPE };
+    const res = await GET(req());
+    expect(res.status).toBe(200);
+    const overlaps = (await sheetsOf(res)).getWorksheet('Overlaps')!;
+    expect([overlaps.getRow(5).getCell(1).value, overlaps.getRow(5).getCell(4).value]).toEqual(['Dee Future', 'SE-II Eng II']);
+  });
+
+  it('L8: a legacy key beside its preferred one is no 400; start/end win', async () => {
+    const res = await GET(req('?start=2026-01-01&startDate=2025-06-01&end=2026-01-31&endDate=2025-06-30'));
+    expect(res.status).toBe(422);                                  // nothing to fix — but not refused
+    expect(h.calls).toEqual([{ startDate: '2026-01-01', endDate: '2026-01-31' }]);
+    expect((await GET(req('?start=2026-01-01&startDate=nope'))).status).toBe(400);   // an invalid value still is
+  });
+
+  it('L8: the scope line names the contract, CLIN and SLIN, and one-sided ranges', async () => {
+    type Names = { contract: string | null; clinNumber: string | null; slinNumber: string | null };
+    const scoped: Names = { contract: 'Army (W1)', clinNumber: '0001', slinNumber: '0001AA' };
+    const cases: Array<[string, Names, string]> = [
+      ['?start=2026-10-01', scoped, 'From Oct 1, 2026 · Army (W1) · CLIN 0001 · SLIN 0001AA'],
+      ['?end=2026-10-31&reason=conflict', { ...scoped, slinNumber: null }, 'Through Oct 31, 2026 · Army (W1) · CLIN 0001 · overlapping categories only'],
+      ['?start=2026-10-01&end=2026-10-31', NO_SCOPE, 'Oct 1 – 31, 2026'],
+      ['', { contract: 'Army (W1)', clinNumber: null, slinNumber: null }, 'All time · Army (W1)'],
+    ];
+    for (const [q, scope, line] of cases) {
+      h.data = { groups: [], overlaps: [pair], entries: [], entriesTruncated: false, scope };
+      const wb = await sheetsOf(await GET(req(q)));
+      expect(wb.getWorksheet('To fix')!.getRow(2).getCell(1).value, q).toBe(line);
+    }
+  });
+});
+

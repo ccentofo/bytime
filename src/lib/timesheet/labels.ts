@@ -11,6 +11,7 @@ export const STATUS_WORD: Record<PeriodStatus, string> = {
 
 /** The visible period label: "Oct 16 – 31, 2026", "Sep 28 – Oct 4, 2026", "Dec 16, 2026 – Jan 1, 2027". */
 export function periodLabel(start: CalendarDate, end: CalendarDate): string {
+  if (start === end) return formatCalendarDate(start, 'MMM D, YYYY'); // UX-4B1-AUDIT L11: one day, not "Nov 1 – 1, 2026"
   if (start.slice(0, 4) !== end.slice(0, 4)) return `${formatCalendarDate(start, 'MMM D, YYYY')} – ${formatCalendarDate(end, 'MMM D, YYYY')}`;
   if (start.slice(0, 7) !== end.slice(0, 7)) return `${formatCalendarDate(start, 'MMM D')} – ${formatCalendarDate(end, 'MMM D, YYYY')}`;
   return `${formatCalendarDate(start, 'MMM D')} – ${formatCalendarDate(end, 'D, YYYY')}`;
