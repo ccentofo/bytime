@@ -20,6 +20,7 @@ import { RowActions } from '@/components/ui/RowActions';
 import { useBusyRows } from '@/components/ui/useRowState';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
+import { toastError } from '@/lib/toast';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import {
@@ -288,11 +289,7 @@ export function LaborCategoriesClient({
         await refreshLaborCategories();
         setLcatModalOpen(false);
       } catch {
-        notifications.show({
-          title: 'Error',
-          message: 'Something went wrong. Please refresh and try again.',
-          color: 'red',
-        });
+        toastError({ title: 'Error', message: 'Something went wrong. Please refresh and try again.' });
       }
     });
   }
@@ -312,11 +309,7 @@ export function LaborCategoriesClient({
         });
         setConfirmDeactivateLcat(null);
       } catch {
-        notifications.show({
-          title: 'Error',
-          message: 'Something went wrong. Please refresh and try again.',
-          color: 'red',
-        });
+        toastError({ title: 'Error', message: 'Something went wrong. Please refresh and try again.' });
       } finally {
         busyRows.done(lcat.id);
       }
@@ -350,11 +343,7 @@ export function LaborCategoriesClient({
           color: 'success',
         });
       } catch {
-        notifications.show({
-          title: 'Assignment Failed',
-          message: 'Something went wrong. Please refresh and try again.',
-          color: 'red',
-        });
+        toastError({ title: 'Assignment Failed', message: 'Something went wrong. Please refresh and try again.' });
       }
     });
   }
@@ -374,11 +363,7 @@ export function LaborCategoriesClient({
         setConfirmEndAssignment(null);
         setEndAssignmentDate(null);
       } catch {
-        notifications.show({
-          title: 'Error',
-          message: 'Something went wrong. Please refresh and try again.',
-          color: 'red',
-        });
+        toastError({ title: 'Error', message: 'Something went wrong. Please refresh and try again.' });
       }
     });
   }

@@ -28,6 +28,7 @@ import { getPeriodOptions, getWorkspaceContext, type PeriodOption } from '@/serv
 import { PageHeader } from '@/components/ui/PageHeader';
 import { CURRENT_RATES_NOTE } from '@/lib/cost-labels';
 import { downloadFile } from '@/lib/download';
+import { toastError } from '@/lib/toast';
 
 /** A report card (feature-plan-ux-page-fixes.md C15): each has its own busy state and its own inline error. */
 type Card = 'pdf' | 'cost' | 'summary';
@@ -104,7 +105,7 @@ export function ReportsClient({ filterOptions, role }: Props) {
       .then((options) => setPeriodOptions([...options].reverse()))
       .catch((error) => {
         console.error('Failed to load pay periods:', error);
-        notifications.show({ title: 'Could not load pay periods', message: 'Reload the page to try again.', color: 'red' });
+        toastError({ title: 'Could not load pay periods', message: 'Reload the page to try again.' });
       });
   }, []);
 

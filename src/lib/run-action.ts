@@ -1,5 +1,6 @@
 import { notifications } from '@mantine/notifications';
 import type { ActionResult } from '@/lib/action-result';
+import { toastError } from '@/lib/toast';
 
 /**
  * Client-side caller for converted server actions (feature-plan-launch-blockers.md P4). Always resolves:
@@ -30,7 +31,7 @@ export async function runAction<T>(action: Promise<ActionResult<T>>, opts: RunAc
   }
   if (!result.ok) {
     if (!opts.silent) {
-      notifications.show({ title: opts.errorTitle ?? 'Couldn’t complete that', message: result.error, color: 'red' });
+      toastError({ title: opts.errorTitle ?? 'Couldn’t complete that', message: result.error });
     }
   } else if (opts.successMessage) {
     notifications.show({ title: 'Done', message: opts.successMessage, color: 'success' });

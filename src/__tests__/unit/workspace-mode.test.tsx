@@ -53,9 +53,12 @@ describe('admin write controls', () => {
     expect(buttons(render('full', <WriteButton>Save</WriteButton>), 'Save')).toEqual([{ disabled: false }]);
   });
 
-  it('a read_only WriteButton carries the read-only explanation', () => {
-    // Mantine renders the Tooltip label lazily; the read-only marker is on the button itself.
-    expect(render('read_only', <WriteButton>Save</WriteButton>)).toContain('data-read-only="true"');
+  it('a read_only WriteButton carries the read-only explanation, and never the disabled attribute (kit §3.5)', () => {
+    // Mantine renders the Tooltip label lazily; the read-only marker is on the button and the reason in a hidden span.
+    const html = render('read_only', <WriteButton>Save</WriteButton>);
+    expect(html).toContain('data-read-only="true"');
+    expect(html).toContain(READ_ONLY_TOOLTIP);
+    expect(html.match(/<button([^>]*)>/)![1]).not.toMatch(/\sdisabled(=|\s|$)/);
     expect(READ_ONLY_TOOLTIP).toMatch(/read-only/);
   });
 
