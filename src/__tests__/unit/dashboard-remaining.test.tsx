@@ -48,6 +48,23 @@ async function renderAndExpand(unpriced: number) {
   await act(async () => { expand!.click(); });
 }
 
+// feature-plan-ux-page-fixes.md C6 / T-C6: each CLIN's row group is a keyed Fragment — expanding logs no key warning.
+// FIRST in this file on purpose: React logs a missing-key warning only once per process, so it must run before any
+// other test expands a contract.
+describe('CLIN rows are keyed (C6)', () => {
+  it('expanding a contract logs no "unique key" warning', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const twoClins = summary(0) as unknown as { clinSummaries: Array<Record<string, unknown>> };
+    twoClins.clinSummaries = [twoClins.clinSummaries[0], { ...twoClins.clinSummaries[0], clinId: 'c2', clinNumber: '0002', slinSummaries: [] }];
+    await act(async () => { root.render(<MantineProvider><DashboardClient initialSummaries={[twoClins as unknown as ContractSummary]} /></MantineProvider>); });
+    await act(async () => { (container.querySelector('button[aria-label="Expand"]') as HTMLButtonElement).click(); });
+    expect(container.textContent).toContain('0002');
+    const keyWarnings = errors.mock.calls.filter((c) => c.some((a) => typeof a === 'string' && /unique "key" prop/.test(a)));
+    errors.mockRestore();
+    expect(keyWarnings).toEqual([]);
+  });
+});
+
 describe('Remaining figures carry the priced-cost flag (F5)', () => {
   it('with unpriced hours: overview card, contract row, CLIN row and SLIN row each say "based on priced cost" with the link', async () => {
     await renderAndExpand(12);
@@ -72,3 +89,4 @@ describe('Remaining figures carry the priced-cost flag (F5)', () => {
     expect(notes()).toHaveLength(0);
   });
 });
+
