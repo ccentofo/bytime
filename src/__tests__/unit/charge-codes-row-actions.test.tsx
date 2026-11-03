@@ -25,6 +25,7 @@ vi.mock('@/server/actions/charge-code-categories', () => ({
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
 import { act } from 'react';
+import { readFileSync } from 'node:fs';
 import { ChargeCodesClient } from '@/app/(app)/admin/charge-codes/ChargeCodesClient';
 import { buttonByText, buttonsByText, chooseRowAction, click, dialogTitled, installDomStubs, menuItems, mount, openRowMenu, unmount, type Mounted } from '../helpers/dom';
 import { expectNoAxeViolations } from '../helpers/axe';
@@ -137,3 +138,15 @@ describe('Charge code edit and its CLIN (C5)', () => {
     expect(actions.updateChargeCode.mock.calls[1][1]).toMatchObject({ clinId: 'c9' });
   });
 });
+
+// UX-4A-AUDIT.md L6: T-C5c (integration) catches an uncorrelated exists, not an interpolated outer column, which would
+// bind to the subquery's own table. Pin the literal outer column.
+describe('listChargeCodes hasHours correlation (C5, L6)', () => {
+  it('the exists subquery names the outer column literally: te.charge_code_id = charge_codes.id', () => {
+    const src = readFileSync('src/server/actions/charge-codes.ts', 'utf8');
+    const hasHours = src.match(/hasHours:\s*sql<boolean>`([^`]*)`/)?.[1] ?? '';
+    expect(hasHours).toContain('te.charge_code_id = charge_codes.id');
+    expect(hasHours).not.toContain('${');
+  });
+});
+
