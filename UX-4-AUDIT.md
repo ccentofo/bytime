@@ -126,3 +126,12 @@ Ranked by daily impact:
 2. **UX-4a** bug fixes (C1–C17; C18 and C19 move to the Payroll and Contracts pages).
 3. **UX-4b:** the shared kit plus the four batch-1 pages built on it, so the kit is proven on real screens.
 4. **UX-4c:** batch 2 mockups, then build.
+
+## 8. Product owner feedback (2026-11-03): Labor categories moves into UX-4b
+The product owner found `/admin/labor-categories` crowded. It's three jobs on one page, it isn't clear you need to scroll, and the cost-basis report lists every unpriced entry (1,732 rows in the demo).
+
+Mockups were added to `ux-mockups/ux4-batch1.html`:
+- **Labor categories:** categories and rates only, grouped by contract (expandable), with a "People" count and one unpriced notice linking to the report.
+- **Unpriced hours** (under Reports): entries grouped by cause × employee × code into "things to fix", each with total hours, a date range and a direct fix action, plus an Excel download with per-entry detail.
+
+The labor-category assignment form moves to People → Assignments as a third tab. Since Reports already absorbs these reports in UX-4b, these pages join UX-4b's scope.

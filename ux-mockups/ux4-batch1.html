@@ -60,6 +60,8 @@ tr:last-child td { border-bottom: 0; }
 tbody tr.child td { background: color-mix(in srgb, var(--panel) 70%, var(--bg)); }
 tbody tr.child td:first-child { padding-left: 46px; }
 tbody tr.grand td { padding-left: 76px; }
+tbody tr.grp td { background: color-mix(in srgb, var(--panel) 85%, var(--bg)); font-size: 14px; }
+#ltable tbody tr.child td:first-child { padding-left: 46px; }
 tfoot td { border-top: 1px solid var(--line-strong); font-weight: 700; border-bottom: 0; }
 .exp { width: 22px; height: 22px; border: 0; background: transparent; color: var(--dim); cursor: pointer; border-radius: 4px; margin-right: 6px; transform: rotate(0); transition: transform .15s; }
 .exp[aria-expanded="true"] { transform: rotate(90deg); }
@@ -127,7 +129,7 @@ summary { cursor: pointer; font-weight: 600; color: var(--accent-text); }
       <div class="grp">Contracts</div>
       <a class="sub" data-go="contracts">Contracts</a>
       <a class="sub">Charge codes</a>
-      <a class="sub">Labor categories</a>
+      <a class="sub" data-go="lcats">Labor categories</a>
       <div class="grp">People</div>
       <a class="sub">Users</a>
       <a class="sub">Assignments</a>
@@ -323,8 +325,8 @@ summary { cursor: pointer; font-weight: 600; color: var(--accent-text); }
       </div>
       <div class="report">
         <div><h3>Unpriced hours</h3><p class="sub2" style="margin:2px 0 0">Hours with no labor-category rate or with overlapping assignments, so you can fix pricing.</p></div>
-        <div class="row"><span class="sub2">All time · 1,719 hours</span></div>
-        <div class="row"><button class="btn">Excel</button></div>
+        <div class="row"><span class="sub2">All time · 1,719 hours · 6 things to fix</span></div>
+        <div class="row"><button class="btn" data-go="unpriced">View</button><button class="btn">Excel</button></div>
       </div>
       <div class="report">
         <div><h3>Cost by pay period</h3><p class="sub2" style="margin:2px 0 0">The period cost report that used to live on the overview page.</p></div>
@@ -345,6 +347,66 @@ summary { cursor: pointer; font-weight: 600; color: var(--accent-text); }
       <li><b>All reports live here:</b> unpriced hours and cost-by-period move in from Labor categories and the overview page.</li>
     </ul>
   </section>
+
+  <!-- ===================== LABOR CATEGORIES ===================== -->
+  <section class="screen" id="lcats">
+    <div class="ph"><div><h1>Labor categories</h1><p class="desc">Each category's billing rate on a CLIN. Charge codes and employees use these to price hours.</p></div><button class="btn primary">Add labor category</button></div>
+    <div class="notice"><span>⚠</span><span><b>1,719 hours have no labor-category rate,</b> so their cost isn't counted.</span><a data-go="unpriced">See what to fix</a></div>
+    <div class="panel" style="overflow-x:auto">
+      <table id="ltable">
+        <thead><tr><th>Category</th><th>Code</th><th class="num">Hourly rate</th><th class="num">Ceiling rate</th><th class="num">People</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          <tr class="grp" data-p="l-army"><td colspan="7"><button class="exp" aria-expanded="true" aria-label="Hide Army IT Support">▸</button><b>Army IT Support</b> <span class="sub2 mono">W911QX-23-D-0042</span> <span class="sub2">· 3 categories</span></td></tr>
+          <tr class="child" data-c="l-army"><td>Help desk analyst <span class="sub2">· CLIN 0001</span></td><td class="mono">HD-I</td><td class="num">$55.00</td><td class="num">$65.00</td><td class="num">2</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+          <tr class="child" data-c="l-army"><td>Junior systems administrator <span class="sub2">· CLIN 0002</span></td><td class="mono">SA-I</td><td class="num">$75.00</td><td class="num">$85.00</td><td class="num">1</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+          <tr class="child" data-c="l-army"><td>Technical trainer <span class="sub2">· CLIN 0003</span></td><td class="mono">TR-I</td><td class="num">$85.00</td><td class="num">$100.00</td><td class="num">0</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+          <tr class="grp" data-p="l-disa"><td colspan="7"><button class="exp" aria-expanded="false" aria-label="Show DISA Cyber Operations">▸</button><b>DISA Cyber Operations</b> <span class="sub2 mono">HC1028-22-C-0015</span> <span class="sub2">· 3 categories</span></td></tr>
+          <tr class="child" data-c="l-disa" hidden><td>Systems administrator <span class="sub2">· CLIN 0001</span></td><td class="mono">SA-II</td><td class="num">$100.00</td><td class="num">$115.00</td><td class="num">2</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+          <tr class="grp" data-p="l-nav"><td colspan="7"><button class="exp" aria-expanded="true" aria-label="Hide NAVAIR Systems Support">▸</button><b>NAVAIR Systems Support</b> <span class="sub2 mono">W58RGZ-21-C-0001</span> <span class="sub2">· 4 categories</span></td></tr>
+          <tr class="child" data-c="l-nav"><td>Program manager <span class="sub2">· CLIN 0001</span></td><td class="mono">PM-II</td><td class="num">$165.00</td><td class="num">$180.00</td><td class="num">1</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+          <tr class="child" data-c="l-nav"><td>Software engineer <span class="sub2">· CLIN 0001</span></td><td class="mono">SE-II</td><td class="num">$110.00</td><td class="num">$125.00</td><td class="num">2</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+          <tr class="child" data-c="l-nav"><td>Senior software engineer <span class="sub2">· CLIN 0001</span></td><td class="mono">SE-III</td><td class="num">$149.35</td><td class="num">$164.80</td><td class="num">1</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul class="callouts">
+      <li><b>One job per page.</b> This page is only categories and their rates. Assigning people to categories moves to <b>People → Assignments</b> (a "Labor categories" tab next to Charge code access and Approval scope). The cost-basis report moves to <b>Reports</b>.</li>
+      <li><b>Grouped by contract,</b> so the contract name appears once instead of on every row; expand or collapse each one. "People" shows how many employees use the category (click it to see them in Assignments).</li>
+      <li><b>Unpriced hours are one line at the top,</b> linking to the report — not 1,732 rows at the bottom of the page.</li>
+      <li>Rate history still opens from each row (Edit → Rates), as today.</li>
+    </ul>
+  </section>
+
+  <!-- ===================== UNPRICED HOURS REPORT ===================== -->
+  <section class="screen" id="unpriced">
+    <p class="sub2" style="margin:0 0 6px"><a style="color:var(--accent-text);cursor:pointer" data-go="reports">Reports</a> › Unpriced hours</p>
+    <div class="ph"><div><h1>Unpriced hours</h1><p class="desc">Hours that have no labor-category rate, so contract costs leave them out. Each row is one thing to fix.</p></div><button class="btn">Download Excel</button></div>
+    <div class="panel strip" style="grid-template-columns:repeat(3,1fr)">
+      <div><div class="n">1,719</div><div class="l">Unpriced hours</div></div>
+      <div><div class="n">6</div><div class="l">Things to fix</div></div>
+      <div><div class="n">4</div><div class="l">Employees affected</div></div>
+    </div>
+    <div class="row" style="margin-bottom:12px"><select aria-label="Contract"><option>All contracts</option></select><select aria-label="Period"><option>All time</option><option>Last pay period</option></select></div>
+    <div class="panel" style="overflow-x:auto">
+      <table>
+        <thead><tr><th>What's wrong</th><th>Employee</th><th>Where</th><th class="num">Hours</th><th>Dates</th><th>Fix</th></tr></thead>
+        <tbody>
+          <tr><td><span class="badge b-warn">No category</span></td><td>Jane Smith</td><td class="mono">NAVAIR-0001-ONSITE</td><td class="num">412.5</td><td class="sub2">Jan 2 – Oct 28, 2026</td><td><button class="btn sm">Set category on code</button></td></tr>
+          <tr><td><span class="badge b-warn">No category</span></td><td>John Doe</td><td class="mono">NAVAIR-0001-ONSITE</td><td class="num">380.0</td><td class="sub2">Jan 2 – Oct 28, 2026</td><td><button class="btn sm">Set category on code</button></td></tr>
+          <tr><td><span class="badge b-warn">No category</span></td><td>Emily Davis</td><td class="mono">ARMY-0001</td><td class="num">402.0</td><td class="sub2">Feb 3 – Oct 27, 2026</td><td><button class="btn sm">Assign Emily a category</button></td></tr>
+          <tr><td><span class="badge b-warn">No category</span></td><td>Emily Davis</td><td class="mono">ARMY-0002</td><td class="num">342.5</td><td class="sub2">Feb 3 – Oct 27, 2026</td><td><button class="btn sm">Assign Emily a category</button></td></tr>
+          <tr><td><span class="badge b-bad">Two categories</span></td><td>Robert Taylor</td><td class="mono">NAVAIR CLIN 0001</td><td class="num">96.0</td><td class="sub2">Sep 1 – Sep 30, 2026</td><td><button class="btn sm">End SE-II or SE-III</button></td></tr>
+          <tr><td><span class="badge b-warn">No category</span></td><td>Mike Chen</td><td class="mono">NAVAIR-0002</td><td class="num">86.0</td><td class="sub2">Oct 1 – Oct 28, 2026</td><td><button class="btn sm">Set category on code</button></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul class="callouts">
+      <li><b>Six problems, not 1,732 entries.</b> Entries with the same cause, employee and charge code collapse into one row with total hours and a date range — that's the unit you actually fix.</li>
+      <li><b>Each row says what to do</b> and links straight to the fix (set a category on the charge code, give the employee a category, or end one of two overlapping ones).</li>
+      <li><b>Every entry is still available:</b> the Excel download keeps the per-entry detail auditors may want.</li>
+      <li>Lives under Reports, linked from the notices on Labor categories, Contracts and Home.</li>
+    </ul>
+  </section>
   </main>
 </div>
 
@@ -353,6 +415,8 @@ summary { cursor: pointer; font-weight: 600; color: var(--accent-text); }
   <button data-go="payroll">Payroll export</button>
   <button data-go="contracts">Contracts</button>
   <button data-go="reports">Reports</button>
+  <button data-go="lcats">Labor categories</button>
+  <button data-go="unpriced">Unpriced hours</button>
   <button id="theme">Light / dark</button>
 </div>
 
@@ -365,12 +429,12 @@ function go(id) {
 }
 document.querySelectorAll('[data-go]').forEach((el) => el.addEventListener('click', () => go(el.dataset.go)));
 document.getElementById('theme').onclick = () => { const h = document.documentElement; h.dataset.theme = h.dataset.theme === 'dark' ? 'light' : 'dark'; };
-document.querySelectorAll('#ctable .exp').forEach((b) => b.addEventListener('click', () => {
+document.querySelectorAll('#ctable .exp, #ltable .exp').forEach((b) => b.addEventListener('click', () => {
   const open = b.getAttribute('aria-expanded') !== 'true';
   b.setAttribute('aria-expanded', String(open));
   b.setAttribute('aria-label', (open ? 'Hide' : 'Show') + b.getAttribute('aria-label').slice(4));
   const key = b.closest('tr').dataset.p;
-  document.querySelectorAll(`#ctable tr[data-c="${key}"]`).forEach((r) => (r.hidden = !open));
+  b.closest('table').querySelectorAll(`tr[data-c="${key}"]`).forEach((r) => (r.hidden = !open));
 }));
 go('approvals');
 </script>
