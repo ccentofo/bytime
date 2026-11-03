@@ -134,4 +134,34 @@ describe('Contracts CLIN drawer (C1)', () => {
     expect(drawer().textContent).toContain('B-CLIN-1');
     expect(drawer().textContent).not.toContain('A-NEW');
   });
+
+  // UX-4A-AUDIT.md L1 -------------------------------------------------------------------------------------------------
+  const addButton = () => [...drawer().querySelectorAll('button')].find((x) => x.textContent?.trim() === 'Add') as HTMLButtonElement;
+
+  it('L1: while a CLIN is being created, Add is aria-disabled with a Loader — never disabled — and a second click does nothing', async () => {
+    const created = deferred<unknown>();
+    h.getClinsByContract.mockResolvedValueOnce([]);
+    h.createClin.mockReturnValueOnce(created.promise);
+    await render();
+    await open(A);
+    await act(async () => { typeInto(drawer().querySelector('input')!, '0009'); });
+    await click(addButton());
+    expect(addButton().getAttribute('aria-disabled')).toBe('true');
+    expect(addButton().hasAttribute('disabled')).toBe(false);
+    expect(addButton().getAttribute('data-loading')).toBeNull();
+    expect(addButton().querySelector('.mantine-Loader-root')).not.toBeNull();
+    await click(addButton());
+    expect(h.createClin).toHaveBeenCalledTimes(1);
+    await act(async () => { created.resolve({ ok: true, data: clin('n1', 'a', '0009') }); });
+    await wait();
+    expect(addButton().getAttribute('aria-disabled')).toBeNull();
+  });
+
+  it('L1: when the CLINs failed to load, Add says why', async () => {
+    h.getClinsByContract.mockRejectedValueOnce(new Error('network'));
+    await render();
+    await open(A);
+    expect(addButton().getAttribute('aria-disabled')).toBe('true');
+    expect(document.getElementById(addButton().getAttribute('aria-describedby')!)!.textContent).toBe("Couldn't load CLINs");
+  });
 });

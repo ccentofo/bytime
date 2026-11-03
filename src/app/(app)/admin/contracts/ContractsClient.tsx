@@ -222,7 +222,7 @@ export function ContractsClient({ initialContracts }: Props) {
   }
 
   function handleClinSubmit() {
-    if (!selectedContract || clinsStatus !== 'ready') return;
+    if (!selectedContract || clinsStatus !== 'ready' || isPending) return;
     const id = clinsReq.current;
     startTransition(async () => {
       const createdResult = await runAction(createClin({
@@ -510,18 +510,21 @@ export function ContractsClient({ initialContracts }: Props) {
               onChange={(e) => setClinForm((f) => ({ ...f, fundedAmount: e.target.value }))}
               style={{ minWidth: 150 }}
             />
-            {/* Unavailable until this contract's CLINs have loaded (aria-disabled + the guard in handleClinSubmit). */}
+            {/* Unavailable until this contract's CLINs have loaded, and while a save runs (aria-disabled + the guard in
+                handleClinSubmit). Never Mantine `loading`: it sets `disabled` (UX-4A-AUDIT.md L1). */}
             <WriteButton
               onClick={handleClinSubmit}
-              loading={isPending && clinsStatus === 'ready'}
-              leftSection={<Icons.create size={14} />}
-              aria-disabled={clinsStatus !== 'ready' || undefined}
-              aria-describedby={clinsStatus === 'loading' ? 'clins-add-why' : undefined}
+              leftSection={isPending && clinsStatus === 'ready' ? <Loader size={14} aria-hidden="true" /> : <Icons.create size={14} />}
+              aria-disabled={clinsStatus !== 'ready' || isPending || undefined}
+              data-disabled={clinsStatus !== 'ready' || isPending || undefined}
+              aria-describedby={clinsStatus === 'loading' || clinsStatus === 'error' ? 'clins-add-why' : undefined}
             >
               Add
             </WriteButton>
           </Group>
-          {clinsStatus === 'loading' && <Text id="clins-add-why" size="sm" c="dimmed">Loading CLINs…</Text>}
+          {(clinsStatus === 'loading' || clinsStatus === 'error') && (
+            <Text id="clins-add-why" size="sm" c="dimmed">{clinsStatus === 'loading' ? 'Loading CLINs…' : "Couldn't load CLINs"}</Text>
+          )}
 
           {/* CLINs list */}
           <Title order={5} mt="sm">Existing CLINs</Title>
