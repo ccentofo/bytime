@@ -5,6 +5,7 @@ import { checkReportRateLimit } from '@/lib/rate-limit';
 import { guardErrorResponse } from '@/lib/http-errors';
 import { isCalendarDate } from '@/lib/calendar-date';
 import { CURRENT_RATES_NOTE } from '@/lib/cost-labels';
+import { noHours, noHoursMessage } from '@/lib/reports/empty-range';
 
 export async function GET(request: NextRequest) {
   const rateLimited = checkReportRateLimit(request);
@@ -27,6 +28,10 @@ export async function GET(request: NextRequest) {
       endDate,
       contractId ?? undefined
     );
+    // R4 (feature-plan-ux-kit-contracts.md §4.5): no hours in range (cleared-only included) → 422, shown in place.
+    if (noHours(data, (e) => e.totalHours)) {
+      return NextResponse.json({ error: noHoursMessage(startDate, endDate) }, { status: 422 });
+    }
 
     const csv = generateCsv(data, [
       { key: 'employeeName', header: 'Employee' },

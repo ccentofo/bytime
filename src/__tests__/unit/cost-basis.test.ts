@@ -175,7 +175,7 @@ describe('static: labor categories are resolved for costs only through cost-basi
   it('every cost join site uses the lateral resolution (detailed, summary, CLIN, SLIN)', () => {
     const count = (rel: string) => (readFileSync(path.join(ROOT, rel), 'utf8').match(/\.leftJoinLateral\(COST_BASIS_LATERAL, sql`true`\)/g) ?? []).length;
     expect(count('src/server/internal/reports.ts')).toBe(1);
-    expect(count('src/server/actions/reports.ts')).toBe(1);
+    expect(count('src/server/actions/reports.ts')).toBe(2); // summary + getPeriodCostByPeriod (UX-4b §4.5)
     expect(count('src/server/internal/dashboard.ts')).toBe(1); // CLIN — the shared clinCostTotals (UX-2 §4.5, also Home)
     expect(count('src/server/internal/contracts-overview.ts')).toBe(1); // SLIN (UX-4b §4.1; the period report moves to Excel, §4.5)
     expect(count('src/server/internal/cost-basis.ts')).toBe(4); // the doc's usage line, pricedHoursFor, unpricedEntries, and the grouped report's per-entry subquery (UX-4b §4.4)
@@ -244,6 +244,7 @@ describe('totals never quietly shrink (CO-D17)', () => {
       'src/app/api/reports/cost-report-csv/route.ts', 'src/lib/reports/cost-report-excel.ts',
       'src/app/(app)/home/HomeClient.tsx', // UX-2 §4.5: Home's Contracts card
       'src/app/(app)/admin/reports/unpriced/UnpricedClient.tsx', 'src/lib/reports/unpriced-excel.ts', // UX-4b §4.4
+      'src/lib/reports/period-cost-excel.ts', // UX-4b §4.5 (R3)
     ]) expect(readFileSync(path.join(ROOT, rel), 'utf8'), rel).toContain('CURRENT_RATES_NOTE');
     expect(CURRENT_RATES_NOTE).toBe('Costs use the labor-category rate in effect on each day worked.'); // dated rates D2
   });

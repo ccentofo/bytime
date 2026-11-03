@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { getPeriodStartForDate, DEFAULT_PERIOD_CONFIG } from '@/lib/date-utils';
 import { todayIn } from '@/lib/calendar-date';
-import { getTestDb, createTestUser, cleanupTestData } from './helpers';
+import * as schema from '@/db/schema';
+import { getTestDb, createTestUser, cleanupTestData, createTestContract, createTestClin, createTestChargeCode, createTestIndirectCode } from './helpers';
 
 /**
  * feature-plan-ux-page-fixes.md C15 (R5) / T-C15c: the timesheet PDF route against the real database. A name like
@@ -30,6 +31,8 @@ vi.mock('@react-pdf/renderer', async (importOriginal) => {
 });
 
 import { GET } from '@/app/api/reports/timesheet-pdf/route';
+import { GET as csvGET } from '@/app/api/reports/cost-report-csv/route';
+import { GET as xlsxGET } from '@/app/api/reports/cost-report-xlsx/route';
 
 describe('timesheet PDF route (C15, T-C15c)', () => {
   let employeeId: string;
@@ -64,5 +67,54 @@ describe('timesheet PDF route (C15, T-C15c)', () => {
     expect(res.status).toBe(500);
     expect(res.headers.get('content-type')).toContain('application/json');
     expect(await res.json()).toEqual({ error: 'Internal server error' });
+  });
+});
+
+/**
+ * feature-plan-ux-kit-contracts.md R4 / R-3: the existing cost routes on a range whose hours total 0 → 422 { error }
+ * (a cleared-only range included: the latest revision is 0 hours); a leave-only range on the summary → 422 with the
+ * "direct hours" wording (it counts direct time only); the PDF keeps 404 for an unknown employee, with its message.
+ */
+describe('empty ranges (R4, R-3)', () => {
+  const url = (route: string, q: string, ip: string) => new NextRequest(`http://localhost/api/reports/${route}?startDate=2026-10-16&endDate=2026-10-31${q}`, { headers: { 'x-forwarded-for': ip } });
+  let employeeId: string;
+
+  beforeEach(async () => {
+    await cleanupTestData();
+    h.adminId = (await createTestUser({ role: 'admin' })).id;
+    employeeId = (await createTestUser({ role: 'employee' })).id;
+  });
+  afterEach(async () => { await cleanupTestData(); });
+
+  it('a cleared-only range → 422 in the CSV, the detailed Excel and the summary', async () => {
+    const clin = await createTestClin((await createTestContract()).id);
+    const code = await createTestChargeCode(clin.id);
+    await getTestDb().insert(schema.timesheetEntries).values([
+      { userId: employeeId, createdBy: employeeId, chargeCodeId: code.id, clinId: clin.id, entryDate: '2026-10-20', hours: '8', revisionNumber: 1 },
+      { userId: employeeId, createdBy: employeeId, chargeCodeId: code.id, clinId: clin.id, entryDate: '2026-10-20', hours: '0', revisionNumber: 2 },
+    ]);
+    const costs = { error: 'No hours recorded between Oct 16 and Oct 31, 2026.' };
+    const csv = await csvGET(url('cost-report-csv', '', '203.0.113.81'));
+    expect([csv.status, await csv.json()]).toEqual([422, costs]);
+    const xlsx = await xlsxGET(url('cost-report-xlsx', '', '203.0.113.82'));
+    expect([xlsx.status, await xlsx.json()]).toEqual([422, costs]);
+    const summary = await xlsxGET(url('cost-report-xlsx', '&format=summary', '203.0.113.83'));
+    expect([summary.status, await summary.json()]).toEqual([422, { error: 'No direct hours recorded between Oct 16 and Oct 31, 2026.' }]);
+  });
+
+  it('a leave-only range on the summary → 422 "No direct hours …"; with direct hours → 200', async () => {
+    const leave = await createTestIndirectCode();
+    await getTestDb().insert(schema.timesheetEntries).values({ userId: employeeId, createdBy: employeeId, indirectCodeId: leave.id, entryDate: '2026-10-21', hours: '8', revisionNumber: 1 });
+    const res = await xlsxGET(url('cost-report-xlsx', '&format=summary', '203.0.113.84'));
+    expect([res.status, await res.json()]).toEqual([422, { error: 'No direct hours recorded between Oct 16 and Oct 31, 2026.' }]);
+    const clin = await createTestClin((await createTestContract()).id);
+    const code = await createTestChargeCode(clin.id);
+    await getTestDb().insert(schema.timesheetEntries).values({ userId: employeeId, createdBy: employeeId, chargeCodeId: code.id, clinId: clin.id, entryDate: '2026-10-22', hours: '4', revisionNumber: 1 });
+    expect((await xlsxGET(url('cost-report-xlsx', '&format=summary', '203.0.113.85'))).status).toBe(200);
+  });
+
+  it('the PDF: an unknown employee keeps 404, with its message', async () => {
+    const res = await GET(new NextRequest('http://localhost/api/reports/timesheet-pdf?userId=9f2c4c8e-0000-4000-8000-000000000000&periodStart=2026-10-16', { headers: { 'x-forwarded-for': '203.0.113.86' } }));
+    expect([res.status, await res.json()]).toEqual([404, { error: "That employee wasn't found." }]);
   });
 });

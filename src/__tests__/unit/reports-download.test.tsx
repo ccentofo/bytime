@@ -1,105 +1,219 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { readFileSync } from 'node:fs';
 
 /**
- * feature-plan-ux-page-fixes.md C15 / T-C15b: Reports downloads go through fetch, never window.open; a failure shows a
- * red alert under THAT card's buttons; while busy the card's buttons are aria-disabled (never `disabled`) with a loader
- * and a second click is ignored; a download clicks an anchor appended to document.body.
+ * feature-plan-ux-kit-contracts.md §4.5 / R-1 (and C15 / T-C15b, kept): Downloads. Five rows for an admin; a supervisor
+ * sees only Signed timesheet and Hours summary, and a supervisor's page load never calls getUnpricedSummary. Neutral
+ * buttons (the PDF is the one primary). Busy state per button through composite keys (a row's buttons block each
+ * other, never another row's; a second click is ignored; aria-disabled, never `disabled`). A 422 shows the route's
+ * message in place, under that row only. Downloads go through fetch, never window.open. Presets resolve on the server.
  */
 
-vi.mock('@/server/actions/periods', () => ({
-  getWorkspaceContext: vi.fn(async () => ({ today: '2026-10-31' })),
-  getPeriodOptions: vi.fn(async () => [{ start: '2026-10-16', numDays: 16, label: 'Oct 16 – 31, 2026' }]),
+const h = vi.hoisted(() => ({
+  resolvePeriodRange: vi.fn(), getPeriodOptions: vi.fn(), getReportFilterOptions: vi.fn(), getUnpricedSummary: vi.fn(),
+  getWorkspaceToday: vi.fn(), role: 'admin' as string,
 }));
+vi.mock('server-only', () => ({}));
+vi.mock('@/server/actions/periods', () => ({ resolvePeriodRange: h.resolvePeriodRange, getPeriodOptions: h.getPeriodOptions }));
+vi.mock('@/server/actions/reports', () => ({ getReportFilterOptions: h.getReportFilterOptions }));
+vi.mock('@/server/actions/labor-categories', () => ({ getUnpricedSummary: h.getUnpricedSummary }));
+vi.mock('@/server/internal/workspace-settings', () => ({ getWorkspaceToday: h.getWorkspaceToday }));
+vi.mock('@/lib/session', () => ({ requirePageRole: vi.fn(async () => ({ id: 'u', role: h.role })) }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
-vi.mock('@mantine/dates', () => ({
-  DateInput: ({ onChange, value, label }: { onChange: (v: string | null) => void; value: string | null; label: string }) =>
-    <label>{label}<input aria-label={label} value={value ?? ''} onChange={(e) => onChange(e.target.value || null)} /></label>,
-}));
 
+import ReportsPage from '@/app/(app)/admin/reports/page';
 import { ReportsClient } from '@/app/(app)/admin/reports/ReportsClient';
-import { buttonByText, click, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
+import { buttonsByText, click, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
+import type { CalendarDate } from '@/lib/calendar-date';
 
 beforeAll(installDomStubs);
 let m: Mounted | undefined;
+beforeEach(() => {
+  for (const f of [h.resolvePeriodRange, h.getPeriodOptions, h.getReportFilterOptions, h.getUnpricedSummary, h.getWorkspaceToday]) f.mockReset();
+  h.resolvePeriodRange.mockResolvedValue({ ok: true, data: { start: '2026-10-16', end: '2026-10-31', label: 'x' } });
+});
 afterEach(() => { unmount(m); m = undefined; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-const deferred = <T,>() => { let resolve!: (v: T) => void; const promise = new Promise<T>((r) => { resolve = r; }); return { promise, resolve }; };
-const cards = () => [...document.body.querySelectorAll('.mantine-Paper-root')] as HTMLElement[];
-const costCard = () => cards().find((c) => c.textContent?.includes('Detailed Cost Report'))!;
-const summaryCard = () => cards().find((c) => c.textContent?.includes('Employee Summary Report'))!;
+const PERIODS = [
+  { start: '2026-10-01', numDays: 15, label: 'Oct 1 – Oct 15, 2026' },
+  { start: '2026-10-16', numDays: 16, label: 'Oct 16 – Oct 31, 2026' },
+  { start: '2026-11-01', numDays: 15, label: 'Nov 1 – Nov 15, 2026' },
+];
+const OPTIONS = {
+  users: [{ id: 'u1', fullName: 'Pat Doe', email: 'p@x' }],
+  contracts: [{ id: 'k1', name: 'NAVAIR', contractNumber: 'N1', startDate: '2026-01-15' as CalendarDate }],
+};
+const UNPRICED = { hours: 1719, groups: 6, employees: 4 };
 
-async function renderWithCostDates() {
-  m = await mount(<ReportsClient filterOptions={{ users: [], contracts: [] }} role="admin" />);
-  await wait();
-  const [start, end] = [...costCard().querySelectorAll('input[aria-label="Start Date"], input[aria-label="End Date"]')] as HTMLInputElement[];
-  for (const [input, v] of [[start, '2026-01-01'], [end, '2026-01-31']] as const) {
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, v);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-  }
+async function render(role: 'admin' | 'supervisor' = 'admin') {
+  m = await mount(
+    <ReportsClient filterOptions={OPTIONS} role={role} periodOptions={PERIODS as never} today={'2026-11-03' as CalendarDate}
+      unpriced={role === 'admin' ? UNPRICED : null} />,
+  );
 }
+const deferred = <T,>() => { let resolve!: (v: T) => void; const promise = new Promise<T>((r) => { resolve = r; }); return { promise, resolve }; };
+const row = (key: string) => document.body.querySelector(`[data-testid="report-${key}"]`) as HTMLElement;
+const titles = () => [...document.body.querySelectorAll('[data-testid^="report-"] h3')].map((t) => t.textContent);
+const btnIn = (r: HTMLElement, text: string) => [...r.querySelectorAll('button, a')].find((b) => b.textContent?.trim() === text) as HTMLElement;
+const xlsx = () => new Response('x', { status: 200, headers: { 'content-disposition': 'attachment; filename="r.xlsx"' } });
 
-describe('Reports downloads (C15)', () => {
-  it('never window.open; a failure shows an alert under that card only; the next attempt clears it', async () => {
-    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'Too many requests', retryAfter: 30 }), { status: 429, headers: { 'content-type': 'application/json' } })));
-    await renderWithCostDates();
-    await click(buttonByText('Download CSV'));
-    await wait();
-    expect(open).not.toHaveBeenCalled();
-    const alert = costCard().querySelector('[role="alert"]')!;
-    expect(alert.textContent).toBe('Too many downloads. Try again in 30 seconds.');
-    expect(summaryCard().querySelector('[role="alert"]')).toBeNull();
-    // The next attempt clears it at once (while its request is still pending), and a failure shows it again.
-    const again = deferred<Response>();
-    vi.stubGlobal('fetch', vi.fn(() => again.promise));
-    await click(buttonByText('Download CSV'));
-    expect(costCard().querySelector('[role="alert"]')).toBeNull();
-    await act(async () => { again.resolve(new Response('{}', { status: 500, headers: { 'content-type': 'application/json' } })); });
-    await wait();
-    expect(costCard().querySelector('[role="alert"]')!.textContent).toBe("The report couldn't be generated. Try again in a moment.");
-    // An input change clears it.
-    const [start] = [...costCard().querySelectorAll('input[aria-label="Start Date"]')] as HTMLInputElement[];
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(start, '2026-01-02');
-      start.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    expect(costCard().querySelector('[role="alert"]')).toBeNull();
+describe('Downloads layout (R-1)', () => {
+  it('an admin sees the five rows in order; the h1 is "Downloads"', async () => {
+    await render();
+    expect(document.body.querySelector('h1')?.textContent).toBe('Downloads');
+    expect(titles()).toEqual(['Signed timesheet', 'Contract costs', 'Hours summary', 'Cost by pay period', 'Unpriced hours']);
+    expect(row('summary').textContent).toContain('Total hours per employee by contract and CLIN (direct time only).');
+    expect(row('unpriced').querySelector('[data-testid="unpriced-summary"]')!.textContent).toBe('All time · 1,719.00 hours · 6 things to fix');
+    expect(btnIn(row('unpriced'), 'View').getAttribute('href')).toBe('/admin/reports/unpriced');
   });
 
-  it('no download path opens a window (every card goes through downloadFile)', () => {
+  it('a supervisor sees only Signed timesheet and Hours summary', async () => {
+    await render('supervisor');
+    expect(titles()).toEqual(['Signed timesheet', 'Hours summary']);
+  });
+
+  it('a supervisor\'s page load never calls getUnpricedSummary; an admin\'s does (once)', async () => {
+    h.getWorkspaceToday.mockResolvedValue('2026-11-03');
+    h.getReportFilterOptions.mockResolvedValue(OPTIONS);
+    h.getPeriodOptions.mockResolvedValue(PERIODS);
+    h.getUnpricedSummary.mockResolvedValue(UNPRICED);
+    h.role = 'supervisor';
+    const sup = (await ReportsPage()) as { props: Record<string, unknown> };
+    expect(h.getUnpricedSummary).not.toHaveBeenCalled();
+    expect(sup.props.unpriced).toBeNull();
+    expect(h.getPeriodOptions).toHaveBeenCalledWith('2026-11-03', 24, 0);
+    h.role = 'admin';
+    const admin = (await ReportsPage()) as { props: Record<string, unknown> };
+    expect(h.getUnpricedSummary).toHaveBeenCalledTimes(1);
+    expect(admin.props.unpriced).toEqual(UNPRICED);
+  });
+
+  it('neutral buttons: only the PDF is filled, the rest outlined; no colour-coding in the source', async () => {
+    await render();
+    const variants = [...document.body.querySelectorAll('[data-testid^="report-"] .mantine-Button-root')]
+      .map((b) => `${b.textContent?.trim()}:${b.getAttribute('data-variant') ?? 'filled'}`); // Mantine omits the default
+    expect(variants).toEqual(['Download PDF:filled', 'Excel:default', 'CSV:default', 'Excel:default', 'Excel:default', 'View:default', 'Excel:default']);
+    const src = readFileSync('src/app/(app)/admin/reports/ReportsClient.tsx', 'utf8');
+    expect(src).not.toMatch(/color="(red|success|signal|green)"/);
+  });
+
+  it('presets: Last pay period is the default; "Contract to date" appears only once a contract is chosen', async () => {
+    await render();
+    const datesInput = () => [...row('costs').querySelectorAll('input')].find((i) => (i as HTMLInputElement).value.includes('pay period')) as HTMLInputElement;
+    expect(datesInput().value).toBe('Last pay period · Oct 16 – 31, 2026');
+    const options = async () => {
+      await click(datesInput());
+      const list = document.getElementById(datesInput().getAttribute('aria-controls')!)!;
+      const found = [...list.querySelectorAll('[role="option"]')].map((o) => o.textContent);
+      await click(datesInput());
+      return found;
+    };
+    expect(await options()).toEqual(['Last pay period · Oct 16 – 31, 2026', 'This pay period · Nov 1 – 15, 2026', 'This month · Nov 1 – 3, 2026', 'Custom dates…']);
+    const contract = [...row('costs').querySelectorAll('input')].find((i) => i.getAttribute('placeholder') === 'All contracts') as HTMLInputElement;
+    await click(contract);
+    await click([...document.getElementById(contract.getAttribute('aria-controls')!)!.querySelectorAll('[role="option"]')][0]);
+    expect((await options()).at(-2)).toBe('Contract to date · Jan 15 – Nov 3, 2026');
+  });
+});
+
+describe('Downloads behaviour (R-1, C15)', () => {
+  it('a download resolves the preset on the server, then fetches with that range; never window.open; via document.body', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const fetchMock = vi.fn(async () => xlsx());
+    vi.stubGlobal('fetch', fetchMock);
+    (URL as unknown as { createObjectURL: unknown }).createObjectURL = vi.fn(() => 'blob:x');
+    (URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = vi.fn();
+    const appended: string[] = [];
+    const realAppend = document.body.appendChild.bind(document.body);
+    vi.spyOn(document.body, 'appendChild').mockImplementation(<T extends Node>(n: T) => { if (n instanceof HTMLAnchorElement) appended.push(n.download); return realAppend(n); });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    await render();
+    await click(btnIn(row('costs'), 'Excel'));
+    await wait();
+    expect(h.resolvePeriodRange).toHaveBeenCalledWith({ kind: 'lastPeriod' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/reports/cost-report-xlsx?startDate=2026-10-16&endDate=2026-10-31', { credentials: 'same-origin' });
+    expect(appended).toEqual(['r.xlsx']);
+    expect(open).not.toHaveBeenCalled();
     const src = readFileSync('src/app/(app)/admin/reports/ReportsClient.tsx', 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
     expect(src).not.toMatch(/\bopen\s*\(/);
-    expect(src.match(/void runDownload\('(pdf|cost|summary)'/g)?.length).toBe(4); // PDF, CSV, Excel, summary
   });
 
-  it('while busy: aria-disabled with a loader, never disabled; a second click is ignored; then a download through document.body', async () => {
+  it('composite busy keys: the busy button shows the Loader; its row-mate is aria-disabled; other rows are free; a second click is ignored', async () => {
     const pending = deferred<Response>();
     const fetchMock = vi.fn(() => pending.promise);
     vi.stubGlobal('fetch', fetchMock);
-    vi.stubGlobal('URL', Object.assign(Object.create(URL), { createObjectURL: () => 'blob:x', revokeObjectURL: vi.fn() }));
-    const appended: Node[] = [];
-    const realAppend = document.body.appendChild.bind(document.body);
-    vi.spyOn(document.body, 'appendChild').mockImplementation(<T extends Node>(n: T) => { appended.push(n); return realAppend(n); });
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-    await renderWithCostDates();
-    await click(buttonByText('Download CSV'));
-    const csv = buttonByText('Download CSV');
-    const excel = buttonByText('Download Excel');
+    await render();
+    const excel = btnIn(row('costs'), 'Excel');
+    const csv = btnIn(row('costs'), 'CSV');
+    await click(excel);
+    await wait();
+    expect(excel.getAttribute('aria-busy')).toBe('true');
+    expect(excel.querySelector('.mantine-Loader-root')).not.toBeNull();
     expect(csv.getAttribute('aria-disabled')).toBe('true');
-    expect(csv.hasAttribute('disabled')).toBe(false);
-    expect(csv.querySelector('.mantine-Loader-root')).not.toBeNull();
-    expect(excel.getAttribute('aria-disabled')).toBe('true');        // the whole card is busy
+    expect(csv.querySelector('.mantine-Loader-root')).toBeNull();
+    expect(btnIn(row('summary'), 'Excel').getAttribute('aria-disabled')).toBeNull();
+    for (const b of [excel, csv]) expect(b.hasAttribute('disabled')).toBe(false);
     await click(csv);
     await click(excel);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    await act(async () => { pending.resolve(new Response('a,b', { status: 200, headers: { 'content-disposition': 'attachment; filename="cost.csv"' } })); });
+    await act(async () => { pending.resolve(new Response('{}', { status: 500, headers: { 'content-type': 'application/json' } })); });
     await wait();
-    expect(appended.some((n) => n instanceof HTMLAnchorElement && (n as HTMLAnchorElement).download === 'cost.csv')).toBe(true);
-    expect(buttonByText('Download CSV').getAttribute('aria-disabled')).toBeNull();
+    expect(excel.getAttribute('aria-busy')).toBeNull();
+  });
+
+  it('a 422 shows the route\'s message in place under that row only; the next attempt clears it', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'No hours recorded between Oct 16 and Oct 31, 2026.' }), { status: 422, headers: { 'content-type': 'application/json' } })));
+    await render();
+    await click(btnIn(row('costs'), 'CSV'));
+    await wait();
+    expect(row('costs').querySelector('[role="alert"]')!.textContent).toBe('No hours recorded between Oct 16 and Oct 31, 2026.');
+    for (const other of ['pdf', 'summary', 'periodCost', 'unpriced']) expect(row(other).querySelector('[role="alert"]'), other).toBeNull();
+    const again = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn(() => again.promise));
+    await click(btnIn(row('costs'), 'CSV'));
+    expect(row('costs').querySelector('[role="alert"]')).toBeNull();
+    await act(async () => { again.resolve(xlsx()); });
+  });
+
+  it('a preset the server refuses shows its message; nothing is fetched', async () => {
+    h.resolvePeriodRange.mockResolvedValue({ ok: false, code: 'validation', error: 'That contract no longer exists.' });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await render();
+    await click(btnIn(row('summary'), 'Excel'));
+    await wait();
+    expect(row('summary').querySelector('[role="alert"]')!.textContent).toBe('That contract no longer exists.');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('Signed timesheet: no employee → inline message, no fetch; a 404 → "That employee wasn\'t found."; the default period is the last one', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 404, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    await render();
+    await click(buttonsByText('Download PDF')[0]);
+    await wait();
+    expect(row('pdf').querySelector('[role="alert"]')!.textContent).toBe('Choose an employee.');
+    expect(fetchMock).not.toHaveBeenCalled();
+    const employee = [...row('pdf').querySelectorAll('input')].find((i) => i.getAttribute('placeholder') === 'Choose an employee') as HTMLInputElement;
+    await click(employee);
+    await click([...document.getElementById(employee.getAttribute('aria-controls')!)!.querySelectorAll('[role="option"]')][0]);
+    expect(row('pdf').querySelector('[role="alert"]')).toBeNull(); // an input change clears it
+    await click(buttonsByText('Download PDF')[0]);
+    await wait();
+    expect(fetchMock).toHaveBeenCalledWith('/api/reports/timesheet-pdf?userId=u1&periodStart=2026-10-16', { credentials: 'same-origin' });
+    expect(row('pdf').querySelector('[role="alert"]')!.textContent).toBe("That employee wasn't found.");
+  });
+
+  it('Cost by pay period downloads the chosen count (default 6)', async () => {
+    const fetchMock = vi.fn(async () => xlsx());
+    vi.stubGlobal('fetch', fetchMock);
+    (URL as unknown as { createObjectURL: unknown }).createObjectURL = vi.fn(() => 'blob:x');
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    await render();
+    await click(btnIn(row('periodCost'), 'Excel'));
+    await wait();
+    expect(fetchMock).toHaveBeenCalledWith('/api/reports/period-cost-xlsx?n=6', { credentials: 'same-origin' });
   });
 });

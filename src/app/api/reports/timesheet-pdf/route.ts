@@ -29,7 +29,8 @@ export async function GET(request: NextRequest) {
       getWorkspaceTimezone(),
     ]);
     if (!data) {
-      return NextResponse.json({ error: 'No data found' }, { status: 404 });
+      // R4: the PDF keeps 404 for an unknown employee, with its own message (an empty period still prints).
+      return NextResponse.json({ error: "That employee wasn't found." }, { status: 404 });
     }
 
     const element = React.createElement(TimesheetPdfDocument, { data, workspaceTimezone }) as any;

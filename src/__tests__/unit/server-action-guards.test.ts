@@ -174,7 +174,10 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getBytimeContractsForMapping: 'reads active contracts; no token refresh, no write',
     getBytimeClinsForMapping: 'reads active CLINs; no token refresh, no write',
   },
-  'reports.ts': { getDetailedCostReport: 'reads cost report rows via the read-only internal reader; no write' },
+  'reports.ts': {
+    getDetailedCostReport: 'reads cost report rows via the read-only internal reader; no write',
+    getPeriodCostByPeriod: 'UX-4b §4.5: one grouped cost read over the last N completed periods; no write',
+  },
   'setup.ts': {
     getSetupStatus: 'reads setup-checklist counts; no write',
     getSetupAccessGaps: 'feature-plan-ux-page-fixes.md C17: reads who has no chargeable code; no write',
