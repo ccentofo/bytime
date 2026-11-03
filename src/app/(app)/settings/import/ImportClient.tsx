@@ -81,12 +81,13 @@ function ParseFeedback({ parseResult }: { parseResult: ParseResult }) {
 }
 
 /** A row's status: the badge plus its errors as visible text (never a title= tooltip). */
-function RowStatus({ row }: { row: ParsedRow }) {
+export function RowStatus({ row }: { row: ParsedRow }) {
   if (row.isValid) return <Badge color="success" size="xs" variant="light">Valid</Badge>;
   return (
     <Stack gap={2}>
       <Badge color="red" size="xs" variant="light">Error</Badge>
-      {row.errors.map((e) => <Text key={e} size="xs" c="red">{e}</Text>)}
+      {/* Keyed by position: two errors can share a text (UX-4A-AUDIT.md L10). */}
+      {row.errors.map((e, i) => <Text key={i} size="xs" c="red">{e}</Text>)}
     </Stack>
   );
 }
