@@ -5,7 +5,7 @@ import { indirectChargeCodes } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { validateRequired, validateStringLength, validateOptionalString, validateEnum } from '@/lib/validation';
-import { userAction } from '@/lib/action-result';
+import { userAction, type ActionResult } from '@/lib/action-result';
 import { UserFacingError } from '@/lib/errors';
 
 const INDIRECT_CATEGORIES = ['overhead', 'ga', 'irad', 'bp', 'leave', 'unallowable'] as const;
@@ -113,7 +113,11 @@ export async function updateIndirectCode(id: string, data: {
  * Seed default indirect charge codes (admin only).
  * Creates standard codes if they don't exist.
  */
-export async function seedIndirectCodes() {
+/**
+ * Add the standard indirect codes to a workspace that has none (feature-plan-ux-page-fixes.md C3). With any code present
+ * it inserts nothing and reports `created: 0`; a seed racing another insert skips the conflicting code instead of failing.
+ */
+export async function seedIndirectCodes(): Promise<ActionResult<{ created: number }>> {
   return userAction(async () => {
     await requireAdminFresh();
     const db = await getDbForWrite();
@@ -131,9 +135,12 @@ export async function seedIndirectCodes() {
       { code: 'UA-001', name: 'Unallowable', category: 'unallowable' as const, description: 'Non-reimbursable activities (FAR 31.205)' },
     ];
 
-    const existing = await db.select().from(indirectChargeCodes);
-    if (existing.length > 0) return existing;
+    const [existing] = await db.select({ id: indirectChargeCodes.id }).from(indirectChargeCodes).limit(1);
+    if (existing) return { created: 0 };
 
-    return db.insert(indirectChargeCodes).values(defaults).returning();
+    const rows = await db.insert(indirectChargeCodes).values(defaults)
+      .onConflictDoNothing({ target: indirectChargeCodes.code })
+      .returning({ id: indirectChargeCodes.id });
+    return { created: rows.length };
   });
 }

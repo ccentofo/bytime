@@ -200,7 +200,7 @@ export const EXPORT_TABLES: ExportTableConfig[] = [
     { key: 'category', header: 'category', description: 'overhead, ga (general and administrative), irad, bp (bid and proposal), leave, or unallowable.' },
     { key: 'description', header: 'description' },
     { key: 'isActive', header: 'is_active' },
-    { key: 'availableToAll', header: 'available_to_all', description: 'true if every employee may charge it; false if only assigned employees may.' },
+    { key: 'availableToAll', header: 'available_to_all', description: 'true if every employee may charge it; false if employees can\'t add the code or record new hours (rows with existing hours stay correctable).' },
     { key: 'leavePayType', header: 'leave_pay_type', description: 'Leave codes only: how the hours are paid in payroll exports — pto, sick, holiday or unpaid.' },
     { key: 'createdAt', header: 'created_at' },
     { key: 'updatedAt', header: 'updated_at' },

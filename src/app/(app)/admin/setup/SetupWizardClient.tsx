@@ -187,11 +187,14 @@ export function SetupWizardClient({ initialStatus }: Props) {
     const result = await runAction(seedIndirectCodes(), { errorTitle: 'Couldn’t create indirect codes' });
     setSeedingIndirect(false);
     if (!result.ok) return;
-    notifications.show({
-      title: 'Indirect codes created',
-      message: '9 standard DCAA indirect charge codes have been seeded.',
-      color: 'success',
-    });
+    // C3: honest about what happened — nothing is added to a workspace that already has codes.
+    notifications.show(result.data.created > 0
+      ? { title: 'Standard codes added', message: `Added ${result.data.created} standard indirect codes.`, color: 'success' }
+      : {
+        title: 'No codes added',
+        message: 'Your workspace already has indirect codes, so none were added. Reactivate them, and turn on Show on every timesheet, on the Indirect codes page.',
+        color: 'gray',
+      });
     refreshStatus();
   }
 

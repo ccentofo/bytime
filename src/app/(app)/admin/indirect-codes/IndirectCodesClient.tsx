@@ -12,6 +12,7 @@ import {
   Badge,
   Switch,
   Text,
+  Loader,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
@@ -99,6 +100,8 @@ export function IndirectCodesClient({ initialCodes }: Props) {
   const [editingCode, setEditingCode] = useState<IndirectCode | null>(null);
   const [form, setForm] = useState<CodeForm>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
+  // C2: turning "Show on every timesheet" off asks first; the form's own error shows inside this confirm while it's open.
+  const [hideConfirm, setHideConfirm] = useState(false);
 
   function openCreateModal() {
     setEditingCode(null);
@@ -121,17 +124,22 @@ export function IndirectCodesClient({ initialCodes }: Props) {
     setModalOpen(true);
   }
 
-  function handleSubmit() {
+  /** `confirmed`: the hide confirm was accepted (feature-plan-ux-page-fixes.md C2). Wired as `() => handleSubmit()`. */
+  function handleSubmit({ confirmed = false }: { confirmed?: boolean } = {}) {
+    setFormError(null);
+    if (!form.code || !form.name || !form.category) {
+      setFormError('Code, Name, and Category are required.');
+      return;
+    }
+    if (form.category === 'leave' && !form.leavePayType) {
+      setFormError('Choose a pay type for a leave code — payroll export needs it.');
+      return;
+    }
+    if (editingCode?.availableToAll && !form.availableToAll && !confirmed) {
+      setHideConfirm(true);
+      return;
+    }
     startTransition(async () => {
-      setFormError(null);
-      if (!form.code || !form.name || !form.category) {
-        setFormError('Code, Name, and Category are required.');
-        return;
-      }
-      if (form.category === 'leave' && !form.leavePayType) {
-        setFormError('Choose a pay type for a leave code — payroll export needs it.');
-        return;
-      }
 
       const fields = {
         code: form.code,
@@ -149,6 +157,7 @@ export function IndirectCodesClient({ initialCodes }: Props) {
         setFormError(result.error);
         return;
       }
+      setHideConfirm(false);
       notifications.show(editingCode
         ? { title: 'Code Updated', message: `${form.name} has been updated.`, color: 'success' }
         : { title: 'Code Created', message: `${form.name} has been created.`, color: 'success' });
@@ -177,14 +186,22 @@ export function IndirectCodesClient({ initialCodes }: Props) {
     });
   }
 
-  function handleSeedDefaults() {
-    startTransition(async () => {
-      const result = await runAction(seedIndirectCodes(), { errorTitle: 'Couldn’t seed defaults' });
+  // C3: adds the standard codes only to a workspace that has none; says honestly when none were added.
+  const [seeding, setSeeding] = useState(false);
+  async function handleSeedDefaults() {
+    if (seeding) return;
+    setSeeding(true);
+    try {
+      const result = await runAction(seedIndirectCodes(), { errorTitle: 'Couldn’t add the standard codes' });
       if (!result.ok) return;
       const refreshed = await getIndirectChargeCodes();
       setCodes(refreshed as IndirectCode[]);
-      notifications.show({ title: 'Defaults Seeded', message: 'Default indirect charge codes have been created.', color: 'success' });
-    });
+      notifications.show(result.data.created > 0
+        ? { title: 'Standard codes added', message: `Added ${result.data.created} standard indirect codes.`, color: 'success' }
+        : { title: 'No codes added', message: 'Your workspace already has indirect codes, so none were added.', color: 'gray' });
+    } finally {
+      setSeeding(false);
+    }
   }
 
   const columns: MRT_ColumnDef<IndirectCode>[] = [
@@ -223,9 +240,10 @@ export function IndirectCodesClient({ initialCodes }: Props) {
       size: 100,
     },
     {
-      accessorKey: 'availableToAll',
-      header: 'All Employees',
-      Cell: ({ cell }) => cell.getValue<boolean>() ? 'Yes' : 'No',
+      // C2: the word, so the table search finds it; an inactive code is on no timesheet whatever the flag says.
+      id: 'availableToAll',
+      accessorFn: (r) => (!r.isActive ? 'Inactive' : r.availableToAll ? 'Yes' : 'Hidden'),
+      header: 'On timesheets',
       size: 120,
     },
   ];
@@ -233,6 +251,21 @@ export function IndirectCodesClient({ initialCodes }: Props) {
   const table = useAppTable({
     columns,
     data: codes,
+    // C3: the standard-codes offer lives in the empty state of a workspace with NO codes — never for a search with no
+    // matches (MRT renders this fallback for both).
+    renderEmptyRowsFallback: codes.length === 0 ? () => (
+      <Stack align="center" gap="sm" py="xl">
+        <Text size="sm">No indirect codes yet. Add the standard DCAA set (overhead, G&amp;A, IR&amp;D, B&amp;P, leave and unallowable) or create your own.</Text>
+        <WriteButton
+          variant="default"
+          onClick={handleSeedDefaults}
+          aria-disabled={seeding || undefined}
+          leftSection={seeding ? <Loader size={14} aria-hidden="true" /> : undefined}
+        >
+          Add standard codes
+        </WriteButton>
+      </Stack>
+    ) : undefined,
     enableRowActions: true,
     renderRowActions: ({ row }) => {
       const code = row.original;
@@ -259,9 +292,6 @@ export function IndirectCodesClient({ initialCodes }: Props) {
             <WriteButton leftSection={<Icons.create size={ICON_SIZE.button} />} onClick={openCreateModal}>
               Add Code
             </WriteButton>
-            <WriteButton variant="default" onClick={handleSeedDefaults} loading={isPending}>
-              Seed Defaults
-            </WriteButton>
           </Group>
         }
       />
@@ -277,9 +307,23 @@ export function IndirectCodesClient({ initialCodes }: Props) {
         onCancel={() => setConfirmDeactivate(null)}
       />
 
+      <ConfirmModal
+        opened={hideConfirm}
+        tone="danger"
+        title={`Hide ${form.code} from timesheets?`}
+        message={`Employees won't be able to add ${form.code} or record new hours on it. Rows that already have hours stay visible in their period for corrections and notes.`}
+        confirmLabel="Hide code"
+        loading={isPending}
+        error={formError}
+        onConfirm={() => handleSubmit({ confirmed: true })}
+        onCancel={() => { setHideConfirm(false); setFormError(null); }}
+      />
+
       <Modal
         opened={modalOpen}
         onClose={() => setModalOpen(false)}
+        // Every open modal listens for Esc on window: with the hide confirm open, Esc must close only the confirm.
+        closeOnEscape={!hideConfirm}
         title={editingCode ? 'Edit Indirect Code' : 'Create Indirect Code'}
         size="md"
       >
@@ -324,18 +368,20 @@ export function IndirectCodesClient({ initialCodes }: Props) {
             minRows={2}
           />
           <Switch
-            label="Available to All Employees"
+            label="Show on every timesheet"
+            description="When off, employees can't add this code or record new hours on it. Where hours are already recorded, the row stays in that period for corrections and notes."
             checked={form.availableToAll}
             onChange={(e) => setForm((f) => ({ ...f, availableToAll: e.currentTarget.checked }))}
           />
-          {formError && (
+          {/* While the hide confirm is open its error shows there instead (one error location). */}
+          {formError && !hideConfirm && (
             <Badge color="red" size="lg" style={{ whiteSpace: 'normal', height: 'auto', padding: '8px' }}>
               {formError}
             </Badge>
           )}
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <WriteButton onClick={handleSubmit} loading={isPending}>
+            <WriteButton onClick={() => handleSubmit()} loading={isPending}>
               {editingCode ? 'Save Changes' : 'Create Code'}
             </WriteButton>
           </Group>

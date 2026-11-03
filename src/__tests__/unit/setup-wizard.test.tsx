@@ -12,11 +12,13 @@ import path from 'path';
 const actions = vi.hoisted(() => ({
   autobridge: vi.fn(async () => ({ ok: true, data: { created: 2, total: 2 } })),
   getSetupStatus: vi.fn(),
+  seedIndirectCodes: vi.fn(),
+  notify: vi.fn(),
 }));
 vi.mock('@/server/actions/charge-codes', () => ({ autobridgeChargeCodesFromClins: actions.autobridge }));
 vi.mock('@/server/actions/setup', () => ({ getSetupStatus: actions.getSetupStatus }));
-vi.mock('@/server/actions/indirect-codes', () => ({ seedIndirectCodes: vi.fn() }));
-vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
+vi.mock('@/server/actions/indirect-codes', () => ({ seedIndirectCodes: actions.seedIndirectCodes }));
+vi.mock('@mantine/notifications', () => ({ notifications: { show: actions.notify } }));
 
 import { SetupWizardClient, STEPS } from '@/app/(app)/admin/setup/SetupWizardClient';
 import type { SetupStatus } from '@/server/internal/setup';
@@ -82,5 +84,31 @@ describe('Setup Wizard (T15)', () => {
     const link = (text: string) => [...m!.container.querySelectorAll('a')].find((a) => a.textContent?.trim() === text)!;
     expect(link('Go to Home').getAttribute('href')).toBe('/home');
     expect(link('Open timesheet').getAttribute('href')).toBe('/timesheet');
+  });
+});
+
+// feature-plan-ux-page-fixes.md C3 / T-C3c: the wizard's seed says what actually happened.
+describe('Setup Wizard seed message (C3)', () => {
+  const shown = () => actions.notify.mock.calls.map((c) => (c[0] as { message: string }).message).join(' | ');
+  const goToIndirectStep = () => click([...document.body.querySelectorAll('button.mantine-Stepper-step')].find((b) => b.textContent?.includes('Indirect charge codes')));
+
+  it('created 0 → "none were added" (with where to reactivate them), never "9 … seeded"', async () => {
+    actions.seedIndirectCodes.mockResolvedValue({ ok: true, data: { created: 0 } });
+    actions.getSetupStatus.mockResolvedValue(status({}));
+    m = await mount(<SetupWizardClient initialStatus={status({})} />);
+    await goToIndirectStep();
+    await click(buttonByText('Seed default DCAA codes'));
+    expect(actions.seedIndirectCodes).toHaveBeenCalledTimes(1);
+    expect(shown()).toContain('Your workspace already has indirect codes, so none were added. Reactivate them, and turn on Show on every timesheet, on the Indirect codes page.');
+    expect(shown()).not.toMatch(/9 .*seeded|seeded/);
+  });
+
+  it('created 9 → "Added 9 standard indirect codes."', async () => {
+    actions.seedIndirectCodes.mockResolvedValue({ ok: true, data: { created: 9 } });
+    actions.getSetupStatus.mockResolvedValue(status({ indirectCodes: 9 }));
+    m = await mount(<SetupWizardClient initialStatus={status({})} />);
+    await goToIndirectStep();
+    await click(buttonByText('Seed default DCAA codes'));
+    expect(shown()).toContain('Added 9 standard indirect codes.');
   });
 });
