@@ -388,34 +388,52 @@ describe('Period-lock integrity (R2-2)', () => {
       const holder = postgres(URL, { max: 1 });
       const observer = postgres(URL, { max: 1 });
       writeDb.override = drizzle(pool, { schema });
+      type SaveResult = Awaited<ReturnType<typeof updatePayPeriodConfig>>;
+      let saveA: Promise<SaveResult> | undefined;
+      let saveB: Promise<SaveResult> | undefined;
+      // UX-4A-AUDIT.md M4: each save's settled result, so a timeout explains itself.
+      const settled: Record<string, unknown> = {};
+      const track = (name: string, p: Promise<SaveResult>) => {
+        p.then((r) => { settled[name] = r; }, (e: unknown) => { settled[name] = `threw: ${String(e)}`; });
+        return p;
+      };
       try {
         const a = { periodType: 'biweekly' as const, anchorDate: '2025-01-06' as CalendarDate, weekStartDay: 1 };
         const b = { periodType: 'biweekly' as const, anchorDate: '2025-01-13' as CalendarDate, weekStartDay: 1 };
         const [dateA] = (await getValidScheduleChangeDates(a)).dates;
         const [dateB] = (await getValidScheduleChangeDates(b)).dates;
-        let saves!: Promise<Awaited<ReturnType<typeof updatePayPeriodConfig>>[]>;
         await holder.begin(async (tx) => {
           await tx`SELECT pg_advisory_xact_lock(hashtext('pay_period_config'))`;
-          // Both pages saw no pending change.
-          saves = Promise.all([
-            updatePayPeriodConfig({ ...a, effectiveFrom: dateA, expectedPendingId: null }),
-            updatePayPeriodConfig({ ...b, effectiveFrom: dateB, expectedPendingId: null }),
-          ]);
-          // Without the lock the saves finish instead of waiting, and this loop times out.
-          for (let i = 0; ; i++) {
-            const [{ n }] = await observer<{ n: number }[]>`SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`;
-            if (n >= 2) break;
-            if (i > 400) throw new Error('the two saves never waited on the pay_period_config lock');
-            await new Promise((res) => setTimeout(res, 25));
-          }
+          // Count waiters on THIS lock only: the holder's own granted row gives its database and key.
+          const [key] = await tx<{ database: string; classid: string; objid: string }[]>`
+            SELECT database::text, classid::text, objid::text FROM pg_locks
+            WHERE locktype = 'advisory' AND granted AND pid = pg_backend_pid()`;
+          const waitFor = async (n: number, what: string) => {
+            for (let i = 0; ; i++) {
+              const [{ w }] = await observer<{ w: number }[]>`
+                SELECT count(*)::int AS w FROM pg_locks
+                WHERE locktype = 'advisory' AND NOT granted
+                  AND database::text = ${key.database} AND classid::text = ${key.classid} AND objid::text = ${key.objid}`;
+              if (w >= n) return;
+              // Without the lock the saves finish instead of waiting, and this times out.
+              if (i > 400) throw new Error(`${what} (waiters: ${w}; settled: ${JSON.stringify(settled)})`);
+              await new Promise((res) => setTimeout(res, 25));
+            }
+          };
+          // Staggered (M4): save B's pre-lock phase (session check and all) never runs alongside save A's. Both pages
+          // saw no pending change.
+          saveA = track('A', updatePayPeriodConfig({ ...a, effectiveFrom: dateA, expectedPendingId: null }));
+          await waitFor(1, 'save A never waited on the pay_period_config lock');
+          saveB = track('B', updatePayPeriodConfig({ ...b, effectiveFrom: dateB, expectedPendingId: null }));
+          await waitFor(2, 'save B never waited on the pay_period_config lock');
         });
-        const results = await saves;
-        expect(results.filter((r) => r.ok)).toHaveLength(1);
-        const refused = results.filter((r) => !r.ok);
-        expect(refused).toHaveLength(1);
-        expect(refused[0]).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/updated by someone else/) });
+        const [resultA, resultB] = await Promise.all([saveA!, saveB!]);
+        expect(resultA).toMatchObject({ ok: true, data: { effectiveFrom: dateA } });
+        expect(resultB).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/updated by someone else/) });
         expect(await getTestDb().select().from(schema.payPeriodConfig).where(gt(schema.payPeriodConfig.effectiveFrom, '2026-01-15'))).toHaveLength(1);
       } finally {
+        // No dangling rejection on a failing run: let both saves settle before the pools end.
+        await Promise.allSettled([saveA, saveB].filter((p): p is Promise<SaveResult> => p !== undefined));
         writeDb.override = null;
         await holder.end({ timeout: 1 });
         await observer.end({ timeout: 1 });
