@@ -67,10 +67,13 @@ export function LoginForm({ next = null }: { next?: string | null } = {}) {
         return;
       }
 
+      // Send the mfaCode key ONLY with a code (feature-plan-hotfix-mfa-qr.md §7): next-auth builds the POST body with
+      // URLSearchParams, which turns `mfaCode: undefined` into the string "undefined" — verified as a wrong code.
+      const code = mfaRequired ? (useRecoveryCode ? recoveryCode.trim() : mfaCode.trim()) : '';
       const result = await signIn('credentials', {
         email: email.toLowerCase().trim(),
         password,
-        mfaCode: mfaRequired ? (useRecoveryCode ? recoveryCode.trim() : mfaCode.trim()) : undefined,
+        ...(mfaRequired ? { mfaCode: code } : {}),
         redirect: false,
       });
 

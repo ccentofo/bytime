@@ -33,7 +33,10 @@ export async function authorizeCredentials(credentials: Record<string, unknown> 
 
   const email = (credentials.email as string).toLowerCase().trim();
   const password = credentials.password as string;
-  const mfaCode = (credentials.mfaCode as string | undefined)?.trim();
+  // No code submitted = missing, blank, not a string, or "undefined"/"null": URLSearchParams serialises an undefined
+  // value as the string "undefined" (feature-plan-hotfix-mfa-qr.md §7) — that must ask for a code, not count a failure.
+  const rawMfa = credentials.mfaCode;
+  const mfaCode = typeof rawMfa === 'string' && !['', 'undefined', 'null'].includes(rawMfa.trim()) ? rawMfa.trim() : undefined;
 
   // Use suspended-tolerant DB resolver so suspended admins can still log in
   // and reach the billing wall. getDb() stays strict everywhere else.
