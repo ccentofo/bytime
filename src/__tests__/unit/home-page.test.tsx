@@ -69,7 +69,7 @@ describe('Home (T10)', () => {
       ['setup', '/admin/setup'],
       ['workweek', '/settings/workspace'],
       ['pay-schedule', '/settings/pay-schedule'],
-      ['contracts', '/admin/dashboard'],
+      ['contracts', '/admin/contracts'],
       ['overlaps', '/admin/labor-categories'],
     ]);
     const items = attentionItems(view());

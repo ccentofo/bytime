@@ -50,7 +50,7 @@ vi.mock('@/lib/session', async (importOriginal) => {
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { getDetailedCostReport, getEmployeeSummaryReport } from '@/server/actions/reports';
-import { getContractSummaries, getPeriodCostReport } from '@/server/actions/dashboard';
+import { getContractsOverview } from '@/server/actions/contracts';
 import { getUnpricedHoursReport, getOverlappingAssignmentsReport, endUserLaborCategoryAssignment } from '@/server/actions/labor-categories';
 import { updateChargeCode, reactivateChargeCode, deactivateChargeCode, listChargeCodes } from '@/server/actions/charge-codes';
 import { correctChargeCodeCategory } from '@/server/actions/charge-code-categories';
@@ -135,12 +135,10 @@ describe('cost basis (certified-outputs C3)', () => {
     const [row] = await getDetailedCostReport(...RANGE);
     expect(row).toMatchObject({ costBasis: 'unpriced', unpricedReason: 'no-category', totalHours: 8, totalCost: 0, unpricedHours: 8 });
     expect((await getUnpricedHoursReport({})).rows[0].fix).toMatch(/^Set a labor category on charge code .*, or give .* a labor category on CLIN .* effective 2026-03-02\.$/);
-    const summary = await getContractSummaries();
-    const c = summary.find((s) => s.contractId === contract.id)!;
-    expect(c).toMatchObject({ totalHours: 8, totalCost: 0, unpricedHours: 8 });
-    expect(c.clinSummaries.find((x) => x.clinId === clinA.id)).toMatchObject({ unpricedHours: 8, totalCost: 0 });
-    const period = await getPeriodCostReport(...RANGE);
-    expect(period).toEqual([expect.objectContaining({ costBasis: 'unpriced', lcatTitle: 'Unpriced', totalHours: 8, totalCost: 0, unpricedHours: 8 })]);
+    // UX-4b (§9): the Contracts read replaces the dashboard summary; the period report moved to Excel (R-2).
+    const c = (await getContractsOverview()).contracts.find((s) => s.id === contract.id)!;
+    expect(c).toMatchObject({ hours: 8, pricedCost: 0, unpricedHours: 8 });
+    expect(c.clins.find((x) => x.id === clinA.id)).toMatchObject({ unpricedHours: 8, pricedCost: 0 });
   });
 
   it('an employee with labor categories on TWO CLINs: summary hours = true hours; one detailed row per entry', async () => {
@@ -155,8 +153,8 @@ describe('cost basis (certified-outputs C3)', () => {
     const summary = await getEmployeeSummaryReport(...RANGE);
     expect(summary.reduce((s, r) => s + r.totalHours, 0)).toBe(16);
     expect(summary.reduce((s, r) => s + (r.totalCost ?? 0), 0)).toBe(1200);
-    const dash = (await getContractSummaries()).find((s) => s.contractId === contract.id)!;
-    expect(dash).toMatchObject({ totalCost: 1200, unpricedHours: 0 });
+    const dash = (await getContractsOverview()).contracts.find((s) => s.id === contract.id)!;
+    expect(dash).toMatchObject({ pricedCost: 1200, unpricedHours: 0 });
   });
 
   it('F6: two employees with the SAME name are two summary rows (grouped by id, not name)', async () => {
@@ -189,17 +187,17 @@ describe('cost basis (certified-outputs C3)', () => {
     expect((await getDetailedCostReport(...RANGE))[0]).toMatchObject({ lcatCode: 'SLINB', hourlyRate: 150, totalCost: 1200, costBasis: 'priced' });
   });
 
-  it('T5: dashboard SLIN summaries carry the exact priced cost and unpriced hours; the employee summary carries unpricedHours', async () => {
+  it('T5: Contracts SLIN rows carry the exact priced cost and unpriced hours; the employee summary carries unpricedHours', async () => {
     const [s1] = await db().insert(schema.slins).values({ clinId: clinA.id, slinNumber: 'SC', fundedAmount: '10000' }).returning();
     const priced = await lcat(clinA.id, 'SC1', '90.00', { slinId: s1.id });
     await assign(emp.id, priced.id, '2026-01-01');
     await entry({ clinId: clinA.id, slinId: s1.id, entryDate: D1, hours: '8' });             // priced: 8 × 90 = 720
     const [s2] = await db().insert(schema.slins).values({ clinId: clinA.id, slinNumber: 'SD' }).returning();
     await entry({ clinId: clinA.id, slinId: s2.id, entryDate: D2, hours: '3' });             // unpriced (no category on SD, none at CLIN level)
-    const c = (await getContractSummaries()).find((x) => x.contractId === contract.id)!;
-    const clin = c.clinSummaries.find((x) => x.clinId === clinA.id)!;
-    expect(clin.slinSummaries.find((x) => x.slinId === s1.id)).toMatchObject({ totalCost: 720, unpricedHours: 0, totalHours: 8 });
-    expect(clin.slinSummaries.find((x) => x.slinId === s2.id)).toMatchObject({ totalCost: 0, unpricedHours: 3, totalHours: 3 });
+    const c = (await getContractsOverview()).contracts.find((x) => x.id === contract.id)!;
+    const clin = c.clins.find((x) => x.id === clinA.id)!;
+    expect(clin.slins.find((x) => x.id === s1.id)).toMatchObject({ pricedCost: 720, unpricedHours: 0, hours: 8 });
+    expect(clin.slins.find((x) => x.id === s2.id)).toMatchObject({ pricedCost: 0, unpricedHours: 3, hours: 3 });
     const summary = (await getEmployeeSummaryReport(...RANGE)).find((r) => r.employeeId === emp.id)!;
     expect(summary).toMatchObject({ totalHours: 11, totalCost: 720, unpricedHours: 3 });
   });

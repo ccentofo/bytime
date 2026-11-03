@@ -1,0 +1,82 @@
+/* feature-plan-ux-kit-contracts.md §4.1 (mockup "Contracts"): the summary strip, burn bars and the contract sub-line. */
+.strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: var(--mantine-spacing-md);
+}
+
+.strip > div {
+  padding: 14px 18px;
+  border-left: 1px solid var(--mantine-color-default-border);
+}
+
+.strip > div:first-child {
+  border-left: 0;
+}
+
+@media (max-width: 48em) {
+  .strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .strip > div:nth-child(3) {
+    border-left: 0;
+  }
+}
+
+.stripValue {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.stripLabel {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-sm);
+}
+
+.burn {
+  display: grid;
+  grid-template-columns: 56px auto;
+  gap: 10px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.bar {
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--mantine-color-default-border);
+}
+
+.bar > span {
+  display: block;
+  height: 100%;
+  background: var(--mantine-color-signal-6);
+}
+
+.sub {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-sm);
+  white-space: nowrap;
+}
+
+.pill {
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 1px 7px;
+  background: var(--mantine-color-default-hover);
+  color: var(--mantine-color-dimmed);
+}
+
+.mono {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: var(--mantine-font-size-sm);
+}
+
+.oneLine {
+  white-space: nowrap;
+}

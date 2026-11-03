@@ -36,8 +36,8 @@ describe('burn tiers (T11)', () => {
     expect(remainingWarning(-1)).toBe(false);
   });
 
-  it('static: DashboardClient uses the shared tiers (no private burn colours)', () => {
-    const src = readFileSync(path.resolve(__dirname, '../../app/(app)/admin/dashboard/DashboardClient.tsx'), 'utf8');
+  it('static: the Contracts page uses the shared tiers (no private burn colours)', () => {
+    const src = readFileSync(path.resolve(__dirname, '../../app/(app)/admin/contracts/ContractsClient.tsx'), 'utf8');
     expect(src).toContain("from '@/lib/ui/burn'");
     expect(src).toMatch(/burnTier\(/);
     expect(src).toMatch(/burnPercent\(/);

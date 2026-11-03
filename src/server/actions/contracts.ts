@@ -4,9 +4,11 @@ import { getDb, getDbForWrite } from '@/db';
 import { contracts } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
-import { validateContractNumber, validateRequired, validateStringLength, validateOptionalString, validateOptionalCalendarDate, validateMonetaryValue } from '@/lib/validation';
+import { validateContractNumber, validateRequired, validateStringLength, validateOptionalString, validateOptionalCalendarDate, validateMonetaryValue, validateUUID } from '@/lib/validation';
 import type { CalendarDate } from '@/lib/calendar-date';
 import { userAction } from '@/lib/action-result';
+import { UserFacingError } from '@/lib/errors';
+import { getContractsOverviewInternal, type ContractsOverview } from '@/server/internal/contracts-overview';
 
 export type Contract = Omit<typeof contracts.$inferSelect, 'startDate' | 'endDate'> & {
   startDate: CalendarDate | null;
@@ -18,6 +20,25 @@ export async function getContracts(): Promise<Contract[]> {
   const db = await getDb();
   const rows = await db.select().from(contracts).orderBy(contracts.name);
   return rows as Contract[];
+}
+
+/** The Contracts page's read (feature-plan-ux-kit-contracts.md §4.1): the hierarchy with money, and the strip totals. */
+export async function getContractsOverview(): Promise<ContractsOverview> {
+  await requireAdmin();
+  return getContractsOverviewInternal(await getDb());
+}
+
+const CONTRACT_STATUSES = ['active', 'inactive', 'closed'] as const;
+const CONTRACT_TYPES = ['prime', 'sub'] as const;
+
+/** Runtime checks the TypeScript types can't make (feature-plan-ux-kit-contracts.md §4.1.10). */
+function validStatus(value: unknown): (typeof CONTRACT_STATUSES)[number] {
+  if (!(CONTRACT_STATUSES as readonly unknown[]).includes(value)) throw new UserFacingError('Invalid contract status.');
+  return value as (typeof CONTRACT_STATUSES)[number];
+}
+function validType(value: unknown): (typeof CONTRACT_TYPES)[number] {
+  if (!(CONTRACT_TYPES as readonly unknown[]).includes(value)) throw new UserFacingError('Invalid contract type.');
+  return value as (typeof CONTRACT_TYPES)[number];
 }
 
 export async function getContractById(id: string): Promise<Contract | null> {
@@ -44,7 +65,7 @@ export async function createContract(data: {
       contractNumber: validateContractNumber(data.contractNumber),
       name: validateStringLength(validateRequired(data.name, 'Contract name'), 'Contract name', 1, 255),
       description: validateOptionalString(data.description, 'Description', 2000),
-      contractType: data.contractType ?? 'prime',
+      contractType: validType(data.contractType ?? 'prime'),
       startDate: validateOptionalCalendarDate(data.startDate, 'Start date'),
       endDate: validateOptionalCalendarDate(data.endDate, 'End date'),
       fundedValue: validateMonetaryValue(data.fundedValue, 'Funded value'),
@@ -68,13 +89,14 @@ export async function updateContract(id: string, data: {
 }) {
   return userAction(async () => {
     await requireAdminFresh();
+    validateUUID(id, 'Contract');
     const db = await getDbForWrite();
     const validatedData: Record<string, unknown> = { updatedAt: new Date() };
     if (data.contractNumber !== undefined) validatedData.contractNumber = validateContractNumber(data.contractNumber);
     if (data.name !== undefined) validatedData.name = validateStringLength(validateRequired(data.name, 'Contract name'), 'Contract name', 1, 255);
     if (data.description !== undefined) validatedData.description = validateOptionalString(data.description, 'Description', 2000);
-    if (data.contractType !== undefined) validatedData.contractType = data.contractType;
-    if (data.status !== undefined) validatedData.status = data.status;
+    if (data.contractType !== undefined) validatedData.contractType = validType(data.contractType);
+    if (data.status !== undefined) validatedData.status = validStatus(data.status);
     if (data.startDate !== undefined) validatedData.startDate = validateOptionalCalendarDate(data.startDate, 'Start date');
     if (data.endDate !== undefined) validatedData.endDate = validateOptionalCalendarDate(data.endDate, 'End date');
     if (data.fundedValue !== undefined) validatedData.fundedValue = validateMonetaryValue(data.fundedValue, 'Funded value');
@@ -83,6 +105,7 @@ export async function updateContract(id: string, data: {
       .set(validatedData)
       .where(eq(contracts.id, id))
       .returning();
+    if (!rows[0]) throw new UserFacingError('That contract no longer exists.', 'not_found');
     return rows[0];
   });
 }

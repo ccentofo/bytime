@@ -78,7 +78,7 @@ vi.mock('@/server/internal/employee-dashboard', async (importOriginal) => {
 import { getHomeData } from '@/server/internal/home';
 import { attentionItems, burnCard, type HomeView } from '@/lib/home/attention';
 import { unpricedEntries } from '@/server/internal/cost-basis';
-import { getContractSummaries } from '@/server/actions/dashboard';
+import { getContractsOverview } from '@/server/actions/contracts';
 
 const EARLY = new Date('2026-01-01T12:00:00Z');
 const ADMIN_ONLY = ['notices', 'contracts', 'workweek', 'pendingConfig', 'overlaps', 'setup'];
@@ -211,11 +211,13 @@ describe('getHomeData (T9)', () => {
     expect(v.admin!.unpricedTotal).toBe(Math.round(report.rows.reduce((s, r) => s + r.hours, 0) * 100) / 100);
     expect(v.admin!.unpricedTotal).toBe(7.5);                                    // 1.5 + 1 (corrected) + 0 (cleared) + 2 (conflict) + 3 (inactive contract)
     expect(report.rows.some((r) => r.reason === 'conflict')).toBe(true);
-    const dashboard = await getContractSummaries();
+    // UX-4b (§9): Home and Contracts agree to the cent (both from clinCostTotals), and on the all-contracts unpriced total.
+    const overview = await getContractsOverview();
     for (const c of v.admin!.contracts) {
-      const d = dashboard.find((x) => x.contractId === c.contractId)!;
-      expect({ cost: c.pricedCost, unpriced: c.unpricedHours }, c.contractName).toEqual({ cost: d.totalCost, unpriced: d.unpricedHours });
+      const d = overview.contracts.find((x) => x.id === c.contractId)!;
+      expect({ cost: c.pricedCost, unpriced: c.unpricedHours }, c.contractName).toEqual({ cost: d.pricedCost, unpriced: d.unpricedHours });
     }
+    expect(overview.totals.unpricedHoursAll).toBe(v.admin!.unpricedTotal);
     expect(v.admin!.contracts.find((c) => c.contractName === 'Active')!.pricedCost).toBe(61.72);
     expect(burnCard(v.admin!.contracts).map((c) => c.contractName)).toEqual(['Active']); // the card is active-only
   });

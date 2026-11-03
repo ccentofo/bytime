@@ -72,3 +72,19 @@ describe('route moves (T1)', () => {
     expect(readdirSync(dir)).not.toContain('layout.tsx');
   });
 });
+
+// feature-plan-ux-kit-contracts.md §5 / C-6 -----------------------------------------------------------------------------
+describe('route moves (UX-4b C-6)', () => {
+  const rules = async () => ((await import('../../../next.config')).default as { redirects: () => Promise<Array<{ source: string; destination: string; permanent: boolean }>> }).redirects();
+
+  it('/admin/dashboard → /admin/contracts (307)', async () => {
+    expect((await rules()).find((r) => r.source === '/admin/dashboard')).toMatchObject({ destination: '/admin/contracts', permanent: false });
+  });
+
+  it('no source file links to /admin/dashboard any more; Home\'s contracts item opens /admin/contracts', () => {
+    const offenders = files(path.join(ROOT, 'src')).filter((f) => /['"`]\/admin\/dashboard/.test(stripComments(readFileSync(f, 'utf8'))));
+    expect(offenders.map((f) => path.relative(ROOT, f))).toEqual([]);
+    expect(readFileSync(path.join(ROOT, 'src/lib/home/attention.ts'), 'utf8')).toContain("action: { label: 'Open contracts', href: '/admin/contracts' }");
+  });
+});
+

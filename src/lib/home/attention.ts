@@ -173,7 +173,7 @@ export function attentionItems(v: HomeView): AttentionItem[] {
         key: 'contracts',
         title: `${plural(flagged.length, 'contract needs', 'contracts need')} a look`,
         sentence: flagged.map((c) => `${c.contractName} (${BURN_TIER_LABEL[c.tier]})`).join(', '),
-        action: { label: 'Open overview', href: '/admin/dashboard' },
+        action: { label: 'Open contracts', href: '/admin/contracts' }, // UX-4b C1: the Overview merged into Contracts
       });
     }
     if (a.overlaps > 0) {

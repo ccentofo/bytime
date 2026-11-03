@@ -71,6 +71,8 @@ const nextConfig: NextConfig = {
       { source: "/admin/migration", destination: "/settings/migration", permanent: false },
       { source: "/admin/notifications", destination: "/profile/notifications", permanent: false },
       { source: "/settings", destination: "/settings/workspace", permanent: false },
+      // feature-plan-ux-kit-contracts.md C1: the Overview merged into Contracts and CLINs.
+      { source: "/admin/dashboard", destination: "/admin/contracts", permanent: false },
     ];
   },
 };

@@ -12,6 +12,7 @@ vi.mock('@/server/actions/contracts', () => ({ createContract: vi.fn(), updateCo
 vi.mock('@/server/actions/clins', () => ({ getClinsByContract: vi.fn(), createClin: vi.fn(), updateClin: vi.fn() }));
 vi.mock('@/server/actions/slins', () => ({ getSlinsByClin: vi.fn(), createSlin: vi.fn(), updateSlin: vi.fn() }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
 import { WorkspaceModeProvider, WriteButton, READ_ONLY_TOOLTIP } from '@/components/shell/WorkspaceMode';
 import { ReviewDecisionButtons } from '@/components/approvals/ReviewDecisionButtons';
@@ -62,8 +63,8 @@ describe('admin write controls', () => {
     expect(READ_ONLY_TOOLTIP).toMatch(/read-only/);
   });
 
-  it('ContractsClient: "Add Contract" is disabled in read_only, enabled in full', () => {
-    expect(buttons(render('read_only', <ContractsClient initialContracts={[]} />), 'Add Contract')).toEqual([{ disabled: true }]);
-    expect(buttons(render('full', <ContractsClient initialContracts={[]} />), 'Add Contract')).toEqual([{ disabled: false }]);
+  it('ContractsClient: "Add contract" is disabled in read_only, enabled in full', () => {
+    expect(buttons(render('read_only', <ContractsClient overview={{ contracts: [], totals: { activeContracts: 0, funded: 0, pricedCost: 0, unpricedHoursAll: 0 } }} />), 'Add contract')).toEqual([{ disabled: true }]);
+    expect(buttons(render('full', <ContractsClient overview={{ contracts: [], totals: { activeContracts: 0, funded: 0, pricedCost: 0, unpricedHoursAll: 0 } }} />), 'Add contract')).toEqual([{ disabled: false }]);
   });
 });

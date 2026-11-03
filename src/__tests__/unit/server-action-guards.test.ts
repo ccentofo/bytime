@@ -134,10 +134,7 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
   'contracts.ts': {
     getContracts: 'reads contracts; no write',
     getContractById: 'reads one contract; no write',
-  },
-  'dashboard.ts': {
-    getContractSummaries: 'aggregates hours/cost per contract; read-only queries',
-    getPeriodCostReport: 'aggregates a period\'s cost; read-only queries',
+    getContractsOverview: 'UX-4b §4.1: reads the contract hierarchy with its money (internal/contracts-overview); no write',
   },
   'gusto.ts': { getBytimeEmployeesForGustoMapping: 'reads active employees for the mapping UI; no token refresh, no write' },
   'indirect-codes.ts': {

@@ -55,8 +55,9 @@ describe('useLastTarget (L2)', () => {
     expect(src('src/app/(app)/admin/users/UsersClient.tsx')).toContain('title={`Deactivate ${shownDeactivate?.fullName');
     expect(src('src/app/(app)/admin/users/UsersClient.tsx')).toContain('title={shownFlsa ? `Mark ${shownFlsa.fullName}');
     expect(src('src/app/(app)/admin/indirect-codes/IndirectCodesClient.tsx')).toContain('title={`Deactivate ${shownDeactivate?.code');
-    expect(src('src/app/(app)/admin/contracts/ContractsClient.tsx')).toContain('title={`Deactivate CLIN ${shownClin?.clinNumber');
-    expect(src('src/app/(app)/admin/contracts/ContractsClient.tsx')).toContain('title={`Deactivate SLIN ${shownSlin?.slinNumber');
+    // UX-4b §4.1: one CLIN/SLIN confirm and the close/reopen confirm, both reading their last target.
+    expect(src('src/app/(app)/admin/contracts/ContractsClient.tsx')).toContain("title={shownLine ? (shownLine.level === 'clin' ? `Deactivate CLIN ${shownLine.clin.clinNumber}?` : `Deactivate SLIN ${shownLine.slin?.slinNumber}?`) : ''}");
+    expect(src('src/app/(app)/admin/contracts/ContractsClient.tsx')).toContain("title={shownStatus ? `${shownStatus.to === 'closed' ? 'Close' : 'Reopen'} ${shownStatus.contract.name}?` : ''}");
   });
 });
 

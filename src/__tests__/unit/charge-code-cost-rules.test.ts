@@ -141,10 +141,8 @@ describe('F11 — small cost-view fixes', () => {
     expect(cc.match(/\.innerJoin\(users, eq\(userChargeCodes\.userId, users\.id\)\)\s*\/\/ F11/g)).toHaveLength(2);
   });
 
-  it('the period-report note scopes by the GENERATED range; the API-key dialog documents lcatTitle "Unpriced"', () => {
-    const dash = readFileSync(path.join(ROOT, 'src/app/(app)/admin/dashboard/DashboardClient.tsx'), 'utf8');
-    expect(dash).toMatch(/<UnpricedNote hours=\{reportUnpriced\} size="sm" scope=\{generatedRange \?\? \{\}\} \/>/);
-    expect(dash).toMatch(/setGeneratedRange\(\{ startDate: reportStartDate, endDate: reportEndDate \}\)/);
+  // The on-screen period report (and its scoped note) moved to the "Cost by pay period" Excel download (UX-4b R3).
+  it('the API-key dialog documents lcatTitle "Unpriced"', () => {
     expect(readFileSync(path.join(ROOT, 'src/app/(app)/settings/api-keys/ApiKeysClient.tsx'), 'utf8')).toMatch(/<Code>lcatTitle<\/Code> is\{' '\}\s*<Code>Unpriced<\/Code>/);
   });
 });

@@ -7,6 +7,18 @@
 export const CURRENT_RATES_NOTE = 'Costs use the labor-category rate in effect on each day worked.';
 export const UNPRICED_REPORT_HREF = '/admin/labor-categories?report=unpriced';
 
+/**
+ * The Unpriced hours report scoped to a contract / CLIN / SLIN (feature-plan-ux-kit-contracts.md §4.1, §4.4.9): built
+ * with URLSearchParams, so it's always `?a=…&b=…` (never a second `?`).
+ */
+export function unpricedReportHref(scope: { contractId?: string; clinId?: string; slinId?: string; reason?: string } = {}): string {
+  const [path, query = ''] = UNPRICED_REPORT_HREF.split('?');
+  const params = new URLSearchParams(query);
+  for (const [k, v] of Object.entries(scope)) if (v) params.set(k, v);
+  const q = params.toString();
+  return q ? `${path}?${q}` : path;
+}
+
 export function unpricedHoursLabel(hours: number): string | null {
   if (!(hours > 0)) return null;
   const rounded = Math.round(hours * 100) / 100;
