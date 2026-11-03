@@ -32,6 +32,7 @@ import {
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
+import { addedStandardCodes } from '@/lib/ui/indirect-seed-copy';
 import { getSetupAccessGaps, getSetupStatus } from '@/server/actions/setup';
 import type { SetupAccessGaps, SetupStatus, SetupStepKey } from '@/server/internal/setup';
 import { seedIndirectCodes } from '@/server/actions/indirect-codes';
@@ -216,7 +217,7 @@ export function SetupWizardClient({ initialStatus, initialGaps = { missingCount:
     if (!result.ok) return;
     // C3: honest about what happened — nothing is added to a workspace that already has codes.
     notifications.show(result.data.created > 0
-      ? { title: 'Standard codes added', message: `Added ${result.data.created} standard indirect codes.`, color: 'success' }
+      ? { title: 'Standard codes added', message: addedStandardCodes(result.data.created), color: 'success' }
       : {
         title: 'No codes added',
         message: 'Your workspace already has indirect codes, so none were added. Reactivate them, and turn on Show on every timesheet, on the Indirect codes page.',

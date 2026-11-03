@@ -107,6 +107,16 @@ describe('Setup Wizard seed message (C3)', () => {
     expect(shown()).not.toMatch(/9 .*seeded|seeded/);
   });
 
+  it('L5: created 1 → "Added 1 standard indirect code." (singular)', async () => {
+    actions.seedIndirectCodes.mockResolvedValue({ ok: true, data: { created: 1 } });
+    actions.getSetupStatus.mockResolvedValue(status({ indirectCodes: 1 }));
+    m = await mount(<SetupWizardClient initialStatus={status({})} />);
+    await goToIndirectStep();
+    await click(buttonByText('Seed default DCAA codes'));
+    expect(shown()).toContain('Added 1 standard indirect code.');
+    expect(shown()).not.toContain('Added 1 standard indirect codes.');
+  });
+
   it('created 9 → "Added 9 standard indirect codes."', async () => {
     actions.seedIndirectCodes.mockResolvedValue({ ok: true, data: { created: 9 } });
     actions.getSetupStatus.mockResolvedValue(status({ indirectCodes: 9 }));

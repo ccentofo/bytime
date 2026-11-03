@@ -16,6 +16,7 @@ import {
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
+import { addedStandardCodes } from '@/lib/ui/indirect-seed-copy';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { RowActions } from '@/components/ui/RowActions';
 import { useBusyRows, useLastTarget } from '@/components/ui/useRowState';
@@ -194,11 +195,20 @@ export function IndirectCodesClient({ initialCodes }: Props) {
     try {
       const result = await runAction(seedIndirectCodes(), { errorTitle: 'Couldn’t add the standard codes' });
       if (!result.ok) return;
-      const refreshed = await getIndirectChargeCodes();
-      setCodes(refreshed as IndirectCode[]);
-      notifications.show(result.data.created > 0
-        ? { title: 'Standard codes added', message: `Added ${result.data.created} standard indirect codes.`, color: 'success' }
-        : { title: 'No codes added', message: 'Your workspace already has indirect codes, so none were added.', color: 'gray' });
+      const { created } = result.data;
+      // UX-4A-AUDIT.md L5: a failed refetch after a successful seed says so, rather than throwing out of the handler.
+      let refreshed: IndirectCode[] | null = null;
+      try {
+        refreshed = (await getIndirectChargeCodes()) as IndirectCode[];
+      } catch {
+        refreshed = null;
+      }
+      if (refreshed) setCodes(refreshed);
+      notifications.show(created > 0 && !refreshed
+        ? { title: 'Standard codes added', message: "Codes were added, but the list couldn't refresh. Reload the page.", color: 'warning' }
+        : created > 0
+          ? { title: 'Standard codes added', message: addedStandardCodes(created), color: 'success' }
+          : { title: 'No codes added', message: 'Your workspace already has indirect codes, so none were added.', color: 'gray' });
     } finally {
       setSeeding(false);
     }

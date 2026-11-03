@@ -173,4 +173,20 @@ describe('"Show on every timesheet" (C2) and the standard codes (C3)', () => {
     await click(buttonByText('Add standard codes'));
     expect(actions.notify).toHaveBeenLastCalledWith(expect.objectContaining({ message: 'Added 9 standard indirect codes.' }));
   });
+
+  // UX-4A-AUDIT.md L5 -------------------------------------------------------------------------------------------------
+  it('L5: one code added → singular; a refetch that fails after a successful seed says so instead of throwing', async () => {
+    actions.getIndirectChargeCodes.mockResolvedValue([] as never);
+    m = await mount(<IndirectCodesClient initialCodes={[]} />);
+    actions.seedIndirectCodes.mockResolvedValueOnce({ ok: true, data: { created: 1 } });
+    await click(buttonByText('Add standard codes'));
+    expect(actions.notify).toHaveBeenLastCalledWith(expect.objectContaining({ message: 'Added 1 standard indirect code.' }));
+
+    actions.seedIndirectCodes.mockResolvedValueOnce({ ok: true, data: { created: 8 } });
+    actions.getIndirectChargeCodes.mockRejectedValueOnce(new Error('network'));
+    await click(buttonByText('Add standard codes'));
+    await wait();
+    expect(actions.notify).toHaveBeenLastCalledWith(expect.objectContaining({ message: "Codes were added, but the list couldn't refresh. Reload the page." }));
+    expect(buttonByText('Add standard codes')!.getAttribute('aria-disabled')).toBeNull();   // seeding ended
+  });
 });
