@@ -9,12 +9,10 @@ import {
   Group,
   Stack,
   Badge,
-  ActionIcon,
   Alert,
   Text,
   Code,
   CopyButton,
-  Tooltip,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
@@ -220,13 +218,16 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
         </Stack>
       </Modal>
 
-      {/* New Key Display Modal (one-time) */}
+      {/* New Key Display Modal (one-time). feature-plan-ux-page-fixes.md C12: Esc, the overlay and ✕ would lose the key, so
+          the only way out is "I've copied the key". */}
       <Modal
         opened={newKeyModalOpen}
-        onClose={() => { setNewKeyModalOpen(false); setNewKeyValue(''); }}
-        title="API Key Created — Copy Now!"
+        onClose={() => {}}
+        title="Copy your API key"
         size="md"
+        closeOnEscape={false}
         closeOnClickOutside={false}
+        withCloseButton={false}
       >
         <Stack>
           <Alert color="warning">
@@ -239,11 +240,13 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
             </Code>
             <CopyButton value={newKeyValue}>
               {({ copied, copy }) => (
-                <Tooltip label={copied ? 'Copied!' : 'Copy'}>
-                  <ActionIcon color={copied ? 'success' : 'signal'} onClick={copy} size="lg" aria-label={copied ? 'Copied' : 'Copy key'}>
-                    {copied ? <Icons.statusSuccess size={18} /> : <Icons.copy size={18} />}
-                  </ActionIcon>
-                </Tooltip>
+                <Button
+                  color={copied ? 'success' : 'signal'}
+                  onClick={copy}
+                  leftSection={copied ? <Icons.statusSuccess size={ICON_SIZE.button} /> : <Icons.copy size={ICON_SIZE.button} />}
+                >
+                  {copied ? 'Copied' : 'Copy key'}
+                </Button>
               )}
             </CopyButton>
           </Group>
@@ -264,7 +267,7 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
             labor category can appear at different rates across a range.
           </Text>
           <Button onClick={() => { setNewKeyModalOpen(false); setNewKeyValue(''); }} color="success">
-            I've Copied the Key
+            I&apos;ve copied the key
           </Button>
         </Stack>
       </Modal>
