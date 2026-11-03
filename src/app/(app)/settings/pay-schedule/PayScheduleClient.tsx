@@ -186,7 +186,7 @@ export function PayScheduleClient({ initialConfig, pendingChange }: Props) {
       setConfirm(null);
       setPendingCfg(null);
       resetForm(currentCfg);
-      notifications.show({ title: 'Scheduled change cancelled', message: 'Scheduled change cancelled.', color: 'success', icon: <Icons.statusSuccess size={ICON_SIZE.button} /> });
+      notifications.show({ title: 'Scheduled change cancelled', message: 'Your current schedule stays in effect.', color: 'success', icon: <Icons.statusSuccess size={ICON_SIZE.button} /> });
     });
   }
 

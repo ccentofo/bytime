@@ -136,7 +136,8 @@ describe('Pay schedule pending change (C7, T-C7c)', () => {
     expect(actions.updatePayPeriodConfig).toHaveBeenCalledWith({ ...CURRENT, effectiveFrom: null, cancelPending: true, expectedPendingId: 'p1' });
     expect(m!.container.querySelector('[data-testid="pending-change"]')).toBeNull();
     expect(radio('semimonthly').checked).toBe(true);
-    expect(notifications.show).toHaveBeenCalledWith(expect.objectContaining({ message: 'Scheduled change cancelled.' }));
+    // UX-4A-AUDIT.md L9: the title says what happened, the message what it means (no repeated text).
+    expect(notifications.show).toHaveBeenCalledWith(expect.objectContaining({ title: 'Scheduled change cancelled', message: 'Your current schedule stays in effect.' }));
     expect(dialogTitled('Cancel the scheduled change?')).toBeUndefined();
   });
 
