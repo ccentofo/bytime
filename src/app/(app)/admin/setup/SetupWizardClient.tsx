@@ -261,7 +261,7 @@ export function SetupWizardClient({ initialStatus, initialGaps = { missingCount:
             {accessPartial && k > 0 && (
               <Alert color="warning" variant="light" maw={500} data-testid="setup-access-gaps">
                 <Text size="sm">
-                  {k} employees have no direct charge code yet and will see only indirect and leave rows: {gaps.names.join(', ')}
+                  {k} {k === 1 ? 'employee has' : 'employees have'} no direct charge code yet and will see only indirect and leave rows: {gaps.names.join(', ')}
                   {k > gaps.names.length ? ` and ${k - gaps.names.length} more` : ''}.
                 </Text>
                 <Anchor href="/admin/assignments" size="sm">Assign charge codes</Anchor>

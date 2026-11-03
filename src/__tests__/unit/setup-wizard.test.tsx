@@ -207,6 +207,12 @@ describe('Setup Wizard refresh and gaps (C17, T-C17b)', () => {
     expect(stepButton('Charge codes').getAttribute('data-progress')).toBe('true');
   });
 
+  it('L8: one missing employee → "1 employee has no direct charge code yet…" (singular)', async () => {
+    m = await mount(<SetupWizardClient initialStatus={status({ chargeCodes: 1, employees: 3, employeesWithAccess: 2 })} initialGaps={{ missingCount: 1, names: ['Dee Solo'] }} />);
+    expect(m.container.querySelector('[data-testid="setup-access-gaps"]')!.textContent)
+      .toContain('1 employee has no direct charge code yet and will see only indirect and leave rows: Dee Solo.');
+  });
+
   it('the completion screen names the missing employees, then "and N more" past 20, with "Assign charge codes"', async () => {
     const names = Array.from({ length: 20 }, (_, i) => `Person ${String(i + 1).padStart(2, '0')}`);
     m = await mount(<SetupWizardClient initialStatus={status({ chargeCodes: 1, employees: 30, employeesWithAccess: 7 })} initialGaps={{ missingCount: 23, names }} />);
