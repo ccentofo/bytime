@@ -164,6 +164,7 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getPendingConfigChange: 'reads the pending schedule change; no write',
     getValidScheduleChangeDates: 'computes valid change dates from reads; no write',
   },
+  'periods.ts': { resolvePeriodRange: 'UX-4b §3.8: contractToDate reads the contract start date / earliest entry; no write' },
   'payroll-export.ts': {
     getPayrollExportPreview: 'reads approved entries (getApprovedEntriesForSync is read-only); no write',
     generatePayrollExportCSV: 'builds a CSV from read-only approved entries; no write',
