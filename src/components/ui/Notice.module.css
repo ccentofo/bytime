@@ -1,0 +1,46 @@
+/* feature-plan-ux-kit-contracts.md §3.2: a quiet notice — 1px border, 3px left rule, soft fill. Light values here, dark
+   below (no CSS light/dark function in .css files). */
+.notice {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 10px 14px;
+  margin-bottom: var(--mantine-spacing-md);
+  border: 1px solid var(--mantine-color-default-border);
+  border-left: 3px solid var(--notice-rule);
+  border-radius: var(--mantine-radius-md);
+  background: var(--notice-fill);
+  --notice-rule: var(--mantine-color-warning-6);
+  --notice-fill: var(--mantine-color-warning-0);
+}
+
+.notice[data-tone='info'] {
+  --notice-rule: var(--mantine-color-signal-6);
+  --notice-fill: var(--mantine-color-signal-0);
+}
+
+:global([data-mantine-color-scheme='dark']) .notice {
+  --notice-fill: rgba(242, 189, 92, 0.12);
+}
+
+:global([data-mantine-color-scheme='dark']) .notice[data-tone='info'] {
+  --notice-fill: rgba(79, 107, 255, 0.12);
+}
+
+.icon {
+  align-self: center;
+  flex-shrink: 0;
+  color: var(--notice-rule);
+}
+
+.message {
+  flex: 1;
+  min-width: 0;
+}
+
+.action {
+  margin-left: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-weight: 600;
+}

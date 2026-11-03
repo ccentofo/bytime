@@ -14,7 +14,7 @@ export const PERIOD_STATUS_COLOR = {
   draft: 'gray',
   submitted: 'signal',
   approved: 'success',
-  rejected: 'red',
+  rejected: 'warning', // feature-plan-ux-kit-contracts.md K2: "Returned" is amber everywhere
 } as const;
 
 export const RECORD_STATUS_COLOR = {
