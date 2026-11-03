@@ -59,7 +59,7 @@ export interface TimesheetState {
   // or subscription ended). UI-only — disables entry so the DCAA reason-code flow doesn't even
   // open for a save that getDbForWrite() would reject anyway; the server gate is the real control.
   readOnly: boolean;
-  flsaExempt: boolean; // true if user is FLSA exempt (salaried)
+  flsaExempt: boolean; // true for FLSA-exempt employees, who must still record all hours worked
 
   // ── Period data (SET_PERIOD_DATA sets every one of these).
   periodStart: CalendarDate;

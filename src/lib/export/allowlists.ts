@@ -130,7 +130,7 @@ export const EXPORT_TABLES: ExportTableConfig[] = [
     { key: 'fullName', header: 'full_name', description: 'Full name.' },
     { key: 'role', header: 'role', description: 'Permission level: admin, supervisor or employee.' },
     { key: 'isActive', header: 'is_active' },
-    { key: 'flsaExempt', header: 'flsa_exempt', description: 'true for FLSA-exempt (salaried) employees, who must still record all hours worked.' },
+    { key: 'flsaExempt', header: 'flsa_exempt', description: 'true for FLSA-exempt employees, who must still record all hours worked.' },
     { key: 'approverId', header: 'approver_id', description: 'Supervisors and admins only: their designated approver (users.csv id); blank if none.' },
     { key: 'totpEnabled', header: 'totp_enabled', description: 'true if the user turned on two-factor authentication (the secret itself is never exported).' },
     { key: 'passwordChangedAt', header: 'password_changed_at', description: 'When the user last changed their password (UTC). The password itself is never exported.' },

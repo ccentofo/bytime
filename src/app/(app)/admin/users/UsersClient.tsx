@@ -60,6 +60,51 @@ type UserForm = {
   approverId: string;
 };
 
+type Role = User['role'];
+
+const SIGNED_OUT = " They'll be signed out within a minute and must sign in again.";
+
+/**
+ * feature-plan-ux-page-fixes.md C16: the confirm for a role change, matching the approval rules
+ * (internal/approval-rules.ts) — a supervisor approves employees sharing an active CLIN, and supervisors or admins who
+ * name them as approver; a second admin ends sole-admin self-approval; a role change bumps sessionVersion.
+ */
+export function roleChangeCopy(name: string, from: Role, to: Role, actingIsSoleAdmin: boolean) {
+  if (to === 'admin') {
+    return {
+      tone: 'danger' as const,
+      title: `Make ${name} an admin?`,
+      message: 'Admins have full access: every timesheet and cost figure, users, contracts, billing and workspace settings.'
+        + (actingIsSoleAdmin ? " You'll no longer be able to approve your own timesheets, because another admin can." : '') + SIGNED_OUT,
+      confirmLabel: 'Make admin',
+    };
+  }
+  if (to === 'supervisor' && from === 'admin') {
+    return {
+      tone: 'neutral' as const,
+      title: `Change ${name} from admin to supervisor?`,
+      message: 'They lose access to users, contracts, costs and settings, and keep approving timesheets in their review scope.' + SIGNED_OUT,
+      confirmLabel: 'Change role',
+    };
+  }
+  if (to === 'supervisor') {
+    return {
+      tone: 'neutral' as const,
+      title: `Make ${name} a supervisor?`,
+      message: 'They can review and approve timesheets for employees who share a CLIN with them, and for supervisors or admins who have them set as their approver.' + SIGNED_OUT,
+      confirmLabel: 'Make supervisor',
+    };
+  }
+  return {
+    tone: 'neutral' as const,
+    title: `Change ${name} to employee?`,
+    message: 'They can no longer review or approve timesheets. Admins, and any other supervisor who shares a CLIN with those employees, can still approve them.' + SIGNED_OUT,
+    confirmLabel: 'Change role',
+  };
+}
+
+const PARTIAL_SAVE = "The role was saved, but the approver couldn't be updated. Try saving again.";
+
 const EMPTY_FORM: UserForm = {
   email: '',
   fullName: '',
@@ -85,6 +130,12 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [form, setForm] = useState<UserForm>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
+  // C16: a role change asks first; the confirm shows the save's error (the form's own Badge is hidden meanwhile).
+  const [roleConfirm, setRoleConfirm] = useState<{ name: string; from: Role; to: Role } | null>(null);
+  const shownRole = useLastTarget(roleConfirm);
+  const activeAdmins = users.filter((u) => u.role === 'admin' && u.isActive);
+  const actingIsSoleAdmin = activeAdmins.length === 1 && activeAdmins[0].id === currentUserId;
+  const roleCopy = shownRole && roleChangeCopy(shownRole.name, shownRole.from, shownRole.to, actingIsSoleAdmin);
 
   // Reset password modal state
   const [resetModalOpen, setResetModalOpen] = useState(false);
@@ -112,7 +163,12 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
     setModalOpen(true);
   }
 
-  function handleSubmit() {
+  function handleSubmit({ confirmed = false }: { confirmed?: boolean } = {}) {
+    if (editingUser && !confirmed && form.role !== editingUser.role) {
+      setFormError(null);
+      setRoleConfirm({ name: editingUser.fullName, from: editingUser.role, to: form.role as Role });
+      return;
+    }
     startTransition(async () => {
       setFormError(null);
       if (editingUser) {
@@ -122,7 +178,8 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
         if (form.email !== editingUser.email) updateData.email = form.email;
         if (form.role !== editingUser.role) updateData.role = form.role as 'admin' | 'supervisor' | 'employee';
 
-        if (Object.keys(updateData).length > 0) {
+        const saving = Object.keys(updateData).length > 0;
+        if (saving) {
           const result = await runAction(updateUser(editingUser.id, updateData), { silent: true });
           if (!result.ok) {
             setFormError(result.error);
@@ -133,7 +190,20 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
         if ((form.role === 'supervisor' || form.role === 'admin') && form.approverId !== (editingUser.approverId ?? '')) {
           const result = await runAction(setUserApprover(editingUser.id, form.approverId || null), { silent: true });
           if (!result.ok) {
-            setFormError(result.error);
+            if (saving) {
+              // C16 partial save: the first update landed. Refresh the list and editingUser before any retry, so a retry
+              // sends only the approver and doesn't ask to confirm a role that's already saved.
+              setEditingUser({ ...editingUser, ...updateData });
+              try {
+                const refreshed = (await getUsers()) as User[];
+                setUsers(refreshed);
+                const fresh = refreshed.find((u) => u.id === editingUser.id);
+                if (fresh) setEditingUser(fresh);
+              } catch {
+                // keep the local copy above
+              }
+            }
+            setFormError(saving && updateData.role ? PARTIAL_SAVE : result.error);
             return;
           }
         }
@@ -172,6 +242,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
       // Refresh user list
       const refreshed = await getUsers();
       setUsers(refreshed as User[]);
+      setRoleConfirm(null);
       setModalOpen(false);
     });
   }
@@ -228,8 +299,8 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
       const refreshed = await getUsers();
       setUsers(refreshed as User[]);
       notifications.show({
-        title: newExempt ? 'FLSA Exempt' : 'FLSA Non-Exempt',
-        message: `${user.fullName} is now ${newExempt ? 'FLSA Exempt (salaried)' : 'FLSA Non-Exempt (hourly)'}.`,
+        title: newExempt ? 'Marked exempt' : 'Marked non-exempt',
+        message: `${user.fullName} is now FLSA ${newExempt ? 'exempt' : 'non-exempt'}.`,
         color: newExempt ? 'signal' : 'gray',
       });
     });
@@ -395,6 +466,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
         onClose={() => setModalOpen(false)}
         title={editingUser ? 'Edit User' : 'Create User'}
         size="md"
+        closeOnEscape={!roleConfirm}
       >
         <Stack>
           <TextInput
@@ -441,7 +513,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
               placeholder="Minimum 8 characters"
             />
           )}
-          {formError && (
+          {formError && !roleConfirm && (
             <Badge color="red" size="lg" style={{ whiteSpace: 'normal', height: 'auto', padding: '8px' }}>
               {formError}
             </Badge>
@@ -450,12 +522,24 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
             <Button variant="default" onClick={() => setModalOpen(false)}>
               Cancel
             </Button>
-            <WriteButton onClick={handleSubmit} loading={isPending}>
+            <WriteButton onClick={() => handleSubmit()} loading={isPending}>
               {editingUser ? 'Save Changes' : 'Create User'}
             </WriteButton>
           </Group>
         </Stack>
       </Modal>
+
+      <ConfirmModal
+        opened={!!roleConfirm}
+        tone={roleCopy?.tone}
+        title={roleCopy?.title ?? ''}
+        message={roleCopy?.message ?? ''}
+        confirmLabel={roleCopy?.confirmLabel}
+        loading={isPending}
+        error={formError}
+        onConfirm={() => handleSubmit({ confirmed: true })}
+        onCancel={() => setRoleConfirm(null)}
+      />
     </>
   );
 }

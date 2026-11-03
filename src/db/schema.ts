@@ -27,7 +27,7 @@ export const users = pgTable('users', {
   isActive: boolean('is_active').notNull().default(true),
   passwordHash: varchar('password_hash', { length: 255 }),
   passwordChangedAt: timestamp('password_changed_at', { withTimezone: true }),
-  flsaExempt: boolean('flsa_exempt').notNull().default(false), // FLSA exempt = salaried, must record all hours including uncompensated OT
+  flsaExempt: boolean('flsa_exempt').notNull().default(false), // true for FLSA-exempt employees, who must still record all hours worked (including uncompensated OT)
   sessionVersion: integer('session_version').notNull().default(1),
   totpSecret: text('totp_secret'),                    // Encrypted TOTP secret (null = 2FA disabled)
   totpEnabled: boolean('totp_enabled').notNull().default(false),
