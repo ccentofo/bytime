@@ -538,7 +538,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
         loading={isPending}
         error={formError}
         onConfirm={() => handleSubmit({ confirmed: true })}
-        onCancel={() => setRoleConfirm(null)}
+        onCancel={() => { setRoleConfirm(null); setFormError(null); }}   // UX-4A-AUDIT.md L3: the error belonged to the confirm
       />
     </>
   );

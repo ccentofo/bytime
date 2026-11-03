@@ -261,6 +261,20 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     expect(form().textContent).not.toContain('The last admin can’t be demoted.');
   });
 
+  it('L3: cancelling the role confirm after a refusal clears its error (it doesn\'t reappear on the form)', async () => {
+    actions.updateUser.mockResolvedValueOnce({ ok: false, code: 'validation', error: 'The last admin can’t be demoted.' } as never);
+    await renderTeam();
+    await edit('Sam Super');
+    await choose('Role', 'Employee');
+    await click(inDialog(form(), 'Save Changes'));
+    await click(inDialog(dialogTitled('Change Sam Super to employee?')!, 'Change role'));
+    await wait();
+    expect(dialogTitled('Change Sam Super to employee?')!.textContent).toContain('The last admin can’t be demoted.');
+    await click(inDialog(dialogTitled('Change Sam Super to employee?')!, 'Cancel'));
+    await wait(300);
+    expect(form().textContent).not.toContain('The last admin can’t be demoted.');
+  });
+
   it('partial save: the role saved but the approver failed → the explicit message, a refreshed user, and a retry sends only the approver', async () => {
     await renderTeam();
     await edit('Pat Doe');
