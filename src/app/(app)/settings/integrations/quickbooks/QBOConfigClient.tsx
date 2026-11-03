@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Container,
   Title,
@@ -10,7 +11,6 @@ import {
   Badge,
   Stack,
   Table,
-  Select,
   Tabs,
   Alert,
   ThemeIcon,
@@ -43,7 +43,8 @@ import {
   fetchQBOVendorsForMapping,
   triggerQBOSync,
 } from '@/server/actions/qbo';
-import { saveMapping, disconnectIntegration, toggleAutoSync } from '@/server/actions/integrations';
+import { saveMapping, deleteMapping, disconnectIntegration, toggleAutoSync } from '@/server/actions/integrations';
+import { MappingSelect } from '../MappingSelect';
 import { SYNC_STATUS_COLOR } from '@/lib/ui/status-colors';
 import type { CalendarDate } from '@/lib/calendar-date';
 import { WriteButton } from '@/components/shell/WorkspaceMode';
@@ -102,15 +103,23 @@ interface Props {
 export function QBOConfigClient({
   connection,
   mappings: initialMappings,
-  syncLogs: initialSyncLogs,
+  syncLogs,
   bytimeEmployees,
   bytimeContracts,
   bytimeClins,
   workspaceTimezone,
 }: Props) {
   const [mappings, setMappings] = useState(initialMappings);
-  const [syncLogs] = useState(initialSyncLogs);
+  // C13: sync history renders the prop; router.refresh() after a sync brings the new log (client state is kept).
+  const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  // Rows ("entityType:bytimeId") whose save or delete is in flight.
+  const [busyRows, setBusyRows] = useState<ReadonlySet<string>>(new Set());
+  const setBusy = (key: string, on: boolean) => setBusyRows((prev) => {
+    const next = new Set(prev);
+    if (on) next.add(key); else next.delete(key);
+    return next;
+  });
 
   // QBO entities loaded on demand
   const [qboEmployees, setQboEmployees] = useState<Array<{ id: string; name: string; email?: string }>>([]);
@@ -144,6 +153,8 @@ export function QBOConfigClient({
   }
 
   async function handleSaveMapping(entityType: string, bytimeId: string, bytimeName: string, externalId: string, externalName: string) {
+    const key = `${entityType}:${bytimeId}`;
+    setBusy(key, true);
     const saved = await runAction(saveMapping({
         connectionId: connection.id,
         entityType,
@@ -152,6 +163,7 @@ export function QBOConfigClient({
         externalEntityId: externalId,
         externalEntityName: externalName,
     }), { errorTitle: 'Failed to save mapping' });
+    setBusy(key, false);
     if (!saved.ok) return;
 
     // Update local state
@@ -160,7 +172,7 @@ export function QBOConfigClient({
         (m) => m.entityType === entityType && m.bytimeEntityId === bytimeId
       );
       const newMapping: Mapping = {
-        id: 'temp-' + Date.now(),
+        id: saved.data.id,
         connectionId: connection.id,
         entityType,
         bytimeEntityId: bytimeId,
@@ -180,6 +192,20 @@ export function QBOConfigClient({
     notifications.show({ title: 'Mapping saved', message: `${bytimeName} → ${externalName}`, color: 'success' });
   }
 
+  /** C13: clearing a mapped Select deletes the mapping (one that's already gone is dropped from the page too). */
+  async function handleClearMapping(entityType: string, bytimeId: string, bytimeName: string) {
+    const mapping = getMappingForEntity(entityType, bytimeId);
+    if (!mapping) return;
+    const key = `${entityType}:${bytimeId}`;
+    setBusy(key, true);
+    const result = await runAction(deleteMapping(mapping.id), { errorTitle: 'Couldn’t remove mapping' });
+    setBusy(key, false);
+    if (result.ok || result.error === 'That mapping no longer exists.') {
+      setMappings((prev) => prev.filter((m) => m.id !== mapping.id));
+    }
+    if (result.ok) notifications.show({ title: 'Mapping removed', message: `${bytimeName} is no longer matched.`, color: 'success' });
+  }
+
   async function handleSync() {
     // Default window (two months back through this month) is computed on the server in the
     // workspace's calendar, not from this browser's clock.
@@ -187,6 +213,7 @@ export function QBOConfigClient({
       const outcome = await runAction(triggerQBOSync({
         connectionId: connection.id,
       }), { errorTitle: 'Sync failed' });
+      router.refresh();
       if (!outcome.ok) return;
       const result = outcome.data;
       notifications.show({
@@ -331,7 +358,10 @@ export function QBOConfigClient({
             bytimeEntities={bytimeEmployees.map((e) => ({ id: e.id, name: e.fullName, detail: e.email }))}
             externalEntities={qboEmployees.map((e) => ({ value: e.id, label: `${e.name}${e.email ? ` (${e.email})` : ''}` }))}
             mappings={mappings}
+            loaded={qboEmployees.length > 0}
+            busyRows={busyRows}
             onSave={handleSaveMapping}
+            onClear={handleClearMapping}
             emptyExternalMessage="Load QBO Data to see employees"
           />
         </Tabs.Panel>
@@ -347,7 +377,10 @@ export function QBOConfigClient({
             bytimeEntities={bytimeEmployees.map((e) => ({ id: e.id, name: e.fullName, detail: e.email }))}
             externalEntities={qboVendors.map((v) => ({ value: v.id, label: `${v.name}${v.email ? ` (${v.email})` : ''}` }))}
             mappings={mappings}
+            loaded={qboEmployees.length > 0}
+            busyRows={busyRows}
             onSave={handleSaveMapping}
+            onClear={handleClearMapping}
             emptyExternalMessage="Load QBO Data to see vendors"
           />
         </Tabs.Panel>
@@ -359,7 +392,10 @@ export function QBOConfigClient({
             bytimeEntities={bytimeContracts.map((c) => ({ id: c.id, name: c.name, detail: c.contractNumber }))}
             externalEntities={qboCustomers.map((c) => ({ value: c.id, label: c.name }))}
             mappings={mappings}
+            loaded={qboEmployees.length > 0}
+            busyRows={busyRows}
             onSave={handleSaveMapping}
+            onClear={handleClearMapping}
             emptyExternalMessage="Load QBO Data to see customers"
           />
         </Tabs.Panel>
@@ -371,7 +407,10 @@ export function QBOConfigClient({
             bytimeEntities={bytimeClins.map((c) => ({ id: c.id, name: c.clinNumber, detail: c.description ?? '' }))}
             externalEntities={qboItems.map((i) => ({ value: i.id, label: i.name }))}
             mappings={mappings}
+            loaded={qboEmployees.length > 0}
+            busyRows={busyRows}
             onSave={handleSaveMapping}
+            onClear={handleClearMapping}
             emptyExternalMessage="Load QBO Data to see service items"
           />
         </Tabs.Panel>
@@ -448,14 +487,21 @@ function MappingTable({
   bytimeEntities,
   externalEntities,
   mappings,
+  loaded,
+  busyRows,
   onSave,
+  onClear,
   emptyExternalMessage,
 }: {
   entityType: string;
   bytimeEntities: Array<{ id: string; name: string; detail: string }>;
   externalEntities: Array<{ value: string; label: string }>;
   mappings: Mapping[];
+  /** QuickBooks data has been loaded (each tab's list may still be empty). */
+  loaded: boolean;
+  busyRows: ReadonlySet<string>;
   onSave: (entityType: string, bytimeId: string, bytimeName: string, externalId: string, externalName: string) => void;
+  onClear: (entityType: string, bytimeId: string, bytimeName: string) => void;
   emptyExternalMessage: string;
 }) {
   return (
@@ -483,24 +529,18 @@ function MappingTable({
                 </Table.Td>
                 <Table.Td>→</Table.Td>
                 <Table.Td>
-                  {externalEntities.length > 0 ? (
-                    <Select
-                      placeholder="Select..."
-                      data={externalEntities}
-                      value={mapping?.externalEntityId ?? null}
-                      onChange={(value) => {
-                        if (value) {
-                          const ext = externalEntities.find((e) => e.value === value);
-                          onSave(entityType, entity.id, entity.name, value, ext?.label ?? value);
-                        }
-                      }}
-                      searchable
-                      clearable
-                      size="xs"
-                    />
-                  ) : (
-                    <Text size="xs" c="dimmed">{emptyExternalMessage}</Text>
-                  )}
+                  <MappingSelect
+                    provider="QuickBooks"
+                    name={entity.name}
+                    mapping={mapping}
+                    options={externalEntities}
+                    loaded={loaded}
+                    busy={busyRows.has(`${entityType}:${entity.id}`)}
+                    placeholder="Select..."
+                    emptyMessage={emptyExternalMessage}
+                    onSelect={(value, label) => onSave(entityType, entity.id, entity.name, value, label)}
+                    onClear={() => onClear(entityType, entity.id, entity.name)}
+                  />
                 </Table.Td>
                 <Table.Td>
                   {mapping ? (

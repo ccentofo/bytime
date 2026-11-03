@@ -15,7 +15,9 @@ const h = vi.hoisted(() => ({
   fetchEmployees: vi.fn(),
 }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: h.show } }));
-vi.mock('@/server/actions/integrations', () => ({ saveMapping: h.saveMapping, disconnectIntegration: vi.fn() }));
+vi.mock('@/server/actions/integrations', () => ({ saveMapping: h.saveMapping, deleteMapping: vi.fn(), disconnectIntegration: vi.fn() }));
+// feature-plan-ux-page-fixes.md C13: the client refreshes the route after a sync.
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock('@/server/actions/gusto', () => ({ fetchGustoEmployeesForMapping: h.fetchEmployees, triggerGustoSync: vi.fn() }));
 
 import { GustoConfigClient } from '@/app/(app)/settings/integrations/gusto/GustoConfigClient';
@@ -101,9 +103,9 @@ describe('Gusto auto-match', () => {
 
   it('mixed outcomes → counts only the successes, in a warning toast', async () => {
     h.saveMapping
-      .mockResolvedValueOnce({ ok: true, data: undefined })
+      .mockResolvedValueOnce({ ok: true, data: { id: 'm1' } })   // C13: saveMapping returns the row's id
       .mockResolvedValueOnce({ ok: false, code: 'validation', error: 'Bad mapping.' })
-      .mockResolvedValueOnce({ ok: true, data: undefined });
+      .mockResolvedValueOnce({ ok: true, data: { id: 'm3' } });
     await autoMatch();
     expect(autoMatchToasts()).toEqual([expect.objectContaining({ message: expect.stringMatching(/^2 employees matched by email\. 1 could not be saved\./), color: 'warning' })]);
   });
