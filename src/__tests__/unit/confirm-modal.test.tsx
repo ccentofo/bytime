@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
+import { readFileSync } from 'node:fs';
 import { createRoot, type Root } from 'react-dom/client';
 import { MantineProvider } from '@mantine/core';
 import { theme } from '@/theme';
@@ -68,6 +69,17 @@ describe('ConfirmModal tone (T8)', () => {
     await act(async () => { b.click(); cancel.click(); });
     expect(onConfirm).not.toHaveBeenCalled();
     expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  // UX-4A-AUDIT.md M1: a busy button is data-disabled (grey fill), so a Loader in --button-color (white) vanishes.
+  it('M1: the busy Loader is shown and never uses --button-color (in ConfirmModal and the Reports buttons)', async () => {
+    await render({ loading: true });
+    const loader = confirmButton().querySelector('.mantine-Loader-root') as HTMLElement;
+    expect(loader).not.toBeNull();
+    expect(loader.getAttribute('style') ?? '').not.toContain('--button-color');
+    for (const file of ['src/components/ui/ConfirmModal.tsx', 'src/app/(app)/admin/reports/ReportsClient.tsx']) {
+      expect(readFileSync(file, 'utf8'), file).not.toMatch(/<Loader[^>]*--button-color/);
+    }
   });
 
   it('while loading: Esc doesn\'t close and there is no ✕; when not loading, Esc and ✕ cancel', async () => {

@@ -89,7 +89,7 @@ export function ReportsClient({ filterOptions, role }: Props) {
   const busyProps = (card: Card, button: string, icon: ReactNode) => ({
     'aria-disabled': busy[card] ? true : undefined,
     'data-disabled': busy[card] ? true : undefined,
-    leftSection: busy[card] === button ? <Loader size={16} color="var(--button-color)" aria-hidden="true" /> : icon,
+    leftSection: busy[card] === button ? <Loader size={16} aria-hidden="true" /> : icon,
   });
   const cardError = (card: Card) => errors[card] && (
     <Alert color="red" role="alert" variant="light" data-testid={`report-error-${card}`}>{errors[card]}</Alert>

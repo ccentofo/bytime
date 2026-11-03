@@ -59,7 +59,7 @@ export function ConfirmModal({
           onClick={() => { if (!loading) onConfirm(); }}
           aria-disabled={loading || undefined}
           data-disabled={loading || undefined}
-          leftSection={loading ? <Loader size={14} color="var(--button-color)" aria-hidden="true" /> : undefined}
+          leftSection={loading ? <Loader size={14} aria-hidden="true" /> : undefined}
         >
           {confirmLabel}
         </Button>
