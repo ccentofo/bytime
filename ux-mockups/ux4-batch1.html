@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CadenzPoint — UX-4 batch 1 mockups</title>
+<style>
+:root {
+  --bg: #f7f8fb; --panel: #ffffff; --raised: #ffffff; --line: #e2e6ee; --line-strong: #c9cfdb; --text: #16203a; --dim: #4c5672;
+  --accent: #4f6bff; --accent-text: #3f55e6; --accent-soft: rgba(79,107,255,.08); --btn: #3f55e6;
+  --ok: #1f7a4d; --ok-soft: #e6f4ec; --warn: #8a5300; --warn-soft: #fff4dc; --bad: #b42318; --bad-soft: #fdecea;
+  --chip: #eef0f5; --nav: #ffffff; --nav-active: #e9edff; --shadow: 0 1px 2px rgba(16,24,40,.05);
+}
+[data-theme="dark"] {
+  --bg: #16181e; --panel: #1d2027; --raised: #22252d; --line: #2e323c; --line-strong: #414756; --text: #e7e9ef; --dim: #a5abb8;
+  --accent: #4f6bff; --accent-text: #8fa0ff; --accent-soft: rgba(79,107,255,.12); --btn: #3f55e6;
+  --ok: #6fd3a0; --ok-soft: rgba(52,168,108,.14); --warn: #f2bd5c; --warn-soft: rgba(242,189,92,.12); --bad: #ff8a80; --bad-soft: rgba(255,107,95,.13);
+  --chip: #2a2e38; --nav: #191b21; --nav-active: #232a4a; --shadow: none;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+button { font: inherit; }
+.app { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100vh; }
+.side { background: var(--nav); border-right: 1px solid var(--line); padding: 16px 12px; }
+.brand { font-weight: 700; font-size: 17px; padding: 4px 10px 18px; display: flex; gap: 8px; align-items: center; }
+.brand i { width: 14px; height: 14px; border-radius: 3px; background: var(--accent); display: inline-block; }
+.nav a { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; border-radius: 6px; color: var(--text); text-decoration: none; cursor: pointer; }
+.nav a.sub { padding-left: 28px; color: var(--dim); }
+.nav a.on { background: var(--nav-active); color: var(--accent-text); font-weight: 600; }
+.nav .count { background: var(--accent); color: #fff; border-radius: 999px; font-size: 12px; padding: 0 7px; font-weight: 600; }
+.nav .grp { color: var(--dim); font-size: 13px; padding: 14px 10px 4px; }
+main { padding: 28px 36px 64px; max-width: 1440px; width: 100%; }
+.ph { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 20px; }
+h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -.01em; }
+.desc { color: var(--dim); margin: 4px 0 0; max-width: 72ch; }
+h2 { font-size: 16px; margin: 0 0 10px; font-weight: 650; }
+.btn { border: 1px solid var(--line-strong); background: var(--panel); color: var(--text); border-radius: 7px; padding: 7px 14px; cursor: pointer; font-weight: 550; white-space: nowrap; }
+.btn.primary { background: var(--btn); border-color: var(--btn); color: #fff; }
+.btn.quiet { border-color: transparent; background: transparent; color: var(--accent-text); padding-inline: 6px; }
+.btn.sm { padding: 4px 10px; font-size: 13px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
+.notice { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: 8px; background: var(--warn-soft); margin-bottom: 16px; }
+.notice.info { border-left-color: var(--accent); background: var(--accent-soft); }
+.notice a { color: var(--accent-text); font-weight: 600; margin-left: auto; white-space: nowrap; cursor: pointer; }
+/* summary strip */
+.strip { display: grid; grid-template-columns: repeat(4, 1fr); margin-bottom: 18px; }
+.strip > div { padding: 14px 18px; border-left: 1px solid var(--line); }
+.strip > div:first-child { border-left: 0; }
+.strip .n { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.strip .l { color: var(--dim); font-size: 13px; }
+/* tables */
+table { width: 100%; border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-weight: 600; color: var(--dim); font-size: 13px; padding: 10px 14px; border-bottom: 1px solid var(--line-strong); white-space: nowrap; }
+td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+tr:last-child td { border-bottom: 0; }
+.num { text-align: right; }
+.sub2 { color: var(--dim); font-size: 13px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+tbody tr.child td { background: color-mix(in srgb, var(--panel) 70%, var(--bg)); }
+tbody tr.child td:first-child { padding-left: 46px; }
+tbody tr.grand td { padding-left: 76px; }
+tbody tr.grp td { background: color-mix(in srgb, var(--panel) 85%, var(--bg)); font-size: 14px; }
+#ltable tbody tr.child td:first-child { padding-left: 46px; }
+tfoot td { border-top: 1px solid var(--line-strong); font-weight: 700; border-bottom: 0; }
+.exp { width: 22px; height: 22px; border: 0; background: transparent; color: var(--dim); cursor: pointer; border-radius: 4px; margin-right: 6px; transform: rotate(0); transition: transform .15s; }
+.exp[aria-expanded="true"] { transform: rotate(90deg); }
+.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 550; }
+.badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.b-ok { color: var(--ok); } .b-warn { color: var(--warn); } .b-bad { color: var(--bad); } .b-info { color: var(--accent-text); } .b-dim { color: var(--dim); }
+.pill { font-size: 12px; font-weight: 600; background: var(--chip); color: var(--dim); border-radius: 4px; padding: 1px 7px; }
+.burn { display: grid; grid-template-columns: 72px auto; gap: 10px; align-items: center; white-space: nowrap; }
+#ctable td:first-child { white-space: nowrap; }
+#ctable th, #ctable td { padding-inline: 10px; }
+#ctable .burn { grid-template-columns: 56px auto; }
+.bar { height: 6px; border-radius: 3px; background: var(--chip); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); }
+.flag { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--warn); font-weight: 550; margin-right: 10px; }
+.flag::before { content: ""; width: 8px; height: 8px; transform: rotate(45deg); background: currentColor; display: inline-block; }
+.screen { display: none; } .screen.on { display: block; }
+.tabs { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; padding: 3px; background: var(--panel); margin-bottom: 14px; }
+.tabs button { border: 0; background: transparent; color: var(--dim); padding: 5px 12px; border-radius: 6px; cursor: pointer; font-weight: 550; }
+.tabs button.on { background: var(--nav-active); color: var(--accent-text); }
+/* approvals review */
+.review { display: grid; gap: 16px; }
+.review-side { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px; align-items: start; }
+.review-side .side-card { margin: 0; }
+@media (max-width: 1100px) { .review-side { grid-template-columns: 1fr; } }
+.grid td, .grid th { border-right: 1px solid var(--line); text-align: center; padding: 9px 6px; }
+.grid th:first-child, .grid td:first-child { text-align: left; padding-left: 12px; min-width: 210px; border-right: 2px solid var(--line-strong); }
+.grid td:last-child, .grid th:last-child { border-right: 0; border-left: 2px solid var(--line-strong); text-align: right; padding-right: 12px; font-weight: 700; }
+.grid th .d { display: block; font-weight: 500; color: var(--dim); font-size: 12px; }
+.grid .wk { background: color-mix(in srgb, var(--panel) 80%, var(--bg)); }
+.grid td.fl { position: relative; background: var(--warn-soft); box-shadow: inset 0 -2px 0 var(--warn); font-weight: 600; }
+.grid td.fl::after { content: ""; position: absolute; top: 0; right: 0; border-top: 9px solid var(--warn); border-left: 9px solid transparent; }
+.grid td.nt::before { content: ""; position: absolute; top: 0; left: 0; border-top: 9px solid var(--accent); border-right: 9px solid transparent; }
+.grid td.nt { position: relative; }
+.side-card { padding: 16px; margin-bottom: 14px; }
+.side-card h3 { margin: 0 0 8px; font-size: 14px; }
+.change { border-top: 1px solid var(--line); padding: 10px 0; font-size: 13.5px; }
+.change:first-of-type { border-top: 0; }
+textarea { width: 100%; min-height: 76px; resize: vertical; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line-strong); border-radius: 7px; padding: 8px 10px; }
+label { font-weight: 600; font-size: 13px; display: block; margin-bottom: 6px; }
+select, input[type=text] { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 7px; padding: 7px 10px; }
+.field { display: grid; gap: 4px; }
+.help { color: var(--dim); font-size: 13px; }
+details { border-top: 1px solid var(--line); padding: 12px 0 0; margin-top: 14px; }
+summary { cursor: pointer; font-weight: 600; color: var(--accent-text); }
+.callouts { margin-top: 26px; color: var(--dim); font-size: 13.5px; max-width: 920px; border-top: 1px solid var(--line); padding-top: 14px; }
+.callouts li { margin: 5px 0; } .callouts b { color: var(--text); }
+.switcher { position: fixed; bottom: 14px; right: 16px; display: flex; gap: 6px; z-index: 10; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.18); }
+.switcher button { border: 1px solid transparent; background: transparent; color: var(--text); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+.switcher button.on { background: var(--nav-active); color: var(--accent-text); font-weight: 600; }
+.report { display: grid; grid-template-columns: minmax(0,1fr) 360px 180px; gap: 18px; align-items: center; padding: 16px 18px; border-top: 1px solid var(--line); }
+.report:first-child { border-top: 0; }
+.report h3 { margin: 0; font-size: 15px; }
+.report > div:last-child { justify-content: flex-end; }
+.err { color: var(--bad); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="side" aria-label="Main">
+    <div class="brand"><i></i>CadenzPoint</div>
+    <div class="nav" id="nav">
+      <a>Home</a>
+      <a>My timesheet</a>
+      <a data-go="approvals">Approvals <span class="count">6</span></a>
+      <div class="grp">Contracts</div>
+      <a class="sub" data-go="contracts">Contracts</a>
+      <a class="sub">Charge codes</a>
+      <a class="sub" data-go="lcats">Labor categories</a>
+      <div class="grp">People</div>
+      <a class="sub">Users</a>
+      <a class="sub">Assignments</a>
+      <div class="grp">Reports</div>
+      <a class="sub" data-go="reports">Reports</a>
+      <a class="sub" data-go="payroll">Payroll export</a>
+      <a class="sub">Audit trail</a>
+      <div class="grp"></div>
+      <a>Settings</a>
+    </div>
+  </nav>
+
+  <main>
+  <!-- ===================== APPROVALS ===================== -->
+  <section class="screen on" id="approvals">
+    <div class="ph"><div><h1>Approvals</h1><p class="desc">Timesheets waiting for you come first, oldest pay period first.</p></div></div>
+    <div class="tabs" role="tablist"><button class="on">Waiting for you (6)</button><button>Decided</button><button>Everything</button></div>
+    <div class="panel" style="margin-bottom:22px">
+      <table>
+        <thead><tr><th>Employee</th><th>Pay period</th><th>Submitted</th><th class="num">Hours</th><th>Worth a look</th><th></th></tr></thead>
+        <tbody>
+          <tr><td><b>Jane Smith</b></td><td>Oct 1 – 15, 2026</td><td>Oct 16</td><td class="num">92.00</td><td><span class="flag">2 corrections</span><span class="flag">1 late entry</span></td><td class="num"><button class="btn sm primary">Review</button></td></tr>
+          <tr><td><b>Robert Taylor</b></td><td>Oct 1 – 15, 2026</td><td>Oct 17</td><td class="num">80.00</td><td><span class="flag">Resubmitted after return</span></td><td class="num"><button class="btn sm">Review</button></td></tr>
+          <tr><td><b>Emily Davis</b></td><td>Oct 1 – 15, 2026</td><td>Oct 17</td><td class="num">88.00</td><td></td><td class="num"><button class="btn sm">Review</button></td></tr>
+          <tr><td><b>John Doe</b></td><td>Oct 1 – 15, 2026</td><td>Oct 17</td><td class="num">86.50</td><td></td><td class="num"><button class="btn sm">Review</button></td></tr>
+          <tr><td><b>Mike Chen</b></td><td>Oct 1 – 15, 2026</td><td>Oct 17</td><td class="num">88.00</td><td></td><td class="num"><button class="btn sm">Review</button></td></tr>
+          <tr><td><b>Sarah Wilson</b></td><td>Oct 1 – 15, 2026</td><td>Oct 17</td><td class="num">90.00</td><td></td><td class="num"><button class="btn sm">Review</button></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="ph" style="margin-bottom:12px"><div><h2 style="font-size:19px;margin:0">Jane Smith · Oct 1 – 15, 2026</h2><p class="desc">Submitted Oct 16 · 92.00 hours · <span class="badge b-info">Submitted</span></p></div>
+      <div class="row"><span class="sub2">1 of 6 waiting</span><button class="btn sm">‹ Previous</button><button class="btn sm">Next ›</button></div></div>
+
+    <div class="review">
+      <div class="panel" style="overflow:auto">
+        <table class="grid">
+          <thead><tr><th>Charge code</th>
+            <th>Thu<span class="d">Oct 1</span></th><th>Fri<span class="d">Oct 2</span></th><th class="wk">Sat<span class="d">Oct 3</span></th><th class="wk">Sun<span class="d">Oct 4</span></th>
+            <th>Mon<span class="d">Oct 5</span></th><th>Tue<span class="d">Oct 6</span></th><th>Wed<span class="d">Oct 7</span></th><th>Thu<span class="d">Oct 8</span></th><th>Fri<span class="d">Oct 9</span></th>
+            <th class="wk">Sat<span class="d">Oct 10</span></th><th class="wk">Sun<span class="d">Oct 11</span></th><th>Mon<span class="d">Oct 12</span></th><th>Tue<span class="d">Oct 13</span></th><th>Wed<span class="d">Oct 14</span></th><th>Thu<span class="d">Oct 15</span></th><th>Total</th></tr></thead>
+          <tbody>
+            <tr><td><b>NAVAIR Base Year — Onsite</b><div class="sub2 mono">NAVAIR-0001-ONSITE</div></td><td>5.50</td><td>6.50</td><td class="wk"></td><td class="wk"></td><td>6.50</td><td class="fl">5.50</td><td>6.00</td><td class="nt">6.50</td><td>6.00</td><td class="wk"></td><td class="wk"></td><td>6.00</td><td class="fl">6.00</td><td>6.50</td><td>6.00</td><td>67.00</td></tr>
+            <tr><td><b>NAVAIR Option Year 1</b><div class="sub2 mono">NAVAIR-0002</div></td><td>2.00</td><td>2.00</td><td class="wk"></td><td class="wk"></td><td>1.50</td><td>2.50</td><td>2.00</td><td>2.00</td><td>2.00</td><td class="wk"></td><td class="wk"></td><td>2.00</td><td>2.50</td><td>1.50</td><td class="fl">2.00</td><td>25.00</td></tr>
+          </tbody>
+          <tfoot><tr><td>Daily total</td><td>7.50</td><td>8.50</td><td class="wk"></td><td class="wk"></td><td>8.00</td><td>8.00</td><td>8.00</td><td>8.50</td><td>8.00</td><td class="wk"></td><td class="wk"></td><td>8.00</td><td>8.50</td><td>8.00</td><td>8.00</td><td>92.00</td></tr></tfoot>
+        </table>
+        <div class="row" style="padding:10px 14px;border-top:1px solid var(--line);font-size:13px;color:var(--dim)">
+          <span><span class="flag" style="margin:0">Corrected or late</span></span>
+          <span style="display:inline-flex;gap:6px;align-items:center"><i style="display:inline-block;border-top:9px solid var(--accent);border-right:9px solid transparent"></i>Has a note</span>
+        </div>
+      </div>
+
+      <div class="review-side">
+        <div class="panel side-card">
+          <h3>Worth a look (3)</h3>
+          <div class="change"><b>Tue Oct 6 · Onsite</b> — 6.00 → 5.50<div class="sub2">Correction · "Left early for a doctor's appointment." · changed Oct 7</div></div>
+          <div class="change"><b>Tue Oct 13 · Onsite</b> — 5.00 → 6.00<div class="sub2">Correction · "Forgot the afternoon site visit." · changed Oct 15</div></div>
+          <div class="change"><b>Thu Oct 15 · Option Year 1</b> — 2.00<div class="sub2">Late entry · entered Oct 16 · "Entered the next morning."</div></div>
+        </div>
+        <div class="panel side-card">
+          <h3>Notes (1)</h3>
+          <div class="change"><b>Thu Oct 8 · Onsite</b><div class="sub2">Site visit at Pax River.</div></div>
+        </div>
+        <div class="panel side-card">
+          <label for="cmt">Comment</label>
+          <textarea id="cmt" placeholder=""></textarea>
+          <p class="help" style="margin:6px 0 12px">Optional to approve. Required to return, so the employee knows what to fix.</p>
+          <div class="row" style="justify-content:space-between">
+            <button class="btn">Return for corrections</button>
+            <div class="row"><button class="btn primary">Approve</button></div>
+          </div>
+          <label style="font-weight:500;margin-top:10px;display:flex;gap:8px;align-items:center"><input type="checkbox" checked> Open the next timesheet after I decide</label>
+        </div>
+      </div>
+    </div>
+
+    <ul class="callouts">
+      <li><b>The list only flags what matters.</b> "Worth a look" shows corrections, late entries and resubmissions, and is blank otherwise (today every row says "Nothing unusual"). Hours are on the list.</li>
+      <li><b>The review shows why it was flagged.</b> Corrected and late cells are marked in the grid (amber corner plus underline, not colour alone), and each one is listed with its old value, reason and comment. No trip to the Audit trail.</li>
+      <li><b>The grid matches the timesheet:</b> weekday headers, weekend tint, daily totals, period total, blank empty cells.</li>
+      <li><b>One comment box, two clear actions:</b> "Return for corrections" (needs a comment, says so when you press it) and "Approve". A resubmitted timesheet shows the previous return comment at the top of "Worth a look".</li>
+      <li><b>Keep going:</b> after a decision the next waiting timesheet opens, with ‹ Previous / Next › to move around.</li>
+    </ul>
+  </section>
+
+  <!-- ===================== PAYROLL ===================== -->
+  <section class="screen" id="payroll">
+    <div class="ph"><div><h1>Payroll export</h1><p class="desc">Approved hours for a pay period, formatted for your payroll system, with weekly overtime worked out.</p></div></div>
+
+    <div class="panel" style="padding:16px 18px;margin-bottom:16px">
+      <div class="row" style="gap:18px;align-items:flex-end">
+        <div class="field"><label for="pp">Pay period</label><select id="pp"><option>Last pay period · Oct 1 – 15, 2026</option><option>This pay period · Oct 16 – 31, 2026</option><option>Sep 16 – 30, 2026</option><option>Custom dates…</option></select></div>
+        <div class="field"><label for="fmt">Format</label><select id="fmt"><option>Gusto</option><option>ADP</option><option>Paychex</option><option>Generic CSV</option></select></div>
+        <div style="margin-left:auto" class="row"><button class="btn primary">Download CSV</button></div>
+      </div>
+    </div>
+
+    <div class="notice"><span>⚠</span><span><b>2 people aren't in this file.</b> Only approved timesheets are exported.</span></div>
+    <div class="panel" style="margin-bottom:18px">
+      <table>
+        <thead><tr><th>Not included</th><th>Why</th><th class="num">Hours</th><th></th></tr></thead>
+        <tbody>
+          <tr><td><b>Robert Taylor</b></td><td><span class="badge b-info">Submitted</span> <span class="sub2">— waiting for approval</span></td><td class="num">80.00</td><td class="num"><button class="btn sm">Review</button></td></tr>
+          <tr><td><b>Jane Smith</b></td><td><span class="badge b-warn">Returned</span> <span class="sub2">— returned Oct 18, not resubmitted</span></td><td class="num">92.00</td><td class="num"><button class="btn sm quiet">Remind</button></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>In this file</h2>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Employee</th><th>FLSA</th><th class="num">Regular</th><th class="num">Overtime</th><th class="num">Leave</th><th class="num">Total</th></tr></thead>
+        <tbody>
+          <tr><td>Emily Davis</td><td class="sub2">Exempt</td><td class="num">80.00</td><td class="num sub2">—</td><td class="num">8.00</td><td class="num">88.00</td></tr>
+          <tr><td>John Doe</td><td class="sub2">Non-exempt</td><td class="num">80.00</td><td class="num">6.50</td><td class="num">0.00</td><td class="num">86.50</td></tr>
+          <tr><td>Mike Chen</td><td class="sub2">Exempt</td><td class="num">88.00</td><td class="num sub2">—</td><td class="num">0.00</td><td class="num">88.00</td></tr>
+          <tr><td>Sarah Wilson</td><td class="sub2">Exempt</td><td class="num">82.00</td><td class="num sub2">—</td><td class="num">8.00</td><td class="num">90.00</td></tr>
+          <tr><td>Admin User</td><td class="sub2">Non-exempt</td><td class="num">80.00</td><td class="num">0.00</td><td class="num">0.00</td><td class="num">80.00</td></tr>
+        </tbody>
+        <tfoot><tr><td>5 people</td><td></td><td class="num">410.00</td><td class="num">6.50</td><td class="num">16.00</td><td class="num">432.50</td></tr></tfoot>
+      </table>
+    </div>
+    <details><summary>How overtime is worked out</summary><p class="help" style="max-width:72ch">Overtime is hours worked over 40 in your workweek (starts Monday), for non-exempt employees only. Leave doesn't count toward the 40. Weeks that cross the pay-period edge use the days on both sides.</p></details>
+
+    <ul class="callouts">
+      <li><b>Defaults to the last completed pay period,</b> not "this month", with presets for this period and the one before.</li>
+      <li><b>Says who's missing and why,</b> with a one-click Review (or Remind) — today the export silently leaves them out.</li>
+      <li><b>A totals row</b> and right-aligned numbers; exempt employees show "—" for overtime instead of 0.</li>
+      <li><b>The legal explanation is one click away</b> instead of a dense box above the buttons; the redundant "Data source" card and "Back to reports" link are gone.</li>
+    </ul>
+  </section>
+
+  <!-- ===================== CONTRACTS ===================== -->
+  <section class="screen" id="contracts">
+    <div class="ph"><div><h1>Contracts</h1><p class="desc">Funding, spending and burn for each contract, CLIN and SLIN.</p></div><button class="btn primary">Add contract</button></div>
+
+    <div class="panel strip">
+      <div><div class="n">3</div><div class="l">Active contracts</div></div>
+      <div><div class="n">$5,050,000</div><div class="l">Funded</div></div>
+      <div><div class="n">$773,213</div><div class="l">Spent (priced hours) · 15%</div></div>
+      <div><div class="n">$4,276,787</div><div class="l">Remaining</div></div>
+    </div>
+    <div class="notice"><span>⚠</span><span><b>1,719 hours have no labor-category rate,</b> so their cost isn't counted above.</span><a>Fix pricing</a></div>
+
+    <div class="panel" style="overflow-x:auto">
+      <table id="ctable">
+        <thead><tr><th>Contract</th><th class="num">Funded</th><th class="num">Spent</th><th class="num">Remaining</th><th>Burn</th><th class="num">Unpriced</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          <tr data-p="army"><td><button class="exp" aria-expanded="false" aria-label="Show CLINs for Army IT Support">▸</button><b>Army IT Support</b><div class="sub2" style="padding-left:28px"><span class="pill">Sub</span> <span class="mono">W911QX-23-D-0042</span> · ends Sep 30, 2026</div></td><td class="num">$750,000</td><td class="num">$173,238</td><td class="num">$576,762</td><td><div class="burn"><div class="bar"><i style="width:23%"></i></div><span class="sub2">23% · on track</span></div></td><td class="num">744.5</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+          <tr class="child" data-c="army" hidden><td>CLIN 0001 · Help desk</td><td class="num">$300,000</td><td class="num">$92,410</td><td class="num">$207,590</td><td><div class="burn"><div class="bar"><i style="width:31%"></i></div><span class="sub2">31%</span></div></td><td class="num">310.0</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button></td></tr>
+          <tr class="child" data-c="army" hidden><td>CLIN 0002 · Network operations</td><td class="num">$350,000</td><td class="num">$66,028</td><td class="num">$283,972</td><td><div class="burn"><div class="bar"><i style="width:19%"></i></div><span class="sub2">19%</span></div></td><td class="num">434.5</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button></td></tr>
+          <tr class="child" data-c="army" hidden><td>CLIN 0003 · Training</td><td class="num">$100,000</td><td class="num">$14,800</td><td class="num">$85,200</td><td><div class="burn"><div class="bar"><i style="width:15%"></i></div><span class="sub2">15%</span></div></td><td class="num">0.0</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button></td></tr>
+          <tr data-p="disa"><td><button class="exp" aria-expanded="false" aria-label="Show CLINs for DISA Cyber Operations">▸</button><b>DISA Cyber Operations</b><div class="sub2" style="padding-left:28px"><span class="pill">Prime</span> <span class="mono">HC1028-22-C-0015</span> · ends May 31, 2028</div></td><td class="num">$1,800,000</td><td class="num">$218,575</td><td class="num">$1,581,425</td><td><div class="burn"><div class="bar"><i style="width:12%"></i></div><span class="sub2">12% · on track</span></div></td><td class="num">0.0</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+          <tr class="child" data-c="disa" hidden><td>CLIN 0001 · Cyber operations</td><td class="num">$1,200,000</td><td class="num">$171,300</td><td class="num">$1,028,700</td><td><div class="burn"><div class="bar"><i style="width:14%"></i></div><span class="sub2">14%</span></div></td><td class="num">0.0</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button></td></tr>
+          <tr class="child grandp" data-c="disa" hidden><td>CLIN 0002 · Cloud infrastructure</td><td class="num">$600,000</td><td class="num">$47,275</td><td class="num">$552,725</td><td><div class="burn"><div class="bar"><i style="width:8%"></i></div><span class="sub2">8%</span></div></td><td class="num">0.0</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button></td></tr>
+          <tr class="child grand" data-c="disa" hidden><td>SLIN 0002AA · Migration support</td><td class="num">$150,000</td><td class="num">$47,275</td><td class="num">$102,725</td><td><div class="burn"><div class="bar"><i style="width:32%"></i></div><span class="sub2">32%</span></div></td><td class="num">0.0</td><td><span class="badge b-dim">Inactive</span></td><td class="num"><button class="btn sm quiet">Edit</button></td></tr>
+          <tr data-p="navair"><td><button class="exp" aria-expanded="true" aria-label="Hide CLINs for NAVAIR Systems Support">▸</button><b>NAVAIR Systems Support</b><div class="sub2" style="padding-left:28px"><span class="pill">Prime</span> <span class="mono">W58RGZ-21-C-0001</span> · ends Dec 31, 2027</div></td><td class="num">$2,500,000</td><td class="num">$381,401</td><td class="num">$2,118,599</td><td><div class="burn"><div class="bar"><i style="width:15%"></i></div><span class="sub2">15% · on track</span></div></td><td class="num">974.5</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+          <tr class="child" data-c="navair"><td>CLIN 0001 · Base year</td><td class="num">$1,500,000</td><td class="num">$301,920</td><td class="num">$1,198,080</td><td><div class="burn"><div class="bar"><i style="width:20%"></i></div><span class="sub2">20%</span></div></td><td class="num">974.5</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button></td></tr>
+          <tr class="child" data-c="navair"><td>CLIN 0002 · Option year 1</td><td class="num">$1,000,000</td><td class="num">$79,481</td><td class="num">$920,519</td><td><div class="burn"><div class="bar"><i style="width:8%"></i></div><span class="sub2">8%</span></div></td><td class="num">0.0</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button></td></tr>
+          <tr class="child" data-c="navair"><td colspan="8"><button class="btn sm quiet">+ Add CLIN to NAVAIR Systems Support</button></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <ul class="callouts">
+      <li><b>One page instead of two</b> ("Overview" and "Contracts and CLINs" merge): the money and the structure live together.</li>
+      <li><b>CLINs and SLINs are visible</b> — expand a contract to see them (no hidden drawer), each with its own funded, spent, remaining and burn.</li>
+      <li><b>Funding changes are one click</b> ("Edit funding"), which today isn't possible at all. Close a contract from its ⋯ menu.</li>
+      <li><b>"Unpriced" is said once,</b> in one notice and one column — today it repeats up to six times. The summary is a quiet strip, not four loud cards; the self-approval banner moves to Home only.</li>
+      <li><b>Readable numbers:</b> whole dollars, right-aligned, burn in words beside the bar; contract numbers under the name so rows stay one line.</li>
+    </ul>
+  </section>
+
+  <!-- ===================== REPORTS ===================== -->
+  <section class="screen" id="reports">
+    <div class="ph"><div><h1>Reports</h1><p class="desc">Download timesheets, costs and hours for any pay period or date range.</p></div></div>
+    <div class="panel">
+      <div class="report">
+        <div><h3>Signed timesheets</h3><p class="sub2" style="margin:2px 0 0">Each employee's approved timesheet with signatures and the audit trail, ready for DCAA.</p></div>
+        <div class="row"><select aria-label="Pay period"><option>Last pay period · Oct 1 – 15</option><option>This pay period · Oct 16 – 31</option><option>Choose a period…</option></select><select aria-label="Employee"><option>Everyone</option></select></div>
+        <div class="row"><button class="btn primary">Download PDF</button></div>
+      </div>
+      <div class="report">
+        <div><h3>Contract costs</h3><p class="sub2" style="margin:2px 0 0">Hours and cost by contract, CLIN and labor category, using the rate in effect each day.</p></div>
+        <div class="row"><select aria-label="Range"><option>Last pay period · Oct 1 – 15</option><option>This month</option><option>Contract to date</option><option>Custom dates…</option></select></div>
+        <div class="row"><button class="btn">Excel</button><button class="btn">PDF</button></div>
+      </div>
+      <div class="report">
+        <div><h3>Hours summary</h3><p class="sub2" style="margin:2px 0 0">Total hours per employee and charge code, including leave and indirect time.</p></div>
+        <div class="row"><select aria-label="Range"><option>Last pay period · Oct 1 – 15</option></select></div>
+        <div class="row"><button class="btn">Excel</button></div>
+      </div>
+      <div class="report">
+        <div><h3>Unpriced hours</h3><p class="sub2" style="margin:2px 0 0">Hours with no labor-category rate or with overlapping assignments, so you can fix pricing.</p></div>
+        <div class="row"><span class="sub2">All time · 1,719 hours · 6 things to fix</span></div>
+        <div class="row"><button class="btn" data-go="unpriced">View</button><button class="btn">Excel</button></div>
+      </div>
+      <div class="report">
+        <div><h3>Cost by pay period</h3><p class="sub2" style="margin:2px 0 0">The period cost report that used to live on the overview page.</p></div>
+        <div class="row"><select aria-label="Range"><option>Last 6 pay periods</option></select></div>
+        <div class="row"><button class="btn">Excel</button></div>
+      </div>
+      <div class="report" style="background:var(--bad-soft)">
+        <div><h3>Contract costs</h3><p class="err" role="alert" style="margin:2px 0 0">No approved hours between Oct 16 and Oct 31, 2026. Choose an earlier period.</p></div>
+        <div class="row"><select aria-label="Range"><option>This pay period · Oct 16 – 31</option></select></div>
+        <div class="row"><button class="btn">Excel</button><button class="btn">PDF</button></div>
+      </div>
+    </div>
+    <ul class="callouts">
+      <li><b>One list, one layout:</b> what the report is, which period, which format. No orphan card, no half-empty page.</li>
+      <li><b>Pay-period presets everywhere</b> ("Last pay period", "Contract to date"), and you can go back as far as you like (today the picker stops at 11 periods).</li>
+      <li><b>Real error messages in place</b> (last row) — today a failed download opens a tab of raw code. A spinner shows while a file is prepared.</li>
+      <li><b>Neutral buttons:</b> no red PDF / green Excel. One primary action, the rest outlined.</li>
+      <li><b>All reports live here:</b> unpriced hours and cost-by-period move in from Labor categories and the overview page.</li>
+    </ul>
+  </section>
+
+  <!-- ===================== LABOR CATEGORIES ===================== -->
+  <section class="screen" id="lcats">
+    <div class="ph"><div><h1>Labor categories</h1><p class="desc">Each category's billing rate on a CLIN. Charge codes and employees use these to price hours.</p></div><button class="btn primary">Add labor category</button></div>
+    <div class="notice"><span>⚠</span><span><b>1,719 hours have no labor-category rate,</b> so their cost isn't counted.</span><a data-go="unpriced">See what to fix</a></div>
+    <div class="panel" style="overflow-x:auto">
+      <table id="ltable">
+        <thead><tr><th>Category</th><th>Code</th><th class="num">Hourly rate</th><th class="num">Ceiling rate</th><th class="num">People</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          <tr class="grp" data-p="l-army"><td colspan="7"><button class="exp" aria-expanded="true" aria-label="Hide Army IT Support">▸</button><b>Army IT Support</b> <span class="sub2 mono">W911QX-23-D-0042</span> <span class="sub2">· 3 categories</span></td></tr>
+          <tr class="child" data-c="l-army"><td>Help desk analyst <span class="sub2">· CLIN 0001</span></td><td class="mono">HD-I</td><td class="num">$55.00</td><td class="num">$65.00</td><td class="num">2</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+          <tr class="child" data-c="l-army"><td>Junior systems administrator <span class="sub2">· CLIN 0002</span></td><td class="mono">SA-I</td><td class="num">$75.00</td><td class="num">$85.00</td><td class="num">1</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+          <tr class="child" data-c="l-army"><td>Technical trainer <span class="sub2">· CLIN 0003</span></td><td class="mono">TR-I</td><td class="num">$85.00</td><td class="num">$100.00</td><td class="num">0</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+          <tr class="grp" data-p="l-disa"><td colspan="7"><button class="exp" aria-expanded="false" aria-label="Show DISA Cyber Operations">▸</button><b>DISA Cyber Operations</b> <span class="sub2 mono">HC1028-22-C-0015</span> <span class="sub2">· 3 categories</span></td></tr>
+          <tr class="child" data-c="l-disa" hidden><td>Systems administrator <span class="sub2">· CLIN 0001</span></td><td class="mono">SA-II</td><td class="num">$100.00</td><td class="num">$115.00</td><td class="num">2</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+          <tr class="grp" data-p="l-nav"><td colspan="7"><button class="exp" aria-expanded="true" aria-label="Hide NAVAIR Systems Support">▸</button><b>NAVAIR Systems Support</b> <span class="sub2 mono">W58RGZ-21-C-0001</span> <span class="sub2">· 4 categories</span></td></tr>
+          <tr class="child" data-c="l-nav"><td>Program manager <span class="sub2">· CLIN 0001</span></td><td class="mono">PM-II</td><td class="num">$165.00</td><td class="num">$180.00</td><td class="num">1</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+          <tr class="child" data-c="l-nav"><td>Software engineer <span class="sub2">· CLIN 0001</span></td><td class="mono">SE-II</td><td class="num">$110.00</td><td class="num">$125.00</td><td class="num">2</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+          <tr class="child" data-c="l-nav"><td>Senior software engineer <span class="sub2">· CLIN 0001</span></td><td class="mono">SE-III</td><td class="num">$149.35</td><td class="num">$164.80</td><td class="num">1</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> ⋯</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul class="callouts">
+      <li><b>One job per page.</b> This page is only categories and their rates. Assigning people to categories moves to <b>People → Assignments</b> (a "Labor categories" tab next to Charge code access and Approval scope). The cost-basis report moves to <b>Reports</b>.</li>
+      <li><b>Grouped by contract,</b> so the contract name appears once instead of on every row; expand or collapse each one. "People" shows how many employees use the category (click it to see them in Assignments).</li>
+      <li><b>Unpriced hours are one line at the top,</b> linking to the report — not 1,732 rows at the bottom of the page.</li>
+      <li>Rate history still opens from each row (Edit → Rates), as today.</li>
+    </ul>
+  </section>
+
+  <!-- ===================== UNPRICED HOURS REPORT ===================== -->
+  <section class="screen" id="unpriced">
+    <p class="sub2" style="margin:0 0 6px"><a style="color:var(--accent-text);cursor:pointer" data-go="reports">Reports</a> › Unpriced hours</p>
+    <div class="ph"><div><h1>Unpriced hours</h1><p class="desc">Hours that have no labor-category rate, so contract costs leave them out. Each row is one thing to fix.</p></div><button class="btn">Download Excel</button></div>
+    <div class="panel strip" style="grid-template-columns:repeat(3,1fr)">
+      <div><div class="n">1,719</div><div class="l">Unpriced hours</div></div>
+      <div><div class="n">6</div><div class="l">Things to fix</div></div>
+      <div><div class="n">4</div><div class="l">Employees affected</div></div>
+    </div>
+    <div class="row" style="margin-bottom:12px"><select aria-label="Contract"><option>All contracts</option></select><select aria-label="Period"><option>All time</option><option>Last pay period</option></select></div>
+    <div class="panel" style="overflow-x:auto">
+      <table>
+        <thead><tr><th>What's wrong</th><th>Employee</th><th>Where</th><th class="num">Hours</th><th>Dates</th><th>Fix</th></tr></thead>
+        <tbody>
+          <tr><td><span class="badge b-warn">No category</span></td><td>Jane Smith</td><td class="mono">NAVAIR-0001-ONSITE</td><td class="num">412.5</td><td class="sub2">Jan 2 – Oct 28, 2026</td><td><button class="btn sm">Set category on code</button></td></tr>
+          <tr><td><span class="badge b-warn">No category</span></td><td>John Doe</td><td class="mono">NAVAIR-0001-ONSITE</td><td class="num">380.0</td><td class="sub2">Jan 2 – Oct 28, 2026</td><td><button class="btn sm">Set category on code</button></td></tr>
+          <tr><td><span class="badge b-warn">No category</span></td><td>Emily Davis</td><td class="mono">ARMY-0001</td><td class="num">402.0</td><td class="sub2">Feb 3 – Oct 27, 2026</td><td><button class="btn sm">Assign Emily a category</button></td></tr>
+          <tr><td><span class="badge b-warn">No category</span></td><td>Emily Davis</td><td class="mono">ARMY-0002</td><td class="num">342.5</td><td class="sub2">Feb 3 – Oct 27, 2026</td><td><button class="btn sm">Assign Emily a category</button></td></tr>
+          <tr><td><span class="badge b-bad">Two categories</span></td><td>Robert Taylor</td><td class="mono">NAVAIR CLIN 0001</td><td class="num">96.0</td><td class="sub2">Sep 1 – Sep 30, 2026</td><td><button class="btn sm">End SE-II or SE-III</button></td></tr>
+          <tr><td><span class="badge b-warn">No category</span></td><td>Mike Chen</td><td class="mono">NAVAIR-0002</td><td class="num">86.0</td><td class="sub2">Oct 1 – Oct 28, 2026</td><td><button class="btn sm">Set category on code</button></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul class="callouts">
+      <li><b>Six problems, not 1,732 entries.</b> Entries with the same cause, employee and charge code collapse into one row with total hours and a date range — that's the unit you actually fix.</li>
+      <li><b>Each row says what to do</b> and links straight to the fix (set a category on the charge code, give the employee a category, or end one of two overlapping ones).</li>
+      <li><b>Every entry is still available:</b> the Excel download keeps the per-entry detail auditors may want.</li>
+      <li>Lives under Reports, linked from the notices on Labor categories, Contracts and Home.</li>
+    </ul>
+  </section>
+  </main>
+</div>
+
+<div class="switcher" role="toolbar" aria-label="Mockup screens">
+  <button data-go="approvals" class="on">Approvals</button>
+  <button data-go="payroll">Payroll export</button>
+  <button data-go="contracts">Contracts</button>
+  <button data-go="reports">Reports</button>
+  <button data-go="lcats">Labor categories</button>
+  <button data-go="unpriced">Unpriced hours</button>
+  <button id="theme">Light / dark</button>
+</div>
+
+<script>
+function go(id) {
+  document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('on', s.id === id));
+  document.querySelectorAll('.switcher [data-go]').forEach((b) => b.classList.toggle('on', b.dataset.go === id));
+  document.querySelectorAll('#nav [data-go]').forEach((a) => a.classList.toggle('on', a.dataset.go === id));
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll('[data-go]').forEach((el) => el.addEventListener('click', () => go(el.dataset.go)));
+document.getElementById('theme').onclick = () => { const h = document.documentElement; h.dataset.theme = h.dataset.theme === 'dark' ? 'light' : 'dark'; };
+document.querySelectorAll('#ctable .exp, #ltable .exp').forEach((b) => b.addEventListener('click', () => {
+  const open = b.getAttribute('aria-expanded') !== 'true';
+  b.setAttribute('aria-expanded', String(open));
+  b.setAttribute('aria-label', (open ? 'Hide' : 'Show') + b.getAttribute('aria-label').slice(4));
+  const key = b.closest('tr').dataset.p;
+  b.closest('table').querySelectorAll(`tr[data-c="${key}"]`).forEach((r) => (r.hidden = !open));
+}));
+go('approvals');
+</script>
+</body>
+</html>

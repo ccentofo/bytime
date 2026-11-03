@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, gt } from 'drizzle-orm';
+import postgres from 'postgres';
+import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from '@/db/schema';
 import { getPeriodStartForDate, getNumDaysInPeriod, navigatePeriod, DEFAULT_PERIOD_CONFIG } from '@/lib/date-utils';
 import { addDays, diffDays, parseCalendarDate, todayIn, type CalendarDate } from '@/lib/calendar-date';
@@ -23,11 +25,15 @@ import {
 // checked.
 // ---------------------------------------------------------------------------
 
+// T-C7e: the shared test client has ONE connection, so concurrent saves would queue in the client instead of waiting on
+// Postgres's lock. That test points the write gate at its own small pool.
+const writeDb = vi.hoisted(() => ({ override: null as unknown }));
+
 vi.mock('@/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/db')>()),
   getDb: async () => getTestDb(),
   // Write actions obtain their client through the write gate (feature-plan-terms-compliance-fixes.md §5.1).
-  getDbForWrite: async () => getTestDb(),
+  getDbForWrite: async () => writeDb.override ?? getTestDb(),
   // requireAdminFresh (updatePayPeriodConfig) re-reads the role through getDbForAuth.
   getDbForAuth: async () => getTestDb(),
 }));
@@ -283,7 +289,8 @@ describe('Period-lock integrity (R2-2)', () => {
       });
       const after = await getValidScheduleChangeDates(sundayWeekly);
       expect(after.immediate).toBe(false);
-      await expectFailure(updatePayPeriodConfig({ ...sundayWeekly, effectiveFrom: null }), 'validation', /must start on a future date/);
+      // A different schedule (C7: re-saving the current one is refused before the null branch).
+      await expectFailure(updatePayPeriodConfig({ periodType: 'monthly', anchorDate: '2026-01-01' as CalendarDate, weekStartDay: 1, effectiveFrom: null }), 'validation', /must start on a future date/);
     });
 
     it('explains a change that can never be scheduled instead of offering nothing silently', async () => {
@@ -300,6 +307,138 @@ describe('Period-lock integrity (R2-2)', () => {
       expect(options.immediate).toBe(false);
       expect(options.dates).toEqual([]);
       expect(options.problem).toMatch(/no date in the next two years/i);
+    });
+
+    // feature-plan-ux-page-fixes.md C7 (R1) ------------------------------------------------------------------------
+    describe('C7: no-op, cancel, idempotent and stale saves (T-C7d)', () => {
+      const current = { periodType: 'semimonthly' as const, anchorDate: '2026-01-01' as CalendarDate, weekStartDay: 1 };
+      const biweekly = { periodType: 'biweekly' as const, anchorDate: '2025-01-06' as CalendarDate, weekStartDay: 1 };
+      const configRows = () => getTestDb().select().from(schema.payPeriodConfig);
+      const pendingRows = () => getTestDb().select().from(schema.payPeriodConfig).where(gt(schema.payPeriodConfig.effectiveFrom, '2026-01-15'));
+      async function schedule(expectedPendingId?: string | null) {
+        const [date] = (await getValidScheduleChangeDates(biweekly)).dates;
+        return { date, result: await expectOk(updatePayPeriodConfig({ ...biweekly, effectiveFrom: date, expectedPendingId })) };
+      }
+
+      it('saving the current schedule with nothing pending is refused and writes no row', async () => {
+        actingAs(admin);
+        await expectFailure(updatePayPeriodConfig({ ...current, effectiveFrom: '2026-02-01' as CalendarDate }), 'validation', /already your pay schedule/);
+        await expectFailure(updatePayPeriodConfig({ ...current, anchorDate: '2024-06-09' as CalendarDate, effectiveFrom: null }), 'validation', /already your pay schedule/);
+        expect(await configRows()).toHaveLength(0);
+      });
+
+      it('the scheduled path returns the new pending id; saving the current schedule while one is pending cancels it', async () => {
+        actingAs(admin);
+        const { date, result } = await schedule(null);
+        const [row] = await pendingRows();
+        expect(result).toEqual({ effectiveFrom: date, pendingId: row.id });
+        expect(await expectOk(updatePayPeriodConfig({ ...current, effectiveFrom: date, expectedPendingId: row.id }))).toEqual({ effectiveFrom: null, cancelledPending: true });
+        expect(await pendingRows()).toHaveLength(0);
+      });
+
+      it('cancelPending deletes the pending change and is idempotent (no schedule fields are validated)', async () => {
+        actingAs(admin);
+        await schedule();
+        const cancel = { periodType: 'nonsense' as never, anchorDate: 'x' as CalendarDate, weekStartDay: 99, effectiveFrom: null, cancelPending: true };
+        expect(await expectOk(updatePayPeriodConfig(cancel))).toEqual({ effectiveFrom: null, cancelledPending: true });
+        expect(await expectOk(updatePayPeriodConfig(cancel))).toEqual({ effectiveFrom: null, cancelledPending: true });
+        expect(await pendingRows()).toHaveLength(0);
+      });
+
+      it('re-saving the pending change for its own date writes nothing (same row id, no pendingId)', async () => {
+        actingAs(admin);
+        const { date, result } = await schedule();
+        const again = await expectOk(updatePayPeriodConfig({ ...biweekly, anchorDate: '2025-01-20' as CalendarDate, effectiveFrom: date, expectedPendingId: result.pendingId }));
+        expect(again).toEqual({ effectiveFrom: date });
+        expect((await pendingRows()).map((r) => r.id)).toEqual([result.pendingId]);
+      });
+
+      it('a stale expectedPendingId is refused — including after another admin replaced the change with an identical one for the same date', async () => {
+        actingAs(admin);
+        const { date, result: first } = await schedule(null);
+        // Another admin cancels and re-schedules the very same change: same date and config, a new row id.
+        await expectOk(updatePayPeriodConfig({ ...current, effectiveFrom: null, cancelPending: true, expectedPendingId: first.pendingId }));
+        const { result: second } = await schedule(null);
+        expect(second.pendingId).not.toBe(first.pendingId);
+        // The first admin's page still holds the old id.
+        const stale = /updated by someone else/;
+        await expectFailure(updatePayPeriodConfig({ ...biweekly, effectiveFrom: date, expectedPendingId: first.pendingId }), 'validation', stale);
+        await expectFailure(updatePayPeriodConfig({ ...current, effectiveFrom: null, cancelPending: true, expectedPendingId: first.pendingId }), 'validation', stale);
+        await expectFailure(updatePayPeriodConfig({ ...biweekly, effectiveFrom: date, expectedPendingId: null }), 'validation', stale);
+        expect((await pendingRows()).map((r) => r.id)).toEqual([second.pendingId]);
+      });
+
+      it('the checks run before the immediate branch: a workspace with timesheets can still cancel, or save its current schedule to cancel', async () => {
+        actingAs(admin);
+        await schedule();
+        await getTestDb().insert(schema.timesheetEntries).values({
+          userId: employee.id, chargeCodeId: chargeCode.id, entryDate: '2026-01-12', hours: '8', revisionNumber: 1, createdBy: employee.id,
+        });
+        expect(await expectOk(updatePayPeriodConfig({ ...current, effectiveFrom: null }))).toEqual({ effectiveFrom: null, cancelledPending: true });
+        await schedule();
+        expect(await expectOk(updatePayPeriodConfig({ ...current, effectiveFrom: null, cancelPending: true }))).toEqual({ effectiveFrom: null, cancelledPending: true });
+        expect(await pendingRows()).toHaveLength(0);
+      });
+    });
+
+    it('C7 (T-C7e): concurrent saves are serialised by the advisory lock — exactly one pending row, one "updated by someone else"', async () => {
+      actingAs(admin);
+      const URL = process.env.TEST_DATABASE_URL ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime_test';
+      const pool = postgres(URL, { max: 4 });
+      const holder = postgres(URL, { max: 1 });
+      const observer = postgres(URL, { max: 1 });
+      writeDb.override = drizzle(pool, { schema });
+      type SaveResult = Awaited<ReturnType<typeof updatePayPeriodConfig>>;
+      let saveA: Promise<SaveResult> | undefined;
+      let saveB: Promise<SaveResult> | undefined;
+      // UX-4A-AUDIT.md M4: each save's settled result, so a timeout explains itself.
+      const settled: Record<string, unknown> = {};
+      const track = (name: string, p: Promise<SaveResult>) => {
+        p.then((r) => { settled[name] = r; }, (e: unknown) => { settled[name] = `threw: ${String(e)}`; });
+        return p;
+      };
+      try {
+        const a = { periodType: 'biweekly' as const, anchorDate: '2025-01-06' as CalendarDate, weekStartDay: 1 };
+        const b = { periodType: 'biweekly' as const, anchorDate: '2025-01-13' as CalendarDate, weekStartDay: 1 };
+        const [dateA] = (await getValidScheduleChangeDates(a)).dates;
+        const [dateB] = (await getValidScheduleChangeDates(b)).dates;
+        await holder.begin(async (tx) => {
+          await tx`SELECT pg_advisory_xact_lock(hashtext('pay_period_config'))`;
+          // Count waiters on THIS lock only: the holder's own granted row gives its database and key.
+          const [key] = await tx<{ database: string; classid: string; objid: string }[]>`
+            SELECT database::text, classid::text, objid::text FROM pg_locks
+            WHERE locktype = 'advisory' AND granted AND pid = pg_backend_pid()`;
+          const waitFor = async (n: number, what: string) => {
+            for (let i = 0; ; i++) {
+              const [{ w }] = await observer<{ w: number }[]>`
+                SELECT count(*)::int AS w FROM pg_locks
+                WHERE locktype = 'advisory' AND NOT granted
+                  AND database::text = ${key.database} AND classid::text = ${key.classid} AND objid::text = ${key.objid}`;
+              if (w >= n) return;
+              // Without the lock the saves finish instead of waiting, and this times out.
+              if (i > 400) throw new Error(`${what} (waiters: ${w}; settled: ${JSON.stringify(settled)})`);
+              await new Promise((res) => setTimeout(res, 25));
+            }
+          };
+          // Staggered (M4): save B's pre-lock phase (session check and all) never runs alongside save A's. Both pages
+          // saw no pending change.
+          saveA = track('A', updatePayPeriodConfig({ ...a, effectiveFrom: dateA, expectedPendingId: null }));
+          await waitFor(1, 'save A never waited on the pay_period_config lock');
+          saveB = track('B', updatePayPeriodConfig({ ...b, effectiveFrom: dateB, expectedPendingId: null }));
+          await waitFor(2, 'save B never waited on the pay_period_config lock');
+        });
+        const [resultA, resultB] = await Promise.all([saveA!, saveB!]);
+        expect(resultA).toMatchObject({ ok: true, data: { effectiveFrom: dateA } });
+        expect(resultB).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/updated by someone else/) });
+        expect(await getTestDb().select().from(schema.payPeriodConfig).where(gt(schema.payPeriodConfig.effectiveFrom, '2026-01-15'))).toHaveLength(1);
+      } finally {
+        // No dangling rejection on a failing run: let both saves settle before the pools end.
+        await Promise.allSettled([saveA, saveB].filter((p): p is Promise<SaveResult> => p !== undefined));
+        writeDb.override = null;
+        await holder.end({ timeout: 1 });
+        await observer.end({ timeout: 1 });
+        await pool.end({ timeout: 1 });
+      }
     });
   });
 

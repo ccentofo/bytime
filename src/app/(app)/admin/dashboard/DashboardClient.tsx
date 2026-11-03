@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { Fragment, useState, useTransition } from 'react';
 import {
   Button,
   Group,
@@ -209,8 +209,8 @@ export function DashboardClient({ initialSummaries }: Props) {
                 const funded = parseFloat(clin.fundedAmount ?? '0') || 0;
                 const remaining = funded - clin.totalCost;
                 return (
-                  <>
-                    <Table.Tr key={clin.clinId}>
+                  <Fragment key={clin.clinId}>
+                    <Table.Tr>
                       <Table.Td>{clin.clinNumber}</Table.Td>
                       <Table.Td>{clin.description ?? '—'}</Table.Td>
                       <Table.Td>{formatCurrencyString(clin.fundedAmount)}</Table.Td>
@@ -260,7 +260,7 @@ export function DashboardClient({ initialSummaries }: Props) {
                         </Table.Tr>
                       );
                     })}
-                  </>
+                  </Fragment>
                 );
               })}
             </Table.Tbody>

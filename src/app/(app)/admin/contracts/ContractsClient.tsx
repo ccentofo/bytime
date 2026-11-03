@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useRef, useState, useTransition } from 'react';
 import {
   Button,
   Modal,
@@ -16,6 +16,8 @@ import {
   Table,
   ActionIcon,
   Box,
+  Alert,
+  Loader,
 } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
@@ -115,6 +117,13 @@ export function ContractsClient({ initialContracts }: Props) {
   const [clins, setClins] = useState<Clin[]>([]);
   const [clinForm, setClinForm] = useState({ clinNumber: '', description: '', fundedAmount: '' });
 
+  // Loading state of the drawer's reads (feature-plan-ux-page-fixes.md C1). clinsReq is the request token: bumped by every
+  // CLIN load and by closing the drawer, written only in handlers; a read or mutation result whose token is stale
+  // (another contract was opened meanwhile) is dropped, so it can never land in the wrong drawer.
+  const [clinsStatus, setClinsStatus] = useState<'idle' | 'loading' | 'error' | 'ready'>('idle');
+  const [slinStatus, setSlinStatus] = useState<Record<string, 'loading' | 'error'>>({});
+  const clinsReq = useRef(0);
+
   // SLINs state
   const [slinsByClin, setSlinsByClin] = useState<Record<string, Slin[]>>({});
   const [slinForm, setSlinForm] = useState({ slinNumber: '', description: '', fundedAmount: '' });
@@ -147,15 +156,35 @@ export function ContractsClient({ initialContracts }: Props) {
     setModalOpen(true);
   }
 
+  /** Load a contract's CLINs — a plain async read (not a transition: a throw must not reach the error boundary). */
+  async function loadClins(contract: Contract) {
+    const id = ++clinsReq.current;
+    setClins([]);
+    setClinsStatus('loading');
+    try {
+      const data = await getClinsByContract(contract.id);
+      if (id === clinsReq.current) {
+        setClins(data as Clin[]);
+        setClinsStatus('ready');
+      }
+    } catch {
+      if (id === clinsReq.current) setClinsStatus('error');
+    }
+  }
+
   function openClinsDrawer(contract: Contract) {
     setSelectedContract(contract);
     setDrawerOpen(true);
     setSlinsByClin({});
+    setSlinStatus({});
     setExpandedClinId(null);
-    startTransition(async () => {
-      const data = await getClinsByContract(contract.id);
-      setClins(data as Clin[]);
-    });
+    void loadClins(contract);
+  }
+
+  function closeClinsDrawer() {
+    clinsReq.current += 1; // anything still in flight belongs to a drawer that's gone
+    setDrawerOpen(false);
+    setClinsStatus('idle');
   }
 
   function handleContractSubmit() {
@@ -193,7 +222,8 @@ export function ContractsClient({ initialContracts }: Props) {
   }
 
   function handleClinSubmit() {
-    if (!selectedContract) return;
+    if (!selectedContract || clinsStatus !== 'ready' || isPending) return;
+    const id = clinsReq.current;
     startTransition(async () => {
       const createdResult = await runAction(createClin({
         contractId: selectedContract.id,
@@ -201,7 +231,7 @@ export function ContractsClient({ initialContracts }: Props) {
         description: clinForm.description || undefined,
         fundedAmount: clinForm.fundedAmount || undefined,
       }), { errorTitle: 'Couldn’t create CLIN' });
-      if (!createdResult.ok) return;
+      if (!createdResult.ok || id !== clinsReq.current) return;
       const created = createdResult.data;
       if (created) {
         setClins((prev) => [...prev, created as Clin]);
@@ -213,15 +243,32 @@ export function ContractsClient({ initialContracts }: Props) {
   /** Same server call as before; the confirm closes only on success (onDone). */
   function handleClinStatusToggle(clin: Clin, onDone?: () => void) {
     const newStatus = clin.status === 'active' ? 'inactive' : 'active';
+    const id = clinsReq.current;
     startTransition(async () => {
       const updatedResult = await runAction(updateClin(clin.id, { status: newStatus }), { errorTitle: 'Couldn’t update CLIN' });
       if (!updatedResult.ok) return;
       onDone?.();
+      if (id !== clinsReq.current) return;
       const updated = updatedResult.data;
       if (updated) {
         setClins((prev) => prev.map((c) => (c.id === updated.id ? (updated as Clin) : c)));
       }
     });
+  }
+
+  /** Load a CLIN's SLINs (token-checked like the CLINs). A failure isn't cached: expanding again, or Retry, refetches. */
+  async function loadSlins(clinId: string) {
+    const id = clinsReq.current;
+    setSlinStatus((prev) => ({ ...prev, [clinId]: 'loading' }));
+    try {
+      const data = await getSlinsByClin(clinId);
+      if (id !== clinsReq.current) return;
+      setSlinsByClin((prev) => ({ ...prev, [clinId]: data as Slin[] }));
+      setSlinStatus((prev) => { const next = { ...prev }; delete next[clinId]; return next; });
+    } catch {
+      if (id !== clinsReq.current) return;
+      setSlinStatus((prev) => ({ ...prev, [clinId]: 'error' }));
+    }
   }
 
   function handleExpandClin(clinId: string) {
@@ -230,15 +277,11 @@ export function ContractsClient({ initialContracts }: Props) {
       return;
     }
     setExpandedClinId(clinId);
-    if (!slinsByClin[clinId]) {
-      startTransition(async () => {
-        const data = await getSlinsByClin(clinId);
-        setSlinsByClin((prev) => ({ ...prev, [clinId]: data as Slin[] }));
-      });
-    }
+    if (!slinsByClin[clinId] && slinStatus[clinId] !== 'loading') void loadSlins(clinId);
   }
 
   function handleSlinSubmit(clinId: string) {
+    const id = clinsReq.current;
     startTransition(async () => {
       const createdResult = await runAction(createSlin({
         clinId,
@@ -246,7 +289,7 @@ export function ContractsClient({ initialContracts }: Props) {
         description: slinForm.description || undefined,
         fundedAmount: slinForm.fundedAmount || undefined,
       }), { errorTitle: 'Couldn’t create SLIN' });
-      if (!createdResult.ok) return;
+      if (!createdResult.ok || id !== clinsReq.current) return;
       const created = createdResult.data;
       if (created) {
         setSlinsByClin((prev) => ({
@@ -261,10 +304,12 @@ export function ContractsClient({ initialContracts }: Props) {
   /** Same server call as before; the confirm closes only on success (onDone). */
   function handleSlinStatusToggle(slin: Slin, onDone?: () => void) {
     const newStatus = slin.status === 'active' ? 'inactive' : 'active';
+    const id = clinsReq.current;
     startTransition(async () => {
       const updatedResult = await runAction(updateSlin(slin.id, { status: newStatus }), { errorTitle: 'Couldn’t update SLIN' });
       if (!updatedResult.ok) return;
       onDone?.();
+      if (id !== clinsReq.current) return;
       const updated = updatedResult.data;
       if (updated) {
         setSlinsByClin((prev) => ({
@@ -431,7 +476,7 @@ export function ContractsClient({ initialContracts }: Props) {
       {/* CLINs Drawer */}
       <Drawer
         opened={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        onClose={closeClinsDrawer}
         // Every open ModalBase listens for Esc on window: with a confirm open, Esc must close only the confirm.
         closeOnEscape={!clinConfirm && !slinConfirm}
         position="right"
@@ -465,14 +510,34 @@ export function ContractsClient({ initialContracts }: Props) {
               onChange={(e) => setClinForm((f) => ({ ...f, fundedAmount: e.target.value }))}
               style={{ minWidth: 150 }}
             />
-            <WriteButton onClick={handleClinSubmit} loading={isPending} leftSection={<Icons.create size={14} />}>
+            {/* Unavailable until this contract's CLINs have loaded, and while a save runs (aria-disabled + the guard in
+                handleClinSubmit). Never Mantine `loading`: it sets `disabled` (UX-4A-AUDIT.md L1). */}
+            <WriteButton
+              onClick={handleClinSubmit}
+              leftSection={isPending && clinsStatus === 'ready' ? <Loader size={14} aria-hidden="true" /> : <Icons.create size={14} />}
+              aria-disabled={clinsStatus !== 'ready' || isPending || undefined}
+              data-disabled={clinsStatus !== 'ready' || isPending || undefined}
+              aria-describedby={clinsStatus === 'loading' || clinsStatus === 'error' ? 'clins-add-why' : undefined}
+            >
               Add
             </WriteButton>
           </Group>
+          {(clinsStatus === 'loading' || clinsStatus === 'error') && (
+            <Text id="clins-add-why" size="sm" c="dimmed">{clinsStatus === 'loading' ? 'Loading CLINs…' : "Couldn't load CLINs"}</Text>
+          )}
 
           {/* CLINs list */}
           <Title order={5} mt="sm">Existing CLINs</Title>
-          {clins.length === 0 ? (
+          {clinsStatus === 'loading' ? (
+            <Group role="status" gap="xs">
+              <Loader size="sm" aria-hidden="true" />
+              <Text size="sm">Loading CLINs…</Text>
+            </Group>
+          ) : clinsStatus === 'error' ? (
+            <Alert role="alert" color="red" title="Couldn't load this contract's CLINs">
+              <Button size="xs" variant="default" mt="xs" onClick={() => { if (selectedContract) void loadClins(selectedContract); }}>Retry</Button>
+            </Alert>
+          ) : clinsStatus !== 'ready' ? null : clins.length === 0 ? (
             <Text c="dimmed" size="sm">No CLINs yet for this contract.</Text>
           ) : (
             <Stack gap="xs">
@@ -563,7 +628,14 @@ export function ContractsClient({ initialContracts }: Props) {
                       </Group>
 
                       {/* SLINs table */}
-                      {(slinsByClin[clin.id] ?? []).length === 0 ? (
+                      {slinStatus[clin.id] === 'loading' ? (
+                        <Text size="xs" role="status">Loading SLINs…</Text>
+                      ) : slinStatus[clin.id] === 'error' ? (
+                        <Group gap="xs" role="alert">
+                          <Text size="xs" c="red">Couldn&apos;t load SLINs.</Text>
+                          <Button size="compact-xs" variant="default" onClick={() => void loadSlins(clin.id)}>Retry</Button>
+                        </Group>
+                      ) : (slinsByClin[clin.id] ?? []).length === 0 ? (
                         <Text size="xs" c="dimmed">No SLINs yet. Add one above.</Text>
                       ) : (
                         <Table.ScrollContainer minWidth={400}>

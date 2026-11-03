@@ -7,12 +7,14 @@ import {
   integrationSyncLogs,
   integrationSyncRecords,
 } from '@/db/schema';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { decrypt } from '@/lib/encryption';
 import { getAllConnectorMetadata } from '@/lib/integrations/registry';
 import type { CalendarDate } from '@/lib/calendar-date';
 import { userAction } from '@/lib/action-result';
+import { validateUUID } from '@/lib/validation';
+import { UserFacingError } from '@/lib/errors';
 
 // ---------------------------------------------------------------------------
 // Connection Management
@@ -93,29 +95,10 @@ export async function saveMapping(data: {
     await requireAdminFresh();
     const db = await getDbForWrite();
 
-    // Upsert — update if mapping already exists for this connection + entity type + bytime ID
-    const existing = await db
-      .select({ id: integrationEntityMappings.id })
-      .from(integrationEntityMappings)
-      .where(
-        and(
-          eq(integrationEntityMappings.connectionId, data.connectionId),
-          eq(integrationEntityMappings.entityType, data.entityType),
-          eq(integrationEntityMappings.bytimeEntityId, data.bytimeEntityId),
-        )
-      );
-
-    if (existing.length > 0) {
-      await db.update(integrationEntityMappings)
-        .set({
-          externalEntityId: data.externalEntityId,
-          externalEntityName: data.externalEntityName,
-          metadata: data.metadata,
-          updatedAt: new Date(),
-        })
-        .where(eq(integrationEntityMappings.id, existing[0].id));
-    } else {
-      await db.insert(integrationEntityMappings).values({
+    // feature-plan-ux-page-fixes.md C13: one atomic upsert on mapping_unique_idx (connection, entity type, CadenzPoint
+    // id), so two saves can't race into a unique violation; the caller gets the row's real id.
+    const [row] = await db.insert(integrationEntityMappings)
+      .values({
         connectionId: data.connectionId,
         entityType: data.entityType,
         bytimeEntityId: data.bytimeEntityId,
@@ -123,16 +106,29 @@ export async function saveMapping(data: {
         externalEntityId: data.externalEntityId,
         externalEntityName: data.externalEntityName,
         metadata: data.metadata,
-      });
-    }
+      })
+      .onConflictDoUpdate({
+        target: [integrationEntityMappings.connectionId, integrationEntityMappings.entityType, integrationEntityMappings.bytimeEntityId],
+        set: {
+          externalEntityId: data.externalEntityId,
+          externalEntityName: data.externalEntityName,
+          bytimeEntityName: data.bytimeEntityName,
+          metadata: data.metadata,
+          updatedAt: new Date(),
+        },
+      })
+      .returning({ id: integrationEntityMappings.id });
+    return { id: row.id };
   });
 }
 
 export async function deleteMapping(mappingId: string) {
   return userAction(async () => {
     await requireAdminFresh();
+    validateUUID(mappingId, 'Mapping');
     const db = await getDbForWrite();
-    await db.delete(integrationEntityMappings).where(eq(integrationEntityMappings.id, mappingId));
+    const deleted = await db.delete(integrationEntityMappings).where(eq(integrationEntityMappings.id, mappingId)).returning({ id: integrationEntityMappings.id });
+    if (deleted.length === 0) throw new UserFacingError('That mapping no longer exists.');
   });
 }
 

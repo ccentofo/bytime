@@ -6,6 +6,7 @@ import {
   dayOfWeek,
   daysInMonth,
   diffDays,
+  isCalendarDate,
   startOfMonth,
   withDayOfMonth,
 } from '@/lib/calendar-date';
@@ -74,6 +75,24 @@ export function getPeriodStartForDate(day: CalendarDate, config: PeriodConfig): 
       return dayOfMonth(day) <= 15 ? startOfMonth(day) : withDayOfMonth(day, 16);
     case 'monthly':
       return startOfMonth(day);
+  }
+}
+
+/**
+ * True when two configs produce the same periods (feature-plan-ux-page-fixes.md C7): same type, then weekly → same week
+ * start; biweekly → same week start and anchors a whole number of fortnights apart; semimonthly and monthly → nothing
+ * more. A null or invalid anchor on a biweekly config returns false (never throws).
+ */
+export function sameSchedule(a: PeriodConfig, b: PeriodConfig): boolean {
+  if (a.periodType !== b.periodType) return false;
+  switch (a.periodType) {
+    case 'weekly':
+      return a.weekStartDay === b.weekStartDay;
+    case 'biweekly':
+      if (a.weekStartDay !== b.weekStartDay || !isCalendarDate(a.anchorDate) || !isCalendarDate(b.anchorDate)) return false;
+      return diffDays(a.anchorDate, b.anchorDate) % 14 === 0;
+    default:
+      return true;
   }
 }
 

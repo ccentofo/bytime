@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useRef, useState, useTransition } from 'react';
 import {
   Container,
   Text,
@@ -15,6 +15,7 @@ import {
   Anchor,
   TextInput,
   List,
+  FileInput,
 } from '@mantine/core';
 import {
   IconDatabaseImport,
@@ -44,6 +45,8 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 type RowError = { row: number; message: string };
+
+const READ_ERROR = "Couldn't read that file. Make sure it's a CSV.";
 
 /** Summary of a (possibly multi-batch) import: committed batches, file-wide row errors, and where it stopped. */
 interface ImportSummary {
@@ -91,6 +94,8 @@ export function MigrationClient() {
   const [sourceSystem, setSourceSystem] = useState('');
 
   // Timesheet entries tab state
+  const [entryFile, setEntryFile] = useState<File | null>(null);
+  const [entryFileError, setEntryFileError] = useState<string | null>(null);
   const [entryFileName, setEntryFileName] = useState<string | null>(null);
   const [entryRows, setEntryRows] = useState<MigrationEntryRow[]>([]);
   const [entryValidation, setEntryValidation] = useState<MigrationValidationResult[]>([]);
@@ -98,6 +103,8 @@ export function MigrationClient() {
   const [entrySummary, setEntrySummary] = useState<ImportSummary | null>(null);
 
   // Period status tab state
+  const [periodFile, setPeriodFile] = useState<File | null>(null);
+  const [periodFileError, setPeriodFileError] = useState<string | null>(null);
   const [periodFileName, setPeriodFileName] = useState<string | null>(null);
   const [periodRows, setPeriodRows] = useState<MigrationPeriodRow[]>([]);
   const [periodValidation, setPeriodValidation] = useState<MigrationPeriodValidationResult[]>([]);
@@ -106,14 +113,41 @@ export function MigrationClient() {
 
   const sourceOk = sourceSystem.trim().length > 0 && sourceSystem.trim().length <= 100;
 
-  function handleEntryFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+  // feature-plan-ux-page-fixes.md C11: a new selection (or clearing the input) first drops the previous file's rows,
+  // validation, summary and stored filename, so nothing from the old file survives. A parse is applied only if no
+  // other file was chosen meanwhile.
+  const entryParseReq = useRef(0);
+  const periodParseReq = useRef(0);
+
+  function clearEntries() {
+    setEntryFileName(null);
+    setEntryRows([]);
+    setEntryValidation([]);
+    setEntryValidated(false);
+    setEntrySummary(null);
+    setEntryFileError(null);
+  }
+
+  function clearPeriods() {
+    setPeriodFileName(null);
+    setPeriodRows([]);
+    setPeriodValidation([]);
+    setPeriodValidated(false);
+    setPeriodSummary(null);
+    setPeriodFileError(null);
+  }
+
+  function handleEntryFile(file: File | null) {
+    const req = ++entryParseReq.current;
+    clearEntries();
+    setEntryFile(file);
     if (!file) return;
-    Papa.parse(file, {
+    Papa.parse<Record<string, string>>(file, {
       header: true,
       skipEmptyLines: true,
       complete: (results) => {
-        const rows = (results.data as Record<string, string>[]).map((row) => ({
+        if (req !== entryParseReq.current) return;
+        const rows = results.data.map((row) => ({
           employeeEmail: row['Employee Email'] ?? '',
           entryDate: row['Entry Date'] ?? '',
           contractNumber: row['Contract Number'] ?? '',
@@ -127,25 +161,27 @@ export function MigrationClient() {
         }));
         setEntryFileName(file.name);
         setEntryRows(rows);
-        setEntryValidation([]);
-        setEntryValidated(false);
-        setEntrySummary(null);
         notifications.show({ title: 'File loaded', message: `${rows.length} rows parsed`, color: 'signal' });
       },
-      error: (error) => {
-        notifications.show({ title: 'Parse error', message: error.message, color: 'red' });
+      error: () => {
+        if (req !== entryParseReq.current) return;
+        clearEntries();
+        setEntryFileError(READ_ERROR);
       },
     });
   }
 
-  function handlePeriodFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+  function handlePeriodFile(file: File | null) {
+    const req = ++periodParseReq.current;
+    clearPeriods();
+    setPeriodFile(file);
     if (!file) return;
-    Papa.parse(file, {
+    Papa.parse<Record<string, string>>(file, {
       header: true,
       skipEmptyLines: true,
       complete: (results) => {
-        const rows = (results.data as Record<string, string>[]).map((row) => ({
+        if (req !== periodParseReq.current) return;
+        const rows = results.data.map((row) => ({
           employeeEmail: row['Employee Email'] ?? '',
           periodStart: row['Period Start'] ?? '',
           status: row['Status'] ?? '',
@@ -156,19 +192,23 @@ export function MigrationClient() {
         }));
         setPeriodFileName(file.name);
         setPeriodRows(rows);
-        setPeriodValidation([]);
-        setPeriodValidated(false);
-        setPeriodSummary(null);
         notifications.show({ title: 'File loaded', message: `${rows.length} rows parsed`, color: 'signal' });
+      },
+      error: () => {
+        if (req !== periodParseReq.current) return;
+        clearPeriods();
+        setPeriodFileError(READ_ERROR);
       },
     });
   }
 
   function handleValidateEntries() {
     if (entryRows.length === 0) return;
+    const req = entryParseReq.current;   // UX-4A-AUDIT.md L7: drop the results if another file is picked meanwhile
     startTransition(async () => {
       // Batched like the import (a whole file in one request can exceed the 1 MB server-action limit).
       const report = await runMigrationBatches(entryRows, (r) => r.employeeEmail, (batch) => validateMigrationData(batch));
+      if (req !== entryParseReq.current) return;
       if (report.stopped) {
         notifications.show({ title: 'Validation failed', message: report.stopped.message, color: 'red' });
         return;
@@ -187,17 +227,21 @@ export function MigrationClient() {
 
   function handleImportEntries() {
     if (!entryValidated || entryRows.length === 0 || !sourceOk) return;
+    const req = entryParseReq.current;
     startTransition(async () => {
       const report = await runMigrationBatches(entryRows, (r) => r.employeeEmail,
         (batch) => importMigrationData({ rows: batch, sourceSystem, fileName: entryFileName }));
+      if (req !== entryParseReq.current) return;
       setEntrySummary(summarize(report));
     });
   }
 
   function handleValidatePeriods() {
     if (periodRows.length === 0) return;
+    const req = periodParseReq.current;
     startTransition(async () => {
       const report = await runMigrationBatches(periodRows, (r) => r.employeeEmail, (batch) => validateMigrationPeriods(batch));
+      if (req !== periodParseReq.current) return;
       if (report.stopped) {
         notifications.show({ title: 'Validation failed', message: report.stopped.message, color: 'red' });
         return;
@@ -216,9 +260,11 @@ export function MigrationClient() {
 
   function handleImportPeriods() {
     if (!periodValidated || periodRows.length === 0 || !sourceOk) return;
+    const req = periodParseReq.current;
     startTransition(async () => {
       const report = await runMigrationBatches(periodRows, (r) => r.employeeEmail,
         (batch) => importMigrationPeriods({ rows: batch, sourceSystem, fileName: periodFileName }));
+      if (req !== periodParseReq.current) return;
       setPeriodSummary(summarize(report));
     });
   }
@@ -237,15 +283,16 @@ export function MigrationClient() {
 
       <Alert icon={<IconAlertCircle size={16} />} color="warning" variant="light" mb="md">
         <Text size="sm" fw={600}>
-          Timesheet history can be imported only during onboarding — before your workspace&apos;s first submitted
-          timesheet. Contracts, CLINs, users and charge codes can be imported any time.
+          Timesheet history can be imported only during onboarding, before your workspace&apos;s first submitted
+          timesheet. Employees, contracts, CLINs and labor categories can be imported any time from{' '}
+          <Anchor href="/settings/import" size="sm">Data import</Anchor>.
         </Text>
-        <Text size="sm" mt={4}>
-          <strong>Required import order:</strong>{' '}
-          1. Employees, Contracts, CLINs, Indirect Codes (via{' '}
-          <Anchor href="/settings/import" size="sm">Data Import</Anchor>
-          ) → 2. Historical Timesheet Entries → 3. Period Statuses. Entries can&apos;t be imported into a period that is
-          already submitted or approved, so import entries <strong>before</strong> periods.
+        <Text size="sm" mt={4} data-testid="migration-import-order">
+          <strong>Import order:</strong>{' '}
+          1. Add employees, contracts and CLINs (<Anchor href="/settings/import" size="sm">Data import</Anchor>) and any
+          indirect codes (<Anchor href="/admin/indirect-codes" size="sm">Indirect codes</Anchor>). 2. Import timesheet
+          entries. 3. Import period statuses. Entries can&apos;t be imported into a period that is already submitted or
+          approved, so import entries <strong>before</strong> periods.
         </Text>
         <Text size="sm" mt={4}>
           Imported rows are labelled as imported (source system, import date and the importing admin) everywhere they
@@ -280,6 +327,17 @@ export function MigrationClient() {
         {/* Timesheet Entries Tab */}
         <Tabs.Panel value="entries">
           <Stack gap="md">
+            <FileInput
+              label="Timesheet entries CSV"
+              accept=".csv"
+              placeholder="Choose a CSV file"
+              clearable
+              leftSection={<IconUpload size={16} />}
+              value={entryFile}
+              onChange={handleEntryFile}
+              error={entryFileError}
+              maw={420}
+            />
             <Group>
               <Button
                 component="a"
@@ -290,10 +348,6 @@ export function MigrationClient() {
                 size="sm"
               >
                 Download Template
-              </Button>
-              <Button component="label" variant="light" leftSection={<IconUpload size={16} />} size="sm">
-                Upload CSV
-                <input type="file" accept=".csv" hidden onChange={handleEntryFileUpload} />
               </Button>
               {entryRows.length > 0 && (
                 <Button variant="light" size="sm" onClick={handleValidateEntries} loading={isPending}>
@@ -370,6 +424,17 @@ export function MigrationClient() {
         {/* Period Status Tab */}
         <Tabs.Panel value="periods">
           <Stack gap="md">
+            <FileInput
+              label="Period status CSV"
+              accept=".csv"
+              placeholder="Choose a CSV file"
+              clearable
+              leftSection={<IconUpload size={16} />}
+              value={periodFile}
+              onChange={handlePeriodFile}
+              error={periodFileError}
+              maw={420}
+            />
             <Group>
               <Button
                 component="a"
@@ -380,10 +445,6 @@ export function MigrationClient() {
                 size="sm"
               >
                 Download Template
-              </Button>
-              <Button component="label" variant="light" leftSection={<IconUpload size={16} />} size="sm">
-                Upload CSV
-                <input type="file" accept=".csv" hidden onChange={handlePeriodFileUpload} />
               </Button>
               {periodRows.length > 0 && (
                 <Button variant="light" size="sm" onClick={handleValidatePeriods} loading={isPending}>

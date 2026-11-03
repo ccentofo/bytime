@@ -1,13 +1,14 @@
 'use client';
 
 import { useState, useTransition } from 'react';
-import { Container, Title, Text, Paper, Group, Select, Button, Modal } from '@mantine/core';
+import { Container, Title, Text, Paper, Group, Select, Button, Modal, Loader } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
 import { updateWorkspaceTimezone, updateWorkweekStartDay } from '@/server/actions/workspace-settings';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { WriteButton } from '@/components/shell/WorkspaceMode';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
 /**
  * Settings → Workspace (feature-plan-ux-navigation-home.md §4.4): timezone, FLSA workweek and the data export — split
@@ -37,12 +38,19 @@ export function WorkspaceSettingsClient({ initialTimezone, initialWorkweekStartD
   const [timezone, setTimezone] = useState<string | null>(initialTimezone);
   const [savedTimezone, setSavedTimezone] = useState<string>(initialTimezone);
   const [isTimezonePending, startTimezoneTransition] = useTransition();
+  // feature-plan-ux-page-fixes.md C8: a timezone change asks first; its error shows inside the confirm.
+  const [confirmTimezone, setConfirmTimezone] = useState(false);
+  const [timezoneError, setTimezoneError] = useState<string | null>(null);
 
   function handleSaveTimezone() {
     if (!timezone) return;
     startTimezoneTransition(async () => {
-      const result = await runAction(updateWorkspaceTimezone(timezone), { errorTitle: 'Save failed' });
-      if (!result.ok) return;
+      const result = await runAction(updateWorkspaceTimezone(timezone), { silent: true });
+      if (!result.ok) {
+        setTimezoneError(result.error);
+        return;
+      }
+      setConfirmTimezone(false);
       const stored = result.data;
       setSavedTimezone(stored);
       setTimezone(stored);
@@ -71,6 +79,13 @@ export function WorkspaceSettingsClient({ initialTimezone, initialWorkweekStartD
     });
   }
 
+  // UX-4A-AUDIT.md M3: the Save buttons are aria-disabled with a visible reason, never `disabled` (nor Mantine `loading`,
+  // which sets it): after a confirm, the Modal returns focus to its button, and a disabled one drops focus to <body>.
+  const timezoneUnchanged = !timezone || timezone === savedTimezone;
+  const canSaveTimezone = !timezoneUnchanged && !isTimezonePending;
+  const workweekUnchanged = workweekDay === null || parseInt(workweekDay, 10) === savedWorkweekDay;
+  const canSaveWorkweek = !workweekUnchanged && !isWorkweekPending;
+
   return (
     <Container size="md" py="xl">
       <PageHeader title="Workspace" description="Applies to everyone in your workspace." />
@@ -84,6 +99,7 @@ export function WorkspaceSettingsClient({ initialTimezone, initialWorkweekStartD
         </Text>
         <Group align="flex-end">
           <Select
+            label="Timezone"
             data={timezoneOptions(timezone)}
             value={timezone}
             onChange={setTimezone}
@@ -91,10 +107,28 @@ export function WorkspaceSettingsClient({ initialTimezone, initialWorkweekStartD
             allowDeselect={false}
             w={320}
           />
-          <WriteButton onClick={handleSaveTimezone} loading={isTimezonePending} disabled={!timezone || timezone === savedTimezone}>
+          <WriteButton
+            onClick={() => { if (canSaveTimezone) { setTimezoneError(null); setConfirmTimezone(true); } }}
+            aria-disabled={!canSaveTimezone || undefined}
+            data-disabled={!canSaveTimezone || undefined}
+            aria-describedby={timezoneUnchanged ? 'timezone-save-why' : undefined}
+            leftSection={isTimezonePending ? <Loader size={16} aria-hidden="true" /> : undefined}
+          >
             Save Timezone
           </WriteButton>
         </Group>
+        {timezoneUnchanged && <Text id="timezone-save-why" size="xs" c="dimmed" mt={4}>Choose a different timezone to save.</Text>}
+        <ConfirmModal
+          opened={confirmTimezone}
+          tone="neutral"
+          title="Change the workspace timezone?"
+          message={`“Today” for every employee will follow ${timezone} instead of ${savedTimezone}. Late-entry and future-date rules, pay-period boundaries and timestamps change immediately.`}
+          confirmLabel="Change timezone"
+          loading={isTimezonePending}
+          error={timezoneError}
+          onConfirm={handleSaveTimezone}
+          onCancel={() => setConfirmTimezone(false)}
+        />
       </Paper>
 
       <Paper withBorder p="lg" radius="md" mb="xl">
@@ -105,6 +139,7 @@ export function WorkspaceSettingsClient({ initialTimezone, initialWorkweekStartD
         </Text>
         <Group align="flex-end">
           <Select
+            label="Workweek starts on"
             data={DAY_NAMES.map((d, i) => ({ value: String(i), label: d }))}
             value={workweekDay}
             onChange={setWorkweekDay}
@@ -114,13 +149,16 @@ export function WorkspaceSettingsClient({ initialTimezone, initialWorkweekStartD
             data-testid="workweek-start-day"
           />
           <WriteButton
-            onClick={() => (savedWorkweekDay === null ? saveWorkweek() : setConfirmWorkweek(true))}
-            loading={isWorkweekPending}
-            disabled={workweekDay === null || parseInt(workweekDay, 10) === savedWorkweekDay}
+            onClick={() => { if (!canSaveWorkweek) return; return savedWorkweekDay === null ? saveWorkweek() : setConfirmWorkweek(true); }}
+            aria-disabled={!canSaveWorkweek || undefined}
+            data-disabled={!canSaveWorkweek || undefined}
+            aria-describedby={workweekUnchanged ? 'workweek-save-why' : undefined}
+            leftSection={isWorkweekPending ? <Loader size={16} aria-hidden="true" /> : undefined}
           >
             Save Workweek
           </WriteButton>
         </Group>
+        {workweekUnchanged && <Text id="workweek-save-why" size="xs" c="dimmed" mt={4}>Choose a different day to save.</Text>}
         <Modal opened={confirmWorkweek} onClose={() => setConfirmWorkweek(false)} title="Change the workweek?">
           <Text size="sm" mb="md" data-testid="workweek-change-warning">
             Federal law (FLSA, 29 CFR 778.105) requires a fixed workweek. Change it only for a permanent business reason

@@ -6,6 +6,8 @@
  * - `insert/update/delete`: recorded (table, values / set; an update also records its `.where()` condition, so a test
  *   can render it with drizzle's PgDialect); `.returning()` resolves to the next scripted result for that table +
  *   operation, or [].
+ * - `conflicts`: the config passed to each `.onConflictDoUpdate()` / `.onConflictDoNothing()` (target, set).
+ * - `ops`: every call's kind in order ('execute', 'select', 'insert', 'update', 'delete'), e.g. to check a lock comes first.
  */
 
 type Row = Record<string, unknown>;
@@ -16,6 +18,7 @@ export interface FakeControlDb {
   update: (table: unknown) => unknown;
   delete: (table: unknown) => unknown;
   execute: (query: unknown) => Promise<unknown[]>;
+  ops: string[];
   /** Every `execute(sql)` call, in order (render with drizzle's PgDialect). */
   executes: unknown[];
   /** Script the next select result for a table. */
@@ -25,6 +28,7 @@ export interface FakeControlDb {
   inserts: Array<{ table: unknown; values: Row }>;
   updates: Array<{ table: unknown; set: Row; where?: unknown }>;
   deletes: Array<{ table: unknown }>;
+  conflicts: unknown[];
   reset(): void;
 }
 
@@ -56,8 +60,8 @@ export function createFakeControlDb(): FakeControlDb {
   function writeResult(op: 'insert' | 'update' | 'delete', table: unknown, record?: { where?: unknown }): unknown {
     const promise = Promise.resolve(undefined);
     const self: Record<string, unknown> = {
-      onConflictDoUpdate: () => self,
-      onConflictDoNothing: () => self,
+      onConflictDoUpdate: (config: unknown) => { db.conflicts.push(config); return self; },
+      onConflictDoNothing: (config?: unknown) => { db.conflicts.push(config); return self; },
       where: (condition: unknown) => { if (record) record.where = condition; return self; },
       returning: async () => next(returnings, keyOf(op, table), []),
       then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => promise.then(res, rej),
@@ -66,15 +70,15 @@ export function createFakeControlDb(): FakeControlDb {
   }
 
   const db: FakeControlDb = {
-    inserts: [], updates: [], deletes: [], executes: [],
-    execute: async (query) => { db.executes.push(query); return []; },
-    select: () => chain(() => []),
-    insert: (table) => ({ values: (values: Row) => { db.inserts.push({ table, values }); return writeResult('insert', table); } }),
-    update: (table) => ({ set: (set: Row) => { const record: { table: unknown; set: Row; where?: unknown } = { table, set }; db.updates.push(record); return writeResult('update', table, record); } }),
-    delete: (table) => { db.deletes.push({ table }); return writeResult('delete', table); },
+    inserts: [], updates: [], deletes: [], executes: [], ops: [], conflicts: [],
+    execute: async (query) => { db.ops.push('execute'); db.executes.push(query); return []; },
+    select: () => { db.ops.push('select'); return chain(() => []); },
+    insert: (table) => ({ values: (values: Row) => { db.ops.push('insert'); db.inserts.push({ table, values }); return writeResult('insert', table); } }),
+    update: (table) => ({ set: (set: Row) => { db.ops.push('update'); const record: { table: unknown; set: Row; where?: unknown } = { table, set }; db.updates.push(record); return writeResult('update', table, record); } }),
+    delete: (table) => { db.ops.push('delete'); db.deletes.push({ table }); return writeResult('delete', table); },
     onSelect: (table, rows) => { selects.set(table, [...(selects.get(table) ?? []), rows]); },
     onReturning: (op, table, rows) => { const k = keyOf(op, table); returnings.set(k, [...(returnings.get(k) ?? []), rows]); },
-    reset: () => { selects.clear(); returnings.clear(); db.inserts = []; db.updates = []; db.deletes = []; db.executes = []; },
+    reset: () => { selects.clear(); returnings.clear(); db.inserts = []; db.updates = []; db.deletes = []; db.executes = []; db.ops = []; db.conflicts = []; },
   };
   return db;
 }

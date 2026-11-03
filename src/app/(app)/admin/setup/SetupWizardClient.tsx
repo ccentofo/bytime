@@ -28,11 +28,13 @@ import {
   IconConfetti,
   IconRefresh,
   IconTag,
+  IconAlertTriangle,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
-import { getSetupStatus } from '@/server/actions/setup';
-import type { SetupStatus, SetupStepKey } from '@/server/internal/setup';
+import { addedStandardCodes } from '@/lib/ui/indirect-seed-copy';
+import { getSetupAccessGaps, getSetupStatus } from '@/server/actions/setup';
+import type { SetupAccessGaps, SetupStatus, SetupStepKey } from '@/server/internal/setup';
 import { seedIndirectCodes } from '@/server/actions/indirect-codes';
 import { autobridgeChargeCodesFromClins } from '@/server/actions/charge-codes';
 import classes from './Setup.module.css';
@@ -40,6 +42,8 @@ import { WriteButton } from '@/components/shell/WorkspaceMode';
 
 interface Props {
   initialStatus: SetupStatus;
+  /** C17: who still has no direct charge code (getSetupAccessGaps). */
+  initialGaps?: SetupAccessGaps;
 }
 
 type CountKey = keyof Omit<SetupStatus, 'isComplete' | 'steps' | 'done' | 'total'>;
@@ -149,36 +153,60 @@ export const STEPS: StepConfig[] = [
   },
 ];
 
-export function SetupWizardClient({ initialStatus }: Props) {
+export type StepState = 'done' | 'partial' | 'todo';
+
+/**
+ * A step's state (feature-plan-ux-page-fixes.md C17), the ONE rule used by the Stepper, the step panel and the summary
+ * grid: charge code access is "partial" when some, but not all, employees and supervisors have a chargeable code.
+ */
+export function stepState(status: SetupStatus, key: SetupStepKey): StepState {
+  const step = STEPS.find((s) => s.key === key)!;
+  if (status[step.countKey] === 0) return 'todo';
+  if (key === 'chargeCodeAccess' && status.steps.find((s) => s.key === key)?.allCovered === false) return 'partial';
+  return 'done';
+}
+
+/** The step to open: the first required step not done, then the first recommended one, then a partial one; else past the end. */
+export function firstIncompleteStep(status: SetupStatus): number {
+  const states = STEPS.map((s) => stepState(status, s.key));
+  const first = (match: (i: number) => boolean) => STEPS.findIndex((_, i) => match(i));
+  for (const match of [
+    (i: number) => STEPS[i].required && states[i] === 'todo',
+    (i: number) => !STEPS[i].required && states[i] === 'todo',
+    (i: number) => states[i] === 'partial',
+  ]) {
+    const i = first(match);
+    if (i >= 0) return i;
+  }
+  return STEPS.length;
+}
+
+const accessOf = (status: SetupStatus) => {
+  const step = status.steps.find((s) => s.key === 'chargeCodeAccess');
+  return { withAccess: step?.withAccess ?? status.employeesWithAccess, total: step?.total ?? status.employees };
+};
+
+export function SetupWizardClient({ initialStatus, initialGaps = { missingCount: 0, names: [] } }: Props) {
   const [status, setStatus] = useState<SetupStatus>(initialStatus);
+  const [gaps, setGaps] = useState<SetupAccessGaps>(initialGaps);
   const [isPending, startTransition] = useTransition();
   const [seedingIndirect, setSeedingIndirect] = useState(false);
   const [bridging, setBridging] = useState(false);
 
-  // Determine which step should be active (first incomplete required, or first incomplete recommended)
-  function getActiveStep(): number {
-    // First, find the first incomplete required step
-    for (let i = 0; i < STEPS.length; i++) {
-      if (STEPS[i].required && status[STEPS[i].countKey] === 0) {
-        return i;
-      }
-    }
-    // All required done — find first incomplete recommended step
-    for (let i = 0; i < STEPS.length; i++) {
-      if (!STEPS[i].required && status[STEPS[i].countKey] === 0) {
-        return i;
-      }
-    }
-    // All done
-    return STEPS.length;
-  }
+  const [activeStep, setActiveStep] = useState(() => firstIncompleteStep(initialStatus));
 
-  const [activeStep, setActiveStep] = useState(getActiveStep);
-
+  // C17: the reads aren't ActionResults, so try/catch. The status and the gaps are refetched together, so the names
+  // always match the counts; the wizard then opens the next incomplete step.
   function refreshStatus() {
     startTransition(async () => {
-      const updated = await getSetupStatus();
-      setStatus(updated);
+      try {
+        const [updated, updatedGaps] = await Promise.all([getSetupStatus(), getSetupAccessGaps()]);
+        setStatus(updated);
+        setGaps(updatedGaps);
+        setActiveStep(firstIncompleteStep(updated));
+      } catch {
+        notifications.show({ title: 'Refresh failed', message: "Couldn't refresh setup status.", color: 'red' });
+      }
     });
   }
 
@@ -187,11 +215,14 @@ export function SetupWizardClient({ initialStatus }: Props) {
     const result = await runAction(seedIndirectCodes(), { errorTitle: 'Couldn’t create indirect codes' });
     setSeedingIndirect(false);
     if (!result.ok) return;
-    notifications.show({
-      title: 'Indirect codes created',
-      message: '9 standard DCAA indirect charge codes have been seeded.',
-      color: 'success',
-    });
+    // C3: honest about what happened — nothing is added to a workspace that already has codes.
+    notifications.show(result.data.created > 0
+      ? { title: 'Standard codes added', message: addedStandardCodes(result.data.created), color: 'success' }
+      : {
+        title: 'No codes added',
+        message: 'Your workspace already has indirect codes, so none were added. Reactivate them, and turn on Show on every timesheet, on the Indirect codes page.',
+        color: 'gray',
+      });
     refreshStatus();
   }
 
@@ -204,13 +235,14 @@ export function SetupWizardClient({ initialStatus }: Props) {
     refreshStatus();
   }
 
-  function isStepComplete(step: StepConfig): boolean {
-    return status[step.countKey] > 0;
-  }
+  const access = accessOf(status);
+  const stillNeed = `${access.total - access.withAccess} of ${access.total} employees still need a charge code.`;
+  const accessPartial = stepState(status, 'chargeCodeAccess') === 'partial';
 
   // All done state
   if (status.isComplete) {
-    const allDone = STEPS.every((s) => status[s.countKey] > 0);
+    const allDone = STEPS.every((s) => stepState(status, s.key) === 'done');
+    const k = gaps.missingCount;
 
     return (
       <Container size="md" py="xl">
@@ -226,7 +258,17 @@ export function SetupWizardClient({ initialStatus }: Props) {
                 : 'The required steps are done, so your team can start recording time. The recommended steps below are still worth doing.'}
             </Text>
 
-            {!allDone && (
+            {accessPartial && k > 0 && (
+              <Alert color="warning" variant="light" maw={500} data-testid="setup-access-gaps">
+                <Text size="sm">
+                  {k} {k === 1 ? 'employee has' : 'employees have'} no direct charge code yet and will see only indirect and leave rows: {gaps.names.join(', ')}
+                  {k > gaps.names.length ? ` and ${k - gaps.names.length} more` : ''}.
+                </Text>
+                <Anchor href="/admin/assignments" size="sm">Assign charge codes</Anchor>
+              </Alert>
+            )}
+
+            {STEPS.some((s) => !s.required && stepState(status, s.key) === 'todo') && (
               <Alert color="warning" variant="light" title="Recommended steps remaining" maw={500}>
                 {STEPS.filter((s) => !s.required && status[s.countKey] === 0).map((s) => (
                   <Text key={s.key} size="sm">
@@ -251,21 +293,28 @@ export function SetupWizardClient({ initialStatus }: Props) {
         <Paper p="md" radius="md" withBorder mt="lg">
           <Title order={2} size="h4" mb="sm">Setup Summary</Title>
           <SimpleGrid cols={{ base: 2, sm: 3, md: 4 }} spacing="sm">
-            {STEPS.map((step) => (
-              <Paper key={step.key} p="sm" radius="sm" withBorder style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', minHeight: 90 }}>
-                {isStepComplete(step) ? (
-                  <ThemeIcon size="md" color="success" variant="light" radius="xl" mb={6}>
-                    <IconCheck size={14} />
-                  </ThemeIcon>
-                ) : (
-                  <Badge size="xs" color="warning" variant="light" mb={6}>Pending</Badge>
-                )}
-                <Text size="sm" fw={500} lh={1.2}>{step.title}</Text>
-                <Text size="xs" c="dimmed" mt={4}>
-                  {status[step.countKey]} {step.entityLabel}
-                </Text>
-              </Paper>
-            ))}
+            {STEPS.map((step) => {
+              const state = stepState(status, step.key);
+              return (
+                <Paper key={step.key} data-step={step.key} data-state={state} p="sm" radius="sm" withBorder style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', minHeight: 90 }}>
+                  {state === 'done' ? (
+                    <ThemeIcon size="md" color="success" variant="light" radius="xl" mb={6}>
+                      <IconCheck size={14} />
+                    </ThemeIcon>
+                  ) : state === 'partial' ? (
+                    <ThemeIcon size="md" color="warning" variant="light" radius="xl" mb={6}>
+                      <IconAlertTriangle size={14} />
+                    </ThemeIcon>
+                  ) : (
+                    <Badge size="xs" color="warning" variant="light" mb={6}>Pending</Badge>
+                  )}
+                  <Text size="sm" fw={500} lh={1.2}>{step.title}</Text>
+                  <Text size="xs" c="dimmed" mt={4}>
+                    {state === 'partial' ? stillNeed : `${status[step.countKey]} ${step.entityLabel}`}
+                  </Text>
+                </Paper>
+              );
+            })}
           </SimpleGrid>
         </Paper>
       </Container>
@@ -304,28 +353,34 @@ export function SetupWizardClient({ initialStatus }: Props) {
         size="sm"
         classNames={{ stepIcon: classes.stepIcon }}
       >
-        {STEPS.map((step, index) => (
+        {STEPS.map((step, index) => {
+          // C17: Mantine marks every step before `active` completed and every step after it inactive, so each step's
+          // own state is carried by its icon, color and (always) its description.
+          const state = stepState(status, step.key);
+          return (
           <Stepper.Step
             key={step.key}
             label={step.title}
-            description={isStepComplete(step)
-              ? `${status[step.countKey]} ${step.entityLabel}`
-              : step.description
-            }
+            description={state === 'done'
+              ? `Done · ${status[step.countKey]} ${step.entityLabel}`
+              : state === 'partial'
+                ? `${access.withAccess} of ${access.total} employees have a charge code`
+                : `Not done · ${step.description}`}
             icon={step.icon}
-            completedIcon={<IconCheck size={16} />}
-            color={isStepComplete(step) ? 'success' : undefined}
+            completedIcon={state === 'done' ? <IconCheck size={16} /> : step.icon}
+            color={state === 'done' ? 'success' : state === 'partial' ? 'warning' : 'gray'}
+            data-state={state}
             loading={isPending && activeStep === index}
           >
             <Paper p="md" radius="md" withBorder ml="sm" mb="md">
               <Group justify="space-between" mb="sm">
                 <Text fw={600}>{step.title}</Text>
                 <Badge
-                  color={isStepComplete(step) ? 'success' : step.required ? 'red' : 'warning'}
+                  color={state === 'done' ? 'success' : state === 'partial' ? 'warning' : step.required ? 'red' : 'warning'}
                   variant="light"
                   size="sm"
                 >
-                  {isStepComplete(step) ? 'Done' : step.required ? 'Required' : 'Recommended'}
+                  {state === 'done' ? 'Done' : state === 'partial' ? 'Partly done' : step.required ? 'Required' : 'Recommended'}
                 </Badge>
               </Group>
 
@@ -333,11 +388,15 @@ export function SetupWizardClient({ initialStatus }: Props) {
                 {step.helpText(status)}
               </Text>
 
-              {isStepComplete(step) ? (
+              {state === 'done' ? (
                 <Alert color="success" variant="light" mb="sm">
                   <Text size="sm">
                     ✅ {status[step.countKey]} {step.entityLabel} created
                   </Text>
+                </Alert>
+              ) : state === 'partial' ? (
+                <Alert color="warning" variant="light" mb="sm">
+                  <Text size="sm">{stillNeed}</Text>
                 </Alert>
               ) : (
                 <Alert color={step.required ? 'red' : 'warning'} variant="light" mb="sm">
@@ -388,7 +447,8 @@ export function SetupWizardClient({ initialStatus }: Props) {
               </Group>
             </Paper>
           </Stepper.Step>
-        ))}
+          );
+        })}
       </Stepper>
     </Container>
   );

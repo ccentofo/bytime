@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
+import { readFileSync } from 'node:fs';
 import { createRoot, type Root } from 'react-dom/client';
 import { MantineProvider } from '@mantine/core';
 import { theme } from '@/theme';
@@ -9,7 +10,8 @@ import { expectNoAxeViolations } from '../helpers/axe';
 
 /**
  * feature-plan-ux-foundations.md §4.6 / T8: ConfirmModal's tone — danger (default) is the red button, neutral the
- * primary color (e.g. Reactivate no longer shows red); the confirm button is disabled while loading; axe clean.
+ * primary color (e.g. Reactivate no longer shows red); while loading the dialog is locked and its buttons are
+ * aria-disabled (feature-plan-ux-page-fixes.md §3); the error slot; axe clean.
  */
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -51,12 +53,55 @@ describe('ConfirmModal tone (T8)', () => {
     expect(b.getAttribute('data-variant') ?? 'filled').toBe('filled');
   });
 
-  it('the confirm button is disabled while loading (no double submit)', async () => {
+  // feature-plan-ux-page-fixes.md §3 / T-CM: locked while loading, aria-disabled and never `disabled` (focus would drop),
+  // never Mantine `loading` (it sets `disabled`); a click while loading does nothing (no double submit).
+  it('while loading: the confirm button is aria-disabled, never disabled, and a click does nothing; Cancel too', async () => {
     const onConfirm = vi.fn();
-    await render({ loading: true, onConfirm });
-    const b = [...document.body.querySelectorAll('button')].find((x) => x.getAttribute('data-loading') === 'true') as HTMLButtonElement;
-    expect(b).toBeDefined();
-    expect(b.disabled).toBe(true);
+    const onCancel = vi.fn();
+    await render({ loading: true, onConfirm, onCancel });
+    const b = confirmButton();
+    expect(b.getAttribute('aria-disabled')).toBe('true');
+    expect(b.hasAttribute('disabled')).toBe(false);
+    expect(b.getAttribute('data-loading')).toBeNull();
+    const cancel = confirmButton('Cancel');
+    expect(cancel.getAttribute('aria-disabled')).toBe('true');
+    expect(cancel.hasAttribute('disabled')).toBe(false);
+    await act(async () => { b.click(); cancel.click(); });
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  // UX-4A-AUDIT.md M1: a busy button is data-disabled (grey fill), so a Loader in --button-color (white) vanishes.
+  it('M1: the busy Loader is shown and never uses --button-color (in ConfirmModal and the Reports buttons)', async () => {
+    await render({ loading: true });
+    const loader = confirmButton().querySelector('.mantine-Loader-root') as HTMLElement;
+    expect(loader).not.toBeNull();
+    expect(loader.getAttribute('style') ?? '').not.toContain('--button-color');
+    for (const file of ['src/components/ui/ConfirmModal.tsx', 'src/app/(app)/admin/reports/ReportsClient.tsx']) {
+      expect(readFileSync(file, 'utf8'), file).not.toMatch(/<Loader[^>]*--button-color/);
+    }
+  });
+
+  it('while loading: Esc doesn\'t close and there is no ✕; when not loading, Esc and ✕ cancel', async () => {
+    const onCancel = vi.fn();
+    await render({ loading: true, onCancel });
+    await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(document.body.querySelector('.mantine-Modal-close')).toBeNull();
+    await render({ loading: false, onCancel });
+    expect(document.body.querySelector('.mantine-Modal-close')).not.toBeNull();
+    await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('the error prop renders role="alert" inside the dialog, above the buttons; absent → nothing', async () => {
+    await render({ error: 'The role couldn\'t be changed.' });
+    const dialog = document.body.querySelector('[role="dialog"]')!;
+    const alert = dialog.querySelector('[role="alert"]')!;
+    expect(alert.textContent).toBe('The role couldn\'t be changed.');
+    expect(alert.compareDocumentPosition(confirmButton()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await render({ error: undefined });
+    expect(document.body.querySelector('[role="dialog"] [role="alert"]')).toBeNull();
   });
 
   it('axe: clean on document.body while open', async () => {

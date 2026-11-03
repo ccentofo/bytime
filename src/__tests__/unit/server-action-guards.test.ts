@@ -174,7 +174,10 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getBytimeClinsForMapping: 'reads active CLINs; no token refresh, no write',
   },
   'reports.ts': { getDetailedCostReport: 'reads cost report rows via the read-only internal reader; no write' },
-  'setup.ts': { getSetupStatus: 'reads setup-checklist counts; no write' },
+  'setup.ts': {
+    getSetupStatus: 'reads setup-checklist counts; no write',
+    getSetupAccessGaps: 'feature-plan-ux-page-fixes.md C17: reads who has no chargeable code; no write',
+  },
   'slins.ts': { getSlinsByClin: 'reads a CLIN\'s SLINs; no write' },
   'users.ts': {
     getUsers: 'reads users (SAFE_USER_COLUMNS); no write',

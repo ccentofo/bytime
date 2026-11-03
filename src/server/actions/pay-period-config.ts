@@ -1,10 +1,10 @@
 'use server';
 
-import { getDb, getDbForWrite } from '@/db';
+import { getDb, getDbForWrite, type ReadDb } from '@/db';
 import { payPeriodConfig, payPeriodTypeEnum, timesheetEntries, timesheetPeriods } from '@/db/schema';
 import { requireAdmin, requireAdminFresh, requireSession } from '@/lib/session';
 import type { PeriodConfig, PeriodType } from '@/lib/date-utils';
-import { getPeriodStartForDate } from '@/lib/date-utils';
+import { getPeriodStartForDate, sameSchedule } from '@/lib/date-utils';
 import { parseCalendarDate, isAfter, addDays, compare, dayOfWeek, type CalendarDate } from '@/lib/calendar-date';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { validateEnum } from '@/lib/validation';
@@ -12,7 +12,7 @@ import { validateEnum } from '@/lib/validation';
 /** effective_from for the first schedule row (matches the migration-0008 backfill sentinel). */
 const SCHEDULE_HISTORY_START = '1900-01-01' as CalendarDate;
 import { configAt, getCurrentEffectiveConfigInternal, getEffectiveConfigAtInternal, loadScheduleResolver, pendingConfigChangeInternal } from '@/server/internal/pay-period-config';
-import { eq, desc, gt } from 'drizzle-orm';
+import { eq, desc, gt, sql } from 'drizzle-orm';
 import { UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
 
@@ -119,9 +119,14 @@ export async function getPendingConfigChange(): Promise<ConfigHistoryRow | null>
 // ---------------------------------------------------------------------------
 
 export type UpdatePayPeriodConfigResult = {
-  /** When the new schedule applies. `null` = immediately (workspace had no timesheet data). */
+  /** When the new schedule applies. `null` = immediately (workspace had no timesheet data), or nothing scheduled. */
   effectiveFrom: CalendarDate | null;
+  /** C7: present only when the pending change was cancelled (asked for, or by saving the current schedule). */
+  cancelledPending?: true;
+  /** C7: the new pending row's id, present only on the scheduled path (every replace is a delete + insert). */
+  pendingId?: string;
 };
+
 
 const PERIOD_TYPES = payPeriodTypeEnum.enumValues;
 
@@ -165,7 +170,7 @@ const SCHEDULE_CHANGE_SEARCH_HORIZON_DAYS = 730; // 2 years — generous for eve
  * how a new workspace sets its schedule without waiting for a common boundary, which for some
  * changes (e.g. a different week start day) never comes.
  */
-async function workspaceHasNoTimesheetData(db: Awaited<ReturnType<typeof getDb>>): Promise<boolean> {
+async function workspaceHasNoTimesheetData(db: Pick<ReadDb, 'select'>): Promise<boolean> {
   const [entry] = await db.select({ id: timesheetEntries.id }).from(timesheetEntries).limit(1);
   if (entry) return false;
   const [period] = await db.select({ id: timesheetPeriods.id }).from(timesheetPeriods).limit(1);
@@ -226,56 +231,82 @@ export async function getValidScheduleChangeDates(
  * periods (the old schedule's straddling period and the new schedule's first period) or none.
  * Exception: `effectiveFrom: null` applies the schedule immediately, replacing the history,
  * and is only allowed while the workspace has no timesheet data at all.
+ *
+ * feature-plan-ux-page-fixes.md C7 (R1): the decision runs under an advisory transaction lock with every read on `tx`,
+ * so two admins can't both replace the pending row. Before the immediate/scheduled logic: a stale page is refused
+ * (`expectedPendingId` ≠ the pending row's id — the id changes on every replace); `cancelPending` deletes the pending
+ * change (idempotent); saving the current schedule cancels a pending change, or is refused with none; re-saving the
+ * pending change for its own date writes nothing.
  */
 export async function updatePayPeriodConfig(data: {
   periodType: PeriodType;
   anchorDate: CalendarDate;
   weekStartDay: number;
   effectiveFrom: CalendarDate | null;
+  cancelPending?: boolean;
+  expectedPendingId?: string | null;
 }): Promise<ActionResult<UpdatePayPeriodConfigResult>> {
   return userAction(async () => {
     await requireAdminFresh();
     const db = await getDbForWrite();
-    const candidateConfig = parseScheduleInput(data);
-    const problem = anchorProblem(candidateConfig);
+    const cancelPending = data.cancelPending === true;
+    // A cancel carries no schedule to validate.
+    const candidateConfig = cancelPending ? null : parseScheduleInput(data);
+    const problem = candidateConfig && anchorProblem(candidateConfig);
     if (problem) throw new UserFacingError(problem);
+    const today = await getWorkspaceToday();
 
-    const values = {
-      periodType: candidateConfig.periodType,
-      anchorDate: candidateConfig.anchorDate,
-      weekStartDay: candidateConfig.weekStartDay,
-    };
-
-    if (data.effectiveFrom === null) {
-      if (!(await workspaceHasNoTimesheetData(db))) {
-        throw new UserFacingError('Timesheets already exist, so a schedule change must start on a future date.');
+    return db.transaction(async (tx): Promise<UpdatePayPeriodConfigResult> => {
+      // Serialises pay-schedule writes; no other user of this key. A literal, so nothing is interpolated (audit R11).
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('pay_period_config'))`);
+      const pending = await pendingConfigChangeInternal(tx, today);
+      if (data.expectedPendingId !== undefined && (pending?.id ?? null) !== data.expectedPendingId) {
+        throw new UserFacingError('The scheduled change was updated by someone else. Reload the page to see it.');
       }
-      // No periods exist to keep consistent: the new schedule becomes the whole history.
-      await db.transaction(async (tx) => {
+      const cancel = async (): Promise<UpdatePayPeriodConfigResult> => {
+        if (pending) await tx.delete(payPeriodConfig).where(gt(payPeriodConfig.effectiveFrom, today));
+        return { effectiveFrom: null, cancelledPending: true };
+      };
+      if (!candidateConfig) return cancel();
+
+      const currentConfig = await configAt(tx, today);
+      if (sameSchedule(candidateConfig, currentConfig)) {
+        if (pending) return cancel();
+        throw new UserFacingError('This is already your pay schedule. Change a setting before saving.');
+      }
+      if (pending && sameSchedule(candidateConfig, pending) && data.effectiveFrom === pending.effectiveFrom) {
+        return { effectiveFrom: pending.effectiveFrom };
+      }
+
+      const values = {
+        periodType: candidateConfig.periodType,
+        anchorDate: candidateConfig.anchorDate,
+        weekStartDay: candidateConfig.weekStartDay,
+      };
+
+      if (data.effectiveFrom === null) {
+        if (!(await workspaceHasNoTimesheetData(tx))) {
+          throw new UserFacingError('Timesheets already exist, so a schedule change must start on a future date.');
+        }
+        // No periods exist to keep consistent: the new schedule becomes the whole history.
         await tx.delete(payPeriodConfig);
         await tx.insert(payPeriodConfig).values({ ...values, effectiveFrom: SCHEDULE_HISTORY_START });
-      });
-      return { effectiveFrom: null };
-    }
+        return { effectiveFrom: null };
+      }
 
-    const effectiveFrom = parseCalendarDate(data.effectiveFrom);
-    const today = await getWorkspaceToday();
-    if (!isAfter(effectiveFrom, today)) {
-      throw new UserFacingError('Cannot set effective_from to a past or current period. Changes are future-effective only.');
-    }
+      const effectiveFrom = parseCalendarDate(data.effectiveFrom);
+      if (!isAfter(effectiveFrom, today)) {
+        throw new UserFacingError('Cannot set effective_from to a past or current period. Changes are future-effective only.');
+      }
+      if (!isCommonBoundary(effectiveFrom, currentConfig, candidateConfig)) {
+        throw new UserFacingError('effective_from must be a period boundary under both the current and new schedules — use getValidScheduleChangeDates for valid choices.');
+      }
 
-    const currentConfig = await configAt(db, today);
-    if (!isCommonBoundary(effectiveFrom, currentConfig, candidateConfig)) {
-      throw new UserFacingError('effective_from must be a period boundary under both the current and new schedules — use getValidScheduleChangeDates for valid choices.');
-    }
-
-    // Replace any pending (future) row and insert the new one atomically, so a failed insert
-    // can't leave the pending change deleted.
-    await db.transaction(async (tx) => {
+      // Replace any pending (future) row and insert the new one in the same transaction, so a failed insert can't
+      // leave the pending change deleted.
       await tx.delete(payPeriodConfig).where(gt(payPeriodConfig.effectiveFrom, today));
-      await tx.insert(payPeriodConfig).values({ ...values, effectiveFrom });
+      const [row] = await tx.insert(payPeriodConfig).values({ ...values, effectiveFrom }).returning({ id: payPeriodConfig.id });
+      return { effectiveFrom, pendingId: row.id };
     });
-
-    return { effectiveFrom };
   });
 }

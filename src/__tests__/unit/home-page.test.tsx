@@ -141,6 +141,16 @@ describe('Home (T10)', () => {
     expect(html).not.toContain('data-testid="attention-self-approval"');
   });
 
+  it('an item\'s button never shrinks (its label was clipped: "Choose a rev…"); the text column takes the rest and wraps', async () => {
+    m = await mount(<HomeClient view={view()} />);
+    const item = m.container.querySelector('[data-testid="attention-self-approval"]')!;
+    const button = [...item.querySelectorAll('a')].find((a) => a.textContent === 'Choose a reviewer') as HTMLElement;
+    expect(button.style.flexShrink).toBe('0');
+    const text = item.querySelector('p')!.parentElement as HTMLElement;
+    expect(text.style.flex).toMatch(/^1/);
+    expect(text.style.minWidth).toBe('0px');
+  });
+
   it('supervisor: no money anywhere', async () => {
     m = await mount(<HomeClient view={view({ role: 'supervisor', admin: null })} />);
     expect(m.container.querySelector('[data-testid="contracts"]')).toBeNull();

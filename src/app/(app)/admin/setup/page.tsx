@@ -1,5 +1,5 @@
 import { requirePageRole } from '@/lib/session';
-import { getSetupStatus } from '@/server/actions/setup';
+import { getSetupAccessGaps, getSetupStatus } from '@/server/actions/setup';
 import { SetupWizardClient } from './SetupWizardClient';
 import type { Metadata } from 'next';
 
@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 export default async function SetupPage() {
   await requirePageRole('admin');
 
-  const setupStatus = await getSetupStatus();
+  const [setupStatus, accessGaps] = await Promise.all([getSetupStatus(), getSetupAccessGaps()]);
 
-  return <SetupWizardClient initialStatus={setupStatus} />;
+  return <SetupWizardClient initialStatus={setupStatus} initialGaps={accessGaps} />;
 }

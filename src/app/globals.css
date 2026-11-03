@@ -60,9 +60,18 @@ table th,
   font-variant-numeric: tabular-nums;
 }
 
-/* Audit Trail: correction rows (revision > 1) get an orange-1 background via the row's
-   `data-correction` attribute (set in AuditTrailClient). In dark mode, darken their text so it
-   stays readable on that light background. Global by nature, so it lives here, not in a CSS module. */
-[data-mantine-color-scheme='dark'] tr[data-correction='true'] td {
-  color: var(--mantine-color-dark-9);
+/* Audit Trail: correction rows (revision > 1, `data-correction` set in AuditTrailClient) get a warm tint that is dark
+   in dark mode — every text colour on it keeps 4.5:1 (body, dimmed, signal) and the icon 3:1 — plus a warning edge on
+   the first cell (a row-level shadow is unreliable in WebKit). Explicit scheme selectors, never the CSS light/dark
+   function (feature-plan-ux-page-fixes.md C14; §15.1 of the timesheet blueprint). Global by nature, so it lives here. */
+:root {
+  --audit-correction-bg: var(--mantine-color-warning-0);
+  --audit-correction-edge: var(--mantine-color-warning-7);
+}
+:root[data-mantine-color-scheme='dark'] {
+  --audit-correction-bg: #2a2416;
+  --audit-correction-edge: var(--mantine-color-warning-6);
+}
+tr[data-correction='true'] > td:first-child {
+  box-shadow: inset 3px 0 0 var(--audit-correction-edge);
 }

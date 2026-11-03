@@ -10,7 +10,6 @@ import {
   Badge,
   Stack,
   Table,
-  Select,
   Tabs,
   Alert,
   ThemeIcon,
@@ -35,7 +34,9 @@ import {
   fetchGustoEmployeesForMapping,
   triggerGustoSync,
 } from '@/server/actions/gusto';
-import { saveMapping, disconnectIntegration } from '@/server/actions/integrations';
+import { saveMapping, deleteMapping, disconnectIntegration } from '@/server/actions/integrations';
+import { useRouter } from 'next/navigation';
+import { MappingSelect } from '../MappingSelect';
 import { formatDateTime } from '@/lib/format';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { SYNC_STATUS_COLOR } from '@/lib/ui/status-colors';
@@ -97,13 +98,21 @@ interface Props {
 export function GustoConfigClient({
   connection,
   mappings: initialMappings,
-  syncLogs: initialSyncLogs,
+  syncLogs,
   bytimeEmployees,
   workspaceTimezone,
 }: Props) {
   const [mappings, setMappings] = useState(initialMappings);
-  const [syncLogs] = useState(initialSyncLogs);
+  // C13: sync history renders the prop; router.refresh() after a sync brings the new log (client state is kept).
+  const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  // Employees whose mapping save or delete is in flight.
+  const [busyRows, setBusyRows] = useState<ReadonlySet<string>>(new Set());
+  const setBusy = (id: string, on: boolean) => setBusyRows((prev) => {
+    const next = new Set(prev);
+    if (on) next.add(id); else next.delete(id);
+    return next;
+  });
 
   const [gustoEmployees, setGustoEmployees] = useState<Array<{ id: string; name: string; email?: string }>>([]);
   const [loadingGusto, setLoadingGusto] = useState(false);
@@ -160,6 +169,7 @@ export function GustoConfigClient({
   }
 
   async function handleSaveMapping(entityType: string, bytimeId: string, bytimeName: string, externalId: string, externalName: string): Promise<RunResult<unknown>> {
+    setBusy(bytimeId, true);
     const saved = await runAction(saveMapping({
         connectionId: connection.id,
         entityType,
@@ -168,6 +178,7 @@ export function GustoConfigClient({
         externalEntityId: externalId,
         externalEntityName: externalName,
     }), { errorTitle: 'Failed to save mapping' });
+    setBusy(bytimeId, false);
     if (!saved.ok) return saved;
 
     setMappings((prev) => {
@@ -175,7 +186,7 @@ export function GustoConfigClient({
         (m) => m.entityType === entityType && m.bytimeEntityId === bytimeId
       );
       const newMapping: Mapping = {
-        id: 'temp-' + Date.now(),
+        id: saved.data.id,
         connectionId: connection.id,
         entityType,
         bytimeEntityId: bytimeId,
@@ -194,6 +205,19 @@ export function GustoConfigClient({
     return saved;
   }
 
+  /** C13: clearing a mapped Select deletes the mapping (one that's already gone is dropped from the page too). */
+  async function handleClearMapping(bytimeId: string, bytimeName: string) {
+    const mapping = mappings.find((m) => m.entityType === 'employee' && m.bytimeEntityId === bytimeId);
+    if (!mapping) return;
+    setBusy(bytimeId, true);
+    const result = await runAction(deleteMapping(mapping.id), { errorTitle: 'Couldn’t remove mapping' });
+    setBusy(bytimeId, false);
+    if (result.ok || result.error === 'That mapping no longer exists.') {
+      setMappings((prev) => prev.filter((m) => m.id !== mapping.id));
+    }
+    if (result.ok) notifications.show({ title: 'Mapping removed', message: `${bytimeName} is no longer matched.`, color: 'success' });
+  }
+
   async function handleSync() {
     // Default window (two months back through this month) is computed on the server in the
     // workspace's calendar, not from this browser's clock.
@@ -201,6 +225,7 @@ export function GustoConfigClient({
       const outcome = await runAction(triggerGustoSync({
         connectionId: connection.id,
       }), { errorTitle: 'Sync failed' });
+      router.refresh();
       if (!outcome.ok) return;
       const result = outcome.data;
       notifications.show({
@@ -325,27 +350,24 @@ export function GustoConfigClient({
                       </Table.Td>
                       <Table.Td>→</Table.Td>
                       <Table.Td>
-                        {gustoEmployees.length > 0 ? (
-                          <Select
-                            placeholder="Select Gusto employee..."
-                            data={gustoEmployees.map((ge) => ({
-                              value: ge.id,
-                              label: `${ge.name}${ge.email ? ` (${ge.email})` : ''}`,
-                            }))}
-                            value={mapping?.externalEntityId ?? null}
-                            onChange={(value) => {
-                              if (value) {
-                                const ge = gustoEmployees.find((e) => e.id === value);
-                                handleSaveMapping('employee', emp.id, emp.fullName, value, ge?.name ?? value);
-                              }
-                            }}
-                            searchable
-                            clearable
-                            size="xs"
-                          />
-                        ) : (
-                          <Text size="xs" c="dimmed">Load Gusto Employees first</Text>
-                        )}
+                        <MappingSelect
+                          provider="Gusto"
+                          name={emp.fullName}
+                          mapping={mapping}
+                          options={gustoEmployees.map((ge) => ({
+                            value: ge.id,
+                            label: `${ge.name}${ge.email ? ` (${ge.email})` : ''}`,
+                          }))}
+                          loaded={gustoEmployees.length > 0}
+                          busy={busyRows.has(emp.id)}
+                          placeholder="Select Gusto employee..."
+                          emptyMessage="Load Gusto Employees first"
+                          onSelect={(value) => {
+                            const ge = gustoEmployees.find((e) => e.id === value);
+                            void handleSaveMapping('employee', emp.id, emp.fullName, value, ge?.name ?? value);
+                          }}
+                          onClear={() => void handleClearMapping(emp.id, emp.fullName)}
+                        />
                       </Table.Td>
                       <Table.Td>
                         {mapping ? (

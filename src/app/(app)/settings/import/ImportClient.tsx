@@ -44,6 +44,72 @@ import { WriteButton } from '@/components/shell/WorkspaceMode';
 import { generateCsv } from '@/lib/reports/csv-generator';
 
 // ---------------------------------------------------------------------------
+// Parse feedback shared by both wizards (feature-plan-ux-page-fixes.md C10)
+// ---------------------------------------------------------------------------
+
+const MAX_LISTED_ERRORS = 100;
+const rowsWord = (n: number) => `${n} ${n === 1 ? 'row' : 'rows'}`;
+
+/** The missing-columns alert, the counts (role=status) and the list of rows with errors. */
+function ParseFeedback({ parseResult }: { parseResult: ParseResult }) {
+  const invalid = parseResult.rows.filter((r) => !r.isValid);
+  return (
+    <>
+      {parseResult.missingColumns.length > 0 && (
+        <Alert role="alert" color="red" variant="light" icon={<IconAlertCircle size={16} />}>
+          This file is missing required columns: {parseResult.missingColumns.join(', ')}. Download the template to see the expected headers.
+        </Alert>
+      )}
+      <Text size="sm" role="status">
+        {rowsWord(parseResult.validRows)} ready to import.
+        {parseResult.errorRows > 0 && ` ${rowsWord(parseResult.errorRows)} ${parseResult.errorRows === 1 ? 'has' : 'have'} errors. Fix them in your file and upload it again.`}
+      </Text>
+      {invalid.length > 0 && (
+        <div>
+          <Text fw={600} size="sm">Rows with errors ({invalid.length})</Text>
+          <Text size="xs" c="dimmed" mb={4}>Row 1 is the first row after the header. Blank lines aren&apos;t counted.</Text>
+          <Stack gap={2} component="ul" m={0} pl="md">
+            {invalid.slice(0, MAX_LISTED_ERRORS).map((r) => (
+              <Text key={r.rowIndex} component="li" size="xs" c="red">Row {r.rowIndex}: {r.errors.join('; ')}</Text>
+            ))}
+          </Stack>
+          {invalid.length > MAX_LISTED_ERRORS && <Text size="xs" c="dimmed">…and {invalid.length - MAX_LISTED_ERRORS} more</Text>}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** A row's status: the badge plus its errors as visible text (never a title= tooltip). */
+export function RowStatus({ row }: { row: ParsedRow }) {
+  if (row.isValid) return <Badge color="success" size="xs" variant="light">Valid</Badge>;
+  return (
+    <Stack gap={2}>
+      <Badge color="red" size="xs" variant="light">Error</Badge>
+      {/* Keyed by position: two errors can share a text (UX-4A-AUDIT.md L10). */}
+      {row.errors.map((e, i) => <Text key={i} size="xs" c="red">{e}</Text>)}
+    </Stack>
+  );
+}
+
+/**
+ * The server numbers errors over the rows it was sent (the valid ones), from 1. `fileRows` is the file row of each
+ * sent row, snapshotted when Import was clicked, so a file chosen mid-import can't remap them.
+ */
+function ServerErrors({ errors, fileRows }: { errors: ImportResult['errors']; fileRows: number[] }) {
+  if (errors.length === 0) return null;
+  return (
+    <Stack gap={4}>
+      {errors.map((e, i) => (
+        <Text key={i} size="xs" c="red">Row {fileRows[e.row - 1] ?? e.row}: {e.message}</Text>
+      ))}
+    </Stack>
+  );
+}
+
+const validFileRows = (parseResult: ParseResult) => parseResult.rows.filter((r) => r.isValid).map((r) => r.rowIndex);
+
+// ---------------------------------------------------------------------------
 // Shared ImportWizard component
 // ---------------------------------------------------------------------------
 
@@ -70,6 +136,7 @@ function ImportWizard({
   const [isPending, startTransition] = useTransition();
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [resultFileRows, setResultFileRows] = useState<number[]>([]);
 
   function handleFileChange(file: File | null) {
     if (!file) {
@@ -91,12 +158,14 @@ function ImportWizard({
     if (!parseResult) return;
     const validRows = parseResult.rows.filter((r) => r.isValid).map((r) => r.data);
     if (validRows.length === 0) return;
+    const fileRows = validFileRows(parseResult);
 
     startTransition(async () => {
       const outcome = await runAction(onImport(validRows), { errorTitle: 'Import Failed' });
       if (!outcome.ok) return;
       const result = outcome.data;
       setImportResult(result);
+      setResultFileRows(fileRows);
       notifications.show({
         title: 'Import Complete',
         message: `Created: ${result.created}, Skipped: ${result.skipped}, Errors: ${result.errors.length}`,
@@ -106,7 +175,6 @@ function ImportWizard({
   }
 
   const validCount = parseResult?.validRows ?? 0;
-  const errorCount = parseResult?.errorRows ?? 0;
 
   return (
     <Stack gap="md">
@@ -144,10 +212,7 @@ function ImportWizard({
 
       {parseResult && (
         <>
-          <Group gap="sm">
-            <Badge color="success" variant="light">{validCount} valid rows</Badge>
-            {errorCount > 0 && <Badge color="red" variant="light">{errorCount} rows with errors</Badge>}
-          </Group>
+          <ParseFeedback parseResult={parseResult} />
 
           {parseResult.rows.length > 0 && (
             <Paper withBorder radius="sm" style={{ maxHeight: 300, overflowY: 'auto' }}>
@@ -166,15 +231,7 @@ function ImportWizard({
                     {parseResult.rows.map((row) => (
                       <Table.Tr key={row.rowIndex}>
                         <Table.Td>{row.rowIndex}</Table.Td>
-                        <Table.Td>
-                          {row.isValid ? (
-                            <Badge color="success" size="xs" variant="light">Valid</Badge>
-                          ) : (
-                            <Badge color="red" size="xs" variant="light" title={row.errors.join(', ')}>
-                              Error
-                            </Badge>
-                          )}
-                        </Table.Td>
+                        <Table.Td><RowStatus row={row} /></Table.Td>
                         {parseResult.headers.map((h) => (
                           <Table.Td key={h} style={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {row.data[h] ?? ''}
@@ -210,13 +267,7 @@ function ImportWizard({
               <Badge color="red" variant="light">✗ {importResult.errors.length} errors</Badge>
             )}
           </Group>
-          {importResult.errors.length > 0 && (
-            <Stack gap={4}>
-              {importResult.errors.map((e, i) => (
-                <Text key={i} size="xs" c="red">Row {e.row}: {e.message}</Text>
-              ))}
-            </Stack>
-          )}
+          <ServerErrors errors={importResult.errors} fileRows={resultFileRows} />
         </Paper>
       )}
     </Stack>
@@ -231,6 +282,7 @@ function EmployeeImportWizard() {
   const [isPending, startTransition] = useTransition();
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [resultFileRows, setResultFileRows] = useState<number[]>([]);
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
 
   const requiredColumns = ['Name', 'Email', 'Role', 'FLSA Exempt'];
@@ -255,12 +307,14 @@ function EmployeeImportWizard() {
       flsaExempt: r.data['FLSA Exempt'],
     }));
     if (validRows.length === 0) return;
+    const fileRows = validFileRows(parseResult);
 
     startTransition(async () => {
       const outcome = await runAction(bulkImportEmployees(validRows), { errorTitle: 'Import Failed' });
       if (!outcome.ok) return; // e.g. the batch would exceed the plan's seat limit — shown verbatim
       const result = outcome.data;
       setImportResult(result);
+      setResultFileRows(fileRows);
       if (result.created > 0) setPasswordModalOpen(true);
       notifications.show({
         title: 'Employee Import Complete',
@@ -308,10 +362,7 @@ function EmployeeImportWizard() {
 
       {parseResult && (
         <>
-          <Group gap="sm">
-            <Badge color="success" variant="light">{validCount} valid rows</Badge>
-            {parseResult.errorRows > 0 && <Badge color="red" variant="light">{parseResult.errorRows} rows with errors</Badge>}
-          </Group>
+          <ParseFeedback parseResult={parseResult} />
 
           {parseResult.rows.length > 0 && (
           <Paper withBorder radius="sm" style={{ overflowX: 'auto', maxHeight: 300, overflowY: 'auto' }}>
@@ -327,11 +378,7 @@ function EmployeeImportWizard() {
                   {parseResult.rows.map((row) => (
                     <Table.Tr key={row.rowIndex}>
                       <Table.Td>{row.rowIndex}</Table.Td>
-                      <Table.Td>
-                        {row.isValid
-                          ? <Badge color="success" size="xs" variant="light">Valid</Badge>
-                          : <Badge color="red" size="xs" variant="light">Error</Badge>}
-                      </Table.Td>
+                      <Table.Td><RowStatus row={row} /></Table.Td>
                       {parseResult.headers.map((h) => <Table.Td key={h}>{row.data[h] ?? ''}</Table.Td>)}
                     </Table.Tr>
                   ))}
@@ -353,6 +400,7 @@ function EmployeeImportWizard() {
             <Badge color="gray" variant="light">⟳ {importResult.skipped} skipped</Badge>
             {importResult.errors.length > 0 && <Badge color="red" variant="light">✗ {importResult.errors.length} errors</Badge>}
           </Group>
+          <ServerErrors errors={importResult.errors} fileRows={resultFileRows} />
           {importResult.created > 0 && (
             <Button size="xs" variant="light" onClick={() => setPasswordModalOpen(true)}>
               View Generated Passwords
