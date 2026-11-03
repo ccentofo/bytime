@@ -114,6 +114,17 @@ describe('"Show on every timesheet" (C2) and the standard codes (C3)', () => {
     expect(rowText().filter((t) => /-0|JURY/.test(t))).toEqual([expect.stringContaining('LV-JURY')]);
   });
 
+  // The hide confirm is declared before the edit Modal, so with equal z-index it rendered behind it.
+  it('the hide confirm stacks above the edit Modal that opened it', async () => {
+    m = await mount(<IndirectCodesClient initialCodes={codes} />);
+    await editAndSave();
+    await toggleSwitch();
+    await click(buttonByText('Save Changes'));
+    const zOf = (dialog: Element) => Number((dialog.closest('.mantine-Modal-root') as HTMLElement).style.getPropertyValue('--mb-z-index'));
+    const edit = dialogTitled('Edit Indirect Code') ?? [...document.body.querySelectorAll('[role="dialog"]')].find((d) => d.textContent?.includes('Show on every timesheet'))!;
+    expect(zOf(hideDialog()!)).toBeGreaterThan(zOf(edit));
+  });
+
   it('T-C2b: turning it off asks first — Cancel → no update; Hide code → one update; a server error shows inside the confirm', async () => {
     m = await mount(<IndirectCodesClient initialCodes={codes} />);
     await editAndSave();

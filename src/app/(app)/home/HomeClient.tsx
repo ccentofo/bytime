@@ -40,11 +40,13 @@ export function HomeClient({ view }: { view: HomeView }) {
               {items.map((item) => (
                 <Paper key={item.key} withBorder p="md" radius="md" data-testid={`attention-${item.key}`}>
                   <Group justify="space-between" align="flex-start" wrap="nowrap">
-                    <div>
+                    {/* The text takes the remaining width and wraps; the button keeps its own width (its label never
+                        wraps, so a shrinking button clipped it, e.g. "Choose a rev…"). */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
                       <Text fw={600}>{item.title}</Text>
                       {item.sentence && <Text size="sm" c="dimmed" mt={2}>{item.sentence}</Text>}
                     </div>
-                    {item.action && <Button component={Link} href={item.action.href} variant="light" size="compact-sm">{item.action.label}</Button>}
+                    {item.action && <Button component={Link} href={item.action.href} variant="light" size="compact-sm" style={{ flexShrink: 0 }}>{item.action.label}</Button>}
                   </Group>
                 </Paper>
               ))}

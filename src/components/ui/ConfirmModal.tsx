@@ -1,7 +1,10 @@
 'use client';
 
-import { Modal, Text, Group, Button, Alert, Loader } from '@mantine/core';
+import { Modal, Text, Group, Button, Alert, Loader, getDefaultZIndex } from '@mantine/core';
 import type { ReactNode } from 'react';
+
+/** One above Mantine's default for modals and drawers (notifications stay above). */
+const CONFIRM_Z_INDEX = getDefaultZIndex('modal') + 1;
 
 type Props = {
   opened: boolean;
@@ -47,6 +50,9 @@ export function ConfirmModal({
       closeOnEscape={!loading}
       closeOnClickOutside={!loading}
       withCloseButton={!loading}
+      // A confirm always sits above the Modal or Drawer that opened it. With the same default z-index, whichever
+      // portal mounted later wins, so a confirm declared before its edit Modal rendered behind it.
+      zIndex={CONFIRM_Z_INDEX}
     >
       <Text size="sm" mb="lg">{message}</Text>
       {error && <Alert role="alert" color="red" mb="sm">{error}</Alert>}
