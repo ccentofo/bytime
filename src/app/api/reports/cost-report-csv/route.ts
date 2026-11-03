@@ -19,40 +19,40 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Missing or invalid startDate/endDate (expected YYYY-MM-DD)' }, { status: 400 });
   }
 
-  let data;
+  // Generation is inside the try too (feature-plan-ux-page-fixes.md C15): a failure returns the JSON 500.
   try {
     // Dollar data — admin-only. getDetailedCostReport enforces this via requireAdmin().
-    data = await getDetailedCostReport(
+    const data = await getDetailedCostReport(
       startDate,
       endDate,
       contractId ?? undefined
     );
+
+    const csv = generateCsv(data, [
+      { key: 'employeeName', header: 'Employee' },
+      { key: 'contractName', header: 'Contract' },
+      { key: 'contractNumber', header: 'Contract Number' },
+      { key: 'clinNumber', header: 'CLIN' },
+      { key: 'slinNumber', header: 'SLIN' },
+      { key: 'lcatCode', header: 'LCAT Code' },
+      { key: 'lcatTitle', header: 'LCAT Title' },
+      { key: 'hourlyRate', header: 'Rate ($/hr)' },
+      { key: 'entryDate', header: 'Date' },
+      { key: 'totalHours', header: 'Hours' },
+      { key: 'totalCost', header: 'Cost ($)' },
+      { key: 'costBasis', header: 'Cost Basis' },
+    ]);
+    // certified-outputs C3 (CO-D17 / ruling Q6): the unpriced count travels with the cost total, plus the CO-D7 note.
+    const unpriced = Math.round(data.reduce((sum, e) => sum + e.unpricedHours, 0) * 100) / 100;
+    const footer = `\nUnpriced hours (no applicable labor category; no cost),${unpriced}\n${CURRENT_RATES_NOTE}\n`;
+
+    return new NextResponse(csv + footer, {
+      headers: {
+        'Content-Type': 'text/csv',
+        'Content-Disposition': `attachment; filename="cost-report-${startDate}-to-${endDate}.csv"`,
+      },
+    });
   } catch (error) {
     return guardErrorResponse(error);
   }
-
-  const csv = generateCsv(data, [
-    { key: 'employeeName', header: 'Employee' },
-    { key: 'contractName', header: 'Contract' },
-    { key: 'contractNumber', header: 'Contract Number' },
-    { key: 'clinNumber', header: 'CLIN' },
-    { key: 'slinNumber', header: 'SLIN' },
-    { key: 'lcatCode', header: 'LCAT Code' },
-    { key: 'lcatTitle', header: 'LCAT Title' },
-    { key: 'hourlyRate', header: 'Rate ($/hr)' },
-    { key: 'entryDate', header: 'Date' },
-    { key: 'totalHours', header: 'Hours' },
-    { key: 'totalCost', header: 'Cost ($)' },
-    { key: 'costBasis', header: 'Cost Basis' },
-  ]);
-  // certified-outputs C3 (CO-D17 / ruling Q6): the unpriced count travels with the cost total, plus the CO-D7 note.
-  const unpriced = Math.round(data.reduce((sum, e) => sum + e.unpricedHours, 0) * 100) / 100;
-  const footer = `\nUnpriced hours (no applicable labor category; no cost),${unpriced}\n${CURRENT_RATES_NOTE}\n`;
-
-  return new NextResponse(csv + footer, {
-    headers: {
-      'Content-Type': 'text/csv',
-      'Content-Disposition': `attachment; filename="cost-report-${startDate}-to-${endDate}.csv"`,
-    },
-  });
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Paper,
   Stack,
@@ -11,6 +11,8 @@ import {
   Text,
   SimpleGrid,
   ThemeIcon,
+  Alert,
+  Loader,
 } from '@mantine/core';
 import {
   IconFileTypePdf,
@@ -25,6 +27,10 @@ import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { getPeriodOptions, getWorkspaceContext, type PeriodOption } from '@/server/actions/periods';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { CURRENT_RATES_NOTE } from '@/lib/cost-labels';
+import { downloadFile } from '@/lib/download';
+
+/** A report card (feature-plan-ux-page-fixes.md C15): each has its own busy state and its own inline error. */
+type Card = 'pdf' | 'cost' | 'summary';
 
 type FilterOptions = {
   users: Array<{ id: string; fullName: string; email: string }>;
@@ -52,6 +58,43 @@ export function ReportsClient({ filterOptions, role }: Props) {
   const [summaryStartDate, setSummaryStartDate] = useState<CalendarDate | null>(null);
   const [summaryEndDate, setSummaryEndDate] = useState<CalendarDate | null>(null);
 
+  // C15: downloads go through fetch (downloadFile), never window.open. Per card: which button is busy (the card's
+  // buttons are aria-disabled meanwhile, never `disabled`) and its error, cleared on the next attempt or an input change.
+  const [busy, setBusy] = useState<Record<Card, string | null>>({ pdf: null, cost: null, summary: null });
+  const [errors, setErrors] = useState<Record<Card, string | null>>({ pdf: null, cost: null, summary: null });
+  // Written only in handlers and the effect: a second click before the re-render is ignored; no setState after unmount.
+  const inFlight = useRef<Record<Card, boolean>>({ pdf: false, cost: false, summary: false });
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const clearError = (card: Card) => setErrors((e) => (e[card] ? { ...e, [card]: null } : e));
+
+  async function runDownload(card: Card, button: string, url: string, fallbackName: string) {
+    if (inFlight.current[card]) return;
+    inFlight.current[card] = true;
+    setBusy((b) => ({ ...b, [card]: button }));
+    clearError(card);
+    try {
+      const result = await downloadFile(url, fallbackName);
+      if (mounted.current && !result.ok) setErrors((e) => ({ ...e, [card]: result.error }));
+    } finally {
+      inFlight.current[card] = false;
+      if (mounted.current) setBusy((b) => ({ ...b, [card]: null }));
+    }
+  }
+
+  /** The download button's props for one card: aria-disabled + a Loader while that card is busy. */
+  const busyProps = (card: Card, button: string, icon: ReactNode) => ({
+    'aria-disabled': busy[card] ? true : undefined,
+    'data-disabled': busy[card] ? true : undefined,
+    leftSection: busy[card] === button ? <Loader size={16} color="var(--button-color)" aria-hidden="true" /> : icon,
+  });
+  const cardError = (card: Card) => errors[card] && (
+    <Alert color="red" role="alert" variant="light" data-testid={`report-error-${card}`}>{errors[card]}</Alert>
+  );
+
   // D4: the client does no schedule math of its own — the pay-period dropdown comes from the
   // server (getPeriodOptions), so it stays correct across a pay-schedule change instead of
   // assuming semimonthly for every tenant.
@@ -74,7 +117,7 @@ export function ReportsClient({ filterOptions, role }: Props) {
       userId: pdfUserId,
       periodStart: pdfPeriodStart,
     });
-    window.open(`/api/reports/timesheet-pdf?${params.toString()}`, '_blank');
+    void runDownload('pdf', 'pdf', `/api/reports/timesheet-pdf?${params.toString()}`, `timesheet-${pdfPeriodStart}.pdf`);
   }
 
   function downloadCostCsv() {
@@ -87,7 +130,7 @@ export function ReportsClient({ filterOptions, role }: Props) {
       endDate: costEndDate,
     });
     if (costContractId) params.set('contractId', costContractId);
-    window.open(`/api/reports/cost-report-csv?${params.toString()}`, '_blank');
+    void runDownload('cost', 'csv', `/api/reports/cost-report-csv?${params.toString()}`, `cost-report-${costStartDate}-to-${costEndDate}.csv`);
   }
 
   function downloadCostExcel() {
@@ -100,7 +143,7 @@ export function ReportsClient({ filterOptions, role }: Props) {
       endDate: costEndDate,
     });
     if (costContractId) params.set('contractId', costContractId);
-    window.open(`/api/reports/cost-report-xlsx?${params.toString()}`, '_blank');
+    void runDownload('cost', 'xlsx', `/api/reports/cost-report-xlsx?${params.toString()}`, `cost-report-${costStartDate}-to-${costEndDate}.xlsx`);
   }
 
   function downloadSummaryExcel() {
@@ -114,7 +157,7 @@ export function ReportsClient({ filterOptions, role }: Props) {
       endDate: summaryEndDate,
       format: 'summary',
     });
-    window.open(`/api/reports/cost-report-xlsx?${params.toString()}`, '_blank');
+    void runDownload('summary', 'xlsx', `/api/reports/cost-report-xlsx?${params.toString()}`, `employee-summary-${summaryStartDate}-to-${summaryEndDate}.xlsx`);
   }
 
   return (
@@ -140,7 +183,7 @@ export function ReportsClient({ filterOptions, role }: Props) {
               placeholder="Select employee"
               data={filterOptions.users.map((u) => ({ value: u.id, label: `${u.fullName} (${u.email})` }))}
               value={pdfUserId}
-              onChange={setPdfUserId}
+              onChange={(v) => { setPdfUserId(v); clearError('pdf'); }}
               searchable
             />
             <Select
@@ -148,17 +191,18 @@ export function ReportsClient({ filterOptions, role }: Props) {
               placeholder="Select pay period"
               data={periodOptions.map((o) => ({ value: o.start, label: o.label }))}
               value={pdfPeriodStart}
-              onChange={(val) => setPdfPeriodStart(val && isCalendarDate(val) ? val : null)}
+              onChange={(val) => { setPdfPeriodStart(val && isCalendarDate(val) ? val : null); clearError('pdf'); }}
               searchable
             />
             <Button
-              leftSection={<IconDownload size={16} />}
+              {...busyProps('pdf', 'pdf', <IconDownload size={16} />)}
               onClick={downloadTimesheetPdf}
               disabled={!pdfUserId || !pdfPeriodStart}
               color="red"
             >
               Download PDF
             </Button>
+            {cardError('pdf')}
           </Stack>
         </Paper>
 
@@ -183,14 +227,14 @@ export function ReportsClient({ filterOptions, role }: Props) {
                   label="Start Date"
                   placeholder="Select start date"
                   value={costStartDate}
-                  onChange={(date) => setCostStartDate(date && isCalendarDate(date) ? date : null)}
+                  onChange={(date) => { setCostStartDate(date && isCalendarDate(date) ? date : null); clearError('cost'); }}
                   clearable
                 />
                 <DateInput
                   label="End Date"
                   placeholder="Select end date"
                   value={costEndDate}
-                  onChange={(date) => setCostEndDate(date && isCalendarDate(date) ? date : null)}
+                  onChange={(date) => { setCostEndDate(date && isCalendarDate(date) ? date : null); clearError('cost'); }}
                   clearable
                 />
               </Group>
@@ -199,13 +243,13 @@ export function ReportsClient({ filterOptions, role }: Props) {
                 placeholder="All contracts"
                 data={filterOptions.contracts.map((c) => ({ value: c.id, label: `${c.name} (${c.contractNumber})` }))}
                 value={costContractId}
-                onChange={setCostContractId}
+                onChange={(v) => { setCostContractId(v); clearError('cost'); }}
                 clearable
                 searchable
               />
               <Group>
                 <Button
-                  leftSection={<IconFileTypeCsv size={16} />}
+                  {...busyProps('cost', 'csv', <IconFileTypeCsv size={16} />)}
                   onClick={downloadCostCsv}
                   disabled={!costStartDate || !costEndDate}
                   variant="default"
@@ -213,7 +257,7 @@ export function ReportsClient({ filterOptions, role }: Props) {
                   Download CSV
                 </Button>
                 <Button
-                  leftSection={<IconFileSpreadsheet size={16} />}
+                  {...busyProps('cost', 'xlsx', <IconFileSpreadsheet size={16} />)}
                   onClick={downloadCostExcel}
                   disabled={!costStartDate || !costEndDate}
                   color="success"
@@ -221,6 +265,7 @@ export function ReportsClient({ filterOptions, role }: Props) {
                   Download Excel
                 </Button>
               </Group>
+              {cardError('cost')}
             </Stack>
           </Paper>
         )}
@@ -246,25 +291,26 @@ export function ReportsClient({ filterOptions, role }: Props) {
                 label="Start Date"
                 placeholder="Select start date"
                 value={summaryStartDate}
-                onChange={(date) => setSummaryStartDate(date && isCalendarDate(date) ? date : null)}
+                onChange={(date) => { setSummaryStartDate(date && isCalendarDate(date) ? date : null); clearError('summary'); }}
                 clearable
               />
               <DateInput
                 label="End Date"
                 placeholder="Select end date"
                 value={summaryEndDate}
-                onChange={(date) => setSummaryEndDate(date && isCalendarDate(date) ? date : null)}
+                onChange={(date) => { setSummaryEndDate(date && isCalendarDate(date) ? date : null); clearError('summary'); }}
                 clearable
               />
             </Group>
             <Button
-              leftSection={<IconFileSpreadsheet size={16} />}
+              {...busyProps('summary', 'xlsx', <IconFileSpreadsheet size={16} />)}
               onClick={downloadSummaryExcel}
               disabled={!summaryStartDate || !summaryEndDate}
               color="signal"
             >
               Download Summary Excel
             </Button>
+            {cardError('summary')}
           </Stack>
         </Paper>
       </SimpleGrid>

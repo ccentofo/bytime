@@ -7,6 +7,7 @@ import { guardErrorResponse } from '@/lib/http-errors';
 import React from 'react';
 import { isCalendarDate } from '@/lib/calendar-date';
 import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
+import { pdfContentDisposition } from '@/lib/content-disposition';
 
 export async function GET(request: NextRequest) {
   const rateLimited = checkReportRateLimit(request);
@@ -20,27 +21,28 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Missing or invalid userId/periodStart (expected YYYY-MM-DD)' }, { status: 400 });
   }
 
-  let data;
-  let workspaceTimezone: string;
+  // Rendering is inside the try too (feature-plan-ux-page-fixes.md C15): a render failure returns the JSON 500 the
+  // client can explain, not Next's non-JSON error page.
   try {
-    [data, workspaceTimezone] = await Promise.all([
+    const [data, workspaceTimezone] = await Promise.all([
       getTimesheetReportData(userId, periodStart),
       getWorkspaceTimezone(),
     ]);
+    if (!data) {
+      return NextResponse.json({ error: 'No data found' }, { status: 404 });
+    }
+
+    const element = React.createElement(TimesheetPdfDocument, { data, workspaceTimezone }) as any;
+    const pdfBuffer = await renderToBuffer(element);
+
+    return new NextResponse(new Uint8Array(pdfBuffer), {
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': pdfContentDisposition(data.employee.fullName, periodStart),
+      },
+    });
   } catch (error) {
     return guardErrorResponse(error);
   }
-  if (!data) {
-    return NextResponse.json({ error: 'No data found' }, { status: 404 });
-  }
-
-  const element = React.createElement(TimesheetPdfDocument, { data, workspaceTimezone }) as any;
-  const pdfBuffer = await renderToBuffer(element);
-
-  return new NextResponse(new Uint8Array(pdfBuffer), {
-    headers: {
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="timesheet-${data.employee.fullName.replace(/\s+/g, '-')}-${periodStart}.pdf"`,
-    },
-  });
 }
+
