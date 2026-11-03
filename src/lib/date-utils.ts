@@ -1,3 +1,5 @@
+import dayjs from 'dayjs';
+import customParseFormat from 'dayjs/plugin/customParseFormat';
 import {
   type CalendarDate,
   addDays,
@@ -146,4 +148,25 @@ export function getLastWeekdayInPeriod(periodStart: CalendarDate, config: Period
   }
 
   return lastDay;
+}
+
+// ── Typed dates (feature-plan-ux-kit-contracts.md §3.7) ─────────────────────────────────────────────────────────────
+
+dayjs.extend(customParseFormat);
+
+/** The formats a person may type, each parsed STRICTLY (a partial or impossible date never matches). */
+const FLEXIBLE_DATE_FORMATS = ['MMM D, YYYY', 'MMMM D, YYYY', 'YYYY-MM-DD', 'M/D/YYYY', 'MM/DD/YYYY'];
+
+/**
+ * A typed date → 'YYYY-MM-DD', or null when it isn't a complete, real date ("Oct 1, 2", "2026-02-30"). DateInput's
+ * theme `dateParser`: it parses on every keystroke, so a half-typed date must never commit a wrong one.
+ */
+export function parseFlexibleDate(input: string): string | null {
+  const text = input.trim();
+  if (!text) return null;
+  for (const format of FLEXIBLE_DATE_FORMATS) {
+    const d = dayjs(text, format, 'en', true);
+    if (d.isValid()) return d.format('YYYY-MM-DD');
+  }
+  return null;
 }

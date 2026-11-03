@@ -1,4 +1,5 @@
 import { createTheme, type CSSVariablesResolver, type MantineColorsTuple } from '@mantine/core';
+import { parseFlexibleDate } from '@/lib/date-utils';
 
 // ── Brand color tuples (Mantine wants 10 shades, light→dark; index 6 = default filled) ──
 
@@ -81,6 +82,10 @@ export const theme = createTheme({
   // Tabular figures for inputs (hours align as you type — pairs with the .tnum rule in globals.css).
   components: {
     NumberInput: { defaultProps: { style: { fontVariantNumeric: 'tabular-nums' } } },
+    // feature-plan-ux-kit-contracts.md §3.7: one date display ("Oct 1, 2026"); typing accepts that or 2026-10-01 or
+    // 10/1/2026, strictly, so a half-typed date never jumps to a wrong one.
+    DateInput: { defaultProps: { valueFormat: 'MMM D, YYYY', dateParser: parseFlexibleDate } },
+    DatePickerInput: { defaultProps: { valueFormat: 'MMM D, YYYY' } },
     // Sentence case (UX-D2): no uppercase transform.
     Badge: { defaultProps: { variant: 'light' }, styles: { root: { textTransform: 'none', fontWeight: 600 } } },
     Tooltip: { defaultProps: { withArrow: true, openDelay: 300 } },

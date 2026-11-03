@@ -142,7 +142,7 @@ export function RateScheduleModal({ opened, onClose, category, canWrite, onSaved
         {mode && (
           <Stack gap="xs">
             <Title order={5}>{mode.kind === 'add' ? 'Add a rate change' : mode.kind === 'correct' ? `Correct ${rows.find((r) => r.ref === mode.target)?.label}` : `Remove the change from ${rows.find((r) => r.ref === mode.changeId)?.label}`}</Title>
-            {mode.kind === 'add' && <DateInput label="Effective date" value={date} onChange={onDate} valueFormat="YYYY-MM-DD" data-testid="rate-date" />}
+            {mode.kind === 'add' && <DateInput label="Effective date" value={date} onChange={onDate} data-testid="rate-date" />}
             {mode.kind !== 'remove' && (
               <Group grow>
                 <TextInput label="Hourly ($)" value={hourly} onChange={(e) => onHourly(e.currentTarget.value)} data-testid="rate-hourly" />

@@ -135,7 +135,7 @@ export function ChargeCodeCategoryModal({ opened, onClose, code, categories, can
         {mode && (
           <Stack gap="xs">
             <Title order={5}>{mode.kind === 'add' ? 'Add a category change' : mode.kind === 'correct' ? `Correct ${rows.find((r) => r.ref === mode.target)?.label}` : `Remove the change from ${rows.find((r) => r.ref === mode.changeId)?.label}`}</Title>
-            {mode.kind === 'add' && <DateInput label="Effective date" value={date} onChange={onDate} valueFormat="YYYY-MM-DD" data-testid="cat-date" />}
+            {mode.kind === 'add' && <DateInput label="Effective date" value={date} onChange={onDate} data-testid="cat-date" />}
             {mode.kind !== 'remove' && (
               <Select
                 label="Labor category"
