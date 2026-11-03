@@ -177,3 +177,47 @@ describe('verify POST — flag on', () => {
     expect(h.alerts).toEqual([expect.objectContaining({ kind: 'signup-cap-reached', dedupKey: new Date().toISOString().slice(0, 10) })]);
   });
 });
+
+describe('verify pages: landmarks and contrast (feature-plan-ux-page-fixes.md C9, T-C9b)', () => {
+  const lum = (color: string) => {
+    const hex = color.length === 4 ? `#${[...color.slice(1)].map((c) => c + c).join('')}` : color;
+    const v = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((x) => (x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+  };
+  const ratio = (a: string, b: string) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  const rule = (html: string, selector: string) => html.match(new RegExp(`\\n\\s*${selector.replace(/[.:]/g, (c) => `\\${c}`)} \\{([^}]*)\\}`))?.[1] ?? '';
+  const prop = (css: string, name: string) => css.match(new RegExp(`(?:^|;|\\s)${name}:\\s*(#[0-9a-f]{6}|#[0-9a-f]{3})\\b`, 'i'))?.[1];
+  async function pages() {
+    db.onSelect(signups, [signupRow()]);
+    const confirm = await (await get()).text();
+    db.onSelect(signups, [signupRow({ waitlistedAt: new Date() })]);
+    const waitlist = await (await get()).text();   // rendered through htmlPage()
+    return { confirm, waitlist };
+  }
+
+  it('both pages: one <main> around the card and one <h1>; the emoji is aria-hidden', async () => {
+    const { confirm, waitlist } = await pages();
+    for (const html of [confirm, waitlist]) {
+      expect(html.match(/<main[\s>]/g)).toHaveLength(1);
+      expect(html.match(/<h1[\s>]/g)).toHaveLength(1);
+      expect(html.indexOf('<main')).toBeLessThan(html.indexOf('class="card"'));
+      expect(html.indexOf('</main>')).toBeGreaterThan(html.lastIndexOf('</div>'));
+    }
+    expect(confirm).toContain('<div class="icon" aria-hidden="true">🏢</div>');
+  });
+
+  it('no #228be6 / #9ca3af; text on the white card ≥ 4.5:1; the focus outline ≥ 3:1', async () => {
+    const { confirm, waitlist } = await pages();
+    for (const html of [confirm, waitlist]) {
+      expect(html.toLowerCase()).not.toMatch(/#228be6|#9ca3af/);
+      for (const sel of ['h1', 'p']) expect(ratio(prop(rule(html, sel), 'color')!, '#ffffff'), sel).toBeGreaterThanOrEqual(4.5);
+    }
+    for (const sel of ['.workspace', '.note']) expect(ratio(prop(rule(confirm, sel), 'color')!, '#ffffff'), sel).toBeGreaterThanOrEqual(4.5);
+    const button = rule(confirm, 'button');
+    expect(ratio(prop(button, 'color')!, prop(button, 'background')!)).toBeGreaterThanOrEqual(4.5);
+    expect(ratio('#ffffff', prop(rule(confirm, 'button:hover'), 'background')!)).toBeGreaterThanOrEqual(4.5);
+    const focus = rule(confirm, 'button:focus-visible');
+    expect(focus).toMatch(/outline:\s*2px solid #4f6bff;\s*outline-offset:\s*2px/);
+    expect(ratio('#4f6bff', '#ffffff')).toBeGreaterThanOrEqual(3);
+  });
+});

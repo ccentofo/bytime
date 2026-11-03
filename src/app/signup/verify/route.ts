@@ -42,12 +42,13 @@ function htmlPage(title: string, body: string, status = 200) {
   <title>${escapeHtml(title)}</title>
   <style>
     body { font-family: system-ui, sans-serif; background: #f9fafb; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; margin: 0; }
-    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 40px; max-width: 480px; width: 100%; text-align: center; }
-    h1 { font-size: 22px; font-weight: 700; margin: 0 0 12px; color: #111; }
-    p { font-size: 14px; color: #6b7280; line-height: 1.6; margin: 0 0 16px; }
+    main { width: 100%; max-width: 480px; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 40px; width: 100%; text-align: center; }
+    h1 { font-size: 22px; font-weight: 700; margin: 0 0 12px; color: #0c1b33; }
+    p { font-size: 14px; color: #46526e; line-height: 1.6; margin: 0 0 16px; }
   </style>
 </head>
-<body><div class="card">${body}</div></body>
+<body><main><div class="card">${body}</div></main></body>
 </html>`;
   return new NextResponse(html, { status, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
@@ -86,19 +87,22 @@ export async function GET(req: NextRequest) {
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, sans-serif; background: #f9fafb; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
-    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 40px; max-width: 440px; width: 100%; text-align: center; }
+    main { width: 100%; max-width: 440px; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 40px; width: 100%; text-align: center; }
     .icon { font-size: 48px; margin-bottom: 16px; }
-    h1 { font-size: 22px; font-weight: 700; margin-bottom: 8px; color: #111; }
-    p { font-size: 14px; color: #6b7280; line-height: 1.6; margin-bottom: 24px; }
-    .workspace { font-weight: 600; color: #228be6; }
-    button { background: #228be6; color: #fff; border: none; border-radius: 8px; padding: 14px 28px; font-size: 15px; font-weight: 600; cursor: pointer; width: 100%; transition: background 0.15s; }
-    button:hover { background: #1c7ed6; }
-    .note { font-size: 12px; color: #9ca3af; margin-top: 16px; }
+    h1 { font-size: 22px; font-weight: 700; margin-bottom: 8px; color: #0c1b33; }
+    p { font-size: 14px; color: #46526e; line-height: 1.6; margin-bottom: 24px; }
+    .workspace { font-weight: 600; color: #3f55e6; }
+    button { background: #3f55e6; color: #fff; border: none; border-radius: 8px; padding: 14px 28px; font-size: 15px; font-weight: 600; cursor: pointer; width: 100%; transition: background 0.15s; }
+    button:hover { background: #3346c0; }
+    button:focus-visible { outline: 2px solid #4f6bff; outline-offset: 2px; }
+    .note { font-size: 12px; color: #46526e; margin-top: 16px; }
   </style>
 </head>
 <body>
+  <main>
   <div class="card">
-    <div class="icon">🏢</div>
+    <div class="icon" aria-hidden="true">🏢</div>
     <h1>Create your workspace</h1>
     <p>
       Your email <strong>${escapeHtml(email)}</strong> is verified.<br/>
@@ -111,6 +115,7 @@ export async function GET(req: NextRequest) {
     </form>
     <p class="note">You'll set your password on the next step.</p>
   </div>
+  </main>
 </body>
 </html>`;
 

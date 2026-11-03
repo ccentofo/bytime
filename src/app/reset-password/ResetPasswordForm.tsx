@@ -19,10 +19,40 @@ import { verifyResetToken, resetPassword } from '@/server/actions/password-reset
 import { runAction } from '@/lib/run-action';
 import { Logo } from '@/components/brand/Logo';
 
+/**
+ * The two modes' copy (feature-plan-ux-page-fixes.md C9). `welcome=1` (strictly) is the first-run link from signup
+ * verification and the waitlist: the new admin sets their first password. Anything else is a password reset.
+ */
+const COPY = {
+  welcome: {
+    title: 'Welcome to CadenzPoint',
+    intro: (email: string) => <>Your workspace is ready. Set a password for <strong>{email}</strong> to sign in.</>,
+    password: 'Password',
+    confirm: 'Confirm password',
+    submit: 'Set password',
+    checking: 'Checking your link…',
+    invalid: 'This setup link is invalid or has expired. Use Forgot password to get a new one.',
+    invalidLink: 'Forgot password',
+    success: 'Your password is set. Sign in to finish setting up your workspace.',
+  },
+  reset: {
+    title: 'Set new password',
+    intro: (email: string) => <>Resetting password for <strong>{email}</strong></>,
+    password: 'New password',
+    confirm: 'Confirm new password',
+    submit: 'Reset password',
+    checking: 'Verifying reset link...',
+    invalid: 'This password reset link is invalid or has expired. Please request a new one.',
+    invalidLink: 'Request a new reset link',
+    success: 'Your password has been reset successfully! You can now sign in with your new password.',
+  },
+};
+
 function ResetPasswordFields() {
   const searchParams = useSearchParams();
   const token = searchParams.get('token') ?? '';
   const email = searchParams.get('email') ?? '';
+  const copy = COPY[searchParams.get('welcome') === '1' ? 'welcome' : 'reset'];
 
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -81,7 +111,7 @@ function ResetPasswordFields() {
     return (
       <Stack align="center" gap="md">
         <Loader size="lg" />
-        <Text c="dimmed">Verifying reset link...</Text>
+        <Text c="dimmed">{copy.checking}</Text>
       </Stack>
     );
   }
@@ -90,25 +120,25 @@ function ResetPasswordFields() {
     <Paper shadow="md" p="xl" radius="md" w={420} withBorder>
       <Stack align="center" mb="lg">
         <Logo size="lg" />
-        <Title order={1} size="h2">Set New Password</Title>
+        <Title order={1} size="h2">{copy.title}</Title>
       </Stack>
 
       {!tokenValid && !success ? (
         <Stack align="center" gap="md">
           <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light">
-            This password reset link is invalid or has expired. Please request a new one.
+            {copy.invalid}
           </Alert>
           <Anchor href="/forgot-password" size="sm">
-            Request a New Reset Link
+            {copy.invalidLink}
           </Anchor>
         </Stack>
       ) : success ? (
         <Stack align="center" gap="md">
           <Alert icon={<IconCheck size={16} />} color="success" variant="light">
-            Your password has been reset successfully! You can now sign in with your new password.
+            {copy.success}
           </Alert>
           <Button component="a" href="/login" fullWidth>
-            Sign In
+            Sign in
           </Button>
         </Stack>
       ) : (
@@ -120,10 +150,10 @@ function ResetPasswordFields() {
               </Alert>
             )}
             <Text size="sm" c="dimmed">
-              Resetting password for <strong>{email}</strong>
+              {copy.intro(email)}
             </Text>
             <PasswordInput
-              label="New Password"
+              label={copy.password}
               placeholder="At least 8 characters"
               required
               value={password}
@@ -132,7 +162,7 @@ function ResetPasswordFields() {
               autoFocus
             />
             <PasswordInput
-              label="Confirm New Password"
+              label={copy.confirm}
               placeholder="Enter password again"
               required
               value={confirmPassword}
@@ -145,11 +175,11 @@ function ResetPasswordFields() {
               loading={loading}
               leftSection={<IconLock size={16} />}
             >
-              Reset Password
+              {copy.submit}
             </Button>
             <Anchor href="/login" size="sm" ta="center">
               <IconArrowLeft size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} />
-              Back to Sign In
+              Back to sign in
             </Anchor>
           </Stack>
         </form>
