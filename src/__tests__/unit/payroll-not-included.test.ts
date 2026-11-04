@@ -115,6 +115,23 @@ describe('loadPayrollData — not in this file (P-1 companion)', () => {
   });
 });
 
+describe('uncovered days next to a stored row (UX-4B2-AUDIT.md M4)', () => {
+  it('hours on days a stored row doesn\'t cover, in an overlapping schedule period → one draft clipped to those days', async () => {
+    script({
+      entries: [work('m', '2026-10-05', '8.00'), work('m', '2026-10-12', '4.00'), work('n', '2026-10-05', '8.00')],
+      people: [person('m', 'Max Moved'), person('n', 'Nell None')],
+      // A 10-day row (Oct 1 – 10, e.g. after a schedule change) inside the schedule's Oct 1 – 15.
+      periods: [row('p-m', 'm', 'submitted', { periodNumDays: 10 }), row('p-n', 'n', 'submitted', { periodNumDays: 10 })],
+    });
+    const data = await loadPayrollData(db as never, d('2026-10-01'), d('2026-10-15'));
+    expect(data.notIncluded.map((x) => [x.employeeName, x.status, x.periodId, x.periodStart, x.periodEnd, x.hoursInRange])).toEqual([
+      ['Max Moved', 'submitted', 'p-m', '2026-10-01', '2026-10-10', 8],
+      ['Nell None', 'submitted', 'p-n', '2026-10-01', '2026-10-10', 8],
+      ['Max Moved', 'draft', null, '2026-10-11', '2026-10-15', 4],          // Nell has no uncovered hours: nothing more
+    ]);
+  });
+});
+
 describe('the P-5 fixture (companion to integration/payroll-p5-fixture.ts, UX-4B2-AUDIT.md M3)', () => {
   it('Mo\'s misaligned row (Mar 3, no stored length) never approves Mar 2: the recorded 24 h, unflagged', async () => {
     script({

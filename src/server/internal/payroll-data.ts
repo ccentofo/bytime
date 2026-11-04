@@ -190,7 +190,8 @@ export async function loadPayrollData(db: Pick<ReadDb, 'select'>, rangeStart: Ca
 
 /**
  * §4.1.2: per person, the person-periods in range that aren't approved. Stored rows cover their own days first; the
- * remaining in-range days are grouped by the schedule's period (never one overlapping a stored row). A person-period
+ * remaining in-range days are grouped by the schedule's period — one overlapping a stored row is never listed whole,
+ * only its uncovered days with hours, as one draft clipped to them (fix round 1, M4). A person-period
  * with no row and no hours is listed only for an expected submitter created on or before the period's end (the
  * createdAt rule never hides a stored row or recorded hours). Ordered by status, name, period start.
  */
@@ -248,7 +249,16 @@ function notIncludedRows(input: {
       if (seen.has(sp.start)) continue;
       seen.add(sp.start);
       const endExclusive = addDays(sp.start, sp.numDays);
-      if (stored.some((r) => isBefore(r.start, endExclusive) && isBefore(sp.start, r.endExclusive))) continue;
+      if (stored.some((r) => isBefore(r.start, endExclusive) && isBefore(sp.start, r.endExclusive))) {
+        // M4: a stored row overlaps this period (a schedule change, a misaligned import). Its uncovered in-range days
+        // with hours are still not in the file: one draft row clipped to those days; none without hours.
+        const uncovered = days.filter((x) => !isBefore(x, sp.start) && isBefore(x, endExclusive) && !covered(x));
+        const clipped = uncovered.reduce((s, x) => s + (centsOn.get(`${p.id}|${x}`) ?? 0), 0);
+        if (clipped > 0) {
+          push({ periodId: null, periodStart: uncovered[0], periodEnd: uncovered[uncovered.length - 1], status: 'draft', hoursInRange: clipped / 100, submittedAt: null, returnedAt: null });
+        }
+        continue;
+      }
       const periodEnd = addDays(sp.start, sp.numDays - 1);
       const cents = hoursIn(sp.start, endExclusive);
       if (cents === 0 && !(expected && !isAfter(calendarDayOf(p.createdAt, timeZone), periodEnd))) continue;
