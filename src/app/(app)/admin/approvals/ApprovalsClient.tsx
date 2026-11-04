@@ -201,7 +201,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
   /** The Drawer's polite live region: "Opened {employee}, {i} of {n} waiting" once a stepped-to review is ready. */
   const [announcement, setAnnouncement] = useState('');
   /** Where focus goes once the Drawer has closed (returnFocus is off; onExitTransitionEnd applies it). */
-  const focusAfterClose = useRef<{ kind: 'heading' } | { kind: 'row'; index: number } | null>(null);
+  const focusAfterClose = useRef<{ kind: 'heading' } | { kind: 'row'; id: string } | null>(null);
 
   const waitingCount = useMemo(() => rowsForView('waiting', periods).length, [periods]);
   // Memoized: a new data array on every render makes MRT re-render forever.
@@ -241,8 +241,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
   function closeDrawer() {
     if (busy.any()) return; // a decision is running (§3.3.3)
     readToken.current += 1;
-    const index = current ? viewRows.findIndex((r) => r.id === current.id) : -1;
-    focusAfterClose.current = index >= 0 ? { kind: 'row', index } : { kind: 'heading' };
+    focusAfterClose.current = current && viewRows.some((r) => r.id === current.id) ? { kind: 'row', id: current.id } : { kind: 'heading' };
     setDrawerOpen(false);
   }
 
@@ -250,7 +249,10 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     const target = focusAfterClose.current;
     focusAfterClose.current = null;
     if (!target) return;
-    const button = target.kind === 'row' ? document.querySelectorAll<HTMLElement>('[data-review-button]')[target.index] : undefined;
+    // By the row's id (fix round 1, L2) — never by its index among the rendered buttons.
+    const button = target.kind === 'row'
+      ? [...document.querySelectorAll<HTMLElement>('[data-review-button]')].find((el) => el.dataset.reviewButton === target.id)
+      : undefined;
     if (button) { button.focus(); return; }
     const heading = document.querySelector<HTMLElement>('h1');
     if (heading) { heading.tabIndex = -1; heading.focus(); }
@@ -278,6 +280,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     }
     const decided = current;
     const snapshot = waitingRows.map((r) => r.id); // before deciding (§3.3.4)
+    const position = viewRows.findIndex((r) => r.id === decided.id); // the decided row's place in this view
     await busy.run(`decision:${kind}`, async () => {
       if (!reviewData.periodId) return;
       setDecisionError(null);
@@ -294,6 +297,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         toastError({ title: 'List not refreshed', message: "Decided, but the list couldn't refresh. Reload the page." });
         router.refresh();
         focusAfterClose.current = { kind: 'heading' };
+        setReviewData(null); // L3: nothing to click while the Drawer slides out
         setDrawerOpen(false);
         return;
       }
@@ -302,7 +306,10 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
       const stillWaiting = rowsForView('waiting', rows);
       const at = snapshot.indexOf(decided.id);
       if (!openNext) {
-        focusAfterClose.current = { kind: 'row', index: at };
+        // L2: the Review button of the row now at the decided row's place (else the heading).
+        const there = position >= 0 ? rowsForView(view, rows)[position] : undefined;
+        focusAfterClose.current = there ? { kind: 'row', id: there.id } : { kind: 'heading' };
+        setReviewData(null);
         setDrawerOpen(false);
         return;
       }
@@ -314,6 +321,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         return;
       }
       focusAfterClose.current = { kind: 'heading' };
+      setReviewData(null);
       setDrawerOpen(false);
     }, { group: 'decision' });
   }
@@ -385,7 +393,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
           size="xs"
           variant={review && row.original.id === firstWaitingId ? 'filled' : 'default'}
           onClick={() => { void loadReview(row.original); }}
-          data-review-button
+          data-review-button={row.original.id}
         >
           {review ? 'Review' : 'View'}
         </Button>
@@ -420,7 +428,8 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         setGrid(gridOf(row, data));
         setDrawerOpen(true);
       } catch {
-        toastError({ title: 'Timesheet not available', message: "That timesheet isn't available to you." });
+        // L6: the read failed — not "isn't available" (that's only for an id not in the rows).
+        toastError({ title: 'Timesheet not opened', message: "Couldn't open that timesheet. Try again." });
       }
     })();
   }, [initialReviewId, initialPeriods]);
@@ -449,7 +458,8 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     }
     // A10: nothing to click until the review for THIS row is on screen.
     if (!(reviewData && reviewData.periodId === current.id)) {
-      return <Text role="status" size="sm" c="dimmed" data-testid="review-loading">Loading…</Text>;
+      // Closing after a decision (reviewData cleared, L3): nothing at all, not "Loading…".
+      return drawerOpen ? <Text role="status" size="sm" c="dimmed" data-testid="review-loading">Loading…</Text> : null;
     }
     const data = reviewData;
     const isOwn = current.userId === currentUserId;
@@ -603,7 +613,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
                               <b>{formatCalendarDate(addDays(current.periodStart, f.dayIndex), 'ddd MMM D')} · {rowName(f.rowId, reviewData!.chargeCodes)}</b>:{' '}
                               {f.kind === 'late'
                                 ? `${formatHours(f.current.hours)}, entered ${dayOf(f.current.createdAt)}`
-                                : `${formatHours(f.previousHours ?? 0)} → ${formatHours(f.current.hours)}`}
+                                : `${f.previousHours === null ? '—' : formatHours(f.previousHours)} → ${formatHours(f.current.hours)}`}
                               {f.sinceReturned && <span className={classes.tag}>Since returned</span>}
                             </Text>
                             <Text size="xs" c="dimmed">

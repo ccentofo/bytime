@@ -27,6 +27,11 @@ describe('flaggedCells (A-4 companion)', () => {
     ]);
   });
 
+  it('a migration rev 1 with a reason, then an app rev 2: a correction, never "originally late" (L8)', () => {
+    const [f] = flaggedCells([{ rowId: 'A', dayIndex: 1, revisions: [rev(1, 8, { source: 'migration', reasonCode: 'LATE_ENTRY' }), rev(2, 6, { reasonCode: 'CORRECTION' })] }], null);
+    expect([f.kind, f.originallyLate, f.previousHours]).toEqual(['correction', false, 8]);
+  });
+
   it('sinceReturned: only revisions recorded after the last return', () => {
     const out = flaggedCells([
       { rowId: 'A', dayIndex: 1, revisions: [rev(1, 8), rev(2, 6, { createdAt: '2026-03-16T11:59:59.000Z' })] },

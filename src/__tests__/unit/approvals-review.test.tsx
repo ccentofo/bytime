@@ -13,6 +13,8 @@ import { act } from 'react';
  * A-9 — open next: getScopedPeriods, then the next waiting id by compareWaiting (not the decided one); at the end the
  *       Drawer closes and focus goes to the heading; unchecked → focus on the row at the same index; a refresh
  *       failure after a successful decision is a toast, never a decision error.
+ * UX-4B2-AUDIT.md fix round 1 — M1 (the kept grid names its employee), M2 (focus on the heading, the live region),
+ *       L2 (close focus by row id), L3 (nothing to click while closing), L4, L5, L8 (deep-linked non-Waiting row).
  */
 
 const nav = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }));
@@ -129,7 +131,7 @@ describe('the review Drawer (A-7)', () => {
     const grid = dialog()!.querySelector('table')!;
     expect(grid.querySelector('caption')!.textContent).toBe('Hours for Ann Adams, Oct 1 – 15, 2026');
     const ths = [...grid.querySelectorAll('thead th')];
-    expect(ths[1].textContent).toBe('ThuOct 1');
+    expect(ths[1].textContent).toBe('Thu Oct 1');                        // L4: a space between the day and the date
     expect(ths[3].className).toMatch(/weekend/);                          // Sat Oct 3
     const onsite = [...grid.querySelectorAll('tbody tr')][0];
     expect(onsite.querySelector('th')!.textContent).toBe('OnsiteNAV-01');  // name, then code
@@ -363,6 +365,86 @@ describe('focus and announcements (fix round 1, M2)', () => {
     await wait(20);
     expect(document.activeElement).toBe(heading());
     expect(dialog()!.contains(document.activeElement)).toBe(true);
+  });
+});
+
+describe('approvals LOWs (fix round 1: L2–L5, L8)', () => {
+  it('L2: close focus goes to the Review button by row id — in Everything, the row at the decided row\'s place, not the same DOM index', async () => {
+    const later = { ...D, periodStart: '2026-10-16' as CalendarDate };       // Everything: Dee (newest period) first, then Ann, Bea, Cy
+    await render([A, B, C, later]);
+    await click([...m!.container.querySelectorAll('label')].find((l) => l.textContent?.startsWith('Everything')));
+    await openRow('Ann Adams');
+    await click(dialog()!.querySelector('input[type="checkbox"]'));
+    actions.getScopedPeriods.mockResolvedValueOnce([{ ...A, status: 'approved', canApprove: false }, B, C, later]);
+    await click(inDialog('Approve'));
+    await wait(400);
+    expect(dialog()).toBeNull();
+    expect((document.activeElement as HTMLElement).dataset.reviewButton).toBe('a');   // Ann is still at index 1 in Everything
+    expect(document.activeElement!.closest('tr')!.textContent).toContain('Ann Adams');
+  });
+
+  // L3, with real transitions (mount() uses env="test", which closes the Drawer instantly), so the exit is observable.
+  const renderAnimated = async (rows: unknown[]) => {
+    const { MantineProvider } = await import('@mantine/core');
+    const { createRoot } = await import('react-dom/client');
+    const { theme } = await import('@/theme');
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<MantineProvider theme={theme}>
+        <ApprovalsClient initialPeriods={rows as never} currentUserId="sam" userRole="admin" workspaceTimezone="America/New_York" scopeInfo={null} />
+      </MantineProvider>);
+    });
+    m = { container, root };
+    await wait(10);
+  };
+  it.each([
+    ['open next unchecked', 'unchecked'],
+    ['the last waiting one', 'last'],
+    ['the list refresh fails', 'refresh-fails'],
+  ] as const)('L3: after a decision that closes the Drawer (%s), there is nothing to click while it slides out', async (_label, how) => {
+    await renderAnimated(how === 'last' ? [B, D] : ROWS);
+    await openRow('Bea Brown');
+    await wait(300);
+    if (how === 'unchecked') await click(dialog()!.querySelector('input[type="checkbox"]'));
+    if (how === 'refresh-fails') actions.getScopedPeriods.mockRejectedValueOnce(new Error('network'));
+    else actions.getScopedPeriods.mockResolvedValueOnce(how === 'last' ? [{ ...B, status: 'approved', canApprove: false }, D] : [A, { ...B, status: 'approved', canApprove: false }, C, D]);
+    await click(inDialog('Approve'));
+    expect(dialog()).not.toBeNull();                                           // still sliding out
+    expect(dialog()!.textContent).toContain('Bea Brown');
+    expect(inDialog('Approve')).toBeUndefined();
+    expect(inDialog('Return for corrections')).toBeUndefined();
+    expect(dialog()!.querySelector('[data-testid="review-loading"]')).toBeNull();
+    await wait(600);
+    expect(dialog()).toBeNull();
+    expect(actions.approvePeriod).toHaveBeenCalledTimes(1);
+  });
+
+  it('L4: the grid scrolls in a focusable region named by the caption', async () => {
+    await render();
+    await openRow('Ann Adams');
+    const scroller = dialog()!.querySelector('table')!.parentElement!;
+    expect(scroller.getAttribute('role')).toBe('region');
+    expect(scroller.getAttribute('tabindex')).toBe('0');
+    expect(scroller.getAttribute('aria-label')).toBe('Hours for Ann Adams, Oct 1 – 15, 2026');
+  });
+
+  it('L5: a correction with no earlier revision on record shows "—", not 0.00', async () => {
+    actions.getTimesheetForReview.mockImplementationOnce(async () => reviewFor(C, { flagged: [
+      { rowId: CC, dayIndex: 1, kind: 'correction', originallyLate: false, sinceReturned: false, previousHours: null,
+        current: rev(2, 6, { reasonCode: 'CORRECTION' }), history: [rev(2, 6, { reasonCode: 'CORRECTION' })] },
+    ] }));
+    await render();
+    await openRow('Cy Cole');
+    expect(dialog()!.querySelector('[data-testid="flagged-change"]')!.textContent).toContain('Fri Oct 2 · Onsite: — → 6.00');
+  });
+
+  it('L8: a deep-linked row that isn\'t waiting has no Previous / Next', async () => {
+    m = await mount(<ApprovalsClient initialPeriods={ROWS as never} currentUserId="sam" userRole="admin" workspaceTimezone="America/New_York" scopeInfo={null} initialReviewId="d" />);
+    await wait(40);
+    expect(dialog()!.textContent).toContain('Dee Done · Oct 1 – 15, 2026');
+    expect(dialog()!.querySelector('[data-testid="review-nav"]')).toBeNull();
   });
 });
 

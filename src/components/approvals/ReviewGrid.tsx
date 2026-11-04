@@ -36,7 +36,9 @@ export function ReviewGrid({ chargeCodes, entries, start, numDays, flagged, note
 
   return (
     <div>
-      <div className={classes.wrap}>
+      {/* A keyboard-scrollable region named by the caption (fix round 1, L4): axe's scrollable-region-focusable. */}
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a scrolling region must be reachable by keyboard */}
+      <div className={classes.wrap} tabIndex={0} role="region" aria-label={caption}>
         <table className={dimmed ? `${classes.grid} ${classes.dimmed}` : classes.grid}>
           <caption className={classes.caption}>{caption}</caption>
           <thead>
@@ -44,7 +46,7 @@ export function ReviewGrid({ chargeCodes, entries, start, numDays, flagged, note
               <th scope="col">Charge code</th>
               {days.map((d) => (
                 <th key={d} scope="col" className={weekend(d) ? classes.weekend : undefined}>
-                  {formatCalendarDate(d, 'ddd')}<span className={classes.day}>{formatCalendarDate(d, 'MMM D')}</span>
+                  {formatCalendarDate(d, 'ddd')}{' '}<span className={classes.day}>{formatCalendarDate(d, 'MMM D')}</span>
                 </th>
               ))}
               <th scope="col">Total</th>

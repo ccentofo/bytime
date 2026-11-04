@@ -241,6 +241,15 @@ describe('the ?review= deep link (A-10)', () => {
     expect(replaceSpy).not.toHaveBeenCalled();
   });
 
+  it('L6: a read that throws → "Couldn\'t open that timesheet. Try again." (not "isn\'t available"); nothing opens', async () => {
+    actions.getTimesheetForReview.mockRejectedValueOnce(new Error('network'));
+    m = await mount(<ApprovalsClient initialPeriods={PERIODS as never} currentUserId={ME} userRole="admin" workspaceTimezone="UTC" scopeInfo={null} initialReviewId="old" />);
+    await wait(30);
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(toast.error).toHaveBeenCalledWith(expect.objectContaining({ message: "Couldn't open that timesheet. Try again." }));
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+
   it('state is set only after the read resolves (nothing opens while it is pending)', async () => {
     let resolve!: (v: unknown) => void;
     actions.getTimesheetForReview.mockImplementationOnce(() => new Promise((r) => { resolve = r; }) as never);
