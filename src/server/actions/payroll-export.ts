@@ -11,7 +11,7 @@ import {
   type PayrollFormat,
 } from '@/lib/integrations/connectors/payroll-export';
 import { fromCents } from '@/lib/payroll/flsa';
-import type { CalendarDate } from '@/lib/calendar-date';
+import { diffDays, type CalendarDate } from '@/lib/calendar-date';
 import { validateCalendarDate } from '@/lib/validation';
 import { UserFacingError } from '@/lib/errors';
 import { loadPayrollData, PayrollNotReadyError } from '@/server/internal/payroll-data';
@@ -54,6 +54,17 @@ export type PayrollPreview =
     }
   | { status: 'refused'; reason: 'workweek-unset' | 'leave-pay-type'; codes: string[]; message: string };
 
+/** The longest range the preview / export reads (UX-4B2-AUDIT.md L9), inclusive. */
+const MAX_RANGE_DAYS = 400;
+
+/** The validated dates; a range over MAX_RANGE_DAYS is refused before any read. */
+function validRange(data: { periodStart: CalendarDate; periodEnd: CalendarDate }): { start: CalendarDate; end: CalendarDate } {
+  const start = validateCalendarDate(data.periodStart, 'Start date');
+  const end = validateCalendarDate(data.periodEnd, 'End date');
+  if (diffDays(start, end) + 1 > MAX_RANGE_DAYS) throw new UserFacingError(`Choose a range of ${MAX_RANGE_DAYS} days or less.`);
+  return { start, end };
+}
+
 /**
  * Preview the export for a range: per-employee FLSA totals and the flagged employees — or why the export is refused
  * (workweek start day unset → Settings; leave codes without a pay type → Indirect Codes).
@@ -64,9 +75,10 @@ export async function getPayrollExportPreview(data: {
 }): Promise<ActionResult<PayrollPreview>> {
   return userAction(async () => {
     await requireAdmin();
+    const { start, end } = validRange(data);
     const db = await getDb();
     try {
-      const payroll = await loadPayrollData(db, validateCalendarDate(data.periodStart, 'Start date'), validateCalendarDate(data.periodEnd, 'End date'));
+      const payroll = await loadPayrollData(db, start, end);
       const sum = (f: (e: (typeof payroll.employees)[number]) => number) => payroll.employees.reduce((s, e) => s + f(e), 0);
       return {
         status: 'ready' as const,
@@ -117,8 +129,7 @@ export async function generatePayrollExportCSV(data: {
     await requireAdmin();
     const formatConfig = data.format === 'daily-hours' ? null : PAYROLL_FORMATS.find((f) => f.id === data.format);
     if (data.format !== 'daily-hours' && !formatConfig) throw new UserFacingError(`Unknown payroll format: ${data.format}`);
-    const start = validateCalendarDate(data.periodStart, 'Start date');
-    const end = validateCalendarDate(data.periodEnd, 'End date');
+    const { start, end } = validRange(data);
     const db = await getDb();
     const payroll = await loadPayrollData(db, start, end);
     const csvContent = formatConfig ? generatePayrollCSV(payroll.employees, formatConfig, start, end) : generateDailyDetailCSV(payroll.days);

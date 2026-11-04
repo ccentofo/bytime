@@ -135,6 +135,16 @@ describe('actions (ActionResult)', () => {
     expect(readFileSync(path.join(ROOT, 'src/server/actions/payroll-export.ts'), 'utf8')).not.toMatch(/getPayrollFormats/);
   });
 
+  it('L9: a range over 400 days is refused before any read, in the preview and the CSV; exactly 400 days is read', async () => {
+    const refused = { ok: false, code: 'validation', error: 'Choose a range of 400 days or less.' };
+    expect(await getPayrollExportPreview({ periodStart: d('2026-01-01'), periodEnd: d('2027-02-05') })).toEqual(refused);   // 401 days
+    expect(await generatePayrollExportCSV({ periodStart: d('2026-01-01'), periodEnd: d('2027-02-05'), format: 'adp' })).toEqual(refused);
+    expect(db.ops).toEqual([]);
+    db.onSelect(workspaceSettings, []);
+    expect(await getPayrollExportPreview({ periodStart: d('2026-01-01'), periodEnd: d('2027-02-04') }))         // 400 days
+      .toEqual({ ok: true, data: { status: 'refused', reason: 'workweek-unset', codes: [], message: WORKWEEK_UNSET_MESSAGE } });
+  });
+
   it('static: the guard is the first await in each action; the old 80-hour aggregation is gone', () => {
     const src = stripComments(readFileSync(path.join(ROOT, 'src/server/actions/payroll-export.ts'), 'utf8'));
     for (const fn of ['getPayrollExportPreview', 'generatePayrollExportCSV']) {

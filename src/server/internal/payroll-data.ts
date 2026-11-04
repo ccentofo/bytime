@@ -147,9 +147,10 @@ export async function loadPayrollData(db: Pick<ReadDb, 'select'>, rangeStart: Ca
   const periods = new Map<string, StoredPeriod[]>();
   for (const p of periodRows) {
     const start = p.periodStart as CalendarDate;
-    // The row's own snapshot, else its length under the schedule in effect on its start — never a snapped period, so a
-    // misaligned imported row keeps exactly the approved days it had before (P-5).
-    const numDays = p.periodNumDays ?? getNumDaysInPeriod(start, resolver.configOn(start));
+    // The row's own snapshot (a positive one, as existingPeriodLength — fix round 1, L1), else its length under the
+    // schedule in effect on its start — never a snapped period, so a misaligned imported row keeps exactly the approved
+    // days it had before (P-5).
+    const numDays = p.periodNumDays != null && p.periodNumDays > 0 ? p.periodNumDays : getNumDaysInPeriod(start, resolver.configOn(start));
     const list = periods.get(p.userId) ?? [];
     list.push({ id: p.id, start, endExclusive: addDays(start, numDays), status: p.status, submittedAt: p.submittedAt, reviewedAt: p.reviewedAt });
     periods.set(p.userId, list);

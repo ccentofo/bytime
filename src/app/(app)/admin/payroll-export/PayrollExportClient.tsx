@@ -2,7 +2,7 @@
 
 import { useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
-import { Accordion, Alert, Button, Group, Paper, Select, Stack, Text, Title } from '@mantine/core';
+import { Accordion, Alert, Button, Group, Paper, Select, Stack, Text, Title, VisuallyHidden } from '@mantine/core';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Notice } from '@/components/ui/Notice';
@@ -22,6 +22,7 @@ import { saveBlob } from '@/lib/download';
 import { toastSuccess } from '@/lib/toast';
 import { formatCount, formatHours } from '@/lib/format';
 import { calendarDayOf, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { periodLabel } from '@/lib/timesheet/labels';
 import type { NotIncluded } from '@/lib/payroll/not-included';
 import type { ActionResult } from '@/lib/action-result';
 
@@ -80,6 +81,10 @@ export function PayrollExportClient({ presets, initialPreview, timeZone }: {
 }) {
   const busy = useBusy();
   const loadingHintId = useId();
+  const refusedId = useId();
+  const failedId = useId();
+  /** Polite live region (fix round 1, L7): "Preview updated for {range}" when a chosen range's preview lands. */
+  const [announcement, setAnnouncement] = useState('');
   const format = useSyncExternalStore(subscribeFormat, readFormat, () => DEFAULT_FORMAT);
   const setFormat = (v: string | null) => {
     if (!v) return;
@@ -104,12 +109,14 @@ export function PayrollExportClient({ presets, initialPreview, timeZone }: {
     const key = rangeOf(sel);
     const mine = ++token.current;
     setPreview({ range: key, result: null });
+    setAnnouncement('');
     const { start, end } = sel;
     void (async () => {
       const result = await runAction(getPayrollExportPreview({ periodStart: start, periodEnd: end }), { silent: true });
       if (mine !== token.current) return; // a newer range was chosen meanwhile — drop it before any setState
-      if (!result.ok) { setPreview({ range: key, result }); return; } // shown inline; the downloads stay blocked
+      if (!result.ok) { setPreview({ range: key, result }); return; } // shown inline (role="alert"); the downloads stay blocked
       setPreview({ range: key, result });
+      setAnnouncement(`Preview updated for ${periodLabel(start, end)}`);
     })();
   }
 
@@ -123,6 +130,7 @@ export function PayrollExportClient({ presets, initialPreview, timeZone }: {
   const flagged = employees.filter((e) => e.otBasisIncludesUnapprovedDays);
   const notIncluded = ready?.notIncluded ?? [];
   const missingPeople = new Set(notIncluded.map((n) => n.userId)).size;
+  const partly = notIncluded.some((n) => n.partlyIncluded);
   const day = (iso: string) => formatCalendarDate(calendarDayOf(new Date(iso), timeZone), 'MMM D');
 
   async function download(kind: string) {
@@ -166,10 +174,11 @@ export function PayrollExportClient({ presets, initialPreview, timeZone }: {
     enableSorting: false,
     enableTopToolbar: false,
     getRowId: (n) => `${n.userId}|${n.periodStart}`,
+    mantineTableProps: { 'aria-label': 'People not in this file' },
     enableRowActions: true,
     positionActionsColumn: 'last',
     renderRowActions: ({ row: { original: n } }) => (n.canReview && n.periodId
-      ? <Button component={Link} href={`/admin/approvals?review=${n.periodId}`} size="xs" variant="default">Review</Button>
+      ? <Button component={Link} href={`/admin/approvals?review=${n.periodId}`} size="xs" variant="default" aria-label={`Review ${n.employeeName}’s timesheet`}>Review</Button>
       : null),
   });
 
@@ -208,6 +217,8 @@ export function PayrollExportClient({ presets, initialPreview, timeZone }: {
   });
 
   const downloadBlocked = !canDownload;
+  // Why the downloads are blocked, read with them (L7): loading, the refusal, or the failure.
+  const describedBy = loading ? loadingHintId : refused ? refusedId : failed ? failedId : undefined;
   return (
     <>
       <PageHeader
@@ -243,7 +254,7 @@ export function PayrollExportClient({ presets, initialPreview, timeZone }: {
             <Group gap="sm">
               <WriteButton
                 {...busy.props('download:csv', { group: 'download', blocked: downloadBlocked })}
-                aria-describedby={loading ? loadingHintId : undefined}
+                aria-describedby={describedBy}
                 onClick={() => { void download(format); }}
                 data-testid="payroll-download"
               >
@@ -252,7 +263,7 @@ export function PayrollExportClient({ presets, initialPreview, timeZone }: {
               <WriteButton
                 variant="default"
                 {...busy.props('download:daily-hours', { group: 'download', blocked: downloadBlocked })}
-                aria-describedby={loading ? loadingHintId : undefined}
+                aria-describedby={describedBy}
                 onClick={() => { void download('daily-hours'); }}
                 data-testid="payroll-download-daily"
               >
@@ -264,9 +275,10 @@ export function PayrollExportClient({ presets, initialPreview, timeZone }: {
         </Group>
       </Paper>
 
-      {failed && <Alert color="red" role="alert" mb="md" data-testid="payroll-preview-error">{failed}</Alert>}
+      <VisuallyHidden role="status" aria-live="polite" data-testid="payroll-announcement">{announcement}</VisuallyHidden>
+      {failed && <Alert color="red" role="alert" mb="md" id={failedId} data-testid="payroll-preview-error">{failed}</Alert>}
       {refused && (
-        <div data-testid="payroll-refused">
+        <div id={refusedId} data-testid="payroll-refused">
           <Notice action={refused.reason === 'workweek-unset'
             ? { label: 'Set the workweek start day', href: '/settings/workspace' }
             : { label: 'Set pay types in Indirect Codes', href: '/admin/indirect-codes' }}>
@@ -280,7 +292,7 @@ export function PayrollExportClient({ presets, initialPreview, timeZone }: {
           {missingPeople > 0 && (
             <>
               <Notice>
-                <b>{formatCount(missingPeople)} {missingPeople === 1 ? 'person isn’t' : 'people aren’t'} in this file.</b> Only approved timesheets are exported.
+                <b>{formatCount(missingPeople)} {missingPeople === 1 ? 'person isn’t' : 'people aren’t'}{partly ? ' fully' : ''} in this file.</b> Only approved timesheets are exported.
               </Notice>
               <div data-testid="payroll-not-included"><MantineReactTable table={notTable} /></div>
             </>

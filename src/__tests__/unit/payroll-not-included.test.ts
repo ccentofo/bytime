@@ -115,6 +115,15 @@ describe('loadPayrollData — not in this file (P-1 companion)', () => {
   });
 });
 
+describe('a stored length of 0 (UX-4B2-AUDIT.md L1)', () => {
+  it('falls back to the schedule\'s length, as existingPeriodLength does: the approved days are in the file', async () => {
+    script({ entries: [work('z', '2026-10-05', '8.00')], people: [person('z', 'Zed Zero')], periods: [row('p-z', 'z', 'approved', { periodNumDays: 0 })] });
+    const data = await loadPayrollData(db as never, d('2026-10-01'), d('2026-10-15'));
+    expect(data.employees.map((e) => [e.employeeName, e.regular])).toEqual([['Zed Zero', 800]]);
+    expect(data.notIncluded).toEqual([]);
+  });
+});
+
 describe('uncovered days next to a stored row (UX-4B2-AUDIT.md M4)', () => {
   it('hours on days a stored row doesn\'t cover, in an overlapping schedule period → one draft clipped to those days', async () => {
     script({

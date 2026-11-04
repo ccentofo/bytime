@@ -10,6 +10,8 @@ import { act } from 'react';
  *       exempt "—"; the remembered format is validated; the explanation is a collapsed accordion.
  * P-4 — F4 in the HANDLER: a click while the preview loads, or after a range change before the new preview, never
  *       generates a file; the downloads are WriteButtons with useBusy props and no `disabled`.
+ * UX-4B2-AUDIT.md L7 — "fully" when someone is partly included; named Review links and table; the refusal / failure
+ *       described on the downloads; the polite "Preview updated" region.
  */
 
 const actions = vi.hoisted(() => ({ preview: vi.fn(), csv: vi.fn() }));
@@ -117,7 +119,7 @@ describe('Payroll export (P-3)', () => {
 
   it('not in this file: the count, why (returned date, partly included), hours, and Review only where it can be reviewed', async () => {
     await render();
-    expect(m!.container.textContent).toContain('3 people aren’t in this file.');   // counted by person, not by row
+    expect(m!.container.textContent).toContain('3 people aren’t fully in this file.');   // by person; Pat is partly included (L7)
     const rows = [...byTestId('payroll-not-included')!.querySelectorAll('tbody tr')];
     expect(rows.map((r) => r.querySelector('td')!.textContent)).toEqual(['Sue Submitted', 'Rae Returned', 'Pat Doe']);
     expect(rows[0].textContent).toContain('Submitted— waiting for approval');
@@ -164,6 +166,53 @@ describe('Payroll export (P-3)', () => {
     await render({ ok: true, data: { status: 'refused', reason: 'workweek-unset', codes: [], message: 'Set the workweek start day in Settings before exporting payroll.' } });
     expect(byTestId('payroll-refused')!.textContent).toContain('Set the workweek start day in Settings before exporting payroll.');
     expect(byTestId('payroll-refused')!.querySelector('a')!.getAttribute('href')).toBe('/settings/workspace');
+  });
+});
+
+describe('Payroll copy and a11y (UX-4B2-AUDIT.md L7)', () => {
+  it('"fully" only when someone is partly included; one person → singular', async () => {
+    await render(ready({ notIncluded: [ni('Sue Submitted', 'submitted', { periodId: 'p-sue', canReview: true })] }));
+    expect(m!.container.textContent).toContain('1 person isn’t in this file.');
+    expect(m!.container.textContent).not.toContain('fully');
+    unmount(m);
+    await render(ready({ notIncluded: [ni('Pat Doe', 'none', { partlyIncluded: true })] }));
+    expect(m!.container.textContent).toContain('1 person isn’t fully in this file.');
+  });
+
+  it('the Review link names the person; the table is named "People not in this file"', async () => {
+    await render();
+    const table = byTestId('payroll-not-included')!.querySelector('table')!;
+    expect(table.getAttribute('aria-label')).toBe('People not in this file');
+    expect(table.querySelector('a')!.getAttribute('aria-label')).toBe('Review Sue Submitted’s timesheet');
+  });
+
+  it('a refused or failed preview is read with the download buttons (aria-describedby); a ready one adds nothing', async () => {
+    await render({ ok: true, data: { status: 'refused', reason: 'leave-pay-type', codes: ['LV-X'], message: 'Set a pay type.' } });
+    const refusedId = byTestId('payroll-refused')!.id;
+    expect(refusedId).not.toBe('');
+    for (const id of ['payroll-download', 'payroll-download-daily']) expect(byTestId(id)!.getAttribute('aria-describedby'), id).toBe(refusedId);
+    unmount(m);
+    await render({ ok: false, code: 'unexpected', error: 'Something went wrong.' });
+    const failedId = byTestId('payroll-preview-error')!.id;
+    expect(failedId).not.toBe('');
+    for (const id of ['payroll-download', 'payroll-download-daily']) expect(byTestId(id)!.getAttribute('aria-describedby'), id).toBe(failedId);
+    unmount(m);
+    await render();
+    expect(byTestId('payroll-download')!.hasAttribute('aria-describedby')).toBe(false);
+  });
+
+  it('a polite live region says "Preview updated for {range}" once a chosen range\'s preview lands (silent on open)', async () => {
+    await render();
+    const live = byTestId('payroll-announcement')!;
+    expect(live.getAttribute('aria-live')).toBe('polite');
+    expect(live.textContent).toBe('');
+    const pending = deferred<unknown>();
+    actions.preview.mockImplementationOnce(() => pending.promise);
+    await pick('Pay period', 'Sep 16 – 30, 2026');
+    expect(live.textContent).toBe('');
+    await act(async () => { pending.resolve(quiet()); });
+    await wait(10);
+    expect(byTestId('payroll-announcement')!.textContent).toBe('Preview updated for Sep 16 – 30, 2026');
   });
 });
 
