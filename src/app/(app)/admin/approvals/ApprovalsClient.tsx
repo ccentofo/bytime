@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Badge,
@@ -19,8 +19,15 @@ import {
 } from '@mantine/core';
 import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { notifications } from '@mantine/notifications';
-import { MantineReactTable, type MRT_ColumnDef, type MRT_SortingState } from 'mantine-react-table';
-import { useAppTable } from '@/components/table/mrtDefaults';
+import { useMediaQuery } from '@mantine/hooks';
+import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { useAppTable, numericColumn } from '@/components/table/mrtDefaults';
+import { StatusBadge } from '@/components/ui/StatusBadge';
+import { toastError } from '@/lib/toast';
+import { formatHours } from '@/lib/format';
+import { calendarDayOf } from '@/lib/calendar-date';
+import { periodLabel } from '@/lib/timesheet/labels';
+import classes from './Approvals.module.css';
 import { approvePeriod, rejectPeriod, getScopedPeriods } from '@/server/actions/periods';
 import { runAction } from '@/lib/run-action';
 import { ReviewDecisionButtons } from '@/components/approvals/ReviewDecisionButtons';
@@ -50,7 +57,13 @@ type Period = {
   approvalText: string | null;
   /** UX-2 §4.6: submissions so far, and the "Worth a look" flags (decidable rows only). */
   submissionCount?: number;
-  flags?: { corrections: number; lateEntries: number; resubmitted: boolean } | null;
+  flags?: { corrections: number; lateEntries: number; resubmitted: boolean; hours?: number } | null;
+  /** UX-4b Part 2 §3.1.3: hours (Waiting rows only) and the decision as the UI words it (A1). */
+  hours?: number | null;
+  decidedByName?: string | null;
+  decidedAtText?: string | null;
+  approvalUiText?: string | null;
+  approvalUiBadge?: string | null;
 };
 
 type ScopeInfo = {
@@ -64,19 +77,23 @@ type ScopeInfo = {
 
 export type ApprovalsView = 'waiting' | 'decided' | 'everything';
 
-/** Which rows each view shows (UX-2 §4.6). Drafts never show. */
+/**
+ * Which rows each view shows (UX-2 §4.6), in its order. Drafts never show. Waiting keeps the server's compareWaiting
+ * order (feature-plan-ux-approvals-payroll.md A3 — no client re-sort); Decided is newest decision first; Everything is
+ * newest period first.
+ */
 export function rowsForView(view: ApprovalsView, rows: Period[]): Period[] {
   if (view === 'waiting') return rows.filter((r) => r.canApprove);
-  if (view === 'decided') return rows.filter((r) => r.status === 'approved' || r.status === 'rejected');
-  return rows.filter((r) => r.status !== 'draft');
+  const time = (d: Date | string | null) => (d ? new Date(d).getTime() : 0);
+  if (view === 'decided') {
+    return rows.filter((r) => r.status === 'approved' || r.status === 'rejected')
+      .sort((a, b) => time(b.reviewedAt) - time(a.reviewedAt) || b.periodStart.localeCompare(a.periodStart));
+  }
+  return rows.filter((r) => r.status !== 'draft')
+    .sort((a, b) => b.periodStart.localeCompare(a.periodStart) || a.userName.localeCompare(b.userName));
 }
 
-/** Waiting: oldest submitted first; the others: newest period first. Controlled, so it resets with the view. */
-const SORT_FOR: Record<ApprovalsView, MRT_SortingState> = {
-  waiting: [{ id: 'submittedAt', desc: false }],
-  decided: [{ id: 'periodStart', desc: true }],
-  everything: [{ id: 'periodStart', desc: true }],
-};
+const periodOf = (r: Pick<Period, 'periodStart' | 'periodNumDays'>) => periodLabel(r.periodStart, addDays(r.periodStart, r.periodNumDays - 1));
 
 /** Why a submitted period isn't yours to decide (only for submitted rows with !canApprove). */
 export function reasonChip(row: Pick<Period, 'status' | 'canApprove' | 'userId'>, currentUserId: string, userRole: string): string | null {
@@ -98,11 +115,12 @@ export function scopeSentence(info: NonNullable<ScopeInfo>): string {
   return info.designatedByCount > 0 ? `${base} and ${designators}` : base;
 }
 
-function flagWords(flags: NonNullable<Period['flags']>): string[] {
+/** "Worth a look" (A4): only what matters; an empty list renders nothing. */
+export function flagWords(flags: NonNullable<Period['flags']>): string[] {
   const out: string[] = [];
   if (flags.corrections > 0) out.push(plural(flags.corrections, 'correction', 'corrections'));
   if (flags.lateEntries > 0) out.push(plural(flags.lateEntries, 'late entry', 'late entries'));
-  if (flags.resubmitted) out.push('Resubmitted');
+  if (flags.resubmitted) out.push('Resubmitted after return');
   return out;
 }
 
@@ -148,18 +166,20 @@ type Props = {
   userRole: string;
   scopeInfo: ScopeInfo;
   workspaceTimezone: string;
+  /** `?review={periodId}` (validated on the server): opened once on mount (§3.1.7). */
+  initialReviewId?: string | null;
+  /** ApprovalNotices, shown below the h1 (§3.2). */
+  notices?: ReactNode;
 };
 
-export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scopeInfo, workspaceTimezone }: Props) {
+export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scopeInfo, workspaceTimezone, initialReviewId = null, notices = null }: Props) {
   const [periods, setPeriods] = useState(initialPeriods);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
   const [view, setView] = useState<ApprovalsView>('waiting');
-  const [sorting, setSorting] = useState<MRT_SortingState>(SORT_FOR.waiting);
-  function changeView(next: ApprovalsView) {
-    setView(next);
-    setSorting(SORT_FOR[next]);
-  }
+  const narrow = useMediaQuery('(max-width: 40em)');
+  const changeView = (next: ApprovalsView) => setView(next);
+  const submittedDay = (d: Date | string | null) => (d ? formatCalendarDate(calendarDayOf(new Date(d), workspaceTimezone), 'MMM D') : '—');
 
   // Review drawer state
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -256,90 +276,113 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     });
   }
 
-  const columns: MRT_ColumnDef<Period>[] = [
-    {
-      accessorKey: 'userName',
-      header: 'Employee',
-      size: 180,
-    },
-    {
-      accessorKey: 'periodStart',
-      header: 'Pay Period',
-      Cell: ({ row }) => {
-        const start = row.original.periodStart;
-        const end = addDays(start, row.original.periodNumDays - 1);
-        return `${formatCalendarDate(start, 'MMM D')} – ${formatCalendarDate(end, 'MMM D, YYYY')}`;
-      },
-      size: 200,
-    },
-    {
-      accessorKey: 'status',
-      header: 'Status',
-      Cell: ({ row, cell }) => {
-        const status = cell.getValue<string>() as keyof typeof PERIOD_STATUS_COLOR;
-        return (
-          <Group gap={4} wrap="nowrap">
-            <Badge color={PERIOD_STATUS_COLOR[status] ?? 'gray'}>
-              {status.charAt(0).toUpperCase() + status.slice(1)}
-            </Badge>
-            {row.original.approvalBadge && (
-              <Badge color="gray" variant="light" size="sm">{row.original.approvalBadge}</Badge>
-            )}
-            {reasonChip(row.original, currentUserId, userRole) && (
-              <Badge color="gray" variant="outline" size="sm" data-testid="reason-chip">{reasonChip(row.original, currentUserId, userRole)}</Badge>
-            )}
-          </Group>
-        );
-      },
-      size: 200,
-    },
-    {
-      accessorKey: 'submittedAt',
-      header: 'Submitted',
-      Cell: ({ cell }) => formatDateTime(cell.getValue<Date | null>(), workspaceTimezone),
-      size: 180,
-    },
-    {
-      id: 'flags',
-      header: 'Worth a look',
-      enableSorting: false,
-      accessorFn: (row) => (row.flags ? flagWords(row.flags).join(' ') : ''),
-      Cell: ({ row }) => {
-        const words = row.original.flags ? flagWords(row.original.flags) : [];
-        if (words.length === 0) return <Text size="sm" c="dimmed">Nothing unusual</Text>;
-        return (
-          <Group gap={4} wrap="wrap">
-            {words.map((w) => <Badge key={w} color="warning" variant="light" size="sm">{w}</Badge>)}
-          </Group>
-        );
-      },
-      size: 200,
-    },
-  ];
-
   const waitingCount = useMemo(() => rowsForView('waiting', periods).length, [periods]);
   // Memoized: a new data array on every render makes MRT re-render forever.
   const viewRows = useMemo(() => rowsForView(view, periods), [view, periods]);
-  const table = useAppTable({
+  const firstWaitingId = view === 'waiting' ? viewRows[0]?.id ?? null : null;
+
+  const columns = useMemo<MRT_ColumnDef<Period>[]>(() => {
+    const employee: MRT_ColumnDef<Period> = { id: 'employee', header: 'Employee', accessorFn: (r) => r.userName, Cell: ({ row }) => <Text fw={600} size="sm" span>{row.original.userName}</Text> };
+    const period: MRT_ColumnDef<Period> = { id: 'period', header: 'Pay period', accessorFn: (r) => periodOf(r) };
+    const submitted: MRT_ColumnDef<Period> = { id: 'submitted', header: 'Submitted', accessorFn: (r) => submittedDay(r.submittedAt) };
+    const status: MRT_ColumnDef<Period> = {
+      id: 'status', header: 'Status', accessorFn: (r) => r.status,
+      Cell: ({ row }) => {
+        const chip = reasonChip(row.original, currentUserId, userRole);
+        return (
+          <Group gap={6} wrap="nowrap">
+            <StatusBadge status={row.original.status} />
+            {chip && <Text size="xs" c="dimmed" data-testid="reason-chip">{chip}</Text>}
+          </Group>
+        );
+      },
+    };
+    if (view === 'waiting') {
+      return [
+        employee, period, submitted,
+        numericColumn<Period>({ id: 'hours', header: 'Hours', accessorFn: (r) => r.hours ?? null, Cell: ({ row }) => formatHours(row.original.hours ?? null) }),
+        {
+          id: 'flags', header: 'Worth a look', accessorFn: (r) => (r.flags ? flagWords(r.flags).join(' ') : ''),
+          // A4: only what matters; nothing at all when there's nothing unusual.
+          Cell: ({ row }) => {
+            const words = row.original.flags ? flagWords(row.original.flags) : [];
+            return words.length === 0 ? null : <span className={classes.flags}>{words.map((w) => <span key={w} className={classes.flag}>{w}</span>)}</span>;
+          },
+        },
+      ];
+    }
+    if (view === 'decided') {
+      return [
+        employee, period, status,
+        {
+          id: 'decidedBy', header: 'Decided by', accessorFn: (r) => r.decidedByName ?? '',
+          Cell: ({ row }) => (
+            <Group gap={6} wrap="nowrap">
+              <span>{row.original.decidedByName ?? '—'}</span>
+              {row.original.approvalUiBadge && <Text size="xs" c="dimmed" span>{row.original.approvalUiBadge}</Text>}
+            </Group>
+          ),
+        },
+        { id: 'decidedOn', header: 'Decided on', accessorFn: (r) => r.decidedAtText ?? '—' },
+      ];
+    }
+    return [employee, period, status, submitted];
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- submittedDay only reads workspaceTimezone
+  }, [view, currentUserId, userRole, workspaceTimezone]);
+
+  const table = useAppTable<Period>({
     columns,
     data: viewRows,
+    hairline: true,
+    compact: viewRows.length <= 25,
+    enableSorting: false,
+    // A3: Waiting keeps the compareWaiting order; the other views keep rowsForView's order (no client re-sort).
+    // The columns change with the view, so the order is set each time (MRT would keep the previous view's).
+    state: { sorting: [], columnOrder: [...columns.map((c) => c.id!), 'mrt-row-actions'] },
     enableRowActions: true,
-    // Review decides; View opens the drawer read-only (the existing decision gating still applies there).
-    renderRowActions: ({ row }) => (
-      <Button
-        size="xs"
-        variant="subtle"
-        leftSection={<Icons.view size={14} />}
-        onClick={() => openReview(row.original)}
-      >
-        {row.original.canApprove ? 'Review' : 'View'}
-      </Button>
-    ),
-    // Controlled sorting: a fixed initialState would override the per-view order.
-    state: { sorting, columnVisibility: { flags: view === 'waiting' } },
-    onSortingChange: setSorting,
-    localization: { noRecordsToDisplay: view === 'waiting' ? 'Nothing is waiting for you.' : 'Nothing here yet.' },
+    positionActionsColumn: 'last',
+    renderRowActions: ({ row }) => {
+      const review = row.original.canApprove;
+      return (
+        <Button
+          size="xs"
+          variant={review && row.original.id === firstWaitingId ? 'filled' : 'default'}
+          onClick={() => openReview(row.original)}
+        >
+          {review ? 'Review' : 'View'}
+        </Button>
+      );
+    },
+    emptyState: view === 'waiting'
+      ? { title: 'Nothing is waiting for you.', body: 'New timesheets appear here when employees submit.' }
+      : view === 'decided' ? { title: 'No decided timesheets yet.' } : { title: 'Nothing here yet.' },
   });
+
+  // §3.1.7: ?review= opens once (a ref survives StrictMode's double mount); the param leaves the URL through
+  // history.replaceState (router.replace would re-run the page on the server); state is set only after the read.
+  const deepLinked = useRef(false);
+  useEffect(() => {
+    if (!initialReviewId || deepLinked.current) return;
+    deepLinked.current = true;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('review');
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    const row = initialPeriods.find((p) => p.id === initialReviewId);
+    if (!row) {
+      toastError({ title: 'Timesheet not available', message: "That timesheet isn't available to you." });
+      return;
+    }
+    void (async () => {
+      try {
+        const data = await getTimesheetForReview(row.userId, row.periodStart);
+        setSelectedPeriod(row);
+        setReviewData(data);
+        setDrawerOpen(true);
+      } catch {
+        toastError({ title: 'Timesheet not available', message: "That timesheet isn't available to you." });
+      }
+    })();
+  }, [initialReviewId, initialPeriods]);
 
   // Build review table content
   let reviewContent = null;
@@ -415,11 +458,15 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
 
   return (
     <>
-      <PageHeader title="Timesheet Approvals" />
+      <PageHeader
+        title="Approvals"
+        description="Timesheets waiting for you come first, oldest pay period first."
+        notices={notices}
+      />
 
       {/* Scope sentence (supervisors): the people they can approve, never counted twice (UX-2 ruling). */}
       {userRole === 'supervisor' && scopeInfo && scopeInfo.approvableEmployeeCount + scopeInfo.designatedByCount > 0 && (
-        <Text size="sm" c="dimmed" mb="md" data-testid="scope-sentence">{scopeSentence(scopeInfo)}.</Text>
+        <Text size="sm" mb="md" data-testid="scope-sentence">{scopeSentence(scopeInfo)}.</Text>
       )}
 
       {/* Empty state for supervisors with nobody to review */}
@@ -435,6 +482,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
 
       <SegmentedControl
         mb="md"
+        fullWidth={narrow}
         value={view}
         onChange={(v) => changeView(v as ApprovalsView)}
         data={[
