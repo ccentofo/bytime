@@ -15,7 +15,8 @@ import { configAt, existingPeriodLength } from '@/server/internal/pay-period-con
 import { getPeriodStatusFor, type PeriodStatus } from '@/server/internal/periods';
 import { getWorkspaceTimezone, getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { canApprove, loadApprovalFacts } from '@/server/internal/approval-rules';
-import { approvalLabels } from '@/server/internal/approval-label';
+import { approvalLabel, approvalLabels, loadApprovalLabelData } from '@/server/internal/approval-label';
+import { flaggedCells, type CellChain, type CellRevision, type FlaggedCell, type LastReturn } from '@/lib/approvals/flagged-cells';
 import { getNumDaysInPeriod } from '@/lib/date-utils';
 import { addDays, diffDays, isAfter, isBefore, formatCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { ConflictError, UserFacingError } from '@/lib/errors';
@@ -478,6 +479,17 @@ export async function getTimesheetForReview(
   approvalText: string | null;
   /** UX-3 A4.3: the period's latest notes, read after submissionCount (C2 order). */
   notes: Record<string, { body: string; revision: number }>;
+  /** feature-plan-ux-approvals-payroll.md §3.1.5 (A10): the period row's id — null with no row (no decision then). */
+  periodId: string | null;
+  numDays: number;
+  submittedAt: string | null;
+  submittedComment: string | null;
+  /** A4: the corrected and late cells, with their revision history. */
+  flagged: FlaggedCell[];
+  /** The latest return (rejected event), when the period was submitted more than once. */
+  lastReturn: LastReturn | null;
+  /** approvalLabel's in-app line ("Returned by …") for a decided period, else null (A1). */
+  approvalUiText: string | null;
 }> {
   const actor = await requireSession();
   await assertCanAccessEmployee(actor, employeeId);
@@ -486,17 +498,28 @@ export async function getTimesheetForReview(
   const [period] = await db.select({
     id: timesheetPeriods.id, status: timesheetPeriods.status, submissionCount: timesheetPeriods.submissionCount,
     reviewedBy: timesheetPeriods.reviewedBy, reviewedAt: timesheetPeriods.reviewedAt,
+    periodNumDays: timesheetPeriods.periodNumDays, submittedAt: timesheetPeriods.submittedAt, submittedComment: timesheetPeriods.submittedComment,
   }).from(timesheetPeriods).where(and(eq(timesheetPeriods.userId, employeeId), eq(timesheetPeriods.periodStart, start)));
   // C4: the review shows every recorded hour (the same period code list as the employee's grid). UX-3 A4.3: notes are
   // read after submissionCount above, like the entries, so a note can't change unseen behind an approval.
-  const numDays = await periodLengthFor(employeeId, start);
+  // UX-4b Part 2 §3.1.5: the length comes from the row just read (its snapshot, else the schedule) and is passed down,
+  // so neither this read nor the entries read re-select the period.
+  const numDays = await existingPeriodLength(db, start, period?.periodNumDays);
   const latestNotes = await latestNotesInPeriod(db, employeeId, start, numDays);
   const codes = await getPeriodCodesForEmployee(employeeId, start, numDays, latestNotes);
-  const entries = await getTimesheetEntriesForEmployee(employeeId, start, codes);
+  const { entries, chains } = await readEntriesAndChains(employeeId, start, codes, numDays);
   const facts = await loadApprovalFacts(db);
-  const label = period
-    ? (await approvalLabels(db, [{ id: period.id, userId: employeeId, status: period.status, reviewedBy: period.reviewedBy, reviewedAt: period.reviewedAt }], await getWorkspaceTimezone())).get(period.id)
+  // approvalLabel's loader called directly (not approvalLabels), so the events it reads also give the last return.
+  const labelPeriod = period ? { id: period.id, userId: employeeId, status: period.status, reviewedBy: period.reviewedBy, reviewedAt: period.reviewedAt } : null;
+  const labelData = labelPeriod ? await loadApprovalLabelData(db, [labelPeriod]) : null;
+  const label = labelPeriod && labelData ? approvalLabel(labelPeriod, labelData.events, labelData.nameOf, await getWorkspaceTimezone()) : undefined;
+  // The latest return, from the events already loaded for the label (no extra query).
+  const ret = period && period.submissionCount > 1 && labelData
+    ? labelData.events.filter((e) => e.event === 'rejected').sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0]
     : undefined;
+  const lastReturn: LastReturn | null = ret && labelData
+    ? { comment: ret.comment ?? null, byName: ret.actorId ? labelData.nameOf(ret.actorId) : null, at: ret.createdAt.toISOString() }
+    : null;
   return {
     chargeCodes: codes,
     entries,
@@ -506,6 +529,13 @@ export async function getTimesheetForReview(
     approvalBadge: label?.badge ?? null,
     approvalText: label?.text ?? null,
     notes: notesMap(latestNotes),
+    periodId: period?.id ?? null,
+    numDays,
+    submittedAt: period?.submittedAt ? period.submittedAt.toISOString() : null,
+    submittedComment: period?.submittedComment ?? null,
+    flagged: flaggedCells(chains, lastReturn?.at ?? null, codes.map((c) => c.id)),
+    lastReturn,
+    approvalUiText: label?.uiText ?? null,
   };
 }
 
@@ -657,12 +687,27 @@ async function getPeriodCodesForEmployee(userId: string, start: CalendarDate, nu
 async function getTimesheetEntriesForEmployee(
   userId: string,
   periodStart: CalendarDate,
-  chargeCodes_param: ChargeCode[]
+  chargeCodes_param: ChargeCode[],
+  numDays?: number,
 ): Promise<TimesheetEntry[]> {
+  return (await readEntriesAndChains(userId, periodStart, chargeCodes_param, numDays)).entries;
+}
+
+/**
+ * The period's latest revision per cell (the grid's `TimesheetEntry[]`, unchanged for every caller) and — for the
+ * review only — every cell's revision chain (UX-4b Part 2 §3.1.5). `numDays` comes from a caller that already read the
+ * period; without it the length is resolved here (getTimesheetPeriod, getTimesheetEntries).
+ */
+async function readEntriesAndChains(
+  userId: string,
+  periodStart: CalendarDate,
+  chargeCodes_param: ChargeCode[],
+  knownNumDays?: number,
+): Promise<{ entries: TimesheetEntry[]; chains: CellChain[] }> {
   const db = await getDb();
   // D3/§0.6: the period's REAL length (this employee's snapshot, else the schedule). Non-throwing:
   // reading must work for any stored period, including imported history.
-  const numDays = await periodLengthFor(userId, periodStart);
+  const numDays = knownNumDays ?? await periodLengthFor(userId, periodStart);
   const endDateExclusive = addDays(periodStart, numDays);
 
   const rows = await db
@@ -676,6 +721,8 @@ async function getTimesheetEntriesForEmployee(
       // C1 display: provenance of the latest revision (imported rows are labelled in the grid and the review).
       source: timesheetEntries.source,
       changeReasonCode: timesheetEntries.changeReasonCode,
+      comment: timesheetEntries.comment,
+      createdAt: timesheetEntries.createdAt,
       originalMetadata: timesheetEntries.originalMetadata,
       importSourceSystem: importBatches.sourceSystem,
       importedAt: importBatches.importedAt,
@@ -696,14 +743,21 @@ async function getTimesheetEntriesForEmployee(
   // The cell identity matches COALESCE(charge_code_id, indirect_code_id, clin_id): a legacy CLIN-only row is keyed by
   // its CLIN, which never collides with a charge-code or indirect id.
   const latest = new Map<string, (typeof rows)[number]>();
+  const chainOf = new Map<string, CellChain>();
   for (const row of rows) {
     const dayIndex = diffDays(periodStart, row.entryDate as CalendarDate);
     const entryId = row.chargeCodeId ?? row.indirectCodeId ?? row.clinId ?? '';
     const key = `${entryId}-${dayIndex}`;
     if (!latest.has(key)) latest.set(key, row);
+    const chain = chainOf.get(key) ?? { rowId: entryId, dayIndex, revisions: [] as CellRevision[] };
+    chain.revisions.push({
+      revision: row.revisionNumber, hours: parseFloat(row.hours), reasonCode: row.changeReasonCode ?? null, comment: row.comment ?? null,
+      createdAt: row.createdAt.toISOString(), source: row.source,
+    });
+    chainOf.set(key, chain);
   }
 
-  return chargeCodes_param.map((cc) => {
+  const entries = chargeCodes_param.map((cc) => {
     const hours: number[] = [];
     const provenance: Array<string | null> = [];
     for (let i = 0; i < numDays; i++) {
@@ -713,4 +767,6 @@ async function getTimesheetEntriesForEmployee(
     }
     return provenance.some(Boolean) ? { chargeCodeId: cc.id, hours, provenance } : { chargeCodeId: cc.id, hours };
   });
+  const chains = [...chainOf.values()].map((c) => ({ ...c, revisions: c.revisions.sort((a, b) => a.revision - b.revision) }));
+  return { entries, chains };
 }

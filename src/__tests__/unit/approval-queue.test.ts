@@ -1,16 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { PgDialect } from 'drizzle-orm/pg-core';
-import { sql, type SQL } from 'drizzle-orm';
 
 /**
  * UX-2 fix round 1 (L6, L7): the sidebar's getWaitingCount skips the oldest-period label (no schedule lookup on every
- * page); the queue orders by submission (never-stamped last), then period start, so ties are stable.
+ * page). feature-plan-ux-approvals-payroll.md A3 / A-1: no SQL ORDER BY any more — the queue sorts with compareWaiting
+ * (period, then submission with never-stamped last, then name, then id), the list's own order.
  */
 
 vi.mock('server-only', () => ({}));
-const h = vi.hoisted(() => ({ orderBy: [] as unknown[], rows: [] as Array<Record<string, unknown>> }));
+const h = vi.hoisted(() => ({ rows: [] as Array<Record<string, unknown>> }));
 const fakeDb = {
-  select: () => ({ from: () => ({ innerJoin: () => ({ where: () => ({ orderBy: async (...args: unknown[]) => { h.orderBy = args; return h.rows; } }) }) }) }),
+  // No .orderBy in the chain: a SQL sort would throw here (A3 — the order is JS's).
+  select: () => ({ from: () => ({ innerJoin: () => ({ where: async () => h.rows }) }) }),
 };
 vi.mock('@/db', () => ({ getDb: async () => fakeDb }));
 vi.mock('@/server/internal/approval-rules', () => ({ loadApprovalFacts: async () => ({}), canApprove: () => true }));
@@ -24,7 +24,7 @@ const ROWS = [
   { id: 'p2', userId: 'u2', periodStart: '2026-10-01', periodNumDays: null, submittedAt: new Date('2026-10-02T10:00:00Z'), fullName: 'Bob' },
 ];
 
-beforeEach(() => { vi.clearAllMocks(); h.rows = ROWS; h.orderBy = []; });
+beforeEach(() => { vi.clearAllMocks(); h.rows = ROWS; });
 
 describe('approval queue — label and order (L6, L7)', () => {
   it('L6: getWaitingCount returns the count without building the label (no schedule lookup)', async () => {
@@ -39,9 +39,15 @@ describe('approval queue — label and order (L6, L7)', () => {
     expect(existingPeriodLength).toHaveBeenCalledTimes(1);
   });
 
-  it('L7: ORDER BY submitted_at ASC NULLS LAST, then period_start ASC', async () => {
-    await approvalQueue(fakeDb as never, 'a', {} as never);
-    const text = new PgDialect().sqlToQuery(sql.join(h.orderBy.map((a) => sql`${a as SQL}`), sql`, `)).sql;
-    expect(text).toBe('"timesheet_periods"."submitted_at" ASC NULLS LAST, "timesheet_periods"."period_start" asc');
+  it('A-1: rows come back in compareWaiting order — period first, even when submission order differs', async () => {
+    h.rows = [
+      { id: 'p3', userId: 'u3', periodStart: '2026-10-01', periodNumDays: 16, submittedAt: new Date('2026-10-17T10:00:00Z'), fullName: 'Cy' },
+      { id: 'p4', userId: 'u4', periodStart: '2026-09-16', periodNumDays: 15, submittedAt: new Date('2026-10-20T10:00:00Z'), fullName: 'Di' },  // submitted last, oldest period
+      { id: 'p5', userId: 'u5', periodStart: '2026-10-01', periodNumDays: 16, submittedAt: null, fullName: 'Al' },
+      { id: 'p6', userId: 'u6', periodStart: '2026-10-01', periodNumDays: 16, submittedAt: new Date('2026-10-17T10:00:00Z'), fullName: 'bea' },
+    ];
+    const q = await approvalQueue(fakeDb as never, 'a', {} as never);
+    expect(q.names).toEqual(['Di', 'bea', 'Cy', 'Al']);
+    expect(q.oldestPeriodLabel).toBe('Sep 16 – Sep 30, 2026');
   });
 });
