@@ -167,6 +167,22 @@ describe('the P-5 fixture (companion to integration/payroll-p5-fixture.ts, UX-4B
   });
 });
 
+describe('a stored row\'s own length, not the snapped one (UX-4B2-AUDIT.md F2-1)', () => {
+  it('an approved row from Feb 3 with no stored length covers Feb 3 – 15 (13 days), so Feb 16 is not approved', async () => {
+    script({
+      entries: [work('f', '2026-02-16', '8.00')],
+      people: [person('f', 'Fay Feb')],
+      periods: [row('p-f', 'f', 'approved', { periodStart: '2026-02-03', periodNumDays: null })],
+    });
+    const data = await loadPayrollData(db as never, d('2026-02-01'), d('2026-02-28'));
+    // Its own length is 28 − 15 = 13 days; the snapped period's (15) would reach Feb 17 and approve Feb 16.
+    expect(data.days.filter((x) => x.userId === 'f').map((x) => x.date)).not.toContain('2026-02-16');
+    expect(data.notIncluded.map((n) => [n.employeeName, n.status, n.periodId, n.periodStart, n.periodEnd, n.hoursInRange])).toEqual([
+      ['Fay Feb', 'draft', null, '2026-02-16', '2026-02-28', 8],
+    ]);
+  });
+});
+
 describe('preview totals (P-2 companion)', () => {
   it('integer-cent sums (0.10 + 0.20 = 0.30 exactly); paid leave excludes unpaid; exempt overtime 0', async () => {
     script({
