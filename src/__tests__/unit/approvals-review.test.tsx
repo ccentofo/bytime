@@ -311,6 +311,61 @@ describe('the kept grid (fix round 1, M1)', () => {
   });
 });
 
+describe('focus and announcements (fix round 1, M2)', () => {
+  const heading = () => dialog()!.querySelector('[data-testid="review-heading"]') as HTMLElement;
+
+  it('the heading is a focusable h2 naming the dialog', async () => {
+    await render();
+    await openRow('Ann Adams');
+    expect(heading().tagName).toBe('H2');
+    expect(heading().getAttribute('tabindex')).toBe('-1');
+    expect(document.getElementById(dialog()!.getAttribute('aria-labelledby')!)).toBe(heading());
+    expect(dialog()!.querySelector('[data-testid="review-announcement"]')!.textContent).toBe('');
+  });
+
+  it('approve with open next: focus moves to the heading before the read, the live region speaks once the review is ready', async () => {
+    await render();
+    await openRow('Ann Adams');
+    actions.getScopedPeriods.mockResolvedValueOnce([{ ...A, status: 'approved', canApprove: false }, B, C, D]);
+    const pending = deferred<unknown>();
+    actions.getTimesheetForReview.mockImplementationOnce(() => pending.promise);
+    inDialog('Approve')!.focus();
+    await click(inDialog('Approve'));
+    await wait(40);
+    expect(document.activeElement).toBe(heading());
+    const live = dialog()!.querySelector('[data-testid="review-announcement"]')!;
+    expect(live.getAttribute('aria-live')).toBe('polite');
+    expect(live.textContent).toBe('');                                          // not before the review is ready
+    await act(async () => { pending.resolve(reviews['u-b']()); });
+    await wait(20);
+    expect(heading().textContent).toBe('Bea Brown · Oct 1 – 15, 2026');
+    expect(document.activeElement).toBe(heading());
+    expect(live.textContent).toBe('Opened Bea Brown, 1 of 2 waiting');
+  });
+
+  it('Next announces the place in the list once ready', async () => {
+    await render();
+    await openRow('Ann Adams');
+    await click(byLabel('Next waiting timesheet'));
+    await wait(20);
+    expect(dialog()!.querySelector('[data-testid="review-announcement"]')!.textContent).toBe('Opened Bea Brown, 2 of 3 waiting');
+  });
+
+  it('Retry keeps focus inside the Drawer (on the heading)', async () => {
+    await render();
+    await openRow('Ann Adams');
+    actions.getTimesheetForReview.mockRejectedValueOnce(new Error('boom'));
+    await click(byLabel('Next waiting timesheet'));
+    await wait(20);
+    const retry = [...dialog()!.querySelectorAll('[data-testid="review-read-error"] button')].find((b) => b.textContent === 'Retry') as HTMLButtonElement;
+    retry.focus();
+    await click(retry);
+    await wait(20);
+    expect(document.activeElement).toBe(heading());
+    expect(dialog()!.contains(document.activeElement)).toBe(true);
+  });
+});
+
 describe('open next (A-9)', () => {
   it('after approving, the list is refetched and the next waiting id in the snapshot opens (not the decided one)', async () => {
     await render();

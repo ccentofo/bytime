@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { Alert, Button, Drawer, Group, List, Paper, SegmentedControl, Stack, Text } from '@mantine/core';
+import { Alert, Button, Drawer, Group, List, Paper, SegmentedControl, Stack, Text, VisuallyHidden } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable, numericColumn } from '@/components/table/mrtDefaults';
@@ -196,6 +196,10 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
   const [openNext, setOpenNext] = useState(true);
   const readToken = useRef(0);
   const commentRef = useRef<HTMLTextAreaElement>(null);
+  /** The Drawer's heading: focus lands here when the focused button unmounts (open next, Retry — fix round 1, M2). */
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  /** The Drawer's polite live region: "Opened {employee}, {i} of {n} waiting" once a stepped-to review is ready. */
+  const [announcement, setAnnouncement] = useState('');
   /** Where focus goes once the Drawer has closed (returnFocus is off; onExitTransitionEnd applies it). */
   const focusAfterClose = useRef<{ kind: 'heading' } | { kind: 'row'; index: number } | null>(null);
 
@@ -207,11 +211,13 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
 
   /**
    * Load `row`'s review. A response for an older request is dropped before any setState (request token). Previous /
-   * Next and "open next" keep the last grid visible while loading (`keepGrid`); opening from the list starts clean.
+   * Next and "open next" keep the last grid visible while loading (`keepGrid`) and pass the row's place in the Waiting
+   * list, announced once the review is ready; opening from the list starts clean.
    */
-  async function loadReview(row: Period, keepGrid = false) {
+  async function loadReview(row: Period, keepGrid = false, position?: { i: number; n: number }) {
     const token = ++readToken.current;
     if (!keepGrid) setGrid(null);
+    setAnnouncement('');
     setCurrent(row);
     setReviewData(null);
     setReadError(null);
@@ -224,6 +230,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
       if (token !== readToken.current) return;
       setReviewData(data);
       setGrid(gridOf(row, data));
+      if (position) setAnnouncement(`Opened ${row.userName}, ${position.i} of ${position.n} waiting`);
     } catch {
       if (token !== readToken.current) return;
       setGrid(null); // only the error and Retry — never another person's grid (M1)
@@ -255,7 +262,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
   function step(delta: -1 | 1) {
     if (busy.any() || !navigable) return; // never move while a decision runs
     const next = waitingRows[navIndex + delta];
-    if (next) void loadReview(next, true);
+    if (next) void loadReview(next, true, { i: navIndex + delta + 1, n: waitingRows.length });
   }
 
   // A10: the card renders only for the review that is on screen — same object for the period id and the version seen.
@@ -301,7 +308,11 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
       }
       const after = snapshot.slice(at + 1).map((id) => stillWaiting.find((r) => r.id === id)).find(Boolean);
       const next = after ?? stillWaiting[0];
-      if (next) { void loadReview(next, true); return; }
+      if (next) {
+        headingRef.current?.focus(); // before the focused button unmounts (M2)
+        void loadReview(next, true, { i: stillWaiting.indexOf(next) + 1, n: stillWaiting.length });
+        return;
+      }
       focusAfterClose.current = { kind: 'heading' };
       setDrawerOpen(false);
     }, { group: 'decision' });
@@ -432,7 +443,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
       return (
         <Alert color="red" role="alert" data-testid="review-read-error">
           {readError}{' '}
-          <Button size="compact-sm" variant="default" ml="xs" onClick={() => { if (current) void loadReview(current); }}>Retry</Button>
+          <Button size="compact-sm" variant="default" ml="xs" onClick={() => { headingRef.current?.focus(); void loadReview(current); }}>Retry</Button>
         </Alert>
       );
     }
@@ -516,7 +527,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
 
       <MantineReactTable table={table} />
 
-      <Drawer
+      <Drawer.Root
         opened={drawerOpen}
         onClose={closeDrawer}
         onExitTransitionEnd={applyCloseFocus}
@@ -525,93 +536,105 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         closeOnClickOutside={!busy.any()}
         position="right"
         size={phone ? '100%' : 'xl'}
-        title={current ? `${current.userName} · ${periodOf(current)}` : ''}
       >
-        {current && (
-          <Stack gap="md">
-            <Group justify="space-between" align="center" wrap="wrap" gap="xs">
-              <Group gap={6} data-testid="review-header">
-                <Text size="sm">Submitted {submittedDay(current.submittedAt)}</Text>
-                {totalHours !== null && <Text size="sm">· {formatHours(totalHours)} hours ·</Text>}
-                <StatusBadge status={current.status} />
-              </Group>
-              {navigable && (
-                <Group gap="xs" data-testid="review-nav">
-                  <Text size="sm" c="dimmed">{navIndex + 1} of {waitingRows.length} waiting</Text>
-                  <Button size="xs" variant="default" aria-label="Previous waiting timesheet"
-                    aria-disabled={navIndex === 0 || busy.any() || undefined} data-disabled={navIndex === 0 || busy.any() || undefined}
-                    onClick={() => step(-1)}>‹ Previous</Button>
-                  <Button size="xs" variant="default" aria-label="Next waiting timesheet"
-                    aria-disabled={navIndex === waitingRows.length - 1 || busy.any() || undefined} data-disabled={navIndex === waitingRows.length - 1 || busy.any() || undefined}
-                    onClick={() => step(1)}>Next ›</Button>
+        <Drawer.Overlay />
+        <Drawer.Content>
+          <Drawer.Header>
+            {/* The dialog's name, and the focus target when the focused button goes away (M2). */}
+            <Drawer.Title ref={headingRef} tabIndex={-1} data-testid="review-heading">
+              {current ? `${current.userName} · ${periodOf(current)}` : ''}
+            </Drawer.Title>
+            <Drawer.CloseButton aria-label="Close" />
+          </Drawer.Header>
+          <Drawer.Body>
+            <VisuallyHidden role="status" aria-live="polite" data-testid="review-announcement">{announcement}</VisuallyHidden>
+            {current && (
+              <Stack gap="md">
+                <Group justify="space-between" align="center" wrap="wrap" gap="xs">
+                  <Group gap={6} data-testid="review-header">
+                    <Text size="sm">Submitted {submittedDay(current.submittedAt)}</Text>
+                    {totalHours !== null && <Text size="sm">· {formatHours(totalHours)} hours ·</Text>}
+                    <StatusBadge status={current.status} />
+                  </Group>
+                  {navigable && (
+                    <Group gap="xs" data-testid="review-nav">
+                      <Text size="sm" c="dimmed">{navIndex + 1} of {waitingRows.length} waiting</Text>
+                      <Button size="xs" variant="default" aria-label="Previous waiting timesheet"
+                        aria-disabled={navIndex === 0 || busy.any() || undefined} data-disabled={navIndex === 0 || busy.any() || undefined}
+                        onClick={() => step(-1)}>‹ Previous</Button>
+                      <Button size="xs" variant="default" aria-label="Next waiting timesheet"
+                        aria-disabled={navIndex === waitingRows.length - 1 || busy.any() || undefined} data-disabled={navIndex === waitingRows.length - 1 || busy.any() || undefined}
+                        onClick={() => step(1)}>Next ›</Button>
+                    </Group>
+                  )}
                 </Group>
-              )}
-            </Group>
 
-            {/* The last loaded grid (Previous / Next keep it visible until the next one arrives), captioned as ITS
-                employee's — and, while kept, marked busy and dimmed with a visible line saying whose it is (M1). */}
-            {grid && (
-              <div aria-busy={keptGrid || undefined} data-testid="review-grid">
-                {keptGrid && <Text size="sm" c="dimmed" data-testid="review-grid-kept">Showing {grid.employeeName} until this loads</Text>}
-                <ReviewGrid
-                  chargeCodes={grid.data.chargeCodes}
-                  entries={grid.data.entries}
-                  start={grid.start}
-                  numDays={grid.numDays}
-                  flagged={grid.data.flagged ?? []}
-                  notes={grid.data.notes ?? {}}
-                  caption={`Hours for ${grid.employeeName}, ${grid.periodText}`}
-                  dimmed={keptGrid}
-                />
-              </div>
+                {/* The last loaded grid (Previous / Next keep it visible until the next one arrives), captioned as ITS
+                    employee's — and, while kept, marked busy and dimmed with a visible line saying whose it is (M1). */}
+                {grid && (
+                  <div aria-busy={keptGrid || undefined} data-testid="review-grid">
+                    {keptGrid && <Text size="sm" c="dimmed" data-testid="review-grid-kept">Showing {grid.employeeName} until this loads</Text>}
+                    <ReviewGrid
+                      chargeCodes={grid.data.chargeCodes}
+                      entries={grid.data.entries}
+                      start={grid.start}
+                      numDays={grid.numDays}
+                      flagged={grid.data.flagged ?? []}
+                      notes={grid.data.notes ?? {}}
+                      caption={`Hours for ${grid.employeeName}, ${grid.periodText}`}
+                      dimmed={keptGrid}
+                    />
+                  </div>
+                )}
+
+                <div className={classes.cards}>
+                  <Paper withBorder radius="md" p="md" data-testid="worth-a-look">
+                    <Text component="h3" fw={600} size="sm" m={0} mb="xs">Worth a look{reviewReady ? ` (${worthCount})` : ''}</Text>
+                    {reviewReady ? (
+                      <Stack gap="xs">
+                        {lastReturn && (
+                          <Text size="sm" data-testid="last-return">
+                            Returned {dayOf(lastReturn.at)} by {lastReturn.byName ?? 'an unknown user'}: “{lastReturn.comment ?? ''}”
+                          </Text>
+                        )}
+                        {flagged.map((f) => (
+                          <div key={`${f.rowId}-${f.dayIndex}`} data-testid="flagged-change">
+                            <Text size="sm">
+                              <b>{formatCalendarDate(addDays(current.periodStart, f.dayIndex), 'ddd MMM D')} · {rowName(f.rowId, reviewData!.chargeCodes)}</b>:{' '}
+                              {f.kind === 'late'
+                                ? `${formatHours(f.current.hours)}, entered ${dayOf(f.current.createdAt)}`
+                                : `${formatHours(f.previousHours ?? 0)} → ${formatHours(f.current.hours)}`}
+                              {f.sinceReturned && <span className={classes.tag}>Since returned</span>}
+                            </Text>
+                            <Text size="xs" c="dimmed">
+                              {[reasonLabel(f.current.reasonCode), f.current.comment ? `“${f.current.comment}”` : null,
+                                f.kind === 'correction' ? `changed ${dayOf(f.current.createdAt)}` : null,
+                                f.originallyLate ? 'originally entered late' : null].filter(Boolean).join(' · ')}
+                            </Text>
+                          </div>
+                        ))}
+                        {reviewData!.submittedComment && <Text size="sm" data-testid="submit-note">Submit note: “{reviewData!.submittedComment}”</Text>}
+                        {flagged.length === 0 && !lastReturn && <Text size="sm" c="dimmed">Nothing unusual in this timesheet.</Text>}
+                      </Stack>
+                    ) : null}
+                  </Paper>
+
+                  <Paper withBorder radius="md" p="md">
+                    <Text component="h3" fw={600} size="sm" m={0} mb="xs" id="review-notes-heading">Notes{reviewReady ? ` (${noteLines.length})` : ''}</Text>
+                    {noteLines.length > 0 ? (
+                      <List size="sm" spacing={4} aria-labelledby="review-notes-heading" data-testid="review-notes">
+                        {noteLines.map((n) => <List.Item key={n.key}>{n.text}</List.Item>)}
+                      </List>
+                    ) : reviewReady ? <Text size="sm" c="dimmed">No notes.</Text> : null}
+                  </Paper>
+
+                  <div data-testid="decision-area">{decisionArea()}</div>
+                </div>
+              </Stack>
             )}
-
-            <div className={classes.cards}>
-              <Paper withBorder radius="md" p="md" data-testid="worth-a-look">
-                <Text component="h3" fw={600} size="sm" m={0} mb="xs">Worth a look{reviewReady ? ` (${worthCount})` : ''}</Text>
-                {reviewReady ? (
-                  <Stack gap="xs">
-                    {lastReturn && (
-                      <Text size="sm" data-testid="last-return">
-                        Returned {dayOf(lastReturn.at)} by {lastReturn.byName ?? 'an unknown user'}: “{lastReturn.comment ?? ''}”
-                      </Text>
-                    )}
-                    {flagged.map((f) => (
-                      <div key={`${f.rowId}-${f.dayIndex}`} data-testid="flagged-change">
-                        <Text size="sm">
-                          <b>{formatCalendarDate(addDays(current.periodStart, f.dayIndex), 'ddd MMM D')} · {rowName(f.rowId, reviewData!.chargeCodes)}</b>:{' '}
-                          {f.kind === 'late'
-                            ? `${formatHours(f.current.hours)}, entered ${dayOf(f.current.createdAt)}`
-                            : `${formatHours(f.previousHours ?? 0)} → ${formatHours(f.current.hours)}`}
-                          {f.sinceReturned && <span className={classes.tag}>Since returned</span>}
-                        </Text>
-                        <Text size="xs" c="dimmed">
-                          {[reasonLabel(f.current.reasonCode), f.current.comment ? `“${f.current.comment}”` : null,
-                            f.kind === 'correction' ? `changed ${dayOf(f.current.createdAt)}` : null,
-                            f.originallyLate ? 'originally entered late' : null].filter(Boolean).join(' · ')}
-                        </Text>
-                      </div>
-                    ))}
-                    {reviewData!.submittedComment && <Text size="sm" data-testid="submit-note">Submit note: “{reviewData!.submittedComment}”</Text>}
-                    {flagged.length === 0 && !lastReturn && <Text size="sm" c="dimmed">Nothing unusual in this timesheet.</Text>}
-                  </Stack>
-                ) : null}
-              </Paper>
-
-              <Paper withBorder radius="md" p="md">
-                <Text component="h3" fw={600} size="sm" m={0} mb="xs" id="review-notes-heading">Notes{reviewReady ? ` (${noteLines.length})` : ''}</Text>
-                {noteLines.length > 0 ? (
-                  <List size="sm" spacing={4} aria-labelledby="review-notes-heading" data-testid="review-notes">
-                    {noteLines.map((n) => <List.Item key={n.key}>{n.text}</List.Item>)}
-                  </List>
-                ) : reviewReady ? <Text size="sm" c="dimmed">No notes.</Text> : null}
-              </Paper>
-
-              <div data-testid="decision-area">{decisionArea()}</div>
-            </div>
-          </Stack>
-        )}
-      </Drawer>
+          </Drawer.Body>
+        </Drawer.Content>
+      </Drawer.Root>
     </>
   );
 }
