@@ -1,5 +1,5 @@
 import 'server-only';
-import { and, asc, isNotNull, sql } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import type { ReadDb } from '@/db';
 import { clins, contracts, timesheetEntries } from '@/db/schema';
 import { COST_BASIS_LATERAL, COST_LC_ON, costLaborCategory, LATEST_REVISION, pricedCostSum, unpricedHoursSum } from './cost-basis';
@@ -9,26 +9,34 @@ type Reader = Pick<ReadDb, 'select'>;
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
- * Priced cost and unpriced hours per CLIN (latest revisions, the one cost-basis resolution), each ROUNDED TO THE CENT
- * PER CLIN. The single source for contract money on the Dashboard (getContractSummaries) and Home (contractBurnSummary)
+ * Priced cost, unpriced hours and total hours per CLIN (latest revisions, the one cost-basis resolution), each ROUNDED
+ * TO THE CENT PER CLIN. The single source for contract money on Contracts (getContractsOverview) and Home (contractBurnSummary)
  * — feature-plan-ux-navigation-home.md §4.5: shared so the two can't drift.
  */
-export async function clinCostTotals(db: Reader): Promise<Map<string, { cost: number; unpricedHours: number }>> {
+export async function clinCostTotals(db: Reader): Promise<Map<string, { cost: number; unpricedHours: number; totalHours: number }>> {
   const rows = await db
-    .select({ clinId: timesheetEntries.clinId, totalCost: pricedCostSum, unpricedHours: unpricedHoursSum })
+    .select({
+      clinId: timesheetEntries.clinId,
+      totalCost: pricedCostSum,
+      unpricedHours: unpricedHoursSum,
+      // feature-plan-ux-kit-contracts.md §4.1 (additive): all latest-revision hours on the CLIN, priced or not.
+      totalHours: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
+    })
     .from(timesheetEntries)
+    // Inner-joined, so indirect and leave entries (no CLIN) are never counted (UX-4b §2).
+    .innerJoin(clins, eq(timesheetEntries.clinId, clins.id))
     .leftJoinLateral(COST_BASIS_LATERAL, sql`true`)
     .leftJoin(costLaborCategory, COST_LC_ON)
-    .where(and(isNotNull(timesheetEntries.clinId), LATEST_REVISION))
+    .where(LATEST_REVISION)
     .groupBy(timesheetEntries.clinId);
-  const out = new Map<string, { cost: number; unpricedHours: number }>();
+  const out = new Map<string, { cost: number; unpricedHours: number; totalHours: number }>();
   for (const r of rows) {
-    if (r.clinId) out.set(r.clinId, { cost: round2(Number(r.totalCost)), unpricedHours: round2(Number(r.unpricedHours)) });
+    if (r.clinId) out.set(r.clinId, { cost: round2(Number(r.totalCost)), unpricedHours: round2(Number(r.unpricedHours)), totalHours: round2(Number(r.totalHours)) });
   }
   return out;
 }
 
-/** A contract's total from its (already per-CLIN-rounded) CLIN values: summed, then rounded — as the Dashboard does. */
+/** A contract's total from its (already per-CLIN-rounded) CLIN values: summed, then rounded (Contracts and Home). */
 export function sumRounded(values: number[]): number {
   return round2(values.reduce((s, v) => s + v, 0));
 }

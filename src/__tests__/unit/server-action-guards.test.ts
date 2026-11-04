@@ -134,10 +134,7 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
   'contracts.ts': {
     getContracts: 'reads contracts; no write',
     getContractById: 'reads one contract; no write',
-  },
-  'dashboard.ts': {
-    getContractSummaries: 'aggregates hours/cost per contract; read-only queries',
-    getPeriodCostReport: 'aggregates a period\'s cost; read-only queries',
+    getContractsOverview: 'UX-4b §4.1: reads the contract hierarchy with its money (internal/contracts-overview); no write',
   },
   'gusto.ts': { getBytimeEmployeesForGustoMapping: 'reads active employees for the mapping UI; no token refresh, no write' },
   'indirect-codes.ts': {
@@ -156,14 +153,17 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getAssignableLaborCategories: 'reads assignable labor categories; no write',
     getLaborCategoriesByClin: 'reads a CLIN\'s labor categories; no write',
     getUserLaborCategoryAssignments: 'reads one user\'s LCAT assignments; no write',
-    getUnpricedHoursReport: 'certified-outputs C3: reads unpriced entries via cost-basis.ts; no write',
-    getOverlappingAssignmentsReport: 'certified-outputs C3: reads overlapping assignments via cost-basis.ts; no write',
+    getUnpricedReport: 'UX-4b §4.4: reads the grouped unpriced report via cost-basis.ts; no write',
+    getUnpricedSummary: 'UX-4b §4.4: reads the unpriced totals via cost-basis.ts; no write',
+    getLaborCategoryPeopleCounts: 'UX-4b §4.2: one grouped COUNT(DISTINCT user_id) read; no write',
+    getUnpricedExportData: 'UX-4b §4.4.8: reads the unpriced groups, pairs and entries for the Excel download; no write',
   },
   'pay-period-config.ts': {
     getConfigHistory: 'reads schedule history; no write',
     getPendingConfigChange: 'reads the pending schedule change; no write',
     getValidScheduleChangeDates: 'computes valid change dates from reads; no write',
   },
+  'periods.ts': { resolvePeriodRange: 'UX-4b §3.8: contractToDate reads the contract start date / earliest entry; no write' },
   'payroll-export.ts': {
     getPayrollExportPreview: 'reads approved entries (getApprovedEntriesForSync is read-only); no write',
     generatePayrollExportCSV: 'builds a CSV from read-only approved entries; no write',
@@ -173,7 +173,10 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getBytimeContractsForMapping: 'reads active contracts; no token refresh, no write',
     getBytimeClinsForMapping: 'reads active CLINs; no token refresh, no write',
   },
-  'reports.ts': { getDetailedCostReport: 'reads cost report rows via the read-only internal reader; no write' },
+  'reports.ts': {
+    getDetailedCostReport: 'reads cost report rows via the read-only internal reader; no write',
+    getPeriodCostByPeriod: 'UX-4b §4.5: one grouped cost read over the last N completed periods; no write',
+  },
   'setup.ts': {
     getSetupStatus: 'reads setup-checklist counts; no write',
     getSetupAccessGaps: 'feature-plan-ux-page-fixes.md C17: reads who has no chargeable code; no write',

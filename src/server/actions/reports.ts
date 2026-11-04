@@ -15,10 +15,12 @@ import {
 } from '@/db/schema';
 import { alias } from 'drizzle-orm/pg-core';
 import { eq, and, gte, lt, sql, inArray } from 'drizzle-orm';
-import { existingPeriodLength } from '@/server/internal/pay-period-config';
+import { existingPeriodLength, lastCompletedPeriods } from '@/server/internal/pay-period-config';
+import { sumRounded } from '@/server/internal/dashboard';
 import { approvalLabels } from '@/server/internal/approval-label';
-import { COST_BASIS_LATERAL, COST_LC_ON, costLaborCategory, pricedCostSum, unpricedHoursSum } from '@/server/internal/cost-basis';
-import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
+import { COST_BASIS_LATERAL, COST_LC_ON, LATEST_REVISION, costLaborCategory, pricedCostSum, unpricedHoursSum } from '@/server/internal/cost-basis';
+import { getWorkspaceTimezone, getWorkspaceToday } from '@/server/internal/workspace-settings';
+import { UserFacingError } from '@/lib/errors';
 import { requireSession, requireAdmin, requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
 import { getDetailedCostReportData, type CostReportEntry } from '@/server/internal/reports';
 import { addDays, diffDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -319,16 +321,116 @@ export async function getReportFilterOptions() {
 
   const allContracts = scope === 'all'
     ? await db
-        .select({ id: contracts.id, name: contracts.name, contractNumber: contracts.contractNumber })
+        .select({ id: contracts.id, name: contracts.name, contractNumber: contracts.contractNumber, startDate: contracts.startDate })
         .from(contracts)
         .orderBy(contracts.name)
     : await db
-        .selectDistinct({ id: contracts.id, name: contracts.name, contractNumber: contracts.contractNumber })
+        .selectDistinct({ id: contracts.id, name: contracts.name, contractNumber: contracts.contractNumber, startDate: contracts.startDate })
         .from(userAssignments)
         .innerJoin(clins, eq(userAssignments.clinId, clins.id))
         .innerJoin(contracts, eq(clins.contractId, contracts.id))
         .where(and(eq(userAssignments.userId, actor.id), eq(userAssignments.isActive, true)))
         .orderBy(contracts.name);
 
-  return { users: allUsers, contracts: allContracts };
+  // feature-plan-ux-kit-contracts.md §4.5 (additive): startDate labels the "Contract to date" preset.
+  return { users: allUsers, contracts: allContracts.map((c) => ({ ...c, startDate: (c.startDate ?? null) as CalendarDate | null })) };
+}
+
+// ---------------------------------------------------------------------------
+// Cost by pay period (feature-plan-ux-kit-contracts.md §4.5, R3)
+// ---------------------------------------------------------------------------
+
+export interface PeriodCostRow {
+  periodStart: CalendarDate;
+  periodEnd: CalendarDate;
+  contractId: string;
+  contractName: string;
+  contractNumber: string;
+  hours: number;
+  /** PRICED cost only (CO-D10/CO-D17). */
+  pricedCost: number;
+  unpricedHours: number;
+}
+
+export interface PeriodCostReport {
+  /** The last N completed periods, oldest first. */
+  periods: Array<{ start: CalendarDate; end: CalendarDate }>;
+  /** One row per period × contract with hours, in period then contract-name order. */
+  rows: PeriodCostRow[];
+}
+
+const PERIOD_COST_N = new Set([3, 6, 12]);
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Hours, priced cost and unpriced hours per pay period × contract for the last N COMPLETED periods (n ∈ {3, 6, 12};
+ * admin only — dollar data). One query: latest revisions × the cost basis, inner-joining CLINs (direct time only),
+ * grouped by CLIN, contract and day within the periods' range. In memory: each day falls into its period (each period
+ * resolved under its own schedule, so a schedule change buckets correctly), sums stay unrounded per CLIN per period,
+ * then are rounded to the cent per CLIN and summed per contract (sumRounded) — the Contracts page's rounding rule.
+ */
+export async function getPeriodCostByPeriod(n: number): Promise<PeriodCostReport> {
+  await requireAdmin();
+  if (!PERIOD_COST_N.has(n)) throw new UserFacingError('Choose 3, 6 or 12 pay periods.');
+  const db = await getDb();
+  const resolved = await lastCompletedPeriods(db, n, await getWorkspaceToday());
+  const periods = resolved.map((p) => ({ start: p.start, end: addDays(p.start, p.numDays - 1) }));
+  const first = periods[0].start;
+  const endExclusive = addDays(periods[periods.length - 1].end, 1);
+
+  const rows = await db
+    .select({
+      clinId: timesheetEntries.clinId,
+      contractId: contracts.id,
+      contractName: contracts.name,
+      contractNumber: contracts.contractNumber,
+      entryDate: timesheetEntries.entryDate,
+      hours: sql<number>`COALESCE(SUM(CAST(${timesheetEntries.hours} AS NUMERIC)), 0)`,
+      pricedCost: pricedCostSum,
+      unpricedHours: unpricedHoursSum,
+    })
+    .from(timesheetEntries)
+    // Inner-joined, so indirect and leave entries (no CLIN) are never counted (UX-4b §2).
+    .innerJoin(clins, eq(timesheetEntries.clinId, clins.id))
+    .innerJoin(contracts, eq(clins.contractId, contracts.id))
+    .leftJoinLateral(COST_BASIS_LATERAL, sql`true`)
+    .leftJoin(costLaborCategory, COST_LC_ON)
+    .where(and(LATEST_REVISION, gte(timesheetEntries.entryDate, first), lt(timesheetEntries.entryDate, endExclusive)))
+    .groupBy(timesheetEntries.clinId, contracts.id, contracts.name, contracts.contractNumber, timesheetEntries.entryDate);
+
+  // period index → contract → clin → unrounded sums
+  type Sums = { hours: number; cost: number; unpriced: number };
+  const buckets = periods.map(() => new Map<string, { name: string; number: string; clins: Map<string, Sums> }>());
+  for (const r of rows) {
+    const day = r.entryDate as CalendarDate;
+    const i = periods.findIndex((p) => day >= p.start && day <= p.end);
+    if (i < 0 || !r.clinId) continue;
+    const contract = buckets[i].get(r.contractId) ?? { name: r.contractName, number: r.contractNumber, clins: new Map<string, Sums>() };
+    buckets[i].set(r.contractId, contract);
+    const sums = contract.clins.get(r.clinId) ?? { hours: 0, cost: 0, unpriced: 0 };
+    sums.hours += Number(r.hours);
+    sums.cost += Number(r.pricedCost);
+    sums.unpriced += Number(r.unpricedHours);
+    contract.clins.set(r.clinId, sums);
+  }
+
+  const out: PeriodCostRow[] = [];
+  periods.forEach((p, i) => {
+    // UX-4B1-AUDIT L7: a deterministic order (name, then number, then id) …
+    const contractsInPeriod = [...buckets[i].entries()].sort(([idA, a], [idB, b]) =>
+      a.name.localeCompare(b.name) || a.number.localeCompare(b.number) || idA.localeCompare(idB));
+    for (const [contractId, c] of contractsInPeriod) {
+      const perClin = [...c.clins.values()];
+      const row = {
+        periodStart: p.start, periodEnd: p.end, contractId, contractName: c.name, contractNumber: c.number,
+        hours: sumRounded(perClin.map((s) => round2(s.hours))),
+        pricedCost: sumRounded(perClin.map((s) => round2(s.cost))),
+        unpricedHours: sumRounded(perClin.map((s) => round2(s.unpriced))),
+      };
+      // … and no all-zero rows (a contract whose only hours in the period were cleared to 0).
+      if (row.hours === 0 && row.pricedCost === 0 && row.unpricedHours === 0) continue;
+      out.push(row);
+    }
+  });
+  return { periods, rows: out };
 }

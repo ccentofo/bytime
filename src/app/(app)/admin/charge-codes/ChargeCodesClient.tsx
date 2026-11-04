@@ -57,6 +57,8 @@ type Props = {
   costClasses: Array<{ id: string; name: string }>;
   contracts: ContractOption[];
   laborCategories: CategoryOption[];
+  /** feature-plan-ux-kit-contracts.md §4.4.7: open this code's labor-category dialog on load (the Unpriced report's fix). */
+  openCategoryForId?: string;
 };
 
 type CodeForm = {
@@ -84,11 +86,11 @@ const WORK_LOCATION_OPTIONS = [
 ];
 
 
-export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborCategories }: Props) {
+export function ChargeCodesClient({ initialCodes, costClasses, contracts, laborCategories, openCategoryForId }: Props) {
   const canWrite = useCanWrite();
   const [codes, setCodes] = useState(initialCodes);
   // Dated rates D3: the "Labor category" modal; a saved schedule is merged back into the table's rows.
-  const [categoryFor, setCategoryFor] = useState<ChargeCodeRow | null>(null);
+  const [categoryFor, setCategoryFor] = useState<ChargeCodeRow | null>(() => (openCategoryForId ? initialCodes.find((c) => c.id === openCategoryForId) ?? null : null));
   function mergeCategorySchedule(view: CategoryScheduleView) {
     setCodes((prev) => prev.map((c) => (c.id === view.chargeCodeId ? { ...c, laborCategoryId: view.starting, categoryChanges: view.changes } : c)));
   }

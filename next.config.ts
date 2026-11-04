@@ -71,6 +71,12 @@ const nextConfig: NextConfig = {
       { source: "/admin/migration", destination: "/settings/migration", permanent: false },
       { source: "/admin/notifications", destination: "/profile/notifications", permanent: false },
       { source: "/settings", destination: "/settings/workspace", permanent: false },
+      // feature-plan-ux-kit-contracts.md C1: the Overview merged into Contracts and CLINs.
+      { source: "/admin/dashboard", destination: "/admin/contracts", permanent: false },
+      // UX-4b R1, U1: the unpriced and overlap reports left Labor categories. The specific `report=overlaps` rule first;
+      // the query passes through (the report accepts the legacy startDate/endDate).
+      { source: "/admin/labor-categories", has: [{ type: "query", key: "report", value: "overlaps" }], destination: "/admin/reports/unpriced?reason=conflict", permanent: false },
+      { source: "/admin/labor-categories", has: [{ type: "query", key: "report" }], destination: "/admin/reports/unpriced", permanent: false },
     ];
   },
 };

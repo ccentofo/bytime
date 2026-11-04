@@ -24,7 +24,7 @@ vi.mock('@/lib/session', () => {
 import * as dbModule from '@/db';
 import { laborCategories, userLaborCategories } from '@/db/schema';
 import type { FakeControlDb } from '../helpers/fake-control-db';
-import { assignUserToLaborCategory } from '@/server/actions/labor-categories';
+import { assignUserToLaborCategory, endUserLaborCategoryAssignment } from '@/server/actions/labor-categories';
 import type { CalendarDate } from '@/lib/calendar-date';
 
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
@@ -67,5 +67,13 @@ describe('assignUserToLaborCategory (C4)', () => {
     db.onReturning('insert', userLaborCategories, [{ id: 'a1' }]);
     expect(await assign()).toEqual({ ok: true, data: { id: 'a1' } });
     expect(db.inserts).toHaveLength(1);
+  });
+});
+
+describe('endUserLaborCategoryAssignment (feature-plan-ux-kit-contracts.md §4.3)', () => {
+  it('a non-UUID id → a validation error after the guard; nothing read or written', async () => {
+    expect(await endUserLaborCategoryAssignment('nope', '2026-11-03' as CalendarDate))
+      .toEqual({ ok: false, code: 'validation', error: 'Assignment is not a valid identifier.' });
+    expect(db.ops).toEqual([]);
   });
 });

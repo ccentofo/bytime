@@ -21,7 +21,6 @@ const SETTINGS: NavLeaf = { label: 'Settings', href: '/settings/workspace', icon
 
 const CONTRACTS_GROUP: NavGroup = {
   key: 'contracts', label: 'Contracts', icon: 'contracts', children: [
-    { label: 'Overview', href: '/admin/dashboard' },
     { label: 'Contracts and CLINs', href: '/admin/contracts' },
     { label: 'Charge codes', href: '/admin/charge-codes' },
     { label: 'Indirect codes', href: '/admin/indirect-codes' },

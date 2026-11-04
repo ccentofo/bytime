@@ -11,8 +11,14 @@ export const metadata: Metadata = { title: 'Charge codes' };
 
 export const dynamic = 'force-dynamic';
 
-export default async function ChargeCodesPage() {
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export default async function ChargeCodesPage({ searchParams }: { searchParams: Promise<{ code?: string | string[] }> }) {
   await requirePageRole('admin');
+  // feature-plan-ux-kit-contracts.md §4.4.7: ?code={id} (from the Unpriced report) opens that code's category dialog.
+  const raw = (await searchParams).code;
+  const code = Array.isArray(raw) ? raw[0] : raw;
+  const openCategoryForId = code && UUID.test(code) ? code : undefined;
 
   const db = await getDb();
   const [codes, costClassList, contractList, laborCats] = await Promise.all([
@@ -48,6 +54,7 @@ export default async function ChargeCodesPage() {
       costClasses={costClassList}
       contracts={Array.from(contractMap.values())}
       laborCategories={laborCats.map((lc) => ({ id: lc.id, lcatCode: lc.lcatCode, title: lc.title, clinId: lc.clinId, slinId: lc.slinId, status: lc.status }))}
+      openCategoryForId={openCategoryForId}
     />
   );
 }

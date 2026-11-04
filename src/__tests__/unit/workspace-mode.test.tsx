@@ -12,6 +12,7 @@ vi.mock('@/server/actions/contracts', () => ({ createContract: vi.fn(), updateCo
 vi.mock('@/server/actions/clins', () => ({ getClinsByContract: vi.fn(), createClin: vi.fn(), updateClin: vi.fn() }));
 vi.mock('@/server/actions/slins', () => ({ getSlinsByClin: vi.fn(), createSlin: vi.fn(), updateSlin: vi.fn() }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
 import { WorkspaceModeProvider, WriteButton, READ_ONLY_TOOLTIP } from '@/components/shell/WorkspaceMode';
 import { ReviewDecisionButtons } from '@/components/approvals/ReviewDecisionButtons';
@@ -53,14 +54,17 @@ describe('admin write controls', () => {
     expect(buttons(render('full', <WriteButton>Save</WriteButton>), 'Save')).toEqual([{ disabled: false }]);
   });
 
-  it('a read_only WriteButton carries the read-only explanation', () => {
-    // Mantine renders the Tooltip label lazily; the read-only marker is on the button itself.
-    expect(render('read_only', <WriteButton>Save</WriteButton>)).toContain('data-read-only="true"');
+  it('a read_only WriteButton carries the read-only explanation, and never the disabled attribute (kit §3.5)', () => {
+    // Mantine renders the Tooltip label lazily; the read-only marker is on the button and the reason in a hidden span.
+    const html = render('read_only', <WriteButton>Save</WriteButton>);
+    expect(html).toContain('data-read-only="true"');
+    expect(html).toContain(READ_ONLY_TOOLTIP);
+    expect(html.match(/<button([^>]*)>/)![1]).not.toMatch(/\sdisabled(=|\s|$)/);
     expect(READ_ONLY_TOOLTIP).toMatch(/read-only/);
   });
 
-  it('ContractsClient: "Add Contract" is disabled in read_only, enabled in full', () => {
-    expect(buttons(render('read_only', <ContractsClient initialContracts={[]} />), 'Add Contract')).toEqual([{ disabled: true }]);
-    expect(buttons(render('full', <ContractsClient initialContracts={[]} />), 'Add Contract')).toEqual([{ disabled: false }]);
+  it('ContractsClient: "Add contract" is disabled in read_only, enabled in full', () => {
+    expect(buttons(render('read_only', <ContractsClient overview={{ contracts: [], totals: { activeContracts: 0, funded: 0, pricedCost: 0, unpricedHoursAll: 0 } }} />), 'Add contract')).toEqual([{ disabled: true }]);
+    expect(buttons(render('full', <ContractsClient overview={{ contracts: [], totals: { activeContracts: 0, funded: 0, pricedCost: 0, unpricedHoursAll: 0 } }} />), 'Add contract')).toEqual([{ disabled: false }]);
   });
 });

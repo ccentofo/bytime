@@ -55,8 +55,9 @@ describe('useLastTarget (L2)', () => {
     expect(src('src/app/(app)/admin/users/UsersClient.tsx')).toContain('title={`Deactivate ${shownDeactivate?.fullName');
     expect(src('src/app/(app)/admin/users/UsersClient.tsx')).toContain('title={shownFlsa ? `Mark ${shownFlsa.fullName}');
     expect(src('src/app/(app)/admin/indirect-codes/IndirectCodesClient.tsx')).toContain('title={`Deactivate ${shownDeactivate?.code');
-    expect(src('src/app/(app)/admin/contracts/ContractsClient.tsx')).toContain('title={`Deactivate CLIN ${shownClin?.clinNumber');
-    expect(src('src/app/(app)/admin/contracts/ContractsClient.tsx')).toContain('title={`Deactivate SLIN ${shownSlin?.slinNumber');
+    // UX-4b §4.1: one CLIN/SLIN confirm and the close/reopen confirm, both reading their last target.
+    expect(src('src/app/(app)/admin/contracts/ContractsClient.tsx')).toContain("title={shownLine ? (shownLine.level === 'clin' ? `Deactivate CLIN ${shownLine.clin.clinNumber}?` : `Deactivate SLIN ${shownLine.slin?.slinNumber}?`) : ''}");
+    expect(src('src/app/(app)/admin/contracts/ContractsClient.tsx')).toContain("title={shownStatus ? `${shownStatus.to === 'closed' ? 'Close' : 'Reopen'} ${shownStatus.contract.name}?` : ''}");
   });
 });
 
@@ -73,10 +74,14 @@ describe('useBusyRows (L5)', () => {
   });
 
   it('static: no table keeps a single busy-row id any more', () => {
-    for (const rel of ['users/UsersClient.tsx', 'indirect-codes/IndirectCodesClient.tsx', 'charge-codes/ChargeCodesClient.tsx', 'labor-categories/LaborCategoriesClient.tsx']) {
+    for (const rel of ['users/UsersClient.tsx', 'indirect-codes/IndirectCodesClient.tsx', 'charge-codes/ChargeCodesClient.tsx']) {
       const s = readFileSync(path.join(ROOT, 'src/app/(app)/admin', rel), 'utf8');
       expect(s, rel).toContain('const busyRows = useBusyRows();');
       expect(s, rel).not.toMatch(/setBusyRow|busyRow ===/);
     }
+    // UX-4b §3.5: Labor categories moved to useBusy, one key per row (like Contracts).
+    const lc = readFileSync(path.join(ROOT, 'src/app/(app)/admin/labor-categories/LaborCategoriesClient.tsx'), 'utf8');
+    expect(lc).toContain('busy: busy.is(`row:${lcat.id}`)');
+    expect(lc).not.toMatch(/setBusyRow|busyRow ===/);
   });
 });

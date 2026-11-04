@@ -51,7 +51,7 @@ vi.mock('@/server/internal/admin-change-log', async (importOriginal) => {
 import { addLaborCategoryRateChange, correctLaborCategoryRate, removeLaborCategoryRateChange, previewRateChangeImpact } from '@/server/actions/labor-category-rates';
 import { updateLaborCategory } from '@/server/actions/labor-categories';
 import { getDetailedCostReportData } from '@/server/internal/reports';
-import { getPeriodCostReport } from '@/server/actions/dashboard';
+import { getContractsOverview } from '@/server/actions/contracts';
 import { hourlyRateOnSql, readRateSchedule } from '@/server/internal/labor-rates';
 import { rateOn } from '@/lib/labor-rates';
 import { duplicateEntityMessage } from '@/lib/db-errors';
@@ -90,6 +90,8 @@ describe('dated labor-category rates (D1, Fixture F1)', () => {
   afterAll(async () => { while (writers.open.length) await writers.open.pop()!.end({ timeout: 1 }).catch(() => {}); });
 
   const costs = async () => (await getDetailedCostReportData(...RANGE)).sort((a, b) => a.entryDate.localeCompare(b.entryDate));
+  // UX-4b (§9): the on-screen period report is gone; totals come from the Contracts read (all of this fixture's hours).
+  const pricedTotal = async () => money((await getContractsOverview()).contracts.reduce((s, c) => s + c.pricedCost, 0));
   const add = (effectiveDate: string, hourlyRate: string, reason?: string) =>
     addLaborCategoryRateChange({ laborCategoryId: L, effectiveDate, hourlyRate, ceilingRate: null, ...(reason !== undefined ? { reason } : {}) });
   const changeId = async (date: string) => (await db().select().from(schema.laborCategoryRates).where(and(eq(schema.laborCategoryRates.laborCategoryId, L), eq(schema.laborCategoryRates.effectiveDate, date))))[0].id;
@@ -126,18 +128,18 @@ describe('dated labor-category rates (D1, Fixture F1)', () => {
     for (const r of rows) {
       expect(money(r.hourlyRate), `${r.employeeName} ${r.entryDate}`).toBe(money(rateOn(schedules[r.lcatCode as 'L' | 'O'], d(r.entryDate)).hourlyRate));
     }
-    expect(money((await getPeriodCostReport(...RANGE)).reduce((sum, r) => sum + r.totalCost, 0))).toBe('3600.00');
+    expect(await pricedTotal()).toBe('3600.00');
   });
 
   it('Pricing → Correction → Removal: each step re-prices exactly its period; the log records each change', async () => {
     expect((await costs()).map((r) => money(r.totalCost))).toEqual(['800.00', '800.00', '400.00']);
-    expect(money((await getPeriodCostReport(...RANGE)).reduce((s, r) => s + r.totalCost, 0))).toBe('2000.00');
+    expect(await pricedTotal()).toBe('2000.00');
 
     await expectOk(add('2027-01-01', '110.00', 'option year'));
     const afterFirst = await costs();
     expect(afterFirst.map((r) => money(r.totalCost))).toEqual(['800.00', '880.00', '440.00']);
     expect(afterFirst.map((r) => money(r.hourlyRate))).toEqual(['100.00', '110.00', '110.00']);
-    const periodTotal = async () => money((await getPeriodCostReport(...RANGE)).reduce((s, r) => s + r.totalCost, 0));
+    const periodTotal = pricedTotal;
     expect(await periodTotal()).toBe('2120.00'); // audit L1: the §9 totals, grouped
 
     await expectOk(add('2027-04-01', '120.00', 'escalation'));
@@ -164,10 +166,12 @@ describe('dated labor-category rates (D1, Fixture F1)', () => {
     expect((await logRows()).map((r) => r.action).sort()).toEqual(['rate_change_added', 'rate_change_added', 'rate_change_removed', 'rate_corrected', 'rate_corrected']);
   });
 
-  it('Grouping: after the first add the period report shows two rows for E/L — rate 100 (8.00 h) and rate 110 (12.00 h)', async () => {
+  it('Grouping: after the first add the detailed report prices E/L at two rates — 100 (8.00 h) and 110 (12.00 h)', async () => {
     await expectOk(add('2027-01-01', '110.00', 'r'));
-    const rows = (await getPeriodCostReport(...RANGE)).filter((r) => r.lcatCode === 'L').map((r) => [money(r.hourlyRate), money(r.totalHours)]).sort();
-    expect(rows).toEqual([['100.00', '8.00'], ['110.00', '12.00']]);
+    // UX-4b (§9): T14's per-rate grouping, now over the detailed cost report (internal/reports.ts).
+    const byRate = new Map<string, number>();
+    for (const r of (await costs()).filter((x) => x.lcatCode === 'L')) byRate.set(money(r.hourlyRate), (byRate.get(money(r.hourlyRate)) ?? 0) + r.totalHours);
+    expect([...byRate].map(([rate, hours]) => [rate, money(hours)]).sort()).toEqual([['100.00', '8.00'], ['110.00', '12.00']]);
   });
 
   it('Unpriced: an entry with no resolvable category stays unpriced, no cost, in the unpriced count', async () => {
@@ -176,9 +180,9 @@ describe('dated labor-category rates (D1, Fixture F1)', () => {
     await db().insert(schema.timesheetEntries).values({ userId: other.id, chargeCodeId: codeId, clinId, entryDate: '2027-02-01', hours: '5.00', revisionNumber: 1, createdBy: other.id });
     const row = (await costs()).find((r) => r.employeeEmail === other.email)!;
     expect(row).toMatchObject({ costBasis: 'unpriced', totalCost: 0, unpricedHours: 5 });
-    const period = await getPeriodCostReport(...RANGE);
-    expect(period.find((r) => r.lcatTitle === 'Unpriced')).toMatchObject({ totalCost: 0, unpricedHours: 5, totalHours: 5 });
-    expect(money(period.reduce((s, r) => s + r.totalCost, 0))).toBe('2120.00'); // the priced total is unchanged by it
+    const overview = await getContractsOverview();
+    expect(overview.totals.unpricedHoursAll).toBe(5);
+    expect(await pricedTotal()).toBe('2120.00'); // the priced total is unchanged by it
   });
 
   it('Impact: preview add / correct starting / remove give the exact hours and period', async () => {

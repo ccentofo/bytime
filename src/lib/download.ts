@@ -40,6 +40,17 @@ export function filenameFromDisposition(header: string | null, fallback: string)
   return name ? name : fallback;
 }
 
+/** A 422's `{ error }` from a JSON body (feature-plan-ux-kit-contracts.md R4), else null. Never throws. */
+async function jsonErrorOf(res: Response): Promise<string | null> {
+  if (!(res.headers.get('content-type') ?? '').includes('application/json')) return null;
+  try {
+    const body = (await res.json()) as { error?: unknown };
+    return typeof body.error === 'string' && body.error.trim() ? body.error : null;
+  } catch {
+    return null;
+  }
+}
+
 async function retryAfterOf(res: Response): Promise<number | null> {
   // Parse the body only when it says it's JSON — and never throw on it.
   if ((res.headers.get('content-type') ?? '').includes('application/json')) {
@@ -54,7 +65,28 @@ async function retryAfterOf(res: Response): Promise<number | null> {
   return Number.isFinite(header) && header > 0 ? header : null;
 }
 
-export async function downloadFile(url: string, fallbackName: string): Promise<DownloadResult> {
+/** Save a Blob as a file: an anchor appended to the body (Firefox ignores a click on a detached one), then removed. */
+export function saveBlob(blob: Blob, name: string): void {
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 1000);
+}
+
+export interface DownloadOptions {
+  /** Per-status overrides, e.g. the PDF's { 404: "That employee wasn't found." }. */
+  messages?: Partial<Record<number, string>>;
+}
+
+/**
+ * Fetch a report and save it. A failure returns its message instead: a 422 (no hours in range, R4) shows the route's
+ * own JSON `error`; other statuses use `opts.messages` first, then the standard copy.
+ */
+export async function downloadFile(url: string, fallbackName: string, opts: DownloadOptions = {}): Promise<DownloadResult> {
   let res: Response;
   try {
     res = await fetch(url, { credentials: 'same-origin' });
@@ -62,6 +94,9 @@ export async function downloadFile(url: string, fallbackName: string): Promise<D
     return { ok: false, error: NETWORK_ERROR };
   }
   if (!res.ok) {
+    if (res.status === 422) return { ok: false, error: (await jsonErrorOf(res)) ?? opts.messages?.[422] ?? GENERIC_ERROR };
+    const override = opts.messages?.[res.status];
+    if (override) return { ok: false, error: override };
     const retryAfter = res.status === 429 ? await retryAfterOf(res) : null;
     return { ok: false, error: downloadErrorMessage(res.status, retryAfter) };
   }
@@ -71,15 +106,6 @@ export async function downloadFile(url: string, fallbackName: string): Promise<D
   } catch {
     return { ok: false, error: NETWORK_ERROR };
   }
-  const name = filenameFromDisposition(res.headers.get('content-disposition'), fallbackName);
-  const href = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = href;
-  a.download = name;
-  // Firefox ignores a click on a detached anchor: append, click, remove.
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(href), 1000);
+  saveBlob(blob, filenameFromDisposition(res.headers.get('content-disposition'), fallbackName));
   return { ok: true };
 }

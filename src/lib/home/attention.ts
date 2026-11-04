@@ -173,14 +173,14 @@ export function attentionItems(v: HomeView): AttentionItem[] {
         key: 'contracts',
         title: `${plural(flagged.length, 'contract needs', 'contracts need')} a look`,
         sentence: flagged.map((c) => `${c.contractName} (${BURN_TIER_LABEL[c.tier]})`).join(', '),
-        action: { label: 'Open overview', href: '/admin/dashboard' },
+        action: { label: 'Open contracts', href: '/admin/contracts' }, // UX-4b C1: the Overview merged into Contracts
       });
     }
     if (a.overlaps > 0) {
       items.push({
         key: 'overlaps',
         title: `${plural(a.overlaps, 'overlapping labor-category assignment', 'overlapping labor-category assignments')}`,
-        action: { label: 'Review', href: '/admin/labor-categories' },
+        action: { label: 'Review', href: '/admin/reports/unpriced?reason=conflict' }, // UX-4b §4.4.9: the overlaps, wherever they are
       });
     }
   }

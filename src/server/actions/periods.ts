@@ -13,7 +13,12 @@ import { approvalLabels } from '@/server/internal/approval-label';
 import { periodFlags, type PeriodFlags } from '@/server/internal/period-flags';
 import { notifySubmissionRecipients } from '@/server/internal/submission-notify';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
-import { existingPeriodLength, loadScheduleResolver } from '@/server/internal/pay-period-config';
+import { existingPeriodLength, lastCompletedPeriods, loadScheduleResolver } from '@/server/internal/pay-period-config';
+import { contracts, clins } from '@/db/schema';
+import { requireAdmin } from '@/lib/session';
+import { validateUUID } from '@/lib/validation';
+import { periodLabel } from '@/lib/timesheet/labels';
+import { startOfMonth } from '@/lib/calendar-date';
 import { sendTimesheetApprovedEmail, sendTimesheetRejectedEmail } from '@/lib/email/send';
 import { scheduleEmail } from '@/lib/email/schedule';
 import { getTenantSlug } from '@/lib/tenant/context';
@@ -100,6 +105,85 @@ export async function getPeriodOptions(aroundDay: CalendarDate, before: number, 
   }
 
   return options;
+}
+
+// ── Period presets (feature-plan-ux-kit-contracts.md §3.8) ────────────────────────────────────────────────────────
+
+export type PeriodPreset =
+  | { kind: 'thisPeriod' }
+  | { kind: 'lastPeriod' }
+  | { kind: 'lastN'; n: number }
+  | { kind: 'thisMonth' }
+  | { kind: 'contractToDate'; contractId: string }
+  | { kind: 'allTime' }
+  | { kind: 'custom'; start: string; end: string };
+
+export interface ResolvedRange {
+  /** null with `end` null = unbounded (All time). */
+  start: CalendarDate | null;
+  end: CalendarDate | null;
+  label: string;
+}
+
+const MAX_LAST_N = 24;
+const rangeOf = (periods: Array<{ start: CalendarDate; numDays: number }>) =>
+  ({ start: periods[0].start, end: addDays(periods[periods.length - 1].start, periods[periods.length - 1].numDays - 1) });
+
+/**
+ * A preset → a concrete date range and its label ("Last pay period · Oct 1 – 15, 2026"). Completed periods are the
+ * ones before the period containing the workspace's today. contractToDate is admin-only: from the contract's start
+ * date, else its earliest entry, else today — never after today.
+ */
+export async function resolvePeriodRange(preset: PeriodPreset): Promise<ActionResult<ResolvedRange>> {
+  return userAction(async () => {
+    await requireSession();
+    const kind = (preset as { kind?: unknown } | null)?.kind;
+    if (kind === 'allTime') return { start: null, end: null, label: 'All time' };
+    if (kind === 'custom') {
+      const { start, end } = preset as { start: unknown; end: unknown };
+      // UX-4B1-AUDIT L8: a malformed date is the user's message, never an internal error.
+      let s: CalendarDate, e: CalendarDate;
+      try { s = parseCalendarDate(start); e = parseCalendarDate(end); } catch { throw new UserFacingError('Enter valid dates.'); }
+      if (isBefore(e, s)) throw new UserFacingError('The end date must be on or after the start date.');
+      return { start: s, end: e, label: periodLabel(s, e) };
+    }
+
+    const db = await getDb();
+    const today = await getWorkspaceToday();
+    if (kind === 'thisPeriod') {
+      const p = (await loadScheduleResolver(db)).periodContaining(today);
+      const r = rangeOf([p]);
+      return { ...r, label: `This pay period · ${periodLabel(r.start, r.end)}` };
+    }
+    if (kind === 'lastPeriod' || kind === 'lastN') {
+      const n = kind === 'lastPeriod' ? 1 : (preset as { n: unknown }).n;
+      if (!Number.isInteger(n) || (n as number) < 1 || (n as number) > MAX_LAST_N) {
+        throw new UserFacingError(`The number of pay periods must be a whole number from 1 to ${MAX_LAST_N}.`);
+      }
+      const r = rangeOf(await lastCompletedPeriods(db, n as number, today));
+      const name = n === 1 ? 'Last pay period' : `Last ${n} pay periods`;
+      return { ...r, label: `${name} · ${periodLabel(r.start, r.end)}` };
+    }
+    if (kind === 'thisMonth') {
+      const s = startOfMonth(today);
+      return { start: s, end: today, label: `This month · ${periodLabel(s, today)}` };
+    }
+    if (kind === 'contractToDate') {
+      await requireAdmin();
+      const contractId = validateUUID((preset as { contractId: unknown }).contractId, 'Contract');
+      const [contract] = await db.select({ startDate: contracts.startDate }).from(contracts).where(eq(contracts.id, contractId));
+      if (!contract) throw new UserFacingError('That contract no longer exists.', 'not_found');
+      let start = contract.startDate as CalendarDate | null;
+      if (!start) {
+        const [first] = await db.select({ d: sql<string | null>`MIN(${timesheetEntries.entryDate})` })
+          .from(timesheetEntries).innerJoin(clins, eq(timesheetEntries.clinId, clins.id)).where(eq(clins.contractId, contractId));
+        start = (first?.d ?? null) as CalendarDate | null;
+      }
+      const s = !start || isBefore(today, start) ? today : start;   // a future start is clamped to today
+      return { start: s, end: today, label: `Contract to date · ${periodLabel(s, today)}` };
+    }
+    throw new UserFacingError('Unknown period preset.');
+  });
 }
 
 /**

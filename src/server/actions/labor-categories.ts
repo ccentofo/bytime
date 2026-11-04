@@ -2,18 +2,19 @@
 
 import { getDb, getDbForWrite } from '@/db';
 import { laborCategories, laborCategoryRates, userLaborCategories, users, clins, contracts, slins } from '@/db/schema';
-import { eq, and, asc, inArray } from 'drizzle-orm';
+import { eq, and, asc, inArray, isNull, or, gte, lte, countDistinct } from 'drizzle-orm';
 import type { RateChange } from '@/lib/labor-rates';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { validateRequired, validateStringLength, validateOptionalString, validateRate, validateUUID } from '@/lib/validation';
-import { isBefore, isCalendarDate, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { isBefore, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { userAction } from '@/lib/action-result';
 import { UserFacingError } from '@/lib/errors';
 import {
-  overlappingAssignments, unpricedEntries, unpricedFixText,
-  type OverlapRow, type UnpricedEntryRow, type UnpricedFilters,
+  unpricedEntries, unpricedFixText, unpricedReport, unpricedTotals, allUnpricedGroups, overlapsInScope, unpricedScopeNames,
+  type OverlapRow, type UnpricedEntryRow, type UnpricedReport, type UnpricedGroup, type UnpricedScopeNames,
 } from '@/server/internal/cost-basis';
+import { parseUnpricedFilters } from '@/lib/unpriced-filters';
 
 // ---------------------------------------------------------------------------
 // Labor Category CRUD
@@ -53,6 +54,7 @@ export async function getAllLaborCategories() {
       updatedAt: laborCategories.updatedAt,
       clinNumber: clins.clinNumber,
       clinDescription: clins.description,
+      contractId: contracts.id, // feature-plan-ux-kit-contracts.md §4.2 (additive): the page groups by contract
       contractName: contracts.name,
       contractNumber: contracts.contractNumber,
       slinNumber: slins.slinNumber,
@@ -75,6 +77,26 @@ export async function getAllLaborCategories() {
     byCategory.set(c.laborCategoryId, list);
   }
   return rows.map((r) => ({ ...r, rateChanges: byCategory.get(r.id) ?? [] }));
+}
+
+/**
+ * How many employees hold each labor category on the workspace's today (feature-plan-ux-kit-contracts.md §4.2): one
+ * grouped query, COUNT(DISTINCT user_id) of assignments with effective_date ≤ today and no end date or end_date ≥ today
+ * (end_date is the INCLUSIVE last day). Ended and future assignments aren't counted; a category nobody holds is absent.
+ */
+export async function getLaborCategoryPeopleCounts(): Promise<Record<string, number>> {
+  await requireAdmin();
+  const db = await getDb();
+  const today = await getWorkspaceToday();
+  const rows = await db
+    .select({ laborCategoryId: userLaborCategories.laborCategoryId, people: countDistinct(userLaborCategories.userId) })
+    .from(userLaborCategories)
+    .where(and(
+      lte(userLaborCategories.effectiveDate, today),
+      or(isNull(userLaborCategories.endDate), gte(userLaborCategories.endDate, today)),
+    ))
+    .groupBy(userLaborCategories.laborCategoryId);
+  return Object.fromEntries(rows.map((r) => [r.laborCategoryId, Number(r.people)]));
 }
 
 /**
@@ -228,6 +250,7 @@ export async function assignUserToLaborCategory(data: {
 export async function endUserLaborCategoryAssignment(id: string, endDate?: CalendarDate) {
   return userAction(async () => {
     await requireAdminFresh();
+    validateUUID(id, 'Assignment'); // feature-plan-ux-kit-contracts.md §4.3: after the guard
     const db = await getDbForWrite();
     const end = endDate !== undefined ? parseCalendarDate(endDate) : await getWorkspaceToday();
     const [current] = await db.select({ effectiveDate: userLaborCategories.effectiveDate })
@@ -250,29 +273,46 @@ export interface UnpricedHoursReportRow extends UnpricedEntryRow {
 }
 
 /**
- * "Unpriced hours" (feature-plan-certified-outputs.md C3, CO-D10/CO-D17): latest-revision entries with no applicable
- * labor category (`no-category`) or two at the deciding level (`conflict`), each with how to fix it. Admin only — it
- * exists because of dollar views.
+ * The grouped Unpriced hours report (feature-plan-ux-kit-contracts.md §4.4.2): up to 1,000 groups with exact totals,
+ * the overlapping pairs behind conflicts, and the pairs with no affected hours. Filters arrive raw from a URL and are
+ * cleaned by parseUnpricedFilters (invalid values ignored). Admin only.
  */
-export async function getUnpricedHoursReport(filters: UnpricedFilters = {}): Promise<{ rows: UnpricedHoursReportRow[]; truncated: boolean }> {
+export async function getUnpricedReport(filters: Record<string, string | string[] | undefined> = {}): Promise<UnpricedReport & { scope: UnpricedScopeNames }> {
   await requireAdmin();
-  // The filters come from the page URL: keep only well-formed ids and dates (anything else would fail in Postgres).
-  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const clean: UnpricedFilters = {
-    ...(filters.startDate && isCalendarDate(filters.startDate) ? { startDate: filters.startDate } : {}),
-    ...(filters.endDate && isCalendarDate(filters.endDate) ? { endDate: filters.endDate } : {}),
-    ...(filters.contractId && UUID.test(filters.contractId) ? { contractId: filters.contractId } : {}),
-    ...(filters.clinId && UUID.test(filters.clinId) ? { clinId: filters.clinId } : {}),
-    ...(filters.slinId && UUID.test(filters.slinId) ? { slinId: filters.slinId } : {}),
-  };
-  const { rows, truncated } = await unpricedEntries(await getDb(), clean);
-  return { truncated, rows: rows.map((r) => ({ ...r, fix: unpricedFixText(r) })) };
+  const db = await getDb();
+  const clean = parseUnpricedFilters(filters);
+  const [report, scope] = await Promise.all([unpricedReport(db, clean), unpricedScopeNames(db, clean)]);
+  return { ...report, scope }; // UX-4B1-AUDIT M2: the CLIN / SLIN behind the scope chip
 }
 
-/** "Overlapping labor-category assignments" (C3): pairs that make the overlapped days' entries unpriced. Admin only. */
-export async function getOverlappingAssignmentsReport(): Promise<OverlapRow[]> {
+const EXPORT_ENTRY_LIMIT = 50_000;
+
+/**
+ * Everything for the Unpriced Excel download (§4.4.8): ALL groups (paged, no cap), every pair in scope, up to 50,000
+ * entries (`entriesTruncated` past that), and the scope's names. With reason=conflict, entries are kept only when
+ * their basis is a conflict. The filters are cleaned here too (UX-4B1-AUDIT L8: an action never trusts its caller),
+ * so an invalid id or date is ignored, never sent to Postgres. Admin only.
+ */
+export async function getUnpricedExportData(filters: Record<string, string | string[] | undefined | null> = {}): Promise<{
+  groups: UnpricedGroup[]; overlaps: OverlapRow[]; entries: UnpricedHoursReportRow[]; entriesTruncated: boolean; scope: UnpricedScopeNames;
+}> {
   await requireAdmin();
-  return overlappingAssignments(await getDb());
+  const db = await getDb();
+  const clean = parseUnpricedFilters(filters);
+  const [groups, overlaps, entries, scope] = await Promise.all([
+    allUnpricedGroups(db, clean),
+    overlapsInScope(db, clean),
+    unpricedEntries(db, clean, EXPORT_ENTRY_LIMIT),
+    unpricedScopeNames(db, clean),
+  ]);
+  const rows = entries.rows.filter((r) => clean.reason !== 'conflict' || r.reason === 'conflict');
+  return { groups, overlaps, entries: rows.map((r) => ({ ...r, fix: unpricedFixText(r) })), entriesTruncated: entries.truncated, scope };
+}
+
+/** Unpriced totals only (Labor categories' notice, the Downloads row). Admin only. */
+export async function getUnpricedSummary(): Promise<{ hours: number; groups: number; employees: number }> {
+  await requireAdmin();
+  return unpricedTotals(await getDb(), {});
 }
 
 /**

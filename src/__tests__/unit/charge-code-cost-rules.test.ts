@@ -141,29 +141,28 @@ describe('F11 — small cost-view fixes', () => {
     expect(cc.match(/\.innerJoin\(users, eq\(userChargeCodes\.userId, users\.id\)\)\s*\/\/ F11/g)).toHaveLength(2);
   });
 
-  it('the period-report note scopes by the GENERATED range; the API-key dialog documents lcatTitle "Unpriced"', () => {
-    const dash = readFileSync(path.join(ROOT, 'src/app/(app)/admin/dashboard/DashboardClient.tsx'), 'utf8');
-    expect(dash).toMatch(/<UnpricedNote hours=\{reportUnpriced\} size="sm" scope=\{generatedRange \?\? \{\}\} \/>/);
-    expect(dash).toMatch(/setGeneratedRange\(\{ startDate: reportStartDate, endDate: reportEndDate \}\)/);
+  // The on-screen period report (and its scoped note) moved to the "Cost by pay period" Excel download (UX-4b R3).
+  it('the API-key dialog documents lcatTitle "Unpriced"', () => {
     expect(readFileSync(path.join(ROOT, 'src/app/(app)/settings/api-keys/ApiKeysClient.tsx'), 'utf8')).toMatch(/<Code>lcatTitle<\/Code> is\{' '\}\s*<Code>Unpriced<\/Code>/);
   });
 });
 
 describe('endUserLaborCategoryAssignment — optional end date (promotion: end yesterday, start today)', () => {
+  const ULC1 = '0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c'; // a UUID: the id is validated first (UX-4b §4.3)
   it('an explicit end date on/after the effective date is used; before it is refused; default is today', async () => {
     db.onSelect(userLaborCategories, [{ effectiveDate: '2026-01-01' }]);
     db.onReturning('update', userLaborCategories, [{ id: 'ulc1', endDate: '2026-10-24' }]);
-    expect((await endUserLaborCategoryAssignment('ulc1', '2026-10-24' as never)).ok).toBe(true);
+    expect((await endUserLaborCategoryAssignment(ULC1, '2026-10-24' as never)).ok).toBe(true);
     expect(db.updates[0].set).toMatchObject({ endDate: '2026-10-24' });
 
     db.reset();
     db.onSelect(userLaborCategories, [{ effectiveDate: '2026-10-01' }]);
-    expect(await endUserLaborCategoryAssignment('ulc1', '2026-09-30' as never)).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/can't be before/) });
+    expect(await endUserLaborCategoryAssignment(ULC1, '2026-09-30' as never)).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/can't be before/) });
 
     db.reset();
     db.onSelect(userLaborCategories, [{ effectiveDate: '2026-01-01' }]);
     db.onReturning('update', userLaborCategories, [{ id: 'ulc1' }]);
-    await endUserLaborCategoryAssignment('ulc1');
+    await endUserLaborCategoryAssignment(ULC1);
     expect(db.updates[0].set).toMatchObject({ endDate: '2026-10-25' });
   });
 });

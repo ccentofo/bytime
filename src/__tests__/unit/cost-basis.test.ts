@@ -172,12 +172,13 @@ describe('static: labor categories are resolved for costs only through cost-basi
     expect(lcatImporters("const label = 'labor_categories.csv id';")).toBe(false); // a plain string is not a query
   });
 
-  it('all five former join sites use the lateral resolution (detailed, summary, CLIN, SLIN, period report)', () => {
+  it('every cost join site uses the lateral resolution (detailed, summary, CLIN, SLIN)', () => {
     const count = (rel: string) => (readFileSync(path.join(ROOT, rel), 'utf8').match(/\.leftJoinLateral\(COST_BASIS_LATERAL, sql`true`\)/g) ?? []).length;
     expect(count('src/server/internal/reports.ts')).toBe(1);
-    expect(count('src/server/actions/reports.ts')).toBe(1);
-    expect(count('src/server/actions/dashboard.ts')).toBe(2); // summary, SLIN
+    expect(count('src/server/actions/reports.ts')).toBe(2); // summary + getPeriodCostByPeriod (UX-4b §4.5)
     expect(count('src/server/internal/dashboard.ts')).toBe(1); // CLIN — the shared clinCostTotals (UX-2 §4.5, also Home)
+    expect(count('src/server/internal/contracts-overview.ts')).toBe(1); // SLIN (UX-4b §4.1; the period report moves to Excel, §4.5)
+    expect(count('src/server/internal/cost-basis.ts')).toBe(4); // the doc's usage line, pricedHoursFor, unpricedEntries, and the grouped report's per-entry subquery (UX-4b §4.4)
   });
 });
 
@@ -221,14 +222,12 @@ describe('totals never quietly shrink (CO-D17)', () => {
     expect(unpricedHoursLabel(12.345)).toBe('12.35 hours unpriced');
   });
 
-  it('the dashboard shows the note beside every cost total (contract, CLIN, SLIN, overview, period report) and labels funding "priced cost"', () => {
-    const src = readFileSync(path.join(ROOT, 'src/app/(app)/admin/dashboard/DashboardClient.tsx'), 'utf8');
-    expect(src).toMatch(/<UnpricedNote hours=\{row\.original\.unpricedHours\} scope=\{\{ contractId: row\.original\.contractId \}\}/);
-    expect(src).toMatch(/<UnpricedNote hours=\{clin\.unpricedHours\} scope=\{\{ clinId: clin\.clinId \}\}/);
-    expect(src).toMatch(/<UnpricedNote hours=\{slin\.unpricedHours\} scope=\{\{ slinId: slin\.slinId \}\}/);
-    expect(src).toMatch(/<UnpricedNote hours=\{totalUnpriced\}/);
-    expect(src).toMatch(/<UnpricedNote hours=\{reportUnpriced\}/);
-    expect(src).toMatch(/row\.original\.unpricedHours > 0 && <Text size="xs" c="dimmed">priced cost<\/Text>/);
+  it('Contracts shows unpriced hours beside every cost (one Unpriced column per row, scoped links) and once in a notice; "Spent (priced hours)"', () => {
+    const src = readFileSync(path.join(ROOT, 'src/app/(app)/admin/contracts/ContractsClient.tsx'), 'utf8');
+    expect(src).toMatch(/id: 'unpriced', header: 'Unpriced'/);
+    expect(src).toMatch(/unpricedReportHref\(\{ contractId: r\.contract\.id, clinId: r\.clin\?\.id, slinId: r\.slin\?\.id \}\)/);
+    expect(src).toContain("so their cost isn&apos;t counted above.");
+    expect(src).toContain('Spent (priced hours)');
   });
 
   it('Home (UX-2 §4.5): the Contracts card says "priced cost" (never "spent"), shows unpriced hours per contract and the note', () => {
@@ -241,9 +240,11 @@ describe('totals never quietly shrink (CO-D17)', () => {
 
   it('the CO-D7 note appears on every cost view: dashboard, reports screen, CSV, XLSX, the Unpriced report', () => {
     for (const rel of [
-      'src/app/(app)/admin/dashboard/DashboardClient.tsx', 'src/app/(app)/admin/reports/ReportsClient.tsx',
-      'src/app/api/reports/cost-report-csv/route.ts', 'src/lib/reports/cost-report-excel.ts', 'src/app/(app)/admin/labor-categories/CostBasisReports.tsx',
+      'src/app/(app)/admin/contracts/ContractsClient.tsx', 'src/app/(app)/admin/reports/ReportsClient.tsx',
+      'src/app/api/reports/cost-report-csv/route.ts', 'src/lib/reports/cost-report-excel.ts',
       'src/app/(app)/home/HomeClient.tsx', // UX-2 §4.5: Home's Contracts card
+      'src/app/(app)/admin/reports/unpriced/UnpricedClient.tsx', 'src/lib/reports/unpriced-excel.ts', // UX-4b §4.4
+      'src/lib/reports/period-cost-excel.ts', // UX-4b §4.5 (R3)
     ]) expect(readFileSync(path.join(ROOT, rel), 'utf8'), rel).toContain('CURRENT_RATES_NOTE');
     expect(CURRENT_RATES_NOTE).toBe('Costs use the labor-category rate in effect on each day worked.'); // dated rates D2
   });

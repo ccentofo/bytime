@@ -86,6 +86,22 @@ export async function loadScheduleResolver(db: TenantDb) {
 }
 
 /**
+ * The N most recent COMPLETED periods before the one containing `today`, oldest first (feature-plan-ux-kit-contracts.md
+ * §3.8, §4.5). Each period resolves under its own schedule, so the list is right across a schedule change. Shared by
+ * resolvePeriodRange (lastPeriod / lastN) and getPeriodCostByPeriod — internal, no session check.
+ */
+export async function lastCompletedPeriods(db: TenantDb, n: number, today: CalendarDate): Promise<ResolvedPeriod[]> {
+  const schedule = await loadScheduleResolver(db);
+  const out: ResolvedPeriod[] = [];
+  let cursor = schedule.periodContaining(today);
+  for (let i = 0; i < n; i++) {
+    cursor = schedule.neighbor(cursor.start, 'prev');
+    out.unshift(cursor);
+  }
+  return out;
+}
+
+/**
  * Length of an EXISTING period, for readers (dashboards, review, exports, reports). Prefers the
  * period row's `period_num_days` snapshot; otherwise derives it from the schedule in effect at
  * `start`. Never throws: a stored period that doesn't line up with today's schedule (e.g. imported

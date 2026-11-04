@@ -13,7 +13,7 @@ describe('nav-config (T2)', () => {
   it('admin main menu', () => {
     expect(shape(mainNav('admin'))).toEqual([
       ['Home', '/home'], ['My timesheet', '/timesheet'], ['Approvals', '/admin/approvals'],
-      ['Contracts', [['Overview', '/admin/dashboard'], ['Contracts and CLINs', '/admin/contracts'], ['Charge codes', '/admin/charge-codes'], ['Indirect codes', '/admin/indirect-codes'], ['Labor categories', '/admin/labor-categories']]],
+      ['Contracts', [['Contracts and CLINs', '/admin/contracts'], ['Charge codes', '/admin/charge-codes'], ['Indirect codes', '/admin/indirect-codes'], ['Labor categories', '/admin/labor-categories']]],
       ['People', [['Users', '/admin/users'], ['Assignments', '/admin/assignments']]],
       ['Reports', [['Downloads', '/admin/reports'], ['Payroll export', '/admin/payroll-export'], ['Audit trail', '/admin/audit-trail']]],
       ['Settings', '/settings/workspace'],

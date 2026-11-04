@@ -1,0 +1,57 @@
+/* feature-plan-ux-kit-contracts.md §3.4: the table kit's tree control and numeric alignment. */
+.treeCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: calc(var(--tree-depth, 0) * 24px);
+  white-space: nowrap;
+}
+
+.expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mantine-color-dimmed);
+  cursor: pointer;
+}
+
+.expand:hover {
+  background: var(--mantine-color-default-hover);
+}
+
+.expand:focus-visible {
+  outline: 2px solid var(--mantine-color-signal-6);
+  outline-offset: 1px;
+}
+
+.chevron {
+  transition: transform 150ms ease;
+}
+
+.expand[aria-expanded='true'] .chevron {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron {
+    transition: none;
+  }
+}
+
+.spacer {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 22px;
+}
+
+/* Plain (non-MRT) tables: right-align a numeric cell. */
+.num {
+  text-align: right;
+}

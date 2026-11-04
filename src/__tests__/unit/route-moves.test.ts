@@ -72,3 +72,43 @@ describe('route moves (T1)', () => {
     expect(readdirSync(dir)).not.toContain('layout.tsx');
   });
 });
+
+// feature-plan-ux-kit-contracts.md §5 / C-6 -----------------------------------------------------------------------------
+describe('route moves (UX-4b C-6)', () => {
+  const rules = async () => ((await import('../../../next.config')).default as { redirects: () => Promise<Array<{ source: string; destination: string; permanent: boolean }>> }).redirects();
+
+  it('/admin/dashboard → /admin/contracts (307)', async () => {
+    expect((await rules()).find((r) => r.source === '/admin/dashboard')).toMatchObject({ destination: '/admin/contracts', permanent: false });
+  });
+
+  it('no source file links to /admin/dashboard any more; Home\'s contracts item opens /admin/contracts', () => {
+    const offenders = files(path.join(ROOT, 'src')).filter((f) => /['"`]\/admin\/dashboard/.test(stripComments(readFileSync(f, 'utf8'))));
+    expect(offenders.map((f) => path.relative(ROOT, f))).toEqual([]);
+    expect(readFileSync(path.join(ROOT, 'src/lib/home/attention.ts'), 'utf8')).toContain("action: { label: 'Open contracts', href: '/admin/contracts' }");
+  });
+
+  it('the old report links on Labor categories: report=overlaps → ?reason=conflict FIRST, then any report → the Unpriced page', async () => {
+    const all = await rules();
+    const lc = all.filter((r) => r.source === '/admin/labor-categories') as Array<{ destination: string; permanent: boolean; has?: Array<{ type: string; key: string; value?: string }> }>;
+    expect(lc).toEqual([
+      expect.objectContaining({ has: [{ type: 'query', key: 'report', value: 'overlaps' }], destination: '/admin/reports/unpriced?reason=conflict', permanent: false }),
+      expect.objectContaining({ has: [{ type: 'query', key: 'report' }], destination: '/admin/reports/unpriced', permanent: false }),
+    ]);
+  });
+
+  it('no source file links to /admin/labor-categories?report any more; Home\'s overlap item opens the conflict view', () => {
+    const offenders = files(path.join(ROOT, 'src')).filter((f) => /\/admin\/labor-categories\?report/.test(stripComments(readFileSync(f, 'utf8'))));
+    expect(offenders.map((f) => path.relative(ROOT, f))).toEqual([]);
+    expect(readFileSync(path.join(ROOT, 'src/lib/home/attention.ts'), 'utf8')).toContain("href: '/admin/reports/unpriced?reason=conflict'");
+  });
+});
+
+describe('removed dead code stays removed (UX-4B1-AUDIT L9)', () => {
+  it('no src file defines or imports UnpricedNote, PricedBasisNote or getOverlappingAssignmentsReport', () => {
+    const offenders = files(path.join(ROOT, 'src'))
+      .filter((f) => /\b(UnpricedNote|PricedBasisNote|getOverlappingAssignmentsReport)\b/.test(stripComments(readFileSync(f, 'utf8'))))
+      .map((f) => path.relative(ROOT, f));
+    expect(offenders).toEqual([]);
+  });
+});
+

@@ -1,3 +1,5 @@
+import dayjs from 'dayjs';
+import customParseFormat from 'dayjs/plugin/customParseFormat';
 import {
   type CalendarDate,
   addDays,
@@ -146,4 +148,40 @@ export function getLastWeekdayInPeriod(periodStart: CalendarDate, config: Period
   }
 
   return lastDay;
+}
+
+// ── Typed dates (feature-plan-ux-kit-contracts.md §3.7) ─────────────────────────────────────────────────────────────
+
+dayjs.extend(customParseFormat);
+
+/**
+ * The formats a person may type, each parsed STRICTLY (a partial or impossible date never matches). UX-4B1-AUDIT M3:
+ * a leading zero is optional in every numeric part, a comma after the day is optional, and the month may be short
+ * or long.
+ */
+const FLEXIBLE_DATE_FORMATS = [
+  'MMM D, YYYY', 'MMM DD, YYYY', 'MMM D YYYY', 'MMMM D, YYYY',
+  'YYYY-MM-DD', 'YYYY-M-D',
+  'M/D/YYYY', 'MM/DD/YYYY', 'M/DD/YYYY', 'MM/D/YYYY',
+];
+
+/** Trim, collapse spaces, title-case a month word ("oct", "OCT" → "Oct") and "Sept" → "Sep" (dayjs knows only "Sep"). */
+function normalizeTypedDate(input: string): string {
+  return input.trim().replace(/\s+/g, ' ')
+    .replace(/[A-Za-z]+/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase())
+    .replace(/\bSept\b/, 'Sep');
+}
+
+/**
+ * A typed date → 'YYYY-MM-DD', or null when it isn't a complete, real date ("Oct 1, 2", "2026-02-30"). DateInput's
+ * theme `dateParser`: it parses on every keystroke, so a half-typed date must never commit a wrong one.
+ */
+export function parseFlexibleDate(input: string): string | null {
+  const text = normalizeTypedDate(input);
+  if (!text) return null;
+  for (const format of FLEXIBLE_DATE_FORMATS) {
+    const d = dayjs(text, format, 'en', true);
+    if (d.isValid()) return d.format('YYYY-MM-DD');
+  }
+  return null;
 }

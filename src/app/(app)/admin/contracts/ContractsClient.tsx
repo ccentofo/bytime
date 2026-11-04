@@ -1,710 +1,446 @@
 'use client';
 
-import { useRef, useState, useTransition } from 'react';
-import {
-  Button,
-  Modal,
-  TextInput,
-  Textarea,
-  Select,
-  Drawer,
-  Group,
-  Stack,
-  Title,
-  Text,
-  Badge,
-  Table,
-  ActionIcon,
-  Box,
-  Alert,
-  Loader,
-} from '@mantine/core';
+import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { Alert, Anchor, Button, Group, Modal, Paper, Select, Stack, Text, TextInput, Textarea } from '@mantine/core';
 import { DateInput } from '@mantine/dates';
-import { Icons, ICON_SIZE } from '@/components/ui/icons';
-import { RowActions } from '@/components/ui/RowActions';
-import { ConfirmModal } from '@/components/ui/ConfirmModal';
-import { useLastTarget } from '@/components/ui/useRowState';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
-import { useAppTable } from '@/components/table/mrtDefaults';
-import {
-  createContract,
-  updateContract,
-} from '@/server/actions/contracts';
-import { runAction } from '@/lib/run-action';
-import { getClinsByContract, createClin, updateClin } from '@/server/actions/clins';
-import { getSlinsByClin, createSlin, updateSlin } from '@/server/actions/slins';
-import { formatDate } from '@/lib/format';
-import { RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
+import { Icons, ICON_SIZE } from '@/components/ui/icons';
+import { RowActions, type RowAction } from '@/components/ui/RowActions';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { StatusBadge } from '@/components/ui/StatusBadge';
+import { Notice } from '@/components/ui/Notice';
+import { MoneyInput } from '@/components/ui/MoneyInput';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { useBusy } from '@/components/ui/useBusy';
+import { useLastTarget } from '@/components/ui/useRowState';
+import { useAppTable, numericColumn, type AppTableExpandable } from '@/components/table/mrtDefaults';
 import { WriteButton } from '@/components/shell/WorkspaceMode';
+import { createContract, updateContract } from '@/server/actions/contracts';
+import { createClin, updateClin } from '@/server/actions/clins';
+import { createSlin, updateSlin } from '@/server/actions/slins';
+import type { ClinNode, ContractNode, ContractsOverview, Money, RecordStatus, SlinNode } from '@/server/internal/contracts-overview';
+import { runAction } from '@/lib/run-action';
+import { formatCurrency, formatDate, formatHours } from '@/lib/format';
+import { CURRENT_RATES_NOTE, unpricedReportHref } from '@/lib/cost-labels';
+import { BURN_TIER_LABEL, burnPercent, burnTier } from '@/lib/ui/burn';
+import { isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import classes from './Contracts.module.css';
 
-type Contract = {
-  id: string;
-  contractNumber: string;
-  name: string;
-  description: string | null;
-  contractType: string;
-  status: 'active' | 'inactive' | 'closed';
-  startDate: CalendarDate | null;
-  endDate: CalendarDate | null;
-  fundedValue: string | null;
-  ceilingValue: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-};
+/**
+ * Contracts and CLINs (feature-plan-ux-kit-contracts.md §4.1; mockup "Contracts"): one page for the money and the
+ * structure. A summary strip (active contracts), one unpriced notice, and an expandable contract → CLIN → SLIN table
+ * with funded / spent / remaining / burn and each row's unpriced hours. Writes merge the row the server returns, then
+ * router.refresh() brings the recomputed money.
+ */
 
-type Clin = {
+type Level = 'contract' | 'clin' | 'slin';
+interface Row {
+  level: Level;
   id: string;
-  contractId: string;
-  clinNumber: string;
-  description: string | null;
-  fundedAmount: string | null;
-  status: 'active' | 'inactive' | 'closed';
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-type Slin = {
-  id: string;
-  clinId: string;
-  slinNumber: string;
-  description: string | null;
-  fundedAmount: string | null;
-  status: 'active' | 'inactive' | 'closed';
-  createdAt: Date;
-  updatedAt: Date;
-};
+  contract: ContractNode;
+  clin?: ClinNode;
+  slin?: SlinNode;
+  node: Money & { status: RecordStatus };
+  children?: Row[];
+}
 
 type ContractForm = {
-  contractNumber: string;
-  name: string;
-  description: string;
-  contractType: string;
-  startDate: string | null;
-  endDate: string | null;
-  fundedValue: string;
-  ceilingValue: string;
+  contractNumber: string; name: string; description: string; contractType: 'prime' | 'sub';
+  startDate: CalendarDate | null; endDate: CalendarDate | null; funded: string; ceiling: string;
+};
+type LineForm = { number: string; description: string; funded: string };
+type Dialog =
+  | { kind: 'contract'; contract?: ContractNode }
+  | { kind: 'clin'; contract: ContractNode; clin?: ClinNode }
+  | { kind: 'slin'; contract: ContractNode; clin: ClinNode; slin?: SlinNode };
+
+const END_BEFORE_START = 'The end date must be on or after the start date.';
+const DEACTIVATE_LINE_MESSAGE = "Employees can't charge new time to it. Existing hours stay on record.";
+const num = (v: string | null | undefined) => {
+  const n = v === null || v === undefined || v === '' ? NaN : Number(v);
+  return Number.isFinite(n) ? n : null;
 };
 
-type Props = {
-  initialContracts: Contract[];
-};
+// ── Merge a saved row from the server into the tree (never the form values: an omitted field stays as stored). ──────
+type ContractRowIn = { id: string; contractNumber: string; name: string; description: string | null; contractType: string; status: string; startDate: string | null; endDate: string | null; fundedValue: string | null; ceilingValue: string | null };
+type LineRowIn = { id: string; description: string | null; fundedAmount: string | null; status: string };
+const fromContractRow = (r: ContractRowIn, prev?: ContractNode): ContractNode => ({
+  ...(prev ?? { hours: 0, pricedCost: 0, unpricedHours: 0, clins: [] }),
+  id: r.id, contractNumber: r.contractNumber, name: r.name, description: r.description,
+  contractType: r.contractType === 'sub' ? 'sub' : 'prime', status: r.status as RecordStatus,
+  startDate: (r.startDate as CalendarDate | null) ?? null, endDate: (r.endDate as CalendarDate | null) ?? null,
+  funded: r.fundedValue, ceiling: r.ceilingValue,
+});
 
-const EMPTY_FORM: ContractForm = {
-  contractNumber: '',
-  name: '',
-  description: '',
-  contractType: 'prime',
-  startDate: null,
-  endDate: null,
-  fundedValue: '',
-  ceilingValue: '',
-};
+export function ContractsClient({ overview }: { overview: ContractsOverview }) {
+  const router = useRouter();
+  const busy = useBusy();
 
-export function ContractsClient({ initialContracts }: Props) {
-  const [contracts, setContracts] = useState<Contract[]>(initialContracts);
-  const [isPending, startTransition] = useTransition();
-
-  // Contract modal state
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editingContract, setEditingContract] = useState<Contract | null>(null);
-  const [contractForm, setContractForm] = useState<ContractForm>(EMPTY_FORM);
-
-  // CLINs drawer state
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
-  const [clins, setClins] = useState<Clin[]>([]);
-  const [clinForm, setClinForm] = useState({ clinNumber: '', description: '', fundedAmount: '' });
-
-  // Loading state of the drawer's reads (feature-plan-ux-page-fixes.md C1). clinsReq is the request token: bumped by every
-  // CLIN load and by closing the drawer, written only in handlers; a read or mutation result whose token is stale
-  // (another contract was opened meanwhile) is dropped, so it can never land in the wrong drawer.
-  const [clinsStatus, setClinsStatus] = useState<'idle' | 'loading' | 'error' | 'ready'>('idle');
-  const [slinStatus, setSlinStatus] = useState<Record<string, 'loading' | 'error'>>({});
-  const clinsReq = useRef(0);
-
-  // SLINs state
-  const [slinsByClin, setSlinsByClin] = useState<Record<string, Slin[]>>({});
-  const [slinForm, setSlinForm] = useState({ slinNumber: '', description: '', fundedAmount: '' });
-  const [expandedClinId, setExpandedClinId] = useState<string | null>(null);
-  // Deactivating a CLIN or SLIN asks first (feature-plan-ux-foundations.md §4.5, B2); activating doesn't.
-  const [clinConfirm, setClinConfirm] = useState<Clin | null>(null);
-  const [slinConfirm, setSlinConfirm] = useState<Slin | null>(null);
-  // The confirms keep showing the last target while they animate closed (no "Deactivate CLIN ?" flash).
-  const shownClin = useLastTarget(clinConfirm);
-  const shownSlin = useLastTarget(slinConfirm);
-
-  function openAddModal() {
-    setEditingContract(null);
-    setContractForm(EMPTY_FORM);
-    setModalOpen(true);
+  // Local tree: the server's, with saved rows merged in until router.refresh() brings a fresh `overview`.
+  const [source, setSource] = useState(overview);
+  const [contracts, setContracts] = useState<ContractNode[]>(overview.contracts);
+  if (source !== overview) {
+    setSource(overview);
+    setContracts(overview.contracts);
   }
 
-  function openEditModal(contract: Contract) {
-    setEditingContract(contract);
+  const [dialog, setDialog] = useState<Dialog | null>(null);
+  const [contractForm, setContractForm] = useState<ContractForm | null>(null);
+  const [lineForm, setLineForm] = useState<LineForm>({ number: '', description: '', funded: '' });
+  const [formError, setFormError] = useState<string | null>(null);
+  const [dateError, setDateError] = useState<string | null>(null);
+  const [statusConfirm, setStatusConfirm] = useState<{ contract: ContractNode; to: 'closed' | 'active' } | null>(null);
+  const [lineConfirm, setLineConfirm] = useState<{ level: 'clin' | 'slin'; contract: ContractNode; clin: ClinNode; slin?: SlinNode } | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  // The confirms keep showing the last target while they animate closed (no "Close ?" flash).
+  const shownStatus = useLastTarget(statusConfirm);
+  const shownLine = useLastTarget(lineConfirm);
+
+  // ── Strip totals (C2): money and counts over ACTIVE contracts; unpriced over ALL (Home's figure). ─────────────────
+  const totals = useMemo(() => {
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const active = contracts.filter((c) => c.status === 'active');
+    const funded = round2(active.reduce((s, c) => s + (num(c.funded) ?? 0), 0));
+    const spent = round2(active.reduce((s, c) => s + c.pricedCost, 0));
+    return { active: active.length, funded, spent, remaining: round2(funded - spent), unpricedAll: round2(contracts.reduce((s, c) => s + c.unpricedHours, 0)) };
+  }, [contracts]);
+
+  const rows = useMemo<Row[]>(() => contracts.map((contract) => ({
+    level: 'contract', id: contract.id, contract, node: contract,
+    children: contract.clins.map((clin) => ({
+      level: 'clin', id: clin.id, contract, clin, node: clin,
+      children: clin.slins.map((slin) => ({ level: 'slin', id: slin.id, contract, clin, slin, node: slin })),
+    })),
+  })), [contracts]);
+
+  // ── Writes ──────────────────────────────────────────────────────────────────────────────────────────────────────
+  const patchContract = (id: string, fn: (c: ContractNode) => ContractNode) =>
+    setContracts((prev) => prev.map((c) => (c.id === id ? fn(c) : c)));
+  const patchClin = (contractId: string, clinId: string, fn: (c: ClinNode) => ClinNode) =>
+    patchContract(contractId, (c) => ({ ...c, clins: c.clins.map((cl) => (cl.id === clinId ? fn(cl) : cl)) }));
+
+  function openContractDialog(contract?: ContractNode) {
+    setDialog({ kind: 'contract', contract });
     setContractForm({
-      contractNumber: contract.contractNumber,
-      name: contract.name,
-      description: contract.description ?? '',
-      contractType: contract.contractType ?? 'prime',
-      startDate: contract.startDate ?? null,
-      endDate: contract.endDate ?? null,
-      fundedValue: contract.fundedValue ?? '',
-      ceilingValue: contract.ceilingValue ?? '',
+      contractNumber: contract?.contractNumber ?? '', name: contract?.name ?? '', description: contract?.description ?? '',
+      contractType: contract?.contractType ?? 'prime', startDate: contract?.startDate ?? null, endDate: contract?.endDate ?? null,
+      funded: contract?.funded ?? '', ceiling: contract?.ceiling ?? '',
     });
-    setModalOpen(true);
+    setFormError(null);
+    setDateError(null);
   }
 
-  /** Load a contract's CLINs — a plain async read (not a transition: a throw must not reach the error boundary). */
-  async function loadClins(contract: Contract) {
-    const id = ++clinsReq.current;
-    setClins([]);
-    setClinsStatus('loading');
-    try {
-      const data = await getClinsByContract(contract.id);
-      if (id === clinsReq.current) {
-        setClins(data as Clin[]);
-        setClinsStatus('ready');
-      }
-    } catch {
-      if (id === clinsReq.current) setClinsStatus('error');
-    }
-  }
-
-  function openClinsDrawer(contract: Contract) {
-    setSelectedContract(contract);
-    setDrawerOpen(true);
-    setSlinsByClin({});
-    setSlinStatus({});
-    setExpandedClinId(null);
-    void loadClins(contract);
-  }
-
-  function closeClinsDrawer() {
-    clinsReq.current += 1; // anything still in flight belongs to a drawer that's gone
-    setDrawerOpen(false);
-    setClinsStatus('idle');
-  }
-
-  function handleContractSubmit() {
-    startTransition(async () => {
-      const payload = {
-        contractNumber: contractForm.contractNumber,
-        name: contractForm.name,
-        description: contractForm.description || undefined,
-        contractType: contractForm.contractType || 'prime',
-        startDate: contractForm.startDate && isCalendarDate(contractForm.startDate) ? contractForm.startDate : undefined,
-        endDate: contractForm.endDate && isCalendarDate(contractForm.endDate) ? contractForm.endDate : undefined,
-        fundedValue: contractForm.fundedValue || undefined,
-        ceilingValue: contractForm.ceilingValue || undefined,
-      };
-
-      if (editingContract) {
-        const updatedResult = await runAction(updateContract(editingContract.id, payload), { errorTitle: 'Couldn’t update contract' });
-        if (!updatedResult.ok) return;
-        const updated = updatedResult.data;
-        if (updated) {
-          setContracts((prev) =>
-            prev.map((c) => (c.id === updated.id ? (updated as Contract) : c))
-          );
-        }
-      } else {
-        const createdResult = await runAction(createContract(payload), { errorTitle: 'Couldn’t create contract' });
-        if (!createdResult.ok) return;
-        const created = createdResult.data;
-        if (created) {
-          setContracts((prev) => [...prev, created as Contract]);
-        }
-      }
-      setModalOpen(false);
+  function openLineDialog(d: Exclude<Dialog, { kind: 'contract' }>) {
+    const existing = d.kind === 'clin' ? d.clin : d.slin;
+    setDialog(d);
+    setLineForm({
+      number: existing ? (d.kind === 'clin' ? (existing as ClinNode).clinNumber : (existing as SlinNode).slinNumber) : '',
+      description: existing?.description ?? '',
+      funded: existing?.funded ?? '',
     });
+    setFormError(null);
   }
 
-  function handleClinSubmit() {
-    if (!selectedContract || clinsStatus !== 'ready' || isPending) return;
-    const id = clinsReq.current;
-    startTransition(async () => {
-      const createdResult = await runAction(createClin({
-        contractId: selectedContract.id,
-        clinNumber: clinForm.clinNumber,
-        description: clinForm.description || undefined,
-        fundedAmount: clinForm.fundedAmount || undefined,
-      }), { errorTitle: 'Couldn’t create CLIN' });
-      if (!createdResult.ok || id !== clinsReq.current) return;
-      const created = createdResult.data;
-      if (created) {
-        setClins((prev) => [...prev, created as Clin]);
-        setClinForm({ clinNumber: '', description: '', fundedAmount: '' });
-      }
-    });
+  function closeDialog() {
+    if (busy.is('save')) return;
+    setDialog(null);
   }
 
-  /** Same server call as before; the confirm closes only on success (onDone). */
-  function handleClinStatusToggle(clin: Clin, onDone?: () => void) {
-    const newStatus = clin.status === 'active' ? 'inactive' : 'active';
-    const id = clinsReq.current;
-    startTransition(async () => {
-      const updatedResult = await runAction(updateClin(clin.id, { status: newStatus }), { errorTitle: 'Couldn’t update CLIN' });
-      if (!updatedResult.ok) return;
-      onDone?.();
-      if (id !== clinsReq.current) return;
-      const updated = updatedResult.data;
-      if (updated) {
-        setClins((prev) => prev.map((c) => (c.id === updated.id ? (updated as Clin) : c)));
-      }
-    });
-  }
-
-  /** Load a CLIN's SLINs (token-checked like the CLINs). A failure isn't cached: expanding again, or Retry, refetches. */
-  async function loadSlins(clinId: string) {
-    const id = clinsReq.current;
-    setSlinStatus((prev) => ({ ...prev, [clinId]: 'loading' }));
-    try {
-      const data = await getSlinsByClin(clinId);
-      if (id !== clinsReq.current) return;
-      setSlinsByClin((prev) => ({ ...prev, [clinId]: data as Slin[] }));
-      setSlinStatus((prev) => { const next = { ...prev }; delete next[clinId]; return next; });
-    } catch {
-      if (id !== clinsReq.current) return;
-      setSlinStatus((prev) => ({ ...prev, [clinId]: 'error' }));
-    }
-  }
-
-  function handleExpandClin(clinId: string) {
-    if (expandedClinId === clinId) {
-      setExpandedClinId(null);
+  async function saveContract() {
+    if (!contractForm || dialog?.kind !== 'contract') return;
+    setFormError(null);
+    if (contractForm.startDate && contractForm.endDate && contractForm.endDate < contractForm.startDate) {
+      setDateError(END_BEFORE_START);
       return;
     }
-    setExpandedClinId(clinId);
-    if (!slinsByClin[clinId] && slinStatus[clinId] !== 'loading') void loadSlins(clinId);
+    setDateError(null);
+    const payload = {
+      contractNumber: contractForm.contractNumber, name: contractForm.name, description: contractForm.description,
+      contractType: contractForm.contractType,
+      startDate: contractForm.startDate ?? undefined, endDate: contractForm.endDate ?? undefined,
+      fundedValue: contractForm.funded, ceilingValue: contractForm.ceiling,
+    };
+    const editing = dialog.contract;
+    const result = editing
+      ? await runAction(updateContract(editing.id, payload), { silent: true })
+      : await runAction(createContract(payload), { silent: true });
+    if (!result.ok) { setFormError(result.error); return; }
+    const saved = result.data as ContractRowIn;
+    if (editing) patchContract(editing.id, (c) => fromContractRow(saved, c));
+    else setContracts((prev) => [...prev, fromContractRow(saved)].sort((a, b) => a.name.localeCompare(b.name)));
+    setDialog(null);
+    router.refresh();
   }
 
-  function handleSlinSubmit(clinId: string) {
-    const id = clinsReq.current;
-    startTransition(async () => {
-      const createdResult = await runAction(createSlin({
-        clinId,
-        slinNumber: slinForm.slinNumber,
-        description: slinForm.description || undefined,
-        fundedAmount: slinForm.fundedAmount || undefined,
-      }), { errorTitle: 'Couldn’t create SLIN' });
-      if (!createdResult.ok || id !== clinsReq.current) return;
-      const created = createdResult.data;
-      if (created) {
-        setSlinsByClin((prev) => ({
-          ...prev,
-          [clinId]: [...(prev[clinId] ?? []), created as Slin],
-        }));
-        setSlinForm({ slinNumber: '', description: '', fundedAmount: '' });
-      }
-    });
+  async function saveLine() {
+    if (!dialog || dialog.kind === 'contract') return;
+    setFormError(null);
+    const base = { description: lineForm.description, fundedAmount: lineForm.funded };
+    if (dialog.kind === 'clin') {
+      const result = dialog.clin
+        ? await runAction(updateClin(dialog.clin.id, { clinNumber: lineForm.number, ...base }), { silent: true })
+        : await runAction(createClin({ contractId: dialog.contract.id, clinNumber: lineForm.number, ...base }), { silent: true });
+      if (!result.ok) { setFormError(result.error); return; }
+      const r = result.data as LineRowIn & { clinNumber: string };
+      const merged = (prev?: ClinNode): ClinNode => ({
+        ...(prev ?? { hours: 0, pricedCost: 0, unpricedHours: 0, slins: [] }),
+        id: r.id, clinNumber: r.clinNumber, description: r.description, funded: r.fundedAmount, status: r.status as RecordStatus,
+      });
+      if (dialog.clin) patchClin(dialog.contract.id, dialog.clin.id, merged);
+      else patchContract(dialog.contract.id, (c) => ({ ...c, clins: [...c.clins, merged()].sort((a, b) => a.clinNumber.localeCompare(b.clinNumber)) }));
+    } else {
+      const result = dialog.slin
+        ? await runAction(updateSlin(dialog.slin.id, { slinNumber: lineForm.number, ...base }), { silent: true })
+        : await runAction(createSlin({ clinId: dialog.clin.id, slinNumber: lineForm.number, ...base }), { silent: true });
+      if (!result.ok) { setFormError(result.error); return; }
+      const r = result.data as LineRowIn & { slinNumber: string };
+      const merged = (prev?: SlinNode): SlinNode => ({
+        ...(prev ?? { hours: 0, pricedCost: 0, unpricedHours: 0 }),
+        id: r.id, slinNumber: r.slinNumber, description: r.description, funded: r.fundedAmount, status: r.status as RecordStatus,
+      });
+      const slinId = dialog.slin?.id;
+      patchClin(dialog.contract.id, dialog.clin.id, (cl) => ({
+        ...cl,
+        slins: slinId ? cl.slins.map((s) => (s.id === slinId ? merged(s) : s)) : [...cl.slins, merged()].sort((a, b) => a.slinNumber.localeCompare(b.slinNumber)),
+      }));
+    }
+    setDialog(null);
+    router.refresh();
   }
 
-  /** Same server call as before; the confirm closes only on success (onDone). */
-  function handleSlinStatusToggle(slin: Slin, onDone?: () => void) {
-    const newStatus = slin.status === 'active' ? 'inactive' : 'active';
-    const id = clinsReq.current;
-    startTransition(async () => {
-      const updatedResult = await runAction(updateSlin(slin.id, { status: newStatus }), { errorTitle: 'Couldn’t update SLIN' });
-      if (!updatedResult.ok) return;
-      onDone?.();
-      if (id !== clinsReq.current) return;
-      const updated = updatedResult.data;
-      if (updated) {
-        setSlinsByClin((prev) => ({
-          ...prev,
-          [slin.clinId]: (prev[slin.clinId] ?? []).map((s) =>
-            s.id === updated.id ? (updated as Slin) : s
-          ),
-        }));
-      }
-    });
+  async function setContractStatus() {
+    if (!statusConfirm) return;
+    setConfirmError(null);
+    const result = await runAction(updateContract(statusConfirm.contract.id, { status: statusConfirm.to }), { silent: true });
+    if (!result.ok) { setConfirmError(result.error); return; }
+    patchContract(statusConfirm.contract.id, (c) => fromContractRow(result.data as ContractRowIn, c));
+    setStatusConfirm(null);
+    router.refresh();
   }
 
-  const columns: MRT_ColumnDef<Contract>[] = [
-    { accessorKey: 'contractNumber', header: 'Contract Number', size: 160 },
-    { accessorKey: 'name', header: 'Name' },
+  async function setLineStatus(target: { level: 'clin' | 'slin'; contract: ContractNode; clin: ClinNode; slin?: SlinNode }, to: RecordStatus, fromConfirm: boolean) {
+    if (fromConfirm) setConfirmError(null);
+    const result = target.level === 'clin'
+      ? await runAction(updateClin(target.clin.id, { status: to }), { silent: fromConfirm, errorTitle: 'Couldn’t update CLIN' })
+      : await runAction(updateSlin(target.slin!.id, { status: to }), { silent: fromConfirm, errorTitle: 'Couldn’t update SLIN' });
+    if (!result.ok) { if (fromConfirm) setConfirmError(result.error); return; }
+    const status = (result.data as LineRowIn).status as RecordStatus;
+    if (target.level === 'clin') patchClin(target.contract.id, target.clin.id, (cl) => ({ ...cl, status }));
+    else patchClin(target.contract.id, target.clin.id, (cl) => ({ ...cl, slins: cl.slins.map((s) => (s.id === target.slin!.id ? { ...s, status } : s)) }));
+    if (fromConfirm) setLineConfirm(null);
+    router.refresh();
+  }
+
+  // ── Table ───────────────────────────────────────────────────────────────────────────────────────────────────────
+  const whole = (v: number | string | null) => formatCurrency(v, { cents: false });
+  const remainingOf = (r: Row) => { const f = num(r.node.funded); return f === null ? null : f - r.node.pricedCost; };
+
+  const columns = useMemo<MRT_ColumnDef<Row>[]>(() => [
     {
-      accessorKey: 'status',
-      header: 'Status',
-      Cell: ({ cell }) => {
-        const status = cell.getValue<string>() as keyof typeof RECORD_STATUS_COLOR;
-        return <Badge color={RECORD_STATUS_COLOR[status] ?? 'gray'}>{status}</Badge>;
+      id: 'name', header: 'Contract', enableSorting: false,
+      Cell: ({ row: { original: r } }) => {
+        if (r.level === 'contract') {
+          const c = r.contract;
+          return (
+            <div className={classes.oneLine}>
+              <Text fw={600} span>{c.name}</Text>
+              <div className={classes.sub}>
+                <span className={classes.pill}>{c.contractType === 'sub' ? 'Sub' : 'Prime'}</span>{' '}
+                <span className={classes.mono}>{c.contractNumber}</span>
+                {c.endDate && <> · ends {formatDate(c.endDate)}</>}
+              </div>
+            </div>
+          );
+        }
+        const n = r.level === 'clin' ? `CLIN ${r.clin!.clinNumber}` : `SLIN ${r.slin!.slinNumber}`;
+        const d = r.node === r.clin ? r.clin!.description : r.slin?.description;
+        return <span className={classes.oneLine}>{n}{d ? ` · ${d}` : ''}</span>;
       },
-      size: 110,
     },
+    numericColumn<Row>({ id: 'funded', header: 'Funded', enableSorting: false, accessorFn: (r) => r.node.funded, Cell: ({ row }) => whole(row.original.node.funded) }),
+    numericColumn<Row>({ id: 'spent', header: 'Spent', enableSorting: false, accessorFn: (r) => r.node.pricedCost, Cell: ({ row }) => whole(row.original.node.pricedCost) }),
+    numericColumn<Row>({ id: 'remaining', header: 'Remaining', enableSorting: false, accessorFn: (r) => remainingOf(r), Cell: ({ row }) => whole(remainingOf(row.original)) }),
     {
-      accessorKey: 'contractType',
-      header: 'Type',
-      Cell: ({ cell }) => (
-        <Badge color={cell.getValue<string>() === 'prime' ? 'signal' : 'gray'} size="sm">
-          {cell.getValue<string>() === 'prime' ? 'Prime' : 'Sub'}
-        </Badge>
-      ),
-      size: 90,
-    },
-    {
-      accessorKey: 'fundedValue',
-      header: 'Funded',
-      Cell: ({ cell }) => {
-        const val = cell.getValue<string | null>();
-        if (!val) return <Text size="sm" c="dimmed">—</Text>;
-        const num = parseFloat(val);
-        return isNaN(num) ? '—' : `$${num.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+      id: 'burn', header: 'Burn', enableSorting: false,
+      Cell: ({ row: { original: r } }) => {
+        const funded = num(r.node.funded);
+        if (funded === null || !(funded > 0)) return <span className={classes.sub}>{r.level === 'contract' ? BURN_TIER_LABEL.noFunding : '—'}</span>;
+        const pct = burnPercent(r.node.pricedCost, funded);
+        const tier = burnTier(pct, funded, funded - r.node.pricedCost);
+        return (
+          <div className={classes.burn} data-testid="burn">
+            <div className={classes.bar} aria-hidden="true"><span style={{ width: `${Math.min(pct, 100)}%` }} /></div>
+            <span className={classes.sub}>{r.level === 'contract' ? `${pct}% · ${BURN_TIER_LABEL[tier].toLowerCase()}` : `${pct}%`}</span>
+          </div>
+        );
       },
-      size: 130,
     },
-    {
-      accessorKey: 'startDate',
-      header: 'Start Date',
-      Cell: ({ cell }) => formatDate(cell.getValue<CalendarDate | null>()),
-      size: 120,
-    },
-    {
-      accessorKey: 'endDate',
-      header: 'End Date',
-      Cell: ({ cell }) => formatDate(cell.getValue<CalendarDate | null>()),
-      size: 120,
-    },
-  ];
+    numericColumn<Row>({
+      id: 'unpriced', header: 'Unpriced', enableSorting: false, accessorFn: (r) => r.node.unpricedHours,
+      Cell: ({ row: { original: r } }) => (r.node.unpricedHours > 0 ? (
+        <Anchor component={Link} size="sm" data-testid="unpriced-link"
+          href={unpricedReportHref({ contractId: r.contract.id, clinId: r.clin?.id, slinId: r.slin?.id })}>
+          {formatHours(r.node.unpricedHours)}
+        </Anchor>
+      ) : formatHours(0)),
+    }),
+    { id: 'status', header: 'Status', enableSorting: false, Cell: ({ row }) => <StatusBadge status={row.original.node.status} /> },
+  ], []);
 
-  const table = useAppTable({
+  const expandable = useMemo<AppTableExpandable<Row>>(() => ({
+    getSubRows: (r) => r.children,
+    // UX-4B1-AUDIT L4: CLIN numbers repeat across contracts, so a CLIN toggle names its contract.
+    label: (r) => (r.level === 'contract' ? `CLINs for ${r.contract.name}` : r.level === 'clin' ? `SLINs for CLIN ${r.clin!.clinNumber} on ${r.contract.name}` : `SLIN ${r.slin!.slinNumber}`),
+    // L6: the "CLIN" / "SLIN" prefix the cell shows is searchable too ("CLIN 0002").
+    searchText: (r) => (r.level === 'contract' ? [r.contract.name, r.contract.contractNumber, r.contract.description]
+      : r.level === 'clin' ? [`CLIN ${r.clin!.clinNumber}`, r.clin!.description] : [`SLIN ${r.slin!.slinNumber}`, r.slin!.description]).filter(Boolean).join(' '),
+    rowId: (r) => `${r.level}:${r.id}`,
+    defaultExpanded: overview.contracts.length === 1 ? { [`contract:${overview.contracts[0].id}`]: true } : {},
+  }), [overview.contracts]);
+
+  function rowActions(r: Row) {
+    if (r.level === 'contract') {
+      const c = r.contract;
+      const items: RowAction[] = [
+        { key: 'add-clin', label: 'Add CLIN', icon: 'create', hidden: c.status !== 'active', onSelect: () => openLineDialog({ kind: 'clin', contract: c }) },
+        c.status === 'active'
+          ? { key: 'close', label: 'Close contract…', icon: 'deactivate', tone: 'danger', onSelect: () => { setConfirmError(null); setStatusConfirm({ contract: c, to: 'closed' }); } }
+          : { key: 'reopen', label: 'Reopen contract…', icon: 'reactivate', onSelect: () => { setConfirmError(null); setStatusConfirm({ contract: c, to: 'active' }); } },
+      ];
+      return <RowActions rowLabel={c.name} primary={{ key: 'edit', label: 'Edit', icon: 'edit', onSelect: () => openContractDialog(c) }} items={items} />;
+    }
+    const target = { level: r.level as 'clin' | 'slin', contract: r.contract, clin: r.clin!, slin: r.slin };
+    const name = r.level === 'clin' ? `CLIN ${r.clin!.clinNumber}` : `SLIN ${r.slin!.slinNumber}`;
+    const active = r.node.status === 'active';
+    const items: RowAction[] = [
+      ...(r.level === 'clin' ? [{
+        key: 'add-slin', label: 'Add SLIN', icon: 'create' as const, hidden: !(r.clin!.status === 'active' && r.contract.status === 'active'),
+        onSelect: () => openLineDialog({ kind: 'slin', contract: r.contract, clin: r.clin! }),
+      }] : []),
+      active
+        ? { key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger', onSelect: () => { setConfirmError(null); setLineConfirm(target); } }
+        : { key: 'reactivate', label: 'Reactivate', icon: 'reactivate', busy: busy.is(`row:${r.id}`), onSelect: () => { void busy.run(`row:${r.id}`, () => setLineStatus(target, 'active', false)); } },
+    ];
+    const edit = r.level === 'clin'
+      ? () => openLineDialog({ kind: 'clin', contract: r.contract, clin: r.clin! })
+      : () => openLineDialog({ kind: 'slin', contract: r.contract, clin: r.clin!, slin: r.slin! });
+    return <RowActions rowLabel={`${name} of ${r.contract.name}`} primary={{ key: 'edit', label: 'Edit', icon: 'edit', onSelect: edit }} items={items} />;
+  }
+
+  const table = useAppTable<Row>({
     columns,
-    data: contracts,
+    data: rows,
+    expandable,
+    hairline: true,
+    compact: rows.length <= 25,
     enableRowActions: true,
-    renderRowActions: ({ row }) => (
-      <RowActions
-        rowLabel={row.original.contractNumber}
-        primary={{ key: 'edit', label: 'Edit', icon: 'edit', onSelect: () => openEditModal(row.original) }}
-        items={[
-          // Read-only admins can open the drawer today (its write buttons gate themselves): keep it reachable.
-          { key: 'clins', label: 'Manage CLINs and SLINs', icon: 'manageClins', writes: false, onSelect: () => openClinsDrawer(row.original) },
-        ]}
-      />
-    ),
+    renderRowActions: ({ row }) => rowActions(row.original),
+    emptyState: { title: 'No contracts yet', body: 'Add a contract to start tracking its CLINs, funding and spending.' },
   });
 
-  // DateInput in @mantine/dates v9 uses string values (ISO date strings) when valueFormat is not set
-  // The onChange callback receives string | null
-  const handleStartDateChange = (val: string | null) =>
-    setContractForm((f) => ({ ...f, startDate: val }));
-  const handleEndDateChange = (val: string | null) =>
-    setContractForm((f) => ({ ...f, endDate: val }));
+  // ── Render ──────────────────────────────────────────────────────────────────────────────────────────────────────
+  const burn = burnPercent(totals.spent, totals.funded);
+  const parentLabel = dialog && dialog.kind !== 'contract'
+    ? (dialog.kind === 'clin' ? `${dialog.contract.name} (${dialog.contract.contractNumber})` : `${dialog.contract.name} · CLIN ${dialog.clin.clinNumber}`)
+    : '';
+  const dialogTitle = !dialog ? '' : dialog.kind === 'contract' ? (dialog.contract ? 'Edit contract' : 'Add contract')
+    : dialog.kind === 'clin' ? (dialog.clin ? `Edit CLIN ${dialog.clin.clinNumber}` : 'Add CLIN')
+      : (dialog.slin ? `Edit SLIN ${dialog.slin.slinNumber}` : 'Add SLIN');
 
   return (
     <>
       <PageHeader
-        title="Contracts & CLINs"
-        actions={
-          <WriteButton leftSection={<Icons.create size={ICON_SIZE.button} />} onClick={openAddModal}>
-            Add Contract
-          </WriteButton>
-        }
+        title="Contracts and CLINs"
+        description={<>Funding, spending and burn for each contract, CLIN and SLIN.<div style={{ fontSize: 'var(--mantine-font-size-xs)', marginTop: 2 }}>{CURRENT_RATES_NOTE}</div></>}
+        actions={<WriteButton leftSection={<Icons.create size={ICON_SIZE.button} />} onClick={() => openContractDialog()}>Add contract</WriteButton>}
       />
+
+      <Paper withBorder radius="md" className={classes.strip} data-testid="contracts-strip">
+        <div><div className={classes.stripValue}>{totals.active}</div><div className={classes.stripLabel}>Active contracts</div></div>
+        <div><div className={classes.stripValue}>{whole(totals.funded)}</div><div className={classes.stripLabel}>Funded</div></div>
+        <div><div className={classes.stripValue}>{whole(totals.spent)}</div><div className={classes.stripLabel}>Spent (priced hours) · {burn}%</div></div>
+        <div><div className={classes.stripValue}>{whole(totals.remaining)}</div><div className={classes.stripLabel}>Remaining</div></div>
+      </Paper>
+
+      {totals.unpricedAll > 0 && (
+        <Notice action={{ label: 'Fix pricing', href: unpricedReportHref() }}>
+          <b>{formatHours(totals.unpricedAll)} hours have no labor-category rate,</b> so their cost isn&apos;t counted above.
+        </Notice>
+      )}
+
       <MantineReactTable table={table} />
 
-      {/* Add / Edit Contract Modal */}
-      <Modal
-        opened={modalOpen}
-        onClose={() => setModalOpen(false)}
-        title={editingContract ? 'Edit Contract' : 'Add Contract'}
-        size="md"
-      >
-        <Stack>
-          <TextInput
-            label="Contract Number"
-            required
-            value={contractForm.contractNumber}
-            onChange={(e) => setContractForm((f) => ({ ...f, contractNumber: e.target.value }))}
-          />
-          <TextInput
-            label="Name"
-            required
-            value={contractForm.name}
-            onChange={(e) => setContractForm((f) => ({ ...f, name: e.target.value }))}
-          />
-          <Textarea
-            label="Description"
-            value={contractForm.description}
-            onChange={(e) => setContractForm((f) => ({ ...f, description: e.target.value }))}
-          />
-          <Select
-            label="Contract Type"
-            data={[
-              { value: 'prime', label: 'Prime Contract' },
-              { value: 'sub', label: 'Subcontract' },
-            ]}
-            value={contractForm.contractType}
-            onChange={(val) => setContractForm((f) => ({ ...f, contractType: val ?? 'prime' }))}
-          />
-          <TextInput
-            label="Funded Value ($)"
-            placeholder="500000.00"
-            value={contractForm.fundedValue}
-            onChange={(e) => setContractForm((f) => ({ ...f, fundedValue: e.target.value }))}
-          />
-          <TextInput
-            label="Ceiling Value ($)"
-            placeholder="750000.00"
-            value={contractForm.ceilingValue}
-            onChange={(e) => setContractForm((f) => ({ ...f, ceilingValue: e.target.value }))}
-          />
-          <DateInput
-            label="Start Date"
-            value={contractForm.startDate}
-            onChange={handleStartDateChange}
-            clearable
-          />
-          <DateInput
-            label="End Date"
-            value={contractForm.endDate}
-            onChange={handleEndDateChange}
-            clearable
-          />
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setModalOpen(false)}>
-              Cancel
-            </Button>
-            <WriteButton onClick={handleContractSubmit} loading={isPending}>
-              {editingContract ? 'Save Changes' : 'Create Contract'}
-            </WriteButton>
-          </Group>
-        </Stack>
+      <Modal opened={!!dialog} onClose={closeDialog} title={dialogTitle} size="md">
+        {dialog?.kind === 'contract' && contractForm && (
+          <Stack>
+            <TextInput label="Contract number" required value={contractForm.contractNumber} onChange={(e) => setContractForm({ ...contractForm, contractNumber: e.currentTarget.value })} />
+            <TextInput label="Name" required value={contractForm.name} onChange={(e) => setContractForm({ ...contractForm, name: e.currentTarget.value })} />
+            <Textarea label="Description" value={contractForm.description} onChange={(e) => setContractForm({ ...contractForm, description: e.currentTarget.value })} />
+            <Select
+              label="Type" allowDeselect={false}
+              data={[{ value: 'prime', label: 'Prime contract' }, { value: 'sub', label: 'Subcontract' }]}
+              value={contractForm.contractType}
+              onChange={(v) => setContractForm({ ...contractForm, contractType: v === 'sub' ? 'sub' : 'prime' })}
+            />
+            <Group grow align="flex-start">
+              <DateInput label="Start date" clearable value={contractForm.startDate}
+                onChange={(d) => { setDateError(null); setContractForm({ ...contractForm, startDate: d && isCalendarDate(d) ? d : null }); }} />
+              <DateInput label="End date" clearable value={contractForm.endDate} error={dateError ?? undefined}
+                onChange={(d) => { setDateError(null); setContractForm({ ...contractForm, endDate: d && isCalendarDate(d) ? d : null }); }} />
+            </Group>
+            <MoneyInput label="Funded" max={999_999_999.99} value={contractForm.funded} onChange={(v) => setContractForm({ ...contractForm, funded: v })} />
+            <MoneyInput label="Ceiling" max={999_999_999.99} value={contractForm.ceiling} onChange={(v) => setContractForm({ ...contractForm, ceiling: v })} />
+            {formError && <Alert color="red" role="alert">{formError}</Alert>}
+            <Group justify="flex-end">
+              <Button variant="default" onClick={closeDialog}>Cancel</Button>
+              <WriteButton {...busy.props('save')} onClick={() => { void busy.run('save', saveContract); }}>
+                {dialog.contract ? 'Save changes' : 'Add contract'}
+              </WriteButton>
+            </Group>
+          </Stack>
+        )}
+        {dialog && dialog.kind !== 'contract' && (
+          <Stack>
+            <TextInput label={dialog.kind === 'clin' ? 'Contract' : 'CLIN'} value={parentLabel} readOnly data-testid="line-parent" />
+            <TextInput label={dialog.kind === 'clin' ? 'CLIN number' : 'SLIN number'} required value={lineForm.number} onChange={(e) => setLineForm({ ...lineForm, number: e.currentTarget.value })} />
+            <TextInput label="Description" value={lineForm.description} onChange={(e) => setLineForm({ ...lineForm, description: e.currentTarget.value })} />
+            <MoneyInput label="Funded" max={999_999_999.99} value={lineForm.funded} onChange={(v) => setLineForm({ ...lineForm, funded: v })} />
+            {formError && <Alert color="red" role="alert">{formError}</Alert>}
+            <Group justify="flex-end">
+              <Button variant="default" onClick={closeDialog}>Cancel</Button>
+              <WriteButton {...busy.props('save')} onClick={() => { void busy.run('save', saveLine); }}>
+                {(dialog.kind === 'clin' ? dialog.clin : dialog.slin) ? 'Save changes' : `Add ${dialog.kind === 'clin' ? 'CLIN' : 'SLIN'}`}
+              </WriteButton>
+            </Group>
+          </Stack>
+        )}
       </Modal>
 
-      {/* CLINs Drawer */}
-      <Drawer
-        opened={drawerOpen}
-        onClose={closeClinsDrawer}
-        // Every open ModalBase listens for Esc on window: with a confirm open, Esc must close only the confirm.
-        closeOnEscape={!clinConfirm && !slinConfirm}
-        position="right"
-        size="xl"
-        title={
-          selectedContract
-            ? `CLINs — ${selectedContract.name} (${selectedContract.contractNumber})`
-            : 'CLINs'
-        }
-      >
-        <Stack>
-          {/* Add CLIN form */}
-          <Title order={5}>Add CLIN</Title>
-          <Group align="flex-end">
-            <TextInput
-              label="CLIN Number"
-              value={clinForm.clinNumber}
-              onChange={(e) => setClinForm((f) => ({ ...f, clinNumber: e.target.value }))}
-              style={{ flex: 1 }}
-            />
-            <TextInput
-              label="Description"
-              value={clinForm.description}
-              onChange={(e) => setClinForm((f) => ({ ...f, description: e.target.value }))}
-              style={{ flex: 2 }}
-            />
-            <TextInput
-              label="Funded Amount ($)"
-              placeholder="100000.00"
-              value={clinForm.fundedAmount}
-              onChange={(e) => setClinForm((f) => ({ ...f, fundedAmount: e.target.value }))}
-              style={{ minWidth: 150 }}
-            />
-            {/* Unavailable until this contract's CLINs have loaded, and while a save runs (aria-disabled + the guard in
-                handleClinSubmit). Never Mantine `loading`: it sets `disabled` (UX-4A-AUDIT.md L1). */}
-            <WriteButton
-              onClick={handleClinSubmit}
-              leftSection={isPending && clinsStatus === 'ready' ? <Loader size={14} aria-hidden="true" /> : <Icons.create size={14} />}
-              aria-disabled={clinsStatus !== 'ready' || isPending || undefined}
-              data-disabled={clinsStatus !== 'ready' || isPending || undefined}
-              aria-describedby={clinsStatus === 'loading' || clinsStatus === 'error' ? 'clins-add-why' : undefined}
-            >
-              Add
-            </WriteButton>
-          </Group>
-          {(clinsStatus === 'loading' || clinsStatus === 'error') && (
-            <Text id="clins-add-why" size="sm" c="dimmed">{clinsStatus === 'loading' ? 'Loading CLINs…' : "Couldn't load CLINs"}</Text>
-          )}
-
-          {/* CLINs list */}
-          <Title order={5} mt="sm">Existing CLINs</Title>
-          {clinsStatus === 'loading' ? (
-            <Group role="status" gap="xs">
-              <Loader size="sm" aria-hidden="true" />
-              <Text size="sm">Loading CLINs…</Text>
-            </Group>
-          ) : clinsStatus === 'error' ? (
-            <Alert role="alert" color="red" title="Couldn't load this contract's CLINs">
-              <Button size="xs" variant="default" mt="xs" onClick={() => { if (selectedContract) void loadClins(selectedContract); }}>Retry</Button>
-            </Alert>
-          ) : clinsStatus !== 'ready' ? null : clins.length === 0 ? (
-            <Text c="dimmed" size="sm">No CLINs yet for this contract.</Text>
-          ) : (
-            <Stack gap="xs">
-              {clins.map((clin) => (
-                <Box key={clin.id}>
-                  {/* CLIN row */}
-                  <Table.ScrollContainer minWidth={500}>
-                  <Table striped highlightOnHover withTableBorder>
-                    <Table.Tbody>
-                      <Table.Tr>
-                        <Table.Td style={{ width: 32 }}>
-                          <ActionIcon
-                            variant="subtle"
-                            size="sm"
-                            onClick={() => handleExpandClin(clin.id)}
-                            title={expandedClinId === clin.id ? 'Collapse SLINs' : 'Expand SLINs'}
-                            aria-label={expandedClinId === clin.id ? 'Collapse SLINs' : 'Expand SLINs'}
-                          >
-                            {expandedClinId === clin.id
-                              ? <Icons.collapse size={14} />
-                              : <Icons.expand size={14} />
-                            }
-                          </ActionIcon>
-                        </Table.Td>
-                        <Table.Td fw={600}>{clin.clinNumber}</Table.Td>
-                        <Table.Td>{clin.description ?? '—'}</Table.Td>
-                        <Table.Td>
-                          {clin.fundedAmount ? `$${parseFloat(clin.fundedAmount).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '—'}
-                        </Table.Td>
-                        <Table.Td>
-                          <Badge color={RECORD_STATUS_COLOR[clin.status] ?? 'gray'}>{clin.status}</Badge>
-                        </Table.Td>
-                        <Table.Td>
-                          <WriteButton
-                            size="xs"
-                            variant="subtle"
-                            onClick={() => (clin.status === 'active' ? setClinConfirm(clin) : handleClinStatusToggle(clin))}
-                            loading={isPending}
-                          >
-                            {clin.status === 'active' ? 'Deactivate' : 'Activate'}
-                          </WriteButton>
-                        </Table.Td>
-                      </Table.Tr>
-                    </Table.Tbody>
-                  </Table>
-                  </Table.ScrollContainer>
-
-                  {/* SLINs section (collapsible) */}
-                  {expandedClinId === clin.id && (
-                    <Box pl="md" pt="xs" pb="sm" style={{ borderLeft: '2px solid var(--mantine-color-signal-3)', marginLeft: 16 }}>
-                      <Title order={6} mb="xs" c="dimmed">SLINs for CLIN {clin.clinNumber}</Title>
-
-                      {/* Add SLIN form */}
-                      <Group align="flex-end" mb="xs">
-                        <TextInput
-                          label="SLIN Number"
-                          placeholder="0001AA"
-                          value={slinForm.slinNumber}
-                          onChange={(e) => setSlinForm((f) => ({ ...f, slinNumber: e.target.value }))}
-                          size="xs"
-                          style={{ flex: 1 }}
-                        />
-                        <TextInput
-                          label="Description"
-                          placeholder="Base Year Labor"
-                          value={slinForm.description}
-                          onChange={(e) => setSlinForm((f) => ({ ...f, description: e.target.value }))}
-                          size="xs"
-                          style={{ flex: 2 }}
-                        />
-                        <TextInput
-                          label="Funded ($)"
-                          placeholder="50000.00"
-                          value={slinForm.fundedAmount}
-                          onChange={(e) => setSlinForm((f) => ({ ...f, fundedAmount: e.target.value }))}
-                          size="xs"
-                          style={{ minWidth: 120 }}
-                        />
-                        <WriteButton
-                          size="xs"
-                          onClick={() => handleSlinSubmit(clin.id)}
-                          loading={isPending}
-                          leftSection={<Icons.create size={12} />}
-                          disabled={!slinForm.slinNumber.trim()}
-                        >
-                          Add SLIN
-                        </WriteButton>
-                      </Group>
-
-                      {/* SLINs table */}
-                      {slinStatus[clin.id] === 'loading' ? (
-                        <Text size="xs" role="status">Loading SLINs…</Text>
-                      ) : slinStatus[clin.id] === 'error' ? (
-                        <Group gap="xs" role="alert">
-                          <Text size="xs" c="red">Couldn&apos;t load SLINs.</Text>
-                          <Button size="compact-xs" variant="default" onClick={() => void loadSlins(clin.id)}>Retry</Button>
-                        </Group>
-                      ) : (slinsByClin[clin.id] ?? []).length === 0 ? (
-                        <Text size="xs" c="dimmed">No SLINs yet. Add one above.</Text>
-                      ) : (
-                        <Table.ScrollContainer minWidth={400}>
-                        <Table striped highlightOnHover withTableBorder>
-                          <Table.Thead>
-                            <Table.Tr>
-                              <Table.Th>SLIN #</Table.Th>
-                              <Table.Th>Description</Table.Th>
-                              <Table.Th>Funded</Table.Th>
-                              <Table.Th>Status</Table.Th>
-                              <Table.Th>Toggle</Table.Th>
-                            </Table.Tr>
-                          </Table.Thead>
-                          <Table.Tbody>
-                            {(slinsByClin[clin.id] ?? []).map((slin) => (
-                              <Table.Tr key={slin.id}>
-                                <Table.Td>{slin.slinNumber}</Table.Td>
-                                <Table.Td>{slin.description ?? '—'}</Table.Td>
-                                <Table.Td>
-                                  {slin.fundedAmount
-                                    ? `$${parseFloat(slin.fundedAmount).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
-                                    : '—'}
-                                </Table.Td>
-                                <Table.Td>
-                                  <Badge size="xs" color={RECORD_STATUS_COLOR[slin.status] ?? 'gray'}>{slin.status}</Badge>
-                                </Table.Td>
-                                <Table.Td>
-                                  <WriteButton
-                                    size="xs"
-                                    variant="subtle"
-                                    onClick={() => (slin.status === 'active' ? setSlinConfirm(slin) : handleSlinStatusToggle(slin))}
-                                    loading={isPending}
-                                  >
-                                    {slin.status === 'active' ? 'Deactivate' : 'Activate'}
-                                  </WriteButton>
-                                </Table.Td>
-                              </Table.Tr>
-                            ))}
-                          </Table.Tbody>
-                        </Table>
-                        </Table.ScrollContainer>
-                      )}
-                    </Box>
-                  )}
-                </Box>
-              ))}
-            </Stack>
-          )}
-        </Stack>
-      </Drawer>
-
       <ConfirmModal
-        opened={!!clinConfirm}
-        title={`Deactivate CLIN ${shownClin?.clinNumber ?? ''}?`}
-        message="Employees can't charge new time to it. Existing hours stay on record."
-        confirmLabel="Deactivate"
-        loading={isPending}
-        onConfirm={() => clinConfirm && handleClinStatusToggle(clinConfirm, () => setClinConfirm(null))}
-        onCancel={() => setClinConfirm(null)}
+        opened={!!statusConfirm}
+        tone={shownStatus?.to === 'active' ? 'neutral' : 'danger'}
+        title={shownStatus ? `${shownStatus.to === 'closed' ? 'Close' : 'Reopen'} ${shownStatus.contract.name}?` : ''}
+        message={shownStatus?.to === 'active'
+          ? 'Its active charge codes will appear on timesheets again for employees assigned to them.'
+          : "Its charge codes will no longer appear on anyone's timesheet, and no one can add new hours to it. Recorded hours stay, and you can reopen it later."}
+        confirmLabel={shownStatus?.to === 'active' ? 'Reopen contract' : 'Close contract'}
+        loading={busy.is('status')}
+        error={confirmError}
+        onConfirm={() => { void busy.run('status', setContractStatus); }}
+        onCancel={() => setStatusConfirm(null)}
       />
 
       <ConfirmModal
-        opened={!!slinConfirm}
-        title={`Deactivate SLIN ${shownSlin?.slinNumber ?? ''}?`}
-        message="Employees can't charge new time to it. Existing hours stay on record."
+        opened={!!lineConfirm}
+        title={shownLine ? (shownLine.level === 'clin' ? `Deactivate CLIN ${shownLine.clin.clinNumber}?` : `Deactivate SLIN ${shownLine.slin?.slinNumber}?`) : ''}
+        message={DEACTIVATE_LINE_MESSAGE}
         confirmLabel="Deactivate"
-        loading={isPending}
-        onConfirm={() => slinConfirm && handleSlinStatusToggle(slinConfirm, () => setSlinConfirm(null))}
-        onCancel={() => setSlinConfirm(null)}
+        loading={busy.is('line')}
+        error={confirmError}
+        onConfirm={() => { if (lineConfirm) void busy.run('line', () => setLineStatus(lineConfirm, 'inactive', true)); }}
+        onCancel={() => setLineConfirm(null)}
       />
     </>
   );

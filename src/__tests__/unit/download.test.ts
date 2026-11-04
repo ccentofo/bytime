@@ -7,7 +7,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
  * `retryAfter` and the Retry-After header fallback; a non-JSON 500 → the generic message; a network error.
  */
 
-import { downloadFile, downloadErrorMessage, filenameFromDisposition } from '@/lib/download';
+import { downloadFile, downloadErrorMessage, filenameFromDisposition, saveBlob } from '@/lib/download';
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
@@ -71,3 +71,30 @@ describe('downloadFile', () => {
     expect(clicked.isConnected).toBe(false);          // removed after the click
   });
 });
+
+// feature-plan-ux-kit-contracts.md §3.9, R4 ---------------------------------------------------------------------------
+describe('downloadFile: 422 and per-status messages (kit §3.9)', () => {
+  it('a 422 shows the route\'s JSON error in place; a non-JSON 422 falls back to the generic message', async () => {
+    stubFetch(async () => response(422, JSON.stringify({ error: 'No hours recorded between Oct 16 – 31, 2026.' }), { 'content-type': 'application/json' }));
+    expect(await downloadFile('/api/x', 'x.xlsx')).toEqual({ ok: false, error: 'No hours recorded between Oct 16 – 31, 2026.' });
+    stubFetch(async () => response(422, '<html>oops</html>', { 'content-type': 'text/html' }));
+    expect(await downloadFile('/api/x', 'x.xlsx')).toEqual({ ok: false, error: downloadErrorMessage(500, null) });
+  });
+
+  it('opts.messages overrides a status\'s standard copy', async () => {
+    stubFetch(async () => response(404, JSON.stringify({ error: 'nope' }), { 'content-type': 'application/json' }));
+    expect(await downloadFile('/api/x', 'x.pdf', { messages: { 404: 'No such timesheet.' } })).toEqual({ ok: false, error: 'No such timesheet.' });
+    stubFetch(async () => response(403, null));
+    expect(await downloadFile('/api/x', 'x.pdf', { messages: { 404: 'x' } })).toEqual({ ok: false, error: downloadErrorMessage(403, null) });
+  });
+
+  it('saveBlob clicks an anchor attached to the body, then removes it', () => {
+    vi.stubGlobal('URL', Object.assign(Object.create(URL), { createObjectURL: () => 'blob:y', revokeObjectURL: vi.fn() }));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { expect(this.isConnected).toBe(true); });
+    saveBlob(new Blob(['a']), 'file.csv');
+    const a = click.mock.contexts[0] as HTMLAnchorElement;
+    expect(a.download).toBe('file.csv');
+    expect(a.isConnected).toBe(false);
+  });
+});
+

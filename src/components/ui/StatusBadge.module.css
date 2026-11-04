@@ -1,0 +1,24 @@
+/* feature-plan-ux-kit-contracts.md §3.1: a dot plus the word, coloured by tone (never colour alone). -text colours only. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--mantine-font-size-sm);
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.badge::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.badge[data-tone='ok'] { color: var(--mantine-color-success-text); }
+.badge[data-tone='warn'] { color: var(--mantine-color-warning-text); }
+.badge[data-tone='bad'] { color: var(--mantine-color-red-text); }
+.badge[data-tone='info'] { color: var(--mantine-color-signal-text); }
+.badge[data-tone='dim'] { color: var(--mantine-color-dimmed); }

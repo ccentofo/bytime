@@ -1,0 +1,10 @@
+/* feature-plan-ux-kit-contracts.md §4.3: the overlapping rows (warning-soft). Light
+   values here, dark below (no CSS light/dark function in .css files). */
+.overlap td {
+  background: var(--mantine-color-warning-0);
+}
+
+:global([data-mantine-color-scheme='dark']) .overlap td {
+  background: rgba(242, 189, 92, 0.12);
+}
+

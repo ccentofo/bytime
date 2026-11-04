@@ -1,7 +1,5 @@
-import { getAllLaborCategories, getUserLaborCategoryAssignments, getAssignableLaborCategories, getUnpricedHoursReport, getOverlappingAssignmentsReport } from '@/server/actions/labor-categories';
-import { CostBasisReports } from './CostBasisReports';
+import { getAllLaborCategories, getLaborCategoryPeopleCounts, getUnpricedSummary } from '@/server/actions/labor-categories';
 import { getContracts } from '@/server/actions/contracts';
-import { getUsers } from '@/server/actions/users';
 import { LaborCategoriesClient } from './LaborCategoriesClient';
 import { requirePageRole } from '@/lib/session';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
@@ -11,43 +9,29 @@ export const metadata: Metadata = { title: 'Labor categories' };
 
 export const dynamic = 'force-dynamic';
 
-export default async function LaborCategoriesPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ report?: string; contractId?: string; clinId?: string; slinId?: string; startDate?: string; endDate?: string }>;
-}) {
+/**
+ * Labor categories (feature-plan-ux-kit-contracts.md §4.2): only categories and their rates. Assigning people moved to
+ * People → Assignments ("Labor categories" tab, §4.3); the Unpriced hours report moved to Downloads › Unpriced hours
+ * (/admin/reports/unpriced; old ?report= links redirect there). Five loads.
+ */
+export default async function LaborCategoriesPage() {
   await requirePageRole('admin');
-  const params = await searchParams;
-  // certified-outputs C3: the "X hours unpriced" links open the Unpriced hours report scoped to their total.
-  const scope = { contractId: params.contractId, clinId: params.clinId, slinId: params.slinId, startDate: params.startDate, endDate: params.endDate };
 
-  const [laborCats, assignments, contracts, users, assignableLcats, unpriced, overlaps, today] = await Promise.all([
+  const [laborCats, contracts, peopleCounts, unpriced, today] = await Promise.all([
     getAllLaborCategories(),
-    getUserLaborCategoryAssignments(),
-    getContracts(),
-    getUsers(),
-    getAssignableLaborCategories(),
-    getUnpricedHoursReport(scope),
-    getOverlappingAssignmentsReport(),
+    getContracts(), // the Add modal's contract list
+    getLaborCategoryPeopleCounts(),
+    getUnpricedSummary(),
     getWorkspaceToday(), // dated rates D2: "today" for the current-rate display — the workspace's, from the server
   ]);
 
   return (
-    <>
     <LaborCategoriesClient
       initialLaborCategories={laborCats}
-      initialAssignments={assignments}
       contracts={contracts}
-      users={users}
-      assignableLcats={assignableLcats}
+      peopleCounts={peopleCounts}
+      unpricedHours={unpriced.hours}
       today={today}
     />
-    <CostBasisReports
-      report={params.report === 'overlaps' ? 'overlaps' : 'unpriced'}
-      unpriced={unpriced}
-      overlaps={overlaps}
-      scoped={Object.values(scope).some(Boolean)}
-    />
-    </>
   );
 }

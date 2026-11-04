@@ -18,15 +18,12 @@ vi.mock('@/server/actions/labor-category-rates', () => ({
   previewRateChangeImpact: actions.preview, addLaborCategoryRateChange: actions.add,
   correctLaborCategoryRate: actions.correct, removeLaborCategoryRateChange: actions.remove,
 }));
-vi.mock('@/server/actions/labor-categories', () => ({
-  createLaborCategory: vi.fn(), updateLaborCategory: vi.fn(), getAllLaborCategories: vi.fn(), getAssignableLaborCategories: vi.fn(),
-  assignUserToLaborCategory: vi.fn(), endUserLaborCategoryAssignment: vi.fn(), getUserLaborCategoryAssignments: vi.fn(),
-}));
+vi.mock('@/server/actions/labor-categories', () => ({ createLaborCategory: vi.fn(), updateLaborCategory: vi.fn(), getAllLaborCategories: vi.fn() }));
 vi.mock('@/server/actions/clins', () => ({ getClinsByContract: vi.fn() }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 vi.mock('@mantine/dates', () => ({
-  DateInput: ({ onChange, value, 'data-testid': testId }: { onChange: (v: string | null) => void; value: string | null; 'data-testid'?: string }) =>
-    <input data-testid={testId} value={value ?? ''} onChange={(e) => onChange(e.target.value || null)} />,
+  DateInput: ({ onChange, value, error, 'data-testid': testId }: { onChange: (v: string | null) => void; value: string | null; error?: string; 'data-testid'?: string }) =>
+    <><input data-testid={testId} value={value ?? ''} onChange={(e) => onChange(e.target.value || null)} />{error && <span data-testid={`${testId}-error`}>{error}</span>}</>,
 }));
 
 import { LaborCategoriesClient } from '@/app/(app)/admin/labor-categories/LaborCategoriesClient';
@@ -44,7 +41,7 @@ beforeAll(() => {
 const L = '11111111-1111-4111-8111-111111111111';
 const category = (changes: Array<{ id: string; effectiveDate: string; hourlyRate: string; ceilingRate: string | null }>) => ({
   id: L, clinId: 'c1', slinId: null, lcatCode: 'SE-III', title: 'Senior Engineer', hourlyRate: '100.00', ceilingRate: '150.00', status: 'active' as const,
-  createdAt: new Date(), updatedAt: new Date(), clinNumber: '0001', clinDescription: null, contractName: 'NAVAIR', contractNumber: 'N1', slinNumber: null,
+  createdAt: new Date(), updatedAt: new Date(), clinNumber: '0001', clinDescription: null, contractId: 'k1', contractName: 'NAVAIR', contractNumber: 'N1', slinNumber: null,
   rateChanges: changes as never,
 });
 
@@ -59,10 +56,9 @@ async function render(today: string, changes: Parameters<typeof category>[0]) {
       <MantineProvider env="test">
         <LaborCategoriesClient
           initialLaborCategories={[category(changes)] as never}
-          initialAssignments={[{ id: 'a1', userId: 'u1', laborCategoryId: L, effectiveDate: '2026-01-01', endDate: null, createdAt: new Date(), userName: 'Pat', userEmail: 'p@x', lcatCode: 'SE-III', lcatTitle: 'Senior Engineer', clinNumber: '0001', contractName: 'NAVAIR', contractNumber: 'N1' }] as never}
           contracts={[]}
-          users={[]}
-          assignableLcats={[{ id: L, lcatCode: 'SE-III', title: 'Senior Engineer', clinId: 'c1', slinId: null, clinNumber: '0001', contractName: 'NAVAIR', contractNumber: 'N1', slinNumber: null }] as never}
+          peopleCounts={{}}
+          unpricedHours={0}
           today={today as CalendarDate}
         />
       </MantineProvider>,
@@ -71,6 +67,8 @@ async function render(today: string, changes: Parameters<typeof category>[0]) {
 }
 const q = (id: string) => document.querySelector(`[data-testid="${id}"]`) as HTMLElement | null;
 const btn = (id: string) => q(id) as HTMLButtonElement;
+/** UX-4B1-AUDIT L13: a step that can't run is aria-disabled (never `disabled`, so focus stays). */
+const off = (id: string) => q(id)!.getAttribute('aria-disabled') === 'true';
 async function click(el: Element | null) { await act(async () => { (el as HTMLElement).click(); }); }
 async function type(id: string, value: string) {
   const el = q(id) as HTMLInputElement | HTMLTextAreaElement;
@@ -105,11 +103,8 @@ describe('Display (D2): current rate on the injected today + the next change', (
     expect(q('lcat-next-hourly')!.textContent).toBe('→ $110.00 from Jan 1, 2027');
   });
 
-  it('the assignments table shows the assigned category\'s CURRENT rate (not the starting rate)', async () => {
-    await render('2027-02-01', twoChanges);
-    expect(document.body.textContent).toContain('$110.00/hr');
-    expect(document.body.textContent).not.toContain('$100.00/hr');
-  });
+  // UX-4b §4.3 (L1): the assignments moved to People → Assignments; their Rate is the page's rateByCategory (the
+  // current rate, computed on the server — assignments-lcat-tab.test.tsx and labor-categories-assignable.test.tsx).
 });
 
 describe('UI (D2): the Rates modal gate', () => {
@@ -125,23 +120,23 @@ describe('UI (D2): the Rates modal gate', () => {
     expect(q('lcat-current-hourly')!.textContent).toBe('$100.00');
     await openAdd();
     await type('rate-date', '2027-01-01');
-    expect((q('rate-hourly') as HTMLInputElement).value).toBe('100.00'); // prefilled from the rate in effect on that date
+    expect((q('rate-hourly') as HTMLInputElement).value).toBe('$100.00'); // prefilled from the rate in effect on that date (MoneyInput, UX-4b §4.2.6)
     await type('rate-hourly', '110');
-    expect(btn('rate-save').disabled).toBe(true); // no preview yet
+    expect(off('rate-save')).toBe(true); // no preview yet
 
     await click(q('rate-preview'));
     expect(actions.preview).toHaveBeenCalledWith({ kind: 'add', laborCategoryId: L, effectiveDate: '2027-01-01', hourlyRate: '110', ceilingRate: '150.00' }); // ceiling prefilled from the rate in effect
     expect(q('rate-impact')!.textContent).toBe('This changes the cost of 12.00 recorded hours (from Jan 1, 2027).');
-    expect(btn('rate-save').disabled).toBe(true); // reason + checkbox still missing
+    expect(off('rate-save')).toBe(true); // reason + checkbox still missing
     await type('rate-reason', 'option year');
-    expect(btn('rate-save').disabled).toBe(true);
+    expect(off('rate-save')).toBe(true);
     await click(ackBox());
-    expect(btn('rate-save').disabled).toBe(false);
+    expect(off('rate-save')).toBe(false);
 
     await type('rate-reason', 'option year 2'); // typing the reason does NOT clear the gate
-    expect(btn('rate-save').disabled).toBe(false);
+    expect(off('rate-save')).toBe(false);
     await type('rate-hourly', '111');           // a value change DOES
-    expect(btn('rate-save').disabled).toBe(true);
+    expect(off('rate-save')).toBe(true);
     expect(q('rate-impact')).toBeNull();
     expect(q('rate-reason')).toBeNull();
 
@@ -163,7 +158,7 @@ describe('UI (D2): the Rates modal gate', () => {
     await click(q('rate-preview'));
     expect(q('rate-impact')!.textContent).toBe('No recorded hours are affected.');
     expect(q('rate-reason')).toBeNull();
-    expect(btn('rate-save').disabled).toBe(false);
+    expect(off('rate-save')).toBe(false);
   });
 
   it('on failure the error shows and the form stays (values kept, main table unchanged)', async () => {
@@ -176,8 +171,29 @@ describe('UI (D2): the Rates modal gate', () => {
     await click(q('rate-preview'));
     await click(q('rate-save'));
     expect(q('rate-error')!.textContent).toBe('There is already a rate change on 2028-01-01 for this labor category. Correct that one instead.');
-    expect((q('rate-hourly') as HTMLInputElement).value).toBe('130');
+    expect((q('rate-hourly') as HTMLInputElement).value).toBe('$130');
     expect(q('lcat-current-hourly')!.textContent).toBe('$100.00');
+  });
+});
+
+describe('UX-4B1-AUDIT L13: Preview and Save keep focus', () => {
+  it('never `disabled`; Preview with no date → an inline error and no call; Save before Preview → the reason, no call', async () => {
+    await render('2027-02-01', []);
+    await openRates();
+    await click(q('rate-start-add'));
+    for (const id of ['rate-preview', 'rate-save']) expect(btn(id).hasAttribute('disabled'), id).toBe(false);
+    expect(off('rate-preview')).toBe(true);
+    expect(btn('rate-preview').getAttribute('aria-describedby')).toBe(q('rate-hint')!.id);
+    expect(q('rate-hint')!.textContent).toBe('Choose an effective date, then preview the change.');
+    await click(q('rate-preview'));
+    expect(actions.preview).not.toHaveBeenCalled();
+    expect(q('rate-date-error')!.textContent).toBe('Choose an effective date.');
+    await type('rate-date', '2028-01-01');
+    expect(off('rate-preview')).toBe(false);
+    expect(q('rate-hint')!.textContent).toBe('Preview the change before saving it.');
+    expect(btn('rate-save').getAttribute('aria-describedby')).toBe(q('rate-hint')!.id);
+    await click(q('rate-save'));
+    expect(actions.add).not.toHaveBeenCalled();
   });
 });
 
@@ -189,7 +205,7 @@ describe('UI (D2): Correct and Remove (audit L3)', () => {
     await openRates();
     expect(q('rate-remove-starting')).toBeNull(); // the starting rate can't be removed
     await click(q('rate-correct-x1'));
-    expect((q('rate-hourly') as HTMLInputElement).value).toBe('110.00');
+    expect((q('rate-hourly') as HTMLInputElement).value).toBe('$110.00');
     await type('rate-hourly', '112');
     await click(q('rate-preview'));
     expect(actions.preview).toHaveBeenCalledWith({ kind: 'correct', laborCategoryId: L, target: 'x1', hourlyRate: '112', ceilingRate: null });
@@ -212,7 +228,7 @@ describe('UI (D2): Correct and Remove (audit L3)', () => {
     await click(q('rate-preview'));
     expect(actions.preview).toHaveBeenCalledWith({ kind: 'remove', laborCategoryId: L, changeId: 'x2' });
     expect(q('rate-impact')!.textContent).toBe('This changes the cost of 4.00 recorded hours (from Apr 1, 2027).');
-    expect(btn('rate-save').disabled).toBe(true);
+    expect(off('rate-save')).toBe(true);
     await type('rate-reason', 'wrong date');
     await click(ackBox());
     await click(q('rate-save'));
@@ -241,7 +257,7 @@ describe('M1 / L5 (audit): a late preview never arms Save; closing the modal dis
     await type('rate-date', '2025-01-01'); // changed while the preview runs
     await act(async () => { pending.resolve(ZERO); });
     expect(q('rate-impact')).toBeNull();
-    expect(btn('rate-save').disabled).toBe(true);
+    expect(off('rate-save')).toBe(true);
   });
 
   it('a row\'s Correct clicked while an Add preview is pending → the late result is dropped', async () => {
@@ -254,7 +270,7 @@ describe('M1 / L5 (audit): a late preview never arms Save; closing the modal dis
     await click(q('rate-correct-x1'));
     await act(async () => { pending.resolve(ZERO); });
     expect(q('rate-impact')).toBeNull();
-    expect(btn('rate-save').disabled).toBe(true);
+    expect(off('rate-save')).toBe(true);
   });
 
   it('close and reopen the same category: the form, preview and reason are gone', async () => {
@@ -293,9 +309,11 @@ describe('Static (wording): the old footer sentence is gone from src/', () => {
     expect(readFileSync(path.join(ROOT, 'src/app/(app)/settings/api-keys/ApiKeysClient.tsx'), 'utf8')).toMatch(/<Code>hourlyRate<\/Code> is the labor-category rate in effect on that entry&apos;s date/);
   });
 
-  it('the assignment dropdown label uses the current rate from the page\'s schedules', () => {
-    const client = readFileSync(path.resolve(__dirname, '../../app/(app)/admin/labor-categories/LaborCategoriesClient.tsx'), 'utf8');
-    expect(client).toMatch(/\(\$\{formatRate\(currentRateOf\(lc\.id\)\)\}\/hr\)/);
+  it('the assignment dropdown label uses the current rate from the page\'s schedules (rateByCategory, UX-4b §4.3)', () => {
+    const panel = readFileSync(path.resolve(__dirname, '../../app/(app)/admin/assignments/LaborCategoryAssignmentsPanel.tsx'), 'utf8');
+    expect(panel).toMatch(/\(\$\{perHour\(rateByCategory\[lc\.id\]\)\}\)/);
+    const page = readFileSync(path.resolve(__dirname, '../../app/(app)/admin/assignments/page.tsx'), 'utf8');
+    expect(page).toContain('rateDisplay(schedule, today).current?.hourlyRate ?? null');
   });
 
   it('the assignment selects no longer return a starting rate', () => {
