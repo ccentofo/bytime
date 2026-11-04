@@ -26,7 +26,20 @@ vi.mock('@/lib/session', () => {
   const admin = async () => ({ id: 'admin-1', email: 'a@x', fullName: 'Ann', role: 'admin' });
   return { AuthorizationError, requireSession: admin, requireAdmin: admin, requireAdminFresh: admin };
 });
-vi.mock('@/server/internal/pay-period-config', () => ({ existingPeriodLength: async (_db: unknown, _s: unknown, n: number | null) => n ?? h.periodLength }));
+vi.mock('@/server/internal/pay-period-config', async () => {
+  // UX-4b Part 2 §4.1.1: payroll-data loads the schedule once (loadScheduleResolver) — the default semi-monthly here.
+  const { DEFAULT_PERIOD_CONFIG, getNumDaysInPeriod, getPeriodStartForDate } = await import('@/lib/date-utils');
+  return {
+    existingPeriodLength: async (_db: unknown, _s: unknown, n: number | null) => n ?? h.periodLength,
+    loadScheduleResolver: async () => ({
+      configOn: () => DEFAULT_PERIOD_CONFIG,
+      periodContaining: (day: string) => {
+        const start = getPeriodStartForDate(day as never, DEFAULT_PERIOD_CONFIG);
+        return { start, numDays: getNumDaysInPeriod(start, DEFAULT_PERIOD_CONFIG), config: DEFAULT_PERIOD_CONFIG };
+      },
+    }),
+  };
+});
 
 import * as dbModule from '@/db';
 import {
