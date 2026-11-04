@@ -1,43 +1,27 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  Badge,
-  Button,
-  Drawer,
-  Stack,
-  Text,
-  Textarea,
-  Group,
-  Paper,
-  Table,
-  Alert,
-  SegmentedControl,
-  List,
-  VisuallyHidden,
-} from '@mantine/core';
-import { Icons, ICON_SIZE } from '@/components/ui/icons';
-import { notifications } from '@mantine/notifications';
+import { Alert, Button, Drawer, Group, List, Paper, SegmentedControl, Stack, Text } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable, numericColumn } from '@/components/table/mrtDefaults';
 import { StatusBadge } from '@/components/ui/StatusBadge';
-import { toastError } from '@/lib/toast';
-import { formatHours } from '@/lib/format';
-import { calendarDayOf } from '@/lib/calendar-date';
-import { periodLabel } from '@/lib/timesheet/labels';
-import classes from './Approvals.module.css';
-import { approvePeriod, rejectPeriod, getScopedPeriods } from '@/server/actions/periods';
-import { runAction } from '@/lib/run-action';
-import { ReviewDecisionButtons } from '@/components/approvals/ReviewDecisionButtons';
-import { getTimesheetForReview } from '@/server/actions/timesheet';
-import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
-import { formatDateTime } from '@/lib/format';
-import { PERIOD_STATUS_COLOR } from '@/lib/ui/status-colors';
-import { rowLabel } from '@/lib/timesheet/labels';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { useBusy } from '@/components/ui/useBusy';
+import { ReviewGrid } from '@/components/approvals/ReviewGrid';
+import { DecisionCard, RETURN_NEEDS_COMMENT } from '@/components/approvals/DecisionCard';
+import { approvePeriod, rejectPeriod, getScopedPeriods } from '@/server/actions/periods';
+import { getTimesheetForReview } from '@/server/actions/timesheet';
+import { runAction } from '@/lib/run-action';
+import { toastError, toastSuccess } from '@/lib/toast';
+import { formatHours } from '@/lib/format';
+import { addDays, calendarDayOf, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { periodLabel, rowLabel, shownRowName } from '@/lib/timesheet/labels';
+import { reasonLabel } from '@/lib/reason-codes';
+import type { FlaggedCell, LastReturn } from '@/lib/approvals/flagged-cells';
 import type { ChargeCode, TimesheetEntry } from '@/types/timesheet';
+import classes from './Approvals.module.css';
 
 type Period = {
   id: string;
@@ -135,6 +119,14 @@ type ReviewData = {
   approvalText: string | null;
   /** UX-3 A4.3: the period's latest notes, keyed `${chargeCodeId}-${dayIndex}` (missing → none). */
   notes?: Record<string, { body: string; revision: number }>;
+  /** UX-4b Part 2 §3.1.5: the reviewed period row (A10 binding; null with no row), its length, the flags, the last return. */
+  periodId?: string | null;
+  numDays?: number;
+  submittedAt?: string | null;
+  submittedComment?: string | null;
+  flagged?: FlaggedCell[];
+  lastReturn?: LastReturn | null;
+  approvalUiText?: string | null;
 };
 
 /** One line of the drawer's Notes list (feature-plan-ux-timesheet-ui.md §4.12). */
@@ -174,112 +166,137 @@ type Props = {
 
 export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scopeInfo, workspaceTimezone, initialReviewId = null, notices = null }: Props) {
   const [periods, setPeriods] = useState(initialPeriods);
-  const [isPending, startTransition] = useTransition();
   const router = useRouter();
+  const busy = useBusy();
   const [view, setView] = useState<ApprovalsView>('waiting');
   const narrow = useMediaQuery('(max-width: 40em)');
-  const changeView = (next: ApprovalsView) => setView(next);
-  const submittedDay = (d: Date | string | null) => (d ? formatCalendarDate(calendarDayOf(new Date(d), workspaceTimezone), 'MMM D') : '—');
+  const phone = useMediaQuery('(max-width: 48em)');
+  const dayOf = (d: Date | string) => formatCalendarDate(calendarDayOf(new Date(d), workspaceTimezone), 'MMM D');
+  const submittedDay = (d: Date | string | null) => (d ? dayOf(d) : '—');
 
-  // Review drawer state
+  // ── The review Drawer (§3.3). `current` is what the Drawer describes; `reviewData` is the review read FOR it, or null
+  // while a read is in flight or after it failed (A10: no decision without the review on screen). ────────────────────
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [selectedPeriod, setSelectedPeriod] = useState<Period | null>(null);
+  const [current, setCurrent] = useState<Period | null>(null);
   const [reviewData, setReviewData] = useState<ReviewData | null>(null);
-  const [rejectComment, setRejectComment] = useState('');
-  const [approveComment, setApproveComment] = useState('');
-  const [actionError, setActionError] = useState<string | null>(null);
-
-  function openReview(period: Period) {
-    setSelectedPeriod(period);
-    setDrawerOpen(true);
-    setRejectComment('');
-    setApproveComment('');
-    setActionError(null);
-    setReviewData(null);
-
-    startTransition(async () => {
-      try {
-        const data = await getTimesheetForReview(period.userId, period.periodStart);
-        setReviewData(data);
-      } catch (error) {
-        // R2-12: don't crash to the error page on a load failure (e.g. a scope change
-        // mid-session) — show an inline notification and close the drawer instead.
-        notifications.show({
-          title: 'Failed to load timesheet',
-          message: String(error),
-          color: 'red',
-          icon: <Icons.statusError size={ICON_SIZE.button} />,
-        });
-        setDrawerOpen(false);
-      }
-    });
-  }
-
-  function handleApprove() {
-    if (!selectedPeriod || !reviewData) return; // decide only what has been loaded and reviewed
-    startTransition(async () => {
-      setActionError(null);
-      const result = await runAction(approvePeriod({
-        periodId: selectedPeriod.id,
-        comment: approveComment.trim() || undefined,
-        seen: reviewData.submissionCount,
-      }), { errorTitle: 'Approval Failed' });
-      if (!result.ok) {
-        setActionError(result.error); // the server's reason (e.g. another reviewer decided first)
-        return;
-      }
-      router.refresh(); // the sidebar's waiting count lives in the layout (UX-2 §4.6)
-      try {
-        const refreshed = await getScopedPeriods();
-        setPeriods(refreshed);
-        setDrawerOpen(false);
-        notifications.show({
-          title: 'Timesheet Approved',
-          message: `${selectedPeriod.userName}'s timesheet has been approved.`,
-          color: 'success',
-          icon: <Icons.approve size={ICON_SIZE.button} />,
-        });
-      } catch {
-        // Approved; only the list refresh failed.
-        notifications.show({ title: 'Approved', message: 'Refresh the page to see the updated list.', color: 'warning' });
-      }
-    });
-  }
-
-  function handleReject() {
-    if (!selectedPeriod || !reviewData || !rejectComment.trim()) return;
-    startTransition(async () => {
-      setActionError(null);
-      const result = await runAction(rejectPeriod({
-        periodId: selectedPeriod.id,
-        comment: rejectComment.trim(),
-        seen: reviewData.submissionCount,
-      }), { errorTitle: 'Rejection Failed' });
-      if (!result.ok) {
-        setActionError(result.error);
-        return;
-      }
-      router.refresh(); // the sidebar's waiting count lives in the layout (UX-2 §4.6)
-      try {
-        const refreshed = await getScopedPeriods();
-        setPeriods(refreshed);
-        setDrawerOpen(false);
-        notifications.show({
-          title: 'Timesheet Rejected',
-          message: `${selectedPeriod.userName}'s timesheet has been returned for corrections.`,
-          color: 'warning',
-          icon: <Icons.reject size={ICON_SIZE.button} />,
-        });
-      } catch {
-        notifications.show({ title: 'Returned', message: 'Refresh the page to see the updated list.', color: 'warning' });
-      }
-    });
-  }
+  /** The last loaded grid stays visible while Previous / Next loads (the decision card shows "Loading…"). */
+  const [grid, setGrid] = useState<{ periodId: string; start: CalendarDate; numDays: number; data: ReviewData } | null>(null);
+  const [readError, setReadError] = useState<string | null>(null);
+  const [comment, setComment] = useState('');
+  const [commentError, setCommentError] = useState<string | null>(null);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
+  const [openNext, setOpenNext] = useState(true);
+  const readToken = useRef(0);
+  const commentRef = useRef<HTMLTextAreaElement>(null);
+  /** Where focus goes once the Drawer has closed (returnFocus is off; onExitTransitionEnd applies it). */
+  const focusAfterClose = useRef<{ kind: 'heading' } | { kind: 'row'; index: number } | null>(null);
 
   const waitingCount = useMemo(() => rowsForView('waiting', periods).length, [periods]);
   // Memoized: a new data array on every render makes MRT re-render forever.
   const viewRows = useMemo(() => rowsForView(view, periods), [view, periods]);
+  const waitingRows = useMemo(() => rowsForView('waiting', periods), [periods]);
   const firstWaitingId = view === 'waiting' ? viewRows[0]?.id ?? null : null;
+
+  /**
+   * Load `row`'s review. A response for an older request is dropped before any setState (request token). Previous /
+   * Next and "open next" keep the last grid visible while loading (`keepGrid`); opening from the list starts clean.
+   */
+  async function loadReview(row: Period, keepGrid = false) {
+    const token = ++readToken.current;
+    if (!keepGrid) setGrid(null);
+    setCurrent(row);
+    setReviewData(null);
+    setReadError(null);
+    setComment('');
+    setCommentError(null);
+    setDecisionError(null);
+    setDrawerOpen(true);
+    try {
+      const data = await getTimesheetForReview(row.userId, row.periodStart);
+      if (token !== readToken.current) return;
+      setReviewData(data);
+      setGrid({ periodId: row.id, start: row.periodStart, numDays: data.numDays ?? row.periodNumDays, data });
+    } catch {
+      if (token !== readToken.current) return;
+      setReadError("This timesheet couldn't be loaded.");
+    }
+  }
+
+  function closeDrawer() {
+    if (busy.any()) return; // a decision is running (§3.3.3)
+    readToken.current += 1;
+    const index = current ? viewRows.findIndex((r) => r.id === current.id) : -1;
+    focusAfterClose.current = index >= 0 ? { kind: 'row', index } : { kind: 'heading' };
+    setDrawerOpen(false);
+  }
+
+  function applyCloseFocus() {
+    const target = focusAfterClose.current;
+    focusAfterClose.current = null;
+    if (!target) return;
+    const button = target.kind === 'row' ? document.querySelectorAll<HTMLElement>('[data-review-button]')[target.index] : undefined;
+    if (button) { button.focus(); return; }
+    const heading = document.querySelector<HTMLElement>('h1');
+    if (heading) { heading.tabIndex = -1; heading.focus(); }
+  }
+
+  // Previous / Next walk the Waiting list (in compareWaiting order) when the open row is in it.
+  const navIndex = current && view === 'waiting' ? waitingRows.findIndex((r) => r.id === current.id) : -1;
+  const navigable = navIndex >= 0;
+  function step(delta: -1 | 1) {
+    if (busy.any() || !navigable) return; // never move while a decision runs
+    const next = waitingRows[navIndex + delta];
+    if (next) void loadReview(next, true);
+  }
+
+  // A10: the card renders only for the review that is on screen — same object for the period id and the version seen.
+  const reviewReady = !!(current && reviewData && reviewData.periodId === current.id);
+
+  async function decide(kind: 'approve' | 'return') {
+    if (!current || !reviewData || reviewData.periodId !== current.id || busy.any()) return;
+    const trimmed = comment.trim();
+    if (kind === 'return' && trimmed === '') {
+      setCommentError(RETURN_NEEDS_COMMENT); // no request (§6)
+      commentRef.current?.focus();
+      return;
+    }
+    const decided = current;
+    const snapshot = waitingRows.map((r) => r.id); // before deciding (§3.3.4)
+    await busy.run(`decision:${kind}`, async () => {
+      if (!reviewData.periodId) return;
+      setDecisionError(null);
+      // A10: the period and the version seen come from the SAME review object — the one on screen.
+      const result = kind === 'approve'
+        ? await runAction(approvePeriod({ periodId: reviewData.periodId, seen: reviewData.submissionCount, comment: trimmed || undefined }), { silent: true })
+        : await runAction(rejectPeriod({ periodId: reviewData.periodId, seen: reviewData.submissionCount, comment: trimmed }), { silent: true });
+      if (!result.ok) { setDecisionError(result.error); return; } // the comment is kept
+      toastSuccess({ title: kind === 'approve' ? 'Timesheet approved' : 'Timesheet returned', message: `${decided.userName} · ${periodOf(decided)}` });
+      let rows: Period[];
+      try {
+        rows = (await getScopedPeriods()) as Period[];
+      } catch {
+        toastError({ title: 'List not refreshed', message: "Decided, but the list couldn't refresh. Reload the page." });
+        router.refresh();
+        focusAfterClose.current = { kind: 'heading' };
+        setDrawerOpen(false);
+        return;
+      }
+      setPeriods(rows);
+      router.refresh(); // the sidebar's waiting count lives in the layout
+      const stillWaiting = rowsForView('waiting', rows);
+      const at = snapshot.indexOf(decided.id);
+      if (!openNext) {
+        focusAfterClose.current = { kind: 'row', index: at };
+        setDrawerOpen(false);
+        return;
+      }
+      const after = snapshot.slice(at + 1).map((id) => stillWaiting.find((r) => r.id === id)).find(Boolean);
+      const next = after ?? stillWaiting[0];
+      if (next) { void loadReview(next, true); return; }
+      focusAfterClose.current = { kind: 'heading' };
+      setDrawerOpen(false);
+    }, { group: 'decision' });
+  }
 
   const columns = useMemo<MRT_ColumnDef<Period>[]>(() => {
     const employee: MRT_ColumnDef<Period> = { id: 'employee', header: 'Employee', accessorFn: (r) => r.userName, Cell: ({ row }) => <Text fw={600} size="sm" span>{row.original.userName}</Text> };
@@ -347,7 +364,8 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         <Button
           size="xs"
           variant={review && row.original.id === firstWaitingId ? 'filled' : 'default'}
-          onClick={() => openReview(row.original)}
+          onClick={() => { void loadReview(row.original); }}
+          data-review-button
         >
           {review ? 'Review' : 'View'}
         </Button>
@@ -372,11 +390,14 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
       toastError({ title: 'Timesheet not available', message: "That timesheet isn't available to you." });
       return;
     }
+    const token = ++readToken.current;
     void (async () => {
       try {
         const data = await getTimesheetForReview(row.userId, row.periodStart);
-        setSelectedPeriod(row);
+        if (token !== readToken.current) return;
+        setCurrent(row);
         setReviewData(data);
+        setGrid({ periodId: row.id, start: row.periodStart, numDays: data.numDays ?? row.periodNumDays, data });
         setDrawerOpen(true);
       } catch {
         toastError({ title: 'Timesheet not available', message: "That timesheet isn't available to you." });
@@ -384,74 +405,63 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     })();
   }, [initialReviewId, initialPeriods]);
 
-  // Build review table content
-  let reviewContent = null;
-  if (reviewData && selectedPeriod) {
-    const numDays = selectedPeriod.periodNumDays;
-    const start = selectedPeriod.periodStart;
-    const notes = reviewData.notes ?? {};
-    const noteLines = reviewNotes(notes, reviewData.chargeCodes, start);
+  // ── Drawer content ──────────────────────────────────────────────────────────────────────────────────────────────
+  const totalHours = reviewReady && reviewData
+    ? reviewData.entries.reduce((s, e) => s + e.hours.reduce((a, b) => a + b, 0), 0)
+    : current?.hours ?? null;
+  const rowName = (id: string, codes: ChargeCode[]) => { const cc = codes.find((c) => c.id === id); return cc ? (shownRowName(cc) || cc.clin) : 'Removed code'; };
+  const flagged = reviewReady ? reviewData!.flagged ?? [] : [];
+  const lastReturn = reviewReady ? reviewData!.lastReturn ?? null : null;
+  const noteLines = reviewReady && current ? reviewNotes(reviewData!.notes, reviewData!.chargeCodes, current.periodStart) : [];
+  const worthCount = flagged.length;
 
-    reviewContent = (
-      <Stack mt="md">
-        <Text fw={600} size="sm">Time Entries:</Text>
-        <Table.ScrollContainer minWidth={600}>
-        <Table striped withTableBorder>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>Charge Code</Table.Th>
-              {Array.from({ length: numDays }, (_, i) => (
-                <Table.Th key={i} style={{ textAlign: 'center', fontSize: 11 }}>
-                  {formatCalendarDate(addDays(start, i), 'M/D')}
-                </Table.Th>
-              ))}
-              <Table.Th style={{ textAlign: 'center' }}>Total</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {reviewData.chargeCodes.map((cc) => {
-              const entry = reviewData.entries.find((e) => e.chargeCodeId === cc.id);
-              const hours = entry?.hours ?? [];
-              const total = hours.reduce((a, b) => a + b, 0);
-              return (
-                <Table.Tr key={cc.id}>
-                  <Table.Td>
-                    {rowLabel(cc)}
-                    {!cc.assignable && <Text size="xs" c="dimmed">Closed to new hours (recorded hours shown)</Text>}
-                  </Table.Td>
-                  {Array.from({ length: numDays }, (_, i) => {
-                    // certified-outputs C1 display: imported hours are labelled in the review too.
-                    const provenance = entry?.provenance?.[i] ?? null;
-                    return (
-                      <Table.Td key={i} style={{ textAlign: 'center' }} title={provenance ?? undefined}>
-                        {(hours[i] ?? 0) === 0 ? '—' : (hours[i] ?? 0).toFixed(2)}
-                        {provenance && <Text span size="xs" c="signal" data-testid="imported-indicator"> •</Text>}
-                        {notes[`${cc.id}-${i}`]?.body && (
-                          <span data-testid="note-indicator">
-                            {' '}<Icons.note size={12} aria-hidden="true" /><VisuallyHidden>, note</VisuallyHidden>
-                          </span>
-                        )}
-                      </Table.Td>
-                    );
-                  })}
-                  <Table.Td style={{ textAlign: 'center', fontWeight: 700 }}>
-                    {total.toFixed(2)}
-                  </Table.Td>
-                </Table.Tr>
-              );
-            })}
-          </Table.Tbody>
-        </Table>
-        </Table.ScrollContainer>
-        {noteLines.length > 0 && (
-          <>
-            {/* A real heading (L14), with the look of the drawer's other labels. */}
-            <Text component="h3" fw={600} size="sm" m={0} id="review-notes-heading">Notes</Text>
-            <List size="sm" spacing={4} aria-labelledby="review-notes-heading" data-testid="review-notes">
-              {noteLines.map((n) => <List.Item key={n.key}>{n.text}</List.Item>)}
-            </List>
-          </>
+  function decisionArea() {
+    if (!current) return null;
+    if (readError) {
+      return (
+        <Alert color="red" role="alert" data-testid="review-read-error">
+          {readError}{' '}
+          <Button size="compact-sm" variant="default" ml="xs" onClick={() => { if (current) void loadReview(current); }}>Retry</Button>
+        </Alert>
+      );
+    }
+    // A10: nothing to click until the review for THIS row is on screen.
+    if (!(reviewData && reviewData.periodId === current.id)) {
+      return <Text role="status" size="sm" c="dimmed" data-testid="review-loading">Loading…</Text>;
+    }
+    const data = reviewData;
+    const isOwn = current.userId === currentUserId;
+    if (data.periodStatus !== 'submitted') {
+      return data.approvalUiText ? <Text size="sm" data-testid="decision-text">{data.approvalUiText}</Text> : null;
+    }
+    // R2-7: supervisors and employees never decide their own period (the server enforces this too).
+    if (isOwn && userRole !== 'admin') {
+      return <Alert color="warning">You can&apos;t approve or return your own timesheet. Another admin or supervisor must review it.</Alert>;
+    }
+    // C2 (CO-D6/CO-D12): an admin's own timesheet once a second admin or a designated approver exists.
+    if (isOwn && !data.canApprove) return <Alert color="warning">Your timesheet must be approved by another admin or your designated approver.</Alert>;
+    if (!data.canApprove) return <Alert color="gray">You can view but not approve this timesheet.</Alert>;
+    return (
+      <Stack gap="sm">
+        {isOwn && (
+          <Alert color="signal">
+            This is your own timesheet. You are the only active admin and have no designated approver, so you may decide
+            it — the decision is visibly marked as a self-decision everywhere it appears.
+          </Alert>
         )}
+        <DecisionCard
+          isOwnPeriod={isOwn}
+          comment={comment}
+          onCommentChange={(v) => { setComment(v); if (commentError && v.trim()) setCommentError(null); }}
+          commentError={commentError}
+          error={decisionError}
+          busy={busy}
+          onApprove={() => { void decide('approve'); }}
+          onReturn={() => { void decide('return'); }}
+          openNext={openNext}
+          onOpenNextChange={setOpenNext}
+          textareaRef={commentRef}
+        />
       </Stack>
     );
   }
@@ -471,8 +481,8 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
 
       {/* Empty state for supervisors with nobody to review */}
       {userRole === 'supervisor' && scopeInfo && scopeInfo.approvableEmployeeCount + scopeInfo.designatedByCount === 0 && (
-        <Paper withBorder p="xl" ta="center" radius="md">
-          <Text size="lg" c="dimmed" mb="sm">No Employees in Your Scope</Text>
+        <Paper withBorder p="xl" ta="center" radius="md" mb="md">
+          <Text size="lg" c="dimmed" mb="sm">No employees in your scope</Text>
           <Text size="sm" c="dimmed">
             You are not assigned to any CLINs and nobody has designated you as their approver, so there are no
             timesheets you can review. Contact your administrator to get assigned to the appropriate contracts and CLINs.
@@ -484,7 +494,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         mb="md"
         fullWidth={narrow}
         value={view}
-        onChange={(v) => changeView(v as ApprovalsView)}
+        onChange={(v) => setView(v as ApprovalsView)}
         data={[
           { value: 'waiting', label: `Waiting for you (${waitingCount})` },
           { value: 'decided', label: 'Decided' },
@@ -497,111 +507,94 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
 
       <Drawer
         opened={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        onClose={closeDrawer}
+        onExitTransitionEnd={applyCloseFocus}
+        returnFocus={false}
+        closeOnEscape={!busy.any()}
+        closeOnClickOutside={!busy.any()}
         position="right"
-        size="90%"
-        title={
-          selectedPeriod
-            ? `${selectedPeriod.canApprove ? 'Review' : 'View'} — ${selectedPeriod.userName}`
-            : 'Review Timesheet'
-        }
+        size={phone ? '100%' : 'xl'}
+        title={current ? `${current.userName} · ${periodOf(current)}` : ''}
       >
-        <Stack>
-          {selectedPeriod && (
-            <Paper withBorder p="sm">
-              <Group>
-                <Text size="sm"><strong>Employee:</strong> {selectedPeriod.userName}</Text>
-                <Text size="sm"><strong>Email:</strong> {selectedPeriod.userEmail}</Text>
-                <Badge color={PERIOD_STATUS_COLOR[selectedPeriod.status as keyof typeof PERIOD_STATUS_COLOR] ?? 'gray'}>
-                  {selectedPeriod.status}
-                </Badge>
-                {(reviewData?.approvalBadge ?? selectedPeriod.approvalBadge) && (
-                  <Badge color="gray" variant="light">{reviewData?.approvalBadge ?? selectedPeriod.approvalBadge}</Badge>
-                )}
+        {current && (
+          <Stack gap="md">
+            <Group justify="space-between" align="center" wrap="wrap" gap="xs">
+              <Group gap={6} data-testid="review-header">
+                <Text size="sm">Submitted {submittedDay(current.submittedAt)}</Text>
+                {totalHours !== null && <Text size="sm">· {formatHours(totalHours)} hours ·</Text>}
+                <StatusBadge status={current.status} />
               </Group>
-              {(reviewData?.approvalText ?? selectedPeriod.approvalText) && (
-                <Text size="sm" c="dimmed" mt={4}>{reviewData?.approvalText ?? selectedPeriod.approvalText}</Text>
+              {navigable && (
+                <Group gap="xs" data-testid="review-nav">
+                  <Text size="sm" c="dimmed">{navIndex + 1} of {waitingRows.length} waiting</Text>
+                  <Button size="xs" variant="default" aria-label="Previous waiting timesheet"
+                    aria-disabled={navIndex === 0 || busy.any() || undefined} data-disabled={navIndex === 0 || busy.any() || undefined}
+                    onClick={() => step(-1)}>‹ Previous</Button>
+                  <Button size="xs" variant="default" aria-label="Next waiting timesheet"
+                    aria-disabled={navIndex === waitingRows.length - 1 || busy.any() || undefined} data-disabled={navIndex === waitingRows.length - 1 || busy.any() || undefined}
+                    onClick={() => step(1)}>Next ›</Button>
+                </Group>
               )}
-            </Paper>
-          )}
+            </Group>
 
-          {reviewData === null && isPending && (
-            <Text c="dimmed" size="sm">Loading timesheet data...</Text>
-          )}
+            {/* The last loaded grid (Previous / Next keep it visible until the next one arrives). */}
+            {grid && (
+              <ReviewGrid
+                chargeCodes={grid.data.chargeCodes}
+                entries={grid.data.entries}
+                start={grid.start}
+                numDays={grid.numDays}
+                flagged={grid.data.flagged ?? []}
+                notes={grid.data.notes ?? {}}
+                caption={`Hours for ${current.userName}, ${periodOf(current)}`}
+              />
+            )}
 
-          {reviewContent}
+            <div className={classes.cards}>
+              <Paper withBorder radius="md" p="md" data-testid="worth-a-look">
+                <Text component="h3" fw={600} size="sm" m={0} mb="xs">Worth a look ({worthCount})</Text>
+                {reviewReady ? (
+                  <Stack gap="xs">
+                    {lastReturn && (
+                      <Text size="sm" data-testid="last-return">
+                        Returned {dayOf(lastReturn.at)} by {lastReturn.byName ?? 'an unknown user'}: “{lastReturn.comment ?? ''}”
+                      </Text>
+                    )}
+                    {flagged.map((f) => (
+                      <div key={`${f.rowId}-${f.dayIndex}`} data-testid="flagged-change">
+                        <Text size="sm">
+                          <b>{formatCalendarDate(addDays(current.periodStart, f.dayIndex), 'ddd MMM D')} · {rowName(f.rowId, reviewData!.chargeCodes)}</b>:{' '}
+                          {f.kind === 'late'
+                            ? `${formatHours(f.current.hours)}, entered ${dayOf(f.current.createdAt)}`
+                            : `${formatHours(f.previousHours ?? 0)} → ${formatHours(f.current.hours)}`}
+                          {f.sinceReturned && <span className={classes.tag}>Since returned</span>}
+                        </Text>
+                        <Text size="xs" c="dimmed">
+                          {[reasonLabel(f.current.reasonCode), f.current.comment ? `“${f.current.comment}”` : null,
+                            f.kind === 'correction' ? `changed ${dayOf(f.current.createdAt)}` : null,
+                            f.originallyLate ? 'originally entered late' : null].filter(Boolean).join(' · ')}
+                        </Text>
+                      </div>
+                    ))}
+                    {reviewData!.submittedComment && <Text size="sm" data-testid="submit-note">Submit note: “{reviewData!.submittedComment}”</Text>}
+                    {flagged.length === 0 && !lastReturn && <Text size="sm" c="dimmed">Nothing unusual in this timesheet.</Text>}
+                  </Stack>
+                ) : null}
+              </Paper>
 
-          {actionError && (
-            <Alert icon={<Icons.statusError size={ICON_SIZE.button} />} color="red">
-              {actionError}
-            </Alert>
-          )}
+              <Paper withBorder radius="md" p="md">
+                <Text component="h3" fw={600} size="sm" m={0} mb="xs" id="review-notes-heading">Notes ({noteLines.length})</Text>
+                {noteLines.length > 0 ? (
+                  <List size="sm" spacing={4} aria-labelledby="review-notes-heading" data-testid="review-notes">
+                    {noteLines.map((n) => <List.Item key={n.key}>{n.text}</List.Item>)}
+                  </List>
+                ) : reviewReady ? <Text size="sm" c="dimmed">No notes.</Text> : null}
+              </Paper>
 
-          {(() => {
-            if (selectedPeriod?.status !== 'submitted') return null;
-            // C2: Approve/Reject stay unavailable until the review data (and the version it shows) has loaded.
-            if (!reviewData) return null;
-            const isOwnPeriod = selectedPeriod.userId === currentUserId;
-
-            // R2-7: supervisors and employees never decide their own period (the server enforces this too).
-            if (isOwnPeriod && userRole !== 'admin') {
-              return (
-                <Alert icon={<Icons.statusWarning size={ICON_SIZE.button} />} color="warning">
-                  You cannot approve or reject your own timesheet. Another admin or supervisor must review it.
-                </Alert>
-              );
-            }
-            // C2 (CO-D6/CO-D12): an admin's own timesheet once a second admin or a designated approver exists.
-            if (isOwnPeriod && !reviewData.canApprove) {
-              return (
-                <Alert icon={<Icons.statusWarning size={ICON_SIZE.button} />} color="warning">
-                  Your timesheet must be approved by another admin or your designated approver.
-                </Alert>
-              );
-            }
-            if (!reviewData.canApprove) {
-              return (
-                <Alert icon={<Icons.statusInfo size={ICON_SIZE.button} />} color="gray">
-                  You can view but not approve this timesheet.
-                </Alert>
-              );
-            }
-
-            return (
-              <>
-                {isOwnPeriod && (
-                  <Alert icon={<Icons.statusInfo size={ICON_SIZE.button} />} color="signal">
-                    This is your own timesheet. You are the only active admin and have no designated approver, so you
-                    may approve or reject it — the decision is visibly marked as a self-approval everywhere it appears.
-                  </Alert>
-                )}
-                <Textarea
-                  label="Approval Comment (optional)"
-                  placeholder="Any feedback for the employee..."
-                  value={approveComment}
-                  onChange={(e) => setApproveComment(e.currentTarget.value)}
-                  style={{ maxWidth: 500 }}
-                />
-
-                <Textarea
-                  label="Rejection Comment (required if rejecting)"
-                  placeholder="Explain what needs to be corrected..."
-                  value={rejectComment}
-                  onChange={(e) => setRejectComment(e.currentTarget.value)}
-                  style={{ maxWidth: 500 }}
-                />
-
-                <ReviewDecisionButtons
-                  isOwnPeriod={isOwnPeriod}
-                  canReject={Boolean(rejectComment.trim())}
-                  pending={isPending}
-                  onApprove={handleApprove}
-                  onReject={handleReject}
-                />
-              </>
-            );
-          })()}
-        </Stack>
+              <div data-testid="decision-area">{decisionArea()}</div>
+            </div>
+          </Stack>
+        )}
       </Drawer>
     </>
   );

@@ -477,10 +477,16 @@ describe('static rules', () => {
     expect(lines).toEqual([]);
   });
 
-  it('the Approvals client sends the reviewed version (seen = submissionCount) and only once the review has loaded', () => {
+  it('A-11: the Approvals client binds each decision to the review on screen (feature-plan-ux-approvals-payroll.md A10)', () => {
     const client = readFileSync(path.join(ROOT, 'src/app/(app)/admin/approvals/ApprovalsClient.tsx'), 'utf8');
-    expect(client.match(/seen: reviewData\.submissionCount/g)).toHaveLength(2);
-    expect(client).toMatch(/if \(!reviewData\) return null;/);
+    // The period and the version seen come from the same review object, in every decision payload.
+    expect(client).toMatch(/periodId: reviewData\.periodId,\s*seen: reviewData\.submissionCount/);
+    const payloads = client.match(/(approvePeriod|rejectPeriod)\(\{[^}]*\}/g) ?? [];
+    expect(payloads).toHaveLength(2);
+    for (const p of payloads) expect(p).toMatch(/periodId: reviewData\.periodId,\s*seen: reviewData\.submissionCount/);
+    // Never the selected row's id; the card is gated on the review being for the current row.
+    expect(client).not.toMatch(/selectedPeriod\.id|periodId: selectedPeriod/);
+    expect(client).toContain('reviewData.periodId ===');
   });
 
   it('getTimesheetForReview reads submission_count BEFORE the entries (safe ordering, see its doc comment)', () => {

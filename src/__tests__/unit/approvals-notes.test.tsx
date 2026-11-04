@@ -47,7 +47,8 @@ const PERIOD = {
 const review = (o: Record<string, unknown> = {}) => ({
   chargeCodes: CODES,
   entries: [{ chargeCodeId: CC, hours: [8, 0, 4, ...Array(12).fill(0)] }, { chargeCodeId: IND, hours: [0, 8, ...Array(13).fill(0)] }],
-  periodStatus: 'submitted', submissionCount: 1, canApprove: true, approvalBadge: null, approvalText: null, notes: NOTES, ...o,
+  periodStatus: 'submitted', submissionCount: 1, canApprove: true, approvalBadge: null, approvalText: null, notes: NOTES,
+  periodId: 'p1', numDays: 15, flagged: [], lastReturn: null, ...o,
 });
 const openDrawer = async () => {
   m = await mount(<ApprovalsClient initialPeriods={[PERIOD] as never} currentUserId="sarah" userRole="admin" workspaceTimezone="America/New_York" scopeInfo={null} />);
@@ -68,14 +69,15 @@ describe('Approvals drawer notes (B-T12)', () => {
     expect(reviewNotes(undefined, CODES, START)).toEqual([]);
   });
 
-  it('the drawer: row labels use rowName, the Notes list renders, and note cells carry the glyph plus sr ", note"', async () => {
+  it('the drawer: row headers show the name then the code, the Notes list renders, noted cells carry the corner plus sr ", has a note"', async () => {
     actions.getTimesheetForReview.mockResolvedValue(review());
     await openDrawer();
-    expect(drawerRows().map((r) => r.querySelector('td')?.textContent)).toEqual(['0001 Systems engineering', 'OH Overhead']);
+    // UX-4b Part 2 §3.3.1: the ReviewGrid row header — the name, then the code.
+    expect(drawerRows().map((r) => r.querySelector('th')?.textContent)).toEqual(['Systems engineering0001', 'OverheadOH']);
     expect(document.body.textContent).not.toContain('0001 — Atlas');
     const list = document.body.querySelector('[data-testid="review-notes"]')!;
     expect(list.getAttribute('aria-labelledby')).toBe('review-notes-heading');
-    expect(document.getElementById('review-notes-heading')!.textContent).toBe('Notes');
+    expect(document.getElementById('review-notes-heading')!.textContent).toBe('Notes (4)');
     expect(document.getElementById('review-notes-heading')!.tagName).toBe('H3');     // L14: a real heading
     expect([...list.querySelectorAll('li')].map((li) => li.textContent)).toEqual([
       'Thu, Oct 1 · 0001 Systems engineering · Kickoff',
@@ -84,12 +86,12 @@ describe('Approvals drawer notes (B-T12)', () => {
       'Sat, Oct 3 · 0001 Systems engineering · Site visit',
     ]);
     // Cells: day 0 and day 2 on the direct row, day 0 on overhead; the emptied note (day 5) shows nothing.
-    const noted = (r: number) => [...drawerRows()[r].querySelectorAll('td')].slice(1).flatMap((td, i) => (td.querySelector('[data-testid="note-indicator"]') ? [i] : []));
+    const noted = (r: number) => [...drawerRows()[r].querySelectorAll('td')].flatMap((td, i) => (td.querySelector('[data-testid="note-indicator"]') ? [i] : []));
     expect(noted(0)).toEqual([0, 2]);
     expect(noted(1)).toEqual([0]);
-    const indicator = drawerRows()[0].querySelectorAll('td')[1].querySelector('[data-testid="note-indicator"]')!;
-    expect(indicator.querySelector('svg')!.getAttribute('aria-hidden')).toBe('true');
-    expect(indicator.textContent).toBe(' , note');
+    const cell = drawerRows()[0].querySelectorAll('td')[0];
+    expect(cell.className).toMatch(/noted/);
+    expect(cell.querySelector('[data-testid="note-indicator"]')!.textContent).toBe(', has a note');
     await expectNoAxeViolations(document.body);
   });
 
@@ -98,7 +100,7 @@ describe('Approvals drawer notes (B-T12)', () => {
     expect(reviewNotes({ [`${CC2}-0`]: { body: 'Old work', revision: 1 } }, [clinRow], START).map((n) => n.text)).toEqual(['Thu, Oct 1 · CLIN 0001 · Old work']);
     actions.getTimesheetForReview.mockResolvedValue(review({ chargeCodes: [clinRow], entries: [{ chargeCodeId: CC2, hours: [3, ...Array(14).fill(0)] }], notes: {} }));
     await openDrawer();
-    expect(drawerRows()[0].querySelector('td')!.textContent).toBe('CLIN 0001Closed to new hours (recorded hours shown)');
+    expect(drawerRows()[0].querySelector('th')!.textContent).toBe('CLIN 0001Closed to new hours (recorded hours shown)');
   });
 
   it('a review without `notes` (or with an empty map) doesn\'t crash and shows no Notes list', async () => {

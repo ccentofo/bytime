@@ -15,7 +15,8 @@ vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
 import { WorkspaceModeProvider, WriteButton, READ_ONLY_TOOLTIP } from '@/components/shell/WorkspaceMode';
-import { ReviewDecisionButtons } from '@/components/approvals/ReviewDecisionButtons';
+import { DecisionCard } from '@/components/approvals/DecisionCard';
+import { useBusy } from '@/components/ui/useBusy';
 import { ContractsClient } from '@/app/(app)/admin/contracts/ContractsClient';
 
 const render = (mode: 'full' | 'read_only', el: ReactElement) =>
@@ -30,21 +31,37 @@ function buttons(html: string, label: string): Array<{ disabled: boolean }> {
   return out;
 }
 
-const decision = () => (
-  <ReviewDecisionButtons isOwnPeriod={false} canReject pending={false} onApprove={() => {}} onReject={() => {}} />
-);
+/** The review's DecisionCard (UX-4b Part 2 §3.3.2: it replaces ReviewDecisionButtons). */
+function Card() {
+  const busy = useBusy();
+  return (
+    <DecisionCard isOwnPeriod={false} comment="" onCommentChange={() => {}} commentError={null} error={null} busy={busy}
+      onApprove={() => {}} onReturn={() => {}} openNext onOpenNextChange={() => {}} />
+  );
+}
+const decision = () => <Card />;
 
-describe('Approve / Reject', () => {
-  it('are disabled in a read_only workspace', () => {
+describe('Approve / Return for corrections (A-12)', () => {
+  it('are aria-disabled WriteButtons in a read_only workspace, with the reason — never the disabled attribute', () => {
     const html = render('read_only', decision());
     expect(buttons(html, 'Approve')).toEqual([{ disabled: true }]);
-    expect(buttons(html, 'Reject')).toEqual([{ disabled: true }]);
+    expect(buttons(html, 'Return for corrections')).toEqual([{ disabled: true }]);
+    for (const label of ['Approve', 'Return for corrections']) {
+      const tag = [...html.matchAll(/<button([^>]*)>([\s\S]*?)<\/button>/g)].find((m) => m[2].replace(/<[^>]+>/g, '').includes(label))![1];
+      expect(tag, label).toContain('aria-disabled="true"');
+      expect(tag, label).toContain('data-read-only="true"');
+      expect(tag, label).not.toMatch(/\sdisabled(=|\s|$)/);
+      const describedBy = tag.match(/aria-describedby="([^"]+)"/)![1];
+      expect(html).toContain(`id="${describedBy}"`);
+    }
+    expect(html).toContain(READ_ONLY_TOOLTIP);
+    expect(html).not.toContain('>Reject<');
   });
 
   it('are enabled in a full workspace', () => {
     const html = render('full', decision());
     expect(buttons(html, 'Approve')).toEqual([{ disabled: false }]);
-    expect(buttons(html, 'Reject')).toEqual([{ disabled: false }]);
+    expect(buttons(html, 'Return for corrections')).toEqual([{ disabled: false }]);
   });
 });
 

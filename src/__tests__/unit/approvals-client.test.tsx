@@ -20,7 +20,7 @@ const actions = vi.hoisted(() => ({
   approvePeriod: vi.fn(async () => ({ ok: true, data: undefined })),
   rejectPeriod: vi.fn(),
   getScopedPeriods: vi.fn(async () => [] as unknown[]),
-  getTimesheetForReview: vi.fn(async () => ({ chargeCodes: [], entries: [], periodStatus: 'submitted', submissionCount: 1, canApprove: true, approvalBadge: null, approvalText: null, notes: {} })),
+  getTimesheetForReview: vi.fn(async (userId: string) => ({ chargeCodes: [], entries: [], periodStatus: 'submitted', submissionCount: 1, canApprove: true, approvalBadge: null, approvalText: null, notes: {}, periodId: userId.replace(/^u-/, ''), numDays: 15, flagged: [], lastReturn: null })),
 }));
 vi.mock('@/server/actions/periods', () => ({ approvePeriod: actions.approvePeriod, rejectPeriod: actions.rejectPeriod, getScopedPeriods: actions.getScopedPeriods }));
 vi.mock('@/server/actions/timesheet', () => ({ getTimesheetForReview: actions.getTimesheetForReview }));
@@ -129,19 +129,18 @@ describe('Approvals to-do list (T12)', () => {
     expect(names[names.length - 1]).toBe('Sept Sam'); // 2026-09-16
   });
 
-  it('L3: the drawer title says Review for a decidable row and View otherwise', async () => {
+  it('the drawer title is "{Employee} · {Pay period}" for Review and View alike (UX-4b Part 2 §3.3)', async () => {
     await render();
     await click(segment('Everything'));
     const rowOf = (name: string) => [...m!.container.querySelectorAll('tbody tr')].find((r) => r.textContent?.includes(name))!;
     await click(rowOf('Me Myself').querySelector('button'));
     await wait(30);
-    expect(dialogTitled('View — Me Myself')).toBeTruthy();
-    expect(dialogTitled('Review — Me Myself')).toBeFalsy();
+    expect(dialogTitled('Me Myself · Oct 1 – 15, 2026')).toBeTruthy();
     unmount(m);
     await render();
     await click(rowOf('Older Olga').querySelector('button'));
     await wait(30);
-    expect(dialogTitled('Review — Older Olga')).toBeTruthy();
+    expect(dialogTitled('Older Olga · Oct 1 – 15, 2026')).toBeTruthy();
   });
 
   it('reason chips per case (pure)', () => {

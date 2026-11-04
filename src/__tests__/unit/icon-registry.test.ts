@@ -41,7 +41,6 @@ export const ICON_IMPORT_ALLOWLIST = [
   'src/app/signup/SignupForm.tsx',
   'src/app/terms/page.tsx',
   'src/components/approvals/ApprovalNotices.tsx',
-  'src/components/approvals/ReviewDecisionButtons.tsx',
   'src/components/auth/SignOutButton.tsx',
   'src/components/auth/WorkspaceFinder.tsx',
 ];
