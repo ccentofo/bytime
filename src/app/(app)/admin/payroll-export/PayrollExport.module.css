@@ -1,8 +1,0 @@
-.formatCard {
-  cursor: pointer;
-  transition: border-color 0.15s ease;
-}
-
-.formatCard:hover {
-  border-color: var(--mantine-color-warning-4);
-}

@@ -23,7 +23,6 @@ export const ICON_IMPORT_ALLOWLIST = [
   'src/app/(app)/settings/import/ImportClient.tsx',
   'src/app/(app)/settings/integrations/IntegrationsClient.tsx',
   'src/app/(app)/settings/integrations/gusto/GustoConfigClient.tsx',
-  'src/app/(app)/admin/payroll-export/PayrollExportClient.tsx',
   'src/app/(app)/settings/integrations/quickbooks/QBOConfigClient.tsx',
   'src/app/(app)/settings/migration/MigrationClient.tsx',
   'src/app/(app)/profile/notifications/NotificationsClient.tsx',
