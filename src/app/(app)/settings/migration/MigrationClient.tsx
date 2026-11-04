@@ -458,7 +458,7 @@ export function MigrationClient() {
               )}
             </Group>
             <Text size="xs" c="dimmed">
-              Only submitted, approved or rejected periods that ended before today are imported. An imported approval is
+              Only submitted, approved or returned periods that ended before today are imported. An imported approval is
               shown as &quot;Approved in {sourceSystem.trim() || 'your previous system'}&quot; — never as a CadenzPoint approval.
             </Text>
             {periodValidated && !sourceOk && <Text size="sm" c="red">Enter the source system before importing.</Text>}

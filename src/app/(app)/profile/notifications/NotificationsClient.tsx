@@ -82,7 +82,7 @@ export function NotificationsClient({ initialPrefs, userRole }: Props) {
 
           <Switch
             label="Timesheet Returned for Corrections"
-            description="Receive an email when your timesheet is rejected and needs corrections"
+            description="Receive an email when your timesheet is returned for corrections"
             checked={prefs.emailOnReject}
             onChange={(e) => handleToggle('emailOnReject', e.currentTarget.checked)}
             disabled={isPending}

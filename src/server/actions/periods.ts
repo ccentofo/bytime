@@ -277,7 +277,7 @@ export async function submitPeriod(data: {
           }).returning();
         } else {
           if (existing.status !== 'draft' && existing.status !== 'rejected') {
-            throw new UserFacingError(`Cannot submit period with status "${existing.status}". Only draft or rejected periods can be submitted.`);
+            throw new UserFacingError(`Cannot submit period with status "${existing.status}". Only draft or returned timesheets can be submitted.`);
           }
           // Conditional on the status we just checked: if a reviewer changed it meanwhile, nothing is written.
           const updated = await tx.update(timesheetPeriods)
