@@ -14,7 +14,7 @@ import classes from './ReviewGrid.module.css';
  * late cells are marked (fill + line + corner) with ", corrected" / ", late entry" for screen readers; noted cells get
  * a corner and ", has a note". Imported hours keep their provenance as the cell's title.
  */
-export function ReviewGrid({ chargeCodes, entries, start, numDays, flagged, notes, caption }: {
+export function ReviewGrid({ chargeCodes, entries, start, numDays, flagged, notes, caption, dimmed = false }: {
   chargeCodes: ChargeCode[];
   entries: TimesheetEntry[];
   start: CalendarDate;
@@ -23,6 +23,8 @@ export function ReviewGrid({ chargeCodes, entries, start, numDays, flagged, note
   notes: Record<string, { body: string; revision: number }>;
   /** "Hours for {employee}, {period}". */
   caption: string;
+  /** Kept on screen while another timesheet loads: the table (never a focusable element) is dimmed. */
+  dimmed?: boolean;
 }) {
   const days = Array.from({ length: numDays }, (_, i) => addDays(start, i));
   const weekend = (d: CalendarDate) => dayOfWeek(d) === 0 || dayOfWeek(d) === 6;
@@ -35,7 +37,7 @@ export function ReviewGrid({ chargeCodes, entries, start, numDays, flagged, note
   return (
     <div>
       <div className={classes.wrap}>
-        <table className={classes.grid}>
+        <table className={dimmed ? `${classes.grid} ${classes.dimmed}` : classes.grid}>
           <caption className={classes.caption}>{caption}</caption>
           <thead>
             <tr>

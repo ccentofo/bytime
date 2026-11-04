@@ -129,6 +129,11 @@ type ReviewData = {
   approvalUiText?: string | null;
 };
 
+/** The grid on screen and whose it is (fix round 1, M1). */
+type GridSnapshot = { periodId: string; start: CalendarDate; numDays: number; data: ReviewData; employeeName: string; periodText: string };
+const gridOf = (row: Period, data: ReviewData): GridSnapshot =>
+  ({ periodId: row.id, start: row.periodStart, numDays: data.numDays ?? row.periodNumDays, data, employeeName: row.userName, periodText: periodOf(row) });
+
 /** One line of the drawer's Notes list (feature-plan-ux-timesheet-ui.md §4.12). */
 export interface ReviewNote { dayIndex: number; rowIndex: number; key: string; text: string }
 
@@ -179,8 +184,11 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [current, setCurrent] = useState<Period | null>(null);
   const [reviewData, setReviewData] = useState<ReviewData | null>(null);
-  /** The last loaded grid stays visible while Previous / Next loads (the decision card shows "Loading…"). */
-  const [grid, setGrid] = useState<{ periodId: string; start: CalendarDate; numDays: number; data: ReviewData } | null>(null);
+  /**
+   * The last loaded grid stays visible while Previous / Next loads (the decision card shows "Loading…"). It carries its
+   * own employee and period, so while it is kept its caption still names whose hours they are (fix round 1, M1).
+   */
+  const [grid, setGrid] = useState<GridSnapshot | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
   const [comment, setComment] = useState('');
   const [commentError, setCommentError] = useState<string | null>(null);
@@ -215,9 +223,10 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
       const data = await getTimesheetForReview(row.userId, row.periodStart);
       if (token !== readToken.current) return;
       setReviewData(data);
-      setGrid({ periodId: row.id, start: row.periodStart, numDays: data.numDays ?? row.periodNumDays, data });
+      setGrid(gridOf(row, data));
     } catch {
       if (token !== readToken.current) return;
+      setGrid(null); // only the error and Retry — never another person's grid (M1)
       setReadError("This timesheet couldn't be loaded.");
     }
   }
@@ -397,7 +406,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
         if (token !== readToken.current) return;
         setCurrent(row);
         setReviewData(data);
-        setGrid({ periodId: row.id, start: row.periodStart, numDays: data.numDays ?? row.periodNumDays, data });
+        setGrid(gridOf(row, data));
         setDrawerOpen(true);
       } catch {
         toastError({ title: 'Timesheet not available', message: "That timesheet isn't available to you." });
@@ -414,6 +423,8 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
   const lastReturn = reviewReady ? reviewData!.lastReturn ?? null : null;
   const noteLines = reviewReady && current ? reviewNotes(reviewData!.notes, reviewData!.chargeCodes, current.periodStart) : [];
   const worthCount = flagged.length;
+  /** The grid on screen belongs to another row: the read for `current` is in flight (a failed read clears it). */
+  const keptGrid = !!(grid && current && grid.periodId !== current.id);
 
   function decisionArea() {
     if (!current) return null;
@@ -537,22 +548,27 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
               )}
             </Group>
 
-            {/* The last loaded grid (Previous / Next keep it visible until the next one arrives). */}
+            {/* The last loaded grid (Previous / Next keep it visible until the next one arrives), captioned as ITS
+                employee's — and, while kept, marked busy and dimmed with a visible line saying whose it is (M1). */}
             {grid && (
-              <ReviewGrid
-                chargeCodes={grid.data.chargeCodes}
-                entries={grid.data.entries}
-                start={grid.start}
-                numDays={grid.numDays}
-                flagged={grid.data.flagged ?? []}
-                notes={grid.data.notes ?? {}}
-                caption={`Hours for ${current.userName}, ${periodOf(current)}`}
-              />
+              <div aria-busy={keptGrid || undefined} data-testid="review-grid">
+                {keptGrid && <Text size="sm" c="dimmed" data-testid="review-grid-kept">Showing {grid.employeeName} until this loads</Text>}
+                <ReviewGrid
+                  chargeCodes={grid.data.chargeCodes}
+                  entries={grid.data.entries}
+                  start={grid.start}
+                  numDays={grid.numDays}
+                  flagged={grid.data.flagged ?? []}
+                  notes={grid.data.notes ?? {}}
+                  caption={`Hours for ${grid.employeeName}, ${grid.periodText}`}
+                  dimmed={keptGrid}
+                />
+              </div>
             )}
 
             <div className={classes.cards}>
               <Paper withBorder radius="md" p="md" data-testid="worth-a-look">
-                <Text component="h3" fw={600} size="sm" m={0} mb="xs">Worth a look ({worthCount})</Text>
+                <Text component="h3" fw={600} size="sm" m={0} mb="xs">Worth a look{reviewReady ? ` (${worthCount})` : ''}</Text>
                 {reviewReady ? (
                   <Stack gap="xs">
                     {lastReturn && (
@@ -583,7 +599,7 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
               </Paper>
 
               <Paper withBorder radius="md" p="md">
-                <Text component="h3" fw={600} size="sm" m={0} mb="xs" id="review-notes-heading">Notes ({noteLines.length})</Text>
+                <Text component="h3" fw={600} size="sm" m={0} mb="xs" id="review-notes-heading">Notes{reviewReady ? ` (${noteLines.length})` : ''}</Text>
                 {noteLines.length > 0 ? (
                   <List size="sm" spacing={4} aria-labelledby="review-notes-heading" data-testid="review-notes">
                     {noteLines.map((n) => <List.Item key={n.key}>{n.text}</List.Item>)}

@@ -133,3 +133,8 @@
   border-top: 9px solid var(--mantine-color-signal-6);
   border-right: 9px solid transparent;
 }
+
+/* Fix round 1 (M1): a grid kept while the next timesheet loads. On the table, not the scroller (which takes focus). */
+.dimmed {
+  opacity: 0.5;
+}

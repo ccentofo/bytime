@@ -274,6 +274,43 @@ describe('the decision binding (A-8)', () => {
   });
 });
 
+describe('the kept grid (fix round 1, M1)', () => {
+  it('during Next the grid is still captioned as A, marked busy, dimmed, with "Showing A until this loads"; the counts are hidden', async () => {
+    await render();
+    await openRow('Ann Adams');
+    const pending = deferred<unknown>();
+    actions.getTimesheetForReview.mockImplementationOnce(() => pending.promise);
+    await click(byLabel('Next waiting timesheet'));
+    const wrap = dialog()!.querySelector('[data-testid="review-grid"]')!;
+    expect(wrap.querySelector('caption')!.textContent).toBe('Hours for Ann Adams, Oct 1 – 15, 2026');
+    expect(wrap.getAttribute('aria-busy')).toBe('true');
+    expect(wrap.querySelector('[data-testid="review-grid-kept"]')!.textContent).toBe('Showing Ann Adams until this loads');
+    expect(wrap.querySelector('table')!.className).toMatch(/dimmed/);
+    expect(dialog()!.querySelector('[data-testid="worth-a-look"] h3')!.textContent).toBe('Worth a look');
+    expect(dialog()!.querySelector('#review-notes-heading')!.textContent).toBe('Notes');
+    await act(async () => { pending.resolve(reviews['u-b']()); });
+    await wait(20);
+    const now = dialog()!.querySelector('[data-testid="review-grid"]')!;
+    expect(now.querySelector('caption')!.textContent).toBe('Hours for Bea Brown, Oct 1 – 15, 2026');
+    expect(now.hasAttribute('aria-busy')).toBe(false);
+    expect(now.querySelector('[data-testid="review-grid-kept"]')).toBeNull();
+    expect(now.querySelector('table')!.className).not.toMatch(/dimmed/);
+    expect(dialog()!.querySelector('[data-testid="worth-a-look"] h3')!.textContent).toBe('Worth a look (1)');
+    expect(dialog()!.querySelector('#review-notes-heading')!.textContent).toBe('Notes (1)');
+  });
+
+  it('after a failed read no grid is shown — only the error with Retry', async () => {
+    await render();
+    await openRow('Ann Adams');
+    actions.getTimesheetForReview.mockRejectedValueOnce(new Error('boom'));
+    await click(byLabel('Next waiting timesheet'));
+    await wait(20);
+    expect(dialog()!.querySelector('[data-testid="review-read-error"]')).not.toBeNull();
+    expect(dialog()!.querySelector('table')).toBeNull();
+    expect(dialog()!.textContent).not.toContain('Showing Ann Adams');
+  });
+});
+
 describe('open next (A-9)', () => {
   it('after approving, the list is refetched and the next waiting id in the snapshot opens (not the decided one)', async () => {
     await render();
