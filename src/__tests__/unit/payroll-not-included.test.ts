@@ -115,6 +115,32 @@ describe('loadPayrollData — not in this file (P-1 companion)', () => {
   });
 });
 
+describe('the P-5 fixture (companion to integration/payroll-p5-fixture.ts, UX-4B2-AUDIT.md M3)', () => {
+  it('Mo\'s misaligned row (Mar 3, no stored length) never approves Mar 2: the recorded 24 h, unflagged', async () => {
+    script({
+      entries: [
+        ...['02', '03', '04', '05', '06'].map((dd) => work('pat', `2026-03-${dd}`, '9.00')),
+        ...['09', '10', '11', '12', '13'].map((dd) => work('ivy', `2026-03-${dd}`, '10.00')),
+        ...['02', '03', '04', '13'].map((dd) => work('mo', `2026-03-${dd}`, '8.00')),
+      ],
+      people: [person('pat', 'Pat Doe'), person('ivy', 'Ivy Exempt', { flsaExempt: true, isActive: false }), person('mo', 'Mo Misaligned'), person('eve', 'Eve Nohours')],
+      periods: [
+        row('p-pat', 'pat', 'approved', { periodStart: '2026-03-01' }),
+        row('p-ivy', 'ivy', 'approved', { periodStart: '2026-03-01' }),
+        row('p-mo', 'mo', 'approved', { periodStart: '2026-03-03', periodNumDays: null }),
+      ],
+    });
+    const data = await loadPayrollData(db as never, d('2026-03-01'), d('2026-03-15'));
+    // The values recorded in RECORDED_P5_PAYLOAD (integration/payroll-not-included.test.ts), in cents.
+    expect(data.employees.map((e) => [e.employeeName, e.regular, e.overtime, e.uncompensatedOvertime, e.otBasisIncludesUnapprovedDays])).toEqual([
+      ['Ivy Exempt', 4000, 0, 1000, false],
+      ['Mo Misaligned', 2400, 0, 0, false],
+      ['Pat Doe', 4000, 500, 0, false],
+    ]);
+    expect(data.days.filter((x) => x.userId === 'mo').map((x) => x.date)).toEqual(['2026-03-03', '2026-03-04', '2026-03-13']);
+  });
+});
+
 describe('preview totals (P-2 companion)', () => {
   it('integer-cent sums (0.10 + 0.20 = 0.30 exactly); paid leave excludes unpaid; exempt overtime 0', async () => {
     script({

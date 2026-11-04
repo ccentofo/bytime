@@ -6,7 +6,9 @@ import { getTestDb, createTestUser, createTestContract, createTestClin } from '.
  * Part 2) and then by the P-5 regression guard. Range Mar 1 – 15, 2026; workweek starts Monday (set by the caller).
  *   - Pat (non-exempt, active): approved Mar 1 (15 days); 9.00 h Mon–Fri Mar 2–6 → 40 regular + 5 overtime.
  *   - Ivy (EXEMPT, INACTIVE): approved Mar 1 (15 days); 10.00 h Mon–Fri Mar 9–13 → 40 regular, 10 uncompensated.
- *   - Mo (non-exempt): a MISALIGNED approved row starting Mar 3 with a NULL period_num_days; 8.00 h on Mar 3, 4, 13.
+ *   - Mo (non-exempt): a MISALIGNED approved row starting Mar 3 with a NULL period_num_days; 8.00 h on Mar 2, 3, 4, 13.
+ *     Mar 2 is before his row, so it stays unapproved (24 h in the payload); snapping his row to the schedule's period
+ *     (Mar 1 – 15) would approve it (32 h) — UX-4B2-AUDIT.md M3.
  *   - Eve (non-exempt, active): an expected submitter with no entries (never in the payload).
  * The payload is compared with user ids replaced by names (ids differ per run).
  */
@@ -28,7 +30,7 @@ export async function seedPayrollP5Fixture() {
   ]);
   for (const day of ['02', '03', '04', '05', '06']) await work(pat.id, `2026-03-${day}`, '9.00');
   for (const day of ['09', '10', '11', '12', '13']) await work(ivy.id, `2026-03-${day}`, '10.00');
-  for (const day of ['03', '04', '13']) await work(mo.id, `2026-03-${day}`, '8.00');
+  for (const day of ['02', '03', '04', '13']) await work(mo.id, `2026-03-${day}`, '8.00');
   return { pat, ivy, mo, eve, names: new Map([[pat.id, 'Pat Doe'], [ivy.id, 'Ivy Exempt'], [mo.id, 'Mo Misaligned'], [eve.id, 'Eve Nohours']]) };
 }
 
