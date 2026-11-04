@@ -21,7 +21,7 @@ import { eq } from 'drizzle-orm';
 import { clearTenantData, SEED_EMAIL_DOMAINS } from '../src/db/clear-tenant-data';
 import { lockUserRulesExclusive, recomputeSelfApproval } from '../src/server/internal/approval-rules';
 import { logAdminChange } from '../src/server/internal/admin-change-log';
-import { addMonths, startOfMonth, todayIn } from '../src/lib/calendar-date';
+import { addMonths, canonicalTimeZone, startOfMonth, todayIn } from '../src/lib/calendar-date';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import dayjs from 'dayjs';
@@ -382,7 +382,8 @@ export async function seedRichData(
 
   // feature-plan-ux-approvals-payroll.md §5 (A9): explicit, ordered, PAST timestamps in the workspace's zone.
   const [ws] = await db.select({ timezone: schema.workspaceSettings.timezone }).from(schema.workspaceSettings).limit(1);
-  const tz = ws?.timezone ?? 'America/New_York';
+  // Canonical (UX-4B2-AUDIT.md L10): an alias or a stored value Intl rejects never reaches dayjs.tz.
+  const tz = canonicalTimeZone(ws?.timezone) ?? 'America/New_York';
   const at = (date: string, hhmm: string) => dayjs.tz(`${date} ${hhmm}`, tz).toDate();
   const earlier = (a: Date, b: Date) => (a.getTime() <= b.getTime() ? a : b);
   const HOUR = 3_600_000;

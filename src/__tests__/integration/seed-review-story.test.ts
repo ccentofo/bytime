@@ -71,7 +71,8 @@ describe('the seeded review story (S-1)', () => {
     expect(late).toHaveLength(1);
     expect(Object.values(s.janeReview.notes).filter((n) => n.body).length).toBe(1);
     const start = s.pj.periodStart;
-    const end = new Date(new Date(start).getTime() + (s.pj.periodNumDays ?? 15) * 86_400_000).toISOString().slice(0, 10);
+    // The period's real length (the seed's periods are 15 or 16 days; its rows store none) — L11.
+    const end = new Date(new Date(start).getTime() + s.janeReview.numDays * 86_400_000).toISOString().slice(0, 10);
     const inPeriod = s.entries.filter((e) => e.entryDate >= start && e.entryDate < end);
     for (const e of inPeriod) expect(e.createdAt.getTime(), `${e.entryDate} rev ${e.revisionNumber}`).toBeLessThan(s.pj.submittedAt!.getTime());
     for (const n of s.janeNotes.filter((x) => x.entryDate >= start && x.entryDate < end)) expect(n.createdAt.getTime()).toBeLessThan(s.pj.submittedAt!.getTime());
@@ -87,7 +88,9 @@ describe('the seeded review story (S-1)', () => {
     expect(s.pr.submissionCount).toBe(2);
     expect(s.pr.reviewComment).toBeNull();
     expect(s.robertReview.flagged.filter((f) => f.sinceReturned)).toHaveLength(1);
-    expect(s.robertReview.flagged.find((f) => f.sinceReturned)!.current.comment).toBe('Added the Tuesday site visit.');
+    const fix = s.robertReview.flagged.find((f) => f.sinceReturned)!;
+    expect(fix.current.comment).toBe('Added the Tuesday site visit.');
+    expect(new Date(fix.current.createdAt).getTime()).toBeLessThan(s.pr.submittedAt!.getTime());   // before the resubmission (L11)
     expect(s.robertReview.lastReturn).toMatchObject({ comment: "Please add Tuesday's site visit hours." });
   }, SEED_TIMEOUT);
 

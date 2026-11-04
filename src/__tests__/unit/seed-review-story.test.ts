@@ -6,7 +6,8 @@ import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
  * period gets Jane's two corrections, one late entry and one note, and Robert's returned-then-resubmitted history (events
  * submitted < rejected < submitted, the correction between the return and the resubmission, submission_count 2 set
  * in the period insert, review_comment null); every pending-period timestamp is in the past and ordered; no extra
- * period row.
+ * period row. Fix round 1: the t1 − 1 h cap when the machine's day is ahead of the workspace's (L11); a stored timezone
+ * Intl rejects (L10).
  */
 
 vi.mock('server-only', () => ({}));
@@ -92,6 +93,43 @@ describe('the seeded review story (S-1 companion)', () => {
   it('never a second period row: one per person per period', () => {
     const keys = rows(schema.timesheetPeriods).map((p) => `${p.userId}|${p.periodStart}`);
     expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+/** A fresh seeding run at `now` with the workspace's stored timezone `timezone`; its inserted rows by table. */
+async function seedAt(now: Date, timezone: string) {
+  vi.setSystemTime(now);
+  const fresh = createFakeControlDb() as typeof db;
+  fresh.transaction = async (cb) => cb(fresh);
+  fresh.onSelect(schema.workspaceSettings, [{ timezone }]);
+  await seedRichData(fresh as never);
+  return (table: unknown) => fresh.inserts.filter((i) => i.table === table).flatMap((i) => (Array.isArray(i.values) ? i.values : [i.values])) as Row[];
+}
+
+describe('seed timestamps at the edges (UX-4B2-AUDIT.md L10, L11)', () => {
+  it('L11: the machine\'s zone is past midnight while the workspace\'s is still the evening before → revision 1 is capped at t1 − 1 h', async () => {
+    // Dec 16 08:30 UTC: Dec 16 in UTC, Los Angeles (00:30) and Auckland — the pending period is Dec 1 – 15 everywhere —
+    // but still Dec 15 (21:30) in Pago Pago. base = now − 1 h, t1 = base − 3 h; Tue Dec 15 17:00 Pago Pago is after t1 − 1 h.
+    const now = new Date('2026-12-16T08:30:00Z');
+    const rowsOf = await seedAt(now, 'Pacific/Pago_Pago');
+    const robert = rowsOf(schema.users).find((u) => u.fullName === 'Robert Taylor')!.id;
+    const pr = rowsOf(schema.timesheetPeriods).find((p) => p.userId === robert && p.status === 'submitted')!;
+    expect(pr.periodStart).toBe('2026-12-01');
+    const [s1] = rowsOf(schema.periodEvents).filter((e) => e.periodId === pr.id).map((e) => (e.createdAt as Date).getTime());
+    const t1 = now.getTime() - 4 * 3_600_000;
+    expect(s1).toBe(t1);
+    const rev1On = (date: string) => rowsOf(schema.timesheetEntries).filter((e) => e.userId === robert && e.revisionNumber === 1 && e.entryDate === date);
+    expect(rev1On('2026-12-15').length).toBeGreaterThan(0);
+    for (const e of rev1On('2026-12-15')) expect((e.createdAt as Date).getTime()).toBe(t1 - 3_600_000);          // capped
+    for (const e of rev1On('2026-12-14')) expect((e.createdAt as Date).toISOString()).toBe('2026-12-15T04:00:00.000Z'); // 17:00 Pago Pago
+  });
+
+  it('L10: a stored timezone Intl rejects falls back to New York instead of failing the seed', async () => {
+    const rowsOf = await seedAt(NOW, 'Mars/Olympus_Mons');
+    const jane = rowsOf(schema.users).find((u) => u.fullName === 'Jane Smith')!.id;
+    const fri = rowsOf(schema.timesheetEntries).filter((e) => e.userId === jane && e.revisionNumber === 1 && e.entryDate === '2026-10-16');
+    expect(fri.length).toBeGreaterThan(0);
+    for (const e of fri) expect((e.createdAt as Date).toISOString()).toBe('2026-10-16T21:00:00.000Z');              // 17:00 EDT
   });
 });
 
