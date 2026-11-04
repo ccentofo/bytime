@@ -114,9 +114,11 @@ describe('demo seeder conformance (seed-full.ts, reused by seed:demo)', () => {
   const seed = stripComments(readFileSync(path.join(ROOT, 'scripts/seed-full.ts'), 'utf8'));
 
   it('writes period_events (source app) for every seeded submission and approval', () => {
-    expect(seed).toMatch(/if \(submittedAt\) \{\s*await db\.insert\(schema\.periodEvents\)\.values\(\{ periodId, userId: emp\.id, event: 'submitted', actorId: emp\.id/);
+    expect(seed).toMatch(/\} else if \(submittedAt\) \{\s*await db\.insert\(schema\.periodEvents\)\.values\(\{ periodId, userId: emp\.id, event: 'submitted', actorId: emp\.id/);
     expect(seed).toMatch(/if \(reviewedAt && reviewedBy\) \{\s*await db\.insert\(schema\.periodEvents\)\.values\(\{ periodId, userId: emp\.id, event: 'approved', actorId: reviewedBy/);
-    expect(seed).toMatch(/submissionCount: status !== 'draft' \? 1 : 0/);
+    // UX-4b Part 2 §5.2: Robert's pending period was returned once — submitted, rejected (by his reviewer), submitted.
+    expect(seed).toMatch(/event: 'submitted', actorId: emp\.id, comment: 'Timesheet complete', createdAt: t\.t1 \},\s*\{ periodId, userId: emp\.id, event: 'rejected', actorId: reviewerFor\(emp\.id\)/);
+    expect(seed).toMatch(/submissionCount: returnedOnce \? 2 : status !== 'draft' \? 1 : 0/);
   });
 
   it('approvals follow C2: supervisors by their designated approver (admin), employees by a supervisor sharing a CLIN', () => {
