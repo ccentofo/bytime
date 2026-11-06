@@ -2,7 +2,7 @@ import 'server-only';
 import { inArray } from 'drizzle-orm';
 import type { ReadDb } from '@/db';
 import { importBatches, periodEvents, users } from '@/db/schema';
-import { formatInstant } from '@/lib/calendar-date';
+import { calendarDayOf, formatCalendarDate, formatInstant, isCalendarDate } from '@/lib/calendar-date';
 
 /**
  * The ONE place that formats a timesheet's approval line (feature-plan-certified-outputs.md C2 "Self-approved label
@@ -23,6 +23,17 @@ export interface ApprovalLabel {
   text: string | null;
   /** In-app decider's name (null for imported or undecided). */
   approverName: string | null;
+  /**
+   * feature-plan-ux-approvals-payroll.md A1 / §3.1.4 — the in-app wording ("Returned", not "Rejected"; display only):
+   * the line ("Approved by Ann on Oct 16, 2026", "Self-returned on …", "Returned in Paylocity by … on …"), or null.
+   */
+  uiText: string | null;
+  /** "Self-approved" / "Self-returned", or null. */
+  uiBadge: string | null;
+  /** The decision's date as uiText shows it (imported: the imported decision date, never the import time), or null. */
+  decidedAtText: string | null;
+  /** Who decided: the decider; the employee for self kinds; the recorded reviewer for imported ones. */
+  decidedByName: string | null;
 }
 
 export interface ApprovalLabelPeriod {
@@ -42,6 +53,8 @@ export interface ApprovalLabelEvent {
   createdAt: Date;
   importSourceSystem: string | null;
   importedAt: Date | null;
+  /** The event's comment (a return's reason) — read for the review's "last return" (UX-4b Part 2 §3.1.5). */
+  comment?: string | null;
 }
 
 const meta = (m: unknown): Record<string, unknown> => (m && typeof m === 'object' ? m as Record<string, unknown> : {});
@@ -53,29 +66,47 @@ export function approvalLabel(
   nameOf: (userId: string) => string | null,
   timeZone: string,
 ): ApprovalLabel {
-  const none: ApprovalLabel = { kind: 'none', selfApproved: false, badge: null, text: null, approverName: null };
+  const none: ApprovalLabel = {
+    kind: 'none', selfApproved: false, badge: null, text: null, approverName: null, uiText: null, uiBadge: null, decidedAtText: null, decidedByName: null,
+  };
   if (period.status !== 'approved' && period.status !== 'rejected') return none;
   const verb = period.status === 'approved' ? 'Approved' : 'Rejected';
+  const uiVerb = period.status === 'approved' ? 'Approved' : 'Returned';
   const decision = events
     .filter((e) => e.periodId === period.id && e.event === period.status)
     .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
 
   if (decision?.source === 'migration') {
+    const m = meta(decision.originalMetadata);
+    const reviewer = str(m.reviewer);
+    const rawDate = str(m.reviewedAt);
+    const decidedAtText = rawDate ? (isCalendarDate(rawDate) ? formatCalendarDate(rawDate, 'MMM D, YYYY') : rawDate) : null;
     return {
       kind: period.status === 'approved' ? 'imported-approved' : 'imported-rejected',
       selfApproved: false,
       badge: null,
       text: importedDecisionText(verb, decision),
       approverName: null,
+      uiText: `${uiVerb} in ${decision.importSourceSystem ?? 'another system'} by ${reviewer ?? 'reviewer not recorded'} on ${decidedAtText ?? 'an unknown date'}`,
+      uiBadge: null,
+      decidedAtText,
+      decidedByName: reviewer,
     };
   }
 
   const deciderId = decision?.actorId ?? period.reviewedBy;
   const at = decision?.createdAt ?? period.reviewedAt;
+  // `text` keeps its zone label (unchanged for the PDF, reports, API); the UI fields show the workspace's calendar day.
   const when = at ? ` on ${formatInstant(at, timeZone, 'MMM D, YYYY')}` : '';
+  const decidedAtText = at ? formatCalendarDate(calendarDayOf(at, timeZone), 'MMM D, YYYY') : null;
+  const uiWhen = decidedAtText ? ` on ${decidedAtText}` : '';
   if (deciderId && deciderId === period.userId) {
     const badge = selfBadge(period.status);
-    return { kind: period.status === 'approved' ? 'self-approved' : 'self-rejected', selfApproved: period.status === 'approved', badge, text: `${badge}${when}`, approverName: null };
+    const uiBadge = period.status === 'approved' ? 'Self-approved' : 'Self-returned';
+    return {
+      kind: period.status === 'approved' ? 'self-approved' : 'self-rejected', selfApproved: period.status === 'approved', badge, text: `${badge}${when}`, approverName: null,
+      uiText: `${uiBadge}${uiWhen}`, uiBadge, decidedAtText, decidedByName: nameOf(period.userId),
+    };
   }
   const name = deciderId ? nameOf(deciderId) : null;
   return {
@@ -84,6 +115,10 @@ export function approvalLabel(
     badge: null,
     text: `${verb} by ${name ?? 'an unknown user'}${when}`,
     approverName: name,
+    uiText: `${uiVerb} by ${name ?? 'an unknown user'}${uiWhen}`,
+    uiBadge: null,
+    decidedAtText,
+    decidedByName: name,
   };
 }
 
@@ -140,6 +175,7 @@ export async function loadApprovalLabelData(db: Pick<ReadDb, 'select'>, periods:
     .select({
       periodId: periodEvents.periodId, event: periodEvents.event, actorId: periodEvents.actorId, source: periodEvents.source,
       originalMetadata: periodEvents.originalMetadata, createdAt: periodEvents.createdAt, importBatchId: periodEvents.importBatchId,
+      comment: periodEvents.comment,
     })
     .from(periodEvents).where(inArray(periodEvents.periodId, ids));
   const batchIds = [...new Set(rows.flatMap((r) => (r.importBatchId ? [r.importBatchId] : [])))];
@@ -153,7 +189,7 @@ export async function loadApprovalLabelData(db: Pick<ReadDb, 'select'>, periods:
   return {
     events: rows.map((r) => ({
       periodId: r.periodId, event: r.event, actorId: r.actorId, source: r.source, originalMetadata: r.originalMetadata,
-      createdAt: r.createdAt,
+      createdAt: r.createdAt, comment: r.comment,
       importSourceSystem: r.importBatchId ? batchById.get(r.importBatchId)?.sourceSystem ?? null : null,
       importedAt: r.importBatchId ? batchById.get(r.importBatchId)?.importedAt ?? null : null,
     })),

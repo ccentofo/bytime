@@ -11,6 +11,7 @@ import { getSupervisorScopeInfo } from '@/server/internal/supervisor-scope';
 import { canApprove, loadApprovalFacts, lockUserRulesShared, selfApprovalAvailable, selfApprovalContext } from '@/server/internal/approval-rules';
 import { approvalLabels } from '@/server/internal/approval-label';
 import { periodFlags, type PeriodFlags } from '@/server/internal/period-flags';
+import { compareWaiting } from '@/lib/approvals/waiting-order';
 import { notifySubmissionRecipients } from '@/server/internal/submission-notify';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { existingPeriodLength, lastCompletedPeriods, loadScheduleResolver } from '@/server/internal/pay-period-config';
@@ -276,7 +277,7 @@ export async function submitPeriod(data: {
           }).returning();
         } else {
           if (existing.status !== 'draft' && existing.status !== 'rejected') {
-            throw new UserFacingError(`Cannot submit period with status "${existing.status}". Only draft or rejected periods can be submitted.`);
+            throw new UserFacingError(`Cannot submit period with status "${existing.status}". Only draft or returned timesheets can be submitted.`);
           }
           // Conditional on the status we just checked: if a reviewer changed it meanwhile, nothing is written.
           const updated = await tx.update(timesheetPeriods)
@@ -407,6 +408,8 @@ const CONCURRENT_REVIEW_MESSAGE = 'This timesheet was just changed by someone el
 const RESUBMITTED_MESSAGE = 'This timesheet was resubmitted after you opened it — refresh to review the new version.';
 const SELF_APPROVAL_OFF_MESSAGE = 'Your timesheet must be approved by another admin or your designated approver.';
 const MISSING_SEEN_MESSAGE = 'Open the timesheet and review it before deciding (the reviewed version is missing).';
+const RETURN_COMMENT_MESSAGE = 'Add a comment so the employee knows what to fix.';
+const MAX_DECISION_COMMENT = 1000;
 
 type Decision = 'approved' | 'rejected';
 
@@ -425,6 +428,15 @@ async function decidePeriod(
   if (typeof data.seen !== 'number' || !Number.isInteger(data.seen) || data.seen < 0) {
     throw new UserFacingError(MISSING_SEEN_MESSAGE);
   }
+  // feature-plan-ux-approvals-payroll.md A2: after the `seen` check (its message stays first). A return needs a real
+  // comment; either decision takes at most 1,000 characters; the trimmed comment is stored (an empty approve → null).
+  if (data.comment !== undefined && typeof data.comment !== 'string') {
+    throw new UserFacingError(decision === 'rejected' ? RETURN_COMMENT_MESSAGE : 'The comment must be text.');
+  }
+  const comment = data.comment?.trim() ?? '';
+  if (decision === 'rejected' && comment === '') throw new UserFacingError(RETURN_COMMENT_MESSAGE);
+  if (comment.length > MAX_DECISION_COMMENT) throw new UserFacingError('Comments can be at most 1,000 characters.');
+  const storedComment = comment === '' ? null : comment;
   const db = await getDbForWrite();
   const [period] = await db.select().from(timesheetPeriods).where(eq(timesheetPeriods.id, data.periodId));
   if (!period) throw new UserFacingError('Period not found', 'not_found');
@@ -458,7 +470,7 @@ async function decidePeriod(
         status: decision,
         reviewedAt: new Date(),
         reviewedBy: actor.id,
-        reviewComment: data.comment ?? null,
+        reviewComment: storedComment,
         updatedAt: new Date(),
       })
       // Only if still submitted AND still the version the reviewer saw.
@@ -473,7 +485,7 @@ async function decidePeriod(
     // T8/R11: append-only approval history, written in the same transaction as the period change.
     await tx.insert(periodEvents).values({
       periodId: data.periodId, userId: period.userId, event: decision, actorId: actor.id,
-      comment: data.comment ?? null, completenessSnapshot: period.completenessSnapshot ?? null,
+      comment: storedComment, completenessSnapshot: period.completenessSnapshot ?? null,
       approvalContext: self && decision === 'approved' ? await selfApprovalContext(tx, actor.id) : null,
     });
   });
@@ -482,7 +494,7 @@ async function decidePeriod(
   if (decision === 'approved') {
     await notifyEmployeeOfApprove(period, actor.fullName).catch((err) => console.error('Approve notification failed:', err));
   } else {
-    await notifyEmployeeOfReject(period, actor.fullName, data.comment ?? '').catch((err) => console.error('Reject notification failed:', err));
+    await notifyEmployeeOfReject(period, actor.fullName, comment).catch((err) => console.error('Reject notification failed:', err));
   }
 }
 
@@ -534,6 +546,13 @@ export interface ScopedPeriodRow {
   submissionCount: number;
   /** UX-2 §4.6 "Worth a look" — only for rows the session user may decide (canApprove); null otherwise. */
   flags: PeriodFlags | null;
+  /** UX-4b Part 2 §3.1.3: latest-revision hours, Waiting (canApprove) rows only (A6); null otherwise. */
+  hours: number | null;
+  /** approvalLabel's decidedByName / decidedAtText / uiText / uiBadge (the Decided view; "Returned" wording, A1). */
+  decidedByName: string | null;
+  decidedAtText: string | null;
+  approvalUiText: string | null;
+  approvalUiBadge: string | null;
 }
 
 /**
@@ -576,9 +595,22 @@ export async function getScopedPeriods(): Promise<ScopedPeriodRow[]> {
     canApprove: row.status === 'submitted' && canApprove(facts, actor.id, row.userId),
     approvalBadge: labels.get(row.id)?.badge ?? null,
     approvalText: labels.get(row.id)?.text ?? null,
+    approvalUiText: labels.get(row.id)?.uiText ?? null,
+    approvalUiBadge: labels.get(row.id)?.uiBadge ?? null,
+    decidedByName: labels.get(row.id)?.decidedByName ?? null,
+    decidedAtText: labels.get(row.id)?.decidedAtText ?? null,
   })));
   const flags = await periodFlags(db, resolved.filter((r) => r.canApprove));
-  return resolved.map((r) => ({ ...r, flags: flags.get(r.id) ?? null }));
+  // A3: the one waiting order (the list, "open next" and the sidebar queue all use compareWaiting).
+  return resolved
+    .map((r) => {
+      const f = flags.get(r.id) ?? null;
+      return { ...r, flags: f, hours: f ? f.hours : null };
+    })
+    .sort((a, b) => compareWaiting(
+      { periodStart: a.periodStart, submittedAt: a.submittedAt, employeeName: a.userName, periodId: a.id },
+      { periodStart: b.periodStart, submittedAt: b.submittedAt, employeeName: b.userName, periodId: b.id },
+    ));
 }
 
 /**

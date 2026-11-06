@@ -1,18 +1,19 @@
 import 'server-only';
 import { cache } from 'react';
-import { asc, eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { getDb, type ReadDb } from '@/db';
 import { timesheetPeriods, users } from '@/db/schema';
 import { addDays, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { canApprove, loadApprovalFacts, type ApprovalFacts } from './approval-rules';
 import { existingPeriodLength } from './pay-period-config';
+import { compareWaiting } from '@/lib/approvals/waiting-order';
 
 export interface ApprovalQueue {
   /** Submitted periods this approver may decide. */
   count: number;
   /** Distinct people behind them (for "and {k} more"). */
   people: number;
-  /** Up to `opts.names` people, oldest submission first, each once. */
+  /** Up to `opts.names` people, in the waiting order (compareWaiting), each once. */
   names: string[];
   /** The oldest waiting period ("Oct 1 – Oct 15, 2026"); null when nothing waits or opts.label is false. */
   oldestPeriodLabel: string | null;
@@ -21,8 +22,8 @@ export interface ApprovalQueue {
 /**
  * The approver's to-do list (feature-plan-ux-navigation-home.md §4.6, B3, L3): submitted periods filtered by
  * canApprove — the same rule as the Approvals "Waiting" view, so the sidebar count and the list agree. No is_active
- * filter (a deactivated person's submitted period still needs a decision, and canApprove allows it). One lean query;
- * never getScopedPeriods (all history). INTERNAL, no guard: callers pass their own (authorized) actor id.
+ * filter (a deactivated person's submitted period still needs a decision, and canApprove allows it). One lean query,
+ * sorted in JS with compareWaiting (feature-plan-ux-approvals-payroll.md A3 — the list's order); never getScopedPeriods. INTERNAL, no guard: callers pass their own (authorized) actor id.
  */
 export async function approvalQueue(
   db: Pick<ReadDb, 'select'>,
@@ -41,11 +42,13 @@ export async function approvalQueue(
     })
     .from(timesheetPeriods)
     .innerJoin(users, eq(timesheetPeriods.userId, users.id))
-    .where(eq(timesheetPeriods.status, 'submitted'))
-    // Oldest submission first (never-stamped last); ties by period so the order is stable.
-    .orderBy(sql`${timesheetPeriods.submittedAt} ASC NULLS LAST`, asc(timesheetPeriods.periodStart));
+    .where(eq(timesheetPeriods.status, 'submitted'));
 
-  const mine = rows.filter((r) => canApprove(facts, actorId, r.userId));
+  const mine = rows.filter((r) => canApprove(facts, actorId, r.userId))
+    .sort((a, b) => compareWaiting(
+      { periodStart: a.periodStart, submittedAt: a.submittedAt, employeeName: a.fullName, periodId: a.id },
+      { periodStart: b.periodStart, submittedAt: b.submittedAt, employeeName: b.fullName, periodId: b.id },
+    ));
   const seen = new Set<string>();
   const people: string[] = [];
   for (const r of mine) {

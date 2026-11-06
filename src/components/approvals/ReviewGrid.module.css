@@ -1,0 +1,140 @@
+/* feature-plan-ux-approvals-payroll.md §3.3.1 (mockup "Approvals" review grid): full lines, weekday headers, weekend
+   tint, blank empty cells, totals. Flagged cells: warn-soft fill, a 2px bottom line and a top-right triangle; noted
+   cells: a top-left accent triangle — never colour alone (each has screen-reader text). Light values here, dark below
+   (no CSS light/dark function in .css files). */
+.wrap {
+  overflow-x: auto;
+}
+
+.grid {
+  border-collapse: collapse;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--mantine-font-size-sm);
+}
+
+.grid th,
+.grid td {
+  border: 1px solid var(--mantine-color-default-border);
+  text-align: center;
+  padding: 8px 6px;
+  white-space: nowrap;
+}
+
+.grid th:first-child,
+.grid td:first-child {
+  text-align: left;
+  padding-left: 12px;
+  min-width: 200px;
+  white-space: normal;
+}
+
+.grid td:last-child,
+.grid th:last-child {
+  text-align: right;
+  padding-right: 12px;
+  font-weight: 700;
+}
+
+.day {
+  display: block;
+  font-weight: 500;
+  color: var(--mantine-color-dimmed);
+  font-size: 12px;
+}
+
+.weekend {
+  background: var(--mantine-color-gray-0);
+}
+
+:global([data-mantine-color-scheme='dark']) .weekend {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.code {
+  display: block;
+  color: var(--mantine-color-dimmed);
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 12px;
+}
+
+.flagged {
+  position: relative;
+  background: var(--mantine-color-warning-0);
+  box-shadow: inset 0 -2px 0 var(--mantine-color-warning-6);
+  font-weight: 600;
+}
+
+:global([data-mantine-color-scheme='dark']) .flagged {
+  background: rgba(242, 189, 92, 0.12);
+}
+
+.flagged::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-top: 9px solid var(--mantine-color-warning-6);
+  border-left: 9px solid transparent;
+}
+
+.noted {
+  position: relative;
+}
+
+.noted::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-top: 9px solid var(--mantine-color-signal-6);
+  border-right: 9px solid transparent;
+}
+
+.foot td {
+  font-weight: 600;
+}
+
+.caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 10px 2px 0;
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-sm);
+}
+
+.legendFlag,
+.legendNote {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legendFlag::before {
+  content: "";
+  width: 14px;
+  height: 12px;
+  background: var(--mantine-color-warning-0);
+  box-shadow: inset 0 -2px 0 var(--mantine-color-warning-6);
+}
+
+.legendNote::before {
+  content: "";
+  border-top: 9px solid var(--mantine-color-signal-6);
+  border-right: 9px solid transparent;
+}
+
+/* Fix round 1 (M1): a grid kept while the next timesheet loads. On the table, not the scroller (which takes focus). */
+.dimmed {
+  opacity: 0.5;
+}

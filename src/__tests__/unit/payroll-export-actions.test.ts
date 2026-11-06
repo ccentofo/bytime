@@ -26,7 +26,20 @@ vi.mock('@/lib/session', () => {
   const admin = async () => ({ id: 'admin-1', email: 'a@x', fullName: 'Ann', role: 'admin' });
   return { AuthorizationError, requireSession: admin, requireAdmin: admin, requireAdminFresh: admin };
 });
-vi.mock('@/server/internal/pay-period-config', () => ({ existingPeriodLength: async (_db: unknown, _s: unknown, n: number | null) => n ?? h.periodLength }));
+vi.mock('@/server/internal/pay-period-config', async () => {
+  // UX-4b Part 2 §4.1.1: payroll-data loads the schedule once (loadScheduleResolver) — the default semi-monthly here.
+  const { DEFAULT_PERIOD_CONFIG, getNumDaysInPeriod, getPeriodStartForDate } = await import('@/lib/date-utils');
+  return {
+    existingPeriodLength: async (_db: unknown, _s: unknown, n: number | null) => n ?? h.periodLength,
+    loadScheduleResolver: async () => ({
+      configOn: () => DEFAULT_PERIOD_CONFIG,
+      periodContaining: (day: string) => {
+        const start = getPeriodStartForDate(day as never, DEFAULT_PERIOD_CONFIG);
+        return { start, numDays: getNumDaysInPeriod(start, DEFAULT_PERIOD_CONFIG), config: DEFAULT_PERIOD_CONFIG };
+      },
+    }),
+  };
+});
 
 import * as dbModule from '@/db';
 import {
@@ -120,6 +133,16 @@ describe('actions (ActionResult)', () => {
     expect(await generatePayrollExportCSV({ periodStart: d('2026-10-01'), periodEnd: '2026-13-40' as never, format: 'adp' }))
       .toEqual({ ok: false, code: 'validation', error: 'End date must be a valid date (YYYY-MM-DD).' });
     expect(readFileSync(path.join(ROOT, 'src/server/actions/payroll-export.ts'), 'utf8')).not.toMatch(/getPayrollFormats/);
+  });
+
+  it('L9: a range over 400 days is refused before any read, in the preview and the CSV; exactly 400 days is read', async () => {
+    const refused = { ok: false, code: 'validation', error: 'Choose a range of 400 days or less.' };
+    expect(await getPayrollExportPreview({ periodStart: d('2026-01-01'), periodEnd: d('2027-02-05') })).toEqual(refused);   // 401 days
+    expect(await generatePayrollExportCSV({ periodStart: d('2026-01-01'), periodEnd: d('2027-02-05'), format: 'adp' })).toEqual(refused);
+    expect(db.ops).toEqual([]);
+    db.onSelect(workspaceSettings, []);
+    expect(await getPayrollExportPreview({ periodStart: d('2026-01-01'), periodEnd: d('2027-02-04') }))         // 400 days
+      .toEqual({ ok: true, data: { status: 'refused', reason: 'workweek-unset', codes: [], message: WORKWEEK_UNSET_MESSAGE } });
   });
 
   it('static: the guard is the first await in each action; the old 80-hour aggregation is gone', () => {

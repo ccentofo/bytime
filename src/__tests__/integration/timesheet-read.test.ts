@@ -211,6 +211,7 @@ describe('getTimesheetForReview reads notes after submissionCount (UX-3 A-T4, st
     const count = review.indexOf('submissionCount: timesheetPeriods.submissionCount');
     expect(count).toBeGreaterThan(-1);
     expect(review.indexOf('latestNotesInPeriod(')).toBeGreaterThan(count);
-    expect(review.indexOf('getTimesheetEntriesForEmployee(')).toBeGreaterThan(count);
+    // UX-4b Part 2 §3.1.5: the review reads entries (and their revision chains) through readEntriesAndChains.
+    expect(review.indexOf('readEntriesAndChains(')).toBeGreaterThan(count);
   });
 });

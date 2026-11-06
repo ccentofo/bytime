@@ -80,12 +80,58 @@ describe('approvalLabel — the one formatter', () => {
     expect(approvalLabel(period({ reviewedBy: null }), [imported], names, 'UTC')).toEqual({
       kind: 'imported-approved', selfApproved: false, badge: null, approverName: null,
       text: 'Approved in Deltek by sarah@old.example on 2025-06-17T14:00:00Z (imported 2026-10-01)',
+      uiText: 'Approved in Deltek by sarah@old.example on 2025-06-17T14:00:00Z', uiBadge: null,
+      decidedAtText: '2025-06-17T14:00:00Z', decidedByName: 'sarah@old.example',
     });
   });
 
   it('undecided periods have no line; a rejected period never reads as approved', () => {
     expect(approvalLabel(period({ status: 'submitted' }), [], names, 'UTC')).toMatchObject({ kind: 'none', text: null });
     expect(approvalLabel(period({ status: 'rejected' }), [ev({ event: 'rejected' })], names, 'UTC').text).toMatch(/^Rejected by Pat Boss on Oct 20, 2026/);
+  });
+});
+
+describe('approvalLabel — UI fields (feature-plan-ux-approvals-payroll.md A1, §3.1.4, A-5)', () => {
+  const period = (o: Record<string, unknown> = {}) => ({ id: 'p1', userId: 'emp', status: 'approved', reviewedBy: 'boss', reviewedAt: T, ...o });
+  const ev = (o: Partial<ApprovalLabelEvent> = {}): ApprovalLabelEvent => ({
+    periodId: 'p1', event: 'approved', actorId: 'boss', source: 'app', originalMetadata: null, createdAt: T, importSourceSystem: null, importedAt: null, ...o,
+  });
+  const names = (id: string) => ({ boss: 'Pat Boss', emp: 'Jo Emp' } as Record<string, string>)[id] ?? null;
+  const ui = (l: ReturnType<typeof approvalLabel>) => ({ uiText: l.uiText, uiBadge: l.uiBadge, decidedAtText: l.decidedAtText, decidedByName: l.decidedByName });
+  const imported = (event: string, m: Record<string, unknown> | null, system: string | null = 'Paylocity') =>
+    ev({ event, actorId: 'admin', source: 'migration', originalMetadata: m, importSourceSystem: system, importedAt: new Date('2026-10-01T09:00:00Z') });
+
+  it('all seven kinds', () => {
+    expect(ui(approvalLabel(period(), [ev()], names, 'UTC'))).toEqual({ uiText: 'Approved by Pat Boss on Oct 20, 2026', uiBadge: null, decidedAtText: 'Oct 20, 2026', decidedByName: 'Pat Boss' });
+    expect(ui(approvalLabel(period({ status: 'rejected' }), [ev({ event: 'rejected' })], names, 'UTC'))).toEqual({ uiText: 'Returned by Pat Boss on Oct 20, 2026', uiBadge: null, decidedAtText: 'Oct 20, 2026', decidedByName: 'Pat Boss' });
+    expect(ui(approvalLabel(period({ reviewedBy: 'emp' }), [ev({ actorId: 'emp' })], names, 'UTC'))).toEqual({ uiText: 'Self-approved on Oct 20, 2026', uiBadge: 'Self-approved', decidedAtText: 'Oct 20, 2026', decidedByName: 'Jo Emp' });
+    expect(ui(approvalLabel(period({ status: 'rejected', reviewedBy: 'emp' }), [ev({ event: 'rejected', actorId: 'emp' })], names, 'UTC'))).toEqual({ uiText: 'Self-returned on Oct 20, 2026', uiBadge: 'Self-returned', decidedAtText: 'Oct 20, 2026', decidedByName: 'Jo Emp' });
+    expect(ui(approvalLabel(period({ reviewedBy: null }), [imported('approved', { reviewer: 'Sam Old', reviewedAt: '2025-06-17' })], names, 'UTC')))
+      .toEqual({ uiText: 'Approved in Paylocity by Sam Old on Jun 17, 2025', uiBadge: null, decidedAtText: 'Jun 17, 2025', decidedByName: 'Sam Old' });
+    expect(ui(approvalLabel(period({ status: 'rejected', reviewedBy: null }), [imported('rejected', { reviewer: 'Sam Old', reviewedAt: '2025-06-17' })], names, 'UTC')))
+      .toEqual({ uiText: 'Returned in Paylocity by Sam Old on Jun 17, 2025', uiBadge: null, decidedAtText: 'Jun 17, 2025', decidedByName: 'Sam Old' });
+    expect(ui(approvalLabel(period({ status: 'submitted' }), [], names, 'UTC'))).toEqual({ uiText: null, uiBadge: null, decidedAtText: null, decidedByName: null });
+  });
+
+  it('imported: the decision date, never the import time; the existing fallbacks; a non-date string is shown as is', () => {
+    expect(ui(approvalLabel(period({ reviewedBy: null }), [imported('approved', null, null)], names, 'UTC')))
+      .toEqual({ uiText: 'Approved in another system by reviewer not recorded on an unknown date', uiBadge: null, decidedAtText: null, decidedByName: null });
+    expect(approvalLabel(period({ reviewedBy: null }), [imported('approved', { reviewer: 'X', reviewedAt: 'June 2025' })], names, 'UTC').decidedAtText).toBe('June 2025');
+  });
+
+  it('the date is the workspace\'s calendar day, with no zone label (an evening decision in New York is that day)', () => {
+    const l = approvalLabel(period({ reviewedAt: new Date('2026-10-21T02:00:00Z') }), [], names, 'America/New_York');
+    expect(l.decidedAtText).toBe('Oct 20, 2026');
+    expect(l.uiText).toBe('Approved by Pat Boss on Oct 20, 2026');
+  });
+
+  it('an in-app decision with no date leaves out " on …"; the old fields are unchanged', () => {
+    const l = approvalLabel(period({ reviewedAt: null }), [], names, 'UTC');
+    expect(l.uiText).toBe('Approved by Pat Boss');
+    expect(l.decidedAtText).toBeNull();
+    const r = approvalLabel(period({ status: 'rejected', reviewedBy: 'emp' }), [ev({ event: 'rejected', actorId: 'emp' })], names, 'UTC');
+    expect({ kind: r.kind, badge: r.badge, text: r.text, approverName: r.approverName, selfApproved: r.selfApproved })
+      .toEqual({ kind: 'self-rejected', badge: 'Self-rejected', text: 'Self-rejected on Oct 20, 2026 UTC', approverName: null, selfApproved: false });
   });
 });
 
@@ -164,6 +210,50 @@ describe('approve / reject order and "approve exactly what was reviewed"', () =>
     db.onReturning('update', timesheetPeriods, []);
     db.onSelect(timesheetPeriods, [{ status: 'approved', submissionCount: 2 }]);
     expect(await rejectPeriod({ periodId: 'p1', seen: 2, comment: 'x' })).toMatchObject({ ok: false, code: 'conflict', error: expect.stringMatching(/just changed by someone else/) });
+  });
+
+  it('A-3: a return with an empty, whitespace or non-string comment → validation; nothing read, no status change, no event', async () => {
+    h.actor = { id: 'adm', role: 'admin', email: 'a@x', fullName: 'A' };
+    for (const comment of ['', '   \n\t', 42, null]) {
+      db.reset();
+      expect(await rejectPeriod({ periodId: 'p1', seen: 2, comment } as never), JSON.stringify(comment))
+        .toEqual({ ok: false, code: 'validation', error: 'Add a comment so the employee knows what to fix.' });
+      expect(db.ops, JSON.stringify(comment)).toEqual([]);
+    }
+    db.reset();
+    expect(await rejectPeriod({ periodId: 'p1', seen: 2 } as never)).toMatchObject({ ok: false, code: 'validation', error: 'Add a comment so the employee knows what to fix.' });
+  });
+
+  it('A-3: the `seen` check stays first; > 1,000 characters is refused for both decisions', async () => {
+    h.actor = { id: 'adm', role: 'admin', email: 'a@x', fullName: 'A' };
+    expect(await rejectPeriod({ periodId: 'p1', comment: '' } as never)).toMatchObject({ error: expect.stringMatching(/reviewed version is missing/) });
+    const long = 'x'.repeat(1001);
+    for (const decide of [() => approvePeriod({ periodId: 'p1', seen: 2, comment: long }), () => rejectPeriod({ periodId: 'p1', seen: 2, comment: long })]) {
+      db.reset();
+      expect(await decide()).toEqual({ ok: false, code: 'validation', error: 'Comments can be at most 1,000 characters.' });
+      expect(db.ops).toEqual([]);
+    }
+    db.reset();
+    expect(await approvePeriod({ periodId: 'p1', seen: 2, comment: 5 } as never)).toMatchObject({ ok: false, code: 'validation' });
+  });
+
+  it('A-3: the trimmed comment is stored (period and event); exactly 1,000 after trimming is fine; an empty approve stores null', async () => {
+    h.actor = { id: 'adm', role: 'admin', email: 'a@x', fullName: 'A' };
+    const decideOk = async (fn: () => Promise<unknown>) => {
+      db.reset();
+      db.onSelect(timesheetPeriods, [submitted()]);
+      facts({ id: 'adm', role: 'admin' }, { id: 'emp', role: 'employee' });
+      facts({ id: 'adm', role: 'admin' }, { id: 'emp', role: 'employee' });
+      db.onReturning('update', timesheetPeriods, [{ id: 'p1' }]);
+      expect(await fn()).toEqual({ ok: true, data: undefined });
+      return { period: db.updates.find((u) => u.table === timesheetPeriods)!.set, event: db.inserts.find((i) => i.table === periodEvents)!.values };
+    };
+    const r = await decideOk(() => rejectPeriod({ periodId: 'p1', seen: 2, comment: '  Add Tuesday.  ' }));
+    expect([r.period.reviewComment, r.event.comment]).toEqual(['Add Tuesday.', 'Add Tuesday.']);
+    const full = await decideOk(() => rejectPeriod({ periodId: 'p1', seen: 2, comment: ` ${'y'.repeat(1000)} ` }));
+    expect((full.period.reviewComment as string).length).toBe(1000);
+    const a = await decideOk(() => approvePeriod({ periodId: 'p1', seen: 2, comment: '   ' }));
+    expect([a.period.reviewComment, a.event.comment]).toEqual([null, null]);
   });
 
   it('the UPDATE is conditional on status = submitted AND submission_count = seen', async () => {
@@ -375,23 +465,39 @@ describe('static rules', () => {
     ]);
   });
 
-  it('no code formats the approver line except approval-label.ts ("Self-approved"/"Self-rejected" literals)', () => {
-    const offenders = sourceFiles(path.join(ROOT, 'src'))
+  it('no code formats the approver line except approval-label.ts ("Self-approved/rejected/returned" literals; the uiText lines)', () => {
+    const files = sourceFiles(path.join(ROOT, 'src'))
       .map((f) => ({ rel: path.relative(ROOT, f), src: readFileSync(f, 'utf8') }))
-      .filter((f) => f.rel !== 'src/server/internal/approval-label.ts')
-      .flatMap((f) => [...stripComments(f.src).matchAll(/(['"`])Self-(approved|rejected)\1|>\s*Self-(approved|rejected)\s*</g)].map(() => f.rel));
+      .filter((f) => f.rel !== 'src/server/internal/approval-label.ts');
+    const offenders = files
+      .flatMap((f) => [...stripComments(f.src).matchAll(/(['"`])Self-(approved|rejected|returned)\1|>\s*Self-(approved|rejected|returned)\s*</g)].map(() => f.rel));
     expect(offenders).toEqual([]);
+    // UX-4b Part 2 §3.1.4: the uiText lines ("Approved by …", "Returned in … by …") are formatted only there too.
+    const lines = files.flatMap((f) => [...stripComments(f.src).matchAll(/`(Approved|Returned|Rejected) (by|in) \$\{/g)].map(() => f.rel));
+    expect(lines).toEqual([]);
   });
 
-  it('the Approvals client sends the reviewed version (seen = submissionCount) and only once the review has loaded', () => {
+  it('A-11: the Approvals client binds each decision to the review on screen (feature-plan-ux-approvals-payroll.md A10)', () => {
     const client = readFileSync(path.join(ROOT, 'src/app/(app)/admin/approvals/ApprovalsClient.tsx'), 'utf8');
-    expect(client.match(/seen: reviewData\.submissionCount/g)).toHaveLength(2);
-    expect(client).toMatch(/if \(!reviewData\) return null;/);
+    // The period and the version seen come from the same review object, in every decision payload.
+    expect(client).toMatch(/periodId: reviewData\.periodId,\s*seen: reviewData\.submissionCount/);
+    const payloads = client.match(/(approvePeriod|rejectPeriod)\(\{[^}]*\}/g) ?? [];
+    expect(payloads).toHaveLength(2);
+    for (const p of payloads) expect(p).toMatch(/periodId: reviewData\.periodId,\s*seen: reviewData\.submissionCount/);
+    // Never the selected row's id; the card is gated on the review being for the current row.
+    expect(client).not.toMatch(/selectedPeriod\.id|periodId: selectedPeriod/);
+    expect(client).toContain('reviewData.periodId ===');
   });
 
   it('getTimesheetForReview reads submission_count BEFORE the entries (safe ordering, see its doc comment)', () => {
     const src = readFileSync(path.join(ROOT, 'src/server/actions/timesheet.ts'), 'utf8');
-    const fn = src.slice(src.indexOf('export async function getTimesheetForReview'));
-    expect(fn.indexOf('submissionCount: timesheetPeriods.submissionCount')).toBeLessThan(fn.indexOf('getTimesheetEntriesForEmployee('));
+    const fn = src.slice(src.indexOf('export async function getTimesheetForReview'), src.indexOf('async function getChargeCodesForEmployee'));
+    const count = fn.indexOf('submissionCount: timesheetPeriods.submissionCount');
+    expect(count).toBeGreaterThan(-1);
+    // UX-4b Part 2 §3.1.5: entries (and their revision chains) come from readEntriesAndChains, after the count.
+    expect(fn.indexOf('readEntriesAndChains(')).toBeGreaterThan(count);
+    // …with the length the first select gave: neither this read nor the entries read re-selects the period.
+    expect(fn).not.toMatch(/periodLengthFor\(/);
+    expect(fn).toMatch(/readEntriesAndChains\(employeeId, start, codes, numDays\)/);
   });
 });

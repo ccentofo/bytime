@@ -1,0 +1,50 @@
+/* feature-plan-ux-approvals-payroll.md §3.2 (mockup "Approvals"): the "Worth a look" flags — a warn diamond and the
+   words, not colour alone. */
+.flags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--mantine-color-warning-text);
+  font-size: var(--mantine-font-size-sm);
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.flag::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  transform: rotate(45deg);
+  background: currentColor;
+  display: inline-block;
+}
+
+/* §3.3.2: the review's cards — a row on wide screens, stacked below 64em. */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 64em) {
+  .cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.tag {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mantine-color-signal-text);
+  border: 1px solid var(--mantine-color-default-border);
+}

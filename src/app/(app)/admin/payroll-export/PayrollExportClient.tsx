@@ -1,340 +1,325 @@
 'use client';
 
-import { useState, useTransition } from 'react';
-import {
-  Container,
-  Title,
-  Text,
-  Paper,
-  Group,
-  Badge,
-  Button,
-  Stack,
-  Select,
-  Table,
-  Alert,
-  ThemeIcon,
-  Anchor,
-  SimpleGrid,
-} from '@mantine/core';
-import { DatePickerInput } from '@mantine/dates';
-import {
-  IconFileExport,
-  IconDownload,
-  IconArrowLeft,
-  IconEye,
-  IconCalendar,
-  IconAlertTriangle,
-} from '@tabler/icons-react';
-import { notifications } from '@mantine/notifications';
+import { useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import Link from 'next/link';
+import { Accordion, Alert, Button, Group, Paper, Select, Stack, Text, Title, VisuallyHidden } from '@mantine/core';
+import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Notice } from '@/components/ui/Notice';
+import { StatusBadge } from '@/components/ui/StatusBadge';
+import { useBusy } from '@/components/ui/useBusy';
+import { CUSTOM_PRESET, PeriodPresetSelect, periodSelectionReady, type PeriodSelection } from '@/components/ui/PeriodPresetSelect';
+import { WriteButton } from '@/components/shell/WorkspaceMode';
+import { useAppTable, numericColumn } from '@/components/table/mrtDefaults';
 import {
   getPayrollExportPreview,
   generatePayrollExportCSV,
   type PayrollPreview,
-  type PayrollPreviewEmployee,
+  type PayrollPreviewRow,
 } from '@/server/actions/payroll-export';
-import { runAction } from '@/lib/run-action';
-import { daysInMonth, isCalendarDate, startOfMonth, withDayOfMonth, type CalendarDate } from '@/lib/calendar-date';
+import { runAction, type RunResult } from '@/lib/run-action';
+import { saveBlob } from '@/lib/download';
+import { toastSuccess } from '@/lib/toast';
+import { formatCount, formatHours } from '@/lib/format';
+import { calendarDayOf, formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
+import { periodLabel } from '@/lib/timesheet/labels';
+import type { NotIncluded } from '@/lib/payroll/not-included';
+import type { ActionResult } from '@/lib/action-result';
+
+/**
+ * Payroll export (feature-plan-ux-approvals-payroll.md §4.2): pick a pay period (kit presets; custom dates seeded from
+ * the current range), the preview runs on every complete change (a stale response is dropped by a request token), the
+ * F10 warning sits above the downloads, "not in this file" says who is missing and why, and the downloads refuse in
+ * their handler unless the preview is READY for the CURRENT range (F4 — the flagged people are always seen first).
+ */
+
+export interface PayrollPresets {
+  last: { start: CalendarDate; end: CalendarDate; label: string };
+  current: { start: CalendarDate; end: CalendarDate; label: string };
+  previous: { start: CalendarDate; end: CalendarDate; label: string };
+}
 
 const FORMAT_OPTIONS = [
-  { value: 'adp', label: 'ADP Workforce Now', description: 'Standard ADP payroll import' },
-  { value: 'paychex', label: 'Paychex Flex', description: 'Paychex payroll import' },
-  { value: 'gusto', label: 'Gusto', description: 'Gusto bulk hours import' },
-  { value: 'custom', label: 'Custom Format', description: 'All columns included' },
+  { value: 'adp', label: 'ADP Workforce Now' },
+  { value: 'paychex', label: 'Paychex Flex' },
+  { value: 'gusto', label: 'Gusto' },
+  { value: 'custom', label: 'Custom (all columns)' },
 ];
-
+const DEFAULT_FORMAT = 'adp';
+export const FORMAT_KEY = 'cp.payrollFormat';
+const FORMAT_EVENT = 'cp-payroll-format';
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-const h = (n: number) => n.toFixed(2);
 
-export function PayrollExportClient({ today }: { today: CalendarDate }) {
-  const [format, setFormat] = useState<string | null>('adp');
-  // Default range: this month in the workspace's calendar (server-provided today).
-  const [dateRange, setDateRange] = useState<[CalendarDate | null, CalendarDate | null]>([
-    startOfMonth(today),
-    withDayOfMonth(today, daysInMonth(today)),
-  ]);
-  // Fix round 1 (F4): a preview belongs to the range it was generated for. Downloads need a READY preview of the
-  // CURRENT range, so the flagged employees are always seen before a file is downloaded.
-  const [previewState, setPreviewState] = useState<{ range: string; data: PayrollPreview } | null>(null);
-  const rangeKey = `${dateRange[0] ?? ''}|${dateRange[1] ?? ''}`;
-  const preview = previewState && previewState.range === rangeKey ? previewState.data : null;
-  const canDownload = preview?.status === 'ready';
-  const [isPending, startTransition] = useTransition();
-  const [isDownloading, setIsDownloading] = useState(false);
-
-  async function handlePreview() {
-    if (!dateRange[0] || !dateRange[1]) {
-      notifications.show({ title: 'Date range required', message: 'Select a start and end date.', color: 'warning' });
-      return;
-    }
-
-    startTransition(async () => {
-      const requested = rangeKey;
-      const result = await runAction(getPayrollExportPreview({ periodStart: dateRange[0]!, periodEnd: dateRange[1]! }), { errorTitle: 'Preview failed' });
-      if (!result.ok) return;
-      setPreviewState({ range: requested, data: result.data }); // ignored at render if the range changed meanwhile
-      if (result.data.status === 'ready' && result.data.employees.length === 0) {
-        notifications.show({ title: 'No approved data', message: 'No approved timesheet entries found for this date range.', color: 'warning' });
-      }
-    });
+/** The remembered format, validated against the options (anything else → the default). */
+function readFormat(): string {
+  try {
+    const v = window.localStorage.getItem(FORMAT_KEY);
+    return FORMAT_OPTIONS.some((f) => f.value === v) ? v! : DEFAULT_FORMAT;
+  } catch {
+    return DEFAULT_FORMAT;
   }
+}
+function subscribeFormat(cb: () => void) {
+  window.addEventListener('storage', cb);
+  window.addEventListener(FORMAT_EVENT, cb);
+  return () => { window.removeEventListener('storage', cb); window.removeEventListener(FORMAT_EVENT, cb); };
+}
+
+type PreviewState = { range: string; result: ActionResult<PayrollPreview> | RunResult<PayrollPreview> | null };
+
+const WHY: Record<NotIncluded['status'], (n: NotIncluded, day: (iso: string) => string) => string> = {
+  submitted: () => '— waiting for approval',
+  rejected: (n, day) => `— returned${n.returnedAt ? ` ${day(n.returnedAt)}` : ''}, not resubmitted`,
+  draft: () => '— not submitted',
+  none: () => '— not started',
+};
+
+export function PayrollExportClient({ presets, initialPreview, timeZone }: {
+  presets: PayrollPresets;
+  initialPreview: ActionResult<PayrollPreview>;
+  timeZone: string;
+}) {
+  const busy = useBusy();
+  const loadingHintId = useId();
+  const refusedId = useId();
+  const failedId = useId();
+  /** Polite live region (fix round 1, L7): "Preview updated for {range}" when a chosen range's preview lands. */
+  const [announcement, setAnnouncement] = useState('');
+  const format = useSyncExternalStore(subscribeFormat, readFormat, () => DEFAULT_FORMAT);
+  const setFormat = (v: string | null) => {
+    if (!v) return;
+    try { window.localStorage.setItem(FORMAT_KEY, v); } catch { /* private mode: the choice lasts this view only */ }
+    window.dispatchEvent(new Event(FORMAT_EVENT));
+  };
+
+  // The selection always carries a start and end (every preset's), so "Custom dates…" starts from the current range.
+  const [selection, setSelection] = useState<PeriodSelection>({ preset: 'last', start: presets.last.start, end: presets.last.end });
+  const rangeOf = (sel: PeriodSelection) => (sel.start && sel.end ? `${sel.start}|${sel.end}` : '');
+  const rangeKey = periodSelectionReady(selection) ? rangeOf(selection) : '';
+  const [preview, setPreview] = useState<PreviewState>({ range: rangeOf({ preset: 'last', start: presets.last.start, end: presets.last.end }), result: initialPreview });
+  const token = useRef(0);
+
+  function choose(next: PeriodSelection) {
+    const preset = next.preset as keyof PayrollPresets | typeof CUSTOM_PRESET;
+    const sel: PeriodSelection = preset !== CUSTOM_PRESET && preset in presets && next.preset !== selection.preset
+      ? { preset: next.preset, start: presets[preset as keyof PayrollPresets].start, end: presets[preset as keyof PayrollPresets].end }
+      : next;
+    setSelection(sel);
+    if (!periodSelectionReady(sel) || !sel.start || !sel.end) return;
+    const key = rangeOf(sel);
+    const mine = ++token.current;
+    setPreview({ range: key, result: null });
+    setAnnouncement('');
+    const { start, end } = sel;
+    void (async () => {
+      const result = await runAction(getPayrollExportPreview({ periodStart: start, periodEnd: end }), { silent: true });
+      if (mine !== token.current) return; // a newer range was chosen meanwhile — drop it before any setState
+      if (!result.ok) { setPreview({ range: key, result }); return; } // shown inline (role="alert"); the downloads stay blocked
+      setPreview({ range: key, result });
+      setAnnouncement(`Preview updated for ${periodLabel(start, end)}`);
+    })();
+  }
+
+  const current = preview.range === rangeKey ? preview.result : null;
+  const loading = rangeKey !== '' && preview.range === rangeKey && preview.result === null;
+  const ready = current?.ok && current.data.status === 'ready' ? current.data : null;
+  const refused = current?.ok && current.data.status === 'refused' ? current.data : null;
+  const failed = current && !current.ok ? current.error : null;
+  const canDownload = !!ready;
+  const employees: PayrollPreviewRow[] = ready?.employees ?? [];
+  const flagged = employees.filter((e) => e.otBasisIncludesUnapprovedDays);
+  const notIncluded = ready?.notIncluded ?? [];
+  const missingPeople = new Set(notIncluded.map((n) => n.userId)).size;
+  const partly = notIncluded.some((n) => n.partlyIncluded);
+  const day = (iso: string) => formatCalendarDate(calendarDayOf(new Date(iso), timeZone), 'MMM D');
 
   async function download(kind: string) {
-    if (!dateRange[0] || !dateRange[1]) {
-      notifications.show({ title: 'Missing fields', message: 'Select a format and date range.', color: 'warning' });
-      return;
-    }
-
-    setIsDownloading(true);
-    try {
+    // F4, in the handler: only a READY preview of the CURRENT range (aria-disabled alone doesn't stop a click).
+    if (!(preview.range === rangeKey && current?.ok && current.data.status === 'ready') || !selection.start || !selection.end) return;
+    await busy.run(`download:${kind}`, async () => {
       const result = await runAction(generatePayrollExportCSV({
-        periodStart: dateRange[0],
-        periodEnd: dateRange[1],
-        format: kind as 'adp' | 'paychex' | 'gusto' | 'custom' | 'daily-hours',
+        periodStart: selection.start!, periodEnd: selection.end!, format: kind as 'adp' | 'paychex' | 'gusto' | 'custom' | 'daily-hours',
       }), { errorTitle: 'Export failed' });
       if (!result.ok) return;
-
-      // Trigger browser download
-      const blob = new Blob([result.data.csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = result.data.filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-
-      notifications.show({
+      saveBlob(new Blob([result.data.csvContent], { type: 'text/csv;charset=utf-8;' }), result.data.filename);
+      toastSuccess({
         title: 'Export downloaded',
-        message: `${result.data.employeeCount} employees, ${result.data.totalPaidHours.toFixed(2)} paid hours (FLSA weekly overtime)`
+        message: `${result.data.employeeCount} employees, ${formatHours(result.data.totalPaidHours)} paid hours`
           + (result.data.flaggedCount > 0 ? ` — ${result.data.flaggedCount} flagged` : ''),
-        color: 'success',
       });
-    } finally {
-      setIsDownloading(false);
-    }
+    }, { group: 'download' });
   }
 
-  const employees: PayrollPreviewEmployee[] = preview?.status === 'ready' ? preview.employees : [];
-  const flagged = employees.filter((e) => e.otBasisIncludesUnapprovedDays);
-  const totalPaid = employees.reduce((sum, e) => sum + e.totalPaidHours, 0);
-
-  return (
-    <Container size="lg" py="xl">
-      {/* Header */}
-      <Group mb="md">
-        <Anchor href="/admin/reports" size="sm">
-          <IconArrowLeft size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} />
-          Back to reports
-        </Anchor>
-      </Group>
-
-      <Group justify="space-between" align="flex-start" mb="xl">
-        <div>
-          <Group gap="sm" mb={4}>
-            <ThemeIcon size="lg" color="warning" variant="light" radius="md">
-              <IconFileExport size={20} />
-            </ThemeIcon>
-            <Title order={1} size="h2">Payroll Export</Title>
-          </Group>
-          <Text c="dimmed" size="sm">
-            Download approved timesheet data formatted for your payroll system — FLSA weekly overtime.
+  const notColumns = useMemo<MRT_ColumnDef<NotIncluded>[]>(() => [
+    { id: 'name', header: 'Name', accessorFn: (n) => n.employeeName, Cell: ({ row }) => <Text fw={600} size="sm" span>{row.original.employeeName}</Text> },
+    {
+      id: 'why', header: 'Why', accessorFn: (n) => n.status,
+      Cell: ({ row: { original: n } }) => (
+        <Group gap={6} wrap="nowrap">
+          {n.status === 'none' ? <StatusBadge word="Not started" tone="dim" /> : <StatusBadge status={n.status} />}
+          <Text size="sm" c="dimmed" span>
+            {WHY[n.status](n, day)}{n.partlyIncluded ? ' · partly included' : ''}
           </Text>
-        </div>
-      </Group>
+        </Group>
+      ),
+    },
+    numericColumn<NotIncluded>({ id: 'hours', header: 'Hours', accessorFn: (n) => n.hoursInRange, Cell: ({ row }) => formatHours(row.original.hoursInRange) }),
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- day only reads timeZone
+  ], [timeZone]);
+  const notTable = useAppTable<NotIncluded>({
+    columns: notColumns,
+    data: notIncluded,
+    hairline: true,
+    compact: notIncluded.length <= 25,
+    enableSorting: false,
+    enableTopToolbar: false,
+    getRowId: (n) => `${n.userId}|${n.periodStart}`,
+    mantineTableProps: { 'aria-label': 'People not in this file' },
+    enableRowActions: true,
+    positionActionsColumn: 'last',
+    renderRowActions: ({ row: { original: n } }) => (n.canReview && n.periodId
+      ? <Button component={Link} href={`/admin/approvals?review=${n.periodId}`} size="xs" variant="default" aria-label={`Review ${n.employeeName}’s timesheet`}>Review</Button>
+      : null),
+  });
 
-      {/* Configuration */}
-      <Paper withBorder p="lg" radius="md" mb="xl">
-        <Stack gap="md">
-          <Group grow align="flex-end">
-            <Select
-              label="Payroll Format"
-              placeholder="Select format..."
-              data={FORMAT_OPTIONS.map((f) => ({ value: f.value, label: f.label }))}
-              value={format}
-              onChange={setFormat}
-              allowDeselect={false}
-            />
-            <DatePickerInput
-              type="range"
-              label="Date Range"
-              placeholder="Select period..."
-              value={dateRange}
-              onChange={(value) => {
-                setDateRange([
-                  value[0] && isCalendarDate(value[0]) ? value[0] : null,
-                  value[1] && isCalendarDate(value[1]) ? value[1] : null,
-                ]);
-                setPreviewState(null); // a new range needs a new preview
-              }}
-              leftSection={<IconCalendar size={16} />}
-            />
-          </Group>
+  const totals = ready?.totals;
+  const inColumns = useMemo<MRT_ColumnDef<PayrollPreviewRow>[]>(() => [
+    {
+      id: 'employee', header: 'Employee', accessorFn: (e) => e.employeeName,
+      Cell: ({ row: { original: e } }) => (
+        <Group gap={6} wrap="nowrap">
+          <Text size="sm" fw={500} span>{e.employeeName}</Text>
+          {e.otBasisIncludesUnapprovedDays && <StatusBadge word="Flagged" tone="warn" />}
+        </Group>
+      ),
+      Footer: () => (totals ? `${formatCount(totals.people)} ${totals.people === 1 ? 'person' : 'people'}` : ''),
+    },
+    { id: 'flsa', header: 'FLSA', accessorFn: (e) => (e.flsaExempt ? 'Exempt' : 'Non-exempt'), Cell: ({ cell }) => <Text size="sm" c="dimmed" span>{cell.getValue<string>()}</Text> },
+    numericColumn<PayrollPreviewRow>({ id: 'regular', header: 'Regular', accessorFn: (e) => e.regularHours, Cell: ({ row }) => formatHours(row.original.regularHours), Footer: () => (totals ? formatHours(totals.regular) : '') }),
+    numericColumn<PayrollPreviewRow>({
+      id: 'overtime', header: 'Overtime', accessorFn: (e) => e.overtimeHours,
+      Cell: ({ row }) => (row.original.flsaExempt ? <Text size="sm" c="dimmed" span>—</Text> : formatHours(row.original.overtimeHours)),
+      Footer: () => (totals ? formatHours(totals.overtime) : ''),
+    }),
+    numericColumn<PayrollPreviewRow>({ id: 'leave', header: 'Leave', accessorFn: (e) => e.paidLeave, Cell: ({ row }) => formatHours(row.original.paidLeave), Footer: () => (totals ? formatHours(totals.paidLeave) : '') }),
+    numericColumn<PayrollPreviewRow>({ id: 'total', header: 'Total', accessorFn: (e) => e.totalPaidHours, Cell: ({ row }) => formatHours(row.original.totalPaidHours), Footer: () => (totals ? formatHours(totals.totalPaid) : '') }),
+  ], [totals]);
+  const inTable = useAppTable<PayrollPreviewRow>({
+    columns: inColumns,
+    data: employees,
+    hairline: true,
+    compact: employees.length <= 25,
+    enableSorting: false,
+    enableTopToolbar: false,
+    getRowId: (e) => e.userId,
+    enableTableFooter: employees.length > 0,
+    emptyState: { title: 'No approved hours in this pay period.', body: 'Only approved timesheets are exported.' },
+  });
 
-          <Alert color="gray" variant="light" title="FLSA weekly overtime">
-            <Text size="sm">
-              Overtime is hours worked over 40 in a workweek (federal FLSA; no state rules), computed per workweek
-              from your workweek start day — a week that crosses pay periods is one week. Leave never counts toward
-              the 40 and is exported in its own columns; unpaid leave is never in a paid column. Exempt employees
-              show 0 overtime; their hours over 40 appear as uncompensated overtime in the Custom export and the
-              Daily hours detail.
-            </Text>
-            <Text size="sm" mt={6}>
-              Deducting partial days of unpaid leave from an exempt employee&apos;s salary can put the exemption at
-              risk under federal rules — that is your payroll accountant&apos;s call.
-            </Text>
-          </Alert>
+  const downloadBlocked = !canDownload;
+  // Why the downloads are blocked, read with them (L7): loading, the refusal, or the failure.
+  const describedBy = loading ? loadingHintId : refused ? refusedId : failed ? failedId : undefined;
+  return (
+    <>
+      <PageHeader
+        title="Payroll export"
+        description="Approved hours for a pay period, formatted for your payroll system, with weekly overtime worked out."
+      />
 
-          {format && (
-            <Alert color="signal" variant="light">
-              <Text size="sm">
-                <strong>{FORMAT_OPTIONS.find((f) => f.value === format)?.label}</strong>
-                {' — '}
-                {FORMAT_OPTIONS.find((f) => f.value === format)?.description}
-              </Text>
-            </Alert>
-          )}
-
-          {flagged.length > 0 && (
-            <Alert color="warning" variant="light" icon={<IconAlertTriangle size={16} />} title="Overtime uses unapproved days" data-testid="payroll-flagged">
-              <Text size="sm">
-                These employees&apos; overtime counts hours from unapproved days earlier in the same workweek. Their
-                figures may change once those timesheets are approved:
-              </Text>
-              <Text size="sm" fw={600} mt={4}>{flagged.map((e) => e.employeeName).join(', ')}</Text>
-            </Alert>
-          )}
-          {!canDownload && (
-            <Text size="xs" c="dimmed" data-testid="payroll-preview-first">Preview the data for this date range to enable downloads.</Text>
-          )}
-
-          <Group>
-            <Button
-              variant="light"
-              leftSection={<IconEye size={16} />}
-              onClick={handlePreview}
-              loading={isPending}
-              disabled={!dateRange[0] || !dateRange[1]}
-            >
-              Preview Data
-            </Button>
-            <Button
-              variant="filled"
-              leftSection={<IconDownload size={16} />}
-              onClick={() => format && download(format)}
-              loading={isDownloading}
-              disabled={!format || !canDownload}
-              data-testid="payroll-download"
-            >
-              Download CSV
-            </Button>
-            <Button
-              variant="default"
-              leftSection={<IconDownload size={16} />}
-              onClick={() => download('daily-hours')}
-              loading={isDownloading}
-              disabled={!canDownload}
-              data-testid="payroll-download-daily"
-            >
-              Daily hours detail
-            </Button>
-          </Group>
-        </Stack>
+      <Paper withBorder radius="md" p="md" mb="md">
+        <Group align="flex-end" gap="lg" wrap="wrap">
+          <PeriodPresetSelect
+            label="Pay period"
+            w={300}
+            presets={[
+              { value: 'last', label: `Last pay period · ${presets.last.label}` },
+              { value: 'current', label: `This pay period · ${presets.current.label}` },
+              { value: 'previous', label: presets.previous.label },
+            ]}
+            value={selection}
+            onChange={choose}
+          />
+          <Select label="Format" w={220} allowDeselect={false} data={FORMAT_OPTIONS} value={format} onChange={setFormat} />
+          <Stack gap={4} ml="auto">
+            {/* A11 (F10): the warning sits ABOVE the downloads. */}
+            {flagged.length > 0 && (
+              <div data-testid="payroll-flagged">
+                <Notice>
+                  <b>Overtime uses unapproved days.</b> These employees&apos; overtime counts hours from unapproved days
+                  earlier in the same workweek. Their figures may change once those timesheets are approved:{' '}
+                  <b>{flagged.map((e) => e.employeeName).join(', ')}</b>
+                </Notice>
+              </div>
+            )}
+            <Group gap="sm">
+              <WriteButton
+                {...busy.props('download:csv', { group: 'download', blocked: downloadBlocked })}
+                aria-describedby={describedBy}
+                onClick={() => { void download(format); }}
+                data-testid="payroll-download"
+              >
+                Download CSV
+              </WriteButton>
+              <WriteButton
+                variant="default"
+                {...busy.props('download:daily-hours', { group: 'download', blocked: downloadBlocked })}
+                aria-describedby={describedBy}
+                onClick={() => { void download('daily-hours'); }}
+                data-testid="payroll-download-daily"
+              >
+                Download daily detail
+              </WriteButton>
+            </Group>
+            {loading && <Text size="xs" c="dimmed" id={loadingHintId} role="status" data-testid="payroll-loading">Loading preview…</Text>}
+          </Stack>
+        </Group>
       </Paper>
 
-      {/* Refusal: the export can't run until these are fixed */}
-      {preview?.status === 'refused' && (
-        <Alert color="red" variant="light" icon={<IconAlertTriangle size={16} />} title="Payroll export unavailable" mb="xl" data-testid="payroll-refused">
-          <Text size="sm">{preview.message}</Text>
-          {preview.reason === 'workweek-unset'
-            ? <Anchor href="/settings/workspace" size="sm">Set the workweek start day in Settings</Anchor>
-            : <Anchor href="/admin/indirect-codes" size="sm">Set pay types in Indirect Codes</Anchor>}
-        </Alert>
+      <VisuallyHidden role="status" aria-live="polite" data-testid="payroll-announcement">{announcement}</VisuallyHidden>
+      {failed && <Alert color="red" role="alert" mb="md" id={failedId} data-testid="payroll-preview-error">{failed}</Alert>}
+      {refused && (
+        <div id={refusedId} data-testid="payroll-refused">
+          <Notice action={refused.reason === 'workweek-unset'
+            ? { label: 'Set the workweek start day', href: '/settings/workspace' }
+            : { label: 'Set pay types in Indirect Codes', href: '/admin/indirect-codes' }}>
+            {refused.message}
+          </Notice>
+        </div>
       )}
 
-      {/* Preview Table */}
-      {preview?.status === 'ready' && (
+      {ready && (
         <>
-          {/* Summary Stats */}
-          <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="md" mb="md">
-            <Paper withBorder p="md" radius="md">
-              <Text size="xs" c="dimmed">Employees</Text>
-              <Text fw={700} size="xl">{employees.length}</Text>
-            </Paper>
-            <Paper withBorder p="md" radius="md">
-              <Text size="xs" c="dimmed">Total Paid Hours</Text>
-              <Text fw={700} size="xl">{totalPaid.toFixed(2)}</Text>
-            </Paper>
-            <Paper withBorder p="md" radius="md">
-              <Text size="xs" c="dimmed">Workweek starts</Text>
-              <Text fw={700} size="xl">{DAY_NAMES[preview.workweekStartDay]}</Text>
-            </Paper>
-            <Paper withBorder p="md" radius="md">
-              <Text size="xs" c="dimmed">Data Source</Text>
-              <Badge color="success" variant="light" size="lg" mt={4}>Approved Only</Badge>
-            </Paper>
-          </SimpleGrid>
+          {missingPeople > 0 && (
+            <>
+              <Notice>
+                <b>{formatCount(missingPeople)} {missingPeople === 1 ? 'person isn’t' : 'people aren’t'}{partly ? ' fully' : ''} in this file.</b> Only approved timesheets are exported.
+              </Notice>
+              <div data-testid="payroll-not-included"><MantineReactTable table={notTable} /></div>
+            </>
+          )}
 
-          {/* Employee Table */}
-          <Paper withBorder radius="md">
-            <Table.ScrollContainer minWidth={900}>
+          <Title order={2} size="h4" mt="lg" mb="xs">In this file</Title>
+          <div data-testid="payroll-in-file"><MantineReactTable table={inTable} /></div>
 
-            <Table striped highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Employee</Table.Th>
-                  <Table.Th style={{ textAlign: 'right' }}>Regular</Table.Th>
-                  <Table.Th style={{ textAlign: 'right' }}>OT (FLSA weekly)</Table.Th>
-                  <Table.Th style={{ textAlign: 'right' }}>Uncomp. OT</Table.Th>
-                  <Table.Th style={{ textAlign: 'right' }}>PTO</Table.Th>
-                  <Table.Th style={{ textAlign: 'right' }}>Sick</Table.Th>
-                  <Table.Th style={{ textAlign: 'right' }}>Holiday</Table.Th>
-                  <Table.Th style={{ textAlign: 'right' }}>Unpaid</Table.Th>
-                  <Table.Th style={{ textAlign: 'right' }}>Total paid</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {employees.length === 0 ? (
-                  <Table.Tr>
-                    <Table.Td colSpan={9}>
-                      <Text c="dimmed" ta="center" py="md">
-                        No approved timesheet data found for this date range.
-                      </Text>
-                    </Table.Td>
-                  </Table.Tr>
-                ) : (
-                  employees.map((emp) => (
-                    <Table.Tr key={emp.employeeEmail}>
-                      <Table.Td>
-                        <Group gap={6}>
-                          <Text size="sm" fw={500}>{emp.employeeName}</Text>
-                          {emp.flsaExempt && <Badge size="xs" variant="light" color="gray">Exempt</Badge>}
-                          {emp.otBasisIncludesUnapprovedDays && <Badge size="xs" variant="light" color="warning">Flagged</Badge>}
-                        </Group>
-                        <Text size="xs" c="dimmed">{emp.employeeEmail}</Text>
-                      </Table.Td>
-                      <Table.Td style={{ textAlign: 'right' }}><Text size="sm">{h(emp.regularHours)}</Text></Table.Td>
-                      <Table.Td style={{ textAlign: 'right' }}>
-                        <Text size="sm" c={emp.overtimeHours > 0 ? 'warning' : undefined} fw={emp.overtimeHours > 0 ? 600 : undefined}>
-                          {h(emp.overtimeHours)}
-                        </Text>
-                      </Table.Td>
-                      <Table.Td style={{ textAlign: 'right' }}><Text size="sm">{h(emp.uncompensatedOvertimeHours)}</Text></Table.Td>
-                      <Table.Td style={{ textAlign: 'right' }}><Text size="sm">{h(emp.ptoHours)}</Text></Table.Td>
-                      <Table.Td style={{ textAlign: 'right' }}><Text size="sm">{h(emp.sickHours)}</Text></Table.Td>
-                      <Table.Td style={{ textAlign: 'right' }}><Text size="sm">{h(emp.holidayHours)}</Text></Table.Td>
-                      <Table.Td style={{ textAlign: 'right' }}><Text size="sm">{h(emp.unpaidLeaveHours)}</Text></Table.Td>
-                      <Table.Td style={{ textAlign: 'right' }}><Text size="sm" fw={600}>{h(emp.totalPaidHours)}</Text></Table.Td>
-                    </Table.Tr>
-                  ))
-                )}
-              </Table.Tbody>
-            </Table>
-            </Table.ScrollContainer>
-          </Paper>
+          <Accordion mt="md" variant="contained" data-testid="payroll-how">
+            <Accordion.Item value="how">
+              <Accordion.Control>How overtime is worked out</Accordion.Control>
+              <Accordion.Panel>
+                <Text size="sm" maw="72ch">
+                  Overtime is hours worked over 40 in your workweek (starts {DAY_NAMES[ready.workweekStartDay]}), for
+                  non-exempt employees only. Leave doesn&apos;t count toward the 40. Weeks that cross the pay-period edge
+                  use the days on both sides. Exempt employees&apos; hours over 40 are listed as uncompensated overtime in
+                  the Custom and daily-detail files. Partial-day deductions for exempt employees aren&apos;t calculated;
+                  review those in your payroll system.
+                </Text>
+              </Accordion.Panel>
+            </Accordion.Item>
+          </Accordion>
         </>
       )}
-    </Container>
+      {!ready && !loading && !failed && !refused && rangeKey === '' && (
+        <Text size="sm" c="dimmed">Choose a start and end date to see the preview.</Text>
+      )}
+    </>
   );
 }

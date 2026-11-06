@@ -21,10 +21,15 @@ import { eq } from 'drizzle-orm';
 import { clearTenantData, SEED_EMAIL_DOMAINS } from '../src/db/clear-tenant-data';
 import { lockUserRulesExclusive, recomputeSelfApproval } from '../src/server/internal/approval-rules';
 import { logAdminChange } from '../src/server/internal/admin-change-log';
-import { addMonths, startOfMonth, todayIn } from '../src/lib/calendar-date';
+import { addMonths, canonicalTimeZone, startOfMonth, todayIn } from '../src/lib/calendar-date';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -375,6 +380,63 @@ export async function seedRichData(
   let periodCount = 0;
   const holidays = ['2025-12-25', '2026-01-01', '2026-01-19', '2026-02-16', '2026-05-25'];
 
+  // feature-plan-ux-approvals-payroll.md §5 (A9): explicit, ordered, PAST timestamps in the workspace's zone.
+  const [ws] = await db.select({ timezone: schema.workspaceSettings.timezone }).from(schema.workspaceSettings).limit(1);
+  // Canonical (UX-4B2-AUDIT.md L10): an alias or a stored value Intl rejects never reaches dayjs.tz.
+  const tz = canonicalTimeZone(ws?.timezone) ?? 'America/New_York';
+  const at = (date: string, hhmm: string) => dayjs.tz(`${date} ${hhmm}`, tz).toDate();
+  const earlier = (a: Date, b: Date) => (a.getTime() <= b.getTime() ? a : b);
+  const HOUR = 3_600_000;
+  /** The period's working days (weekdays that aren't holidays), as 'YYYY-MM-DD'. */
+  const workDays = (periodStart: string, numDays: number) => Array.from({ length: numDays }, (_, i) => dayjs(periodStart).add(i, 'day'))
+    .filter((d) => isWeekday(d) && !holidays.includes(d.format('YYYY-MM-DD')));
+
+  /**
+   * §5.1 Jane (submitted once): two corrections (revision 2 on cells the loop wrote, same code and CLIN), one late entry
+   * on a cell the loop leaves empty (overhead on a non-Friday, ≥ 2 days before the end), and one note — all before
+   * her submission (`base`).
+   */
+  async function seedJaneReview(periodStart: string, numDays: number, base: Date): Promise<number> {
+    const days = workDays(periodStart, numDays);
+    const end = dayjs(periodStart).add(numDays - 1, 'day');
+    const onsite = { chargeCodeId: chargeCodeIds['nav01-onsite'], clinId: clinIds.nav01 };
+    const fixes: Array<[dayjs.Dayjs, string, string]> = [
+      [days[0], '5.50', "Left early for a doctor's appointment."],
+      [days[2], '7.00', 'Forgot the afternoon site visit.'],
+    ];
+    for (const [day, hours, comment] of fixes) {
+      await db.insert(schema.timesheetEntries).values({
+        userId: userIds.jane, ...onsite, entryDate: day.format('YYYY-MM-DD'), hours, revisionNumber: 2,
+        changeReasonCode: 'CORRECTION', comment, createdBy: userIds.jane,
+        createdAt: earlier(at(day.add(1, 'day').format('YYYY-MM-DD'), '12:00'), new Date(base.getTime() - 3.5 * HOUR)),
+      });
+    }
+    const lateDay = days.find((d) => d.day() !== 5 && !d.isAfter(end.subtract(2, 'day')) && !fixes.some(([f]) => f.isSame(d, 'day')))!;
+    await db.insert(schema.timesheetEntries).values({
+      userId: userIds.jane, clinId: null, indirectCodeId: indirectIds['OH-001'], entryDate: lateDay.format('YYYY-MM-DD'), hours: '1.00',
+      revisionNumber: 1, changeReasonCode: 'LATE_ENTRY', comment: 'Entered the next morning.', createdBy: userIds.jane,
+      createdAt: earlier(at(lateDay.add(1, 'day').format('YYYY-MM-DD'), '09:00'), new Date(base.getTime() - 4 * HOUR)),
+    });
+    await db.insert(schema.timesheetNotes).values({
+      userId: userIds.jane, chargeCodeId: onsite.chargeCodeId, entryDate: days[3].format('YYYY-MM-DD'),
+      body: 'Site visit at Pax River.', revisionNumber: 1, createdBy: userIds.jane,
+      createdAt: earlier(at(days[3].format('YYYY-MM-DD'), '17:00'), new Date(base.getTime() - 4 * HOUR)),
+    });
+    return 3;
+  }
+
+  /** §5.2 Robert: the correction after the return (t2) and before the resubmission (t4), on a Tuesday cell. */
+  async function seedRobertReview(periodStart: string, numDays: number, t3: Date): Promise<number> {
+    const days = workDays(periodStart, numDays);
+    const tuesday = days.find((d) => d.day() === 2) ?? days[0];
+    await db.insert(schema.timesheetEntries).values({
+      userId: userIds.robert, chargeCodeId: chargeCodeIds['army01'], clinId: clinIds.army01, entryDate: tuesday.format('YYYY-MM-DD'),
+      hours: '7.00', revisionNumber: 2, changeReasonCode: 'CORRECTION', comment: 'Added the Tuesday site visit.', createdBy: userIds.robert,
+      createdAt: t3,
+    });
+    return 1;
+  }
+
   for (const emp of activeEmployees) {
     for (let pi = 0; pi < periods.length; pi++) {
       const periodStart = periods[pi];
@@ -389,21 +451,34 @@ export async function seedRichData(
 
       // Create period record
       const periodId = uuid();
-      const submittedAt = status !== 'draft' ? dayjs(periodStart).add(numDays, 'day').add(1, 'day').toDate() : null;
+      const plannedSubmit = status !== 'draft' ? dayjs(periodStart).add(numDays, 'day').add(1, 'day').toDate() : null;
+      // §5: a pending period's `base` is never in the future (seeding on the 1st or 16th): min(planned, now − 1 h).
+      // Its review story runs t1 < t2 < t3 < t4 = base; every revision 1 is recorded before t1.
+      const base = isPendingReview && plannedSubmit ? earlier(plannedSubmit, new Date(now.valueOf() - HOUR)) : null;
+      const t = base ? { t1: new Date(base.getTime() - 3 * HOUR), t2: new Date(base.getTime() - 2 * HOUR), t3: new Date(base.getTime() - HOUR), t4: base } : null;
+      const submittedAt = base ?? plannedSubmit;
       const reviewedAt = status === 'approved' ? dayjs(periodStart).add(numDays + 2, 'day').toDate() : null;
       // certified-outputs C8 (C2 rules): a supervisor's timesheet is approved by their designated approver (the admin);
       // an employee's by a supervisor sharing an active CLIN — never a peer, never themselves.
       const reviewedBy = status === 'approved' ? reviewerFor(emp.id) : null;
+      // §5.2: Robert's pending timesheet was returned once and resubmitted (set in this insert — no later UPDATE).
+      const returnedOnce = isPendingReview && emp.id === userIds.robert && t !== null;
 
       await db.insert(schema.timesheetPeriods).values({
         id: periodId, userId: emp.id, periodStart, status,
         submittedAt, reviewedAt, reviewedBy,
         submittedComment: status !== 'draft' ? 'Timesheet complete' : null,
         reviewComment: status === 'approved' ? 'Approved — looks good' : null,
-        submissionCount: status !== 'draft' ? 1 : 0,
+        submissionCount: returnedOnce ? 2 : status !== 'draft' ? 1 : 0,
       });
       // The append-only approval history, as the app writes it (source 'app').
-      if (submittedAt) {
+      if (returnedOnce && t) {
+        await db.insert(schema.periodEvents).values([
+          { periodId, userId: emp.id, event: 'submitted', actorId: emp.id, comment: 'Timesheet complete', createdAt: t.t1 },
+          { periodId, userId: emp.id, event: 'rejected', actorId: reviewerFor(emp.id), comment: "Please add Tuesday's site visit hours.", createdAt: t.t2 },
+          { periodId, userId: emp.id, event: 'submitted', actorId: emp.id, comment: 'Timesheet complete', createdAt: t.t4 },
+        ]);
+      } else if (submittedAt) {
         await db.insert(schema.periodEvents).values({ periodId, userId: emp.id, event: 'submitted', actorId: emp.id, comment: 'Timesheet complete', createdAt: submittedAt });
       }
       if (reviewedAt && reviewedBy) {
@@ -419,12 +494,15 @@ export async function seedRichData(
 
         const dateStr = entryDate.format('YYYY-MM-DD');
         const isHoliday = holidays.includes(dateStr);
+        // §5: a non-current period's revision 1 is recorded that day at 17:00 workspace time — and, in the pending
+        // period, before its review story starts (t1 − 1 h). The current period keeps the default (now).
+        const createdAt = isCurrentPeriod ? undefined : t ? earlier(at(dateStr, '17:00'), new Date(t.t1.getTime() - HOUR)) : at(dateStr, '17:00');
 
         if (isHoliday) {
           // Log holiday hours to leave code
           await db.insert(schema.timesheetEntries).values({
             userId: emp.id, clinId: null, indirectCodeId: indirectIds['LV-HOL'],
-            entryDate: entryDate.format('YYYY-MM-DD'), hours: '8', revisionNumber: 1, createdBy: emp.id,
+            entryDate: entryDate.format('YYYY-MM-DD'), hours: '8', revisionNumber: 1, createdBy: emp.id, createdAt,
           });
           entryCount++;
           continue;
@@ -444,7 +522,7 @@ export async function seedRichData(
               clinId: e.clinId,               // denormalized from charge code (preserves CLIN-based queries)
               indirectCodeId: null,
               entryDate: entryDate.format('YYYY-MM-DD'), hours: hours.toFixed(2),
-              revisionNumber: 1, createdBy: emp.id,
+              revisionNumber: 1, createdBy: emp.id, createdAt,
             });
             entryCount++;
           }
@@ -454,7 +532,7 @@ export async function seedRichData(
         if (entryDate.day() === 5 && pi % 2 === 0) {
           await db.insert(schema.timesheetEntries).values({
             userId: emp.id, clinId: null, indirectCodeId: indirectIds['OH-001'],
-            entryDate: entryDate.format('YYYY-MM-DD'), hours: '1.00', revisionNumber: 1, createdBy: emp.id,
+            entryDate: entryDate.format('YYYY-MM-DD'), hours: '1.00', revisionNumber: 1, createdBy: emp.id, createdAt,
           });
           entryCount++;
         }
@@ -472,11 +550,16 @@ export async function seedRichData(
             entryDate: corrDate.format('YYYY-MM-DD'), hours: '7.50',
             revisionNumber: 2, changeReasonCode: 'CORRECTION',
             comment: 'Corrected hours — was on training for part of the day',
-            createdBy: emp.id,
+            createdBy: emp.id, createdAt: at(corrDate.add(1, 'day').format('YYYY-MM-DD'), '12:00'),
           });
           entryCount++;
         }
       }
+
+      // §5 (A9): the pending period shows what Approvals' "Worth a look" is for. Never a second period row: only
+      // revisions, a note and (Robert) the events above, on the period the loop just wrote.
+      if (t && emp.id === userIds.jane) entryCount += await seedJaneReview(periodStart, numDays, t.t4);
+      if (t && emp.id === userIds.robert) entryCount += await seedRobertReview(periodStart, numDays, t.t3);
     }
   }
   console.log(`    ✓ ${entryCount} timesheet entries created`);
