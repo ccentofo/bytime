@@ -107,8 +107,9 @@ describe('Charge codes (UX-4c §3)', () => {
     const taken = await createTestClin(contract.id, { clinNumber: '0004' });
     const elsewhere = await createTestClin((await createTestContract()).id);
     await createTestChargeCode(elsewhere.id, { code: `${contract.contractNumber}-0004` });   // the string CLIN 0004 would get
-    const longContract = await createTestContract({ contractNumber: 'L'.repeat(97), name: 'Long' });
-    const long = await createTestClin(longContract.id, { clinNumber: '0001' });
+    // The longest code the columns allow: varchar(50) contract number + '-' + varchar(50) CLIN number = 101 > 100.
+    const longContract = await createTestContract({ contractNumber: 'L'.repeat(50), name: 'Long' });
+    const long = await createTestClin(longContract.id, { clinNumber: 'C'.repeat(50) });
 
     const preview = await previewAutobridgeChargeCodes();
     const p = (id: string) => preview.find((r) => r.clinId === id)!;

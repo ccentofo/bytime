@@ -106,7 +106,7 @@ describe('Audit trail (UX-4c §6)', () => {
     await entry({ clinId: c1.id, entryDate: '2026-10-06', changeReasonCode: 'CORRECTION', comment: 'late, typed as a correction' }); // late (R3)
     await entry({ clinId: c1.id, entryDate: '2026-10-06', revisionNumber: 2, changeReasonCode: 'CORRECTION', comment: 'fixed' });  // changed
     await entry({ clinId: c2.id, userId: other.id, createdBy: other.id });
-    await entry({ clinId: c1.id, source: 'migration', changeReasonCode: 'LATE_ENTRY' });  // imported: not late
+    await entry({ clinId: c1.id, entryDate: '2026-10-07', source: 'migration', changeReasonCode: 'LATE_ENTRY' });  // imported: not late
     const f = { startDate: '2026-10-01' as CalendarDate, endDate: '2026-10-31' as CalendarDate };
     expect(await getAuditSummary(f)).toEqual({ entries: 5, changed: 1, late: 1, people: 2 });
     expect(await getAuditSummary({ ...f, contractId: k1.id })).toEqual({ entries: 4, changed: 1, late: 1, people: 1 });
@@ -116,7 +116,8 @@ describe('Audit trail (UX-4c §6)', () => {
 
   it('AU-3: page 2 is the next 50 (created_at, id order); total is a number equal to the filtered count', async () => {
     const clin = await createTestClin((await createTestContract()).id);
-    for (let i = 0; i < 120; i++) await entry({ clinId: clin.id, entryDate: '2026-10-05', hours: String(i % 8), createdAt: new Date(Date.UTC(2026, 9, 5, 0, 0, i)) });
+    // One cell, 120 revisions (the unique index is user + code + date + revision).
+    for (let i = 0; i < 120; i++) await entry({ clinId: clin.id, entryDate: '2026-10-05', revisionNumber: i + 1, hours: String(i % 8), createdAt: new Date(Date.UTC(2026, 9, 5, 0, 0, i)) });
     const f = { startDate: '2026-10-01' as CalendarDate, endDate: '2026-10-31' as CalendarDate };
     const p1 = await getAuditEntries({ ...f, page: 1 });
     const p2 = await getAuditEntries({ ...f, page: 2 });
@@ -167,16 +168,16 @@ describe('Audit trail (UX-4c §6)', () => {
     expect((await download('?start=2026-11-01&end=2026-11-30')).status).toBe(422);
     expect((await download('?end=2026-10-31')).status).toBe(400);
     await db().execute(sql`INSERT INTO timesheet_entries (user_id, clin_id, entry_date, hours, revision_number, created_by)
-      SELECT ${emp.id}, ${clin.id}, '2026-09-01'::date + (g % 28), '1', 1, ${emp.id} FROM generate_series(1, 50001) g`);
+      SELECT ${emp.id}, ${clin.id}, '2026-09-01'::date + (g % 28), '1', g, ${emp.id} FROM generate_series(1, 50001) g`);   // revision g: a distinct key per row (the unique index)
     const tooMany = await download('?start=2026-09-01&end=2026-09-30');
     expect([tooMany.status, (await tooMany.json()).error]).toEqual([422, 'More than 50,000 entries match. Choose a shorter date range.']);
   }, 120_000);
 
   it('AU-8: more than 1,000 rows written in ONE transaction (one created_at) → the CSV row count equals the COUNT', async () => {
     const clin = await createTestClin((await createTestContract()).id);
-    await db().transaction(async (tx) => {
+    await db().transaction(async (tx) => {                                              // one statement in one transaction; revision g keeps each key distinct
       await tx.execute(sql`INSERT INTO timesheet_entries (user_id, clin_id, entry_date, hours, revision_number, created_by)
-        SELECT ${emp.id}, ${clin.id}, '2026-08-01'::date + (g % 28), '2', 1, ${emp.id} FROM generate_series(1, 2345) g`);
+        SELECT ${emp.id}, ${clin.id}, '2026-08-01'::date + (g % 28), '2', g, ${emp.id} FROM generate_series(1, 2345) g`);
     });
     const [{ distinct }] = await db().execute(sql`SELECT COUNT(DISTINCT created_at)::int AS distinct FROM timesheet_entries WHERE entry_date BETWEEN '2026-08-01' AND '2026-08-31'`) as unknown as Array<{ distinct: number }>;
     expect(distinct).toBe(1);                                                            // one save: one created_at
