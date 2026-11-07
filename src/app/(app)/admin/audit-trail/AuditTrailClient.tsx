@@ -132,11 +132,19 @@ export function AuditTrailClient({
   /** §6.1: any filter change resets the page to 1. */
   const change = (patch: Partial<AuditParams>) => { void apply({ ...params, ...patch, page: 1 }); };
 
+  // UX-4C1-AUDIT.md L4: a CLIN list arriving after the contract changed again is dropped (it belongs to the old one).
+  const clinsFor = useRef<string | null>(initialParams.contract);
   async function chooseContract(contract: string | null) {
     change({ contract, clin: null });
     setClins([]);
+    clinsFor.current = contract;
     if (!contract) return;
-    try { setClins(await getClinsForFilter(contract)); } catch { toastError({ title: 'Couldn’t load CLINs', message: 'Try again.' }); }
+    try {
+      const list = await getClinsForFilter(contract);
+      if (clinsFor.current === contract) setClins(list);
+    } catch {
+      if (clinsFor.current === contract) toastError({ title: 'Couldn’t load CLINs', message: 'Try again.' });
+    }
   }
 
   function setCustom(which: 'start' | 'end', value: string | null) {

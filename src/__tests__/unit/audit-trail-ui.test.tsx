@@ -156,6 +156,23 @@ describe('the client', () => {
     expect(document.body.querySelector('[data-testid="audit-entries"] table')!.hasAttribute('aria-busy')).toBe(false);
   });
 
+  it('L4: a CLIN list for a contract no longer selected is dropped (the newer contract\'s list stays)', async () => {
+    await render({ contracts: [{ id: ID(21), name: 'Alpha' }, { id: ID(22), name: 'Bravo' }] });
+    let releaseAlpha!: (v: unknown) => void;
+    h.clins.mockImplementationOnce(() => new Promise((r) => { releaseAlpha = r; }) as never)
+      .mockResolvedValueOnce([{ id: ID(32), clinNumber: '0002', description: 'Bravo work' }] as never);
+    await choose('Contract', 'Alpha');
+    await choose('Contract', 'Bravo');
+    await wait(10);
+    await act(async () => { releaseAlpha([{ id: ID(31), clinNumber: '0001', description: 'Alpha work' }]); });
+    await wait(10);
+    const l = [...document.body.querySelectorAll<HTMLLabelElement>('[data-testid="audit-filters"] label')].find((x) => x.textContent?.trim() === 'CLIN')!;
+    const input = document.getElementById(l.htmlFor)!;
+    await click(input);
+    const options = [...document.getElementById(input.getAttribute('aria-controls')!)!.querySelectorAll('[role="option"]')].map((o) => o.textContent);
+    expect(options).toEqual(['All CLINs', '0002 — Bravo work']);
+  });
+
   it('Custom dates…: no query until both dates are valid', async () => {
     await render();
     await choose('Dates', 'Custom dates…');
