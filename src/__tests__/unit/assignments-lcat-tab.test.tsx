@@ -265,6 +265,20 @@ describe('statuses, Show and the overlap notice (AS-6)', () => {
     expect(panel().querySelector('[data-testid="overlap-notice"]')).toBeNull();
   });
 
+  it('M4: the page computes each supervisor\'s approver by the approvals rule — an inactive or non-approver designee → null ("admins")', async () => {
+    for (const f of [h.getAssignments, h.listChargeCodes, h.getChargeCodeAssignments, h.getAssignableLaborCategories, h.getAllLaborCategories, h.getUserLaborCategoryAssignments]) f.mockResolvedValue([]);
+    const p = (id: string, fullName: string, role: string, approverId: string | null, isActive = true) => ({ id, fullName, role, isActive, approverId });
+    h.getUsers.mockResolvedValue([
+      p('ann', 'Ann Admin', 'admin', null), p('gone', 'Gone Admin', 'admin', null, false), p('emp', 'Eve Employee', 'employee', null),
+      p('s1', 'Sam One', 'supervisor', 'gone'), p('s2', 'Sam Two', 'supervisor', 'emp'), p('s3', 'Sam Three', 'supervisor', 'ann'),
+      p('s4', 'Sam Four', 'supervisor', null), p('s5', 'Sam Five', 'supervisor', 'ann', false),
+    ]);
+    h.getWorkspaceTimezone.mockResolvedValue('America/New_York');
+    h.getWorkspaceToday.mockResolvedValue('2026-11-03');
+    const props = ((await AssignmentsPage({ searchParams: Promise.resolve({}) })) as { props: { approverNames: Record<string, string | null> } }).props;
+    expect(props.approverNames).toEqual({ s1: null, s2: null, s3: 'Ann Admin', s4: null });
+  });
+
   it('the page passes the overlapping assignment ids (findOverlaps over the rows it already loads)', async () => {
     h.getAllLaborCategories.mockResolvedValue([
       { id: L1, lcatCode: 'SE-I', title: 'Eng I', clinId: 'clin-1', slinId: null, clinNumber: '0001', slinNumber: null, contractId: 'k1', status: 'active', hourlyRate: '100.00', ceilingRate: null, rateChanges: [] },

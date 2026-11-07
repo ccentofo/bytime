@@ -85,6 +85,18 @@ describe('getUsersForAdminPage (US-1)', () => {
   });
 });
 
+describe('getUsersForAdminPage approver (M4)', () => {
+  it('the approvals rule: an inactive or non-approver designee → null ("admins"); an employee never shows one', async () => {
+    const row = (id: string, role: string, approverId: string | null, isActive = true) => ({ id, email: `${id}@x`, fullName: id.toUpperCase(), role, isActive, flsaExempt: false, approverId, createdAt: new Date(), updatedAt: new Date(), mfaEnabled: false });
+    db.onSelect(users, [
+      row('ann', 'admin', null), row('gone', 'admin', null, false), row('emp', 'employee', 'ann'),
+      row('s1', 'supervisor', 'gone'), row('s2', 'supervisor', 'emp'), row('s3', 'supervisor', 'ann'), row('a2', 'admin', 'a2'),
+    ]);
+    const out = await getUsersForAdminPage();
+    expect(Object.fromEntries(out.map((u) => [u.id, u.approverName]))).toEqual({ ann: null, gone: null, emp: null, s1: null, s2: null, s3: 'ANN', a2: null });
+  });
+});
+
 describe('adminResetMfa (US-3 companion)', () => {
   it('yourself → refused before any read or attempt', async () => {
     expect(await adminResetMfa({ userId: ADMIN, currentPassword: 'right-password' })).toMatchObject({ ok: false, error: 'Use your profile to turn off two-step sign-in.' });
