@@ -53,7 +53,7 @@ describe('useLastTarget (L2)', () => {
   it('static: the Users, Indirect codes and CLIN/SLIN confirm titles read the last target', () => {
     const src = (rel: string) => readFileSync(path.join(ROOT, rel), 'utf8');
     expect(src('src/app/(app)/admin/users/UsersClient.tsx')).toContain('title={`Deactivate ${shownDeactivate?.fullName');
-    expect(src('src/app/(app)/admin/users/UsersClient.tsx')).toContain('title={shownFlsa ? `Mark ${shownFlsa.fullName}');
+    expect(src('src/app/(app)/admin/users/UsersClient.tsx')).toContain('const flsaCopy = shownFlsa && flsaChangeCopy(shownFlsa.fullName');
     expect(src('src/app/(app)/admin/charge-codes/IndirectCodesPanel.tsx')).toContain('title={`Deactivate ${shownDeactivate?.code');
     // UX-4b §4.1: one CLIN/SLIN confirm and the close/reopen confirm, both reading their last target.
     expect(src('src/app/(app)/admin/contracts/ContractsClient.tsx')).toContain("title={shownLine ? (shownLine.level === 'clin' ? `Deactivate CLIN ${shownLine.clin.clinNumber}?` : `Deactivate SLIN ${shownLine.slin?.slinNumber}?`) : ''}");
