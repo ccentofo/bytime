@@ -38,7 +38,7 @@ vi.mock('@/lib/session', () => {
   class AuthorizationError extends Error {
     constructor(public kind: 'unauthenticated' | 'forbidden', message: string) { super(message); this.name = 'AuthorizationError'; }
   }
-  const admin = async () => ({ id: '00000000-0000-4000-8000-000000000099', email: 'stale@x', fullName: 'Ann', role: 'admin' });
+  const admin = async () => ({ id: 'abcdef00-0000-4000-8000-000000000099', email: 'stale@x', fullName: 'Ann', role: 'admin' });   // hex letters: L1
   return { AuthorizationError, requireSession: admin, requireAdmin: admin, requireAdminFresh: admin };
 });
 vi.mock('@/server/internal/seats', () => ({ assertSeatsAvailable: async () => {}, getSeatUsage: async () => ({ limit: null, currentActive: 1, planLabel: 'x' }) }));
@@ -58,7 +58,7 @@ import { bulkImportEmployees } from '@/server/actions/import';
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
 beforeEach(() => db.reset());
 const ID = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
-const ADMIN = ID(99);
+const ADMIN = 'abcdef00-0000-4000-8000-000000000099';
 const logs = () => db.inserts.filter((i) => i.table === adminChangeLog).map((i) => i.values as { action: string; entityId: string; oldValue: unknown; newValue: unknown });
 /** M2: every admin_change_log insert and every users update went through the transaction's tx. */
 const viaTx = () => [...db.inserts.filter((i) => i.table === adminChangeLog), ...db.updates.filter((u) => u.table === users)].map((w) => (w as { via?: string }).via ?? 'db');
@@ -100,6 +100,14 @@ describe('getUsersForAdminPage approver (M4)', () => {
 describe('adminResetMfa (US-3 companion)', () => {
   it('yourself → refused before any read or attempt', async () => {
     expect(await adminResetMfa({ userId: ADMIN, currentPassword: 'right-password' })).toMatchObject({ ok: false, error: 'Use your profile to turn off two-step sign-in.' });
+    expect(db.ops).toEqual([]);
+  });
+
+  it('L1: yourself in UPPER case is still yourself — adminResetMfa and updateUser refuse before any read', async () => {
+    expect(await adminResetMfa({ userId: ADMIN.toUpperCase(), currentPassword: 'right-password' })).toMatchObject({ ok: false, error: 'Use your profile to turn off two-step sign-in.' });
+    expect(await updateUser(ADMIN.toUpperCase(), { role: 'employee' })).toMatchObject({ ok: false, code: 'forbidden' });
+    expect(await updateUser(ADMIN.toUpperCase(), { isActive: false })).toMatchObject({ ok: false, code: 'forbidden' });
+    expect(await updateUser('not-a-uuid', { fullName: 'X' })).toMatchObject({ ok: false, error: 'User is not a valid identifier.' });
     expect(db.ops).toEqual([]);
   });
 

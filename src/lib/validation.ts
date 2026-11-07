@@ -129,12 +129,16 @@ export function validateRate(value: unknown, fieldName: string): string {
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * A UUID, returned LOWERCASED (UX-4C1-AUDIT.md L1): Postgres compares uuids case-insensitively but JS `===` doesn't,
+ * so a self check like `userId === actor.id` (ids from the database are lowercase) can't be bypassed with upper case.
+ */
 export function validateUUID(value: unknown, fieldName: string): string {
   const str = validateRequired(value, fieldName);
   if (!UUID_REGEX.test(str)) {
     throw new UserFacingError(`${fieldName} is not a valid identifier.`);
   }
-  return str;
+  return str.toLowerCase();
 }
 
 // ---------------------------------------------------------------------------

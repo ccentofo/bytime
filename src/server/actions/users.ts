@@ -93,6 +93,7 @@ export async function updateUser(id: string, data: {
 }) {
   return userAction(async () => {
     const actor = await requireAdminFresh();
+    id = validateUUID(id, 'User');   // lowercased: the self checks below compare with `===` (UX-4C1-AUDIT.md L1)
     const db = await getDbForWrite();
 
     // Server-action arguments are untrusted JSON. The last-admin and self-deactivation checks

@@ -31,14 +31,14 @@ describe('updateUser: role and isActive in one call (audit R4)', () => {
     [{ isActive: false, role: 'supervisor' as const }],
     [{ isActive: true, role: 'admin' as const }],
   ])('%j → refused (validation), no transaction', async (data) => {
-    expect(await updateUser('user-2', data)).toEqual({ ok: false, code: 'validation', error: 'Change the role and the active status separately.' });
+    expect(await updateUser('00000000-0000-4000-8000-000000000002', data)).toEqual({ ok: false, code: 'validation', error: 'Change the role and the active status separately.' });
     expect(h.transactions).toBe(0);
   });
 
   it('either change alone still reaches the transaction', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await updateUser('user-2', { role: 'employee' }).catch(() => undefined);
-    await updateUser('user-2', { isActive: true }).catch(() => undefined);
+    await updateUser('00000000-0000-4000-8000-000000000002', { role: 'employee' }).catch(() => undefined);
+    await updateUser('00000000-0000-4000-8000-000000000002', { isActive: true }).catch(() => undefined);
     spy.mockRestore();
     expect(h.transactions).toBe(2);
   });
