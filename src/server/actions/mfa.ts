@@ -139,7 +139,7 @@ export async function adminResetMfa(data: { userId: string; currentPassword: str
     const [admin] = await db.select({ email: users.email, passwordHash: users.passwordHash }).from(users).where(eq(users.id, actor.id));
     if (!admin) throw new UserFacingError('User not found.', 'not_found');
     const reauth = await verifyCurrentPassword(db, admin.email, admin.passwordHash, data.currentPassword);
-    if (!reauth.ok) throw new UserFacingError(reauth.error === 'Current password is incorrect.' ? ADMIN_MFA_WRONG_PASSWORD : reauth.error);
+    if (!reauth.ok) throw new UserFacingError(reauth.reason === 'wrong' ? ADMIN_MFA_WRONG_PASSWORD : reauth.error);
 
     return db.transaction(async (tx) => {
       const [target] = await tx.select({ totpEnabled: users.totpEnabled }).from(users).where(eq(users.id, userId)).for('update');

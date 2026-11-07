@@ -67,7 +67,7 @@ beforeEach(() => {
 
 describe('verifyCurrentPassword', () => {
   it('an account with no password → "Set a password first", no bcrypt', async () => {
-    await expect(verifyCurrentPassword(fake.db as never, 'jane@acme.com', null, 'x')).resolves.toEqual({ ok: false, error: 'Set a password first.' });
+    await expect(verifyCurrentPassword(fake.db as never, 'jane@acme.com', null, 'x')).resolves.toEqual({ ok: false, reason: 'no_password', error: 'Set a password first.' });
     expect(compare.spy).not.toHaveBeenCalled();
   });
 
@@ -76,13 +76,14 @@ describe('verifyCurrentPassword', () => {
     const result = await verifyCurrentPassword(fake.db as never, 'jane@acme.com', HASH, 'Correct123!');
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toMatch(/too many failed attempts/i);
+    expect(!result.ok && result.reason).toBe('locked');                               // UX-4C1-AUDIT.md L2
     expect(compare.spy).not.toHaveBeenCalled();
     expect(fake.state.inserts).toHaveLength(0);
   });
 
   it('a wrong password is recorded in the shared login_attempts counter', async () => {
     fake.state.results = [[], []];
-    await expect(verifyCurrentPassword(fake.db as never, 'jane@acme.com', HASH, 'wrong')).resolves.toEqual({ ok: false, error: 'Current password is incorrect.' });
+    await expect(verifyCurrentPassword(fake.db as never, 'jane@acme.com', HASH, 'wrong')).resolves.toEqual({ ok: false, reason: 'wrong', error: 'Current password is incorrect.' });
     expect(fake.state.inserts).toEqual([expect.objectContaining({ email: 'jane@acme.com', successful: false })]);
   });
 

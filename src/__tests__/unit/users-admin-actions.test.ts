@@ -41,6 +41,12 @@ vi.mock('@/lib/session', () => {
   const admin = async () => ({ id: 'abcdef00-0000-4000-8000-000000000099', email: 'stale@x', fullName: 'Ann', role: 'admin' });   // hex letters: L1
   return { AuthorizationError, requireSession: admin, requireAdmin: admin, requireAdminFresh: admin };
 });
+// UX-4C1-AUDIT.md L2: a test can replace the re-auth result (e.g. a reworded message with the same reason).
+const reauth = vi.hoisted(() => ({ override: null as null | (() => Promise<unknown>) }));
+vi.mock('@/server/internal/login-attempts', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/server/internal/login-attempts')>();
+  return { ...real, verifyCurrentPassword: (...a: Parameters<typeof real.verifyCurrentPassword>) => (reauth.override ? reauth.override() : real.verifyCurrentPassword(...a)) };
+});
 vi.mock('@/server/internal/seats', () => ({ assertSeatsAvailable: async () => {}, getSeatUsage: async () => ({ limit: null, currentActive: 1, planLabel: 'x' }) }));
 vi.mock('@/server/internal/submission-notify', () => ({ notifyReroutedApprovals: async () => {} }));
 
@@ -56,7 +62,7 @@ import { adminResetPassword } from '@/server/actions/password';
 import { bulkImportEmployees } from '@/server/actions/import';
 
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
-beforeEach(() => db.reset());
+beforeEach(() => { db.reset(); reauth.override = null; });
 const ID = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const ADMIN = 'abcdef00-0000-4000-8000-000000000099';
 const logs = () => db.inserts.filter((i) => i.table === adminChangeLog).map((i) => i.values as { action: string; entityId: string; oldValue: unknown; newValue: unknown });
@@ -116,6 +122,15 @@ describe('adminResetMfa (US-3 companion)', () => {
     expect(await adminResetMfa({ userId: ID(2), currentPassword: 'nope' })).toMatchObject({ ok: false, error: "That password isn't right." });
     expect(db.inserts.filter((i) => i.table === loginAttempts).map((i) => i.values)).toEqual([expect.objectContaining({ email: 'admin@x', successful: false })]);
     expect(db.updates).toEqual([]);
+  });
+
+  it('L2: maps on the reason, not the message — "wrong" → "That password isn\'t right."; "locked" keeps its own words', async () => {
+    db.onSelect(users, [{ email: 'admin@x', passwordHash: adminHash }]);
+    reauth.override = async () => ({ ok: false, reason: 'wrong', error: 'The password you typed is wrong.' });
+    expect(await adminResetMfa({ userId: ID(2), currentPassword: 'x' })).toMatchObject({ ok: false, error: "That password isn't right." });
+    db.onSelect(users, [{ email: 'admin@x', passwordHash: adminHash }]);
+    reauth.override = async () => ({ ok: false, reason: 'locked', error: 'Too many failed attempts. Try again in 3 minutes.' });
+    expect(await adminResetMfa({ userId: ID(2), currentPassword: 'x' })).toMatchObject({ ok: false, error: 'Too many failed attempts. Try again in 3 minutes.' });
   });
 
   it('success: clears the three fields, turns it off, bumps the session in SQL, logs mfa_reset once; already off → no write', async () => {

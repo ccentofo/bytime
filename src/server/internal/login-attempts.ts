@@ -105,27 +105,29 @@ export async function getLockoutsForEmails(db: Pick<ReadDb, 'select'>, emails: r
  * Re-authentication for account-security changes (changePassword, disableMFA, completeMFASetup) —
  * feature-plan-launch-blockers.md P3. The lockout is checked BEFORE bcrypt, and a wrong password is recorded in
  * login_attempts: the SAME counter as sign-in, intentionally — a stolen session can't be used to guess the password
- * without also locking the account's sign-in.
+ * without also locking the account's sign-in. `reason` lets a caller word a case its own way without matching the message
+ * (UX-4C1-AUDIT.md L2).
  */
 export async function verifyCurrentPassword(
   db: AttemptsWriter,
   email: string,
   passwordHash: string | null,
   candidate: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true } | { ok: false; reason: 'wrong' | 'locked' | 'no_password'; error: string }> {
   if (!passwordHash) {
-    return { ok: false, error: 'Set a password first.' };
+    return { ok: false, reason: 'no_password', error: 'Set a password first.' };
   }
   const lockout = await getLockoutInfo(db, email);
   if (lockout.isLocked) {
     return {
       ok: false,
+      reason: 'locked',
       error: `Too many failed attempts. Try again in ${lockout.minutesRemaining} minute${lockout.minutesRemaining !== 1 ? 's' : ''}.`,
     };
   }
   if (typeof candidate !== 'string' || !(await bcrypt.compare(candidate, passwordHash))) {
     await recordFailedAttempt(db, email);
-    return { ok: false, error: 'Current password is incorrect.' };
+    return { ok: false, reason: 'wrong', error: 'Current password is incorrect.' };
   }
   return { ok: true };
 }
