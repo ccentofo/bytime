@@ -11,7 +11,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({ built: [] as Array<{ toSQL: () => { sql: string; params: unknown[] } }>, rows: [] as unknown[][], cursor: null as unknown }));
 vi.mock('server-only', () => ({}));
-vi.mock('@sentry/nextjs', () => ({ captureException: vi.fn(), captureMessage: () => {} }));
+const sentry = vi.hoisted(() => ({ capture: vi.fn() }));
+vi.mock('@sentry/nextjs', () => ({ captureException: sentry.capture, captureMessage: () => {} }));
 vi.mock('@/lib/session', () => ({ requireApprover: async () => ({ id: 'a', role: 'admin' }), getEmployeeScope: async () => 'all' }));
 vi.mock('@/server/internal/workspace-settings', () => ({ getWorkspaceTimezone: async () => 'America/New_York' }));
 vi.mock('@/lib/rate-limit', () => ({ checkReportRateLimit: () => null }));
@@ -113,11 +114,11 @@ describe('the keyset cursor and the route (AU-8 companion)', () => {
     expect(second).not.toContain('te_top');
   });
 
-  const call = async (qs: string, cursor: { count: () => Promise<number>; batch: (id: string | null) => Promise<{ lines: string[]; lastId: string | null }> }) => {
+  const call = async (qs: string, cursor: { count: () => Promise<number>; batch: (id: string | null) => Promise<{ lines: string[]; lastId: string | null }> }, init?: RequestInit) => {
     vi.resetModules();
     vi.doMock('@/server/internal/audit-export', async (orig) => ({ ...(await orig<typeof import('@/server/internal/audit-export')>()), getAuditExportCursor: async () => cursor }));
     const { GET } = await import('@/app/api/reports/audit-csv/route');
-    return GET(new Request(`http://x/api/reports/audit-csv${qs}`) as never);
+    return GET(new Request(`http://x/api/reports/audit-csv${qs}`, init) as never);
   };
 
   it('start and end are required (400); 0 rows → 422; over 50,000 → 422 — before any batch', async () => {
@@ -140,5 +141,36 @@ describe('the keyset cursor and the route (AU-8 companion)', () => {
     expect(batch.mock.calls.map((c) => c[0])).toEqual([null, ID(1)]);
     const broken = await call('?start=2026-10-01&end=2026-10-31', { count: async () => 3, batch: async () => { throw new Error('db down'); } });
     await expect(broken.text()).rejects.toThrow();
+  });
+
+  it('L5: a mid-stream error goes to Sentry; an aborted request or a cancelled download fetches no more batches', async () => {
+    sentry.capture.mockClear();
+    const down = new Error('db down');
+    const broken = await call('?start=2026-10-01&end=2026-10-31', { count: async () => 3, batch: async () => { throw down; } });
+    await expect(broken.text()).rejects.toThrow();
+    expect(sentry.capture).toHaveBeenCalledWith(down);
+
+    const endless = () => vi.fn(async (lastId: string | null) => ({ lines: [`row after ${lastId}`], lastId: ID(Math.floor(Math.random() * 1e6)) }));
+    const ac = new AbortController();
+    const aborted = endless();
+    const r1 = (await call('?start=2026-10-01&end=2026-10-31', { count: async () => 3, batch: aborted }, { signal: ac.signal })).body!.getReader();
+    expect(new TextDecoder().decode((await r1.read()).value)).toBe(`${AUDIT_CSV_HEADER.join(',')}\n`);
+    await r1.read();                                                                         // one batch
+    ac.abort();
+    expect((await r1.read()).done).toBe(true);                                               // closed, not fetched
+    expect(aborted).toHaveBeenCalledTimes(1);
+
+    const cancelled = endless();
+    const r2 = (await call('?start=2026-10-01&end=2026-10-31', { count: async () => 3, batch: cancelled })).body!.getReader();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(cancelled).not.toHaveBeenCalled();                                                // pulled on demand only: nothing fetched ahead
+    await r2.read();                                                                         // header
+    await new Promise((r) => setTimeout(r, 20));
+    expect(cancelled).not.toHaveBeenCalled();
+    await r2.read();                                                                         // one batch
+    await r2.cancel();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(cancelled).toHaveBeenCalledTimes(1);
+    expect(sentry.capture).toHaveBeenCalledTimes(1);                                         // only the real failure
   });
 });

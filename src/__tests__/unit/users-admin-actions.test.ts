@@ -50,6 +50,7 @@ vi.mock('@/server/internal/login-attempts', async (importOriginal) => {
 vi.mock('@/server/internal/seats', () => ({ assertSeatsAvailable: async () => {}, getSeatUsage: async () => ({ limit: null, currentActive: 1, planLabel: 'x' }) }));
 vi.mock('@/server/internal/submission-notify', () => ({ notifyReroutedApprovals: async () => {} }));
 
+import { readFileSync } from 'node:fs';
 import bcrypt from 'bcryptjs';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { SQL } from 'drizzle-orm';
@@ -88,6 +89,24 @@ describe('getUsersForAdminPage (US-1)', () => {
     db.onSelect(users, [row('j', 'John')]);
     await getUsers();
     expect(db.ops.filter((o) => o === 'select')).toHaveLength(1);
+  });
+});
+
+describe('L5 guards', () => {
+  it('a lock shows only for an active user (an inactive one with 5 failures has none)', async () => {
+    const row = (id: string, isActive: boolean) => ({ id, email: `${id}@x`, fullName: id, role: 'employee', isActive, flsaExempt: false, approverId: null, createdAt: new Date(), updatedAt: new Date(), mfaEnabled: false });
+    db.onSelect(users, [row('on', true), row('off', false)]);
+    const now = Date.now();
+    const fails = (email: string) => Array.from({ length: 5 }, (_, i) => ({ email, successful: false, attemptedAt: new Date(now - 60_000 - i * 1000) }));
+    db.onSelect(loginAttempts, [...fails('on@x'), ...fails('off@x')]);
+    const out = await getUsersForAdminPage();
+    expect(out.map((u) => [u.id, u.lock !== null])).toEqual([['on', true], ['off', false]]);
+  });
+
+  it('adminResetMfa locks the target row FOR UPDATE inside its transaction (static)', () => {
+    const src = readFileSync('src/server/actions/mfa.ts', 'utf8');
+    const body = src.slice(src.indexOf('export async function adminResetMfa'));
+    expect(body.slice(0, body.indexOf('\n}\n'))).toMatch(/return db\.transaction\(async \(tx\) => \{\s*const \[target\] = await tx\.select\(\{ totpEnabled: users\.totpEnabled \}\)\.from\(users\)\.where\(eq\(users\.id, userId\)\)\.for\('update'\);/);
   });
 });
 

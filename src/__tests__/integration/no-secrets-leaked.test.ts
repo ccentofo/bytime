@@ -53,7 +53,7 @@ vi.mock('@/auth', () => ({
       : null,
 }));
 
-import { getUsers, updateUser, createUserWithPassword } from '@/server/actions/users';
+import { getUsers, getUsersForAdminPage, updateUser, createUserWithPassword } from '@/server/actions/users';
 
 const FORBIDDEN_KEYS = ['passwordHash', 'totpSecret', 'totpRecoveryCodes', 'sessionVersion'];
 
@@ -86,6 +86,17 @@ describe('No secrets sent to the browser (R2-3)', () => {
       assertNoSecretKeys(row as any);
     }
     void employee;
+  });
+
+  it('getUsersForAdminPage() rows have no secret columns; two-step is only a boolean (UX-4C1-AUDIT.md L5)', async () => {
+    await createTestUser({ role: 'employee', totpEnabled: true, totpSecret: 'should-never-leak', totpRecoveryCodes: 'codes-never-leak' });
+    const rows = await getUsersForAdminPage();
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      assertNoSecretKeys(row as any);
+      expect(typeof row.mfaEnabled).toBe('boolean');
+    }
+    expect(JSON.stringify(rows)).not.toMatch(/never-leak/);
   });
 
   it('updateUser() result has no secret columns', async () => {
