@@ -56,11 +56,16 @@ const rateChange = (verb: string): Describe => (row, names) => {
   return { change: `Rate ${verb}`, details: join(subject(row, names), rates, from && `from ${from}`) + reason(n) };
 };
 const simple = (change: string): Describe => (row, names) => ({ change, details: subject(row, names) });
+/** UX-4C1-AUDIT.md L7: self-approval rows carry a recorded system reason (e.g. "Pat Doe added (admin)") — shown as is. */
+const selfApproval = (change: string): Describe => (row, names) => {
+  const why = obj(row.newValue).reason;
+  return { change, details: join(subject(row, names), typeof why === 'string' && why.trim() ? why.trim() : null) };
+};
 
 export const ADMIN_CHANGE_TEXT: Table = {
   self_approval: {
-    enabled: simple('Self-approval turned on'),
-    disabled: simple('Self-approval turned off'),
+    enabled: selfApproval('Self-approval turned on'),
+    disabled: selfApproval('Self-approval turned off'),
   },
   charge_code: {
     deactivated: simple('Charge code deactivated'),

@@ -34,6 +34,15 @@ describe('describeAdminChange (AU-7)', () => {
       .toBe('SE-II Software Engineer · $145.00 → $149.35 · from Jan 1, 2027 · “Mod 3”');
   });
 
+  it('L7: self-approval rows show the recorded reason; none recorded → just the admin', () => {
+    expect(describeAdminChange(row('self_approval', 'disabled', 'u-ann', { enabled: true }, { enabled: false, reason: 'Pat Doe added (admin)', activeAdminCount: 2 }), names))
+      .toEqual({ change: 'Self-approval turned off', details: 'Ann Admin · Pat Doe added (admin)' });
+    expect(describeAdminChange(row('self_approval', 'enabled', 'u-ann', { enabled: false }, { enabled: true, reason: 'Pat Doe deactivated' }), names))
+      .toEqual({ change: 'Self-approval turned on', details: 'Ann Admin · Pat Doe deactivated' });
+    expect(describeAdminChange(row('self_approval', 'enabled', 'u-ann', { enabled: false }, { enabled: true }), names))
+      .toEqual({ change: 'Self-approval turned on', details: 'Ann Admin' });
+  });
+
   it('an unknown pair, or values of the wrong shape, never throw', () => {
     expect(describeAdminChange(row('spaceship', 'warp_engaged', 'x', 7, 'nope'), names)).toEqual({ change: 'Warp engaged', details: 'spaceship' });
     expect(describeAdminChange(row('user', 'teleported', 'u-pat', null, null), names)).toEqual({ change: 'Teleported', details: 'Pat Doe' });
