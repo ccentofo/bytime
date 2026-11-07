@@ -136,8 +136,14 @@ describe('Add user (US-8)', () => {
     expect(drawer.querySelector('[data-testid="user-form-alert"]')!.textContent).toContain('Fix 4 things to add this user:');
     const rules = () => [...drawer.querySelectorAll('[data-testid="password-rules"] li')].map((li) => [li.textContent, li.hasAttribute('data-met')]);
     expect(rules()[0]).toEqual(['· At least 8 characters', false]);
+    expect(rules()[1]).toEqual(['· No more than 128 characters', false]);
+    await setValue(field(drawer, 'Temporary password')!, 'h');                          // L13: the first keystroke ticks neither
+    expect(rules()).toEqual([['· At least 8 characters', false], ['· No more than 128 characters', false]]);
     await setValue(field(drawer, 'Temporary password')!, 'harbor-light');
-    expect(rules()[0]).toEqual(['✓ At least 8 characters', true]);
+    expect(rules()).toEqual([['✓ At least 8 characters', true], ['✓ No more than 128 characters', true]]);
+    await setValue(field(drawer, 'Temporary password')!, 'x'.repeat(129));
+    expect(rules()).toEqual([['✓ At least 8 characters', true], ['· No more than 128 characters', false]]);
+    await setValue(field(drawer, 'Temporary password')!, 'harbor-light');
     await setValue(field(drawer, 'Full name')!, 'Priya N');
     await setValue(field(drawer, 'Email')!, 'priya@x.test');
     await click(drawer.querySelector('input[type="radio"][value="exempt"]'));
