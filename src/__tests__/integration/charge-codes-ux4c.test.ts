@@ -15,11 +15,42 @@ import { getTestDb, createTestUser, createTestContract, createTestClin, createTe
 // regression in who's allowed to do what shows up here instead of being hidden.
 // ---------------------------------------------------------------------------
 
+// UX-4C1-AUDIT.md M5: a code string taken AFTER autobridge's qualifying check and before its insert (a concurrent
+// create). The test pool has one connection, so the "other writer" runs on the transaction itself, just before the
+// charge_codes insert executes: the insert's ON CONFLICT DO NOTHING is what keeps it from failing.
+const race = vi.hoisted(() => ({ beforeChargeCodeInsert: null as null | ((tx: ReturnType<typeof getTestDb>) => Promise<void>) }));
+type AnyFn = (...a: unknown[]) => unknown;
+/** A builder chain recorded until awaited, so the async hook runs first; then the chain is replayed on the real builder. */
+function deferred(start: () => unknown, hook: () => Promise<void>): unknown {
+  const calls: Array<[PropertyKey, unknown[]]> = [];
+  const chain: unknown = new Proxy({}, {
+    get: (_t, k) => (k === 'then'
+      ? (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+        hook().then(() => calls.reduce((b, [m, a]) => ((b as Record<PropertyKey, AnyFn>)[m] as AnyFn).apply(b, a), start())).then(res, rej)
+      : (...a: unknown[]) => { calls.push([k, a]); return chain; }),
+  });
+  return chain;
+}
+const bound = (t: object, k: PropertyKey) => { const v = Reflect.get(t, k); return typeof v === 'function' ? (v as AnyFn).bind(t) : v; };
+function racing(db: ReturnType<typeof getTestDb>) {
+  return new Proxy(db, {
+    get: (t, k) => (k !== 'transaction' ? bound(t, k) : (cb: (tx: unknown) => unknown, ...rest: unknown[]) =>
+      (t.transaction as AnyFn).call(t, (tx: ReturnType<typeof getTestDb>) => cb(new Proxy(tx, {
+        get: (tt, kk) => (kk !== 'insert' ? bound(tt, kk) : (table: unknown) => {
+          const hook = race.beforeChargeCodeInsert;
+          if (table !== schema.chargeCodes || !hook) return tt.insert(table as typeof schema.chargeCodes);
+          race.beforeChargeCodeInsert = null;
+          return deferred(() => tt.insert(table as typeof schema.chargeCodes), () => hook(tt));
+        }),
+      })), ...rest)),
+  });
+}
+
 vi.mock('@/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/db')>()),
   getDb: async () => getTestDb(),
   // Write actions obtain their client through the write gate (feature-plan-terms-compliance-fixes.md §5.1).
-  getDbForWrite: async () => getTestDb(),
+  getDbForWrite: async () => racing(getTestDb()),
   // requireAdminFresh (feature-plan-launch-blockers.md P3) re-reads the role through getDbForAuth.
   getDbForAuth: async () => getTestDb(),
 }));
@@ -78,7 +109,7 @@ function actingAs(user: { id: string; role: string; email: string; fullName: str
 describe('Charge codes (UX-4c §3)', () => {
   let admin: Awaited<ReturnType<typeof createTestUser>>;
   beforeEach(async () => { await cleanupTestData(); admin = await createTestUser({ role: 'admin' }); actingAs(admin); });
-  afterEach(async () => { sessionState.user = null; await cleanupTestData(); });
+  afterEach(async () => { sessionState.user = null; race.beforeChargeCodeInsert = null; await cleanupTestData(); });
 
   it('CC-4: peopleCount counts active rows of active users only; chargeable is false on an inactive CLIN', async () => {
     const db = getTestDb();
@@ -128,6 +159,21 @@ describe('Charge codes (UX-4c §3)', () => {
     expect(await codesOn(c3.id)).toHaveLength(1);
     expect(await codesOn(long.id)).toHaveLength(0);
     expect(await expectOk(autobridgeChargeCodesFromClins())).toEqual({ created: 0, skipped: 0 });
+  });
+
+  it('M5: a code string taken after the qualifying check (a concurrent create) is skipped, not an error → { created: 0, skipped: 1 }', async () => {
+    const db = getTestDb();
+    const contract = await createTestContract({ contractNumber: `R${Date.now()}` });
+    const target = await createTestClin(contract.id, { clinNumber: '0001' });
+    const elsewhere = await createTestClin((await createTestContract()).id);
+    expect((await previewAutobridgeChargeCodes()).find((r) => r.clinId === target.id)).toMatchObject({ available: true });
+    race.beforeChargeCodeInsert = async (tx) => {
+      await tx.insert(schema.chargeCodes).values({ code: `${contract.contractNumber}-0001`, name: 'Concurrent', clinId: elsewhere.id });
+    };
+    expect(await expectOk(autobridgeChargeCodesFromClins([target.id]))).toEqual({ created: 0, skipped: 1 });
+    expect(race.beforeChargeCodeInsert).toBeNull();                                         // the concurrent insert ran
+    expect(await db.select().from(schema.chargeCodes).where(eq(schema.chargeCodes.clinId, target.id))).toHaveLength(0);
+    expect(await db.select().from(schema.chargeCodes).where(eq(schema.chargeCodes.clinId, elsewhere.id))).toHaveLength(1);
   });
 
   it('CC-7: create refuses a SLIN from another CLIN and an inactive CLIN; an update moving the CLIN while the old SLIN stays is refused', async () => {

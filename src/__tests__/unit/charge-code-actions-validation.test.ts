@@ -59,6 +59,7 @@ describe('Create codes from CLINs (CC-6 companion)', () => {
     expect(r).toEqual({ ok: true, data: { created: 1, skipped: 2 } });
     expect(db.inserts).toHaveLength(1);
     expect((db.inserts[0].values as unknown as Array<{ clinId: string }>).map((v) => v.clinId)).toEqual([ID(1), ID(3)]);
+    expect(db.conflicts).toEqual([undefined]);                                           // M5: ON CONFLICT DO NOTHING (no target, no update)
   });
 
   it('no argument: every available CLIN; [] refused; non-UUID refused; nothing is read before a refusal', async () => {
