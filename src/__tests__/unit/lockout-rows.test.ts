@@ -6,7 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
  * emails in ONE query, keyed by the lowercased email, reporting only locked ones.
  */
 vi.mock('server-only', () => ({}));
-import { getLockoutsForEmails, lockoutFromRows } from '@/server/internal/login-attempts';
+import { getLockoutInfo, getLockoutsForEmails, lockoutFromRows } from '@/server/internal/login-attempts';
 import { createFakeControlDb } from '../helpers/fake-control-db';
 import { loginAttempts } from '@/db/schema';
 
@@ -37,6 +37,15 @@ describe('lockoutFromRows (US-2 companion)', () => {
     const at = (oldest: number) => [fail(ago(oldest)), ...fails(4, 0)];
     expect(lockoutFromRows(at(S), NOW)).toMatchObject({ isLocked: true, minutesRemaining: 14 });
     expect(lockoutFromRows(at(14 * M + 30 * S), NOW)).toMatchObject({ isLocked: false, minutesRemaining: 0, failedAttempts: 5 });
+  });
+});
+
+describe('getLockoutInfo with a fixed clock (UX-4C1-AUDIT.md L6)', () => {
+  it('uses the `now` passed in, not the wall clock', async () => {
+    const db = createFakeControlDb();
+    db.onSelect(loginAttempts, fails(5) as never);                                          // failures as of NOW (long expired by the wall clock)
+    db.onSelect(loginAttempts, []);                                                        // no success
+    expect(await getLockoutInfo(db as never, 'jane@x.dev', NOW)).toMatchObject({ isLocked: true, minutesRemaining: 13 });
   });
 });
 

@@ -52,9 +52,9 @@ export function lockoutFromRows(rows: readonly AttemptRow[], now: Date): Lockout
  * Lockout state for an email: locked after MAX_FAILED_ATTEMPTS failures (since the last success) within the
  * window. Callers pass the auth client (getDbForAuth) so a suspended tenant's admin still sees an accurate state (F10).
  */
-export async function getLockoutInfo(db: Pick<ReadDb, 'select'> | AttemptsWriter, email: string): Promise<LockoutInfo> {
+export async function getLockoutInfo(db: Pick<ReadDb, 'select'> | AttemptsWriter, email: string, now = new Date()): Promise<LockoutInfo> {
+  // `now` is a parameter for tests only (a fixed clock, UX-4C1-AUDIT.md L6); callers use the default.
   const normalizedEmail = email.toLowerCase().trim();
-  const now = new Date();
   const windowStart = dayjs(now).subtract(LOCKOUT_DURATION_MINUTES, 'minute').toDate();
 
   // Recent failed attempts within the lockout window
