@@ -49,6 +49,7 @@ const ALLOWLIST: Array<{ file: string; expr: string; why: string }> = [
   { file: 'src/server/actions/audit.ts', expr: 'start', why: "a validated 'YYYY-MM-DD' calendar date, cast ::date (UX-4c §6.4)" },
   { file: 'src/server/actions/audit.ts', expr: 'end', why: "a validated 'YYYY-MM-DD' calendar date, cast ::date (UX-4c §6.4)" },
   { file: 'src/server/internal/audit-export.ts', expr: 'lastId', why: 'the CSV keyset cursor: the previous batch\'s last row id (a UUID), bound as a parameter (UX-4c §6.5)' },
+  { file: 'src/server/internal/audit-export.ts', expr: 'topId', why: 'the CSV snapshot: the newest row id read with the count (a UUID), bound as a parameter (UX-4C1-AUDIT.md L3)' },
 ];
 
 const SCHEMA_FILES = new Set(['src/db/schema.ts', 'src/db/control-plane/schema.ts']);

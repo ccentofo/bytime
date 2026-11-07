@@ -98,6 +98,21 @@ describe('the keyset cursor and the route (AU-8 companion)', () => {
     expect(second.params).toContain(1000);
   });
 
+  it('L3: the count pins the newest row in the same statement; the first batch is bounded by it (≤, in SQL)', async () => {
+    const { getAuditExportCursor } = await import('@/server/internal/audit-export');
+    const cursor = await getAuditExportCursor({ startDate: '2026-10-01' as never, endDate: '2026-10-31' as never });
+    h.rows = [[{ n: 3, id: ID(7) }], [], []];
+    expect(await cursor.count()).toBe(3);
+    await cursor.batch(null);
+    await cursor.batch(ID(9));
+    const count = flat(h.built[0].toSQL().sql), first = h.built[1].toSQL(), second = flat(h.built[2].toSQL().sql);
+    expect(count).toMatch(/^select COUNT\(\*\) OVER \(\), "id" from "timesheet_entries" where .* order by "timesheet_entries"\."created_at" desc, "timesheet_entries"\."id" desc limit \$\d+$/);
+    expect(flat(first.sql)).toContain('("timesheet_entries"."created_at", "timesheet_entries"."id") <= (SELECT te_top.created_at, te_top.id FROM timesheet_entries te_top WHERE te_top.id = $');
+    expect(first.params).toContain(ID(7));
+    expect(second).toContain('< (SELECT te_cursor.created_at');
+    expect(second).not.toContain('te_top');
+  });
+
   const call = async (qs: string, cursor: { count: () => Promise<number>; batch: (id: string | null) => Promise<{ lines: string[]; lastId: string | null }> }) => {
     vi.resetModules();
     vi.doMock('@/server/internal/audit-export', async (orig) => ({ ...(await orig<typeof import('@/server/internal/audit-export')>()), getAuditExportCursor: async () => cursor }));

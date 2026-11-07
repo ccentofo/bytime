@@ -89,7 +89,10 @@ const importer = alias(users, 'audit_csv_importer');
 const enteredBy = alias(users, 'audit_csv_entered_by');
 
 export interface AuditExportCursor {
-  /** The number of rows the export will write (scope + filters). */
+  /**
+   * The number of rows the export will write (scope + filters). It also pins the newest matching row (UX-4C1-AUDIT.md
+   * L3): read in the SAME statement as the count, it bounds the first batch, so rows saved after the count aren't added.
+   */
   count: () => Promise<number>;
   /** The next batch after `lastId` (null = the first), newest first, already encoded as CSV lines. */
   batch: (lastId: string | null) => Promise<{ lines: string[]; lastId: string | null }>;
@@ -108,20 +111,27 @@ export async function getAuditExportCursor(filters: AuditEntryFilters): Promise<
   const tz = await getWorkspaceTimezone();
   const empty = scope !== 'all' && scope.length === 0;
   const where = auditEntryWhere(db, scope, f);
+  let topId: string | null = null;
 
   return {
     count: async () => {
       if (empty) return 0;
-      const [row] = await db.select({ n: sql<number>`COUNT(*)`.mapWith(Number) }).from(timesheetEntries).where(where);
+      // One statement, one snapshot: the window COUNT runs before the LIMIT, so `n` is the total and `id` the newest row.
+      const [row] = await db.select({ n: sql<number>`COUNT(*) OVER ()`.mapWith(Number), id: timesheetEntries.id }).from(timesheetEntries).where(where)
+        .orderBy(desc(timesheetEntries.createdAt), desc(timesheetEntries.id)).limit(1);
+      topId = row?.id ?? null;
       return row?.n ?? 0;
     },
     batch: async (lastId) => {
       if (empty) return { lines: [], lastId: null };
       // The keyset cursor stays in SQL: created_at has microsecond precision and one save shares it, so a JS Date
       // (milliseconds) would silently drop rows. Compare against the last row's own stored values.
+      // The first batch starts AT the row the count pinned (≤, in SQL); each later one strictly after the last row.
       const after = lastId
         ? sql`(${timesheetEntries.createdAt}, ${timesheetEntries.id}) < (SELECT te_cursor.created_at, te_cursor.id FROM timesheet_entries te_cursor WHERE te_cursor.id = ${lastId})`
-        : undefined;
+        : topId
+          ? sql`(${timesheetEntries.createdAt}, ${timesheetEntries.id}) <= (SELECT te_top.created_at, te_top.id FROM timesheet_entries te_top WHERE te_top.id = ${topId})`
+          : undefined;
       const rows = await db
         .select({
           id: timesheetEntries.id,
