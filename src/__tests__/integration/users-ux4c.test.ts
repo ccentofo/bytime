@@ -128,9 +128,10 @@ describe('Users server (UX-4c §5.1)', () => {
     const db = getTestDb();
     const pat = await createTestUser({ role: 'employee', flsaExempt: false, sessionVersion: 5, totpEnabled: true, totpSecret: 'enc-secret' });
     logState.fail = true;
-    expect((await updateUser(pat.id, { role: 'supervisor', flsaExempt: true })).ok).toBe(false);
-    expect((await adminResetPassword({ targetUserId: pat.id, newPassword: 'BrandNew123' })).ok).toBe(false);
-    expect((await adminResetMfa({ userId: pat.id, currentPassword: 'AdminPass123!' })).ok).toBe(false);
+    // userAction rethrows unexpected errors by design (src/lib/action-result.ts): the failure surfaces as a throw.
+    await expect(updateUser(pat.id, { role: 'supervisor', flsaExempt: true })).rejects.toThrow('admin_change_log write failed');
+    await expect(adminResetPassword({ targetUserId: pat.id, newPassword: 'BrandNew123' })).rejects.toThrow('admin_change_log write failed');
+    await expect(adminResetMfa({ userId: pat.id, currentPassword: 'AdminPass123!' })).rejects.toThrow('admin_change_log write failed');
     const [after] = await db.select().from(schema.users).where(eq(schema.users.id, pat.id));
     expect([after.role, after.flsaExempt, after.sessionVersion, after.passwordHash, after.totpEnabled, after.totpSecret])
       .toEqual(['employee', false, 5, pat.passwordHash, true, 'enc-secret']);
