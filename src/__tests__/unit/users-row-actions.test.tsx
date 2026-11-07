@@ -22,7 +22,7 @@ vi.mock('@/server/actions/password', () => ({ adminResetPassword: vi.fn() }));
 vi.mock('@/server/actions/mfa', () => ({ adminResetMfa: actions.resetMfa }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
-import { UsersClient, roleChangeCopy } from '@/app/(app)/admin/users/UsersClient';
+import { UsersClient, editConfirmCopy, roleChangeCopy } from '@/app/(app)/admin/users/UsersClient';
 import { notifications } from '@mantine/notifications';
 import { buttonByText, chooseRowAction, click, dialogTitled, installDomStubs, menuItem, mount, openRowMenu, unmount, wait, type Mounted } from '../helpers/dom';
 import { act } from 'react';
@@ -247,6 +247,44 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     await choose('Role', 'Admin');
     await click(inDialog(form(), 'Save changes'));
     expect(dialogTitled('Make Pat Doe an admin?')!.textContent).not.toContain('approve your own timesheets');
+  });
+
+  it('M1: an Edit save that changes overtime shows the FLSA confirm; Cancel sends nothing; Confirm sends it', async () => {
+    await renderTeam();
+    await edit('Pat Doe');
+    await click(form().querySelector('input[type="radio"][value="exempt"]'));
+    await click(inDialog(form(), 'Save changes'));
+    const confirm = dialogTitled('Mark Pat Doe as FLSA exempt?')!;
+    expect(confirm.textContent).toContain('Payroll export uses this to calculate overtime for every period, including past ones.');
+    await click(inDialog(confirm, 'Cancel'));
+    await wait();
+    expect(actions.updateUser).not.toHaveBeenCalled();
+    expect(form()).toBeDefined();
+    await click(inDialog(form(), 'Save changes'));
+    await click(inDialog(dialogTitled('Mark Pat Doe as FLSA exempt?')!, 'Mark as exempt'));
+    await wait();
+    expect(actions.updateUser).toHaveBeenCalledWith('u2', { flsaExempt: true });
+  });
+
+  it('M1: role and overtime both changed → ONE confirm carrying both messages', async () => {
+    expect(editConfirmCopy('Pat', null, null, false)).toBeNull();
+    expect(editConfirmCopy('Pat', null, false, false)).toEqual({
+      tone: 'neutral', title: 'Mark Pat as FLSA non-exempt?', confirmLabel: 'Mark as non-exempt',
+      message: 'Payroll export uses this to calculate overtime for every period, including past ones.',
+    });
+    await renderTeam();
+    await edit('Pat Doe');
+    await choose('Role', 'Supervisor');
+    await click(form().querySelector('input[type="radio"][value="exempt"]'));
+    await click(inDialog(form(), 'Save changes'));
+    const confirm = dialogTitled('Make Pat Doe a supervisor?')!;
+    expect(confirm.textContent).toContain('share a CLIN with them');
+    expect(confirm.textContent).toContain('Their overtime status changes to exempt: payroll export uses this to calculate overtime for every period, including past ones.');
+    expect(dialogTitled('Mark Pat Doe as FLSA exempt?')).toBeUndefined();
+    await click(inDialog(confirm, 'Save changes'));
+    await wait();
+    expect(actions.updateUser).toHaveBeenCalledTimes(1);
+    expect(actions.updateUser).toHaveBeenCalledWith('u2', { role: 'supervisor', flsaExempt: true });
   });
 
   it('a name-only edit saves without a confirm', async () => {

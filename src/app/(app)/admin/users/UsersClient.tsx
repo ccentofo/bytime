@@ -112,6 +112,31 @@ export function roleChangeCopy(name: string, from: Role, to: Role, actingIsSoleA
   };
 }
 
+const FLSA_MESSAGE = 'Payroll export uses this to calculate overtime for every period, including past ones.';
+
+/** The FLSA status confirm (the ⋯ menu's and the Edit save's). */
+export function flsaChangeCopy(name: string, toExempt: boolean) {
+  return {
+    tone: 'neutral' as const,
+    title: `Mark ${name} as FLSA ${toExempt ? 'exempt' : 'non-exempt'}?`,
+    message: FLSA_MESSAGE,
+    confirmLabel: toExempt ? 'Mark as exempt' : 'Mark as non-exempt',
+  };
+}
+
+/**
+ * UX-4C1-AUDIT.md M1: what an Edit save asks first — the role confirm, the FLSA confirm, or (both changed) ONE confirm
+ * carrying both messages. Null when neither changed (the save runs directly).
+ */
+export function editConfirmCopy(name: string, role: { from: Role; to: Role } | null, toExempt: boolean | null, actingIsSoleAdmin: boolean) {
+  const r = role && roleChangeCopy(name, role.from, role.to, actingIsSoleAdmin);
+  if (r && toExempt !== null) {
+    return { ...r, message: `${r.message} Their overtime status changes to ${toExempt ? 'exempt' : 'non-exempt'}: ${FLSA_MESSAGE.charAt(0).toLowerCase()}${FLSA_MESSAGE.slice(1)}`, confirmLabel: 'Save changes' };
+  }
+  if (r) return r;
+  return toExempt === null ? null : flsaChangeCopy(name, toExempt);
+}
+
 const PARTIAL_SAVE = "The role was saved, but the approver couldn't be updated. Try saving again.";
 
 const EMPTY_FORM: UserForm = { email: '', fullName: '', role: 'employee', password: '', overtime: '', approverId: '' };
@@ -148,12 +173,13 @@ export function UsersClient({ initialUsers, currentUserId, seats }: Props) {
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<FieldKey, string>>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const fieldRefs = useRef<Partial<Record<FieldKey, HTMLElement | null>>>({});
-  // C16: a role change asks first; the confirm shows the save's error (the form's own Alert is hidden meanwhile).
-  const [roleConfirm, setRoleConfirm] = useState<{ name: string; from: Role; to: Role } | null>(null);
-  const shownRole = useLastTarget(roleConfirm);
+  // C16 / M1: a role or overtime change asks first; the confirm shows the save's error (the form's own Alert is hidden meanwhile).
+  const [editConfirm, setEditConfirm] = useState<{ name: string; role: { from: Role; to: Role } | null; toExempt: boolean | null } | null>(null);
+  const shownEdit = useLastTarget(editConfirm);
   const activeAdmins = users.filter((u) => u.role === 'admin' && u.isActive);
   const actingIsSoleAdmin = activeAdmins.length === 1 && activeAdmins[0].id === currentUserId;
-  const roleCopy = shownRole && roleChangeCopy(shownRole.name, shownRole.from, shownRole.to, actingIsSoleAdmin);
+  const editCopy = shownEdit && editConfirmCopy(shownEdit.name, shownEdit.role, shownEdit.toExempt, actingIsSoleAdmin);
+  const flsaCopy = shownFlsa && flsaChangeCopy(shownFlsa.fullName, !shownFlsa.flsaExempt);
 
   // Reset password
   const [resetTarget, setResetTarget] = useState<User | null>(null);
@@ -217,9 +243,10 @@ export function UsersClient({ initialUsers, currentUserId, seats }: Props) {
     setFieldErrors(errors);
     setFormError(null);
     if (Object.keys(errors).length > 0) return;
-    if (editingUser && !confirmed && form.role !== editingUser.role) {
-      setRoleConfirm({ name: editingUser.fullName, from: editingUser.role, to: form.role as Role });
-      return;
+    if (editingUser && !confirmed) {
+      const role = form.role !== editingUser.role ? { from: editingUser.role, to: form.role as Role } : null;
+      const toExempt = (form.overtime === 'exempt') !== editingUser.flsaExempt ? form.overtime === 'exempt' : null;
+      if (role || toExempt !== null) { setEditConfirm({ name: editingUser.fullName, role, toExempt }); return; }
     }
     await busy.run('save', async () => {
       const flsaExempt = form.overtime === 'exempt';
@@ -270,7 +297,7 @@ export function UsersClient({ initialUsers, currentUserId, seats }: Props) {
         toastSuccess({ title: 'User added', message: `${form.fullName} can sign in with the temporary password.` });
       }
       await refresh();
-      setRoleConfirm(null);
+      setEditConfirm(null);
       setDrawerOpen(false);
     });
   }
@@ -451,9 +478,9 @@ export function UsersClient({ initialUsers, currentUserId, seats }: Props) {
       <ConfirmModal
         opened={!!confirmFlsa}
         tone="neutral"
-        title={shownFlsa ? `Mark ${shownFlsa.fullName} as FLSA ${shownFlsa.flsaExempt ? 'non-exempt' : 'exempt'}?` : ''}
-        message="Payroll export uses this to calculate overtime for every period, including past ones."
-        confirmLabel={shownFlsa?.flsaExempt ? 'Mark as non-exempt' : 'Mark as exempt'}
+        title={flsaCopy?.title ?? ''}
+        message={flsaCopy?.message ?? ''}
+        confirmLabel={flsaCopy?.confirmLabel}
         loading={busy.is('flsa')}
         onConfirm={() => { if (confirmFlsa) void handleToggleFlsaExempt(confirmFlsa, () => setConfirmFlsa(null)); }}
         onCancel={() => setConfirmFlsa(null)}
@@ -489,11 +516,11 @@ export function UsersClient({ initialUsers, currentUserId, seats }: Props) {
         title={editingUser ? 'Edit user' : 'Add user'}
         position="right"
         size="md"
-        closeOnEscape={!roleConfirm}
+        closeOnEscape={!editConfirm}
       >
         <Stack>
           {/* One summary of every problem (links focus the field), plus the server's error — hidden while the role confirm shows it. */}
-          {(errorList.length > 0 || (formError && !roleConfirm)) && (
+          {(errorList.length > 0 || (formError && !editConfirm)) && (
             <Alert color="red" role="alert" data-testid="user-form-alert">
               {errorList.length > 0 && (
                 <>
@@ -505,7 +532,7 @@ export function UsersClient({ initialUsers, currentUserId, seats }: Props) {
                   </List>
                 </>
               )}
-              {formError && !roleConfirm && <Text size="sm" mt={errorList.length > 0 ? 4 : 0}>{formError}</Text>}
+              {formError && !editConfirm && <Text size="sm" mt={errorList.length > 0 ? 4 : 0}>{formError}</Text>}
             </Alert>
           )}
           <TextInput label="Full name" required ref={(el) => { fieldRefs.current.fullName = el; }} error={fieldErrors.fullName}
@@ -564,15 +591,15 @@ export function UsersClient({ initialUsers, currentUserId, seats }: Props) {
       </Drawer>
 
       <ConfirmModal
-        opened={!!roleConfirm}
-        tone={roleCopy?.tone}
-        title={roleCopy?.title ?? ''}
-        message={roleCopy?.message ?? ''}
-        confirmLabel={roleCopy?.confirmLabel}
+        opened={!!editConfirm}
+        tone={editCopy?.tone}
+        title={editCopy?.title ?? ''}
+        message={editCopy?.message ?? ''}
+        confirmLabel={editCopy?.confirmLabel}
         loading={busy.is('save')}
         error={formError}
         onConfirm={() => { void handleSubmit({ confirmed: true }); }}
-        onCancel={() => { setRoleConfirm(null); setFormError(null); }}   // UX-4A-AUDIT.md L3: the error belonged to the confirm
+        onCancel={() => { setEditConfirm(null); setFormError(null); }}   // UX-4A-AUDIT.md L3: the error belonged to the confirm
       />
     </>
   );
