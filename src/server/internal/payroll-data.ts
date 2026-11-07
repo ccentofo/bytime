@@ -29,7 +29,7 @@ export class PayrollNotReadyError extends UserFacingError {
   constructor(readonly reason: 'workweek-unset' | 'leave-pay-type', readonly codes: string[] = []) {
     super(reason === 'workweek-unset'
       ? WORKWEEK_UNSET_MESSAGE
-      : `Set a pay type (PTO, sick, holiday or unpaid) on these leave codes in Indirect Codes before exporting payroll: ${codes.join(', ')}.`);
+      : `Set a pay type (PTO, sick, holiday or unpaid) on these leave codes on Charge codes → Indirect before exporting payroll: ${codes.join(', ')}.`);
     this.name = 'PayrollNotReadyError';
   }
 }

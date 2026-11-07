@@ -79,7 +79,7 @@ describe('payroll-data', () => {
     const err = await loadPayrollData(db as never, d('2026-10-01'), d('2026-10-15')).catch((x) => x);
     expect(err).toBeInstanceOf(PayrollNotReadyError);
     expect(err).toMatchObject({ reason: 'leave-pay-type', codes: ['LV-BEREAVE', 'LV-JURY'] });
-    expect(err.message).toMatch(/Indirect Codes .*LV-BEREAVE, LV-JURY/);
+    expect(err.message).toBe('Set a pay type (PTO, sick, holiday or unpaid) on these leave codes on Charge codes → Indirect before exporting payroll: LV-BEREAVE, LV-JURY.');
   });
 
   it('outputs only in-range days whose containing period is approved; a period that started BEFORE the range contributes its in-range days', async () => {
@@ -102,7 +102,7 @@ describe('payroll-data', () => {
 });
 
 describe('actions (ActionResult)', () => {
-  it('preview: a refusal comes back as data with its reason (the UI links to Settings / Indirect Codes)', async () => {
+  it('preview: a refusal comes back as data with its reason (the UI links to Settings / Charge codes → Indirect)', async () => {
     db.onSelect(workspaceSettings, []);
     expect(await getPayrollExportPreview({ periodStart: d('2026-10-01'), periodEnd: d('2026-10-15') })).toEqual({
       ok: true, data: { status: 'refused', reason: 'workweek-unset', codes: [], message: WORKWEEK_UNSET_MESSAGE },
