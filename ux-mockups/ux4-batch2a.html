@@ -1,0 +1,664 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CadenzPoint — UX-4 batch 2a mockups</title>
+<style>
+:root {
+  --bg: #f7f8fb; --panel: #ffffff; --raised: #ffffff; --line: #e2e6ee; --line-strong: #c9cfdb; --text: #16203a; --dim: #4c5672;
+  --accent: #4f6bff; --accent-text: #3f55e6; --accent-soft: rgba(79,107,255,.08); --btn: #3f55e6;
+  --ok: #1f7a4d; --ok-soft: #e6f4ec; --warn: #8a5300; --warn-soft: #fff4dc; --bad: #b42318; --bad-soft: #fdecea;
+  --chip: #eef0f5; --nav: #ffffff; --nav-active: #e9edff; --shadow: 0 1px 2px rgba(16,24,40,.05);
+}
+[data-theme="dark"] {
+  --bg: #16181e; --panel: #1d2027; --raised: #22252d; --line: #2e323c; --line-strong: #414756; --text: #e7e9ef; --dim: #a5abb8;
+  --accent: #4f6bff; --accent-text: #8fa0ff; --accent-soft: rgba(79,107,255,.12); --btn: #3f55e6;
+  --ok: #6fd3a0; --ok-soft: rgba(52,168,108,.14); --warn: #f2bd5c; --warn-soft: rgba(242,189,92,.12); --bad: #ff8a80; --bad-soft: rgba(255,107,95,.13);
+  --chip: #2a2e38; --nav: #191b21; --nav-active: #232a4a; --shadow: none;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+button { font: inherit; }
+.app { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100vh; }
+.side { background: var(--nav); border-right: 1px solid var(--line); padding: 16px 12px; }
+.brand { font-weight: 700; font-size: 17px; padding: 4px 10px 18px; display: flex; gap: 8px; align-items: center; }
+.brand i { width: 14px; height: 14px; border-radius: 3px; background: var(--accent); display: inline-block; }
+.nav a { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; border-radius: 6px; color: var(--text); text-decoration: none; cursor: pointer; }
+.nav a.sub { padding-left: 28px; color: var(--dim); }
+.nav a.on { background: var(--nav-active); color: var(--accent-text); font-weight: 600; }
+.nav .count { background: var(--accent); color: #fff; border-radius: 999px; font-size: 12px; padding: 0 7px; font-weight: 600; }
+.nav .grp { color: var(--dim); font-size: 13px; padding: 14px 10px 4px; }
+main { padding: 28px 36px 64px; max-width: 1440px; width: 100%; }
+.ph { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 20px; }
+h1 { font-size: 26px; margin: 0; font-weight: 700; letter-spacing: -.01em; }
+.desc { color: var(--dim); margin: 4px 0 0; max-width: 72ch; }
+h2 { font-size: 16px; margin: 0 0 10px; font-weight: 650; }
+.btn { border: 1px solid var(--line-strong); background: var(--panel); color: var(--text); border-radius: 7px; padding: 7px 14px; cursor: pointer; font-weight: 550; white-space: nowrap; }
+.btn.primary { background: var(--btn); border-color: var(--btn); color: #fff; }
+.btn.quiet { border-color: transparent; background: transparent; color: var(--accent-text); padding-inline: 6px; }
+.btn.sm { padding: 4px 10px; font-size: 13px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
+.notice { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: 8px; background: var(--warn-soft); margin-bottom: 16px; }
+.notice.info { border-left-color: var(--accent); background: var(--accent-soft); }
+.notice a { color: var(--accent-text); font-weight: 600; margin-left: auto; white-space: nowrap; cursor: pointer; }
+/* summary strip */
+.strip { display: grid; grid-template-columns: repeat(4, 1fr); margin-bottom: 18px; }
+.strip > div { padding: 14px 18px; border-left: 1px solid var(--line); }
+.strip > div:first-child { border-left: 0; }
+.strip .n { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.strip .l { color: var(--dim); font-size: 13px; }
+/* tables */
+table { width: 100%; border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-weight: 600; color: var(--dim); font-size: 13px; padding: 10px 14px; border-bottom: 1px solid var(--line-strong); white-space: nowrap; }
+td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+tr:last-child td { border-bottom: 0; }
+.num { text-align: right; }
+.sub2 { color: var(--dim); font-size: 13px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+tbody tr.child td { background: color-mix(in srgb, var(--panel) 70%, var(--bg)); }
+tbody tr.child td:first-child { padding-left: 46px; }
+tbody tr.grand td { padding-left: 76px; }
+tbody tr.grp td { background: color-mix(in srgb, var(--panel) 85%, var(--bg)); font-size: 14px; }
+#ltable tbody tr.child td:first-child { padding-left: 46px; }
+tfoot td { border-top: 1px solid var(--line-strong); font-weight: 700; border-bottom: 0; }
+.exp { width: 22px; height: 22px; border: 0; background: transparent; color: var(--dim); cursor: pointer; border-radius: 4px; margin-right: 6px; transform: rotate(0); transition: transform .15s; }
+.exp[aria-expanded="true"] { transform: rotate(90deg); }
+.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 550; }
+.badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.b-ok { color: var(--ok); } .b-warn { color: var(--warn); } .b-bad { color: var(--bad); } .b-info { color: var(--accent-text); } .b-dim { color: var(--dim); }
+.pill { font-size: 12px; font-weight: 600; background: var(--chip); color: var(--dim); border-radius: 4px; padding: 1px 7px; }
+.burn { display: grid; grid-template-columns: 72px auto; gap: 10px; align-items: center; white-space: nowrap; }
+#ctable td:first-child { white-space: nowrap; }
+#ctable th, #ctable td { padding-inline: 10px; }
+#ctable .burn { grid-template-columns: 56px auto; }
+.bar { height: 6px; border-radius: 3px; background: var(--chip); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); }
+.flag { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--warn); font-weight: 550; margin-right: 10px; }
+.flag::before { content: ""; width: 8px; height: 8px; transform: rotate(45deg); background: currentColor; display: inline-block; }
+.screen { display: none; } .screen.on { display: block; }
+.tabs { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; padding: 3px; background: var(--panel); margin-bottom: 14px; }
+.tabs button { border: 0; background: transparent; color: var(--dim); padding: 5px 12px; border-radius: 6px; cursor: pointer; font-weight: 550; }
+.tabs button.on { background: var(--nav-active); color: var(--accent-text); }
+/* approvals review */
+.review { display: grid; gap: 16px; }
+.review-side { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px; align-items: start; }
+.review-side .side-card { margin: 0; }
+@media (max-width: 1100px) { .review-side { grid-template-columns: 1fr; } }
+.grid td, .grid th { border-right: 1px solid var(--line); text-align: center; padding: 9px 6px; }
+.grid th:first-child, .grid td:first-child { text-align: left; padding-left: 12px; min-width: 210px; border-right: 2px solid var(--line-strong); }
+.grid td:last-child, .grid th:last-child { border-right: 0; border-left: 2px solid var(--line-strong); text-align: right; padding-right: 12px; font-weight: 700; }
+.grid th .d { display: block; font-weight: 500; color: var(--dim); font-size: 12px; }
+.grid .wk { background: color-mix(in srgb, var(--panel) 80%, var(--bg)); }
+.grid td.fl { position: relative; background: var(--warn-soft); box-shadow: inset 0 -2px 0 var(--warn); font-weight: 600; }
+.grid td.fl::after { content: ""; position: absolute; top: 0; right: 0; border-top: 9px solid var(--warn); border-left: 9px solid transparent; }
+.grid td.nt::before { content: ""; position: absolute; top: 0; left: 0; border-top: 9px solid var(--accent); border-right: 9px solid transparent; }
+.grid td.nt { position: relative; }
+.side-card { padding: 16px; margin-bottom: 14px; }
+.side-card h3 { margin: 0 0 8px; font-size: 14px; }
+.change { border-top: 1px solid var(--line); padding: 10px 0; font-size: 13.5px; }
+.change:first-of-type { border-top: 0; }
+textarea { width: 100%; min-height: 76px; resize: vertical; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line-strong); border-radius: 7px; padding: 8px 10px; }
+label { font-weight: 600; font-size: 13px; display: block; margin-bottom: 6px; }
+select, input[type=text] { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 7px; padding: 7px 10px; }
+.field { display: grid; gap: 4px; }
+.help { color: var(--dim); font-size: 13px; }
+details { border-top: 1px solid var(--line); padding: 12px 0 0; margin-top: 14px; }
+summary { cursor: pointer; font-weight: 600; color: var(--accent-text); }
+.callouts { margin-top: 26px; color: var(--dim); font-size: 13.5px; max-width: 920px; border-top: 1px solid var(--line); padding-top: 14px; }
+.callouts li { margin: 5px 0; } .callouts b { color: var(--text); }
+.switcher { position: fixed; bottom: 14px; right: 16px; display: flex; gap: 6px; z-index: 10; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.18); }
+.switcher button { border: 1px solid transparent; background: transparent; color: var(--text); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+.switcher button.on { background: var(--nav-active); color: var(--accent-text); font-weight: 600; }
+.report { display: grid; grid-template-columns: minmax(0,1fr) 360px 180px; gap: 18px; align-items: center; padding: 16px 18px; border-top: 1px solid var(--line); }
+.report:first-child { border-top: 0; }
+.report h3 { margin: 0; font-size: 15px; }
+.report > div:last-child { justify-content: flex-end; }
+.err { color: var(--bad); font-size: 13px; }
+
+/* batch 2a additions */
+[hidden] { display: none !important; }
+.mono { white-space: nowrap; }
+#au-entries td:first-child, #au-entries td:last-child, #au-events td:first-child { white-space: nowrap; }
+.toolbar { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 14px; }
+.toolbar .grow { margin-left: auto; }
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; background: var(--panel); color: var(--dim); padding: 6px 12px; cursor: pointer; font-weight: 550; }
+.seg button + button { border-left: 1px solid var(--line-strong); }
+.seg button.on { background: var(--nav-active); color: var(--accent-text); }
+.search { min-width: 240px; }
+.chipf { display: inline-flex; gap: 6px; align-items: center; background: var(--chip); border-radius: 999px; padding: 3px 6px 3px 10px; font-size: 13px; }
+.chipf button { border: 0; background: transparent; color: var(--dim); cursor: pointer; padding: 0 4px; }
+.pane { display: none; } .pane.on { display: block; }
+tbody tr.person td { background: color-mix(in srgb, var(--panel) 85%, var(--bg)); }
+tbody tr.child td.lead { padding-left: 46px; }
+.count-sub { color: var(--dim); font-size: 13px; font-weight: 400; margin-left: 6px; }
+.removed td { color: var(--dim); }
+.tag-new { font-size: 11px; font-weight: 700; color: var(--accent-text); border: 1px solid var(--accent-text); border-radius: 4px; padding: 0 5px; margin-left: 6px; vertical-align: 1px; }
+.menu { position: relative; display: inline-block; }
+.menu-list { position: absolute; right: 0; top: 30px; z-index: 5; min-width: 220px; background: var(--raised); border: 1px solid var(--line-strong); border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.25); text-align: left; }
+.menu-list div { padding: 7px 10px; border-radius: 5px; cursor: pointer; }
+.menu-list div:hover { background: var(--accent-soft); }
+.menu-list .danger { color: var(--bad); }
+.menu-list .sep { height: 1px; background: var(--line); padding: 0; margin: 4px 0; }
+.menu-list .why { color: var(--dim); font-size: 12px; display: block; }
+/* dialogs */
+.scrim { position: fixed; inset: 0; background: rgba(5,8,15,.55); display: none; z-index: 20; }
+.scrim.on { display: block; }
+.dialog { position: fixed; z-index: 21; background: var(--panel); border: 1px solid var(--line-strong); display: none; box-shadow: 0 20px 50px rgba(0,0,0,.35); }
+.dialog.on { display: flex; flex-direction: column; }
+.dialog.modal { left: 50%; top: 8vh; transform: translateX(-50%); width: min(620px, 94vw); max-height: 84vh; border-radius: 12px; }
+.dialog.drawer { right: 0; top: 0; bottom: 0; width: min(520px, 96vw); border-radius: 12px 0 0 12px; }
+.dialog header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+.dialog header h2 { margin: 0; font-size: 17px; }
+.dialog .body { padding: 16px 20px; overflow: auto; display: grid; gap: 14px; }
+.dialog.drawer .body { flex: 1; align-content: start; }
+.dialog footer { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--line); }
+.x { border: 0; background: transparent; color: var(--dim); font-size: 20px; cursor: pointer; line-height: 1; }
+.req { color: var(--bad); margin-left: 2px; }
+.pick { border: 1px solid var(--line); border-radius: 8px; max-height: 300px; overflow: auto; }
+.pick .g { padding: 8px 12px; background: color-mix(in srgb, var(--panel) 85%, var(--bg)); border-bottom: 1px solid var(--line); font-weight: 600; display: flex; gap: 8px; align-items: center; }
+.pick .c { padding: 7px 12px 7px 36px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
+.pick .c:last-child { border-bottom: 0; }
+.pick .had { color: var(--dim); }
+.radios { display: flex; gap: 18px; }
+.radios label { font-weight: 500; display: flex; gap: 6px; align-items: center; margin: 0; }
+.alert { border: 1px solid var(--bad); background: var(--bad-soft); border-radius: 8px; padding: 10px 12px; }
+.alert b { color: var(--bad); }
+.rules { margin: 4px 0 0; padding-left: 0; list-style: none; color: var(--dim); font-size: 13px; }
+.rules li.ok { color: var(--ok); }
+input[type=email], input[type=password], input[type=date] { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 7px; padding: 7px 10px; width: 100%; }
+.dialog select, .dialog input[type=text] { width: 100%; }
+.fielderr { color: var(--bad); font-size: 13px; }
+.timeline { border-left: 2px solid var(--line-strong); margin-left: 6px; padding-left: 16px; display: grid; gap: 16px; }
+.timeline .rev { position: relative; }
+.timeline .rev::before { content: ""; position: absolute; left: -23px; top: 5px; width: 10px; height: 10px; border-radius: 50%; background: var(--line-strong); }
+.timeline .rev.cur::before { background: var(--accent); }
+.kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 12px; font-size: 13.5px; }
+.kv dt { color: var(--dim); } .kv dd { margin: 0; }
+tr.chg td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+tr.clickable { cursor: pointer; } tr.clickable:hover td { background: var(--accent-soft); }
+.revn { display: inline-block; min-width: 22px; text-align: center; border-radius: 4px; font-size: 12px; font-weight: 700; padding: 1px 6px; background: var(--chip); color: var(--dim); }
+.revn.up { background: var(--warn-soft); color: var(--warn); }
+.legend { font-size: 13px; color: var(--dim); padding: 10px 14px; border-top: 1px solid var(--line); display: flex; gap: 18px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="side" aria-label="Main">
+    <div class="brand"><i></i>CadenzPoint</div>
+    <div class="nav" id="nav">
+      <a>Home</a>
+      <a>My timesheet</a>
+      <a>Approvals <span class="count">6</span></a>
+      <div class="grp">Contracts</div>
+      <a class="sub">Contracts</a>
+      <a class="sub" data-go="codes">Charge codes</a>
+      <a class="sub">Labor categories</a>
+      <div class="grp">People</div>
+      <a class="sub" data-go="users">Users</a>
+      <a class="sub" data-go="assign">Assignments</a>
+      <div class="grp">Reports</div>
+      <a class="sub">Reports</a>
+      <a class="sub">Payroll export</a>
+      <a class="sub" data-go="audit">Audit trail</a>
+      <div class="grp"></div>
+      <a>Settings</a>
+    </div>
+  </nav>
+
+  <main>
+  <!-- ===================== ASSIGNMENTS ===================== -->
+  <section class="screen on" id="assign">
+    <div class="ph"><div><h1>Assignments</h1><p class="desc">What each person can charge, which labor category prices their hours, and which CLINs each supervisor approves.</p></div></div>
+    <div class="tabs" role="tablist" data-tabs="assign">
+      <button class="on" data-pane="a-codes">Charge code access</button>
+      <button data-pane="a-lcat">Labor categories</button>
+      <button data-pane="a-scope">Approval scope</button>
+    </div>
+
+    <!-- Charge code access -->
+    <div class="pane on" id="a-codes">
+      <div class="toolbar">
+        <div class="field"><label for="a-q">Search</label><input type="text" id="a-q" class="search" placeholder="Name, code or contract"></div>
+        <div class="field"><label>Group by</label><div class="seg" data-seg="agroup"><button class="on" data-show="a-by-person">Person</button><button data-show="a-by-code">Charge code</button></div></div>
+        <label style="font-weight:500;display:flex;gap:6px;align-items:center;margin:0 0 8px"><input type="checkbox" id="showRemoved"> Show removed access</label>
+        <div class="grow"><button class="btn primary" data-open="dlg-access">Give access</button></div>
+      </div>
+
+      <div class="panel" id="a-by-person">
+        <table class="xt">
+          <thead><tr><th>Person / charge code</th><th>Name</th><th>Contract · CLIN</th><th>Location</th><th></th></tr></thead>
+          <tbody>
+            <tr class="person" data-p="p-jane"><td colspan="4"><button class="exp" aria-expanded="true" aria-label="Hide codes for Jane Smith">▸</button><b>Jane Smith</b><span class="count-sub">3 codes · NAVAIR</span></td><td class="num"><button class="btn sm quiet" data-open="dlg-access">Add codes</button></td></tr>
+            <tr class="child" data-c="p-jane"><td class="lead mono">NAVAIR-0001-ONSITE</td><td>Base Year Labor — Onsite</td><td>NAVAIR Systems Support · 0001</td><td>Onsite</td><td class="num"><button class="btn sm quiet">Remove…</button></td></tr>
+            <tr class="child" data-c="p-jane"><td class="lead mono">NAVAIR-0001-TELEWORK</td><td>Base Year Labor — Telework</td><td>NAVAIR Systems Support · 0001</td><td>Telework</td><td class="num"><button class="btn sm quiet">Remove…</button></td></tr>
+            <tr class="child" data-c="p-jane"><td class="lead mono">NAVAIR-0002</td><td>Option Year 1 Labor</td><td>NAVAIR Systems Support · 0002</td><td>—</td><td class="num"><button class="btn sm quiet">Remove…</button></td></tr>
+            <tr class="child removed" data-c="p-jane" data-removed hidden><td class="lead mono">DISA-0001</td><td>Cyber Operations Labor</td><td>DISA Cyber Operations · 0001</td><td>—</td><td class="num"><span class="sub2">Removed Sep 30</span> <button class="btn sm quiet">Restore</button></td></tr>
+            <tr class="person" data-p="p-john"><td colspan="4"><button class="exp" aria-expanded="true" aria-label="Hide codes for John Doe">▸</button><b>John Doe</b><span class="count-sub">2 codes · NAVAIR</span></td><td class="num"><button class="btn sm quiet" data-open="dlg-access">Add codes</button></td></tr>
+            <tr class="child" data-c="p-john"><td class="lead mono">NAVAIR-0001-ONSITE</td><td>Base Year Labor — Onsite</td><td>NAVAIR Systems Support · 0001</td><td>Onsite</td><td class="num"><button class="btn sm quiet">Remove…</button></td></tr>
+            <tr class="child" data-c="p-john"><td class="lead mono">NAVAIR-0002</td><td>Option Year 1 Labor</td><td>NAVAIR Systems Support · 0002</td><td>—</td><td class="num"><button class="btn sm quiet">Remove…</button></td></tr>
+            <tr class="person" data-p="p-emily"><td colspan="4"><button class="exp" aria-expanded="false" aria-label="Show codes for Emily Davis">▸</button><b>Emily Davis</b><span class="count-sub">2 codes · Army</span></td><td class="num"><button class="btn sm quiet" data-open="dlg-access">Add codes</button></td></tr>
+            <tr class="child" data-c="p-emily" hidden><td class="lead mono">ARMY-0001</td><td>Help Desk Support</td><td>Army IT Support · 0001</td><td>—</td><td class="num"><button class="btn sm quiet">Remove…</button></td></tr>
+            <tr class="child" data-c="p-emily" hidden><td class="lead mono">ARMY-0002</td><td>Network Operations</td><td>Army IT Support · 0002</td><td>—</td><td class="num"><button class="btn sm quiet">Remove…</button></td></tr>
+            <tr class="person" data-p="p-rob"><td colspan="4"><button class="exp" aria-expanded="false" aria-label="Show codes for Robert Taylor">▸</button><b>Robert Taylor</b><span class="count-sub">2 codes · NAVAIR, DISA</span></td><td class="num"><button class="btn sm quiet" data-open="dlg-access">Add codes</button></td></tr>
+            <tr class="person" data-p="p-mike"><td colspan="4"><button class="exp" aria-expanded="false" aria-label="Show codes for Mike Chen">▸</button><b>Mike Chen</b><span class="count-sub">1 code · Army</span></td><td class="num"><button class="btn sm quiet" data-open="dlg-access">Add codes</button></td></tr>
+            <tr class="person" data-p="p-sarah"><td colspan="4"><button class="exp" aria-expanded="false" aria-label="Show codes for Sarah Wilson">▸</button><b>Sarah Wilson</b><span class="count-sub">3 codes · NAVAIR, DISA</span></td><td class="num"><button class="btn sm quiet" data-open="dlg-access">Add codes</button></td></tr>
+            <tr class="person"><td colspan="4"><span style="display:inline-block;width:28px"></span><b>Admin User</b><span class="count-sub" style="color:var(--warn)">No charge codes · only indirect time on their timesheet</span></td><td class="num"><button class="btn sm quiet" data-open="dlg-access">Add codes</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel" id="a-by-code" hidden>
+        <table class="xt">
+          <thead><tr><th>Charge code / person</th><th>Name</th><th>Contract · CLIN</th><th class="num">People</th><th></th></tr></thead>
+          <tbody>
+            <tr class="person" data-p="c-onsite"><td><button class="exp" aria-expanded="true" aria-label="Hide people for NAVAIR-0001-ONSITE">▸</button><b class="mono">NAVAIR-0001-ONSITE</b></td><td>Base Year Labor — Onsite</td><td>NAVAIR Systems Support · 0001</td><td class="num">4</td><td class="num"><button class="btn sm quiet" data-open="dlg-access">Add people</button></td></tr>
+            <tr class="child" data-c="c-onsite"><td class="lead" colspan="4">Jane Smith</td><td class="num"><button class="btn sm quiet">Remove…</button></td></tr>
+            <tr class="child" data-c="c-onsite"><td class="lead" colspan="4">John Doe</td><td class="num"><button class="btn sm quiet">Remove…</button></td></tr>
+            <tr class="child" data-c="c-onsite"><td class="lead" colspan="4">Robert Taylor</td><td class="num"><button class="btn sm quiet">Remove…</button></td></tr>
+            <tr class="child" data-c="c-onsite"><td class="lead" colspan="4">Sarah Wilson</td><td class="num"><button class="btn sm quiet">Remove…</button></td></tr>
+            <tr class="person"><td><button class="exp" aria-expanded="false" aria-label="Show people for NAVAIR-0001-TELEWORK">▸</button><b class="mono">NAVAIR-0001-TELEWORK</b></td><td>Base Year Labor — Telework</td><td>NAVAIR Systems Support · 0001</td><td class="num">1</td><td class="num"><button class="btn sm quiet">Add people</button></td></tr>
+            <tr class="person"><td><button class="exp" aria-expanded="false" aria-label="Show people for NAVAIR-0002">▸</button><b class="mono">NAVAIR-0002</b></td><td>Option Year 1 Labor</td><td>NAVAIR Systems Support · 0002</td><td class="num">2</td><td class="num"><button class="btn sm quiet">Add people</button></td></tr>
+            <tr class="person"><td><button class="exp" aria-expanded="false" aria-label="Show people for DISA-0001">▸</button><b class="mono">DISA-0001</b></td><td>Cyber Operations Labor</td><td>DISA Cyber Operations · 0001</td><td class="num">2</td><td class="num"><button class="btn sm quiet">Add people</button></td></tr>
+            <tr class="person"><td><span style="display:inline-block;width:28px"></span><b class="mono">DISA-0002</b></td><td>Cloud Infrastructure</td><td>DISA Cyber Operations · 0002</td><td class="num" style="color:var(--warn)">0</td><td class="num"><button class="btn sm quiet">Add people</button></td></tr>
+            <tr class="person"><td><button class="exp" aria-expanded="false" aria-label="Show people for ARMY-0001">▸</button><b class="mono">ARMY-0001</b></td><td>Help Desk Support</td><td>Army IT Support · 0001</td><td class="num">2</td><td class="num"><button class="btn sm quiet">Add people</button></td></tr>
+            <tr class="person"><td><button class="exp" aria-expanded="false" aria-label="Show people for ARMY-0002">▸</button><b class="mono">ARMY-0002</b></td><td>Network Operations</td><td>Army IT Support · 0002</td><td class="num">1</td><td class="num"><button class="btn sm quiet">Add people</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <ul class="callouts">
+        <li><b>Answers "what can Jane charge?" at a glance:</b> one row per person, their codes underneath. Switch to <b>Group by charge code</b> to answer "who can charge NAVAIR-0002?" — a code nobody can charge shows 0 in amber.</li>
+        <li><b>One "Give access" dialog replaces the four-step cascade and two buttons:</b> pick a person, tick codes grouped by contract and CLIN (or a whole CLIN at once). Codes they already have are shown, already ticked.</li>
+        <li><b>People who'd get a blank timesheet are called out</b> ("No charge codes").</li>
+        <li><b>Removed access can be brought back:</b> "Show removed access" lists it with a Restore button (today the only way back is re-assigning from scratch).</li>
+        <li>Inactive people and inactive codes aren't offered in the pickers. Locations read "Onsite", not "onsite".</li>
+      </ul>
+    </div>
+
+    <!-- Labor categories -->
+    <div class="pane" id="a-lcat">
+      <div class="toolbar">
+        <div class="field"><label for="l-q">Search</label><input type="text" id="l-q" class="search" placeholder="Name or category"></div>
+        <div class="field"><label for="l-show">Show</label><select id="l-show"><option>Current and upcoming</option><option>Everything, including ended</option></select></div>
+        <span class="chipf">Labor category: SE-II · CLIN 0001 <button aria-label="Remove filter">✕</button></span>
+        <div class="grow"><button class="btn primary">Assign a labor category</button></div>
+      </div>
+      <div class="notice"><span>⚠</span><span><b>Robert Taylor has two categories on NAVAIR CLIN 0001 from Sep 1 – Sep 30, 2026,</b> so those hours aren't priced. End one of them.</span></div>
+      <div class="panel">
+        <table>
+          <thead><tr><th>Person / category</th><th>CLIN</th><th class="num">Rate today</th><th>From</th><th>Until</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            <tr class="person"><td colspan="7"><b>Jane Smith</b></td></tr>
+            <tr class="child"><td class="lead"><span class="mono">SE-III</span> Senior Software Engineer</td><td>NAVAIR · 0001</td><td class="num">$149.35</td><td>Dec 1, 2025</td><td class="sub2">No end</td><td><span class="badge b-ok">Current</span></td><td class="num"><button class="btn sm quiet">End…</button></td></tr>
+            <tr class="person"><td colspan="7"><b>Robert Taylor</b></td></tr>
+            <tr class="child" style="background:var(--warn-soft)"><td class="lead"><span class="mono">SE-II</span> Software Engineer</td><td>NAVAIR · 0001</td><td class="num">$110.00</td><td>Dec 1, 2025</td><td class="sub2">No end</td><td><span class="badge b-warn">Overlaps</span></td><td class="num"><button class="btn sm quiet">End…</button></td></tr>
+            <tr class="child" style="background:var(--warn-soft)"><td class="lead"><span class="mono">SE-III</span> Senior Software Engineer</td><td>NAVAIR · 0001</td><td class="num">$149.35</td><td>Sep 1, 2026</td><td>Sep 30, 2026</td><td><span class="badge b-warn">Overlaps</span></td><td class="num"><button class="btn sm quiet">End…</button></td></tr>
+            <tr class="person"><td colspan="7"><b>John Doe</b></td></tr>
+            <tr class="child"><td class="lead"><span class="mono">SE-II</span> Software Engineer</td><td>NAVAIR · 0001</td><td class="num">$110.00</td><td>Dec 1, 2025</td><td class="sub2">No end</td><td><span class="badge b-ok">Current</span></td><td class="num"><button class="btn sm quiet">End…</button></td></tr>
+            <tr class="child"><td class="lead"><span class="mono">SE-III</span> Senior Software Engineer</td><td>NAVAIR · 0001</td><td class="num">$149.35</td><td>Jan 1, 2027</td><td class="sub2">No end</td><td><span class="badge b-info">Starts Jan 1</span></td><td class="num"><button class="btn sm quiet">End…</button></td></tr>
+            <tr class="person"><td colspan="7"><b>Emily Davis</b> <span class="count-sub" style="color:var(--warn)">No labor category on Army CLINs 0001, 0002 · <a style="color:var(--accent-text);cursor:pointer">Assign one</a></span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul class="callouts">
+        <li><b>Grouped by person, with a plain status:</b> Current, Starts {date}, Ended, or <b>Overlaps</b> (amber, with the notice above saying what to do). "No end" instead of a blank cell.</li>
+        <li><b>Gaps are visible:</b> someone charging a CLIN with no category on it gets a one-line "Assign one".</li>
+        <li>The filter chips from Labor categories and Unpriced hours links still work, and now <b>survive switching tabs</b>.</li>
+      </ul>
+    </div>
+
+    <!-- Approval scope -->
+    <div class="pane" id="a-scope">
+      <div class="notice info"><span>ℹ</span><span>Admins can approve anyone. A supervisor approves timesheets for people who charge the CLINs below. Supervisors' and admins' own timesheets go to their approver (set on <b>Users</b>).</span></div>
+      <div class="toolbar"><div class="grow"><button class="btn primary">Add CLIN to a supervisor</button></div></div>
+      <div class="panel">
+        <table>
+          <thead><tr><th>Supervisor / CLIN</th><th>SLIN</th><th class="num">People charging it</th><th>Since</th><th></th></tr></thead>
+          <tbody>
+            <tr class="person"><td colspan="4"><b>Sarah Wilson</b><span class="count-sub">2 CLINs · her approver: Admin User</span></td><td class="num"><button class="btn sm quiet">Add CLIN</button></td></tr>
+            <tr class="child"><td class="lead">NAVAIR Systems Support · CLIN 0001 Base Year Labor</td><td class="sub2">All</td><td class="num">4</td><td>Dec 1, 2025</td><td class="num"><button class="btn sm quiet">Remove…</button></td></tr>
+            <tr class="child"><td class="lead">DISA Cyber Operations · CLIN 0001 Cyber Operations Labor</td><td class="sub2">All</td><td class="num">2</td><td>Dec 1, 2025</td><td class="num"><button class="btn sm quiet">Remove…</button></td></tr>
+            <tr class="person"><td colspan="4"><b>Mike Chen</b><span class="count-sub">2 CLINs · his approver: Admin User</span></td><td class="num"><button class="btn sm quiet">Add CLIN</button></td></tr>
+            <tr class="child"><td class="lead">Army IT Support · CLIN 0001 Help Desk Support</td><td class="sub2">All</td><td class="num">2</td><td>Dec 1, 2025</td><td class="num"><button class="btn sm quiet">Remove…</button></td></tr>
+            <tr class="child"><td class="lead">Army IT Support · CLIN 0002 Network Operations</td><td class="sub2">All</td><td class="num">1</td><td>Dec 1, 2025</td><td class="num"><button class="btn sm quiet">Remove…</button></td></tr>
+          </tbody>
+        </table>
+        <div class="legend"><span><b style="color:var(--warn)">Not covered by a supervisor:</b> NAVAIR CLIN 0002, DISA CLIN 0002, Army CLIN 0003 — admins approve these.</span></div>
+      </div>
+      <ul class="callouts">
+        <li><b>Says who approves what, in words,</b> at the top — today the rules live only in the code.</li>
+        <li><b>Grouped by supervisor,</b> with how many people charge each CLIN, an optional SLIN (the server already supports it), and dates instead of timestamps.</li>
+        <li><b>Shows the gaps:</b> CLINs no supervisor covers (admins approve those).</li>
+        <li>Only supervisor scope is listed here; the per-employee CLIN rows that charge-code access creates automatically stay hidden, as today.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ===================== CHARGE CODES ===================== -->
+  <section class="screen" id="codes">
+    <div class="ph"><div><h1>Charge codes</h1><p class="desc">The codes people charge time to: direct codes bill a contract's CLIN; indirect codes cover overhead, G&amp;A and leave.</p></div>
+      <div class="row" id="codes-actions-d"><button class="btn" data-open="dlg-gen">Create codes from CLINs…</button><button class="btn primary">Add charge code</button></div>
+      <div class="row" id="codes-actions-i" hidden><button class="btn primary">Add indirect code</button></div>
+    </div>
+    <div class="tabs" role="tablist" data-tabs="codes">
+      <button class="on" data-pane="c-direct">Direct (7)</button>
+      <button data-pane="c-indirect">Indirect (9)</button>
+    </div>
+
+    <div class="pane on" id="c-direct">
+      <div class="toolbar">
+        <div class="field"><label for="c-q">Search</label><input type="text" id="c-q" class="search" placeholder="Code, name or contract"></div>
+        <div class="field"><label for="c-st">Status</label><select id="c-st"><option>Active</option><option>Inactive</option><option>All</option></select></div>
+      </div>
+      <div class="panel" style="overflow-x:auto">
+        <table class="xt">
+          <thead><tr><th>Charge code</th><th>Name</th><th>Labor category</th><th>Location</th><th>Billable</th><th class="num">People</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            <tr class="grp" data-p="cc-nav"><td colspan="8"><button class="exp" aria-expanded="true" aria-label="Hide NAVAIR Systems Support">▸</button><b>NAVAIR Systems Support</b> <span class="sub2 mono">W58RGZ-21-C-0001</span></td></tr>
+            <tr class="child" data-c="cc-nav"><td><span class="mono">NAVAIR-0001-ONSITE</span><div class="sub2">CLIN 0001</div></td><td>Base Year Labor — Onsite</td><td class="sub2">None</td><td>Onsite</td><td>Yes</td><td class="num">4</td><td><span class="badge b-ok">Active</span></td><td class="num"><div class="menu"><button class="btn sm quiet">Edit</button><button class="btn sm quiet" data-menu aria-label="More actions for NAVAIR-0001-ONSITE">⋯</button><div class="menu-list" hidden><div>Change labor category…</div><div class="sep"></div><div class="danger">Deactivate…</div></div></div></td></tr>
+            <tr class="child" data-c="cc-nav"><td><span class="mono">NAVAIR-0001-TELEWORK</span><div class="sub2">CLIN 0001</div></td><td>Base Year Labor — Telework</td><td><span class="mono">SE-II</span> <span class="sub2">since Dec 1, 2025</span></td><td>Telework</td><td>Yes</td><td class="num">1</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+            <tr class="child" data-c="cc-nav"><td><span class="mono">NAVAIR-0002</span><div class="sub2">CLIN 0002</div></td><td>Option Year 1 Labor</td><td class="sub2">None</td><td>—</td><td>Yes</td><td class="num">2</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+            <tr class="child" data-c="cc-nav"><td colspan="8" class="sub2">CLIN 0003 ODC — Travel has no charge codes.</td></tr>
+            <tr class="grp" data-p="cc-disa"><td colspan="8"><button class="exp" aria-expanded="true" aria-label="Hide DISA Cyber Operations">▸</button><b>DISA Cyber Operations</b> <span class="sub2 mono">HC1028-22-C-0015</span></td></tr>
+            <tr class="child" data-c="cc-disa"><td><span class="mono">DISA-0001</span><div class="sub2">CLIN 0001</div></td><td>Cyber Operations Labor</td><td><span class="mono">SA-II</span> <span class="sub2">since Dec 1, 2025</span></td><td>—</td><td>Yes</td><td class="num">2</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+            <tr class="child" data-c="cc-disa"><td><span class="mono">DISA-0002</span><div class="sub2">CLIN 0002 · SLIN 0002AA</div></td><td>Cloud Infrastructure</td><td class="sub2">None</td><td>Telework</td><td class="sub2">No</td><td class="num" style="color:var(--warn)">0</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+            <tr class="grp" data-p="cc-army"><td colspan="8"><button class="exp" aria-expanded="false" aria-label="Show Army IT Support">▸</button><b>Army IT Support</b> <span class="sub2 mono">W911QX-23-D-0042</span> <span class="sub2">· 2 codes</span></td></tr>
+            <tr class="child" data-c="cc-army" hidden><td><span class="mono">ARMY-0001</span><div class="sub2">CLIN 0001</div></td><td>Help Desk Support</td><td class="sub2">None</td><td>—</td><td>Yes</td><td class="num">2</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+            <tr class="child" data-c="cc-army" hidden><td><span class="mono">ARMY-0002</span><div class="sub2">CLIN 0002</div></td><td>Network Operations</td><td class="sub2">None</td><td>—</td><td>Yes</td><td class="num">1</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul class="callouts">
+        <li><b>Direct and Indirect are tabs on one page</b> (today two nav items, two layouts). The old Indirect codes address redirects to the Indirect tab.</li>
+        <li><b>Grouped by contract,</b> with the CLIN (and SLIN) under each code, and the columns that matter for pricing and billing: <b>Labor category</b> (with its start date), <b>Billable</b>, and <b>People</b> who can charge it (links to Assignments). "Class" moves into the edit form.</li>
+        <li><b>Empty CLINs are said out loud</b> ("CLIN 0003 has no charge codes") — that's what "Create codes from CLINs…" fixes.</li>
+        <li><b>"Create codes from CLINs…" shows what it will create first</b> and lets you untick any (today it runs on one click).</li>
+        <li>The edit form gets a SLIN picker (the server already supports it), field errors next to the fields, and server-side checks for required fields.</li>
+      </ul>
+    </div>
+
+    <div class="pane" id="c-indirect">
+      <div class="toolbar">
+        <div class="field"><label for="i-q">Search</label><input type="text" id="i-q" class="search" placeholder="Code or name"></div>
+        <div class="field"><label for="i-st">Status</label><select id="i-st"><option>Active</option><option>Inactive</option><option>All</option></select></div>
+      </div>
+      <div class="notice"><span>⚠</span><span><b>LV-BRV Bereavement has no pay type,</b> so Payroll export is blocked for anyone who charged it.</span><a>Set pay type</a></div>
+      <div class="panel">
+        <table>
+          <thead><tr><th>Code</th><th>Name</th><th>Pay type</th><th>On timesheets</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            <tr class="grp"><td colspan="6"><b>Leave</b> <span class="sub2">· paid and unpaid time off</span></td></tr>
+            <tr class="child"><td class="mono">LV-AL</td><td>Annual Leave</td><td>Paid time off</td><td>Everyone</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+            <tr class="child"><td class="mono">LV-SL</td><td>Sick Leave</td><td>Sick</td><td>Everyone</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+            <tr class="child"><td class="mono">LV-HOL</td><td>Holiday</td><td>Holiday</td><td>Everyone</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+            <tr class="child"><td class="mono">LV-LWOP</td><td>Leave Without Pay</td><td>Unpaid</td><td>Everyone</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+            <tr class="child"><td class="mono">LV-BRV</td><td>Bereavement</td><td><span class="badge b-bad">Not set</span></td><td>Everyone</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+            <tr class="grp"><td colspan="6"><b>Overhead</b></td></tr>
+            <tr class="child"><td class="mono">OH-001</td><td>General Overhead</td><td class="sub2">—</td><td>Everyone</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+            <tr class="grp"><td colspan="6"><b>G&amp;A</b> <span class="sub2">· general and administrative</span></td></tr>
+            <tr class="child"><td class="mono">GA-001</td><td>General &amp; Administrative</td><td class="sub2">—</td><td>Everyone</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+            <tr class="grp"><td colspan="6"><b>IR&amp;D and B&amp;P</b></td></tr>
+            <tr class="child"><td class="mono">IRAD-001</td><td>Independent Research &amp; Development</td><td class="sub2">—</td><td>Everyone</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+            <tr class="child"><td class="mono">BP-001</td><td>Bid &amp; Proposal</td><td class="sub2">—</td><td class="sub2">Hidden</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+            <tr class="grp"><td colspan="6"><b>Unallowable</b> <span class="sub2">· FAR 31.205</span></td></tr>
+            <tr class="child"><td class="mono">UA-001</td><td>Unallowable Costs</td><td class="sub2">—</td><td>Everyone</td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions">⋯</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul class="callouts">
+        <li><b>Grouped by category</b> (Leave, Overhead, G&amp;A, IR&amp;D and B&amp;P, Unallowable) instead of a Category badge on every row.</li>
+        <li><b>A leave code with no pay type is a notice at the top,</b> not just a red badge in a column, because it blocks Payroll export.</li>
+        <li>"On timesheets" reads <b>Everyone</b> or <b>Hidden</b>; the description moves into the edit form. "Add standard codes" stays as the empty state for a new workspace.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ===================== USERS ===================== -->
+  <section class="screen" id="users">
+    <div class="ph"><div><h1>Users</h1><p class="desc">Everyone who can sign in: their role, who approves their timesheets, and their overtime status.</p></div><button class="btn primary" data-open="dlg-user">Add user</button></div>
+    <div class="toolbar">
+      <div class="field"><label for="u-q">Search</label><input type="text" id="u-q" class="search" placeholder="Name or email"></div>
+      <div class="field"><label for="u-role">Role</label><select id="u-role"><option>All roles</option><option>Admin</option><option>Supervisor</option><option>Employee</option></select></div>
+      <div class="field"><label for="u-st">Status</label><select id="u-st"><option>Active</option><option>Inactive</option><option>All</option></select></div>
+      <div class="grow sub2" style="padding-bottom:8px">7 active · 3 of 10 seats free</div>
+    </div>
+    <div class="panel" style="overflow-x:visible">
+      <table>
+        <thead><tr><th>Name</th><th>Role</th><th>Approver</th><th>Overtime</th><th>Two-step sign-in</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          <tr><td><b>Admin User</b><div class="sub2">admin@cadenzpoint.dev · you</div></td><td>Admin</td><td class="sub2">None — admins approve</td><td>Non-exempt</td><td><span class="badge b-ok">On</span></td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions for Admin User">⋯</button></td></tr>
+          <tr><td><b>Sarah Wilson</b><div class="sub2">sarah.wilson@cadenzpoint.dev</div></td><td>Supervisor</td><td>Admin User</td><td>Exempt</td><td><span class="badge b-ok">On</span></td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions for Sarah Wilson">⋯</button></td></tr>
+          <tr><td><b>Mike Chen</b><div class="sub2">mike.chen@cadenzpoint.dev</div></td><td>Supervisor</td><td>Admin User</td><td>Exempt</td><td><span class="badge b-dim">Off</span></td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions for Mike Chen">⋯</button></td></tr>
+          <tr><td><b>John Doe</b><div class="sub2">john.doe@cadenzpoint.dev</div></td><td>Employee</td><td class="sub2">CLIN supervisors</td><td>Non-exempt</td><td><span class="badge b-dim">Off</span></td><td><span class="badge b-warn">Locked</span> <span class="sub2">· 11 min</span></td><td class="num"><div class="menu"><button class="btn sm quiet">Edit</button><button class="btn sm quiet" data-menu aria-label="More actions for John Doe">⋯</button>
+            <div class="menu-list" hidden><div>Unlock now</div><div>Reset password…</div><div>Mark as exempt…</div><div class="sep"></div><div class="danger">Deactivate…</div></div></div></td></tr>
+          <tr><td><b>Jane Smith</b><div class="sub2">jane.smith@cadenzpoint.dev</div></td><td>Employee</td><td class="sub2">CLIN supervisors</td><td>Exempt</td><td><span class="badge b-dim">Off</span></td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions for Jane Smith">⋯</button></td></tr>
+          <tr><td><b>Emily Davis</b><div class="sub2">emily.davis@cadenzpoint.dev</div></td><td>Employee</td><td class="sub2">CLIN supervisors</td><td>Exempt</td><td><span class="badge b-dim">Off</span></td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions for Emily Davis">⋯</button></td></tr>
+          <tr><td><b>Robert Taylor</b><div class="sub2">robert.taylor@cadenzpoint.dev</div></td><td>Employee</td><td class="sub2">CLIN supervisors</td><td>Non-exempt</td><td><span class="badge b-dim">Off</span></td><td><span class="badge b-ok">Active</span></td><td class="num"><button class="btn sm quiet">Edit</button> <button class="btn sm quiet" aria-label="More actions for Robert Taylor">⋯</button></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul class="callouts">
+      <li><b>The columns answer real questions:</b> who approves this person (today only visible inside Edit), are they exempt from overtime, have they turned on two-step sign-in, and <b>are they locked out</b> (5 wrong passwords lock an account for 15 minutes — today "Unlock" works blind).</li>
+      <li><b>The ⋯ menu only offers what applies:</b> "Unlock now" appears only for a locked account; Reactivate only for an inactive one.</li>
+      <li><b>Email moves under the name</b> so rows stay readable at narrow widths. Role is plain text, not a coloured badge.</li>
+      <li><b>Add user</b> (open it) asks for overtime status up front (an Approver field appears for supervisors and admins), shows the password rules before you type, and puts errors in one summary at the top plus next to each field.</li>
+      <li><b>Not in this mockup, by design:</b> an invite email instead of an admin-set password (Q3, waits for the email provider), and an admin reset of someone's two-step sign-in (doesn't exist today; say if you want it).</li>
+    </ul>
+  </section>
+
+  <!-- ===================== AUDIT TRAIL ===================== -->
+  <section class="screen" id="audit">
+    <div class="ph"><div><h1>Audit trail</h1><p class="desc">Every hour entry and every change to it, and every submit, approval and return — who, when, and why.</p></div><button class="btn">Download CSV</button></div>
+    <div class="toolbar">
+      <div class="field"><label for="au-r">Dates</label><select id="au-r"><option>Last 30 days · Oct 7 – Nov 5</option><option>Last pay period</option><option>This pay period</option><option>Custom dates…</option></select></div>
+      <div class="field"><label for="au-e">Employee</label><select id="au-e"><option>Everyone</option><option>Jane Smith</option></select></div>
+      <div class="field au-only"><label for="au-c">Contract</label><select id="au-c"><option>All contracts</option><option>NAVAIR Systems Support</option><option>Indirect</option></select></div>
+      <div class="field au-only"><label for="au-rs">Reason</label><select id="au-rs"><option>All reasons</option><option>Correction</option><option>Late entry</option><option>Transfer between accounts</option><option>Supervisor-directed change</option><option>Other</option><option>Imported</option></select></div>
+      <label class="au-only" style="font-weight:500;display:flex;gap:6px;align-items:center;margin:0 0 8px"><input type="checkbox"> Changed entries only</label>
+    </div>
+    <div class="tabs" role="tablist" data-tabs="audit">
+      <button class="on" data-pane="au-entries">Hour entries (312)</button>
+      <button data-pane="au-events">Timesheet events (41)</button>
+      <button data-pane="au-admin">Admin changes (6)<span class="tag-new">Proposed</span></button>
+    </div>
+
+    <div class="pane on" id="au-entries">
+      <div class="panel strip" style="grid-template-columns:repeat(4,1fr)">
+        <div><div class="n">312</div><div class="l">Entries in this view</div></div>
+        <div><div class="n">9</div><div class="l">Changed after first entry</div></div>
+        <div><div class="n">4</div><div class="l">Entered late</div></div>
+        <div><div class="n">7</div><div class="l">People</div></div>
+      </div>
+      <div class="panel" style="overflow-x:auto">
+        <table>
+          <thead><tr><th>Work date</th><th>Employee</th><th>Charge code</th><th class="num">Hours</th><th>Version</th><th>Reason</th><th>Comment</th><th>Entered</th></tr></thead>
+          <tbody>
+            <tr class="chg clickable" data-open="dlg-rev"><td>Oct 13, 2026</td><td>Jane Smith</td><td class="mono">NAVAIR-0001-ONSITE</td><td class="num">6.00</td><td><span class="revn up">2</span></td><td>Correction</td><td>Forgot the afternoon site visit.</td><td>Oct 15, 9:12 AM<div class="sub2">by Jane Smith</div></td></tr>
+            <tr class="chg clickable" data-open="dlg-rev"><td>Oct 15, 2026</td><td>Jane Smith</td><td class="mono">NAVAIR-0002</td><td class="num">2.00</td><td><span class="revn">1</span></td><td>Late entry</td><td>Entered the next morning.</td><td>Oct 16, 8:03 AM<div class="sub2">by Jane Smith</div></td></tr>
+            <tr class="clickable" data-open="dlg-rev"><td>Oct 15, 2026</td><td>John Doe</td><td class="mono">NAVAIR-0001-ONSITE</td><td class="num">8.00</td><td><span class="revn">1</span></td><td class="sub2">—</td><td class="sub2">—</td><td>Oct 15, 5:41 PM<div class="sub2">by John Doe</div></td></tr>
+            <tr class="chg clickable" data-open="dlg-rev"><td>Oct 6, 2026</td><td>Jane Smith</td><td class="mono">NAVAIR-0001-ONSITE</td><td class="num">5.50</td><td><span class="revn up">2</span></td><td>Correction</td><td>Left early for a doctor's appointment.</td><td>Oct 7, 10:20 AM<div class="sub2">by Jane Smith</div></td></tr>
+            <tr class="chg clickable" data-open="dlg-rev"><td>Oct 6, 2026</td><td>Robert Taylor</td><td class="mono">NAVAIR-0001-ONSITE</td><td class="num">8.00</td><td><span class="revn up">2</span></td><td>Correction</td><td>Added the Tuesday site visit.</td><td>Oct 18, 2:15 PM<div class="sub2">by Robert Taylor</div></td></tr>
+            <tr class="clickable" data-open="dlg-rev"><td>Oct 2, 2026</td><td>Emily Davis</td><td class="mono">LV-AL</td><td class="num">8.00</td><td><span class="revn">1</span></td><td class="sub2">—</td><td class="sub2">—</td><td>Oct 2, 4:58 PM<div class="sub2">by Emily Davis</div></td></tr>
+            <tr class="clickable"><td>Oct 8, 2026</td><td>Mike Chen</td><td class="mono">ARMY-0001</td><td class="num">8.00</td><td><span class="revn">1</span></td><td>Imported</td><td class="sub2">—</td><td>Oct 9, 11:00 AM<div class="sub2">import · timesheets-2026.csv</div></td></tr>
+          </tbody>
+        </table>
+        <div class="legend"><span><span style="display:inline-block;width:3px;height:12px;background:var(--warn);vertical-align:-1px;margin-right:6px"></span>Changed or entered late</span><span>Select a row for its full history.</span><span style="margin-left:auto">Showing 1–50 of 312 · <a style="color:var(--accent-text);cursor:pointer">Next ›</a></span></div>
+      </div>
+      <ul class="callouts">
+        <li><b>Shows something right away:</b> the last 30 days load with the page (today nothing appears until you press Search). Filters apply as you change them.</li>
+        <li><b>The numbers follow the filters</b> — today the four cards always count the whole workspace, and "Corrections" there means something different from "Corrections only".</li>
+        <li><b>Comment is a visible column,</b> Hours are right-aligned, reasons read in plain words ("Late entry", not "Late Entry (&gt;24hrs)"). Changed rows get an amber edge instead of a fill that failed dark-mode contrast.</li>
+        <li><b>Download CSV</b> exports exactly what the filters select (new; DCAA reviewers ask for it). Paging replaces the hard 500-row cut-off.</li>
+        <li>Select a row for its revision history (open one).</li>
+      </ul>
+    </div>
+
+    <div class="pane" id="au-events">
+      <div class="panel">
+        <table>
+          <thead><tr><th>When</th><th>Employee</th><th>Pay period</th><th>Event</th><th>By</th><th>Comment</th></tr></thead>
+          <tbody>
+            <tr><td>Oct 19, 9:40 AM</td><td>Robert Taylor</td><td>Oct 1 – 15, 2026</td><td><span class="badge b-info">Submitted</span> <span class="sub2">· 2nd time</span></td><td>Robert Taylor</td><td>Added Tuesday's site visit.</td></tr>
+            <tr><td>Oct 18, 1:05 PM</td><td>Robert Taylor</td><td>Oct 1 – 15, 2026</td><td><span class="badge b-warn">Returned</span></td><td>Sarah Wilson</td><td>Please add Tuesday's site visit hours.</td></tr>
+            <tr><td>Oct 17, 4:12 PM</td><td>John Doe</td><td>Oct 1 – 15, 2026</td><td><span class="badge b-ok">Approved</span></td><td>Sarah Wilson</td><td>Approved — looks good</td></tr>
+            <tr><td>Oct 17, 8:30 AM</td><td>Robert Taylor</td><td>Oct 1 – 15, 2026</td><td><span class="badge b-info">Submitted</span></td><td>Robert Taylor</td><td>Timesheet complete</td></tr>
+            <tr><td>Oct 16, 5:02 PM</td><td>Admin User</td><td>Oct 1 – 15, 2026</td><td><span class="badge b-ok">Approved</span> <span class="sub2">· self-approved</span></td><td>Admin User</td><td class="sub2">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul class="callouts">
+        <li><b>A sortable table with times,</b> not a plain list. "Returned", never "Rejected" (the stored data and the signed-timesheet PDF keep their wording).</li>
+        <li><b>Filters that don't apply are hidden on this tab</b> (contract, reason, changed only) — today they're silently ignored.</li>
+        <li>Self-approvals and resubmissions are labelled, so an auditor sees them without opening anything.</li>
+      </ul>
+    </div>
+
+    <div class="pane" id="au-admin">
+      <div class="notice info"><span>ℹ</span><span><b>Proposed:</b> these changes are already recorded, but no screen shows them today. Your call whether this tab is in scope.</span></div>
+      <div class="panel">
+        <table>
+          <thead><tr><th>When</th><th>Change</th><th>Details</th><th>By</th></tr></thead>
+          <tbody>
+            <tr><td>Oct 30, 3:10 PM</td><td>Rate changed</td><td>SE-III Senior Software Engineer · $145.00 → $149.35 from Jan 1, 2027</td><td>Admin User</td></tr>
+            <tr><td>Oct 21, 11:02 AM</td><td>Approver changed</td><td>Mike Chen · None → Admin User</td><td>Admin User</td></tr>
+            <tr><td>Oct 12, 9:15 AM</td><td>User deactivated</td><td>Lisa Anderson</td><td>Admin User</td></tr>
+            <tr><td>Oct 3, 2:44 PM</td><td>Labor category changed</td><td>NAVAIR-0001-TELEWORK · none → SE-II from Dec 1, 2025 · "Priced per the mod 3 rate table."</td><td>Admin User</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+  </main>
+</div>
+
+<!-- ===================== DIALOGS ===================== -->
+<div class="scrim" id="scrim"></div>
+
+<div class="dialog modal" id="dlg-access" role="dialog" aria-modal="true" aria-labelledby="dlg-access-t">
+  <header><h2 id="dlg-access-t">Give access to charge codes</h2><button class="x" data-close aria-label="Close">×</button></header>
+  <div class="body">
+    <div class="field"><label for="ga-p">Person<span class="req" aria-hidden="true">*</span></label><select id="ga-p"><option>Robert Taylor</option><option>Jane Smith</option><option>John Doe</option></select><span class="help">Active people only.</span></div>
+    <div class="field"><label>Charge codes<span class="req" aria-hidden="true">*</span></label>
+      <div class="pick">
+        <div class="g"><input type="checkbox" aria-label="All of NAVAIR CLIN 0001"> NAVAIR Systems Support · CLIN 0001 Base Year Labor</div>
+        <div class="c had"><input type="checkbox" checked disabled aria-label="NAVAIR-0001-ONSITE, already has access"> <span class="mono">NAVAIR-0001-ONSITE</span> — Onsite <span class="sub2">· already has access</span></div>
+        <div class="c"><input type="checkbox" checked aria-label="NAVAIR-0001-TELEWORK"> <span class="mono">NAVAIR-0001-TELEWORK</span> — Telework</div>
+        <div class="g"><input type="checkbox" aria-label="All of NAVAIR CLIN 0002"> NAVAIR Systems Support · CLIN 0002 Option Year 1 Labor</div>
+        <div class="c"><input type="checkbox" aria-label="NAVAIR-0002"> <span class="mono">NAVAIR-0002</span> — Option Year 1 Labor</div>
+        <div class="g"><input type="checkbox" aria-label="All of DISA CLIN 0001"> DISA Cyber Operations · CLIN 0001 Cyber Operations Labor</div>
+        <div class="c had"><input type="checkbox" checked disabled aria-label="DISA-0001, already has access"> <span class="mono">DISA-0001</span> <span class="sub2">· already has access</span></div>
+        <div class="g"><input type="checkbox" aria-label="All of DISA CLIN 0002"> DISA Cyber Operations · CLIN 0002 Cloud Infrastructure</div>
+        <div class="c"><input type="checkbox" aria-label="DISA-0002"> <span class="mono">DISA-0002</span> — Cloud Infrastructure</div>
+      </div>
+      <span class="help">Ticking a CLIN ticks all its codes. This only adds codes to Robert's timesheet; it doesn't change what he can approve.</span>
+    </div>
+  </div>
+  <footer><span class="sub2" style="margin-right:auto;align-self:center">1 code selected</span><button class="btn" data-close>Cancel</button><button class="btn primary">Give access to 1 code</button></footer>
+</div>
+
+<div class="dialog modal" id="dlg-gen" role="dialog" aria-modal="true" aria-labelledby="dlg-gen-t">
+  <header><h2 id="dlg-gen-t">Create codes from CLINs</h2><button class="x" data-close aria-label="Close">×</button></header>
+  <div class="body">
+    <p style="margin:0">These active CLINs have no charge code yet. Each ticked one gets a code named after the CLIN. You can rename them afterwards.</p>
+    <div class="panel">
+      <table>
+        <thead><tr><th style="width:36px"></th><th>New code</th><th>Name</th><th>CLIN</th></tr></thead>
+        <tbody>
+          <tr><td><input type="checkbox" checked aria-label="Create W58RGZ-21-C-0001-0003"></td><td class="mono">W58RGZ-21-C-0001-0003</td><td>ODC — Travel</td><td>NAVAIR · 0003</td></tr>
+          <tr><td><input type="checkbox" checked aria-label="Create W911QX-23-D-0042-0003"></td><td class="mono">W911QX-23-D-0042-0003</td><td>Training &amp; Transition</td><td>Army · 0003</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="help" style="margin:0">They start billable, with no labor category, and nobody has access yet — give access on Assignments.</p>
+  </div>
+  <footer><button class="btn" data-close>Cancel</button><button class="btn primary">Create 2 codes</button></footer>
+</div>
+
+<div class="dialog drawer" id="dlg-user" role="dialog" aria-modal="true" aria-labelledby="dlg-user-t">
+  <header><h2 id="dlg-user-t">Add user</h2><button class="x" data-close aria-label="Close">×</button></header>
+  <div class="body">
+    <div class="alert" role="alert"><b>Fix 2 things to add this user:</b><ul style="margin:4px 0 0;padding-left:18px"><li><a style="color:inherit" href="#nu-email">Email is already used by another user</a></li><li><a style="color:inherit" href="#nu-flsa">Choose an overtime status</a></li></ul></div>
+    <div class="field"><label for="nu-name">Full name<span class="req" aria-hidden="true">*</span></label><input type="text" id="nu-name" value="Priya Natarajan"></div>
+    <div class="field"><label for="nu-email">Email<span class="req" aria-hidden="true">*</span></label><input type="email" id="nu-email" value="jane.smith@cadenzpoint.dev" aria-invalid="true" aria-describedby="nu-email-e"><span class="fielderr" id="nu-email-e">Email is already used by another user.</span></div>
+    <div class="field"><label for="nu-role">Role<span class="req" aria-hidden="true">*</span></label><select id="nu-role"><option>Employee — records time</option><option>Supervisor — records time and approves their CLINs</option><option>Admin — manages everything</option></select></div>
+    <div class="field" id="nu-flsa"><label>Overtime status<span class="req" aria-hidden="true">*</span></label>
+      <div class="radios"><label><input type="radio" name="flsa"> Non-exempt (paid overtime)</label><label><input type="radio" name="flsa"> Exempt</label></div>
+      <span class="fielderr">Choose an overtime status.</span><span class="help">Payroll export uses this to work out overtime.</span></div>
+    <div class="field"><label for="nu-pw">Temporary password<span class="req" aria-hidden="true">*</span></label><input type="password" id="nu-pw" value="harbor-light" aria-describedby="nu-pw-r">
+      <ul class="rules" id="nu-pw-r"><li class="ok">✓ At least 8 characters</li></ul><span class="help">Share it with them privately. They can change it after signing in.</span></div>
+  </div>
+  <footer><span class="sub2" style="margin-right:auto;align-self:center">Uses 1 of 3 free seats</span><button class="btn" data-close>Cancel</button><button class="btn primary">Add user</button></footer>
+</div>
+
+<div class="dialog drawer" id="dlg-rev" role="dialog" aria-modal="true" aria-labelledby="dlg-rev-t">
+  <header><h2 id="dlg-rev-t">Entry history</h2><button class="x" data-close aria-label="Close">×</button></header>
+  <div class="body">
+    <dl class="kv"><dt>Employee</dt><dd>Jane Smith</dd><dt>Work date</dt><dd>Tue Oct 13, 2026</dd><dt>Charge code</dt><dd><span class="mono">NAVAIR-0001-ONSITE</span></dd><dt>Contract</dt><dd>NAVAIR Systems Support · CLIN 0001</dd><dt>Pay period</dt><dd>Oct 1 – 15, 2026 · <span class="badge b-ok">Approved</span></dd></dl>
+    <div class="timeline">
+      <div class="rev cur"><b>Version 2 · 6.00 hours</b> <span class="sub2">· current</span><div>Correction · “Forgot the afternoon site visit.”</div><div class="sub2">Entered Oct 15, 2026, 9:12 AM by Jane Smith</div></div>
+      <div class="rev"><b>Version 1 · 5.00 hours</b><div class="sub2">Entered Oct 13, 2026, 5:30 PM by Jane Smith</div></div>
+    </div>
+    <p class="help" style="margin:0">Entries are never overwritten: each change adds a version with its reason.</p>
+  </div>
+  <footer><button class="btn" data-close>Close</button></footer>
+</div>
+
+<div class="switcher" role="toolbar" aria-label="Mockup screens">
+  <button data-go="assign" class="on">Assignments</button>
+  <button data-go="codes">Charge codes</button>
+  <button data-go="users">Users</button>
+  <button data-go="audit">Audit trail</button>
+  <button id="theme">Light / dark</button>
+</div>
+
+<script>
+function go(id) {
+  document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('on', s.id === id));
+  document.querySelectorAll('.switcher [data-go]').forEach((b) => b.classList.toggle('on', b.dataset.go === id));
+  document.querySelectorAll('#nav [data-go]').forEach((a) => a.classList.toggle('on', a.dataset.go === id));
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll('[data-go]').forEach((el) => el.addEventListener('click', () => go(el.dataset.go)));
+document.getElementById('theme').onclick = () => { const h = document.documentElement; h.dataset.theme = h.dataset.theme === 'dark' ? 'light' : 'dark'; };
+// tabs
+document.querySelectorAll('[data-tabs]').forEach((tl) => tl.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+  tl.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+  tl.querySelectorAll('button').forEach((x) => document.getElementById(x.dataset.pane).classList.toggle('on', x === b));
+  if (tl.dataset.tabs === 'codes') { const d = b.dataset.pane === 'c-direct'; document.getElementById('codes-actions-d').hidden = !d; document.getElementById('codes-actions-i').hidden = d; }
+  if (tl.dataset.tabs === 'audit') { document.querySelectorAll('.au-only').forEach((el) => (el.style.display = b.dataset.pane === 'au-entries' ? '' : 'none')); }
+})));
+// segmented group-by
+document.querySelectorAll('[data-seg]').forEach((sg) => sg.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+  sg.querySelectorAll('button').forEach((x) => { x.classList.toggle('on', x === b); document.getElementById(x.dataset.show).hidden = x !== b; });
+})));
+// expand rows
+document.querySelectorAll('.exp').forEach((b) => b.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const open = b.getAttribute('aria-expanded') !== 'true';
+  b.setAttribute('aria-expanded', String(open));
+  b.setAttribute('aria-label', (open ? 'Hide' : 'Show') + b.getAttribute('aria-label').slice(4));
+  const key = b.closest('tr').dataset.p; if (!key) return;
+  const showRemoved = document.getElementById('showRemoved').checked;
+  b.closest('table').querySelectorAll(`tr[data-c="${key}"]`).forEach((r) => (r.hidden = !open || (r.hasAttribute('data-removed') && !showRemoved)));
+}));
+document.getElementById('showRemoved').addEventListener('change', (e) => document.querySelectorAll('tr[data-removed]').forEach((r) => (r.hidden = !e.target.checked)));
+// menus
+document.querySelectorAll('[data-menu]').forEach((b) => b.addEventListener('click', (e) => {
+  e.stopPropagation(); const l = b.nextElementSibling; const was = l.hidden;
+  document.querySelectorAll('.menu-list').forEach((m) => (m.hidden = true)); l.hidden = !was;
+}));
+document.addEventListener('click', () => document.querySelectorAll('.menu-list').forEach((m) => (m.hidden = true)));
+// dialogs
+const scrim = document.getElementById('scrim');
+function closeAll() { document.querySelectorAll('.dialog').forEach((d) => d.classList.remove('on')); scrim.classList.remove('on'); }
+document.querySelectorAll('[data-open]').forEach((el) => el.addEventListener('click', () => { closeAll(); document.getElementById(el.dataset.open).classList.add('on'); scrim.classList.add('on'); }));
+document.querySelectorAll('[data-close]').forEach((el) => el.addEventListener('click', closeAll));
+scrim.addEventListener('click', closeAll);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAll(); });
+go('assign');
+</script>
+</body>
+</html>
