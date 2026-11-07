@@ -5,7 +5,7 @@ import { getTestDb, createTestUser, createTestContract, createTestClin, createTe
 
 /**
  * feature-plan-ux-people-codes.md §3.2–§3.4: CC-4 (peopleCount and chargeable), CC-6 (Create codes from CLINs), CC-7
- * (create / update checks), against Postgres.
+ * (create / update checks), AS-3 (assignChargeCodesToUser) and AS-8 (assignUserToClin), against Postgres.
  */
 
 // ---------------------------------------------------------------------------
@@ -67,7 +67,9 @@ vi.mock('@/lib/email/send', () => ({
 }));
 
 // Imports AFTER the mocks — vitest hoists vi.mock, so this is safe at module top level.
-import { autobridgeChargeCodesFromClins, createChargeCode, listChargeCodes, previewAutobridgeChargeCodes, updateChargeCode } from '@/server/actions/charge-codes';
+import { assignChargeCodesToUser, autobridgeChargeCodesFromClins, createChargeCode, listChargeCodes, previewAutobridgeChargeCodes, updateChargeCode } from '@/server/actions/charge-codes';
+import { assignUserToClin } from '@/server/actions/assignments';
+import { and } from 'drizzle-orm';
 
 function actingAs(user: { id: string; role: string; email: string; fullName: string }) {
   sessionState.user = { id: user.id, role: user.role, email: user.email, fullName: user.fullName };
@@ -142,5 +144,41 @@ describe('Charge codes (UX-4c §3)', () => {
     await expectOk(updateChargeCode(made.id, { clinId: c2.id, slinId: s2.id }));
     const [row] = await db.select().from(schema.chargeCodes).where(eq(schema.chargeCodes.id, made.id));
     expect([row.clinId, row.slinId]).toEqual([c2.id, s2.id]);
+  });
+
+  it('AS-3: an inactive person refused; one non-chargeable code → nothing written; an inactive row reactivated; assigned excludes held', async () => {
+    const db = getTestDb();
+    const contract = await createTestContract();
+    const live = await createTestClin(contract.id);
+    const closed = await createTestClin(contract.id, { status: 'inactive' });
+    const [a, b, held] = [await createTestChargeCode(live.id), await createTestChargeCode(live.id), await createTestChargeCode(live.id)];
+    const dead = await createTestChargeCode(closed.id);
+    const person = await createTestUser();
+    const gone = await createTestUser({ isActive: false });
+    await expectFailure(assignChargeCodesToUser({ userId: gone.id, chargeCodeIds: [a.id] }), 'validation', /^Choose an active person\.$/);
+    await expectFailure(assignChargeCodesToUser({ userId: person.id, chargeCodeIds: [a.id, dead.id] }), 'validation', new RegExp(`^${dead.code} can't be charged right now\\.`));
+    const rowsFor = () => db.select().from(schema.userChargeCodes).where(eq(schema.userChargeCodes.userId, person.id));
+    expect(await rowsFor()).toHaveLength(0);
+    await db.insert(schema.userChargeCodes).values([
+      { userId: person.id, chargeCodeId: held.id, isActive: true, assignedBy: admin.id },
+      { userId: person.id, chargeCodeId: b.id, isActive: false },
+    ]);
+    expect(await expectOk(assignChargeCodesToUser({ userId: person.id, chargeCodeIds: [a.id, b.id, held.id] }))).toEqual({ assigned: 2 });
+    const rows = await rowsFor();
+    expect(rows.every((r) => r.isActive)).toBe(true);
+    expect(rows.find((r) => r.chargeCodeId === b.id)!.isActive).toBe(true);           // reactivated
+    const [clinRow] = await db.select().from(schema.userAssignments).where(and(eq(schema.userAssignments.userId, person.id), eq(schema.userAssignments.clinId, live.id)));
+    expect(clinRow.isActive).toBe(true);
+  });
+
+  it('AS-8: assignUserToClin refuses an inactive person and a non-supervisor', async () => {
+    const clin = await createTestClin((await createTestContract()).id);
+    const off = await createTestUser({ role: 'supervisor', isActive: false });
+    const emp = await createTestUser({ role: 'employee' });
+    const sup = await createTestUser({ role: 'supervisor' });
+    await expectFailure(assignUserToClin({ userId: off.id, clinId: clin.id }), 'validation', /^Choose an active supervisor\.$/);
+    await expectFailure(assignUserToClin({ userId: emp.id, clinId: clin.id }), 'validation', /^Choose an active supervisor\.$/);
+    const row = await expectOk(assignUserToClin({ userId: sup.id, clinId: clin.id }));
+    expect([row.isActive, row.slinId]).toEqual([true, null]);
   });
 });

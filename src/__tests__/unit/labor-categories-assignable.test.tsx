@@ -38,6 +38,8 @@ async function render() {
       onRemoveFilter={() => {}}
     />,
   );
+  // UX-4c §4.3: the form is in a Modal opened by "Assign a labor category".
+  await click([...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Assign a labor category'));
 }
 
 describe('the assign form (C4, moved)', () => {
@@ -49,7 +51,7 @@ describe('the assign form (C4, moved)', () => {
     const listbox = document.getElementById(input.getAttribute('aria-controls')!)!;
     const options = [...listbox.querySelectorAll('[role="option"]')].map((o) => o.textContent);
     expect(options).toEqual(['NAVAIR — 0001 — SE-I: SE-I title ($110.00/hr)']);
-    const row = m!.container.querySelector('tbody tr')!;
+    const row = m!.container.querySelector('tbody tr[data-row="lcat"]')!;
     expect(row.textContent).toContain('$110.00/hr');
   });
 });

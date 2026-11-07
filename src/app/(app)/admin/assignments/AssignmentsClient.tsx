@@ -1,129 +1,34 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import { useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import {
-  Select,
-  Group,
-  Title,
-  Badge,
-  Paper,
-  Tabs,
-  Text,
-} from '@mantine/core';
-import { RowActions } from '@/components/ui/RowActions';
-import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
-import { useAppTable } from '@/components/table/mrtDefaults';
-import { getClinsByContract } from '@/server/actions/clins';
-import { assignUserToClin, unassignUserFromClin, getAssignments } from '@/server/actions/assignments';
-import {
-  assignChargeCodeToUser,
-  unassignChargeCodeFromUser,
-  assignAllUnderClin,
-  getChargeCodeAssignments,
-} from '@/server/actions/charge-codes';
-import { formatDateTime } from '@/lib/format';
-import { runAction } from '@/lib/run-action';
-import { notifications } from '@mantine/notifications';
-import { RECORD_STATUS_COLOR, WORK_LOCATION_COLOR } from '@/lib/ui/status-colors';
-import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { Tabs } from '@mantine/core';
+import { getAssignments } from '@/server/actions/assignments';
+import { getChargeCodeAssignments } from '@/server/actions/charge-codes';
+import { toastError } from '@/lib/toast';
 import { PageHeader } from '@/components/ui/PageHeader';
 import type { CalendarDate } from '@/lib/calendar-date';
-import { WriteButton } from '@/components/shell/WorkspaceMode';
 import { parseAssignmentsParams, type AssignmentsTab } from '@/lib/assignments-params';
+import { ChargeCodeAccessPanel, type CodeAccessRow } from './ChargeCodeAccessPanel';
+import { ApprovalScopePanel, type ActiveClin, type ScopeAssignment } from './ApprovalScopePanel';
+import type { AccessCode, AccessPerson } from './GiveAccessModal';
 import {
   LaborCategoryAssignmentsPanel, type AssignableLcat, type LcatAssignment, type LcatFilterKey,
 } from './LaborCategoryAssignmentsPanel';
 
-type User = {
-  id: string;
-  email: string;
-  fullName: string;
-  role: 'admin' | 'supervisor' | 'employee';
-  isActive: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-type Contract = {
-  id: string;
-  contractNumber: string;
-  name: string;
-  description: string | null;
-  status: 'active' | 'inactive' | 'closed';
-  startDate: CalendarDate | null;
-  endDate: CalendarDate | null;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-type Clin = {
-  id: string;
-  contractId: string;
-  clinNumber: string;
-  description: string | null;
-  status: 'active' | 'inactive' | 'closed';
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-type Assignment = {
-  id: string;
-  userId: string;
-  clinId: string;
-  slinId: string | null;
-  isActive: boolean;
-  assignedAt: Date;
-  userName: string;
-  userEmail: string;
-  clinNumber: string;
-  clinDescription: string | null;
-  contractName: string;
-  contractNumber: string;
-  slinNumber: string | null;
-  slinDescription: string | null;
-};
-
-type ChargeCode = {
-  id: string;
-  code: string;
-  name: string;
-  description: string | null;
-  clinId: string;
-  clinNumber: string;
-  slinId: string | null;
-  contractName: string;
-  contractNumber: string;
-  laborCategoryId: string | null;
-  classId: string | null;
-  className: string | null;
-  workLocation: 'onsite' | 'telework' | 'other' | null;
-  billable: boolean;
-  isActive: boolean;
-  createdAt: Date;
-};
-
-type ChargeCodeAssignment = {
-  userId: string;
-  userName: string;
-  chargeCodeId: string;
-  code: string;
-  name: string;
-  clinNumber: string;
-  contractName: string;
-  contractNumber: string;
-  workLocation: 'onsite' | 'telework' | 'other' | null;
-  isActive: boolean;
-  assignedAt: Date;
-};
+type User = AccessPerson & { email: string; approverId?: string | null };
+type Assignment = ScopeAssignment & { slinId: string | null; userEmail: string; slinNumber: string | null; slinDescription: string | null };
 
 type Props = {
   initialAssignments: Assignment[];
   users: User[];
-  contracts: Contract[];
-  chargeCodes: ChargeCode[];
-  initialChargeCodeAssignments: ChargeCodeAssignment[];
+  /** Active CLINs on active contracts (§4.1: the pickers and the uncovered line). */
+  activeClins: ActiveClin[];
+  chargeCodes: AccessCode[];
+  initialChargeCodeAssignments: CodeAccessRow[];
   workspaceTimezone: string;
+  /** supervisorId → their effective approver's name (null = admins), computed on the server (§4.4). */
+  approverNames?: Record<string, string | null>;
   /** The server's allowlisted `tab` — used only when the URL can't be read (the client re-derives it). */
   initialTab: AssignmentsTab;
   /** The "Labor categories" tab's data (feature-plan-ux-kit-contracts.md §4.3). */
@@ -131,21 +36,28 @@ type Props = {
     initialAssignments: LcatAssignment[];
     assignableLcats: AssignableLcat[];
     rateByCategory: Record<string, string | null>;
-    categoryNames: Record<string, { lcatCode: string; clinNumber: string }>;
+    categoryNames: Record<string, { lcatCode: string; clinNumber: string; slinNumber?: string | null }>;
     today: CalendarDate;
+    overlapIds?: string[];
   };
 };
 
-export function AssignmentsClient({ initialAssignments, users, contracts, chargeCodes, initialChargeCodeAssignments, workspaceTimezone, initialTab, lcat }: Props) {
-  // §4.3: the tab and the labor-category filters live in the URL. A tab switch or a removed chip REPLACES the URL with
-  // window.history.replaceState (no server round-trip; Next keeps useSearchParams in sync), so switching tabs drops
-  // the filters.
+/**
+ * Assignments (feature-plan-ux-people-codes.md §4): Charge code access | Labor categories | Approval scope. The tab and
+ * the labor-category filters live in the URL; a tab switch REPLACES only `tab` (history.replaceState — Next keeps
+ * useSearchParams in sync), so the filters survive it (§4.1). After every write the panel's data is refetched into state.
+ */
+export function AssignmentsClient({
+  initialAssignments, users, activeClins, chargeCodes, initialChargeCodeAssignments, workspaceTimezone, approverNames = {}, initialTab, lcat,
+}: Props) {
   const searchParams = useSearchParams();
   const params = parseAssignmentsParams((k) => searchParams?.get(k));
   const tab = searchParams ? params.tab : initialTab;
   function switchTab(value: string | null) {
     if (!value || value === tab) return;
-    window.history.replaceState(null, '', `?tab=${encodeURIComponent(value)}`);
+    const next = new URLSearchParams(searchParams?.toString() ?? '');
+    next.set('tab', value); // laborCategoryId, userId and assignments are kept (§4.1)
+    window.history.replaceState(null, '', `?${next.toString()}`);
   }
   function removeFilter(key: LcatFilterKey) {
     const next = new URLSearchParams(searchParams?.toString() ?? '');
@@ -154,387 +66,41 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
     window.history.replaceState(null, '', `?${next.toString()}`);
   }
 
-  const [isPending, startTransition] = useTransition();
   const [assignments, setAssignments] = useState<Assignment[]>(initialAssignments);
-
-  // Form state
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
-  const [selectedContractId, setSelectedContractId] = useState<string | null>(null);
-  const [selectedClinId, setSelectedClinId] = useState<string | null>(null);
-  const [clinOptions, setClinOptions] = useState<{ value: string; label: string }[]>([]);
-  const [confirmClinTarget, setConfirmClinTarget] = useState<Assignment | null>(null);
-
-  // Charge-code assignment section state
-  const [ccAssignments, setCcAssignments] = useState<ChargeCodeAssignment[]>(initialChargeCodeAssignments);
-  const [ccIsPending, startCcTransition] = useTransition();
-  const [ccUserId, setCcUserId] = useState<string | null>(null);
-  const [ccContractId, setCcContractId] = useState<string | null>(null);
-  const [ccClinId, setCcClinId] = useState<string | null>(null);
-  const [ccChargeCodeId, setCcChargeCodeId] = useState<string | null>(null);
-  const [confirmCcTarget, setConfirmCcTarget] = useState<ChargeCodeAssignment | null>(null);
-
-  // CLIN options for the charge-code form, derived from the same contract→CLIN data
-  // already present in `chargeCodes` (avoids a second getClinsByContract round-trip).
-  const ccClinOptionsForContract = ccContractId
-    ? Array.from(
-        new Map(
-          chargeCodes
-            .filter((cc) => cc.contractNumber === contracts.find((c) => c.id === ccContractId)?.contractNumber)
-            .map((cc) => [cc.clinId, { value: cc.clinId, label: cc.clinNumber }])
-        ).values()
-      )
-    : [];
-
-  const ccChargeCodeOptions = ccClinId
-    ? chargeCodes
-        .filter((cc) => cc.clinId === ccClinId && cc.isActive)
-        .map((cc) => ({ value: cc.id, label: `${cc.code} — ${cc.name}` }))
-    : [];
-
-  function handleCcContractChange(contractId: string | null) {
-    setCcContractId(contractId);
-    setCcClinId(null);
-    setCcChargeCodeId(null);
+  const [access, setAccess] = useState<CodeAccessRow[]>(initialChargeCodeAssignments);
+  async function refresh() {
+    try {
+      const [a, c] = await Promise.all([getAssignments(), getChargeCodeAssignments()]);
+      setAssignments(a as Assignment[]);
+      setAccess(c as CodeAccessRow[]);
+    } catch {
+      toastError({ title: 'List not refreshed', message: 'Saved, but the list couldn’t refresh. Reload the page.' });
+    }
   }
 
-  function handleCcClinChange(clinId: string | null) {
-    setCcClinId(clinId);
-    setCcChargeCodeId(null);
-  }
-
-  function handleAssignChargeCode() {
-    if (!ccUserId || !ccChargeCodeId) return;
-    startCcTransition(async () => {
-      const result = await runAction(assignChargeCodeToUser(ccUserId, ccChargeCodeId), { errorTitle: 'Couldn’t assign charge code' });
-      if (!result.ok) return;
-      const refreshed = await getChargeCodeAssignments();
-      setCcAssignments(refreshed as ChargeCodeAssignment[]);
-      setCcUserId(null);
-      setCcContractId(null);
-      setCcClinId(null);
-      setCcChargeCodeId(null);
-    });
-  }
-
-  function handleAssignAllUnderClin() {
-    if (!ccUserId || !ccClinId) return;
-    startCcTransition(async () => {
-      const result = await runAction(assignAllUnderClin(ccUserId, ccClinId), { errorTitle: 'Couldn’t assign charge codes' });
-      if (!result.ok) return;
-      if (result.data.failed.length > 0) {
-        notifications.show({
-          title: `Assigned ${result.data.assigned}; ${result.data.failed.length} failed`,
-          message: result.data.failed.map((f) => f.error).join(' '),
-          color: 'warning',
-        });
-      }
-      const refreshed = await getChargeCodeAssignments();
-      setCcAssignments(refreshed as ChargeCodeAssignment[]);
-      setCcUserId(null);
-      setCcContractId(null);
-      setCcClinId(null);
-      setCcChargeCodeId(null);
-    });
-  }
-
-  function handleDeactivateChargeCode(assignment: ChargeCodeAssignment) {
-    startCcTransition(async () => {
-      const result = await runAction(unassignChargeCodeFromUser(assignment.userId, assignment.chargeCodeId), { errorTitle: 'Couldn’t deactivate assignment' });
-      if (!result.ok) return;
-      const refreshed = await getChargeCodeAssignments();
-      setCcAssignments(refreshed as ChargeCodeAssignment[]);
-      setConfirmCcTarget(null);
-    });
-  }
-
-  const ccColumns: MRT_ColumnDef<ChargeCodeAssignment>[] = [
-    { accessorKey: 'userName', header: 'Employee', size: 180 },
-    { accessorKey: 'code', header: 'Code', size: 160 },
-    { accessorKey: 'name', header: 'Name', size: 200 },
-    {
-      id: 'contractClin',
-      header: 'Contract / CLIN',
-      accessorFn: (row) => `${row.contractNumber} / ${row.clinNumber}`,
-      size: 180,
-    },
-    {
-      accessorKey: 'workLocation',
-      header: 'Work Location',
-      size: 130,
-      Cell: ({ cell }) => {
-        const loc = cell.getValue<string | null>();
-        return loc ? <Badge color={WORK_LOCATION_COLOR[loc] ?? 'gray'}>{loc}</Badge> : '—';
-      },
-    },
-    {
-      accessorKey: 'isActive',
-      header: 'Status',
-      filterVariant: 'checkbox',
-      size: 100,
-      Cell: ({ cell }) => {
-        const active = cell.getValue<boolean>();
-        return (
-          <Badge color={active ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive}>
-            {active ? 'Active' : 'Inactive'}
-          </Badge>
-        );
-      },
-    },
-  ];
-
-  const ccTable = useAppTable({
-    columns: ccColumns,
-    data: ccAssignments,
-    enableColumnFilters: true,
-    initialState: { showColumnFilters: true },
-    enableRowActions: true,
-    renderRowActions: ({ row }) => (
-      <RowActions
-        rowLabel={`${row.original.userName} — ${row.original.code}`}
-        items={[{
-          key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger',
-          // An inactive row stays listed as Inactive; it has no action.
-          hidden: !row.original.isActive,
-          onSelect: () => setConfirmCcTarget(row.original),
-        }]}
-      />
-    ),
-  });
-
-  function handleContractChange(contractId: string | null) {
-    setSelectedContractId(contractId);
-    setSelectedClinId(null);
-    setClinOptions([]);
-    if (!contractId) return;
-    startTransition(async () => {
-      const clins = await getClinsByContract(contractId);
-      setClinOptions(
-        (clins as Clin[]).map((c) => ({
-          value: c.id,
-          label: `${c.clinNumber}${c.description ? ' — ' + c.description : ''}`,
-        }))
-      );
-    });
-  }
-
-  function handleAssign() {
-    if (!selectedUserId || !selectedClinId) return;
-    startTransition(async () => {
-      const result = await runAction(assignUserToClin({ userId: selectedUserId, clinId: selectedClinId }), { errorTitle: 'Couldn’t assign CLIN' });
-      if (!result.ok) return;
-      const refreshed = await getAssignments();
-      setAssignments(refreshed as Assignment[]);
-      // Reset form
-      setSelectedUserId(null);
-      setSelectedContractId(null);
-      setSelectedClinId(null);
-      setClinOptions([]);
-    });
-  }
-
-  function handleDeactivate(assignment: Assignment) {
-    startTransition(async () => {
-      const result = await runAction(unassignUserFromClin(assignment.userId, assignment.clinId), { errorTitle: 'Couldn’t deactivate assignment' });
-      if (!result.ok) return;
-      const refreshed = await getAssignments();
-      setAssignments(refreshed as Assignment[]);
-      setConfirmClinTarget(null);
-    });
-  }
-
-  const usersById = useMemo(() => new Map(users.map((u) => [u.id, u])), [users]);
-  const supervisorUsers = useMemo(() => users.filter((u) => u.role === 'supervisor'), [users]);
-  const supervisorAssignments = useMemo(
-    () => assignments.filter((a) => usersById.get(a.userId)?.role === 'supervisor'),
-    [assignments, usersById]
-  );
-
-  const columns: MRT_ColumnDef<Assignment>[] = [
-    { accessorKey: 'userName', header: 'Supervisor', size: 180 },
-    {
-      id: 'contract',
-      header: 'Contract',
-      accessorFn: (row) => `${row.contractName} (${row.contractNumber})`,
-      size: 220,
-    },
-    { accessorKey: 'clinNumber', header: 'CLIN', size: 100 },
-    {
-      accessorKey: 'slinNumber',
-      header: 'SLIN',
-      size: 100,
-      Cell: ({ cell }) => cell.getValue<string | null>() ?? '—',
-    },
-    {
-      accessorKey: 'isActive',
-      header: 'Status',
-      filterVariant: 'checkbox',
-      Cell: ({ cell }) => {
-        const active = cell.getValue<boolean>();
-        return (
-          <Badge color={active ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive}>
-            {active ? 'Active' : 'Inactive'}
-          </Badge>
-        );
-      },
-      size: 100,
-    },
-    {
-      accessorKey: 'assignedAt',
-      header: 'Assigned Date',
-      Cell: ({ cell }) => formatDateTime(cell.getValue<Date>(), workspaceTimezone),
-      size: 140,
-    },
-  ];
-
-  const table = useAppTable({
-    columns,
-    data: supervisorAssignments,
-    enableColumnFilters: true,
-    initialState: { showColumnFilters: true },
-    enableRowActions: true,
-    renderRowActions: ({ row }) => (
-      <RowActions
-        rowLabel={`${row.original.userName} — CLIN ${row.original.clinNumber}`}
-        items={[{
-          key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger',
-          hidden: !row.original.isActive,
-          onSelect: () => setConfirmClinTarget(row.original),
-        }]}
-      />
-    ),
-  });
+  // personId → the CLIN ids of their active user_assignments rows (the R8 notice in Give access).
+  const clinsBy = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    for (const a of assignments) if (a.isActive) m.set(a.userId, new Set([...(m.get(a.userId) ?? []), a.clinId]));
+    return m;
+  }, [assignments]);
 
   return (
     <>
-      <PageHeader title="User Assignments" />
+      <PageHeader
+        title="Assignments"
+        description="What each person can charge, which labor category prices their hours, and which CLINs each supervisor approves."
+      />
 
       <Tabs value={tab} onChange={switchTab}>
         <Tabs.List mb="md">
-          <Tabs.Tab value="charge-codes">Charge Code Access</Tabs.Tab>
-          <Tabs.Tab value="approval-scope">Approval Scope</Tabs.Tab>
+          <Tabs.Tab value="charge-codes">Charge code access</Tabs.Tab>
           <Tabs.Tab value="labor-categories">Labor categories</Tabs.Tab>
+          <Tabs.Tab value="approval-scope">Approval scope</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="charge-codes">
-          <Text size="sm" c="dimmed" mb="md">
-            Authorize which charge codes each employee can charge time to. Assigning a code also
-            grants the underlying CLIN access automatically.
-          </Text>
-
-          {/* Charge Code Assignment Form */}
-          <Paper withBorder p="md" mb="xl">
-            <Title order={4} mb="sm">Assign Charge Code</Title>
-            <Group align="flex-end" wrap="wrap">
-              <Select
-                label="User"
-                placeholder="Select employee"
-                data={users.map((u) => ({ value: u.id, label: u.fullName }))}
-                value={ccUserId}
-                onChange={setCcUserId}
-                searchable
-                style={{ minWidth: 200 }}
-              />
-              <Select
-                label="Contract"
-                placeholder="Select contract"
-                data={contracts.map((c) => ({ value: c.id, label: `${c.name} (${c.contractNumber})` }))}
-                value={ccContractId}
-                onChange={handleCcContractChange}
-                searchable
-                style={{ minWidth: 260 }}
-              />
-              <Select
-                label="CLIN"
-                placeholder={ccContractId ? 'Select CLIN' : 'Select a contract first'}
-                data={ccClinOptionsForContract}
-                value={ccClinId}
-                onChange={handleCcClinChange}
-                disabled={!ccContractId || ccClinOptionsForContract.length === 0}
-                searchable
-                style={{ minWidth: 180 }}
-              />
-              <Select
-                label="Charge Code"
-                placeholder={ccClinId ? 'Select charge code' : 'Select a CLIN first'}
-                data={ccChargeCodeOptions}
-                value={ccChargeCodeId}
-                onChange={setCcChargeCodeId}
-                disabled={!ccClinId || ccChargeCodeOptions.length === 0}
-                searchable
-                style={{ minWidth: 240 }}
-              />
-              <WriteButton
-                onClick={handleAssignChargeCode}
-                loading={ccIsPending}
-                disabled={!ccUserId || !ccChargeCodeId}
-              >
-                Assign Code
-              </WriteButton>
-              <WriteButton
-                variant="default"
-                onClick={handleAssignAllUnderClin}
-                loading={ccIsPending}
-                disabled={!ccUserId || !ccClinId}
-              >
-                Assign all codes under CLIN
-              </WriteButton>
-            </Group>
-          </Paper>
-
-          {/* Charge Code Assignments Table */}
-          <MantineReactTable table={ccTable} />
-        </Tabs.Panel>
-
-        <Tabs.Panel value="approval-scope">
-          <Text size="sm" c="dimmed" mb="md">
-            Grant supervisors approval authority over the CLINs they oversee. A supervisor can
-            review any employee who charges to a CLIN they&apos;re assigned to.
-          </Text>
-
-          {/* Assign Supervisor to CLIN Form */}
-          <Paper withBorder p="md" mb="xl">
-            <Title order={4} mb="sm">Assign Supervisor to CLIN</Title>
-            <Group align="flex-end" wrap="wrap">
-              <Select
-                label="Supervisor"
-                placeholder="Select supervisor"
-                data={supervisorUsers.map((u) => ({ value: u.id, label: u.fullName }))}
-                value={selectedUserId}
-                onChange={setSelectedUserId}
-                searchable
-                style={{ minWidth: 200 }}
-              />
-              <Select
-                label="Contract"
-                placeholder="Select contract"
-                data={contracts.map((c) => ({ value: c.id, label: `${c.name} (${c.contractNumber})` }))}
-                value={selectedContractId}
-                onChange={handleContractChange}
-                searchable
-                style={{ minWidth: 260 }}
-              />
-              <Select
-                label="CLIN"
-                placeholder={selectedContractId ? 'Select CLIN' : 'Select a contract first'}
-                data={clinOptions}
-                value={selectedClinId}
-                onChange={setSelectedClinId}
-                disabled={!selectedContractId || clinOptions.length === 0}
-                searchable
-                style={{ minWidth: 220 }}
-              />
-              <WriteButton
-                onClick={handleAssign}
-                loading={isPending}
-                disabled={!selectedUserId || !selectedClinId}
-              >
-                Assign
-              </WriteButton>
-            </Group>
-          </Paper>
-
-          {/* Supervisor Assignments Table */}
-          <MantineReactTable table={table} />
+          <ChargeCodeAccessPanel people={users} access={access} codes={chargeCodes} clinsBy={clinsBy} onChanged={refresh} />
         </Tabs.Panel>
 
         <Tabs.Panel value="labor-categories">
@@ -545,35 +111,18 @@ export function AssignmentsClient({ initialAssignments, users, contracts, charge
             onRemoveFilter={removeFilter}
           />
         </Tabs.Panel>
+
+        <Tabs.Panel value="approval-scope">
+          <ApprovalScopePanel
+            people={users}
+            assignments={assignments}
+            activeClins={activeClins}
+            approverNames={approverNames}
+            workspaceTimezone={workspaceTimezone}
+            onChanged={refresh}
+          />
+        </Tabs.Panel>
       </Tabs>
-
-      <ConfirmModal
-        opened={!!confirmCcTarget}
-        title="Deactivate charge code assignment?"
-        message={
-          confirmCcTarget
-            ? `This removes ${confirmCcTarget.userName}'s access to ${confirmCcTarget.code} — ${confirmCcTarget.name}.`
-            : ''
-        }
-        confirmLabel="Deactivate"
-        loading={ccIsPending}
-        onConfirm={() => confirmCcTarget && handleDeactivateChargeCode(confirmCcTarget)}
-        onCancel={() => setConfirmCcTarget(null)}
-      />
-
-      <ConfirmModal
-        opened={!!confirmClinTarget}
-        title="Deactivate supervisor assignment?"
-        message={
-          confirmClinTarget
-            ? `This removes ${confirmClinTarget.userName}'s approval scope over CLIN ${confirmClinTarget.clinNumber}.`
-            : ''
-        }
-        confirmLabel="Deactivate"
-        loading={isPending}
-        onConfirm={() => confirmClinTarget && handleDeactivate(confirmClinTarget)}
-        onCancel={() => setConfirmClinTarget(null)}
-      />
     </>
   );
 }

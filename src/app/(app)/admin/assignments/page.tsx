@@ -1,12 +1,16 @@
 import { requirePageRole } from '@/lib/session';
 import { getAssignments } from '@/server/actions/assignments';
 import { getUsers } from '@/server/actions/users';
-import { getContracts } from '@/server/actions/contracts';
 import { listChargeCodes, getChargeCodeAssignments } from '@/server/actions/charge-codes';
 import { getAllLaborCategories, getUserLaborCategoryAssignments, getAssignableLaborCategories } from '@/server/actions/labor-categories';
 import { getWorkspaceTimezone, getWorkspaceToday } from '@/server/internal/workspace-settings';
+import { findOverlaps } from '@/server/internal/cost-basis';
+import { effectiveDesignee, type ApprovalFacts } from '@/server/internal/approval-rules';
 import { firstParam, parseAssignmentsParams } from '@/lib/assignments-params';
 import { rateDisplay } from '@/lib/labor-rates';
+import { getDb } from '@/db';
+import { clins, contracts } from '@/db/schema';
+import { and, eq } from 'drizzle-orm';
 import { AssignmentsClient } from './AssignmentsClient';
 import type { Metadata } from 'next';
 
@@ -17,20 +21,26 @@ export const dynamic = 'force-dynamic';
 type SearchParams = { tab?: string | string[]; laborCategoryId?: string | string[]; userId?: string | string[]; assignments?: string | string[] };
 
 /**
- * Assignments: charge-code access, approval scope and (feature-plan-ux-kit-contracts.md §4.3) labor categories. The
- * server uses only `tab` (allowlisted) for the initial tab; the client reads the filters from the URL. Ten loads at most
- * (the pool's max): the workspace today and timezone share one cached settings read.
+ * Assignments (feature-plan-ux-people-codes.md §4): charge-code access by person, labor categories by person and
+ * approval scope by supervisor. The server uses only `tab` (allowlisted) for the initial tab; the client reads the
+ * filters from the URL. Ten loads at most (the pool's max): the workspace today and timezone share one cached settings
+ * read; the overlaps (§4.3) and each supervisor's approver (§4.4) are computed here from rows already loaded.
  */
 export default async function AssignmentsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   await requirePageRole('admin');
   const sp = await searchParams;
   const { tab } = parseAssignmentsParams((k) => firstParam(sp[k as keyof SearchParams]));
+  const db = await getDb();
 
-  const [assignments, allUsers, allContracts, allChargeCodes, chargeCodeAssignments, workspaceTimezone,
+  const [assignments, allUsers, activeClins, allChargeCodes, chargeCodeAssignments, workspaceTimezone,
     laborCategories, lcatAssignments, assignableLcats, today] = await Promise.all([
     getAssignments(),
     getUsers(),
-    getContracts(),
+    // §4.1: the CLIN pickers and the uncovered line offer active CLINs on active contracts only.
+    db.select({ clinId: clins.id, clinNumber: clins.clinNumber, clinDescription: clins.description, contractId: contracts.id, contractName: contracts.name, contractNumber: contracts.contractNumber })
+      .from(clins).innerJoin(contracts, eq(clins.contractId, contracts.id))
+      .where(and(eq(clins.status, 'active'), eq(contracts.status, 'active')))
+      .orderBy(contracts.name, clins.clinNumber),
     listChargeCodes(),
     getChargeCodeAssignments(),
     getWorkspaceTimezone(),
@@ -41,11 +51,33 @@ export default async function AssignmentsPage({ searchParams }: { searchParams: 
   ]);
 
   const rateByCategory: Record<string, string | null> = {};
-  const categoryNames: Record<string, { lcatCode: string; clinNumber: string }> = {};
+  const categoryNames: Record<string, { lcatCode: string; clinNumber: string; slinNumber: string | null }> = {};
+  const lcById = new Map(laborCategories.map((lc) => [lc.id, lc]));
   for (const lc of laborCategories) {
     const schedule = { starting: { hourlyRate: lc.hourlyRate, ceilingRate: lc.ceilingRate }, changes: lc.rateChanges };
     rateByCategory[lc.id] = rateDisplay(schedule, today).current?.hourlyRate ?? null;
-    categoryNames[lc.id] = { lcatCode: lc.lcatCode, clinNumber: lc.clinNumber };
+    categoryNames[lc.id] = { lcatCode: lc.lcatCode, clinNumber: lc.clinNumber, slinNumber: lc.slinNumber ?? null };
+  }
+
+  // §4.3: the overlaps from the assignment rows already loaded (no 11th load), in findOverlaps' row shape.
+  const overlapping = findOverlaps(lcatAssignments.flatMap((a) => {
+    const lc = lcById.get(a.laborCategoryId);
+    return lc ? [{
+      assignmentId: a.id, userId: a.userId, employeeName: a.userName, effectiveDate: a.effectiveDate, endDate: a.endDate,
+      lcId: lc.id, lcatCode: lc.lcatCode, title: lc.title, clinId: lc.clinId, clinNumber: lc.clinNumber, slinId: lc.slinId, slinNumber: lc.slinNumber ?? null,
+      contractId: lc.contractId,
+    }] : [];
+  }));
+  const overlapIds = [...new Set(overlapping.flatMap((o) => [o.a.assignmentId, o.b.assignmentId]))];
+
+  // §4.4: each active supervisor's effective approver, by the same rule as approvals, from the users already loaded.
+  const facts: ApprovalFacts = { users: new Map(allUsers.map((u) => [u.id, { id: u.id, role: u.role, isActive: u.isActive, approverId: u.approverId }])), clinsByUser: new Map() };
+  const nameById = new Map(allUsers.map((u) => [u.id, u.fullName]));
+  const approverNames: Record<string, string | null> = {};
+  for (const u of allUsers) {
+    if (u.role !== 'supervisor' || !u.isActive) continue;
+    const designee = effectiveDesignee(facts, u.id);
+    approverNames[u.id] = designee ? nameById.get(designee) ?? null : null;
   }
 
   return (
@@ -53,11 +85,12 @@ export default async function AssignmentsPage({ searchParams }: { searchParams: 
       initialTab={tab}
       initialAssignments={assignments}
       users={allUsers}
-      contracts={allContracts}
+      activeClins={activeClins}
       chargeCodes={allChargeCodes}
       initialChargeCodeAssignments={chargeCodeAssignments}
       workspaceTimezone={workspaceTimezone}
-      lcat={{ initialAssignments: lcatAssignments, assignableLcats, rateByCategory, categoryNames, today }}
+      approverNames={approverNames}
+      lcat={{ initialAssignments: lcatAssignments, assignableLcats, rateByCategory, categoryNames, today, overlapIds }}
     />
   );
 }

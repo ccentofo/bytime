@@ -3,11 +3,13 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
 import { act } from 'react';
 
 /**
- * feature-plan-ux-kit-contracts.md §4.3 / L-2: People → Assignments → "Labor categories". `?tab=` is allowlisted (first
- * of arrays; invalid → charge-codes); a tab switch REPLACES the URL with history.replaceState (no router call) and drops
- * the filters; `laborCategoryId` filters exactly (that category's assignments active today) with a chip; `userId`
- * filters and pre-selects; `assignments` highlights; switching tabs and back clears the filter and chip; removing a chip
- * clears its param; the Rate shows for an assignment to a DEACTIVATED category (rates for every category, from the page).
+ * feature-plan-ux-kit-contracts.md §4.3 / L-2 and feature-plan-ux-people-codes.md §4.1, §4.3 (AS-1, AS-6): People →
+ * Assignments → "Labor categories". `?tab=` is allowlisted (first of arrays; invalid → charge-codes); a tab switch
+ * REPLACES only `tab` with history.replaceState (no router call) and KEEPS the filters (AS-1); `laborCategoryId` filters
+ * exactly (that category's assignments active today) with a chip; `userId` filters and pre-selects; `assignments`
+ * highlights; removing a chip clears its param; the Rate shows for an assignment to a DEACTIVATED category. AS-6: rows
+ * grouped by person with a status (Overlaps wins, Current, Starts, Ended); "Current and upcoming" hides Ended; the
+ * overlap notice links to the conflict report; the page computes the overlap ids.
  *
  * next/navigation is mocked the way Next behaves: useSearchParams follows window.location, and replaceState notifies it.
  */
@@ -22,7 +24,7 @@ vi.mock('next/navigation', async () => {
   };
 });
 const h = vi.hoisted(() => ({
-  getAssignments: vi.fn(), getUsers: vi.fn(), getContracts: vi.fn(), listChargeCodes: vi.fn(), getChargeCodeAssignments: vi.fn(),
+  getAssignments: vi.fn(), getUsers: vi.fn(), listChargeCodes: vi.fn(), getChargeCodeAssignments: vi.fn(),
   getWorkspaceTimezone: vi.fn(), getWorkspaceToday: vi.fn(), getAllLaborCategories: vi.fn(), getUserLaborCategoryAssignments: vi.fn(),
   getAssignableLaborCategories: vi.fn(),
 }));
@@ -30,12 +32,15 @@ vi.mock('server-only', () => ({}));
 vi.mock('@/lib/session', () => ({ requirePageRole: vi.fn(async () => ({ id: 'a', role: 'admin' })) }));
 vi.mock('@/server/actions/assignments', () => ({ assignUserToClin: vi.fn(), unassignUserFromClin: vi.fn(), getAssignments: h.getAssignments }));
 vi.mock('@/server/actions/users', () => ({ getUsers: h.getUsers }));
-vi.mock('@/server/actions/contracts', () => ({ getContracts: h.getContracts }));
 vi.mock('@/server/actions/charge-codes', () => ({
-  assignChargeCodeToUser: vi.fn(), unassignChargeCodeFromUser: vi.fn(), assignAllUnderClin: vi.fn(),
+  assignChargeCodesToUser: vi.fn(), unassignChargeCodeFromUser: vi.fn(),
   getChargeCodeAssignments: h.getChargeCodeAssignments, listChargeCodes: h.listChargeCodes,
 }));
-vi.mock('@/server/actions/clins', () => ({ getClinsByContract: vi.fn(async () => []) }));
+vi.mock('@/db', async () => {
+  const { createFakeControlDb } = await import('../helpers/fake-control-db');
+  const db = createFakeControlDb();
+  return { getDb: async () => db };
+});
 vi.mock('@/server/actions/labor-categories', () => ({
   assignUserToLaborCategory: vi.fn(), endUserLaborCategoryAssignment: vi.fn(), getUserLaborCategoryAssignments: h.getUserLaborCategoryAssignments,
   getAllLaborCategories: h.getAllLaborCategories, getAssignableLaborCategories: h.getAssignableLaborCategories,
@@ -79,7 +84,7 @@ const ASSIGNMENTS = [
   asg(X3, U2, 'Lee Roe', L2, 'SE-II', '2026-01-01'),                // on the deactivated L2
   asg(X4, U1, 'Pat Doe', L1, 'SE-I', '2026-12-01'),                 // future on L1
 ];
-const USERS = [{ id: U1, fullName: 'Pat Doe' }, { id: U2, fullName: 'Lee Roe' }];
+const USERS = [{ id: U1, fullName: 'Pat Doe', role: 'employee', isActive: true }, { id: U2, fullName: 'Lee Roe', role: 'employee', isActive: true }];
 const LCAT_PROPS = {
   initialAssignments: ASSIGNMENTS as never,
   assignableLcats: [{ id: L1, lcatCode: 'SE-I', title: 'SE-I title', clinNumber: '0001', contractName: 'NAVAIR' }] as never,
@@ -87,18 +92,25 @@ const LCAT_PROPS = {
   categoryNames: { [L1]: { lcatCode: 'SE-I', clinNumber: '0001' }, [L2]: { lcatCode: 'SE-II', clinNumber: '0002' } },
   today: '2026-11-03' as CalendarDate,
 };
+const ALL_SHOWN = 4; // with "Everything, including ended"
+const DEFAULT_SHOWN = 3; // "Current and upcoming" hides Lee's ended X2
 
-async function render(search: string) {
+async function render(search: string, lcat: Record<string, unknown> = {}) {
   realReplace(null, '', `/admin/assignments${search}`);
   m = await mount(
-    <AssignmentsClient initialTab="charge-codes" initialAssignments={[]} users={USERS as never} contracts={[]} chargeCodes={[]}
-      initialChargeCodeAssignments={[]} workspaceTimezone="America/New_York" lcat={LCAT_PROPS} />,
+    <AssignmentsClient initialTab="charge-codes" initialAssignments={[]} users={USERS as never} activeClins={[]} chargeCodes={[]}
+      initialChargeCodeAssignments={[]} workspaceTimezone="America/New_York" lcat={{ ...LCAT_PROPS, ...lcat }} />,
   );
 }
 const tab = (name: string) => [...document.body.querySelectorAll('[role="tab"]')].find((t) => t.textContent === name) as HTMLElement;
 const panel = () => document.getElementById(tab('Labor categories').getAttribute('aria-controls')!)!;
-const rows = () => [...panel().querySelectorAll('tbody tr')] as HTMLElement[];
-const rowIds = () => rows().map((r) => (r.textContent ?? '').match(/(Pat Doe|Lee Roe).*?(SE-I+)/)?.slice(1).join('/') + (r.textContent?.includes('Jan 1, 2025') ? ' ended' : r.textContent?.includes('Dec 1, 2026') ? ' future' : ''));
+const rows = () => [...panel().querySelectorAll('tbody tr[data-row="lcat"]')] as HTMLElement[];
+const rowIds = () => rows().map((r) => `${r.getAttribute('data-person')}/${(r.textContent ?? '').match(/SE-I+/)?.[0]}` + (r.textContent?.includes('Jan 1, 2025') ? ' ended' : r.textContent?.includes('Dec 1, 2026') ? ' future' : ''));
+const showEverything = async () => {
+  const label = [...panel().querySelectorAll<HTMLLabelElement>('label')].find((l) => l.textContent?.trim() === 'Show')!;
+  await click(document.getElementById(label.htmlFor));
+  await click([...document.body.querySelectorAll('[role="option"]')].find((o) => o.textContent === 'Everything, including ended'));
+};
 const chips = () => [...panel().querySelectorAll('[data-testid^="lcat-chip-"]')].map((c) => c.textContent);
 const search = () => new URLSearchParams(window.location.search);
 
@@ -119,7 +131,7 @@ describe('URL parsing (L-2)', () => {
       { id: L2, lcatCode: 'SE-II', clinNumber: '0002', status: 'inactive', hourlyRate: '110.00', ceilingRate: null,
         rateChanges: [{ id: 'r', effectiveDate: '2026-06-01', hourlyRate: '120.00', ceilingRate: null }] },
     ]);
-    for (const f of [h.getAssignments, h.getUsers, h.getContracts, h.listChargeCodes, h.getChargeCodeAssignments, h.getUserLaborCategoryAssignments, h.getAssignableLaborCategories]) f.mockResolvedValue([]);
+    for (const f of [h.getAssignments, h.getUsers, h.listChargeCodes, h.getChargeCodeAssignments, h.getUserLaborCategoryAssignments, h.getAssignableLaborCategories]) f.mockResolvedValue([]);
     h.getWorkspaceTimezone.mockResolvedValue('America/New_York');
     h.getWorkspaceToday.mockResolvedValue('2026-11-03');
     const page = async (sp: Record<string, string | string[]>) => ((await AssignmentsPage({ searchParams: Promise.resolve(sp) })) as { props: Record<string, never> }).props;
@@ -128,7 +140,7 @@ describe('URL parsing (L-2)', () => {
     const props = await page({});
     expect(props.initialTab).toBe('charge-codes');
     expect((props.lcat as { rateByCategory: unknown }).rateByCategory).toEqual({ [L1]: '100.00', [L2]: '120.00' });
-    expect((props.lcat as { categoryNames: unknown }).categoryNames).toEqual({ [L1]: { lcatCode: 'SE-I', clinNumber: '0001' }, [L2]: { lcatCode: 'SE-II', clinNumber: '0002' } });
+    expect((props.lcat as { categoryNames: unknown }).categoryNames).toEqual({ [L1]: { lcatCode: 'SE-I', clinNumber: '0001', slinNumber: null }, [L2]: { lcatCode: 'SE-II', clinNumber: '0002', slinNumber: null } });
     expect(h.getAllLaborCategories).toHaveBeenCalledTimes(3);
   });
 });
@@ -141,15 +153,15 @@ describe('the Labor categories tab (L-2)', () => {
     expect(chips()).toEqual(['Labor category: SE-I · CLIN 0001']);
   });
 
-  it('a tab switch uses history.replaceState (no router call) and drops the filters; switching back shows no filter or chip', async () => {
-    await render(`?tab=labor-categories&laborCategoryId=${L1}`);
-    await act(async () => { tab('Charge Code Access').click(); });
-    expect(replaceSpy).toHaveBeenLastCalledWith(null, '', '?tab=charge-codes');
-    expect(tab('Charge Code Access').getAttribute('aria-selected')).toBe('true');
+  it('AS-1: a tab switch replaces only `tab` (history.replaceState, no router call); the filters and chip survive it', async () => {
+    await render(`?tab=labor-categories&laborCategoryId=${L1}&userId=${U1}&assignments=${X1}`);
+    await act(async () => { tab('Charge code access').click(); });
+    expect(replaceSpy).toHaveBeenLastCalledWith(null, '', `?tab=charge-codes&laborCategoryId=${L1}&userId=${U1}&assignments=${X1}`);
+    expect(tab('Charge code access').getAttribute('aria-selected')).toBe('true');
     await act(async () => { tab('Labor categories').click(); });
-    expect(replaceSpy).toHaveBeenLastCalledWith(null, '', '?tab=labor-categories');
-    expect(chips()).toEqual([]);
-    expect(rows()).toHaveLength(4);
+    expect(search().get('tab')).toBe('labor-categories');
+    expect(chips()).toEqual(['Labor category: SE-I · CLIN 0001', 'Employee: Pat Doe']);
+    expect(rowIds()).toEqual(['Pat Doe/SE-I']);
     for (const f of Object.values(nav.router)) expect(f).not.toHaveBeenCalled();
   });
 
@@ -159,27 +171,31 @@ describe('the Labor categories tab (L-2)', () => {
     expect(search().get('laborCategoryId')).toBeNull();
     expect(search().get('tab')).toBe('labor-categories');
     expect(chips()).toEqual([]);
-    expect(rows()).toHaveLength(4);
+    expect(rows()).toHaveLength(DEFAULT_SHOWN);
   });
 
   it('userId filters to that employee and pre-selects them in the assign form', async () => {
     await render(`?tab=labor-categories&userId=${U2}`);
-    expect(rows().every((r) => r.textContent?.includes('Lee Roe'))).toBe(true);
+    await showEverything();
+    expect(rows().every((r) => r.getAttribute('data-person') === 'Lee Roe')).toBe(true);
     expect(rows()).toHaveLength(2);
     expect(chips()).toEqual(['Employee: Lee Roe']);
-    const label = [...panel().querySelectorAll('label')].find((l) => l.textContent?.startsWith('User'))!;
+    await click([...panel().querySelectorAll('button')].find((b) => b.textContent === 'Assign a labor category'));
+    const dialog = [...document.body.querySelectorAll('[role="dialog"]')].find((d) => d.textContent?.includes('Assign a labor category'))!;
+    const label = [...dialog.querySelectorAll<HTMLLabelElement>('label')].find((l) => l.textContent?.startsWith('Person'))!;
     expect((document.getElementById(label.htmlFor) as HTMLInputElement).value).toBe('Lee Roe');
   });
 
   it('assignments highlights exactly those rows, with ", overlapping" for screen readers', async () => {
     await render(`?tab=labor-categories&userId=${U2}&assignments=${X2},${X3}`);
+    await showEverything();
     const marked = rows().filter((r) => r.getAttribute('data-overlap') === 'true');
     expect(marked).toHaveLength(2);
     for (const r of marked) expect(r.textContent).toContain(', overlapping');
     unmount(m);
     await render(`?tab=labor-categories&assignments=${X1}`);
     const all = rows();
-    expect(all.filter((r) => r.getAttribute('data-overlap') === 'true').map((r) => r.textContent?.includes('Jan 1, 2026') && r.textContent?.includes('Pat Doe'))).toEqual([true]);
+    expect(all.filter((r) => r.getAttribute('data-overlap') === 'true').map((r) => r.textContent?.includes('Jan 1, 2026') && r.getAttribute('data-person') === 'Pat Doe')).toEqual([true]);
     expect(all.filter((r) => r.textContent?.includes(', overlapping'))).toHaveLength(1);
   });
 
@@ -192,6 +208,53 @@ describe('the Labor categories tab (L-2)', () => {
   it('invalid filter values are ignored (no chip, no filter)', async () => {
     await render('?tab=labor-categories&laborCategoryId=nope&userId=123');
     expect(chips()).toEqual([]);
-    expect(rows()).toHaveLength(4);
+    expect(rows()).toHaveLength(DEFAULT_SHOWN);
+    await showEverything();
+    expect(rows()).toHaveLength(ALL_SHOWN);
+  });
+});
+
+describe('statuses, Show and the overlap notice (AS-6)', () => {
+  const statusOf = (r: HTMLElement) => r.querySelector('[data-testid="lcat-status"]')!.textContent;
+
+  it('grouped by person; Current / Starts {MMM D} / Ended {MMM D, YYYY}; Overlaps wins; "Current and upcoming" hides Ended', async () => {
+    await render('?tab=labor-categories', { overlapIds: [X3] });
+    const people = [...panel().querySelectorAll('tbody tr:not([data-row])')].map((r) => r.textContent?.trim());
+    expect(people).toEqual(['Lee Roe', 'Pat Doe']);
+    const byId = () => Object.fromEntries(rows().map((r) => [rowIds()[rows().indexOf(r)], statusOf(r)]));
+    expect(byId()).toEqual({ 'Lee Roe/SE-II': 'Overlaps', 'Pat Doe/SE-I': 'Current', 'Pat Doe/SE-I future': 'Starts Dec 1' });
+    expect(rows().find((r) => statusOf(r) === 'Overlaps')!.getAttribute('data-overlap')).toBe('true');
+    await showEverything();
+    expect(byId()['Lee Roe/SE-I ended']).toBe('Ended Jun 30, 2026');
+    expect(rows().find((r) => statusOf(r) === 'Ended Jun 30, 2026')!.textContent).not.toContain('End…');
+    expect(rows().find((r) => statusOf(r) === 'Current')!.textContent).toContain('No end');
+  });
+
+  it('the overlap notice: one person by name, several by count; "See what to fix" → the conflict report; none without overlaps', async () => {
+    await render('?tab=labor-categories', { overlapIds: [X3] });
+    const notice = () => panel().querySelector('[data-testid="overlap-notice"]');
+    expect(notice()!.textContent).toContain('Lee Roe has overlapping labor categories, so some hours aren’t priced.'.replace('’', "'"));
+    expect(notice()!.querySelector('a')!.getAttribute('href')).toBe('/admin/reports/unpriced?reason=conflict');
+    unmount(m);
+    await render('?tab=labor-categories', { overlapIds: [X3, X1] });
+    expect(notice()!.textContent).toContain('2 people have overlapping labor categories');
+    unmount(m);
+    await render('?tab=labor-categories');
+    expect(notice()).toBeNull();
+  });
+
+  it('the page passes the overlapping assignment ids (findOverlaps over the rows it already loads)', async () => {
+    h.getAllLaborCategories.mockResolvedValue([
+      { id: L1, lcatCode: 'SE-I', title: 'Eng I', clinId: 'clin-1', slinId: null, clinNumber: '0001', slinNumber: null, contractId: 'k1', status: 'active', hourlyRate: '100.00', ceilingRate: null, rateChanges: [] },
+      { id: L2, lcatCode: 'SE-II', title: 'Eng II', clinId: 'clin-1', slinId: null, clinNumber: '0001', slinNumber: null, contractId: 'k1', status: 'active', hourlyRate: '110.00', ceilingRate: null, rateChanges: [] },
+    ]);
+    for (const f of [h.getAssignments, h.getUsers, h.listChargeCodes, h.getChargeCodeAssignments, h.getAssignableLaborCategories]) f.mockResolvedValue([]);
+    h.getUserLaborCategoryAssignments.mockResolvedValue([
+      asg(X1, U1, 'Pat Doe', L1, 'SE-I', '2026-01-01'), asg(X2, U1, 'Pat Doe', L2, 'SE-II', '2026-06-01'), asg(X3, U2, 'Lee Roe', L1, 'SE-I', '2026-01-01'),
+    ]);
+    h.getWorkspaceTimezone.mockResolvedValue('America/New_York');
+    h.getWorkspaceToday.mockResolvedValue('2026-11-03');
+    const props = ((await AssignmentsPage({ searchParams: Promise.resolve({}) })) as { props: { lcat: { overlapIds: string[] } } }).props;
+    expect([...props.lcat.overlapIds].sort()).toEqual([X1, X2].sort());
   });
 });

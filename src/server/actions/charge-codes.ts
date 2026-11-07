@@ -274,16 +274,43 @@ export async function reactivateChargeCode(id: string) {
 // ---------------------------------------------------------------------------
 
 /**
- * Assign a charge code to a user.
- * ALSO upserts the user_assignments row for the code's CLIN so supervisor
- * approval routing and LCAT rates remain intact.
+ * Give a person access to charge codes (feature-plan-ux-people-codes.md §4.2), all or nothing, in one transaction: the
+ * person must be active and every code chargeable (else nothing is written and the first refused code is named).
+ * Codes already actively held are left alone (their assignedBy isn't overwritten); the rest go through
+ * assignChargeCodeToUserInternal, which also upserts the person's CLIN row (R8: unchanged — for a supervisor that is
+ * approval scope, which the dialog warns about).
  */
-export async function assignChargeCodeToUser(userId: string, chargeCodeId: string) {
+export async function assignChargeCodesToUser(data: { userId: string; chargeCodeIds: string[] }): Promise<ActionResult<{ assigned: number }>> {
   return userAction(async () => {
     const actor = await requireAdminFresh();
+    if (!data?.userId) throw new UserFacingError('Choose a person.');
+    const userId = validateUUID(data.userId, 'Person');
+    if (!Array.isArray(data.chargeCodeIds) || data.chargeCodeIds.length === 0) throw new UserFacingError('Choose at least one charge code.');
+    const ids = [...new Set(data.chargeCodeIds.map((id) => validateUUID(id, 'Charge code')))];
+    if (ids.length > 200) throw new UserFacingError('Choose 200 charge codes or fewer at a time.');
     const db = await getDbForWrite();
-    await assignChargeCodeToUserInternal(db, actor.id, userId, chargeCodeId);
-    return { success: true };
+    return db.transaction(async (tx) => {
+      const [person] = await tx.select({ isActive: users.isActive }).from(users).where(eq(users.id, userId));
+      if (!person?.isActive) throw new UserFacingError('Choose an active person.');
+      const found = await tx
+        .select({ id: chargeCodes.id, code: chargeCodes.code, chargeable: sql<boolean>`${CHARGEABLE_CODE}`.mapWith(Boolean) })
+        .from(chargeCodes)
+        .innerJoin(clins, eq(chargeCodes.clinId, clins.id))
+        .innerJoin(contracts, eq(clins.contractId, contracts.id))
+        .leftJoin(slins, eq(chargeCodes.slinId, slins.id))
+        .where(inArray(chargeCodes.id, ids));
+      const byId = new Map(found.map((c) => [c.id, c]));
+      for (const id of ids) {
+        const c = byId.get(id);
+        if (!c?.chargeable) throw new UserFacingError(`${c?.code ?? 'A charge code'} can't be charged right now. Refresh and try again.`);
+      }
+      const held = new Set((await tx.select({ chargeCodeId: userChargeCodes.chargeCodeId }).from(userChargeCodes)
+        .where(and(eq(userChargeCodes.userId, userId), eq(userChargeCodes.isActive, true), inArray(userChargeCodes.chargeCodeId, ids))))
+        .map((r) => r.chargeCodeId));
+      const toAssign = ids.filter((id) => !held.has(id));
+      for (const id of toAssign) await assignChargeCodeToUserInternal(tx, actor.id, userId, id);
+      return { assigned: toAssign.length };
+    });
   });
 }
 
@@ -293,34 +320,6 @@ export async function unassignChargeCodeFromUser(userId: string, chargeCodeId: s
     const db = await getDbForWrite();
     await db.update(userChargeCodes).set({ isActive: false })
       .where(and(eq(userChargeCodes.userId, userId), eq(userChargeCodes.chargeCodeId, chargeCodeId)));
-  });
-}
-
-/**
- * Assign ALL active charge codes under a specific CLIN to a user.
- * Convenience for onboarding: "assign all codes under this CLIN."
- */
-export async function assignAllUnderClin(userId: string, clinId: string) {
-  return userAction(async () => {
-    const actor = await requireAdminFresh();
-    const db = await getDbForWrite();
-    const codes = await db.select({ id: chargeCodes.id })
-      .from(chargeCodes)
-      .where(and(eq(chargeCodes.clinId, clinId), eq(chargeCodes.isActive, true)));
-
-    // Real per-code results: one code failing (e.g. deleted meanwhile) doesn't hide the others' outcome.
-    let assigned = 0;
-    const failed: Array<{ chargeCodeId: string; error: string }> = [];
-    for (const code of codes) {
-      try {
-        await assignChargeCodeToUserInternal(db, actor.id, userId, code.id);
-        assigned++;
-      } catch (err) {
-        if (!(err instanceof UserFacingError)) throw err;
-        failed.push({ chargeCodeId: code.id, error: err.message });
-      }
-    }
-    return { assigned, failed };
   });
 }
 
