@@ -98,8 +98,8 @@ const WRITE_GATE_AUTH_ALLOWLIST: Record<string, { names: string[]; reason: strin
       'locked-out user still needs to be able to reset their password.',
   },
   'mfa.ts': {
-    names: ['completeMFASetup', 'disableMFA'],
-    reason: 'Credential-only write (TOTP secret / recovery codes). Same rationale as password.ts.',
+    names: ['completeMFASetup', 'disableMFA', 'adminResetMfa'],
+    reason: 'Credential-only write (TOTP secret / recovery codes; UX-4c R6: an admin turning off another user\'s two-step sign-in). Same rationale as password.ts.',
   },
   'notifications.ts': {
     names: ['updateNotificationPreferences'],
@@ -186,6 +186,7 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
   'users.ts': {
     getUsers: 'reads users (SAFE_USER_COLUMNS); no write',
     getApprovalNotices: 'certified-outputs C2: reads the approval rules + admin_change_log for the notices; no write',
+    getUsersForAdminPage: 'UX-4c §5.1: users + two-step on/off + lock state + approver name for the Users page; no write',
   },
 };
 

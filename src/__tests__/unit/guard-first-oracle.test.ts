@@ -73,7 +73,6 @@ const CASES: Array<[string, AnyAction, unknown[]]> = [
   ['updatePayPeriodConfig', a(payPeriodConfig.updatePayPeriodConfig), [{}]],
   ['createSlin', a(slins.createSlin), [{}]],
   ['updateSlin', a(slins.updateSlin), ['s', {}]],
-  ['createUser', a(users.createUser), [{}]],
   ['createUserWithPassword', a(users.createUserWithPassword), [{}]],
   // feature-plan-dated-rates.md D1.5 (guard first; the preview's read client is refused the same way)
   ['addLaborCategoryRateChange', a(laborCategoryRates.addLaborCategoryRateChange), [{}]],

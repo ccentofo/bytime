@@ -63,7 +63,8 @@ describe('static: no admin_change_log insert outside the writer', () => {
     expect(uses('src/server/actions/charge-codes.ts')).toBe(2);
     expect(uses('src/server/actions/labor-category-rates.ts')).toBe(3);
     expect(uses('src/server/actions/charge-code-categories.ts')).toBe(3);
-    expect(uses('src/server/actions/users.ts')).toBe(1);
+    // UX-4c R5: + updateUser (role / active / overtime) and createUserWithPassword (created, approver).
+    expect(uses('src/server/actions/users.ts')).toBe(6);
     expect(uses('src/server/actions/workspace-settings.ts')).toBe(1);
     expect(readFileSync(path.join(ROOT, 'src/server/internal/approval-rules.ts'), 'utf8')).toMatch(/const logId = await logAdminChange\(tx, \{/);
   });

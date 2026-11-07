@@ -1,32 +1,28 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
-  Button,
-  Modal,
-  TextInput,
-  PasswordInput,
-  Select,
-  Group,
-  Stack,
-  Badge,
-  Alert,
-  Text,
+  Alert, Anchor, Button, Drawer, Group, List, Modal, PasswordInput, Radio, Select, Stack, Text, TextInput,
 } from '@mantine/core';
-import { notifications } from '@mantine/notifications';
-import { runAction } from '@/lib/run-action';
-import { Icons, ICON_SIZE } from '@/components/ui/icons';
-import { RowActions } from '@/components/ui/RowActions';
-import { useBusyRows, useLastTarget } from '@/components/ui/useRowState';
-import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
+import { runAction } from '@/lib/run-action';
+import { toastError, toastSuccess } from '@/lib/toast';
+import { Icons, ICON_SIZE } from '@/components/ui/icons';
+import { RowActions, type RowAction } from '@/components/ui/RowActions';
+import { useBusyRows, useLastTarget } from '@/components/ui/useRowState';
+import { useBusy } from '@/components/ui/useBusy';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { StatusBadge } from '@/components/ui/StatusBadge';
 import { useAppTable } from '@/components/table/mrtDefaults';
-import { createUserWithPassword, updateUser, getUsers, unlockUserAccount, setUserApprover } from '@/server/actions/users';
+import { createUserWithPassword, updateUser, getUsersForAdminPage, unlockUserAccount, setUserApprover } from '@/server/actions/users';
 import { adminResetPassword } from '@/server/actions/password';
-import { RECORD_STATUS_COLOR, ROLE_COLOR } from '@/lib/ui/status-colors';
+import { adminResetMfa } from '@/server/actions/mfa';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { WriteButton } from '@/components/shell/WorkspaceMode';
 import { approverSelectOptions } from '@/lib/approvals/approver-options';
+import { PASSWORD_RULES, validatePassword } from '@/lib/password-rules';
+import { formatCount } from '@/lib/format';
+import classes from './Users.module.css';
 
 type User = {
   id: string;
@@ -38,36 +34,48 @@ type User = {
   approverId: string | null;
   createdAt: Date;
   updatedAt: Date;
+  /** feature-plan-ux-people-codes.md §5.1 (getUsersForAdminPage). */
+  mfaEnabled?: boolean;
+  lock?: { minutesRemaining: number } | null;
+  approverName?: string | null;
 };
 
 type Props = {
   initialUsers: User[];
   currentUserId: string;
+  /** getSeatUsage: active users and the plan's limit (null = unlimited). */
+  seats?: { active: number; limit: number | null };
 };
 
 const ROLE_OPTIONS = [
-  { value: 'employee', label: 'Employee' },
-  { value: 'supervisor', label: 'Supervisor' },
-  { value: 'admin', label: 'Admin' },
+  { value: 'employee', label: 'Employee — records time' },
+  { value: 'supervisor', label: 'Supervisor — records time and approves their CLINs' },
+  { value: 'admin', label: 'Admin — manages everything' },
 ];
+const ROLE_WORD: Record<User['role'], string> = { admin: 'Admin', supervisor: 'Supervisor', employee: 'Employee' };
 
 type UserForm = {
   email: string;
   fullName: string;
   role: string;
   password: string;
+  /** '' until chosen on Add (required, no default); 'exempt' / 'nonexempt'. */
+  overtime: '' | 'exempt' | 'nonexempt';
   /** certified-outputs C2: designated approver ('' = none — admins approve). Supervisor/admin users only. */
   approverId: string;
 };
+type FieldKey = 'fullName' | 'email' | 'overtime' | 'password';
 
 type Role = User['role'];
+type StatusFilter = 'active' | 'inactive' | 'locked' | 'all';
 
 const SIGNED_OUT = " They'll be signed out within a minute and must sign in again.";
 
 /**
  * feature-plan-ux-page-fixes.md C16: the confirm for a role change, matching the approval rules
  * (internal/approval-rules.ts) — a supervisor approves employees sharing an active CLIN, and supervisors or admins who
- * name them as approver; a second admin ends sole-admin self-approval; a role change bumps sessionVersion.
+ * name them as approver; a second admin ends sole-admin self-approval; a role change bumps sessionVersion. UX-4c R8: a
+ * new supervisor's approval scope is their CLIN rows, which Assignments → Approval scope shows.
  */
 export function roleChangeCopy(name: string, from: Role, to: Role, actingIsSoleAdmin: boolean) {
   if (to === 'admin') {
@@ -91,7 +99,8 @@ export function roleChangeCopy(name: string, from: Role, to: Role, actingIsSoleA
     return {
       tone: 'neutral' as const,
       title: `Make ${name} a supervisor?`,
-      message: 'They can review and approve timesheets for employees who share a CLIN with them, and for supervisors or admins who have them set as their approver.' + SIGNED_OUT,
+      message: 'They can review and approve timesheets for employees who share a CLIN with them, and for supervisors or admins who have them set as their approver.'
+        + " They'll approve employees on the CLINs they're assigned to. Check Assignments → Approval scope." + SIGNED_OUT,
       confirmLabel: 'Make supervisor',
     };
   }
@@ -105,19 +114,26 @@ export function roleChangeCopy(name: string, from: Role, to: Role, actingIsSoleA
 
 const PARTIAL_SAVE = "The role was saved, but the approver couldn't be updated. Try saving again.";
 
-const EMPTY_FORM: UserForm = {
-  email: '',
-  fullName: '',
-  role: 'employee',
-  password: '',
-  approverId: '',
-};
+const EMPTY_FORM: UserForm = { email: '', fullName: '', role: 'employee', password: '', overtime: '', approverId: '' };
 
-export function UsersClient({ initialUsers, currentUserId }: Props) {
+/** What applies to a user's ⋯ menu (§5.2): Unlock only when locked; two-step reset only when on and not yourself. */
+export function userMenuKeys(u: Pick<User, 'id' | 'isActive' | 'mfaEnabled' | 'lock'>, currentUserId: string): string[] {
+  return [
+    ...(u.lock ? ['unlock'] : []),
+    'reset-password',
+    ...(u.mfaEnabled && u.id !== currentUserId ? ['reset-mfa'] : []),
+    'flsa',
+    u.isActive ? 'deactivate' : 'reactivate',
+  ];
+}
+
+export function UsersClient({ initialUsers, currentUserId, seats }: Props) {
   const [users, setUsers] = useState<User[]>(initialUsers);
-  const [isPending, startTransition] = useTransition();
+  const busy = useBusy();
   // Row actions that run without a confirm (Unlock, Reactivate) show a loader on THEIR row only.
   const busyRows = useBusyRows();
+  const [roleFilter, setRoleFilter] = useState<'all' | Role>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
   // Confirmations (feature-plan-ux-foundations.md §4.5, B2): deactivation and FLSA status ask first.
   const [confirmDeactivate, setConfirmDeactivate] = useState<User | null>(null);
   const [confirmFlsa, setConfirmFlsa] = useState<User | null>(null);
@@ -125,66 +141,99 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
   const shownDeactivate = useLastTarget(confirmDeactivate);
   const shownFlsa = useLastTarget(confirmFlsa);
 
-  // Modal state
-  const [modalOpen, setModalOpen] = useState(false);
+  // Drawer state (Add / Edit)
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [form, setForm] = useState<UserForm>(EMPTY_FORM);
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<FieldKey, string>>>({});
   const [formError, setFormError] = useState<string | null>(null);
-  // C16: a role change asks first; the confirm shows the save's error (the form's own Badge is hidden meanwhile).
+  const fieldRefs = useRef<Partial<Record<FieldKey, HTMLElement | null>>>({});
+  // C16: a role change asks first; the confirm shows the save's error (the form's own Alert is hidden meanwhile).
   const [roleConfirm, setRoleConfirm] = useState<{ name: string; from: Role; to: Role } | null>(null);
   const shownRole = useLastTarget(roleConfirm);
   const activeAdmins = users.filter((u) => u.role === 'admin' && u.isActive);
   const actingIsSoleAdmin = activeAdmins.length === 1 && activeAdmins[0].id === currentUserId;
   const roleCopy = shownRole && roleChangeCopy(shownRole.name, shownRole.from, shownRole.to, actingIsSoleAdmin);
 
-  // Reset password modal state
-  const [resetModalOpen, setResetModalOpen] = useState(false);
+  // Reset password
   const [resetTarget, setResetTarget] = useState<User | null>(null);
+  const shownReset = useLastTarget(resetTarget);
   const [resetPassword, setResetPassword] = useState('');
   const [resetError, setResetError] = useState<string | null>(null);
+  // Reset two-step sign-in (R6)
+  const [mfaTarget, setMfaTarget] = useState<User | null>(null);
+  const shownMfa = useLastTarget(mfaTarget);
+  const [mfaPassword, setMfaPassword] = useState('');
+  const [mfaError, setMfaError] = useState<string | null>(null);
 
-  function openCreateModal() {
-    setEditingUser(null);
-    setForm(EMPTY_FORM);
-    setFormError(null);
-    setModalOpen(true);
+  async function refresh() {
+    try {
+      setUsers((await getUsersForAdminPage()) as User[]);
+    } catch {
+      toastError({ title: 'List not refreshed', message: 'Saved, but the list couldn’t refresh. Reload the page.' });
+    }
   }
 
-  function openEditModal(user: User) {
+  const freeSeats = seats && seats.limit !== null ? Math.max(0, seats.limit - seats.active) : null;
+
+  function openCreate() {
+    setEditingUser(null);
+    setForm(EMPTY_FORM);
+    setFieldErrors({});
+    setFormError(null);
+    setDrawerOpen(true);
+  }
+
+  function openEdit(user: User) {
     setEditingUser(user);
     setForm({
       email: user.email,
       fullName: user.fullName,
       role: user.role,
-      password: '', // Don't pre-fill password
+      password: '', // never pre-filled; not on Edit
+      overtime: user.flsaExempt ? 'exempt' : 'nonexempt',
       approverId: user.approverId ?? '',
     });
+    setFieldErrors({});
     setFormError(null);
-    setModalOpen(true);
+    setDrawerOpen(true);
   }
 
-  function handleSubmit({ confirmed = false }: { confirmed?: boolean } = {}) {
+  /** §5.2: validate on click; the Alert lists every problem with a link to its field. */
+  function validate(): Partial<Record<FieldKey, string>> {
+    const e: Partial<Record<FieldKey, string>> = {};
+    if (!form.fullName.trim()) e.fullName = 'Enter a full name.';
+    if (!form.email.trim()) e.email = 'Enter an email.';
+    if (!form.overtime) e.overtime = 'Choose an overtime status.';
+    if (!editingUser) {
+      const pw = validatePassword(form.password);
+      if (pw) e.password = pw;
+    }
+    return e;
+  }
+
+  async function handleSubmit({ confirmed = false }: { confirmed?: boolean } = {}) {
+    const errors = validate();
+    setFieldErrors(errors);
+    setFormError(null);
+    if (Object.keys(errors).length > 0) return;
     if (editingUser && !confirmed && form.role !== editingUser.role) {
-      setFormError(null);
       setRoleConfirm({ name: editingUser.fullName, from: editingUser.role, to: form.role as Role });
       return;
     }
-    startTransition(async () => {
-      setFormError(null);
+    await busy.run('save', async () => {
+      const flsaExempt = form.overtime === 'exempt';
       if (editingUser) {
-        // Update existing user
-        const updateData: { fullName?: string; email?: string; role?: 'admin' | 'supervisor' | 'employee' } = {};
+        const updateData: { fullName?: string; email?: string; role?: Role; flsaExempt?: boolean } = {};
         if (form.fullName !== editingUser.fullName) updateData.fullName = form.fullName;
         if (form.email !== editingUser.email) updateData.email = form.email;
-        if (form.role !== editingUser.role) updateData.role = form.role as 'admin' | 'supervisor' | 'employee';
+        if (form.role !== editingUser.role) updateData.role = form.role as Role;
+        if (flsaExempt !== editingUser.flsaExempt) updateData.flsaExempt = flsaExempt;
 
         const saving = Object.keys(updateData).length > 0;
         if (saving) {
           const result = await runAction(updateUser(editingUser.id, updateData), { silent: true });
-          if (!result.ok) {
-            setFormError(result.error);
-            return;
-          }
+          if (!result.ok) { setFormError(result.error); return; }
         }
         // C2 (CO-D12): the approver is designated separately, and only for supervisor/admin users.
         if ((form.role === 'supervisor' || form.role === 'admin') && form.approverId !== (editingUser.approverId ?? '')) {
@@ -195,7 +244,7 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
               // sends only the approver and doesn't ask to confirm a role that's already saved.
               setEditingUser({ ...editingUser, ...updateData });
               try {
-                const refreshed = (await getUsers()) as User[];
+                const refreshed = (await getUsersForAdminPage()) as User[];
                 setUsers(refreshed);
                 const fresh = refreshed.find((u) => u.id === editingUser.id);
                 if (fresh) setEditingUser(fresh);
@@ -207,198 +256,186 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
             return;
           }
         }
-        notifications.show({
-          title: 'User Updated',
-          message: `${form.fullName} has been updated successfully.`,
-          color: 'success',
-        });
+        toastSuccess({ title: 'User updated', message: `${form.fullName} has been updated.` });
       } else {
-        // Create new user
-        if (!form.email || !form.fullName || !form.password) {
-          setFormError('All fields are required for new users.');
-          return;
-        }
-        if (form.password.length < 8) {
-          setFormError('Password must be at least 8 characters.');
-          return;
-        }
         const result = await runAction(createUserWithPassword({
           email: form.email,
           fullName: form.fullName,
-          role: form.role as 'admin' | 'supervisor' | 'employee',
+          role: form.role as Role,
           password: form.password,
+          flsaExempt,
+          approverId: (form.role === 'supervisor' || form.role === 'admin') && form.approverId ? form.approverId : null,
         }), { silent: true });
-        if (!result.ok) {
-          setFormError(result.error); // e.g. the plan's seat limit, verbatim
-          return;
-        }
-        notifications.show({
-          title: 'User Created',
-          message: `${form.fullName} has been created successfully.`,
-          color: 'success',
-        });
+        if (!result.ok) { setFormError(result.error); return; } // e.g. the plan's seat limit or a duplicate email, verbatim
+        toastSuccess({ title: 'User added', message: `${form.fullName} can sign in with the temporary password.` });
       }
-
-      // Refresh user list
-      const refreshed = await getUsers();
-      setUsers(refreshed as User[]);
+      await refresh();
       setRoleConfirm(null);
-      setModalOpen(false);
+      setDrawerOpen(false);
     });
   }
 
-  function openResetModal(user: User) {
-    setResetTarget(user);
-    setResetPassword('');
-    setResetError(null);
-    setResetModalOpen(true);
-  }
-
-  function handleUnlockAccount(user: User) {
+  async function handleUnlock(user: User) {
     busyRows.start(user.id);
-    startTransition(async () => {
-      const result = await runAction(unlockUserAccount(user.email), { errorTitle: 'Couldn’t unlock account' });
-      busyRows.done(user.id);
-      if (!result.ok) return;
-      notifications.show({
-        title: 'Account Unlocked',
-        message: `${user.fullName}'s account has been unlocked. They can now log in.`,
-        color: 'success',
-      });
+    const result = await runAction(unlockUserAccount(user.email), { errorTitle: 'Couldn’t unlock account' });
+    busyRows.done(user.id);
+    if (!result.ok) return;
+    toastSuccess({ title: 'Unlocked', message: `${user.fullName} can sign in again` });
+    await refresh();
+  }
+
+  async function handleResetPassword() {
+    if (!resetTarget) return;
+    // §5.2: never disabled — validated on click with the shared rules.
+    const problem = validatePassword(resetPassword);
+    if (problem) { setResetError(problem); return; }
+    await busy.run('reset-password', async () => {
+      setResetError(null);
+      const result = await runAction(adminResetPassword({ targetUserId: resetTarget.id, newPassword: resetPassword }), { silent: true });
+      if (!result.ok) { setResetError(result.error); return; }
+      setResetTarget(null);
+      toastSuccess({ title: 'Password reset', message: `${resetTarget.fullName} can sign in with the new password.` });
     });
   }
 
-  function handleResetPassword() {
-    if (!resetTarget || !resetPassword) return;
-    startTransition(async () => {
-      setResetError(null);
-      const result = await runAction(adminResetPassword({
-        targetUserId: resetTarget.id,
-        newPassword: resetPassword,
-      }), { silent: true });
-      if (!result.ok) {
-        setResetError(result.error);
-        return;
-      }
-      setResetModalOpen(false);
-      notifications.show({
-        title: 'Password Reset',
-        message: `Password for ${resetTarget.fullName} has been reset.`,
-        color: 'success',
-      });
+  async function handleResetMfa() {
+    if (!mfaTarget) return;
+    if (!mfaPassword) { setMfaError('Enter your password.'); return; }
+    await busy.run('reset-mfa', async () => {
+      setMfaError(null);
+      const result = await runAction(adminResetMfa({ userId: mfaTarget.id, currentPassword: mfaPassword }), { silent: true });
+      if (!result.ok) { setMfaError(result.error); return; }
+      setMfaTarget(null);
+      if (result.data.changed) toastSuccess({ title: 'Two-step sign-in reset', message: `${mfaTarget.fullName} is signed out within a minute.` });
+      else toastSuccess({ title: 'Nothing to reset', message: 'Two-step sign-in was already off' });
+      await refresh();
     });
   }
 
   /** Same server call as before; the confirm closes only on success (onDone). */
-  function handleToggleFlsaExempt(user: User, onDone?: () => void) {
-    startTransition(async () => {
+  async function handleToggleFlsaExempt(user: User, onDone?: () => void) {
+    await busy.run('flsa', async () => {
       const newExempt = !user.flsaExempt;
       const result = await runAction(updateUser(user.id, { flsaExempt: newExempt }), { errorTitle: 'Action Failed' });
       if (!result.ok) return;
       onDone?.();
-      const refreshed = await getUsers();
-      setUsers(refreshed as User[]);
-      notifications.show({
-        title: newExempt ? 'Marked exempt' : 'Marked non-exempt',
-        message: `${user.fullName} is now FLSA ${newExempt ? 'exempt' : 'non-exempt'}.`,
-        color: newExempt ? 'signal' : 'gray',
-      });
+      await refresh();
+      toastSuccess({ title: newExempt ? 'Marked exempt' : 'Marked non-exempt', message: `${user.fullName} is now FLSA ${newExempt ? 'exempt' : 'non-exempt'}.` });
     });
   }
 
   /** Same server call as before; deactivation runs from the confirm (closed only on success), reactivation directly. */
-  function handleToggleActive(user: User, onDone?: () => void) {
+  async function handleToggleActive(user: User, onDone?: () => void) {
     if (!onDone) busyRows.start(user.id);
-    startTransition(async () => {
+    await busy.run(`active:${user.id}`, async () => {
       const newActive = !user.isActive;
       const result = await runAction(updateUser(user.id, { isActive: newActive }), { errorTitle: 'Action Failed' });
       busyRows.done(user.id);
       if (!result.ok) return;
       onDone?.();
-      const refreshed = await getUsers();
-      setUsers(refreshed as User[]);
-      notifications.show({
-        title: newActive ? 'User Activated' : 'User Deactivated',
-        message: `${user.fullName} has been ${newActive ? 'activated' : 'deactivated'}.`,
-        color: newActive ? 'success' : 'warning',
-      });
+      await refresh();
+      toastSuccess({ title: newActive ? 'User reactivated' : 'User deactivated', message: `${user.fullName} has been ${newActive ? 'reactivated' : 'deactivated'}.` });
     });
   }
 
-  const columns: MRT_ColumnDef<User>[] = [
-    { accessorKey: 'fullName', header: 'Name', size: 180 },
-    { accessorKey: 'email', header: 'Email', size: 220 },
+  const rows = useMemo(() => users.filter((u) => {
+    if (roleFilter !== 'all' && u.role !== roleFilter) return false;
+    if (statusFilter === 'active') return u.isActive;
+    if (statusFilter === 'inactive') return !u.isActive;
+    if (statusFilter === 'locked') return u.isActive && !!u.lock;
+    return true;
+  }), [users, roleFilter, statusFilter]);
+
+  const columns = useMemo<MRT_ColumnDef<User>[]>(() => [
     {
-      accessorKey: 'role',
-      header: 'Role',
-      Cell: ({ cell }) => {
-        const role = cell.getValue<string>() as keyof typeof ROLE_COLOR;
-        return (
-          <Badge color={ROLE_COLOR[role] ?? 'gray'}>
-            {role.charAt(0).toUpperCase() + role.slice(1)}
-          </Badge>
-        );
-      },
-      size: 120,
-    },
-    {
-      // The word, so the table search finds "Inactive" (UX-1 audit L3).
-      id: 'isActive',
-      accessorFn: (r) => (r.isActive ? 'Active' : 'Inactive'),
-      header: 'Status',
-      Cell: ({ row }) => (
-        <Badge color={row.original.isActive ? RECORD_STATUS_COLOR.active : RECORD_STATUS_COLOR.inactive}>
-          {row.original.isActive ? 'Active' : 'Inactive'}
-        </Badge>
+      // Search covers the name and email (the accessor), §5.2.
+      id: 'name', header: 'Name', accessorFn: (u) => `${u.fullName} ${u.email}`, enableSorting: false,
+      Cell: ({ row: { original: u } }) => (
+        <>
+          <Text fw={600} size="sm">{u.fullName}</Text>
+          <Text size="xs" c="dimmed">{u.email}{u.id === currentUserId ? ' · you' : ''}</Text>
+        </>
       ),
-      size: 100,
+    },
+    { id: 'role', header: 'Role', accessorFn: (u) => ROLE_WORD[u.role], enableSorting: false, enableGlobalFilter: false },
+    {
+      id: 'approver', header: 'Approver', enableSorting: false, enableGlobalFilter: false,
+      Cell: ({ row: { original: u } }) => (u.role === 'employee'
+        ? <span className={classes.dim}>CLIN supervisors</span>
+        : u.approverName ? u.approverName : <span className={classes.dim}>None — admins approve</span>),
+    },
+    { id: 'overtime', header: 'Overtime', accessorFn: (u) => (u.flsaExempt ? 'Exempt' : 'Non-exempt'), enableSorting: false, enableGlobalFilter: false },
+    {
+      id: 'mfa', header: 'Two-step sign-in', enableSorting: false, enableGlobalFilter: false,
+      Cell: ({ row: { original: u } }) => <StatusBadge word={u.mfaEnabled ? 'On' : 'Off'} tone={u.mfaEnabled ? 'ok' : 'dim'} />,
     },
     {
-      id: 'flsaExempt',
-      accessorFn: (r) => (r.flsaExempt ? 'Exempt' : 'Non-exempt'),
-      header: 'FLSA',
-      Cell: ({ row }) => (row.original.flsaExempt ? 'Exempt' : 'Non-exempt'),
-      size: 110,
+      id: 'status', header: 'Status', enableSorting: false, enableGlobalFilter: false,
+      Cell: ({ row: { original: u } }) => (u.isActive && u.lock
+        ? <span data-testid="user-locked"><StatusBadge word={`Locked · ${formatCount(u.lock.minutesRemaining)} min`} tone="warn" /></span>
+        : <StatusBadge status={u.isActive ? 'active' : 'inactive'} />),
     },
-  ];
+  ], [currentUserId]);
 
   const table = useAppTable({
     columns,
-    data: users,
+    data: rows,
+    hairline: true,
+    compact: rows.length <= 25,
     enableRowActions: true,
     renderRowActions: ({ row }) => {
       const user = row.original;
+      const all: Record<string, RowAction> = {
+        // Credential actions stay available in read-only mode, matching the server (users.ts unlock, password.ts, mfa.ts).
+        unlock: { key: 'unlock', label: 'Unlock now', icon: 'unlock', writes: false, busy: busyRows.isBusy(user.id), onSelect: () => { void handleUnlock(user); } },
+        'reset-password': { key: 'reset-password', label: 'Reset password…', icon: 'resetPassword', writes: false, onSelect: () => { setResetTarget(user); setResetPassword(''); setResetError(null); } },
+        'reset-mfa': { key: 'reset-mfa', label: 'Reset two-step sign-in…', icon: 'lock', writes: false, onSelect: () => { setMfaTarget(user); setMfaPassword(''); setMfaError(null); } },
+        flsa: { key: 'flsa', label: user.flsaExempt ? 'Mark as non-exempt…' : 'Mark as exempt…', icon: 'flsa', onSelect: () => setConfirmFlsa(user) },
+        deactivate: {
+          key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger', onSelect: () => setConfirmDeactivate(user),
+          disabledReason: user.id === currentUserId ? "You can't deactivate your own account" : undefined,
+        },
+        reactivate: { key: 'reactivate', label: 'Reactivate', icon: 'reactivate', busy: busyRows.isBusy(user.id), onSelect: () => { void handleToggleActive(user); } },
+      };
       return (
         <RowActions
           rowLabel={user.fullName}
-          primary={{ key: 'edit', label: 'Edit', icon: 'edit', onSelect: () => openEditModal(user) }}
-          items={[
-            // Credential actions stay available in read-only mode, matching the server (users.ts unlock, password.ts).
-            { key: 'reset-password', label: 'Reset password…', icon: 'resetPassword', writes: false, onSelect: () => openResetModal(user) },
-            { key: 'unlock', label: 'Unlock account', icon: 'unlock', writes: false, busy: busyRows.isBusy(user.id), onSelect: () => handleUnlockAccount(user) },
-            { key: 'flsa', label: user.flsaExempt ? 'Mark as non-exempt…' : 'Mark as FLSA exempt…', icon: 'flsa', onSelect: () => setConfirmFlsa(user) },
-            user.isActive
-              ? {
-                key: 'deactivate', label: 'Deactivate…', icon: 'deactivate', tone: 'danger', onSelect: () => setConfirmDeactivate(user),
-                disabledReason: user.id === currentUserId ? "You can't deactivate your own account" : undefined,
-              }
-              : { key: 'reactivate', label: 'Reactivate', icon: 'reactivate', busy: busyRows.isBusy(user.id), onSelect: () => handleToggleActive(user) },
-          ]}
+          primary={{ key: 'edit', label: 'Edit', icon: 'edit', onSelect: () => openEdit(user) }}
+          items={userMenuKeys(user, currentUserId).map((k) => all[k])}
         />
       );
     },
+    emptyState: { title: 'No users match.' },
   });
+
+  // ── Drawer ──────────────────────────────────────────────────────────────────────────────────────────────────────
+  const errorList = (Object.entries(fieldErrors) as Array<[FieldKey, string]>).filter(([, v]) => v);
+  const approverOptions = approverSelectOptions({ id: editingUser?.id ?? '', role: form.role }, users);
+  const passwordRules = PASSWORD_RULES.map((r) => ({ ...r, ok: r.met(form.password) }));
+  const focusField = (k: FieldKey) => {
+    const el = fieldRefs.current[k];
+    const target = el?.matches('input, textarea, select') ? el : el?.querySelector<HTMLElement>('input');
+    target?.focus();
+  };
 
   return (
     <>
       <PageHeader
-        title="User Management"
-        actions={
-          <WriteButton leftSection={<Icons.create size={ICON_SIZE.button} />} onClick={openCreateModal}>
-            Add User
-          </WriteButton>
-        }
+        title="Users"
+        description="Everyone who can sign in: their role, who approves their timesheets, and their overtime status."
+        actions={<WriteButton leftSection={<Icons.create size={ICON_SIZE.button} />} onClick={openCreate}>Add user</WriteButton>}
       />
+      <Group align="flex-end" gap="md" mb="sm" wrap="wrap">
+        <Select label="Role" w={180} allowDeselect={false} value={roleFilter} onChange={(v) => setRoleFilter((v as 'all' | Role) ?? 'all')}
+          data={[{ value: 'all', label: 'All roles' }, { value: 'admin', label: 'Admin' }, { value: 'supervisor', label: 'Supervisor' }, { value: 'employee', label: 'Employee' }]} />
+        <Select label="Status" w={160} allowDeselect={false} value={statusFilter} onChange={(v) => setStatusFilter((v as StatusFilter) ?? 'active')}
+          data={[{ value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }, { value: 'locked', label: 'Locked' }, { value: 'all', label: 'All' }]} />
+        {seats && (
+          <Text size="sm" c="dimmed" ml="auto" data-testid="seat-line">
+            {formatCount(seats.active)} active{freeSeats !== null && seats.limit !== null ? ` · ${formatCount(freeSeats)} of ${formatCount(seats.limit)} seats free` : ''}
+          </Text>
+        )}
+      </Group>
       <MantineReactTable table={table} />
 
       <ConfirmModal
@@ -406,8 +443,8 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
         title={`Deactivate ${shownDeactivate?.fullName ?? ''}?`}
         message="They're signed out and can't sign in. Timesheets waiting for their approval go to admins. Their timesheets and history stay on record."
         confirmLabel="Deactivate"
-        loading={isPending}
-        onConfirm={() => confirmDeactivate && handleToggleActive(confirmDeactivate, () => setConfirmDeactivate(null))}
+        loading={confirmDeactivate ? busy.is(`active:${confirmDeactivate.id}`) : false}
+        onConfirm={() => { if (confirmDeactivate) void handleToggleActive(confirmDeactivate, () => setConfirmDeactivate(null)); }}
         onCancel={() => setConfirmDeactivate(null)}
       />
 
@@ -417,82 +454,86 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
         title={shownFlsa ? `Mark ${shownFlsa.fullName} as FLSA ${shownFlsa.flsaExempt ? 'non-exempt' : 'exempt'}?` : ''}
         message="Payroll export uses this to calculate overtime for every period, including past ones."
         confirmLabel={shownFlsa?.flsaExempt ? 'Mark as non-exempt' : 'Mark as exempt'}
-        loading={isPending}
-        onConfirm={() => confirmFlsa && handleToggleFlsaExempt(confirmFlsa, () => setConfirmFlsa(null))}
+        loading={busy.is('flsa')}
+        onConfirm={() => { if (confirmFlsa) void handleToggleFlsaExempt(confirmFlsa, () => setConfirmFlsa(null)); }}
         onCancel={() => setConfirmFlsa(null)}
       />
 
-      <Modal
-        opened={resetModalOpen}
-        onClose={() => setResetModalOpen(false)}
-        title={`Reset Password — ${resetTarget?.fullName}`}
-        size="sm"
-      >
+      <Modal opened={!!resetTarget} onClose={() => { if (!busy.is('reset-password')) setResetTarget(null); }} title={`Reset password — ${shownReset?.fullName ?? ''}`} size="sm">
         <Stack>
-          <Text size="sm" c="dimmed">
-            Set a new password for {resetTarget?.fullName} ({resetTarget?.email}).
-            The user will need to use this password to log in.
-          </Text>
-          <PasswordInput
-            label="New Password"
-            placeholder="Minimum 8 characters"
-            value={resetPassword}
-            onChange={(e) => setResetPassword(e.currentTarget.value)}
-            required
-          />
-          {resetError && (
-            <Alert icon={<Icons.statusError size={ICON_SIZE.button} />} color="red">
-              {resetError}
-            </Alert>
-          )}
+          <Text size="sm" c="dimmed">Set a new password for {shownReset?.fullName} ({shownReset?.email}). They&apos;re signed out and sign in with it.</Text>
+          <PasswordInput label="New password" required value={resetPassword} onChange={(e) => setResetPassword(e.currentTarget.value)} />
+          {resetError && <Alert color="red" role="alert">{resetError}</Alert>}
           <Group justify="flex-end">
-            <Button variant="default" onClick={() => setResetModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleResetPassword}
-              loading={isPending}
-              disabled={!resetPassword || resetPassword.length < 8}
-              color="warning"
-            >
-              Reset Password
-            </Button>
+            <Button variant="default" onClick={() => { if (!busy.is('reset-password')) setResetTarget(null); }}>Cancel</Button>
+            <Button color="warning" {...busy.props('reset-password')} onClick={() => { void handleResetPassword(); }}>Reset password</Button>
           </Group>
         </Stack>
       </Modal>
 
-      <Modal
-        opened={modalOpen}
-        onClose={() => setModalOpen(false)}
-        title={editingUser ? 'Edit User' : 'Create User'}
+      <Modal opened={!!mfaTarget} onClose={() => { if (!busy.is('reset-mfa')) setMfaTarget(null); }} title={`Reset two-step sign-in for ${shownMfa?.fullName ?? ''}?`} size="md">
+        <Stack>
+          <Text size="sm">They&apos;re signed out within a minute. They&apos;ll sign in with just their password and can turn two-step sign-in on again from their profile.</Text>
+          <PasswordInput label="Your password" required value={mfaPassword} onChange={(e) => setMfaPassword(e.currentTarget.value)} autoComplete="current-password" />
+          {mfaError && <Alert color="red" role="alert" data-testid="mfa-reset-error">{mfaError}</Alert>}
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => { if (!busy.is('reset-mfa')) setMfaTarget(null); }}>Cancel</Button>
+            <Button color="warning" {...busy.props('reset-mfa')} onClick={() => { void handleResetMfa(); }}>Reset two-step sign-in</Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Drawer
+        opened={drawerOpen}
+        onClose={() => { if (!busy.is('save')) setDrawerOpen(false); }}
+        title={editingUser ? 'Edit user' : 'Add user'}
+        position="right"
         size="md"
         closeOnEscape={!roleConfirm}
       >
         <Stack>
-          <TextInput
-            label="Full Name"
-            required
-            value={form.fullName}
-            onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))}
-          />
-          <TextInput
-            label="Email"
-            type="email"
-            required
-            value={form.email}
-            onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-          />
+          {/* One summary of every problem (links focus the field), plus the server's error — hidden while the role confirm shows it. */}
+          {(errorList.length > 0 || (formError && !roleConfirm)) && (
+            <Alert color="red" role="alert" data-testid="user-form-alert">
+              {errorList.length > 0 && (
+                <>
+                  <Text size="sm" fw={600}>Fix {formatCount(errorList.length)} {errorList.length === 1 ? 'thing' : 'things'} to {editingUser ? 'save this user' : 'add this user'}:</Text>
+                  <List size="sm" mt={4}>
+                    {errorList.map(([k, msg]) => (
+                      <List.Item key={k}><Anchor component="button" type="button" size="sm" className={classes.alertLink} onClick={() => focusField(k)}>{msg}</Anchor></List.Item>
+                    ))}
+                  </List>
+                </>
+              )}
+              {formError && !roleConfirm && <Text size="sm" mt={errorList.length > 0 ? 4 : 0}>{formError}</Text>}
+            </Alert>
+          )}
+          <TextInput label="Full name" required ref={(el) => { fieldRefs.current.fullName = el; }} error={fieldErrors.fullName}
+            value={form.fullName} onChange={(e) => { const v = e.target.value; setForm((f) => ({ ...f, fullName: v })); }} />
+          <TextInput label="Email" type="email" required ref={(el) => { fieldRefs.current.email = el; }} error={fieldErrors.email}
+            value={form.email} onChange={(e) => { const v = e.target.value; setForm((f) => ({ ...f, email: v })); }} />
           <Select
             label="Role"
             description={editingUser?.id === currentUserId ? "You can't change your own role" : undefined}
             data={ROLE_OPTIONS}
             value={form.role}
-            onChange={(val) => setForm((f) => ({ ...f, role: val ?? 'employee' }))}
-            disabled={editingUser?.id === currentUserId}
+            allowDeselect={false}
+            onChange={(val) => { if (editingUser?.id !== currentUserId) setForm((f) => ({ ...f, role: val ?? 'employee' })); }}
+            readOnly={editingUser?.id === currentUserId}
             required
           />
+          <Radio.Group
+            label="Overtime status" required description="Payroll export uses this to work out overtime."
+            ref={(el) => { fieldRefs.current.overtime = el; }}
+            value={form.overtime} error={fieldErrors.overtime}
+            onChange={(v) => setForm((f) => ({ ...f, overtime: v as UserForm['overtime'] }))}
+          >
+            <Group mt={6}>
+              <Radio value="nonexempt" label="Non-exempt (paid overtime)" />
+              <Radio value="exempt" label="Exempt" />
+            </Group>
+          </Radio.Group>
           {(() => {
-            const approverOptions = editingUser ? approverSelectOptions({ id: editingUser.id, role: form.role }, users) : null;
             return approverOptions && (
               <Select
                 label="Approver"
@@ -505,29 +546,22 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
             );
           })()}
           {!editingUser && (
-            <PasswordInput
-              label="Password"
-              required
-              value={form.password}
-              onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-              placeholder="Minimum 8 characters"
-            />
+            <div>
+              <PasswordInput label="Temporary password" required ref={(el) => { fieldRefs.current.password = el; }} error={fieldErrors.password}
+                value={form.password} onChange={(e) => { const v = e.target.value; setForm((f) => ({ ...f, password: v })); }}
+                description="Share it with them privately. They can change it after signing in." />
+              <ul className={classes.rules} data-testid="password-rules">
+                {passwordRules.map((r) => <li key={r.id} data-met={r.ok || undefined}>{r.ok ? '✓' : '·'} {r.label}</li>)}
+              </ul>
+            </div>
           )}
-          {formError && !roleConfirm && (
-            <Badge color="red" size="lg" style={{ whiteSpace: 'normal', height: 'auto', padding: '8px' }}>
-              {formError}
-            </Badge>
-          )}
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setModalOpen(false)}>
-              Cancel
-            </Button>
-            <WriteButton onClick={() => handleSubmit()} loading={isPending}>
-              {editingUser ? 'Save Changes' : 'Create User'}
-            </WriteButton>
+          <Group justify="flex-end" gap="sm" mt="sm">
+            {!editingUser && freeSeats !== null && <Text size="sm" c="dimmed" mr="auto" data-testid="seat-use">Uses 1 of {formatCount(freeSeats)} free seats</Text>}
+            <Button variant="default" onClick={() => { if (!busy.is('save')) setDrawerOpen(false); }}>Cancel</Button>
+            <WriteButton {...busy.props('save')} onClick={() => { void handleSubmit(); }}>{editingUser ? 'Save changes' : 'Add user'}</WriteButton>
           </Group>
         </Stack>
-      </Modal>
+      </Drawer>
 
       <ConfirmModal
         opened={!!roleConfirm}
@@ -535,9 +569,9 @@ export function UsersClient({ initialUsers, currentUserId }: Props) {
         title={roleCopy?.title ?? ''}
         message={roleCopy?.message ?? ''}
         confirmLabel={roleCopy?.confirmLabel}
-        loading={isPending}
+        loading={busy.is('save')}
         error={formError}
-        onConfirm={() => handleSubmit({ confirmed: true })}
+        onConfirm={() => { void handleSubmit({ confirmed: true }); }}
         onCancel={() => { setRoleConfirm(null); setFormError(null); }}   // UX-4A-AUDIT.md L3: the error belonged to the confirm
       />
     </>

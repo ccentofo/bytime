@@ -1,20 +1,22 @@
 'use server';
 
 import { getDb, getDbForAuth, getDbForWrite } from '@/db';
-import { users } from '@/db/schema';
+import { userAssignments, users } from '@/db/schema';
 import bcrypt from 'bcryptjs';
 import { eq, and, sql } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh, AuthorizationError } from '@/lib/session';
-import { unlockAccount } from '@/server/internal/login-attempts';
+import { getLockoutsForEmails, unlockAccount } from '@/server/internal/login-attempts';
 import { SAFE_USER_COLUMNS } from '@/server/internal/users';
 import { assertSeatsAvailable } from '@/server/internal/seats';
-import { loadApprovalFacts, lockUserRulesExclusive, newlyEligible, recomputeSelfApproval, snapshotSubmittedEligibility } from '@/server/internal/approval-rules';
+import { effectiveDesignee, loadApprovalFacts, lockUserRulesExclusive, newlyEligible, recomputeSelfApproval, snapshotSubmittedEligibility, type ApprovalFacts } from '@/server/internal/approval-rules';
 import { approvalNotices } from '@/server/internal/approval-notices';
 import { notifyReroutedApprovals } from '@/server/internal/submission-notify';
-import { validateEmail, validateRequired, validateStringLength, validateEnum } from '@/lib/validation';
+import { validateEmail, validateRequired, validateStringLength, validateEnum, validateUUID } from '@/lib/validation';
 import { UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
 import { logAdminChange } from '@/server/internal/admin-change-log';
+import { validatePassword } from '@/lib/password-rules';
+import type { DbTx } from '@/db';
 
 const USER_ROLES = ['admin', 'supervisor', 'employee'] as const;
 
@@ -25,34 +27,42 @@ export async function getUsers() {
   return db.select(SAFE_USER_COLUMNS).from(users).orderBy(users.fullName);
 }
 
-export async function createUser(data: {
-  email: string;
-  fullName: string;
-  role?: 'admin' | 'supervisor' | 'employee';
-}) {
-  return userAction(async () => {
-    const actor = await requireAdminFresh();
-    const db = await getDbForWrite();
-    const validatedData = {
-      email: validateEmail(data.email),
-      fullName: validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255),
-      role: data.role ? validateEnum(data.role, 'Role', USER_ROLES) : 'employee' as const,
-    };
-    // certified-outputs C2 (CO-D19, ruling Q5): the insert, the self-approval recompute and the re-routing snapshot run
-    // in one transaction; the waiting timesheets' newly eligible approvers are emailed after it commits.
-    const { user, rerouted } = await db.transaction(async (tx) => {
-      await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
-      await assertSeatsAvailable(1, tx);
-      const beforeFacts = await loadApprovalFacts(tx);
-      const before = await snapshotSubmittedEligibility(tx, beforeFacts);
-      const [row] = await tx.insert(users).values(validatedData).returning(SAFE_USER_COLUMNS);
-      await recomputeSelfApproval(tx, actor.id, `${row.fullName} added (${row.role})`, { before: beforeFacts });
-      return { user: row, rerouted: newlyEligible(before, await snapshotSubmittedEligibility(tx)) };
-    });
-    await notifyReroutedApprovals(rerouted);
-    return user;
+/** A Users-page row (feature-plan-ux-people-codes.md §5.1): the safe columns plus what the page shows. Never a secret. */
+export type AdminPageUser = Awaited<ReturnType<typeof getUsers>>[number] & {
+  /** users.totp_enabled, as a boolean only — no TOTP secret or recovery codes leave the server. */
+  mfaEnabled: boolean;
+  /** Locked by failed sign-ins: minutes left (truncated, > 0), else null. */
+  lock: { minutesRemaining: number } | null;
+  /** Supervisors and admins: their effective approver's name (the approvals rule), else null. */
+  approverName: string | null;
+};
+
+/**
+ * The Users page's read (§5.1): getUsers' columns plus two-step on/off, the lock (ONE bounded login_attempts query for
+ * every email, the same arithmetic as sign-in) and the server-computed approver. getUsers itself is unchanged.
+ */
+export async function getUsersForAdminPage(): Promise<AdminPageUser[]> {
+  await requireAdmin();
+  const db = await getDb();
+  const rows = await db.select({ ...SAFE_USER_COLUMNS, mfaEnabled: users.totpEnabled }).from(users).orderBy(users.fullName);
+  const locks = await getLockoutsForEmails(db, rows.map((r) => r.email));
+  const facts: ApprovalFacts = { users: new Map(rows.map((r) => [r.id, { id: r.id, role: r.role, isActive: r.isActive, approverId: r.approverId }])), clinsByUser: new Map() };
+  const nameById = new Map(rows.map((r) => [r.id, r.fullName]));
+  return rows.map((r) => {
+    const lock = r.isActive ? locks.get(r.email.toLowerCase().trim()) : undefined;
+    const designee = r.role === 'employee' ? null : effectiveDesignee(facts, r.id);
+    return { ...r, mfaEnabled: r.mfaEnabled === true, lock: lock ? { minutesRemaining: lock.minutesRemaining } : null, approverName: designee ? nameById.get(designee) ?? null : null };
   });
 }
+
+/** The approver a supervisor or admin may be given: an active admin or supervisor (setUserApprover and the create path). */
+async function assertValidApprover(tx: Pick<DbTx, 'select'>, approverId: string): Promise<void> {
+  const [approver] = await tx.select({ role: users.role, isActive: users.isActive }).from(users).where(eq(users.id, approverId));
+  if (!approver || !approver.isActive || (approver.role !== 'admin' && approver.role !== 'supervisor')) {
+    throw new UserFacingError('The approver must be an active admin or supervisor.');
+  }
+}
+const APPROVER_ROLES_ONLY = 'Approvers can be designated for supervisors and admins only. Employees are approved by their CLIN supervisors and admins.';
 
 export async function unlockUserAccount(email: string): Promise<ActionResult<void>> {
   return userAction(async () => {
@@ -135,6 +145,9 @@ export async function updateUser(id: string, data: {
 
     const result = await db.transaction(async (tx) => {
       await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
+      // feature-plan-ux-people-codes.md R5: the old values, for the change log (a plain read; the lock order is unchanged).
+      const [old] = await tx.select({ role: users.role, isActive: users.isActive, flsaExempt: users.flsaExempt }).from(users).where(eq(users.id, id));
+      if (!old) throw new UserFacingError('User not found.', 'not_found');
       if (activating) {
         // Reactivating a user takes a seat, same as creating one (R2-11).
         const [target] = await tx.select({ isActive: users.isActive }).from(users).where(eq(users.id, id)).for('update');
@@ -180,6 +193,30 @@ export async function updateUser(id: string, data: {
       const before = await snapshotSubmittedEligibility(tx, beforeFacts);
       const rows = await tx.update(users).set(updateData).where(eq(users.id, id)).returning(SAFE_USER_COLUMNS);
       const changed = rows[0];
+      // R5: log only what actually changed, in this transaction (a failed log rolls the change back).
+      if (data.role !== undefined && changed && changed.role !== old.role) {
+        // A promotion to supervisor lists the CLINs they now approve on (their active CLIN rows — R8).
+        const clinIds = changed.role === 'supervisor'
+          ? (await tx.select({ clinId: userAssignments.clinId }).from(userAssignments)
+            .where(and(eq(userAssignments.userId, id), eq(userAssignments.isActive, true)))).map((r) => r.clinId).sort()
+          : undefined;
+        await logAdminChange(tx, {
+          actorId: actor.id, entity: 'user', entityId: id, action: 'role_changed',
+          oldValue: { role: old.role }, newValue: clinIds ? { role: changed.role, clinIds } : { role: changed.role },
+        });
+      }
+      if (data.isActive !== undefined && changed && changed.isActive !== old.isActive) {
+        await logAdminChange(tx, {
+          actorId: actor.id, entity: 'user', entityId: id, action: changed.isActive ? 'reactivated' : 'deactivated',
+          oldValue: { isActive: old.isActive }, newValue: { isActive: changed.isActive },
+        });
+      }
+      if (data.flsaExempt !== undefined && changed && changed.flsaExempt !== old.flsaExempt) {
+        await logAdminChange(tx, {
+          actorId: actor.id, entity: 'user', entityId: id, action: 'flsa_changed',
+          oldValue: { flsaExempt: old.flsaExempt }, newValue: { flsaExempt: changed.flsaExempt },
+        });
+      }
       const reason = !changed ? 'user update'
         : data.isActive === false ? `${changed.fullName} deactivated`
         : data.isActive === true ? `${changed.fullName} reactivated`
@@ -194,11 +231,19 @@ export async function updateUser(id: string, data: {
   });
 }
 
+/**
+ * Add a user with a temporary password (feature-plan-ux-people-codes.md R7, §5.1): the overtime status is required
+ * (no default), the password follows password-rules.ts, the email is validated, and an approver may be set only for a
+ * supervisor or admin. Logs `created` (role, overtime status), plus `approver_changed` when an approver is set. A
+ * duplicate email is the existing friendly `conflict` (userAction).
+ */
 export async function createUserWithPassword(data: {
   email: string;
   fullName: string;
   role: 'admin' | 'supervisor' | 'employee';
   password: string;
+  flsaExempt: boolean;
+  approverId?: string | null;
 }) {
   return userAction(async () => {
     const actor = await requireAdminFresh();
@@ -206,11 +251,17 @@ export async function createUserWithPassword(data: {
     const validatedEmail = validateEmail(data.email);
     const validatedName = validateStringLength(validateRequired(data.fullName, 'Full name'), 'Full name', 1, 255);
     const validatedRole = validateEnum(data.role, 'Role', USER_ROLES);
+    if (typeof data.flsaExempt !== 'boolean') throw new UserFacingError('Choose an overtime status.');
+    const passwordError = validatePassword(data.password);
+    if (passwordError) throw new UserFacingError(passwordError);
+    const approverId = data.approverId ? validateUUID(data.approverId, 'Approver') : null;
+    if (approverId && validatedRole === 'employee') throw new UserFacingError(APPROVER_ROLES_ONLY);
     const hash = await bcrypt.hash(data.password, 12);
     // certified-outputs C2 (ruling Q5): one transaction with the self-approval recompute and re-routing snapshot.
     const { user, rerouted } = await db.transaction(async (tx) => {
       await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
       await assertSeatsAvailable(1, tx);
+      if (approverId) await assertValidApprover(tx, approverId);
       const beforeFacts = await loadApprovalFacts(tx);
       const before = await snapshotSubmittedEligibility(tx, beforeFacts);
       const [row] = await tx.insert(users).values({
@@ -218,7 +269,13 @@ export async function createUserWithPassword(data: {
         fullName: validatedName,
         role: validatedRole,
         passwordHash: hash,
+        flsaExempt: data.flsaExempt,
+        approverId,
       }).returning(SAFE_USER_COLUMNS);
+      await logAdminChange(tx, { actorId: actor.id, entity: 'user', entityId: row.id, action: 'created', oldValue: null, newValue: { role: row.role, flsaExempt: row.flsaExempt } });
+      if (approverId) {
+        await logAdminChange(tx, { actorId: actor.id, entity: 'user', entityId: row.id, action: 'approver_changed', oldValue: { approverId: null }, newValue: { approverId } });
+      }
       await recomputeSelfApproval(tx, actor.id, `${row.fullName} added (${row.role})`, { before: beforeFacts });
       return { user: row, rerouted: newlyEligible(before, await snapshotSubmittedEligibility(tx)) };
     });
@@ -245,15 +302,8 @@ export async function setUserApprover(userId: string, approverId: string | null)
       const [target] = await tx.select({ id: users.id, fullName: users.fullName, role: users.role, approverId: users.approverId })
         .from(users).where(eq(users.id, userId)).for('update');
       if (!target) throw new UserFacingError('User not found.', 'not_found');
-      if (target.role !== 'supervisor' && target.role !== 'admin') {
-        throw new UserFacingError('Approvers can be designated for supervisors and admins only. Employees are approved by their CLIN supervisors and admins.');
-      }
-      if (approverId !== null) {
-        const [approver] = await tx.select({ role: users.role, isActive: users.isActive }).from(users).where(eq(users.id, approverId));
-        if (!approver || !approver.isActive || (approver.role !== 'admin' && approver.role !== 'supervisor')) {
-          throw new UserFacingError('The approver must be an active admin or supervisor.');
-        }
-      }
+      if (target.role !== 'supervisor' && target.role !== 'admin') throw new UserFacingError(APPROVER_ROLES_ONLY);
+      if (approverId !== null) await assertValidApprover(tx, approverId);
       if (target.approverId === approverId) return [];
 
       const beforeFacts = await loadApprovalFacts(tx);

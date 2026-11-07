@@ -14,7 +14,6 @@ const ROOT = path.resolve(__dirname, '../../..');
 
 /** The six enumerated writers (CERTIFIED-OUTPUTS-AUDIT.md F1). */
 const WRITERS: Array<{ file: string; fn: string }> = [
-  { file: 'src/server/actions/users.ts', fn: 'createUser' },
   { file: 'src/server/actions/users.ts', fn: 'updateUser' },
   { file: 'src/server/actions/users.ts', fn: 'createUserWithPassword' },
   { file: 'src/server/actions/users.ts', fn: 'setUserApprover' },

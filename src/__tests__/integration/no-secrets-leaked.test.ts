@@ -100,6 +100,7 @@ describe('No secrets sent to the browser (R2-3)', () => {
       fullName: 'New Hire',
       role: 'employee',
       password: 'SomeStrongPass123!',
+      flsaExempt: false,
     }));
     assertNoSecretKeys(result as any);
   });

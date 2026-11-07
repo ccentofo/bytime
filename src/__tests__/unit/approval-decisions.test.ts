@@ -362,8 +362,9 @@ describe('R2 — a pre-C2 workspace\'s first recorded state is not a switch', ()
 
   it('every writer passes the facts from before its write (static)', async () => {
     const users = readFileSync(path.join(ROOT, 'src/server/actions/users.ts'), 'utf8');
-    expect(users.match(/, \{ before: beforeFacts \}\);/g)).toHaveLength(4);
-    expect(users.match(/const before = await snapshotSubmittedEligibility\(tx, beforeFacts\);/g)).toHaveLength(4);
+    // UX-4c R5: createUser is gone (no app caller), so three writers remain.
+    expect(users.match(/, \{ before: beforeFacts \}\);/g)).toHaveLength(3);
+    expect(users.match(/const before = await snapshotSubmittedEligibility\(tx, beforeFacts\);/g)).toHaveLength(3);
     expect(readFileSync(path.join(ROOT, 'src/server/actions/import.ts'), 'utf8')).toMatch(/user\(s\) imported`, \{ before: beforeFacts \}\);/);
   });
 });
@@ -448,7 +449,6 @@ describe('static rules', () => {
     expect(writers.map((w) => `${w.file}:${w.fn}`).sort()).toEqual(expect.arrayContaining([
       'src/lib/tenant/provision.ts:provisionTenant',
       'src/server/actions/import.ts:bulkImportEmployees',
-      'src/server/actions/users.ts:createUser',
       'src/server/actions/users.ts:createUserWithPassword',
       'src/server/actions/users.ts:setUserApprover',
       'src/server/actions/users.ts:updateUser',

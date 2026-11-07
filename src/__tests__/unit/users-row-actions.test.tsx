@@ -10,14 +10,16 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
 const actions = vi.hoisted(() => ({
   updateUser: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ ok: true, data: {} })),
   getUsers: vi.fn(async () => []),
+  resetMfa: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ ok: true, data: { changed: true } })),
   unlockUserAccount: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ ok: true, data: undefined })),
   setUserApprover: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ ok: true, data: undefined })),
 }));
 vi.mock('@/server/actions/users', () => ({
-  updateUser: actions.updateUser, getUsers: actions.getUsers, unlockUserAccount: actions.unlockUserAccount,
+  updateUser: actions.updateUser, getUsersForAdminPage: actions.getUsers, unlockUserAccount: actions.unlockUserAccount,
   createUserWithPassword: vi.fn(), setUserApprover: actions.setUserApprover,
 }));
 vi.mock('@/server/actions/password', () => ({ adminResetPassword: vi.fn() }));
+vi.mock('@/server/actions/mfa', () => ({ adminResetMfa: actions.resetMfa }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
 import { UsersClient, roleChangeCopy } from '@/app/(app)/admin/users/UsersClient';
@@ -27,7 +29,7 @@ import { act } from 'react';
 import { readFileSync } from 'node:fs';
 import { expectNoAxeViolations } from '../helpers/axe';
 
-const user = (id: string, fullName: string, extra: Partial<{ isActive: boolean; flsaExempt: boolean; role: 'admin' | 'supervisor' | 'employee'; approverId: string | null }> = {}) => ({
+const user = (id: string, fullName: string, extra: Partial<{ isActive: boolean; flsaExempt: boolean; role: 'admin' | 'supervisor' | 'employee'; approverId: string | null; mfaEnabled: boolean; lock: { minutesRemaining: number } | null }> = {}) => ({
   id, email: `${id}@x.test`, fullName, role: 'employee' as const, isActive: true, flsaExempt: false, approverId: null,
   createdAt: new Date(), updatedAt: new Date(), ...extra,
 });
@@ -72,15 +74,15 @@ describe('Users row actions (T9)', () => {
     expect(dialogTitled('Deactivate Pat Doe?')).toBeDefined();
   });
 
-  it('Mark as FLSA exempt → neutral confirm → Cancel: no call; Confirm: { flsaExempt: true }', async () => {
+  it('Mark as exempt → neutral confirm → Cancel: no call; Confirm: { flsaExempt: true }', async () => {
     await render();
-    await chooseRowAction('Pat Doe', 'Mark as FLSA exempt…');
+    await chooseRowAction('Pat Doe', 'Mark as exempt…');
     const dialog = dialogTitled('Mark Pat Doe as FLSA exempt?')!;
     expect(dialog.textContent).toContain('Payroll export uses this to calculate overtime for every period, including past ones.');
     expect(buttonByText('Mark as exempt').getAttribute('style') ?? '').not.toContain('--mantine-color-red');
     await click(buttonByText('Cancel'));
     expect(actions.updateUser).not.toHaveBeenCalled();
-    await chooseRowAction('Pat Doe', 'Mark as FLSA exempt…');
+    await chooseRowAction('Pat Doe', 'Mark as exempt…');
     await click(buttonByText('Mark as exempt'));
     expect(actions.updateUser).toHaveBeenCalledTimes(1);
     expect(actions.updateUser).toHaveBeenCalledWith('u2', { flsaExempt: true });
@@ -89,7 +91,7 @@ describe('Users row actions (T9)', () => {
   it('a refused FLSA change keeps its confirm open and its button enabled (closes only on success)', async () => {
     actions.updateUser.mockResolvedValueOnce({ ok: false, code: 'validation', error: 'No.' } as never);
     await render();
-    await chooseRowAction('Pat Doe', 'Mark as FLSA exempt…');
+    await chooseRowAction('Pat Doe', 'Mark as exempt…');
     await click(buttonByText('Mark as exempt'));
     expect(actions.updateUser).toHaveBeenCalledTimes(1);
     expect(dialogTitled('Mark Pat Doe as FLSA exempt?')).toBeDefined();
@@ -107,20 +109,24 @@ describe('Users row actions (T9)', () => {
   });
 
   it('read-only: Reset password and Unlock stay enabled; Deactivate and FLSA are disabled; Unlock calls the server', async () => {
-    await render('read_only');
+    const people = [user('me', 'Ann Admin'), user('u2', 'Pat Doe', { lock: { minutesRemaining: 9 } })];
+    m = await mount(<UsersClient initialUsers={people} currentUserId="me" />, 'read_only');
     await openRowMenu('Pat Doe');
     expect(menuItem('Reset password…')!.getAttribute('aria-disabled')).toBeNull();
-    expect(menuItem('Unlock account')!.getAttribute('aria-disabled')).toBeNull();
-    expect(menuItem('Mark as FLSA exempt…')!.getAttribute('aria-disabled')).toBe('true');
+    expect(menuItem('Unlock now')!.getAttribute('aria-disabled')).toBeNull();
+    expect(menuItem('Mark as exempt…')!.getAttribute('aria-disabled')).toBe('true');
     expect(menuItem('Deactivate…')!.getAttribute('aria-disabled')).toBe('true');
     await expectNoAxeViolations(document.body);
-    await click(menuItem('Unlock account'));
+    await click(menuItem('Unlock now'));
     expect(actions.unlockUserAccount).toHaveBeenCalledWith('u2@x.test');
   });
 
-  it('L3: the table search finds the Status and FLSA words', async () => {
+  it('§5.2: search covers the name and email; the Status filter shows inactive people', async () => {
     const people = [user('me', 'Ann Admin'), user('u3', 'Gone Person', { isActive: false, flsaExempt: true })];
     m = await mount(<UsersClient initialUsers={people} currentUserId="me" />);
+    const statusLabel = [...document.body.querySelectorAll<HTMLLabelElement>('label')].find((l) => l.textContent?.trim() === 'Status')!;
+    await click(document.getElementById(statusLabel.htmlFor));
+    await click([...document.body.querySelectorAll('[role="option"]')].find((o) => o.textContent === 'All'));
     const names = () => [...m!.container.querySelectorAll('tbody tr')].map((r) => r.textContent ?? '').filter((t) => /Admin|Person/.test(t));
     const search = async (q: string) => {
       const input = m!.container.querySelector('input[aria-label="Search this table"]') as HTMLInputElement;
@@ -130,9 +136,9 @@ describe('Users row actions (T9)', () => {
       });
       await wait(350); // MRT debounces the global filter 250 ms
     };
-    await search('Inactive');
+    await search('u3@x');
     expect(names()).toEqual([expect.stringContaining('Gone Person')]);
-    await search('Non-exempt');
+    await search('Ann');
     expect(names()).toEqual([expect.stringContaining('Ann Admin')]);
   });
 });
@@ -145,18 +151,22 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     m = await mount(<UsersClient initialUsers={people} currentUserId="me" />);
   };
   const edit = (name: string) => click([...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Edit' && b.closest('tr')?.textContent?.includes(name)));
-  const form = () => dialogTitled('Edit User')!;
+  const form = () => dialogTitled('Edit user')!;
   const field = (text: string) => {
     const l = [...form().querySelectorAll('label')].find((x) => x.textContent?.replace(/\s*\*\s*$/, '').trim() === text);
     return l ? document.getElementById(l.htmlFor) as HTMLInputElement : null;
   };
   const choose = async (label: string, option: string) => {
-    await click(field(label));
-    await click([...document.body.querySelectorAll('[role="option"]')].find((o) => o.textContent?.trim() === option));
+    const input = field(label)!;
+    await click(input);
+    // UX-4c §5.2: role options carry a description ("Supervisor — records time and approves their CLINs"); only this
+    // field's listbox (the toolbar has a Role filter too).
+    const listbox = document.getElementById(input.getAttribute('aria-controls')!)!;
+    await click([...listbox.querySelectorAll('[role="option"]')].find((o) => o.textContent?.trim() === option || o.textContent?.startsWith(`${option} — `)));
   };
   const inDialog = (d: HTMLElement, text: string) => [...d.querySelectorAll('button')].find((b) => b.textContent?.trim() === text) as HTMLButtonElement;
   const setName = (v: string) => act(async () => {
-    const input = field('Full Name')!;
+    const input = field('Full name')!;
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, v);
     input.dispatchEvent(new Event('input', { bubbles: true }));
   });
@@ -164,7 +174,8 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
   it('each transition has its own title, message, tone and button, and every message ends with the sign-out line', () => {
     expect(roleChangeCopy('Pat', 'employee', 'supervisor', false)).toEqual({
       tone: 'neutral', title: 'Make Pat a supervisor?', confirmLabel: 'Make supervisor',
-      message: 'They can review and approve timesheets for employees who share a CLIN with them, and for supervisors or admins who have them set as their approver.' + OUT,
+      message: 'They can review and approve timesheets for employees who share a CLIN with them, and for supervisors or admins who have them set as their approver.'
+        + " They'll approve employees on the CLINs they're assigned to. Check Assignments → Approval scope." + OUT,
     });
     expect(roleChangeCopy('Pat', 'supervisor', 'admin', false)).toEqual({
       tone: 'danger', title: 'Make Pat an admin?', confirmLabel: 'Make admin',
@@ -190,7 +201,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     await renderTeam();
     await edit('Pat Doe');
     await choose('Role', 'Supervisor');
-    await click(inDialog(form(), 'Save Changes'));
+    await click(inDialog(form(), 'Save changes'));
     const confirm = dialogTitled('Make Pat Doe a supervisor?')!;
     expect(confirm.textContent).toContain('share a CLIN with them');
     expect(confirm.textContent).toContain(OUT.trim());
@@ -200,25 +211,25 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     expect(actions.updateUser).not.toHaveBeenCalled();
     expect(form()).toBeDefined();                                    // back to the form, which keeps the choice
 
-    await click(inDialog(form(), 'Save Changes'));
+    await click(inDialog(form(), 'Save changes'));
     await click(inDialog(dialogTitled('Make Pat Doe a supervisor?')!, 'Make supervisor'));
     await wait();
     expect(actions.updateUser).toHaveBeenCalledTimes(1);
     expect(actions.updateUser).toHaveBeenCalledWith('u2', { role: 'supervisor' });
     expect(dialogTitled('Make Pat Doe a supervisor?')).toBeUndefined();
-    expect(dialogTitled('Edit User')).toBeUndefined();
+    expect(dialogTitled('Edit user')).toBeUndefined();
   });
 
   it('Esc under the role confirm closes only the confirm; the edit form stays open', async () => {
     await renderTeam();
     await edit('Pat Doe');
     await choose('Role', 'Supervisor');
-    await click(inDialog(form(), 'Save Changes'));
+    await click(inDialog(form(), 'Save changes'));
     expect(dialogTitled('Make Pat Doe a supervisor?')).toBeDefined();
     await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
     await wait();
     expect(dialogTitled('Make Pat Doe a supervisor?')).toBeUndefined();
-    expect(dialogTitled('Edit User')).toBeDefined();
+    expect(dialogTitled('Edit user')).toBeDefined();
     expect(actions.updateUser).not.toHaveBeenCalled();
   });
 
@@ -226,7 +237,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     await renderTeam();
     await edit('Pat Doe');
     await choose('Role', 'Admin');
-    await click(inDialog(form(), 'Save Changes'));
+    await click(inDialog(form(), 'Save changes'));
     const confirm = dialogTitled('Make Pat Doe an admin?')!;
     expect(inDialog(confirm, 'Make admin').getAttribute('style') ?? '').toContain('--mantine-color-red');
     expect(confirm.textContent).toContain("You'll no longer be able to approve your own timesheets, because another admin can.");
@@ -234,7 +245,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     await renderTeam([...TEAM, user('a2', 'Al Admin', { role: 'admin' })]);
     await edit('Pat Doe');
     await choose('Role', 'Admin');
-    await click(inDialog(form(), 'Save Changes'));
+    await click(inDialog(form(), 'Save changes'));
     expect(dialogTitled('Make Pat Doe an admin?')!.textContent).not.toContain('approve your own timesheets');
   });
 
@@ -242,7 +253,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     await renderTeam();
     await edit('Pat Doe');
     await setName('Pat Dee');
-    await click(inDialog(form(), 'Save Changes'));
+    await click(inDialog(form(), 'Save changes'));
     await wait();
     expect(document.body.textContent).not.toContain('signed out within a minute');
     expect(actions.updateUser).toHaveBeenCalledWith('u2', { fullName: 'Pat Dee' });
@@ -253,7 +264,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     await renderTeam();
     await edit('Sam Super');
     await choose('Role', 'Employee');
-    await click(inDialog(form(), 'Save Changes'));
+    await click(inDialog(form(), 'Save changes'));
     await click(inDialog(dialogTitled('Change Sam Super to employee?')!, 'Change role'));
     await wait();
     const confirm = dialogTitled('Change Sam Super to employee?')!;
@@ -266,7 +277,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     await renderTeam();
     await edit('Sam Super');
     await choose('Role', 'Employee');
-    await click(inDialog(form(), 'Save Changes'));
+    await click(inDialog(form(), 'Save changes'));
     await click(inDialog(dialogTitled('Change Sam Super to employee?')!, 'Change role'));
     await wait();
     expect(dialogTitled('Change Sam Super to employee?')!.textContent).toContain('The last admin can’t be demoted.');
@@ -283,7 +294,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     actions.setUserApprover.mockResolvedValueOnce({ ok: false, code: 'validation', error: 'Approver unavailable.' } as never);
     const saved = TEAM.map((u) => (u.id === 'u2' ? { ...u, role: 'supervisor' as const } : u));
     actions.getUsers.mockResolvedValue(saved as never);
-    await click(inDialog(form(), 'Save Changes'));
+    await click(inDialog(form(), 'Save changes'));
     await click(inDialog(dialogTitled('Make Pat Doe a supervisor?')!, 'Make supervisor'));
     await wait();
     expect(actions.updateUser).toHaveBeenCalledTimes(1);
@@ -292,18 +303,18 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     expect(confirm.querySelector('[role="alert"]')!.textContent).toBe("The role was saved, but the approver couldn't be updated. Try saving again.");
     // Back in the form, Save no longer asks to confirm the (already saved) role and sends only the approver.
     await click(inDialog(confirm, 'Cancel'));
-    await click(inDialog(form(), 'Save Changes'));
+    await click(inDialog(form(), 'Save changes'));
     await wait();
     expect(dialogTitled('Make Pat Doe a supervisor?')).toBeUndefined();
     expect(actions.updateUser).toHaveBeenCalledTimes(1);
     expect(actions.setUserApprover).toHaveBeenCalledTimes(2);
     expect(actions.setUserApprover).toHaveBeenLastCalledWith('u2', 's1');
-    expect(dialogTitled('Edit User')).toBeUndefined();
+    expect(dialogTitled('Edit user')).toBeUndefined();
   });
 
   it('the FLSA toast says exempt / non-exempt, never salaried or hourly', async () => {
     await renderTeam();
-    await chooseRowAction('Pat Doe', 'Mark as FLSA exempt…');
+    await chooseRowAction('Pat Doe', 'Mark as exempt…');
     await click(buttonByText('Mark as exempt'));
     await wait();
     const shown = vi.mocked(notifications.show).mock.calls.map(([n]) => n);

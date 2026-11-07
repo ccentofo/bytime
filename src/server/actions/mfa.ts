@@ -2,8 +2,8 @@
 
 import { getDb, getDbForAuth } from '@/db';
 import { users } from '@/db/schema';
-import { eq } from 'drizzle-orm';
-import { requireSession } from '@/lib/session';
+import { eq, sql } from 'drizzle-orm';
+import { requireAdminFresh, requireSession } from '@/lib/session';
 import { encrypt, decrypt } from '@/lib/encryption';
 import { verifyCurrentPassword } from '@/server/internal/login-attempts';
 import {
@@ -14,6 +14,8 @@ import {
 } from '@/lib/totp';
 import { UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
+import { validateUUID } from '@/lib/validation';
+import { logAdminChange } from '@/server/internal/admin-change-log';
 
 // ---------------------------------------------------------------------------
 // MFA Setup — all self-only. MFA login verification itself lives in auth.ts's
@@ -114,6 +116,46 @@ export async function disableMFA(currentPassword: string): Promise<ActionResult<
       .where(eq(users.id, actor.id));
 
     return;
+  });
+}
+
+const ADMIN_MFA_SELF = 'Use your profile to turn off two-step sign-in.';
+const ADMIN_MFA_WRONG_PASSWORD = "That password isn't right.";
+
+/**
+ * An admin turns off another user's two-step sign-in (feature-plan-ux-people-codes.md R6, §5.1). Needs the ACTING
+ * admin's current password (verifyCurrentPassword: lockout first, a wrong one recorded as a failed attempt), refuses
+ * yourself before any password check, and in one transaction (target FOR UPDATE) clears the secret, the recovery codes
+ * and the last used step, turns two-step off, bumps the session in SQL (the user is signed out within about a minute —
+ * the session check interval) and logs `mfa_reset`. Already off (a stale screen) → { changed: false }, no log.
+ */
+export async function adminResetMfa(data: { userId: string; currentPassword: string }): Promise<ActionResult<{ changed: boolean }>> {
+  return userAction(async () => {
+    const actor = await requireAdminFresh();
+    const userId = validateUUID(data?.userId, 'User');
+    if (userId === actor.id) throw new UserFacingError(ADMIN_MFA_SELF); // before the password: no attempt used up
+    const db = await getDbForAuth();
+    // The acting admin's email from the database (the session's email isn't refreshed when it changes).
+    const [admin] = await db.select({ email: users.email, passwordHash: users.passwordHash }).from(users).where(eq(users.id, actor.id));
+    if (!admin) throw new UserFacingError('User not found.', 'not_found');
+    const reauth = await verifyCurrentPassword(db, admin.email, admin.passwordHash, data.currentPassword);
+    if (!reauth.ok) throw new UserFacingError(reauth.error === 'Current password is incorrect.' ? ADMIN_MFA_WRONG_PASSWORD : reauth.error);
+
+    return db.transaction(async (tx) => {
+      const [target] = await tx.select({ totpEnabled: users.totpEnabled }).from(users).where(eq(users.id, userId)).for('update');
+      if (!target) throw new UserFacingError('User not found.', 'not_found');
+      if (!target.totpEnabled) return { changed: false };
+      await tx.update(users).set({
+        totpSecret: null,
+        totpRecoveryCodes: null,
+        totpLastUsedStep: null,
+        totpEnabled: false,
+        sessionVersion: sql`${users.sessionVersion} + 1`,
+        updatedAt: new Date(),
+      }).where(eq(users.id, userId));
+      await logAdminChange(tx, { actorId: actor.id, entity: 'user', entityId: userId, action: 'mfa_reset', oldValue: { mfaEnabled: true }, newValue: { mfaEnabled: false } });
+      return { changed: true };
+    });
   });
 }
 

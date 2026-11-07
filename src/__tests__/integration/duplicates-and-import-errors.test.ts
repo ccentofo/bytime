@@ -68,7 +68,7 @@ vi.mock('@/auth', () => ({
 // that returns a function for every key also answers `then`, so vitest's `await factory()` treats
 // the mock as a never-resolving thenable and the whole run hangs during module loading.
 
-import { createUser } from '@/server/actions/users';
+import { createUserWithPassword } from '@/server/actions/users';
 import { createContract } from '@/server/actions/contracts';
 import { createChargeCode } from '@/server/actions/charge-codes';
 import { bulkImportContracts } from '@/server/actions/import';
@@ -86,7 +86,7 @@ describe('duplicate and import error messages (audit A5/A6)', () => {
 
   it('duplicate email → conflict "A user with that email already exists."', async () => {
     const existing = await createTestUser({ role: 'employee' });
-    await expectFailure(createUser({ email: existing.email, fullName: 'Second Person' }), 'conflict', /^A user with that email already exists\.$/);
+    await expectFailure(createUserWithPassword({ email: existing.email, fullName: 'Second Person', role: 'employee', password: 'TestPass123!', flsaExempt: false }), 'conflict', /^A user with that email already exists\.$/);
   });
 
   it('duplicate contract number → conflict "A contract with that number already exists."', async () => {
