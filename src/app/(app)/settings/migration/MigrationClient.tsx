@@ -290,7 +290,7 @@ export function MigrationClient() {
         <Text size="sm" mt={4} data-testid="migration-import-order">
           <strong>Import order:</strong>{' '}
           1. Add employees, contracts and CLINs (<Anchor href="/settings/import" size="sm">Data import</Anchor>) and any
-          indirect codes (<Anchor href="/admin/indirect-codes" size="sm">Indirect codes</Anchor>). 2. Import timesheet
+          indirect codes (<Anchor href="/admin/charge-codes?tab=indirect" size="sm">Indirect codes</Anchor>). 2. Import timesheet
           entries. 3. Import period statuses. Entries can&apos;t be imported into a period that is already submitted or
           approved, so import entries <strong>before</strong> periods.
         </Text>

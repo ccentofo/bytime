@@ -1,0 +1,25 @@
+/* feature-plan-ux-people-codes.md §3.2 (mockup "Charge codes"): the code (mono) with its CLIN / SLIN below, dimmed
+   "None", a warn People count of 0, and the empty-CLIN lines. */
+.mono {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: var(--mantine-font-size-sm);
+}
+
+.sub {
+  display: block;
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+}
+
+.dim {
+  color: var(--mantine-color-dimmed);
+}
+
+.warn {
+  color: var(--mantine-color-warning-text);
+  font-weight: 600;
+}
+
+.oneLine {
+  white-space: nowrap;
+}

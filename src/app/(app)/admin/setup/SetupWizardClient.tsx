@@ -73,7 +73,7 @@ export const STEPS: StepConfig[] = [
     helpText: () => 'These codes let employees record time like PTO, holidays, overhead and training. "Seed default DCAA codes" creates the 9 standard codes.',
     icon: <IconReceipt size={18} />,
     required: false,
-    linkHref: '/admin/indirect-codes',
+    linkHref: '/admin/charge-codes?tab=indirect',
     linkLabel: 'Go to indirect codes',
     entityLabel: 'indirect codes',
   },
@@ -231,7 +231,8 @@ export function SetupWizardClient({ initialStatus, initialGaps = { missingCount:
     const result = await runAction(autobridgeChargeCodesFromClins(), { errorTitle: 'Couldn’t create charge codes' });
     setBridging(false);
     if (!result.ok) return;
-    notifications.show({ title: 'Charge codes created', message: `Created ${result.data.created} charge code(s) from ${result.data.total} active CLINs.`, color: 'success' });
+    // feature-plan-ux-people-codes.md §3.3: the rows actually inserted (a CLIN taken meanwhile is skipped, not counted).
+    notifications.show({ title: 'Charge codes created', message: `Created ${result.data.created} charge ${result.data.created === 1 ? 'code' : 'codes'}`, color: 'success' });
     refreshStatus();
   }
 

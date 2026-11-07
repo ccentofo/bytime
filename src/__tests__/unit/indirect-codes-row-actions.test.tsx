@@ -18,7 +18,7 @@ vi.mock('@/server/actions/indirect-codes', () => ({
 }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: actions.notify } }));
 
-import { IndirectCodesClient } from '@/app/(app)/admin/indirect-codes/IndirectCodesClient';
+import { IndirectCodesPanel as IndirectCodesClient } from '@/app/(app)/admin/charge-codes/IndirectCodesPanel';
 import { buttonByText, chooseRowAction, click, dialogTitled, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
 import { act } from 'react';
 

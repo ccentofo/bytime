@@ -23,7 +23,6 @@ const CONTRACTS_GROUP: NavGroup = {
   key: 'contracts', label: 'Contracts', icon: 'contracts', children: [
     { label: 'Contracts and CLINs', href: '/admin/contracts' },
     { label: 'Charge codes', href: '/admin/charge-codes' },
-    { label: 'Indirect codes', href: '/admin/indirect-codes' },
     { label: 'Labor categories', href: '/admin/labor-categories' },
   ],
 };

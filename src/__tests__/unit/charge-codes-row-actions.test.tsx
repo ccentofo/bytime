@@ -43,19 +43,26 @@ beforeEach(() => { vi.clearAllMocks(); actions.listChargeCodes.mockResolvedValue
 afterEach(() => { unmount(m); m = undefined; });
 
 const render = async () => { m = await mount(<ChargeCodesClient initialCodes={CODES} costClasses={[]} contracts={[]} laborCategories={[]} />); };
+/** The Direct tab's Status filter (Active by default, §3.2). */
+const showStatus = async (word: 'Active' | 'Inactive' | 'All') => {
+  const label = [...document.body.querySelectorAll('label')].find((l) => l.textContent?.trim() === 'Status')!;
+  await click(document.getElementById(label.htmlFor));
+  await click([...document.body.querySelectorAll('[role="option"]')].find((o) => o.textContent === word));
+};
 
 describe('Charge codes row actions (T12)', () => {
   it('each row shows a visible "Edit" button and a "More actions" trigger (no icon group)', async () => {
     await render();
+    await showStatus('All');
     expect(buttonsByText('Edit')).toHaveLength(2);
     expect(document.body.querySelector('button[aria-label="More actions for NAV-01"]')).not.toBeNull();
     expect(document.body.querySelector('button[aria-label="Edit charge code"], button[aria-label="Labor category"]')).toBeNull();
   });
 
-  it('the menu: "Change labor category", a divider, then Deactivate last (danger)', async () => {
+  it('the menu: "Change labor category…", a divider, then Deactivate last (danger)', async () => {
     await render();
     await openRowMenu('NAV-01');
-    expect(menuItems().map((i) => i.textContent)).toEqual(['Change labor category', 'Deactivate…']);
+    expect(menuItems().map((i) => i.textContent)).toEqual(['Change labor category…', 'Deactivate…']);
     const dropdown = document.body.querySelector('[role="menu"]')!;
     const kids = [...dropdown.children];
     expect(kids.findIndex((k) => k.className.includes('divider'))).toBe(kids.indexOf(menuItems()[1]) - 1);
@@ -65,6 +72,7 @@ describe('Charge codes row actions (T12)', () => {
 
   it('Reactivate fetches its info, then confirms with a neutral (not red) button; Confirm calls reactivateChargeCode once', async () => {
     await render();
+    await showStatus('Inactive');
     await chooseRowAction('NAV-02', 'Reactivate…');
     expect(actions.getChargeCodeReactivationInfo).toHaveBeenCalledWith('cc2');
     expect(dialogTitled('Reactivate charge code?')).toBeDefined();
@@ -92,7 +100,7 @@ describe('Charge code edit and its CLIN (C5)', () => {
     m = await mount(<ChargeCodesClient initialCodes={codes as never} costClasses={[]} contracts={ACTIVE} laborCategories={[]} />);
   };
   const edit = (code: string) => click([...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Edit' && b.closest('tr')?.textContent?.includes(code)));
-  const dialog = () => dialogTitled('Edit Charge Code')!;
+  const dialog = () => dialogTitled('Edit charge code')!;
   const labelled = (text: string) => { const l = [...dialog().querySelectorAll('label')].find((x) => x.textContent?.replace(/\s*\*\s*$/, '').trim() === text); return l ? document.getElementById(l.htmlFor) as HTMLInputElement : null; };
   const choose = async (field: string, option: string) => {
     await click(labelled(field));
@@ -105,12 +113,12 @@ describe('Charge code edit and its CLIN (C5)', () => {
     const locked = dialog().querySelector('[data-testid="charge-code-clin-locked"]') as HTMLInputElement;
     expect(locked.readOnly).toBe(true);
     expect(locked.value).toBe('N-1 — NAVAIR · CLIN 0001');
-    expect(dialog().textContent).toContain("This code has recorded hours, so its CLIN can't change. Create a new charge code to use a different CLIN.");
+    expect(dialog().textContent).toContain("This code has recorded hours, so its CLIN and SLIN can't change. Create a new charge code to use a different CLIN.");
     expect(labelled('Contract')).toBeNull();
     expect(labelled('CLIN')).toBeNull();
     await click(buttonByText('Cancel'));
     await edit('NAV-02');
-    expect(dialog().textContent).toContain("Remove this code's labor categories before moving it to another CLIN.");
+    expect(dialog().textContent).toContain("Remove this code's labor categories before moving it to another CLIN or SLIN.");
     expect(labelled('CLIN')).toBeNull();
   });
 

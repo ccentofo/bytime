@@ -129,6 +129,7 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getUserChargeCodeIds: 'reads one user\'s active charge-code ids; no write',
     getChargeCodeAssignments: 'reads user↔charge-code assignments; no write',
     getChargeCodeReactivationInfo: 'certified-outputs C3: counts still-assigned users for the reactivate dialog; no write',
+    previewAutobridgeChargeCodes: 'UX-4c §3.3: lists the CLINs "Create codes from CLINs" would code; no write',
   },
   'clins.ts': { getClinsByContract: 'reads CLINs of a contract; no write' },
   'contracts.ts': {

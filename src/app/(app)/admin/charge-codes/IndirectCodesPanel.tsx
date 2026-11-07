@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useEffect, useImperativeHandle, useState, useTransition, type Ref } from 'react';
 import {
   Button,
   Modal,
@@ -17,18 +17,16 @@ import {
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
 import { addedStandardCodes } from '@/lib/ui/indirect-seed-copy';
-import { Icons, ICON_SIZE } from '@/components/ui/icons';
 import { RowActions } from '@/components/ui/RowActions';
 import { useBusyRows, useLastTarget } from '@/components/ui/useRowState';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
 import { createIndirectCode, updateIndirectCode, getIndirectChargeCodes, seedIndirectCodes } from '@/server/actions/indirect-codes';
-import { PageHeader } from '@/components/ui/PageHeader';
 import { INDIRECT_CATEGORY_COLOR, RECORD_STATUS_COLOR } from '@/lib/ui/status-colors';
 import { WriteButton } from '@/components/shell/WorkspaceMode';
 
-type IndirectCode = {
+export type IndirectCode = {
   id: string;
   code: string;
   name: string;
@@ -41,8 +39,14 @@ type IndirectCode = {
   updatedAt: Date;
 };
 
+/** The page header's "Add indirect code" opens this panel's form (feature-plan-ux-people-codes.md §3.1). */
+export interface IndirectPanelHandle { openCreate: () => void }
+
 type Props = {
   initialCodes: IndirectCode[];
+  ref?: Ref<IndirectPanelHandle>;
+  /** The tab's count follows the list. */
+  onCountChange?: (n: number) => void;
 };
 
 const CATEGORY_OPTIONS = [
@@ -90,7 +94,7 @@ const EMPTY_FORM: CodeForm = {
   leavePayType: null,
 };
 
-export function IndirectCodesClient({ initialCodes }: Props) {
+export function IndirectCodesPanel({ initialCodes, ref, onCountChange }: Props) {
   // Deactivate asks first (feature-plan-ux-foundations.md §4.5, B2); Reactivate runs directly with a row loader.
   const [confirmDeactivate, setConfirmDeactivate] = useState<IndirectCode | null>(null);
   const busyRows = useBusyRows();
@@ -110,6 +114,8 @@ export function IndirectCodesClient({ initialCodes }: Props) {
     setFormError(null);
     setModalOpen(true);
   }
+  useImperativeHandle(ref, () => ({ openCreate: openCreateModal }));
+  useEffect(() => { onCountChange?.(codes.filter((c) => c.isActive).length); }, [codes, onCountChange]);
 
   function openEditModal(code: IndirectCode) {
     setEditingCode(code);
@@ -295,16 +301,6 @@ export function IndirectCodesClient({ initialCodes }: Props) {
 
   return (
     <>
-      <PageHeader
-        title="Indirect Charge Codes"
-        actions={
-          <Group>
-            <WriteButton leftSection={<Icons.create size={ICON_SIZE.button} />} onClick={openCreateModal}>
-              Add Code
-            </WriteButton>
-          </Group>
-        }
-      />
       <MantineReactTable table={table} />
 
       <ConfirmModal
