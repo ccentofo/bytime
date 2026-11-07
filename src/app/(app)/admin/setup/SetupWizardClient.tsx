@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useState } from 'react';
 import {
   Container,
   Title,
@@ -15,6 +15,7 @@ import {
   ThemeIcon,
   Anchor,
   SimpleGrid,
+  Loader,
 } from '@mantine/core';
 import {
   IconReceipt,
@@ -32,6 +33,7 @@ import {
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
+import { useBusy } from '@/components/ui/useBusy';
 import { addedStandardCodes } from '@/lib/ui/indirect-seed-copy';
 import { getSetupAccessGaps, getSetupStatus } from '@/server/actions/setup';
 import type { SetupAccessGaps, SetupStatus, SetupStepKey } from '@/server/internal/setup';
@@ -189,16 +191,15 @@ const accessOf = (status: SetupStatus) => {
 export function SetupWizardClient({ initialStatus, initialGaps = { missingCount: 0, names: [] } }: Props) {
   const [status, setStatus] = useState<SetupStatus>(initialStatus);
   const [gaps, setGaps] = useState<SetupAccessGaps>(initialGaps);
-  const [isPending, startTransition] = useTransition();
-  const [seedingIndirect, setSeedingIndirect] = useState(false);
-  const [bridging, setBridging] = useState(false);
+  // UX-4C1-AUDIT.md L12: per-button busy state — aria-disabled + a Loader, never Mantine `loading` (it sets `disabled`).
+  const busy = useBusy();
 
   const [activeStep, setActiveStep] = useState(() => firstIncompleteStep(initialStatus));
 
   // C17: the reads aren't ActionResults, so try/catch. The status and the gaps are refetched together, so the names
   // always match the counts; the wizard then opens the next incomplete step.
   function refreshStatus() {
-    startTransition(async () => {
+    return busy.run('refresh', async () => {
       try {
         const [updated, updatedGaps] = await Promise.all([getSetupStatus(), getSetupAccessGaps()]);
         setStatus(updated);
@@ -211,10 +212,8 @@ export function SetupWizardClient({ initialStatus, initialGaps = { missingCount:
   }
 
   async function handleSeedIndirect() {
-    setSeedingIndirect(true);
-    const result = await runAction(seedIndirectCodes(), { errorTitle: 'Couldn’t create indirect codes' });
-    setSeedingIndirect(false);
-    if (!result.ok) return;
+    const result = await busy.run('seed', () => runAction(seedIndirectCodes(), { errorTitle: 'Couldn’t create indirect codes' }));
+    if (!result?.ok) return;
     // C3: honest about what happened — nothing is added to a workspace that already has codes.
     notifications.show(result.data.created > 0
       ? { title: 'Standard codes added', message: addedStandardCodes(result.data.created), color: 'success' }
@@ -223,17 +222,15 @@ export function SetupWizardClient({ initialStatus, initialGaps = { missingCount:
         message: 'Your workspace already has indirect codes, so none were added. Reactivate them, and turn on Show on every timesheet, on the Indirect codes page.',
         color: 'gray',
       });
-    refreshStatus();
+    void refreshStatus();
   }
 
   async function handleAutobridge() {
-    setBridging(true);
-    const result = await runAction(autobridgeChargeCodesFromClins(), { errorTitle: 'Couldn’t create charge codes' });
-    setBridging(false);
-    if (!result.ok) return;
+    const result = await busy.run('bridge', () => runAction(autobridgeChargeCodesFromClins(), { errorTitle: 'Couldn’t create charge codes' }));
+    if (!result?.ok) return;
     // feature-plan-ux-people-codes.md §3.3: the rows actually inserted (a CLIN taken meanwhile is skipped, not counted).
     notifications.show({ title: 'Charge codes created', message: `Created ${result.data.created} charge ${result.data.created === 1 ? 'code' : 'codes'}`, color: 'success' });
-    refreshStatus();
+    void refreshStatus();
   }
 
   const access = accessOf(status);
@@ -339,9 +336,8 @@ export function SetupWizardClient({ initialStatus, initialGaps = { missingCount:
         <Button
           variant="subtle"
           size="sm"
-          leftSection={<IconRefresh size={14} />}
-          onClick={refreshStatus}
-          loading={isPending}
+          {...busy.props('refresh', { icon: <IconRefresh size={14} /> })}
+          onClick={() => { void refreshStatus(); }}
         >
           Refresh status
         </Button>
@@ -367,11 +363,11 @@ export function SetupWizardClient({ initialStatus, initialGaps = { missingCount:
               : state === 'partial'
                 ? `${access.withAccess} of ${access.total} employees have a charge code`
                 : `Not done · ${step.description}`}
-            icon={step.icon}
+            // While refreshing, the open step's icon is a Loader (what Stepper's `loading` drew).
+            icon={busy.is('refresh') && activeStep === index ? <Loader size="xs" aria-hidden="true" /> : step.icon}
             completedIcon={state === 'done' ? <IconCheck size={16} /> : step.icon}
             color={state === 'done' ? 'success' : state === 'partial' ? 'warning' : 'gray'}
             data-state={state}
-            loading={isPending && activeStep === index}
           >
             <Paper p="md" radius="md" withBorder ml="sm" mb="md">
               <Group justify="space-between" mb="sm">
@@ -409,7 +405,7 @@ export function SetupWizardClient({ initialStatus, initialGaps = { missingCount:
 
               <Group gap="sm">
                 {step.key === 'chargeCodes' && (
-                  <WriteButton variant="light" size="sm" onClick={handleAutobridge} loading={bridging}>
+                  <WriteButton variant="light" size="sm" {...busy.props('bridge')} onClick={() => { void handleAutobridge(); }}>
                     Create one per CLIN
                   </WriteButton>
                 )}
@@ -419,8 +415,8 @@ export function SetupWizardClient({ initialStatus, initialGaps = { missingCount:
                   <WriteButton
                     variant="filled"
                     size="sm"
-                    onClick={handleSeedIndirect}
-                    loading={seedingIndirect}
+                    {...busy.props('seed')}
+                    onClick={() => { void handleSeedIndirect(); }}
                   >
                     Seed default DCAA codes
                   </WriteButton>

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
+import { act } from 'react';
 import path from 'path';
 
 /**
@@ -86,6 +87,35 @@ describe('Setup Wizard (T15)', () => {
     expect(shownMessages()).toContain('Created 2 charge codes');
     expect(actions.getSetupStatus).toHaveBeenCalled();
     await expectNoAxeViolations(document.body);
+  });
+
+  it('L12: no Mantine `loading` (it sets `disabled`) — a busy button is aria-disabled with a Loader, keeps focus, and ignores a second click', async () => {
+    const src = readFileSync(path.join(ROOT, 'src/app/(app)/admin/setup/SetupWizardClient.tsx'), 'utf8');
+    expect(src).not.toMatch(/\sloading=/);
+    let finish!: (v: unknown) => void;
+    actions.autobridge.mockImplementationOnce(() => new Promise((r) => { finish = r; }) as never);
+    actions.getSetupStatus.mockResolvedValue(status({ chargeCodes: 2 }));
+    m = await mount(<SetupWizardClient initialStatus={status({})} />);
+    const bridge = buttonByText('Create one per CLIN') as HTMLButtonElement;
+    bridge.focus();
+    await click(bridge);
+    expect([bridge.getAttribute('aria-busy'), bridge.getAttribute('aria-disabled'), bridge.hasAttribute('disabled')]).toEqual(['true', 'true', false]);
+    expect(bridge.querySelector('.mantine-Loader-root')).not.toBeNull();
+    expect(document.activeElement).toBe(bridge);
+    await click(bridge);
+    expect(actions.autobridge).toHaveBeenCalledTimes(1);
+    await act(async () => { finish({ ok: true, data: { created: 2, skipped: 0 } }); });
+    await wait();
+    expect(bridge.hasAttribute('aria-busy')).toBe(false);
+
+    let refreshed!: (v: unknown) => void;
+    actions.getSetupStatus.mockImplementationOnce(() => new Promise((r) => { refreshed = r; }) as never);
+    const refresh = buttonByText('Refresh status') as HTMLButtonElement;
+    await click(refresh);
+    expect([refresh.getAttribute('aria-busy'), refresh.getAttribute('aria-disabled'), refresh.hasAttribute('disabled')]).toEqual(['true', 'true', false]);
+    await act(async () => { refreshed(status({ chargeCodes: 2 })); });
+    await wait();
+    expect(refresh.hasAttribute('aria-busy')).toBe(false);
   });
 
   it('done screen: "Setup complete", Go to Home → /home, Open timesheet → /timesheet', async () => {
