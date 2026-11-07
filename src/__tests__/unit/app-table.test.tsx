@@ -3,8 +3,6 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { format } from 'util';
-import { readFileSync } from 'fs';
-import path from 'path';
 import { MantineProvider } from '@mantine/core';
 import { MantineReactTable, MRT_ShowHideColumnsButton, type MRT_ColumnDef } from 'mantine-react-table';
 import { useAppTable } from '@/components/table/mrtDefaults';
@@ -157,9 +155,6 @@ describe('useAppTable defaults (T6)', () => {
     await renderPeople(true);
     expect(container.querySelector('button[aria-label="Show/Hide columns"]')).not.toBeNull();
     expect(container.querySelector('button[aria-label="Show/Hide filters"]')).toBeNull();
-    // …and AuditTrail itself is configured that way (it hides Comment / Entered By by default).
-    const audit = readFileSync(path.resolve(__dirname, '../../app/(app)/admin/audit-trail/AuditTrailClient.tsx'), 'utf8');
-    expect(audit).toContain('enableToolbarInternalActions: true,');
-    expect(audit).toContain('renderToolbarInternalActions: ({ table }) => <MRT_ShowHideColumnsButton table={table} />,');
+    // (UX-4c §6.2: the Audit trail now shows Comment and Entered as columns, so it no longer needs this button.)
   });
 });

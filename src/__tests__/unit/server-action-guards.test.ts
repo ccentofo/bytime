@@ -183,6 +183,9 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getSetupAccessGaps: 'feature-plan-ux-page-fixes.md C17: reads who has no chargeable code; no write',
   },
   'slins.ts': { getSlinsByClin: 'reads a CLIN\'s SLINs; no write' },
+  'audit.ts': {
+    getAdminChanges: 'UX-4c §6.4: reads admin_change_log (with names) for the Audit trail; no write',
+  },
   'users.ts': {
     getUsers: 'reads users (SAFE_USER_COLUMNS); no write',
     getApprovalNotices: 'certified-outputs C2: reads the approval rules + admin_change_log for the notices; no write',

@@ -129,6 +129,7 @@ const LCAT_IMPORT_ALLOWLIST = new Set([
   'src/db/clear-tenant-data.ts',                 // test / seed cleanup (namespace import)
   'src/server/internal/labor-rates.ts',          // dated rates D1.3: the one SQL rate rule + schedule readers
   'src/server/actions/labor-category-rates.ts',  // dated rates D1.5: the rate actions
+  'src/server/actions/audit.ts',                 // UX-4c §6.4: names only ("{code} {title}") on Admin changes — no cost
 ]);
 
 export function lcatImporters(src: string): boolean {

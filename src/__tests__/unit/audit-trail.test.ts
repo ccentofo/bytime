@@ -62,6 +62,7 @@ describe('true cell code', () => {
 
 describe('getAuditEntries', () => {
   it('indirect entries appear (no CLIN) with their category; each row carries its true cell code and label', async () => {
+    db.onSelect(timesheetEntries, [{ total: 3 }]);                                     // UX-4c §6.2: the COUNT comes first
     db.onSelect(timesheetEntries, [
       row({ id: 'a', indirectCodeId: 'ind-1', indirectCode: 'LV-PTO', indirectCategory: 'leave' }),
       row({ id: 'b', chargeCodeId: 'cc-1', clinId: 'clin-1', chargeCode: 'NAV-1', clinNumber: '0001', contractName: 'NAVAIR', contractNumber: 'N1' }),
@@ -76,6 +77,7 @@ describe('getAuditEntries', () => {
   });
 
   it('imported rows carry their provenance label; legacy MIGRATION rows the legacy label; app rows none', async () => {
+    db.onSelect(timesheetEntries, [{ total: 3 }]);
     db.onSelect(timesheetEntries, [
       row({ id: 'm', clinId: 'c', source: 'migration', importSourceSystem: 'Deltek', importedAt: new Date('2026-01-05T00:00:00Z'), importedByName: 'Ann', originalMetadata: { enteredBy: 'Pat' } }),
       row({ id: 'l', clinId: 'c', changeReasonCode: 'MIGRATION' }),
@@ -150,14 +152,12 @@ describe('F12 — audit reads', () => {
     createdAt: new Date('2026-09-20T14:00:00Z'), source: 'app', originalMetadata: null, importSourceSystem: null, importedAt: null, approvalContext: null,
   });
 
-  it('entries: 501 rows fetched → 500 shown and truncated = true; 500 → not truncated', async () => {
-    db.onSelect(timesheetEntries, Array.from({ length: 501 }, (_, i) => row({ id: `e${i}`, clinId: 'c' })));
-    const capped = await getAuditEntries({});
-    expect(capped.entries).toHaveLength(500);
-    expect(capped.truncated).toBe(true);
-    db.reset();
-    db.onSelect(timesheetEntries, Array.from({ length: 500 }, (_, i) => row({ id: `e${i}`, clinId: 'c' })));
-    expect((await getAuditEntries({})).truncated).toBe(false);
+  it('entries (UX-4c §6.2): a page of rows with the total — no 500-row cap any more', async () => {
+    db.onSelect(timesheetEntries, [{ total: 120 }]);                                   // the COUNT
+    db.onSelect(timesheetEntries, Array.from({ length: 50 }, (_, i) => row({ id: `e${i}`, clinId: 'c' })));
+    const r = await getAuditEntries({ page: 2 });
+    expect([r.entries.length, r.total, r.page, r.pageSize]).toEqual([50, 120, 2, 50]);
+    expect('truncated' in r).toBe(false);
   });
 
   it('period events: a period that STARTED before the range but overlaps it is included; one that ended before is not', async () => {
@@ -201,8 +201,10 @@ describe('F12 — audit reads', () => {
     const audit = readFileSync(path.join(ROOT, 'src/server/actions/audit.ts'), 'utf8');
     expect(audit).toMatch(/\.orderBy\(desc\(timesheetEntries\.createdAt\), desc\(timesheetEntries\.id\)\)/);
     expect(audit).toMatch(/\.orderBy\(desc\(periodEvents\.createdAt\), desc\(periodEvents\.id\)\)/);
+    // UX-4c §6.2: entries are paged (no 500-row cut-off); the events keep their cap notice.
     const client = readFileSync(path.join(ROOT, 'src/app/(app)/admin/audit-trail/AuditTrailClient.tsx'), 'utf8');
-    expect(client).toMatch(/\{hasSearched && entriesTruncated && \(/);
+    expect(client).toMatch(/manualPagination: true,/);
+    expect(client).toMatch(/data-testid="audit-events-truncated"/);
   });
 });
 
@@ -229,7 +231,7 @@ describe('wiring (static)', () => {
     expect(client.match(/reasonLabel\(/g)!.length).toBeGreaterThanOrEqual(2);
     expect(client).toMatch(/data-testid="audit-imported"/);
     expect(client).toMatch(/data-testid="revision-imported"/);
-    expect(client).toMatch(/if \(row\.original\.provenance\) return/);
+    expect(client).toMatch(/\{e\.provenance \?\? \(e\.createdByName/);   // an imported row is never shown as typed here
     expect(client).toMatch(/getAuditPeriodEvents\(/);
     expect(client).toMatch(/\{e\.context && /);
   });
