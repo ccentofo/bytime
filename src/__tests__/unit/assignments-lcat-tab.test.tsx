@@ -26,7 +26,7 @@ vi.mock('next/navigation', async () => {
 const h = vi.hoisted(() => ({
   getAssignments: vi.fn(), getUsers: vi.fn(), listChargeCodes: vi.fn(), getChargeCodeAssignments: vi.fn(),
   getWorkspaceTimezone: vi.fn(), getWorkspaceToday: vi.fn(), getAllLaborCategories: vi.fn(), getUserLaborCategoryAssignments: vi.fn(),
-  getAssignableLaborCategories: vi.fn(),
+  getAssignableLaborCategories: vi.fn(), endAssignment: vi.fn(), withOverlaps: vi.fn(),
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/session', () => ({ requirePageRole: vi.fn(async () => ({ id: 'a', role: 'admin' })) }));
@@ -42,7 +42,8 @@ vi.mock('@/db', async () => {
   return { getDb: async () => db };
 });
 vi.mock('@/server/actions/labor-categories', () => ({
-  assignUserToLaborCategory: vi.fn(), endUserLaborCategoryAssignment: vi.fn(), getUserLaborCategoryAssignments: h.getUserLaborCategoryAssignments,
+  assignUserToLaborCategory: vi.fn(), endUserLaborCategoryAssignment: h.endAssignment, getUserLaborCategoryAssignments: h.getUserLaborCategoryAssignments,
+  getLaborCategoryAssignmentsWithOverlaps: h.withOverlaps,
   getAllLaborCategories: h.getAllLaborCategories, getAssignableLaborCategories: h.getAssignableLaborCategories,
 }));
 vi.mock('@/server/internal/workspace-settings', () => ({ getWorkspaceTimezone: h.getWorkspaceTimezone, getWorkspaceToday: h.getWorkspaceToday }));
@@ -51,7 +52,7 @@ vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 import AssignmentsPage from '@/app/(app)/admin/assignments/page';
 import { AssignmentsClient } from '@/app/(app)/admin/assignments/AssignmentsClient';
 import { parseAssignmentsParams } from '@/lib/assignments-params';
-import { click, installDomStubs, mount, unmount, type Mounted } from '../helpers/dom';
+import { click, dialogTitled, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
 import type { CalendarDate } from '@/lib/calendar-date';
 
 const realReplace = window.history.replaceState.bind(window.history);
@@ -217,6 +218,12 @@ describe('the Labor categories tab (L-2)', () => {
 describe('statuses, Show and the overlap notice (AS-6)', () => {
   const statusOf = (r: HTMLElement) => r.querySelector('[data-testid="lcat-status"]')!.textContent;
 
+  it('L8: Overlaps wins over Ended and Starts — an ended overlapping row stays under "Current and upcoming"', async () => {
+    await render('?tab=labor-categories', { overlapIds: [X2, X4] });
+    const byId = () => Object.fromEntries(rows().map((r) => [rowIds()[rows().indexOf(r)], statusOf(r)]));
+    expect(byId()).toEqual({ 'Lee Roe/SE-I ended': 'Overlaps', 'Lee Roe/SE-II': 'Current', 'Pat Doe/SE-I': 'Current', 'Pat Doe/SE-I future': 'Overlaps' });
+  });
+
   it('grouped by person; Current / Starts {MMM D} / Ended {MMM D, YYYY}; Overlaps wins; "Current and upcoming" hides Ended', async () => {
     await render('?tab=labor-categories', { overlapIds: [X3] });
     const people = [...panel().querySelectorAll('tbody tr:not([data-row])')].map((r) => r.textContent?.trim());
@@ -241,6 +248,21 @@ describe('statuses, Show and the overlap notice (AS-6)', () => {
     unmount(m);
     await render('?tab=labor-categories');
     expect(notice()).toBeNull();
+  });
+
+  it('M3: End… on an overlapping row refetches the overlap ids — Overlaps and the notice clear without a reload', async () => {
+    h.endAssignment.mockResolvedValue({ ok: true, data: undefined });
+    h.withOverlaps.mockResolvedValue({ assignments: ASSIGNMENTS.map((a) => (a.id === X3 ? { ...a, endDate: '2026-11-03' } : a)), overlapIds: [] });
+    await render('?tab=labor-categories', { overlapIds: [X3] });
+    const lee = () => rows().find((r) => r.textContent?.includes('SE-II'))!;
+    expect(statusOf(lee())).toBe('Overlaps');
+    await click([...lee().querySelectorAll('button')].find((b) => b.textContent === 'End…'));
+    await click([...dialogTitled('End assignment?')!.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'End Assignment'));
+    await wait();
+    expect(h.endAssignment).toHaveBeenCalledWith(X3, undefined);
+    expect(h.withOverlaps).toHaveBeenCalledTimes(1);
+    expect(statusOf(lee())).toBe('Current');
+    expect(panel().querySelector('[data-testid="overlap-notice"]')).toBeNull();
   });
 
   it('the page passes the overlapping assignment ids (findOverlaps over the rows it already loads)', async () => {

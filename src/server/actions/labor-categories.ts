@@ -12,6 +12,7 @@ import { userAction } from '@/lib/action-result';
 import { UserFacingError } from '@/lib/errors';
 import {
   unpricedEntries, unpricedFixText, unpricedReport, unpricedTotals, allUnpricedGroups, overlapsInScope, unpricedScopeNames,
+  overlappingAssignments, overlapAssignmentIds,
   type OverlapRow, type UnpricedEntryRow, type UnpricedReport, type UnpricedGroup, type UnpricedScopeNames,
 } from '@/server/internal/cost-basis';
 import { parseUnpricedFilters } from '@/lib/unpriced-filters';
@@ -176,7 +177,21 @@ export interface UserLcatAssignment {
 
 export async function getUserLaborCategoryAssignments(): Promise<UserLcatAssignment[]> {
   await requireAdmin();
+  return selectUserLcatAssignments(await getDb());
+}
+
+/**
+ * UX-4C1-AUDIT.md M3: the assignments with the ids that overlap (the Unpriced report's rule, findOverlaps), for the
+ * Labor categories tab's refetch after Assign or End…, so Overlaps and the notice follow the write.
+ */
+export async function getLaborCategoryAssignmentsWithOverlaps(): Promise<{ assignments: UserLcatAssignment[]; overlapIds: string[] }> {
+  await requireAdmin();
   const db = await getDb();
+  const [assignments, overlaps] = await Promise.all([selectUserLcatAssignments(db), overlappingAssignments(db)]);
+  return { assignments, overlapIds: overlapAssignmentIds(overlaps) };
+}
+
+async function selectUserLcatAssignments(db: Awaited<ReturnType<typeof getDb>>): Promise<UserLcatAssignment[]> {
   const rows = await db
     .select({
       id: userLaborCategories.id,

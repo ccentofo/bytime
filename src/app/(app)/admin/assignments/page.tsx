@@ -4,7 +4,7 @@ import { getUsers } from '@/server/actions/users';
 import { listChargeCodes, getChargeCodeAssignments } from '@/server/actions/charge-codes';
 import { getAllLaborCategories, getUserLaborCategoryAssignments, getAssignableLaborCategories } from '@/server/actions/labor-categories';
 import { getWorkspaceTimezone, getWorkspaceToday } from '@/server/internal/workspace-settings';
-import { findOverlaps } from '@/server/internal/cost-basis';
+import { findOverlaps, overlapAssignmentIds } from '@/server/internal/cost-basis';
 import { effectiveDesignee, type ApprovalFacts } from '@/server/internal/approval-rules';
 import { firstParam, parseAssignmentsParams } from '@/lib/assignments-params';
 import { rateDisplay } from '@/lib/labor-rates';
@@ -68,7 +68,7 @@ export default async function AssignmentsPage({ searchParams }: { searchParams: 
       contractId: lc.contractId,
     }] : [];
   }));
-  const overlapIds = [...new Set(overlapping.flatMap((o) => [o.a.assignmentId, o.b.assignmentId]))];
+  const overlapIds = overlapAssignmentIds(overlapping);
 
   // §4.4: each active supervisor's effective approver, by the same rule as approvals, from the users already loaded.
   const facts: ApprovalFacts = { users: new Map(allUsers.map((u) => [u.id, { id: u.id, role: u.role, isActive: u.isActive, approverId: u.approverId }])), clinsByUser: new Map() };

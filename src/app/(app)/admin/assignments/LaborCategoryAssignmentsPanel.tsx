@@ -17,7 +17,7 @@ import { toastError, toastSuccess } from '@/lib/toast';
 import { formatCount, formatCurrency } from '@/lib/format';
 import { compare, formatCalendarDate, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import {
-  assignUserToLaborCategory, endUserLaborCategoryAssignment, getUserLaborCategoryAssignments,
+  assignUserToLaborCategory, endUserLaborCategoryAssignment, getLaborCategoryAssignmentsWithOverlaps,
 } from '@/server/actions/labor-categories';
 import classes from './LaborCategoryAssignments.module.css';
 import styles from './Assignments.module.css';
@@ -95,7 +95,14 @@ export function LaborCategoryAssignmentsPanel({
   const busy = useBusy();
   const [assignments, setAssignments] = useState<LcatAssignment[]>(initialAssignments);
   const [show, setShow] = useState<'current' | 'all'>('current');
-  const overlapSet = useMemo(() => new Set(overlapIds), [overlapIds]);
+  // UX-4C1-AUDIT.md M3: the overlap ids are refetched with the assignments after every write.
+  const [overlaps, setOverlaps] = useState<string[]>(overlapIds);
+  const overlapSet = useMemo(() => new Set(overlaps), [overlaps]);
+  async function reload() {
+    const fresh = await getLaborCategoryAssignmentsWithOverlaps();
+    setAssignments(fresh.assignments);
+    setOverlaps(fresh.overlapIds);
+  }
 
   // Assign form (a Modal). A `userId` in the URL pre-selects that employee (again whenever the parameter changes).
   const [assignOpen, setAssignOpen] = useState(false);
@@ -168,7 +175,7 @@ export function LaborCategoryAssignmentsPanel({
         userId: assignUserId, laborCategoryId: assignLcatId, effectiveDate: assignEffectiveDate, endDate: end,
       }), { errorTitle: 'Assignment Failed' });
       if (!result.ok) return;
-      setAssignments(await getUserLaborCategoryAssignments());
+      await reload();
       setAssignUserId(null);
       setAssignLcatId(null);
       setAssignEffectiveDate(null);
@@ -185,7 +192,7 @@ export function LaborCategoryAssignmentsPanel({
     try {
       const result = await runAction(endUserLaborCategoryAssignment(assignment.id, endDate ?? undefined), { errorTitle: 'Couldn’t end assignment' });
       if (!result.ok) return;
-      setAssignments(await getUserLaborCategoryAssignments());
+      await reload();
       toastSuccess({ title: 'Assignment ended', message: `${assignment.userName}'s assignment to ${assignment.lcatCode} has been ended.` });
       setConfirmEnd(null);
       setEndDate(null);
