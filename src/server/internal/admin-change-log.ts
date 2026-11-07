@@ -1,20 +1,20 @@
 import 'server-only';
 import type { TenantWriter } from '@/db';
 import { adminChangeLog } from '@/db/schema';
+import type { AdminChangePair } from '@/lib/audit/admin-change-registry';
 
 /**
  * THE writer of `admin_change_log` (feature-plan-dated-rates.md D1.5 ruling, D0). Every change log row goes through
  * here, in the CALLER's transaction (pass `tx`) — never a client of its own — so a change and its log row commit or
- * roll back together. A static test forbids `insert(adminChangeLog)` anywhere else.
+ * roll back together. A static test forbids `insert(adminChangeLog)` anywhere else. The (entity, action) pair is typed
+ * from the registry (feature-plan-ux-people-codes.md §6.4), so an unregistered pair doesn't compile.
  */
-export interface AdminChangeLogRow {
+export type AdminChangeLogRow = AdminChangePair & {
   actorId: string;
-  entity: string;
   entityId: string;
-  action: string;
   oldValue: unknown;
   newValue: unknown;
-}
+};
 
 /** Insert one log row with the caller's client; returns its id. */
 export async function logAdminChange(tx: TenantWriter, row: AdminChangeLogRow): Promise<string> {

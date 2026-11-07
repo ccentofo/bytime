@@ -114,7 +114,7 @@ describe('labels', () => {
   it('MIGRATION has a label but is NOT a user-pickable reason (saveTimesheetBatch validates against REASON_CODES)', () => {
     expect(REASON_LABELS.MIGRATION).toBe('Imported (migration)');
     expect(REASON_CODES.map((r) => r.value)).not.toContain('MIGRATION');
-    expect(reasonLabel('CORRECTION')).toBe('Correction of Error');
+    expect(reasonLabel('CORRECTION')).toBe('Correction');
     expect(reasonLabel('SOMETHING_ELSE')).toBe('SOMETHING_ELSE');
   });
 

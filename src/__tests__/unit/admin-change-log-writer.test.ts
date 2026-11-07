@@ -35,7 +35,7 @@ describe('logAdminChange', () => {
   it('inserts exactly the given row with the CALLER\'s client and returns its id', async () => {
     const tx = createFakeControlDb();
     tx.onReturning('insert', adminChangeLog, [{ id: 'log-1' }]);
-    const row = { actorId: 'a', entity: 'charge_code', entityId: 'c', action: 'deactivated', oldValue: { isActive: true }, newValue: { isActive: false } };
+    const row = { actorId: 'a', entity: 'charge_code', entityId: 'c', action: 'deactivated', oldValue: { isActive: true }, newValue: { isActive: false } } as const;
     expect(await logAdminChange(tx as never, row)).toBe('log-1');
     expect(tx.inserts).toEqual([{ table: adminChangeLog, values: row }]);
   });

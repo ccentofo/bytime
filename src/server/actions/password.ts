@@ -8,23 +8,7 @@ import { requireSession, requireAdminFresh } from '@/lib/session';
 import { verifyCurrentPassword } from '@/server/internal/login-attempts';
 import { UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
-
-// ---------------------------------------------------------------------------
-// Password Validation
-// ---------------------------------------------------------------------------
-
-const MIN_PASSWORD_LENGTH = 8;
-const MAX_PASSWORD_LENGTH = 128;
-
-function validatePassword(password: string): string | null {
-  if (!password || password.length < MIN_PASSWORD_LENGTH) {
-    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
-  }
-  if (password.length > MAX_PASSWORD_LENGTH) {
-    return `Password must not exceed ${MAX_PASSWORD_LENGTH} characters.`;
-  }
-  return null; // Valid
-}
+import { validatePassword } from '@/lib/password-rules';
 
 // ---------------------------------------------------------------------------
 // Self-Service Password Change

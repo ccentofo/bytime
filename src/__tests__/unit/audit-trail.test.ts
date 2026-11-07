@@ -56,7 +56,7 @@ describe('true cell code', () => {
 
   it('MIGRATION has a label (REASON_LABELS)', () => {
     expect(reasonLabel('MIGRATION')).toBe('Imported (migration)');
-    expect(reasonLabel('CORRECTION')).toBe('Correction of Error');
+    expect(reasonLabel('CORRECTION')).toBe('Correction');
   });
 });
 

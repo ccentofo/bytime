@@ -1,9 +1,11 @@
 export const REASON_CODES: { value: string; label: string }[] = [
-  { value: 'CORRECTION', label: 'Correction of Error' },
-  { value: 'LATE_ENTRY', label: 'Late Entry (>24hrs)' },
-  { value: 'TRANSFER', label: 'Transfer Between Accounts' },
-  { value: 'SUPERVISOR_DIRECTED', label: 'Supervisor-Directed Change' },
-  { value: 'OTHER', label: 'Other (explain in comments)' },
+  // feature-plan-ux-people-codes.md R4: sentence-case labels, UI only (no PDF, CSV or API prints them; the audit CSV
+  // writes the raw code). ReasonModal requires a comment for every reason, so no label carries a hint.
+  { value: 'CORRECTION', label: 'Correction' },
+  { value: 'LATE_ENTRY', label: 'Late entry' },
+  { value: 'TRANSFER', label: 'Transfer between accounts' },
+  { value: 'SUPERVISOR_DIRECTED', label: 'Supervisor-directed change' },
+  { value: 'OTHER', label: 'Other' },
 ];
 
 /**
