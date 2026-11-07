@@ -16,7 +16,7 @@ const nav = vi.hoisted(() => ({ listeners: new Set<() => void>() }));
 vi.mock('next/navigation', async () => {
   const { useSyncExternalStore } = await import('react');
   const subscribe = (cb: () => void) => { nav.listeners.add(cb); return () => { nav.listeners.delete(cb); }; };
-  return { useSearchParams: () => new URLSearchParams(useSyncExternalStore(subscribe, () => window.location.search)) };
+  return { useSearchParams: () => new URLSearchParams(useSyncExternalStore(subscribe, () => window.location.search, () => window.location.search)) };
 });
 const actions = vi.hoisted(() => ({
   listChargeCodes: vi.fn(async () => [] as unknown[]),
@@ -37,6 +37,10 @@ vi.mock('@/server/actions/charge-code-categories', () => ({
 vi.mock('@/server/actions/indirect-codes', () => ({ updateIndirectCode: vi.fn(), getIndirectChargeCodes: vi.fn(async () => []), createIndirectCode: vi.fn(), seedIndirectCodes: vi.fn() }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: actions.notify } }));
 
+import { renderToString } from 'react-dom/server';
+import { MantineProvider } from '@mantine/core';
+import { theme } from '@/theme';
+import { WorkspaceModeProvider } from '@/components/shell/WorkspaceMode';
 import { ChargeCodesClient } from '@/app/(app)/admin/charge-codes/ChargeCodesClient';
 import { parseCodesTab } from '@/lib/charge-codes-tab';
 import { buttonByText, click, dialogTitled, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
@@ -248,5 +252,29 @@ describe('Create codes from CLINs (§3.3)', () => {
     await click(buttonByText('Create codes from CLINs…'));
     await wait(10);
     expect(dialogTitled('Create codes from CLINs')!.textContent).toContain('Every active CLIN already has a charge code.');
+  });
+
+  it('L10: no active CLINs at all → "There are no active CLINs yet." with a link to Contracts', async () => {
+    actions.preview.mockResolvedValueOnce([]);
+    await render([], { contracts: [] });
+    await click(buttonByText('Create codes from CLINs…'));
+    await wait(10);
+    const empty = dialogTitled('Create codes from CLINs')!.querySelector('[data-testid="autobridge-empty"]')!;
+    expect(empty.textContent).toBe('There are no active CLINs yet. Go to Contracts');
+    expect(empty.querySelector('a')!.getAttribute('href')).toBe('/admin/contracts');
+  });
+});
+
+describe('the Indirect tab count (L9)', () => {
+  it('counts ACTIVE indirect codes from the first paint — the server HTML, before any effect (no flicker from the total)', async () => {
+    const off = { ...INDIRECT[0], id: 'ic2', code: 'OH-02', isActive: false };
+    const html = renderToString(
+      <MantineProvider env="test" theme={theme}>
+        <WorkspaceModeProvider mode="full">
+          <ChargeCodesClient initialCodes={[]} costClasses={[]} contracts={CONTRACTS} laborCategories={CATS} indirectCodes={[...INDIRECT, off]} workspaceToday={TODAY} />
+        </WorkspaceModeProvider>
+      </MantineProvider>,
+    );
+    expect(html).toContain('Indirect (<!-- -->1<!-- -->)');
   });
 });

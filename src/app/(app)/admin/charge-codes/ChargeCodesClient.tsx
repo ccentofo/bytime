@@ -169,7 +169,8 @@ export function ChargeCodesClient({
     window.history.replaceState(null, '', `?${params.toString()}`);
   }
   const indirectRef = useRef<IndirectPanelHandle>(null);
-  const [indirectCount, setIndirectCount] = useState(indirectCodes.length);
+  // UX-4C1-AUDIT.md L9: the active count from the first paint (the panel reports the same number), so it doesn't flicker.
+  const [indirectCount, setIndirectCount] = useState(() => indirectCodes.filter((c) => c.isActive).length);
 
   const [codes, setCodes] = useState(initialCodes);
   const [status, setStatus] = useState<StatusFilter>('active');
@@ -468,7 +469,7 @@ export function ChargeCodesClient({
         </Tabs.Panel>
       </Tabs>
 
-      <CreateFromClinsModal opened={bridgeOpen} onClose={() => setBridgeOpen(false)} onCreated={refreshCodes} />
+      <CreateFromClinsModal opened={bridgeOpen} onClose={() => setBridgeOpen(false)} onCreated={refreshCodes} hasActiveClins={contracts.some((c) => c.clins.length > 0)} />
 
       <Modal opened={modalOpen} onClose={() => { if (!busy.is('save')) setModalOpen(false); }} title={editingId ? 'Edit charge code' : 'Add charge code'} size="lg">
         <Stack gap="md">

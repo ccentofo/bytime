@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Alert, Button, Checkbox, Group, Modal, Stack, Table, Text, VisuallyHidden } from '@mantine/core';
+import Link from 'next/link';
+import { Alert, Anchor, Button, Checkbox, Group, Modal, Stack, Table, Text, VisuallyHidden } from '@mantine/core';
 import { WriteButton } from '@/components/shell/WorkspaceMode';
 import { useBusy } from '@/components/ui/useBusy';
 import { runAction } from '@/lib/run-action';
@@ -15,9 +16,11 @@ export const TICK_AT_LEAST_ONE = 'Tick at least one CLIN.';
  * "Create codes from CLINs" (feature-plan-ux-people-codes.md §3.3): shows what it would create first. Available CLINs
  * start ticked; one whose code is taken or too long shows why, with an unticked aria-disabled box (never `disabled`).
  */
-export function CreateFromClinsModal({ opened, onClose, onCreated }: {
+export function CreateFromClinsModal({ opened, onClose, onCreated, hasActiveClins }: {
   opened: boolean;
   onClose: () => void;
+  /** UX-4C1-AUDIT.md L10: false → the empty state says there are no active CLINs and links to Contracts. */
+  hasActiveClins: boolean;
   /** After a successful create (the caller refetches). */
   onCreated: () => void | Promise<void>;
 }) {
@@ -74,7 +77,11 @@ export function CreateFromClinsModal({ opened, onClose, onCreated }: {
         {candidates === null && !error && <Text size="sm" c="dimmed" role="status">Loading…</Text>}
         {empty && (
           <>
-            <Text size="sm" data-testid="autobridge-empty">Every active CLIN already has a charge code.</Text>
+            <Text size="sm" data-testid="autobridge-empty">
+              {hasActiveClins
+                ? 'Every active CLIN already has a charge code.'
+                : <>There are no active CLINs yet. <Anchor component={Link} href="/admin/contracts" size="sm">Go to Contracts</Anchor></>}
+            </Text>
             <Group justify="flex-end"><Button variant="default" onClick={close}>Close</Button></Group>
           </>
         )}
