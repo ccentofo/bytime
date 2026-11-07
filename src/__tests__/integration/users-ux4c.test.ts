@@ -54,6 +54,19 @@ vi.mock('@/auth', () => ({
       : null,
 }));
 
+// UX-4C1-AUDIT.md M2: make the change-log write fail on demand (wrapping the real writer), to prove the change rolls back.
+const logState = vi.hoisted(() => ({ fail: false }));
+vi.mock('@/server/internal/admin-change-log', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/server/internal/admin-change-log')>();
+  return {
+    ...real,
+    logAdminChange: async (...args: Parameters<typeof real.logAdminChange>) => {
+      if (logState.fail) throw new Error('admin_change_log write failed');
+      return real.logAdminChange(...args);
+    },
+  };
+});
+
 import { updateUser, createUserWithPassword } from '@/server/actions/users';
 import { adminResetMfa } from '@/server/actions/mfa';
 import { adminResetPassword } from '@/server/actions/password';
@@ -73,7 +86,7 @@ describe('Users server (UX-4c §5.1)', () => {
     admin = await createTestUser({ role: 'admin', passwordHash: await bcrypt.hash('AdminPass123!', 4) });
     actingAs(admin);
   });
-  afterEach(async () => { sessionState.user = null; await cleanupTestData(); });
+  afterEach(async () => { sessionState.user = null; logState.fail = false; await cleanupTestData(); });
 
   it('US-3: wrong admin password refused and recorded; success clears 3 fields, turns off, bumps the session, logs once; already off → no log; self refused without an attempt', async () => {
     const db = getTestDb();
@@ -109,6 +122,19 @@ describe('Users server (UX-4c §5.1)', () => {
       ['role_changed', { role: 'supervisor' }, { role: 'admin' }],
       ['flsa_changed', { flsaExempt: false }, { flsaExempt: true }],
     ]);
+  });
+
+  it('M2: the change-log write fails → the change rolls back (updateUser, adminResetPassword, adminResetMfa)', async () => {
+    const db = getTestDb();
+    const pat = await createTestUser({ role: 'employee', flsaExempt: false, sessionVersion: 5, totpEnabled: true, totpSecret: 'enc-secret' });
+    logState.fail = true;
+    expect((await updateUser(pat.id, { role: 'supervisor', flsaExempt: true })).ok).toBe(false);
+    expect((await adminResetPassword({ targetUserId: pat.id, newPassword: 'BrandNew123' })).ok).toBe(false);
+    expect((await adminResetMfa({ userId: pat.id, currentPassword: 'AdminPass123!' })).ok).toBe(false);
+    const [after] = await db.select().from(schema.users).where(eq(schema.users.id, pat.id));
+    expect([after.role, after.flsaExempt, after.sessionVersion, after.passwordHash, after.totpEnabled, after.totpSecret])
+      .toEqual(['employee', false, 5, pat.passwordHash, true, 'enc-secret']);
+    expect(await logsFor(pat.id)).toHaveLength(0);
   });
 
   it('US-5: missing flsaExempt, a short password, an approver for an employee → refused; logs created', async () => {

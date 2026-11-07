@@ -18,7 +18,20 @@ vi.mock('@sentry/nextjs', () => ({ captureException: () => {}, captureMessage: (
 vi.mock('@/db', async () => {
   const { createFakeControlDb } = await import('../helpers/fake-control-db');
   const db = createFakeControlDb() as ReturnType<typeof createFakeControlDb> & { transaction: (cb: (tx: unknown) => unknown) => unknown };
-  db.transaction = async (cb) => cb(db);
+  // UX-4C1-AUDIT.md M2: the callback gets a DISTINCT tx whose writes are tagged `via: 'tx'`, so a change or log written
+  // through `db` (outside the transaction, surviving a rollback) is caught.
+  type W = { values: (v: Record<string, unknown>) => unknown };
+  type U = { set: (v: Record<string, unknown>) => unknown };
+  const tagged = (list: () => object[], write: () => unknown) => { const r = write(); (list()[list().length - 1] as { via?: string }).via = 'tx'; return r; };
+  const tx = {
+    select: (f?: unknown) => db.select(f),
+    execute: (q: unknown) => db.execute(q),
+    insert: (t: unknown) => ({ values: (v: Record<string, unknown>) => tagged(() => db.inserts, () => (db.insert(t) as W).values(v)) }),
+    update: (t: unknown) => ({ set: (v: Record<string, unknown>) => tagged(() => db.updates, () => (db.update(t) as U).set(v)) }),
+    delete: (t: unknown) => tagged(() => db.deletes, () => db.delete(t)),
+    transaction: async (cb: (t: unknown) => unknown) => cb(tx),
+  };
+  db.transaction = async (cb) => cb(tx);
   return { getDb: async () => db, getDbForWrite: async () => db, getDbForAuth: async () => db, getDbForUrl: () => db, __db: db };
 });
 vi.mock('@/lib/session', () => {
@@ -47,6 +60,8 @@ beforeEach(() => db.reset());
 const ID = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const ADMIN = ID(99);
 const logs = () => db.inserts.filter((i) => i.table === adminChangeLog).map((i) => i.values as { action: string; entityId: string; oldValue: unknown; newValue: unknown });
+/** M2: every admin_change_log insert and every users update went through the transaction's tx. */
+const viaTx = () => [...db.inserts.filter((i) => i.table === adminChangeLog), ...db.updates.filter((u) => u.table === users)].map((w) => (w as { via?: string }).via ?? 'db');
 const sqlText = (v: unknown) => (v instanceof SQL ? new PgDialect().sqlToQuery(v).sql : String(v));
 let adminHash = '';
 beforeAll(async () => { adminHash = await bcrypt.hash('right-password', 4); });
@@ -91,6 +106,7 @@ describe('adminResetMfa (US-3 companion)', () => {
     expect(set).toMatchObject({ totpSecret: null, totpRecoveryCodes: null, totpLastUsedStep: null, totpEnabled: false });
     expect(sqlText(set.sessionVersion)).toMatch(/"session_version" \+ 1/);
     expect(logs().map((l) => [l.action, l.entityId])).toEqual([['mfa_reset', ID(2)]]);
+    expect(viaTx()).toEqual(['tx', 'tx']);                                             // M2: the log and the change, in the transaction
     db.reset();
     db.onSelect(users, [{ email: 'admin@x', passwordHash: adminHash }]);
     db.onSelect(users, [{ totpEnabled: false }]);
@@ -110,6 +126,7 @@ describe('updateUser logs (US-4 companion)', () => {
     db.onSelect(userAssignments, [{ clinId: 'clin-b' }, { clinId: 'clin-a' }]);
     expect(await updateUser(ID(3), { role: 'supervisor' })).toMatchObject({ ok: true });
     expect(logs().map((l) => [l.action, l.oldValue, l.newValue])).toEqual([['role_changed', { role: 'employee' }, { role: 'supervisor', clinIds: ['clin-a', 'clin-b'] }]]);
+    expect(viaTx()).toEqual(['tx', 'tx']);                                             // M2
   });
 
   it('overtime and active state log their own action; a name-only edit logs nothing; a missing user is not_found', async () => {
@@ -126,6 +143,7 @@ describe('updateUser logs (US-4 companion)', () => {
       ['flsa_changed', { flsaExempt: false }, { flsaExempt: true }],
       ['deactivated', { isActive: true }, { isActive: false }],
     ]);
+    expect(viaTx()).toEqual(['tx', 'tx', 'tx', 'tx', 'tx']);                          // M2: two logs, three updates
     expect(await updateUser(ID(9), { fullName: 'X' })).toMatchObject({ ok: false, code: 'not_found' });
   });
 });
@@ -144,6 +162,7 @@ describe('createUserWithPassword (US-5 companion)', () => {
     db.onReturning('insert', users, [{ id: ID(5), fullName: 'New Person', role: 'employee', flsaExempt: true }]);
     expect(await createUserWithPassword({ ...base, flsaExempt: true })).toMatchObject({ ok: true });
     expect(logs().map((l) => [l.action, l.entityId, l.newValue])).toEqual([['created', ID(5), { role: 'employee', flsaExempt: true }]]);
+    expect(viaTx()).toEqual(['tx']);                                                    // M2
     db.reset();
     db.onSelect(users, [{ role: 'admin', isActive: true }]);                         // the approver
     db.onReturning('insert', users, [{ id: ID(6), fullName: 'Sup', role: 'supervisor', flsaExempt: false }]);
@@ -159,6 +178,7 @@ describe('adminResetPassword and the import (US-6 companion)', () => {
     expect(await adminResetPassword({ targetUserId: ID(8), newPassword: 'brand-new-pass' })).toMatchObject({ ok: true });
     expect(sqlText((db.updates[0].set as Record<string, unknown>).sessionVersion)).toMatch(/"session_version" \+ 1/);
     expect(logs().map((l) => [l.action, l.entityId])).toEqual([['password_reset', ID(8)]]);
+    expect(viaTx()).toEqual(['tx', 'tx']);                                             // M2
     db.reset();
     expect(await adminResetPassword({ targetUserId: ID(9), newPassword: 'brand-new-pass' })).toMatchObject({ ok: false, code: 'not_found' });
     expect(logs()).toEqual([]);
