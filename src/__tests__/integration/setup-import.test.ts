@@ -76,7 +76,7 @@ async function checkThenImport(run: (opts: { dryRun?: boolean }) => Promise<Acti
   expect(await counts()).toEqual(before);
   expect(check.generatedPasswords ?? []).toEqual([]);
   const real = await expectOk(run({}));
-  const strip = ({ generatedPasswords: _p, ...rest }: ImportResult) => rest;
+  const strip = (r: ImportResult) => { const { generatedPasswords, ...rest } = r; void generatedPasswords; return rest; };
   expect(strip(check)).toEqual(strip(real));
   return { check, real, before };
 }

@@ -81,13 +81,18 @@ describe('Import → Hours and Timesheet status (C11, L7)', () => {
   });
 
   it('L7: a check that finishes after another file was chosen is dropped', async () => {
-    const pending = deferredOf<unknown>();
-    actions.validateMigrationData.mockImplementationOnce(() => pending.promise);
+    const stale = deferredOf<unknown>();
+    const current = deferredOf<unknown>();
+    actions.validateMigrationData.mockImplementationOnce(() => stale.promise).mockImplementationOnce(() => current.promise);
     m = await mount(<ImportClient initialData={importPageData()} initialType="hours" />);
     await chooseFile(`${HEADER}\nold@x.test,2025-01-06,,,OH-001,8\n`, 'old.csv');
     await click(buttonByText('Choose a different file'));
     await chooseFile(`${HEADER}\nnew@x.test,2025-01-06,,,OH-001,8\nnew2@x.test,2025-01-06,,,OH-001,8\n`, 'new.csv');
-    await act(async () => { pending.resolve({ ok: true, data: [{ rowIndex: 1, data: {}, errors: ['stale'], isValid: false }] }); });
+    // The old file's check returns while the new file's is still running: it must not land.
+    await act(async () => { stale.resolve({ ok: true, data: [{ rowIndex: 1, data: {}, errors: ['stale'], isValid: false }] }); });
+    await wait();
+    expect(document.body.querySelector('[data-testid="checking"]')).not.toBeNull();
+    await act(async () => { current.resolve({ ok: true, data: [1, 2].map((rowIndex) => ({ rowIndex, data: {}, errors: [], isValid: true })) }); });
     await wait();
     expect(document.body.textContent).not.toContain('stale');
     expect(document.body.querySelector('[data-testid="check-summary"]')!.textContent).toContain('All 2 rows are ready.');
