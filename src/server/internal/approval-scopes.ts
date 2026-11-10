@@ -45,17 +45,21 @@ export async function assertActiveClins(tx: Pick<DbTx, 'select'>, clinIds: strin
 type ScopeRow = { id: string; supervisorId: string; clinId: string };
 
 /**
- * Give `supervisorId` scope on each CLIN. A row already active is skipped (no log); a new or inactive one becomes
- * active with `source`, granted now by `actorId`, reviewed now, and is logged `granted`. Returns the rows granted.
- * Validation (active supervisor, active CLINs) is the caller's, after the lock.
+ * Give `supervisorId` scope on each CLIN. A row already active is skipped (no grant) — except that a converted row
+ * nobody has reviewed yet (S6) is KEPT: the admin just chose it, so it's reviewed now, logged `kept`, and leaves the
+ * review list and Home's count (APPROVAL-SCOPE-AUDIT.md L4). A new or inactive one becomes active with `source`, granted
+ * now by `actorId`, reviewed now, and is logged `granted`. Returns the rows granted. Validation (active supervisor, active
+ * CLINs) is the caller's, after the lock.
  */
 export async function grantScopeRows(tx: DbTx, args: { actorId: string; supervisorId: string; clinIds: string[]; source: ScopeSource }): Promise<ScopeRow[]> {
   const { actorId, supervisorId, source } = args;
   const clinIds = [...new Set(args.clinIds)];
   if (clinIds.length === 0) return [];
-  const active = new Set((await tx.select({ clinId: approvalScopes.clinId }).from(approvalScopes)
-    .where(and(eq(approvalScopes.supervisorId, supervisorId), inArray(approvalScopes.clinId, clinIds), eq(approvalScopes.isActive, true))))
-    .map((r) => r.clinId));
+  const existing = await tx.select({ id: approvalScopes.id, clinId: approvalScopes.clinId, needsReview: sql<boolean>`(${UNREVIEWED_MIGRATED_SCOPE})` })
+    .from(approvalScopes)
+    .where(and(eq(approvalScopes.supervisorId, supervisorId), inArray(approvalScopes.clinId, clinIds), eq(approvalScopes.isActive, true)));
+  await markScopeRowsKept(tx, { actorId, rowIds: existing.filter((r) => r.needsReview).map((r) => r.id) });
+  const active = new Set(existing.map((r) => r.clinId));
   const toGrant = clinIds.filter((id) => !active.has(id));
   if (toGrant.length === 0) return [];
   const now = new Date();

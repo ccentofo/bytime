@@ -311,17 +311,19 @@ export async function bulkImportAssignments(rows: AssignmentImportRow[]): Promis
         const row = rows[i];
         try {
           const outcome = await tx.transaction(async (sp) => {
-            const email = String(row.email ?? '').toLowerCase().trim();
+            // Row messages echo the TRIMMED values (APPROVAL-SCOPE-AUDIT.md L2); the lookup is case-insensitive.
+            const shownEmail = String(row.email ?? '').trim();
+            const email = shownEmail.toLowerCase();
             const contractNumber = String(row.contractNumber ?? '').trim();
             const clinNumber = String(row.clinNumber ?? '').trim();
             const [user] = await sp.select({ id: users.id, role: users.role, isActive: users.isActive }).from(users).where(eq(users.email, email));
-            if (!user) throw new UserFacingError(`User "${row.email}" not found`);
-            if (!user.isActive || user.role !== 'supervisor') throw new UserFacingError(`${row.email} isn't an active supervisor, so they can't approve a CLIN.`);
+            if (!user) throw new UserFacingError(`User "${shownEmail}" not found`);
+            if (!user.isActive || user.role !== 'supervisor') throw new UserFacingError(`${shownEmail} isn't an active supervisor, so they can't approve a CLIN.`);
             const [clin] = await sp.select({ id: clins.id, status: clins.status, contractStatus: contracts.status })
               .from(clins).innerJoin(contracts, eq(clins.contractId, contracts.id))
               .where(and(eq(contracts.contractNumber, contractNumber), eq(clins.clinNumber, clinNumber)));
-            if (!clin) throw new UserFacingError(`CLIN "${row.clinNumber}" not found under contract "${row.contractNumber}"`);
-            if (clin.status !== 'active' || clin.contractStatus !== 'active') throw new UserFacingError(`CLIN "${row.clinNumber}" under contract "${row.contractNumber}" isn't active.`);
+            if (!clin) throw new UserFacingError(`CLIN "${clinNumber}" not found under contract "${contractNumber}"`);
+            if (clin.status !== 'active' || clin.contractStatus !== 'active') throw new UserFacingError(`CLIN "${clinNumber}" under contract "${contractNumber}" isn't active.`);
             const granted = await grantScopeRows(sp, { actorId: actor.id, supervisorId: user.id, clinIds: [clin.id], source: 'import' });
             return granted.length > 0 ? 'created' : 'skipped';
           });

@@ -51,6 +51,7 @@ const ALLOWLIST: Array<{ file: string; expr: string; why: string }> = [
   { file: 'src/server/internal/audit-export.ts', expr: 'lastId', why: 'the CSV keyset cursor: the previous batch\'s last row id (a UUID), bound as a parameter (UX-4c §6.5)' },
   { file: 'src/server/internal/audit-export.ts', expr: 'topId', why: 'the CSV snapshot: the newest row id read with the count (a UUID), bound as a parameter (UX-4C1-AUDIT.md L3)' },
   { file: 'src/server/actions/assignments.ts', expr: 'UNREVIEWED_MIGRATED_SCOPE', why: 'the shared S6 review predicate (internal/approval-scopes.ts) as a select column (feature-plan-approval-scope.md S6)' },
+  { file: 'src/server/internal/approval-scopes.ts', expr: 'UNREVIEWED_MIGRATED_SCOPE', why: 'the shared S6 review predicate as a select column, so a re-chosen converted row is kept (APPROVAL-SCOPE-AUDIT.md L4)' },
 ];
 
 const SCHEMA_FILES = new Set(['src/db/schema.ts', 'src/db/control-plane/schema.ts']);

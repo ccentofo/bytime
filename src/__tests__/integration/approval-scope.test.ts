@@ -19,6 +19,8 @@ import {
  * AS-10 — demotion: scope removed, reviewed and logged; an unbacked membership row deactivated, a backed one kept.
  * AS-11 — the review: keep → reviewed + logged; remove → inactive + logged; app rows ignored; an inactive supervisor's
  *         and a demoted user's rows are reviewable; a second save skips them.
+ * Fix round 1 (APPROVAL-SCOPE-AUDIT.md): M1 (in AS-9), M2 (createUserWithPassword grants), L1 (in AS-10), L2 (in AS-12),
+ *         L4 (re-granting a converted row keeps it).
  * AS-12 — the import: a non-supervisor row is a row error; a forced SQL error in one row leaves the others committed;
  *         more than 500 rows refused.
  */
@@ -52,11 +54,12 @@ vi.mock('@/lib/email/send', () => ({
 import { approvePeriod, getScopedPeriods } from '@/server/actions/periods';
 import { assignChargeCodesToUser } from '@/server/actions/charge-codes';
 import { grantApprovalScope, revokeApprovalScope, reviewMigratedScopes } from '@/server/actions/assignments';
-import { updateUser } from '@/server/actions/users';
+import { createUserWithPassword, updateUser } from '@/server/actions/users';
 import { bulkImportAssignments } from '@/server/actions/import';
 import { getReportFilterOptions } from '@/server/actions/reports';
 import { getAdminChanges, getClinsForFilter, getContractsForFilter } from '@/server/actions/audit';
 import { canApprove, loadApprovalFacts, reviewScopeFrom } from '@/server/internal/approval-rules';
+import { approvalScopesToReview } from '@/server/internal/approval-scopes';
 
 type U = Awaited<ReturnType<typeof createTestUser>>;
 const actingAs = (u: U | null) => { sessionState.user = u ? { id: u.id, role: u.role, email: u.email, fullName: u.fullName } : null; };
@@ -165,22 +168,60 @@ describe('approval scope (feature-plan-approval-scope.md)', () => {
     expect(await scopeLogs()).toHaveLength(1);
   });
 
-  it('AS-9: promotion with [X] gives exactly X (membership on Y ignored), logged; role_changed lists [X]; a second "promotion" with ids is refused', async () => {
+  it('AS-9: promotion with [X] gives exactly X (membership on Y ignored; a leftover converted scope on Z removed), logged; role_changed lists [X]; a second "promotion" with ids is refused', async () => {
     const k = await createTestContract();
-    const [x, y] = [await createTestClin(k.id), await createTestClin(k.id)];
+    const [x, y, z] = [await createTestClin(k.id), await createTestClin(k.id), await createTestClin(k.id)];
     const pat = await createTestUser({ role: 'employee' });
     await assignUserToClin(pat.id, y.id);                                                    // charges Y
+    // APPROVAL-SCOPE-AUDIT.md M1: demoted by the OLD code during the deploy window, so their converted scope on Z is still active.
+    const stale = await assignApprovalScope(pat.id, z.id, { source: 'migration', reviewedAt: null });
     actingAs(admin);
     await expectOk(updateUser(pat.id, { role: 'supervisor', approvalClinIds: [x.id] }));
     const rows = await scopeRows(pat.id);
-    expect(rows.map((r) => [r.clinId, r.isActive, r.source])).toEqual([[x.id, true, 'app']]);
-    expect((await scopeLogs()).map((l) => [l.action, l.newValue])).toEqual([['granted', { supervisorId: pat.id, clinId: x.id }]]);
+    expect(rows.filter((r) => r.isActive).map((r) => [r.clinId, r.source])).toEqual([[x.id, 'app']]);
+    const z1 = rows.find((r) => r.id === stale.id)!;
+    expect([z1.isActive, z1.reviewedAt !== null]).toEqual([false, true]);
+    expect((await scopeLogs()).map((l) => [l.action, l.entityId === stale.id ? 'stale' : 'new', l.newValue]).sort()).toEqual([
+      ['granted', 'new', { supervisorId: pat.id, clinId: x.id }],
+      ['removed', 'stale', { supervisorId: pat.id, clinId: z.id }],
+    ]);
     const [roleLog] = await db().select().from(schema.adminChangeLog).where(and(eq(schema.adminChangeLog.entityId, pat.id), eq(schema.adminChangeLog.action, 'role_changed')));
     expect(roleLog.newValue).toEqual({ role: 'supervisor', clinIds: [x.id] });
 
     await expectFailure(updateUser(pat.id, { role: 'supervisor', approvalClinIds: [y.id] }), 'validation', /^Already a supervisor — edit their approval scope on Assignments\.$/);
     await expectFailure(updateUser(pat.id, { fullName: 'Pat S', approvalClinIds: [y.id] }), 'validation', /^Already a supervisor/);
-    expect((await scopeRows(pat.id)).map((r) => [r.clinId, r.isActive])).toEqual([[x.id, true]]);
+    expect((await scopeRows(pat.id)).filter((r) => r.isActive).map((r) => r.clinId)).toEqual([x.id]);
+  });
+
+  it('M2: createUserWithPassword gives a new supervisor their chosen CLINs (logged; a waiting timesheet re-routes); a non-supervisor with ids is refused', async () => {
+    const x = await createTestClin((await createTestContract()).id);
+    const emp = await createTestUser({ role: 'employee' });
+    await assignUserToClin(emp.id, x.id);
+    await submittedPeriod(emp);
+    actingAs(admin);
+    const base = { fullName: 'New Sup', password: 'LongEnough123', flsaExempt: true };
+    const email = `new-sup-${Date.now()}@bytime.dev`;
+    await expectFailure(createUserWithPassword({ ...base, email: `x-${email}`, role: 'employee', approvalClinIds: [x.id] }), 'validation', /^Approval CLINs only apply when making someone a supervisor\.$/);
+    const made = await expectOk(createUserWithPassword({ ...base, email, role: 'supervisor', approvalClinIds: [x.id] }));
+    const rows = await scopeRows(made.id);
+    expect(rows.map((r) => [r.clinId, r.isActive, r.source, r.grantedBy])).toEqual([[x.id, true, 'app', admin.id]]);
+    expect((await scopeLogs()).map((l) => [l.action, l.entityId, l.newValue])).toEqual([['granted', rows[0].id, { supervisorId: made.id, clinId: x.id }]]);
+    expect(emails.submitted.map((e) => e.supervisorEmail)).toEqual([email]);           // emp's waiting timesheet re-routed
+  });
+
+  it('L4: re-granting a converted, unreviewed CLIN keeps it — reviewed, logged `kept`, off the review list and Home count', async () => {
+    const x = await createTestClin((await createTestContract()).id);
+    const sup = await createTestUser({ role: 'supervisor' });
+    const converted = await assignApprovalScope(sup.id, x.id, { source: 'migration', reviewedAt: null });
+    actingAs(admin);
+    expect(await approvalScopesToReview(db() as never)).toBe(1);
+    expect(await expectOk(grantApprovalScope({ supervisorId: sup.id, clinIds: [x.id] }))).toEqual({ granted: 0 });
+    const [row] = await scopeRows(sup.id);
+    expect([row.id, row.isActive, row.source, row.reviewedAt !== null]).toEqual([converted.id, true, 'migration', true]);
+    expect((await scopeLogs()).map((l) => [l.action, l.entityId])).toEqual([['kept', converted.id]]);
+    expect(await approvalScopesToReview(db() as never)).toBe(0);
+    expect(await expectOk(grantApprovalScope({ supervisorId: sup.id, clinIds: [x.id] }))).toEqual({ granted: 0 }); // now reviewed: nothing logged
+    expect(await scopeLogs()).toHaveLength(1);
   });
 
   it('AS-10: demotion removes the scope (reviewed, logged); an unbacked membership row is deactivated, a backed one kept', async () => {
@@ -201,6 +242,14 @@ describe('approval scope (feature-plan-approval-scope.md)', () => {
     expect(Object.fromEntries(member.map((m) => [m.clinId, m.isActive]))).toEqual({ [x.id]: true, [z.id]: false });
     const [roleLog] = await db().select().from(schema.adminChangeLog).where(and(eq(schema.adminChangeLog.entityId, dee.id), eq(schema.adminChangeLog.action, 'role_changed')));
     expect(roleLog.newValue).toEqual({ role: 'employee', membershipRemoved: [z.id] });
+
+    // APPROVAL-SCOPE-AUDIT.md L1: S10 runs only when LEAVING supervisor — an employee made admin keeps an unbacked row.
+    const eve = await createTestUser({ role: 'employee' });
+    await assignUserToClin(eve.id, z.id);
+    await expectOk(updateUser(eve.id, { role: 'admin' }));
+    expect((await db().select().from(schema.userAssignments).where(eq(schema.userAssignments.userId, eve.id))).map((m) => m.isActive)).toEqual([true]);
+    const [eveLog] = await db().select().from(schema.adminChangeLog).where(and(eq(schema.adminChangeLog.entityId, eve.id), eq(schema.adminChangeLog.action, 'role_changed')));
+    expect(eveLog.newValue).toEqual({ role: 'admin' });
   });
 
   it('AS-11: the review keeps and removes converted rows (an inactive supervisor\'s and a demoted user\'s too), ignores app rows, and skips them the second time', async () => {
@@ -229,20 +278,25 @@ describe('approval scope (feature-plan-approval-scope.md)', () => {
     const [c1, c2, c3] = [await createTestClin(k.id, { clinNumber: '0001' }), await createTestClin(k.id, { clinNumber: '0002' }), await createTestClin(k.id, { clinNumber: '0003' })];
     const sup = await createTestUser({ role: 'supervisor', email: `imp-sup-${Date.now()}@bytime.dev` });
     const emp = await createTestUser({ role: 'employee', email: `imp-emp-${Date.now()}@bytime.dev` });
+    const off = await createTestUser({ role: 'supervisor', isActive: false, email: `imp-off-${Date.now()}@bytime.dev` });
     // A real database error for CLIN 0002 only (a trigger), inside that row's savepoint.
     await db().execute(sql.raw(`CREATE OR REPLACE FUNCTION test_scope_import_fail() RETURNS trigger AS $$ BEGIN IF NEW.clin_id = '${c2.id}' THEN RAISE EXCEPTION 'forced failure'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql`));
     await db().execute(sql.raw('CREATE TRIGGER test_scope_import_fail BEFORE INSERT ON approval_scopes FOR EACH ROW EXECUTE FUNCTION test_scope_import_fail()'));
     try {
       actingAs(admin);
       const row = (email: string, clinNumber: string) => ({ email, contractNumber: k.contractNumber, clinNumber });
-      const r = await expectOk(bulkImportAssignments([row(sup.email, '0001'), row(emp.email, '0001'), row(sup.email, '0002'), row(sup.email, '0003'), row(sup.email, '0001'), row('nobody@bytime.dev', '0001'), row(sup.email, '9999')]));
+      const r = await expectOk(bulkImportAssignments([
+        row(sup.email, '0001'), row(emp.email, '0001'), row(sup.email, '0002'), row(sup.email, '0003'), row(sup.email, '0001'),
+        row('  Nobody@Bytime.dev ', '0001'), { ...row(sup.email, ' 9999 '), contractNumber: ` ${k.contractNumber} ` }, row(` ${off.email.toUpperCase()} `, '0001'),
+      ]));
       expect(r.created).toBe(2);
       expect(r.skipped).toBe(1);
       expect(r.errors).toEqual([
         { row: 2, message: `${emp.email} isn't an active supervisor, so they can't approve a CLIN.` },
         { row: 3, message: 'Could not import this row.' },
-        { row: 6, message: 'User "nobody@bytime.dev" not found' },
+        { row: 6, message: 'User "Nobody@Bytime.dev" not found' },                               // L2: the trimmed value
         { row: 7, message: `CLIN "9999" not found under contract "${k.contractNumber}"` },
+        { row: 8, message: `${off.email.toUpperCase()} isn't an active supervisor, so they can't approve a CLIN.` }, // L2: inactive supervisor
       ]);
       const rows = await scopeRows(sup.id);
       expect(rows.map((x) => [x.clinId, x.source]).sort()).toEqual([[c1.id, 'import'], [c3.id, 'import']].sort());
