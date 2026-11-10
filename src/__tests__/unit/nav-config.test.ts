@@ -20,7 +20,7 @@ describe('nav-config (T2)', () => {
     ]);
   });
 
-  it('supervisor and employee menus; /admin/setup is in no menu', () => {
+  it('supervisor and employee menus; the old /admin/setup is in no menu', () => {
     expect(shape(mainNav('supervisor'))).toEqual([
       ['Home', '/home'], ['My timesheet', '/timesheet'], ['Approvals', '/admin/approvals'],
       ['Reports', [['Downloads', '/admin/reports'], ['Audit trail', '/admin/audit-trail']]],
@@ -37,6 +37,7 @@ describe('nav-config (T2)', () => {
     }
     for (const l of [...SETTINGS_NAV, SETTINGS_BACK('admin')]) expect(Icons[l.icon], l.label).toBeDefined();
     expect(SETTINGS_NAV.map((l) => [l.label, l.href])).toEqual([
+      ['Setup checklist', '/settings/setup'],   // SU-7: the first Settings item (feature-plan-ux-setup-import.md P1)
       ['Workspace', '/settings/workspace'], ['Pay schedule', '/settings/pay-schedule'], ['Billing', '/settings/billing'],
       ['Integrations', '/settings/integrations'], ['API keys', '/settings/api-keys'], ['Data import', '/settings/import'],
       ['Timesheet history import', '/settings/migration'],
@@ -55,6 +56,7 @@ describe('nav-config (T2)', () => {
     expect(activeHref('/admin/users-x', admin)).toBeNull();
     expect(activeHref('/settings/billing', admin)).toBe('/settings/workspace'); // Settings matches all of /settings
     expect(activeHref('/admin/setup', admin)).toBeNull();
+    expect(activeHref('/settings/setup', SETTINGS_NAV)).toBe('/settings/setup');
     expect(activeHref('/home', admin)).toBe('/home');
   });
 

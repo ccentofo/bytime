@@ -69,6 +69,8 @@ const nextConfig: NextConfig = {
       { source: "/admin/api-keys", destination: "/settings/api-keys", permanent: false },
       { source: "/admin/import", destination: "/settings/import", permanent: false },
       { source: "/admin/migration", destination: "/settings/migration", permanent: false },
+      // feature-plan-ux-setup-import.md P1: the Setup checklist moved into Settings.
+      { source: "/admin/setup", destination: "/settings/setup", permanent: false },
       { source: "/admin/notifications", destination: "/profile/notifications", permanent: false },
       { source: "/settings", destination: "/settings/workspace", permanent: false },
       // feature-plan-ux-kit-contracts.md C1: the Overview merged into Contracts and CLINs.

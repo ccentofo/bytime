@@ -6,7 +6,7 @@
 import { formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { UNPRICED_REPORT_HREF } from '@/lib/cost-labels';
 import { BURN_TIER_LABEL, NEEDS_A_LOOK, burnPercent, burnTier, type BurnTier } from '@/lib/ui/burn';
-import type { SetupStepKey } from '@/lib/setup/steps';
+import { SETUP_HREF, type SetupStepKey } from '@/lib/setup/steps';
 
 export type TeamBucket = 'submitted' | 'returned' | 'inProgress' | 'notStarted';
 export type TeamStatus = Record<TeamBucket, { count: number; names: string[] }>;
@@ -38,7 +38,6 @@ export interface HomeView {
     notices: { selfApprovalBackOn: { logId: string } | null; recommendDesignee: boolean };
     contracts: HomeContract[];
     unpricedTotal: number;
-    workweekSet: boolean;
     pendingConfig: { effectiveFrom: string } | null;
     overlaps: number;
     setup: { isComplete: boolean; requiredDone: number; requiredTotal: number; steps: HomeSetupStep[] };
@@ -162,15 +161,7 @@ export function attentionItems(v: HomeView): AttentionItem[] {
         key: 'setup',
         title: `Finish setting up: ${a.setup.requiredDone} of ${a.setup.requiredTotal} done`,
         sentence: next ? SETUP_STEP_HINT[next.key] : undefined,
-        action: { label: 'Continue', href: '/admin/setup' },
-      });
-    }
-    if (!a.workweekSet) {
-      items.push({
-        key: 'workweek',
-        title: 'Payroll workweek isn’t set',
-        sentence: 'Payroll export stays off until you set it.',
-        action: { label: 'Set workweek', href: '/settings/workspace' },
+        action: { label: 'Continue', href: SETUP_HREF },
       });
     }
     if (a.pendingConfig) {

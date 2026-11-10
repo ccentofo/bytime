@@ -32,7 +32,7 @@ describe('page titles (T14)', () => {
 
   it('every page.tsx except the landing page exports metadata with a title string', () => {
     const pages = files(APP, (n) => n === 'page.tsx');
-    expect(pages.length).toBe(31); // UX-2: + home and settings/pay-schedule; UX-3 Part B: + timesheet/history; UX-4b: − admin/dashboard, + admin/reports/unpriced; UX-4c: − admin/indirect-codes; UX-4c 2a: − admin/setup
+    expect(pages.length).toBe(32); // UX-2: + home and settings/pay-schedule; UX-3 Part B: + timesheet/history; UX-4b: − admin/dashboard, + admin/reports/unpriced; UX-4c: − admin/indirect-codes; UX-4c 2a: admin/setup → settings/setup
     const missing = pages.filter((f) => rel(f) !== LANDING)
       .filter((f) => !/export const metadata: Metadata = \{ title: '[^']+' \};/.test(read(f)))
       .map(rel);

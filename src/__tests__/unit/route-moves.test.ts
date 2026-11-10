@@ -13,6 +13,7 @@ const ROOT = path.resolve(__dirname, '../../..');
 export const OLD_ADMIN_PATHS = [
   '/admin/settings', '/admin/billing', '/admin/integrations', '/admin/integrations/quickbooks', '/admin/integrations/gusto',
   '/admin/integrations/payroll-export', '/admin/api-keys', '/admin/import', '/admin/migration', '/admin/notifications',
+  '/admin/setup',   // feature-plan-ux-setup-import.md P1
 ];
 
 function files(dir: string): string[] {
@@ -57,6 +58,7 @@ describe('route moves (T1)', () => {
       ['/admin/migration', '/settings/migration'],
       ['/admin/notifications', '/profile/notifications'],
       ['/settings', '/settings/workspace'],
+      ['/admin/setup', '/settings/setup'],   // SU-7 (feature-plan-ux-setup-import.md P1)
     ];
     for (const [source, destination] of expected) {
       expect(rules.find((r) => r.source === source), source).toMatchObject({ destination, permanent: false });
