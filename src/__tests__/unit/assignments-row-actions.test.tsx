@@ -32,16 +32,22 @@ vi.mock('@/server/actions/assignments', () => ({
   grantApprovalScope: actions.grant, revokeApprovalScope: actions.revoke, reviewMigratedScopes: actions.review, getApprovalScopesView: actions.getScopesView,
 }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: actions.notify } }));
+// L10: a test can shrink the review chunk size (null = the real REVIEW_CHUNK), so it renders a handful of rows, not 501.
+const chunking = vi.hoisted(() => ({ size: null as number | null }));
+vi.mock('@/app/(app)/admin/assignments/review-chunks', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/app/(app)/admin/assignments/review-chunks')>();
+  return { ...real, reviewChunks: (ids: string[], toRemove: ReadonlySet<string>) => real.reviewChunks(ids, toRemove, chunking.size ?? real.REVIEW_CHUNK) };
+});
 vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams('') }));
 vi.mock('@/server/actions/labor-categories', () => ({ assignUserToLaborCategory: vi.fn(), endUserLaborCategoryAssignment: vi.fn(), getUserLaborCategoryAssignments: vi.fn() }));
 
 import { AssignmentsClient } from '@/app/(app)/admin/assignments/AssignmentsClient';
-import { REVIEW_CHUNK, holderTag, reviewChunks, scopeRows, uncoveredClins } from '@/app/(app)/admin/assignments/ApprovalScopePanel';
+import { holderTag, scopeRows, uncoveredClins } from '@/app/(app)/admin/assignments/ApprovalScopePanel';
 import { buttonByText, click, dialogTitled, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
 
 beforeAll(installDomStubs);
 let m: Mounted | undefined;
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => { vi.clearAllMocks(); chunking.size = null; });
 afterEach(() => { unmount(m); m = undefined; });
 
 const person = (id: string, fullName: string, role = 'employee', isActive = true) => ({ id, fullName, email: `${id}@x`, role, isActive, approverId: null });
@@ -271,31 +277,45 @@ describe('Approval scope (AS-7)', () => {
     expect(panel().querySelector('[data-testid="scope-review"] table')!.getAttribute('aria-label')).toBe('Approval scopes to review');
   });
 
-  it('L10: "Save review" sends at most 500 rows per call, summing the counts; a failed chunk stops and refetches', async () => {
-    const ids = Array.from({ length: 1201 }, (_, i) => `r${i}`);
-    const chunks = reviewChunks(ids, new Set(['r0', 'r600', 'r1200']));
+  it('L10: reviewChunks splits at REVIEW_CHUNK (500), each chunk with its own keep / remove ids', async () => {
+    const { REVIEW_CHUNK, reviewChunks } = await vi.importActual<typeof import('@/app/(app)/admin/assignments/review-chunks')>('@/app/(app)/admin/assignments/review-chunks');
     expect(REVIEW_CHUNK).toBe(500);
+    const chunks = reviewChunks(Array.from({ length: 1201 }, (_, i) => `r${i}`), new Set(['r0', 'r600', 'r1200']));
     expect(chunks.map((c) => [c.keep.length, c.remove])).toEqual([[499, ['r0']], [499, ['r600']], [200, ['r1200']]]);
+  });
 
-    const many = Array.from({ length: 501 }, (_, i) => scope(`m${i}`, 'u-sarah', 'clin-d2', '0002', 'DISA', { source: 'migration', needsReview: true }));
-    actions.review.mockResolvedValueOnce({ ok: true, data: { kept: 500, removed: 0, skipped: 0 } }).mockResolvedValueOnce({ ok: true, data: { kept: 1, removed: 0, skipped: 0 } });
-    await openTab({ initialScopes: { scopes: [...SCOPES, ...many], membership: MEMBERSHIP } });
+  it('L10: "Save review" sends one call per chunk, summing the counts; a failed chunk stops, shows its error and refetches', async () => {
+    chunking.size = 2;                                                               // 5 rows → chunks of 2, 2, 1
+    const five = Array.from({ length: 5 }, (_, i) => scope(`m${i}`, 'u-sarah', 'clin-d2', '0002', 'DISA', { source: 'migration', needsReview: true }));
+    const view = { scopes: [...SCOPES, ...five], membership: MEMBERSHIP };
+    actions.review
+      .mockResolvedValueOnce({ ok: true, data: { kept: 1, removed: 1, skipped: 0 } })
+      .mockResolvedValueOnce({ ok: true, data: { kept: 2, removed: 0, skipped: 0 } })
+      .mockResolvedValueOnce({ ok: true, data: { kept: 1, removed: 0, skipped: 0 } });
+    await openTab({ initialScopes: view });
+    const rows = () => [...panel().querySelectorAll('[data-testid="scope-review-row"]')];
+    await click(rows()[1].querySelector('input[value="remove"]'));
     await click([...panel().querySelectorAll('button')].find((b) => b.textContent === 'Save review'));
     await wait(20);
-    expect(actions.review.mock.calls.map((c) => (c[0] as { keep: string[] }).keep.length)).toEqual([500, 1]);
-    expect(actions.notify.mock.calls.map((c) => (c[0] as { message: string }).message)).toContain('501 kept, 0 removed.');
+    expect(actions.review.mock.calls.map((c) => c[0])).toEqual([
+      { keep: ['m0'], remove: ['m1'] }, { keep: ['m2', 'm3'], remove: [] }, { keep: ['m4'], remove: [] },
+    ]);
+    expect(actions.notify.mock.calls.map((c) => (c[0] as { message: string }).message)).toContain('4 kept, 1 removed.');
 
     unmount(m);
     vi.clearAllMocks();
-    actions.review.mockResolvedValueOnce({ ok: false, code: 'validation', error: 'Review 500 approval scopes or fewer at a time.' });
-    actions.getScopesView.mockResolvedValueOnce({ scopes: [...SCOPES, ...many], membership: MEMBERSHIP });   // nothing was saved
-    await openTab({ initialScopes: { scopes: [...SCOPES, ...many], membership: MEMBERSHIP } });
+    actions.review
+      .mockResolvedValueOnce({ ok: true, data: { kept: 2, removed: 0, skipped: 0 } })
+      .mockResolvedValueOnce({ ok: false, code: 'validation', error: 'Review 500 approval scopes or fewer at a time.' });
+    actions.getScopesView.mockResolvedValueOnce({ scopes: [...SCOPES, ...five.slice(2)], membership: MEMBERSHIP });   // the first chunk was saved
+    await openTab({ initialScopes: view });
     await click([...panel().querySelectorAll('button')].find((b) => b.textContent === 'Save review'));
     await wait(20);
-    expect(actions.review).toHaveBeenCalledTimes(1);                                // stopped after the failed chunk
+    expect(actions.review).toHaveBeenCalledTimes(2);                                // stopped at the failed chunk; the third never sent
     expect(panel().querySelector('[data-testid="scope-review"] [role="alert"]')!.textContent).toBe('Review 500 approval scopes or fewer at a time.');
-    expect(actions.getScopesView).toHaveBeenCalled();                               // earlier chunks may be saved: refetch
-  }, 60_000);
+    expect(actions.getScopesView).toHaveBeenCalled();                               // earlier chunks were saved: refetch
+    expect(actions.notify.mock.calls.map((c) => (c[0] as { title: string }).title)).not.toContain('Approval scopes reviewed');
+  });
 
   it('L11: Add for a supervisor who already approves every active CLIN says so in the dropdown', async () => {
     await openTab({ initialScopes: { scopes: [...SCOPES, scope('s9', 'u-sarah', 'clin-d2', '0002', 'DISA')], membership: MEMBERSHIP } });

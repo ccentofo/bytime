@@ -16,6 +16,7 @@ import { formatCount } from '@/lib/format';
 import { calendarDayOf, formatCalendarDate } from '@/lib/calendar-date';
 import { grantApprovalScope, revokeApprovalScope, reviewMigratedScopes, type ApprovalScopeRow } from '@/server/actions/assignments';
 import type { AccessPerson } from './GiveAccessModal';
+import { reviewChunks } from './review-chunks';
 import classes from './Assignments.module.css';
 
 export type ActiveClin = { clinId: string; clinNumber: string; clinDescription: string | null; contractId: string; contractName: string; contractNumber: string };
@@ -63,19 +64,6 @@ export function uncoveredClins(people: AccessPerson[], scopes: ApprovalScopeRow[
   const employees = employeesOn(people, membership);
   const covered = new Set(scopes.filter((s) => byId.get(s.supervisorId)?.isActive && byId.get(s.supervisorId)?.role === 'supervisor').map((s) => s.clinId));
   return activeClins.filter((c) => (employees.get(c.clinId) ?? 0) > 0 && !covered.has(c.clinId));
-}
-
-/** reviewMigratedScopes takes at most this many rows per call (the server's limit). */
-export const REVIEW_CHUNK = 500;
-
-/** APPROVAL-SCOPE-AUDIT.md L10: the review split into calls of ≤ REVIEW_CHUNK rows, each with its keep / remove ids. */
-export function reviewChunks(ids: string[], toRemove: ReadonlySet<string>): Array<{ keep: string[]; remove: string[] }> {
-  const out: Array<{ keep: string[]; remove: string[] }> = [];
-  for (let i = 0; i < ids.length; i += REVIEW_CHUNK) {
-    const part = ids.slice(i, i + REVIEW_CHUNK);
-    out.push({ keep: part.filter((id) => !toRemove.has(id)), remove: part.filter((id) => toRemove.has(id)) });
-  }
-  return out;
 }
 
 /** The review list's supervisor tag: "(inactive)" or "(no longer a supervisor)". Exported for tests. */
