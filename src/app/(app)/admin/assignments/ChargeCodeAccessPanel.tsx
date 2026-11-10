@@ -51,12 +51,10 @@ export function accessRows(people: AccessPerson[], access: CodeAccessRow[], char
     });
 }
 
-export function ChargeCodeAccessPanel({ people, access, codes, clinsBy, onChanged }: {
+export function ChargeCodeAccessPanel({ people, access, codes, onChanged }: {
   people: AccessPerson[];
   access: CodeAccessRow[];
   codes: AccessCode[];
-  /** personId → CLIN ids of their active user_assignments rows (the R8 notice). */
-  clinsBy: Map<string, Set<string>>;
   /** Refetch after a write (§4.1). */
   onChanged: () => Promise<void>;
 }) {
@@ -147,7 +145,6 @@ export function ChargeCodeAccessPanel({ people, access, codes, clinsBy, onChange
           people={people}
           codes={codes}
           heldBy={heldBy}
-          clinsBy={clinsBy}
           initialPersonId={giveFor.personId}
         />
       )}

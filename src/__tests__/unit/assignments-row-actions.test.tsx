@@ -5,31 +5,38 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
  * feature-plan-ux-people-codes.md §4.2, §4.4 / AS-2, AS-4, AS-5, AS-7:
  * AS-2 — Charge code access grouped by person: every active user; a code that can't be charged is dimmed with "Can't be
  *        charged right now" and not counted; n = 0 → the warn text; people with nothing chargeable sort last; Remove….
- * AS-4 — R8: choosing a supervisor plus a code on a CLIN they have no active row on shows the notice naming that CLIN;
- *        an employee shows none.
+ * AS-4 — (feature-plan-approval-scope.md AS-14) a supervisor plus a code on a CLIN they lack shows NO notice: a charge
+ *        code never gives approval authority.
  * AS-5 — Give access: held codes checked and aria-disabled ("already has access"); the CLIN box selects its selectable
  *        codes (indeterminate when partly); "Choose a person." / "Choose at least one charge code."; the success toast.
- * AS-7 — Approval scope: active supervisors listed even with no CLINs; People counts active employees only; the
- *        uncovered line ignores an inactive supervisor's row.
+ * AS-7 — Approval scope (feature-plan-approval-scope.md §5): active supervisors listed even with no CLINs; their
+ *        approval_scopes rows; People counts active employee members only; the uncovered line ignores an inactive
+ *        supervisor's scope; Since names who granted it (or "converted from earlier data"); the review list (tags,
+ *        Keep / Remove, Save review); Add (several CLINs) and Remove call the new actions.
  */
 
 const actions = vi.hoisted(() => ({
   assign: vi.fn<(d: unknown) => Promise<unknown>>(async () => ({ ok: true, data: { assigned: 2 } })),
   unassign: vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ ok: true, data: undefined })),
   getCcAssignments: vi.fn(async () => [] as unknown[]),
-  getAssignments: vi.fn(async () => [] as unknown[]),
+  getScopesView: vi.fn(async () => ({ scopes: [] as unknown[], membership: [] as unknown[] })),
+  grant: vi.fn<(d: unknown) => Promise<unknown>>(async () => ({ ok: true, data: { granted: 2 } })),
+  revoke: vi.fn<(d: unknown) => Promise<unknown>>(async () => ({ ok: true, data: { changed: true } })),
+  review: vi.fn<(d: unknown) => Promise<unknown>>(async () => ({ ok: true, data: { kept: 2, removed: 1, skipped: 0 } })),
   notify: vi.fn(),
 }));
 vi.mock('@/server/actions/charge-codes', () => ({
   assignChargeCodesToUser: actions.assign, unassignChargeCodeFromUser: actions.unassign, getChargeCodeAssignments: actions.getCcAssignments,
 }));
-vi.mock('@/server/actions/assignments', () => ({ assignUserToClin: vi.fn(), unassignUserFromClin: vi.fn(), getAssignments: actions.getAssignments }));
+vi.mock('@/server/actions/assignments', () => ({
+  grantApprovalScope: actions.grant, revokeApprovalScope: actions.revoke, reviewMigratedScopes: actions.review, getApprovalScopesView: actions.getScopesView,
+}));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: actions.notify } }));
 vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams('') }));
 vi.mock('@/server/actions/labor-categories', () => ({ assignUserToLaborCategory: vi.fn(), endUserLaborCategoryAssignment: vi.fn(), getUserLaborCategoryAssignments: vi.fn() }));
 
 import { AssignmentsClient } from '@/app/(app)/admin/assignments/AssignmentsClient';
-import { scopeRows, uncoveredClins } from '@/app/(app)/admin/assignments/ApprovalScopePanel';
+import { holderTag, scopeRows, uncoveredClins } from '@/app/(app)/admin/assignments/ApprovalScopePanel';
 import { buttonByText, click, dialogTitled, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
 
 beforeAll(installDomStubs);
@@ -59,14 +66,20 @@ const ACCESS = [
   access('u-sarah', 'Sarah Wilson', CODES[0]),
   access('u-sam', 'Sam Solo', CODES[2], false),                                          // removed access: not listed, not counted
 ];
-const scope = (id: string, userId: string, clinId: string, clinNumber: string, contractName: string, isActive = true) => ({
-  id, userId, clinId, slinId: null, isActive, assignedAt: new Date('2025-12-01T15:00:00Z'), userName: USERS.find((u) => u.id === userId)!.fullName,
-  userEmail: 'x', clinNumber, clinDescription: 'Base', contractName, contractNumber: 'K', slinNumber: null, slinDescription: null,
-});
-const SCOPE = [
-  scope('a1', 'u-sarah', 'clin-n1', '0001', 'NAVAIR'), scope('a2', 'u-jane', 'clin-n1', '0001', 'NAVAIR'),
-  scope('a3', 'u-old', 'clin-n1', '0001', 'NAVAIR'), scope('a4', 'u-sam', 'clin-n1', '0001', 'NAVAIR', false),
-  scope('a5', 'u-jane', 'clin-d2', '0002', 'DISA'), scope('a6', 'u-ex', 'clin-d2', '0002', 'DISA'),     // only an INACTIVE supervisor covers DISA 0002
+const scope = (id: string, supervisorId: string, clinId: string, clinNumber: string, contractName: string, o: Record<string, unknown> = {}) => {
+  const u = USERS.find((x) => x.id === supervisorId)!;
+  return {
+    id, supervisorId, supervisorName: u.fullName, holderRole: u.role, holderActive: u.isActive, clinId, clinNumber, clinDescription: 'Base',
+    contractName, contractNumber: 'K', clinActive: true, source: 'app', grantedAt: new Date('2025-12-01T15:00:00Z'), grantedByName: 'Ann Admin', needsReview: false, ...o,
+  };
+};
+const SCOPES = [
+  scope('s1', 'u-sarah', 'clin-n1', '0001', 'NAVAIR'),
+  scope('s2', 'u-ex', 'clin-d2', '0002', 'DISA'),                                       // only an INACTIVE supervisor covers DISA 0002
+];
+const MEMBERSHIP = [
+  { userId: 'u-sarah', clinId: 'clin-n1' }, { userId: 'u-jane', clinId: 'clin-n1' }, { userId: 'u-old', clinId: 'clin-n1' },
+  { userId: 'u-sam', clinId: 'clin-n1' }, { userId: 'u-jane', clinId: 'clin-d2' },
 ];
 const ACTIVE_CLINS = [
   { clinId: 'clin-n1', clinNumber: '0001', clinDescription: 'Base', contractId: 'k-n', contractName: 'NAVAIR', contractNumber: 'N' },
@@ -75,7 +88,7 @@ const ACTIVE_CLINS = [
 const LCAT = { initialAssignments: [], assignableLcats: [], rateByCategory: {}, categoryNames: {}, today: '2026-11-06' as never };
 
 const render = async (o: Record<string, unknown> = {}) => {
-  m = await mount(<AssignmentsClient initialTab="charge-codes" lcat={LCAT} initialAssignments={SCOPE as never} users={USERS as never}
+  m = await mount(<AssignmentsClient initialTab="charge-codes" lcat={LCAT} initialScopes={{ scopes: SCOPES, membership: MEMBERSHIP } as never} users={USERS as never}
     activeClins={ACTIVE_CLINS} chargeCodes={CODES as never} workspaceTimezone="America/New_York" initialChargeCodeAssignments={ACCESS as never}
     approverNames={{ 'u-sarah': 'Ann Admin', 'u-sam': null }} {...o} />);
   await wait(10);
@@ -160,43 +173,101 @@ describe('Give access (AS-4, AS-5)', () => {
     expect(box(dialog, 'NAV-1').checked).toBe(true);
   });
 
-  it('AS-4: a supervisor plus a code on a CLIN they have no row on → the notice naming that CLIN; an employee → none', async () => {
+  it('AS-4 / AS-14: a supervisor plus a code on a CLIN they lack (the old trigger) shows NO notice; nothing else changes', async () => {
     await render();
     const dialog = await open();
     await chooseIn(dialog, 'Person', 'Sarah Wilson');
-    await click(box(dialog, 'NAV-1B'));                                              // NAVAIR 0001: she already has it
+    await click(box(dialog, 'DISA-2'));                                              // DISA 0002: no scope, no membership
     expect(dialog.querySelector('[data-testid="supervisor-notice"]')).toBeNull();
-    await click(box(dialog, 'DISA-2'));
-    expect(dialog.querySelector('[data-testid="supervisor-notice"]')!.textContent)
-      .toContain('Sarah Wilson is a supervisor. These codes also let them approve employees on DISA CLIN 0002. You can change that on Approval scope.');
-    await chooseIn(dialog, 'Person', 'Amy Adams');
-    await click(box(dialog, 'DISA-2'));
-    expect(dialog.querySelector('[data-testid="supervisor-notice"]')).toBeNull();
+    expect(dialog.textContent).not.toMatch(/approve/i);
+    await click(buttonByText('Give access to 1 code'));
+    await wait(10);
+    expect(actions.assign).toHaveBeenCalledWith({ userId: 'u-sarah', chargeCodeIds: ['cc-d2'] });
   });
 });
 
 describe('Approval scope (AS-7)', () => {
-  it('active supervisors even with no CLINs; People counts active employees only; the approver line', () => {
-    const rows = scopeRows(USERS as never, SCOPE as never, { 'u-sarah': 'Ann Admin', 'u-sam': null });
+  const panel = () => document.getElementById([...document.body.querySelectorAll('[role="tab"]')].find((t) => t.textContent === 'Approval scope')!.getAttribute('aria-controls')!)!;
+  const openTab = async (o: Record<string, unknown> = {}) => {
+    await render({ initialTab: 'approval-scope', ...o });
+    await click([...document.body.querySelectorAll('[role="tab"]')].find((t) => t.textContent === 'Approval scope'));
+  };
+
+  it('active supervisors even with no CLINs; their scope rows only; People counts active employee members; the approver line', () => {
+    const rows = scopeRows(USERS as never, SCOPES as never, MEMBERSHIP, { 'u-sarah': 'Ann Admin', 'u-sam': null });
     expect(rows.map((r) => r.level === 'supervisor' && [r.person.fullName, r.children.length, r.approver])).toEqual([
       ['Sam Solo', 0, null], ['Sarah Wilson', 1, 'Ann Admin'],
     ]);
     const sarah = rows[1].level === 'supervisor' ? rows[1].children[0] : null;
-    expect(sarah && sarah.level === 'clin' && sarah.people).toBe(1);               // Jane — not Old Gone (inactive), not Sam (supervisor)
+    expect(sarah && sarah.level === 'clin' && sarah.people).toBe(1);               // Jane — not Old Gone (inactive), not Sam or Sarah (supervisors)
   });
 
-  it('uncovered: a CLIN with an active employee row and no ACTIVE supervisor row (an inactive supervisor doesn\'t cover it)', () => {
-    expect(uncoveredClins(USERS as never, SCOPE as never, ACTIVE_CLINS).map((c) => c.clinId)).toEqual(['clin-d2']);
+  it('uncovered: a CLIN with an active employee member and no active supervisor\'s scope (an inactive supervisor doesn\'t cover it; membership never does)', () => {
+    expect(uncoveredClins(USERS as never, SCOPES as never, MEMBERSHIP, ACTIVE_CLINS).map((c) => c.clinId)).toEqual(['clin-d2']);
+    // Sarah's own membership on DISA 0002 (she charges it) doesn't cover it either.
+    expect(uncoveredClins(USERS as never, SCOPES as never, [...MEMBERSHIP, { userId: 'u-sarah', clinId: 'clin-d2' }], ACTIVE_CLINS).map((c) => c.clinId)).toEqual(['clin-d2']);
   });
 
-  it('renders the notice, "{n} CLINs · approver: …", Since as a workspace date, and the uncovered line', async () => {
-    await render({ initialTab: 'approval-scope' });
-    await click([...document.body.querySelectorAll('[role="tab"]')].find((t) => t.textContent === 'Approval scope'));
-    const panel = document.getElementById([...document.body.querySelectorAll('[role="tab"]')].find((t) => t.textContent === 'Approval scope')!.getAttribute('aria-controls')!)!;
-    expect(panel.textContent).toContain('Admins can approve anyone. A supervisor approves employees assigned to the CLINs below');
-    const summaries = [...panel.querySelectorAll('[data-testid="scope-summary"]')].map((s) => s.textContent);
-    expect(summaries).toEqual(['0 CLINs · approver: admins', '1 CLIN · approver: Ann Admin']);
-    expect(panel.textContent).toContain('Dec 1, 2025');
-    expect(panel.querySelector('[data-testid="uncovered-clins"]')!.textContent).toBe('Not covered by a supervisor: DISA CLIN 0002 — admins approve these.');
+  it('renders the notice, "{n} CLINs · approver: …", Since with who granted it (or converted), and the uncovered line', async () => {
+    await openTab({ initialScopes: { scopes: [...SCOPES, scope('s3', 'u-sam', 'clin-d2', '0002', 'DISA', { source: 'migration', grantedByName: null })], membership: MEMBERSHIP } });
+    expect(panel().textContent).toContain('Admins can approve anyone. A supervisor approves employees who work on the CLINs below');
+    const summaries = [...panel().querySelectorAll('[data-testid="scope-summary"]')].map((s) => s.textContent);
+    expect(summaries).toEqual(['1 CLIN · approver: admins', '1 CLIN · approver: Ann Admin']);
+    expect([...panel().querySelectorAll('[data-testid="scope-since"]')].map((s) => s.textContent)).toEqual(['Dec 1, 2025 converted from earlier data', 'Dec 1, 2025 by Ann Admin']);
+    expect(panel().querySelector('[data-testid="uncovered-clins"]')).toBeNull();     // Sam covers DISA 0002 now
+  });
+
+  it('Remove…: the confirm, then revokeApprovalScope and a refetch; Add CLINs: several at once → grantApprovalScope', async () => {
+    await openTab();
+    expect(panel().querySelector('[data-testid="uncovered-clins"]')!.textContent).toBe('Not covered by a supervisor: DISA CLIN 0002 — admins approve these.');
+    const row = [...panel().querySelectorAll('tbody tr')].find((r) => r.textContent?.includes('NAVAIR · CLIN 0001'))!;
+    await click([...row.querySelectorAll('button')].find((b) => b.textContent === 'Remove…'));
+    const confirm = dialogTitled("Remove NAVAIR CLIN 0001 from Sarah Wilson's approval scope?")!;
+    expect(confirm.textContent).toContain("They'll stop approving employees on this CLIN.");
+    expect(confirm.textContent).not.toMatch(/charge code/i);
+    await click([...confirm.querySelectorAll('button')].find((b) => b.textContent === 'Remove'));
+    await wait(10);
+    expect(actions.revoke).toHaveBeenCalledWith({ supervisorId: 'u-sarah', clinId: 'clin-n1' });
+    expect(actions.getScopesView).toHaveBeenCalled();
+
+    const sam = [...panel().querySelectorAll('tbody tr')].find((r) => r.textContent?.includes('Sam Solo'))!;
+    await click([...sam.querySelectorAll('button')].find((b) => b.textContent === 'Add CLINs'));
+    const dialog = dialogTitled('Add CLINs to a supervisor')!;
+    const input = document.getElementById([...dialog.querySelectorAll<HTMLLabelElement>('label')].find((l) => l.textContent?.startsWith('CLINs they approve'))!.htmlFor)!;
+    for (const option of ['NAVAIR CLIN 0001 — Base', 'DISA CLIN 0002 — Cloud']) {
+      await click(input);
+      await click([...document.body.querySelectorAll('[role="option"]')].find((o) => o.textContent === option));
+    }
+    await click([...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Add CLINs'));
+    await wait(10);
+    expect(actions.grant).toHaveBeenCalledWith({ supervisorId: 'u-sam', clinIds: ['clin-n1', 'clin-d2'] });
+  });
+
+  it('the review list: tags inactive holders, ex-supervisors and inactive CLINs; Keep by default; Save review sends keep / remove', async () => {
+    const review = [
+      scope('r1', 'u-sarah', 'clin-d2', '0002', 'DISA', { source: 'migration', needsReview: true }),
+      scope('r2', 'u-ex', 'clin-n1', '0001', 'NAVAIR', { source: 'migration', needsReview: true }),
+      scope('r3', 'u-jane', 'clin-n1', '0001', 'NAVAIR', { source: 'migration', needsReview: true, clinActive: false }),
+    ];
+    expect([holderTag({ holderActive: false, holderRole: 'supervisor' }), holderTag({ holderActive: true, holderRole: 'employee' }), holderTag({ holderActive: true, holderRole: 'supervisor' })])
+      .toEqual([' (inactive)', ' (no longer a supervisor)', '']);
+    await openTab({ initialScopes: { scopes: [...SCOPES, ...review], membership: MEMBERSHIP } });
+    const list = panel().querySelector('[data-testid="scope-review"]')!;
+    expect(list.textContent).toContain('These approval scopes were converted from earlier assignments. Keep the ones that are right and remove any that weren\'t intended.');
+    expect([...list.querySelectorAll('[data-testid="scope-review-row"]')].map((r) => r.querySelectorAll('td')[0].textContent + ' | ' + r.querySelectorAll('td')[1].textContent)).toEqual([
+      'Sarah Wilson | DISA CLIN 0002', 'Ex Super (inactive) | NAVAIR CLIN 0001', 'Jane Smith (no longer a supervisor) | NAVAIR CLIN 0001 (inactive)',
+    ]);
+    const removeOf = (i: number) => [...list.querySelectorAll('[data-testid="scope-review-row"]')][i].querySelector('input[value="remove"]');
+    await click(removeOf(1));
+    await click([...list.querySelectorAll('button')].find((b) => b.textContent === 'Save review'));
+    await wait(10);
+    expect(actions.review).toHaveBeenCalledWith({ keep: ['r1', 'r3'], remove: ['r2'] });
+    expect(actions.notify.mock.calls.map((c) => (c[0] as { title: string }).title)).toContain('Approval scopes reviewed');
+    expect(actions.getScopesView).toHaveBeenCalled();
+  });
+
+  it('no review rows → no review list', async () => {
+    await openTab();
+    expect(panel().querySelector('[data-testid="scope-review"]')).toBeNull();
   });
 });

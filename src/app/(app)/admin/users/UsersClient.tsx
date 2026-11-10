@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from 'react';
 import {
-  Alert, Anchor, Button, Drawer, Group, List, Modal, PasswordInput, Radio, Select, Stack, Text, TextInput,
+  Alert, Anchor, Button, Drawer, Group, List, Modal, MultiSelect, PasswordInput, Radio, Select, Stack, Text, TextInput,
 } from '@mantine/core';
 import { MantineReactTable, type MRT_ColumnDef } from 'mantine-react-table';
 import { runAction } from '@/lib/run-action';
@@ -40,9 +40,14 @@ type User = {
   approverName?: string | null;
 };
 
+/** An active CLIN on an active contract — the "CLINs they approve" picker (feature-plan-approval-scope.md §5). */
+export type ApprovalClinOption = { clinId: string; clinNumber: string; clinDescription: string | null; contractId: string; contractName: string };
+
 type Props = {
   initialUsers: User[];
   currentUserId: string;
+  /** feature-plan-approval-scope.md §5: the CLINs a new supervisor can be given to approve. */
+  approvalClins?: ApprovalClinOption[];
   /** getSeatUsage: active users and the plan's limit (null = unlimited). */
   seats?: { active: number; limit: number | null };
 };
@@ -63,6 +68,8 @@ type UserForm = {
   overtime: '' | 'exempt' | 'nonexempt';
   /** certified-outputs C2: designated approver ('' = none — admins approve). Supervisor/admin users only. */
   approverId: string;
+  /** feature-plan-approval-scope.md §5: a NEW supervisor's approval CLINs (Add, or a real change to supervisor). */
+  approvalClinIds: string[];
 };
 type FieldKey = 'fullName' | 'email' | 'overtime' | 'password';
 
@@ -70,20 +77,24 @@ type Role = User['role'];
 type StatusFilter = 'active' | 'inactive' | 'locked' | 'all';
 
 const SIGNED_OUT = " They'll be signed out within a minute and must sign in again.";
+const SCOPE_REMOVED = "Their approval scope is removed. Charge code access doesn't change.";
 
 /**
  * feature-plan-ux-page-fixes.md C16: the confirm for a role change, matching the approval rules
- * (internal/approval-rules.ts) — a supervisor approves employees sharing an active CLIN, and supervisors or admins who
- * name them as approver; a second admin ends sole-admin self-approval; a role change bumps sessionVersion. UX-4c R8: a
- * new supervisor's approval scope is their CLIN rows, which Assignments → Approval scope shows.
+ * (internal/approval-rules.ts) — a supervisor approves employees on the CLINs of their approval scope, and supervisors or
+ * admins who name them as approver; a second admin ends sole-admin self-approval; a role change bumps sessionVersion.
+ * feature-plan-approval-scope.md §5: a promotion summarizes the CLINs chosen in the Drawer (`approve`: their labels); a
+ * demotion from supervisor says the approval scope goes and charge code access stays.
  */
-export function roleChangeCopy(name: string, from: Role, to: Role, actingIsSoleAdmin: boolean) {
+export function roleChangeCopy(name: string, from: Role, to: Role, actingIsSoleAdmin: boolean, approve: string[] = []) {
+  const approveLine = approve.length > 0 ? ` They'll approve: ${approve.join(', ')}.` : " They won't approve any CLINs yet.";
+  const scopeRemoved = from === 'supervisor' && to !== 'supervisor' ? ` ${SCOPE_REMOVED}` : '';
   if (to === 'admin') {
     return {
       tone: 'danger' as const,
       title: `Make ${name} an admin?`,
       message: 'Admins have full access: every timesheet and cost figure, users, contracts, billing and workspace settings.'
-        + (actingIsSoleAdmin ? " You'll no longer be able to approve your own timesheets, because another admin can." : '') + SIGNED_OUT,
+        + (actingIsSoleAdmin ? " You'll no longer be able to approve your own timesheets, because another admin can." : '') + scopeRemoved + SIGNED_OUT,
       confirmLabel: 'Make admin',
     };
   }
@@ -91,7 +102,7 @@ export function roleChangeCopy(name: string, from: Role, to: Role, actingIsSoleA
     return {
       tone: 'neutral' as const,
       title: `Change ${name} from admin to supervisor?`,
-      message: 'They lose access to users, contracts, costs and settings, and keep approving timesheets in their review scope.' + SIGNED_OUT,
+      message: 'They lose access to users, contracts, costs and settings.' + approveLine + SIGNED_OUT,
       confirmLabel: 'Change role',
     };
   }
@@ -99,15 +110,15 @@ export function roleChangeCopy(name: string, from: Role, to: Role, actingIsSoleA
     return {
       tone: 'neutral' as const,
       title: `Make ${name} a supervisor?`,
-      message: 'They can review and approve timesheets for employees who share a CLIN with them, and for supervisors or admins who have them set as their approver.'
-        + " They'll approve employees on the CLINs they're assigned to. Check Assignments → Approval scope." + SIGNED_OUT,
+      message: 'They can review and approve timesheets for employees on the CLINs they approve, and for supervisors or admins who have them set as their approver. Charge code access doesn\'t change.'
+        + approveLine + SIGNED_OUT,
       confirmLabel: 'Make supervisor',
     };
   }
   return {
     tone: 'neutral' as const,
     title: `Change ${name} to employee?`,
-    message: 'They can no longer review or approve timesheets. Admins, and any other supervisor who shares a CLIN with those employees, can still approve them.' + SIGNED_OUT,
+    message: 'They can no longer review or approve timesheets. Admins, and any supervisor who approves those employees\' CLINs, can still approve them.' + scopeRemoved + SIGNED_OUT,
     confirmLabel: 'Change role',
   };
 }
@@ -128,8 +139,8 @@ export function flsaChangeCopy(name: string, toExempt: boolean) {
  * UX-4C1-AUDIT.md M1: what an Edit save asks first — the role confirm, the FLSA confirm, or (both changed) ONE confirm
  * carrying both messages. Null when neither changed (the save runs directly).
  */
-export function editConfirmCopy(name: string, role: { from: Role; to: Role } | null, toExempt: boolean | null, actingIsSoleAdmin: boolean) {
-  const r = role && roleChangeCopy(name, role.from, role.to, actingIsSoleAdmin);
+export function editConfirmCopy(name: string, role: { from: Role; to: Role } | null, toExempt: boolean | null, actingIsSoleAdmin: boolean, approve: string[] = []) {
+  const r = role && roleChangeCopy(name, role.from, role.to, actingIsSoleAdmin, approve);
   if (r && toExempt !== null) {
     return { ...r, message: `${r.message} Their overtime status changes to ${toExempt ? 'exempt' : 'non-exempt'}: ${FLSA_MESSAGE.charAt(0).toLowerCase()}${FLSA_MESSAGE.slice(1)}`, confirmLabel: 'Save changes' };
   }
@@ -139,7 +150,7 @@ export function editConfirmCopy(name: string, role: { from: Role; to: Role } | n
 
 const PARTIAL_SAVE = "The role was saved, but the approver couldn't be updated. Try saving again.";
 
-const EMPTY_FORM: UserForm = { email: '', fullName: '', role: 'employee', password: '', overtime: '', approverId: '' };
+const EMPTY_FORM: UserForm = { email: '', fullName: '', role: 'employee', password: '', overtime: '', approverId: '', approvalClinIds: [] };
 
 /** What applies to a user's ⋯ menu (§5.2): Unlock only when locked; two-step reset only when on and not yourself. */
 export function userMenuKeys(u: Pick<User, 'id' | 'isActive' | 'mfaEnabled' | 'lock'>, currentUserId: string): string[] {
@@ -152,7 +163,7 @@ export function userMenuKeys(u: Pick<User, 'id' | 'isActive' | 'mfaEnabled' | 'l
   ];
 }
 
-export function UsersClient({ initialUsers, currentUserId, seats }: Props) {
+export function UsersClient({ initialUsers, currentUserId, seats, approvalClins = [] }: Props) {
   const [users, setUsers] = useState<User[]>(initialUsers);
   const busy = useBusy();
   // Row actions that run without a confirm (Unlock, Reactivate) show a loader on THEIR row only.
@@ -174,11 +185,11 @@ export function UsersClient({ initialUsers, currentUserId, seats }: Props) {
   const [formError, setFormError] = useState<string | null>(null);
   const fieldRefs = useRef<Partial<Record<FieldKey, HTMLElement | null>>>({});
   // C16 / M1: a role or overtime change asks first; the confirm shows the save's error (the form's own Alert is hidden meanwhile).
-  const [editConfirm, setEditConfirm] = useState<{ name: string; role: { from: Role; to: Role } | null; toExempt: boolean | null } | null>(null);
+  const [editConfirm, setEditConfirm] = useState<{ name: string; role: { from: Role; to: Role } | null; toExempt: boolean | null; approve: string[] } | null>(null);
   const shownEdit = useLastTarget(editConfirm);
   const activeAdmins = users.filter((u) => u.role === 'admin' && u.isActive);
   const actingIsSoleAdmin = activeAdmins.length === 1 && activeAdmins[0].id === currentUserId;
-  const editCopy = shownEdit && editConfirmCopy(shownEdit.name, shownEdit.role, shownEdit.toExempt, actingIsSoleAdmin);
+  const editCopy = shownEdit && editConfirmCopy(shownEdit.name, shownEdit.role, shownEdit.toExempt, actingIsSoleAdmin, shownEdit.approve);
   const flsaCopy = shownFlsa && flsaChangeCopy(shownFlsa.fullName, !shownFlsa.flsaExempt);
 
   // Reset password
@@ -219,6 +230,7 @@ export function UsersClient({ initialUsers, currentUserId, seats }: Props) {
       password: '', // never pre-filled; not on Edit
       overtime: user.flsaExempt ? 'exempt' : 'nonexempt',
       approverId: user.approverId ?? '',
+      approvalClinIds: [],
     });
     setFieldErrors({});
     setFormError(null);
@@ -238,6 +250,17 @@ export function UsersClient({ initialUsers, currentUserId, seats }: Props) {
     return e;
   }
 
+  /** §5: the picker shows (and its ids are sent) only on Add, or for a REAL change to supervisor. */
+  const pickingApprovalClins = form.role === 'supervisor' && (!editingUser || editingUser.role !== 'supervisor');
+  const clinName = (id: string) => {
+    const c = approvalClins.find((x) => x.clinId === id);
+    return c ? `${c.contractName} CLIN ${c.clinNumber}` : 'a CLIN';
+  };
+  const approvalClinGroups = [...new Map(approvalClins.map((c) => [c.contractId, c.contractName])).entries()].map(([contractId, contractName]) => ({
+    group: contractName,
+    items: approvalClins.filter((c) => c.contractId === contractId).map((c) => ({ value: c.clinId, label: `${c.contractName} CLIN ${c.clinNumber}${c.clinDescription ? ` — ${c.clinDescription}` : ''}` })),
+  }));
+
   async function handleSubmit({ confirmed = false }: { confirmed?: boolean } = {}) {
     const errors = validate();
     setFieldErrors(errors);
@@ -246,16 +269,18 @@ export function UsersClient({ initialUsers, currentUserId, seats }: Props) {
     if (editingUser && !confirmed) {
       const role = form.role !== editingUser.role ? { from: editingUser.role, to: form.role as Role } : null;
       const toExempt = (form.overtime === 'exempt') !== editingUser.flsaExempt ? form.overtime === 'exempt' : null;
-      if (role || toExempt !== null) { setEditConfirm({ name: editingUser.fullName, role, toExempt }); return; }
+      const approve = pickingApprovalClins ? form.approvalClinIds.map(clinName) : [];
+      if (role || toExempt !== null) { setEditConfirm({ name: editingUser.fullName, role, toExempt, approve }); return; }
     }
     await busy.run('save', async () => {
       const flsaExempt = form.overtime === 'exempt';
       if (editingUser) {
-        const updateData: { fullName?: string; email?: string; role?: Role; flsaExempt?: boolean } = {};
+        const updateData: { fullName?: string; email?: string; role?: Role; flsaExempt?: boolean; approvalClinIds?: string[] } = {};
         if (form.fullName !== editingUser.fullName) updateData.fullName = form.fullName;
         if (form.email !== editingUser.email) updateData.email = form.email;
         if (form.role !== editingUser.role) updateData.role = form.role as Role;
         if (flsaExempt !== editingUser.flsaExempt) updateData.flsaExempt = flsaExempt;
+        if (pickingApprovalClins) updateData.approvalClinIds = form.approvalClinIds; // the role and the grants save (or fail) together
 
         const saving = Object.keys(updateData).length > 0;
         if (saving) {
@@ -292,6 +317,7 @@ export function UsersClient({ initialUsers, currentUserId, seats }: Props) {
           password: form.password,
           flsaExempt,
           approverId: (form.role === 'supervisor' || form.role === 'admin') && form.approverId ? form.approverId : null,
+          ...(pickingApprovalClins ? { approvalClinIds: form.approvalClinIds } : {}),
         }), { silent: true });
         if (!result.ok) { setFormError(result.error); return; } // e.g. the plan's seat limit or a duplicate email, verbatim
         toastSuccess({ title: 'User added', message: `${form.fullName} can sign in with the temporary password.` });
@@ -549,6 +575,19 @@ export function UsersClient({ initialUsers, currentUserId, seats }: Props) {
             readOnly={editingUser?.id === currentUserId}
             required
           />
+          {pickingApprovalClins && (
+            <MultiSelect
+              label="CLINs they approve"
+              description="Charge code access doesn't change. Their approval scope starts with only what you choose here."
+              data-testid="approval-clins"
+              data={approvalClinGroups}
+              value={form.approvalClinIds}
+              onChange={(v) => setForm((f) => ({ ...f, approvalClinIds: v }))}
+              searchable
+              clearable
+              placeholder={form.approvalClinIds.length === 0 ? 'None yet' : undefined}
+            />
+          )}
           <Radio.Group
             label="Overtime status" required description="Payroll export uses this to work out overtime."
             ref={(el) => { fieldRefs.current.overtime = el; }}

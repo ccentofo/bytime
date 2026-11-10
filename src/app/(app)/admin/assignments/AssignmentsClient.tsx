@@ -1,26 +1,27 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Tabs } from '@mantine/core';
-import { getAssignments } from '@/server/actions/assignments';
+import { getApprovalScopesView, type ApprovalScopeRow } from '@/server/actions/assignments';
 import { getChargeCodeAssignments } from '@/server/actions/charge-codes';
 import { toastError } from '@/lib/toast';
 import { PageHeader } from '@/components/ui/PageHeader';
 import type { CalendarDate } from '@/lib/calendar-date';
 import { parseAssignmentsParams, type AssignmentsTab } from '@/lib/assignments-params';
 import { ChargeCodeAccessPanel, type CodeAccessRow } from './ChargeCodeAccessPanel';
-import { ApprovalScopePanel, type ActiveClin, type ScopeAssignment } from './ApprovalScopePanel';
+import { ApprovalScopePanel, type ActiveClin } from './ApprovalScopePanel';
 import type { AccessCode, AccessPerson } from './GiveAccessModal';
 import {
   LaborCategoryAssignmentsPanel, type AssignableLcat, type LcatAssignment, type LcatFilterKey,
 } from './LaborCategoryAssignmentsPanel';
 
 type User = AccessPerson & { email: string; approverId?: string | null };
-type Assignment = ScopeAssignment & { slinId: string | null; userEmail: string; slinNumber: string | null; slinDescription: string | null };
+type ScopeView = { scopes: ApprovalScopeRow[]; membership: Array<{ userId: string; clinId: string }> };
 
 type Props = {
-  initialAssignments: Assignment[];
+  /** feature-plan-approval-scope.md §4.2: the active approval scopes (review flag included) and CLIN membership. */
+  initialScopes: ScopeView;
   users: User[];
   /** Active CLINs on active contracts (§4.1: the pickers and the uncovered line). */
   activeClins: ActiveClin[];
@@ -48,7 +49,7 @@ type Props = {
  * useSearchParams in sync), so the filters survive it (§4.1). After every write the panel's data is refetched into state.
  */
 export function AssignmentsClient({
-  initialAssignments, users, activeClins, chargeCodes, initialChargeCodeAssignments, workspaceTimezone, approverNames = {}, initialTab, lcat,
+  initialScopes, users, activeClins, chargeCodes, initialChargeCodeAssignments, workspaceTimezone, approverNames = {}, initialTab, lcat,
 }: Props) {
   const searchParams = useSearchParams();
   const params = parseAssignmentsParams((k) => searchParams?.get(k));
@@ -66,24 +67,18 @@ export function AssignmentsClient({
     window.history.replaceState(null, '', `?${next.toString()}`);
   }
 
-  const [assignments, setAssignments] = useState<Assignment[]>(initialAssignments);
+  const [scopes, setScopes] = useState<ScopeView>(initialScopes);
   const [access, setAccess] = useState<CodeAccessRow[]>(initialChargeCodeAssignments);
   async function refresh() {
     try {
-      const [a, c] = await Promise.all([getAssignments(), getChargeCodeAssignments()]);
-      setAssignments(a as Assignment[]);
+      // A charge-code grant changes CLIN membership (People counts, uncovered CLINs), so both are refetched.
+      const [v, c] = await Promise.all([getApprovalScopesView(), getChargeCodeAssignments()]);
+      setScopes(v);
       setAccess(c as CodeAccessRow[]);
     } catch {
       toastError({ title: 'List not refreshed', message: 'Saved, but the list couldn’t refresh. Reload the page.' });
     }
   }
-
-  // personId → the CLIN ids of their active user_assignments rows (the R8 notice in Give access).
-  const clinsBy = useMemo(() => {
-    const m = new Map<string, Set<string>>();
-    for (const a of assignments) if (a.isActive) m.set(a.userId, new Set([...(m.get(a.userId) ?? []), a.clinId]));
-    return m;
-  }, [assignments]);
 
   return (
     <>
@@ -100,7 +95,7 @@ export function AssignmentsClient({
         </Tabs.List>
 
         <Tabs.Panel value="charge-codes">
-          <ChargeCodeAccessPanel people={users} access={access} codes={chargeCodes} clinsBy={clinsBy} onChanged={refresh} />
+          <ChargeCodeAccessPanel people={users} access={access} codes={chargeCodes} onChanged={refresh} />
         </Tabs.Panel>
 
         <Tabs.Panel value="labor-categories">
@@ -115,7 +110,8 @@ export function AssignmentsClient({
         <Tabs.Panel value="approval-scope">
           <ApprovalScopePanel
             people={users}
-            assignments={assignments}
+            scopes={scopes.scopes}
+            membership={scopes.membership}
             activeClins={activeClins}
             approverNames={approverNames}
             workspaceTimezone={workspaceTimezone}

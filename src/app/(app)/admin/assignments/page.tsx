@@ -1,5 +1,5 @@
 import { requirePageRole } from '@/lib/session';
-import { getAssignments } from '@/server/actions/assignments';
+import { getApprovalClinOptions, getApprovalScopesView } from '@/server/actions/assignments';
 import { getUsers } from '@/server/actions/users';
 import { listChargeCodes, getChargeCodeAssignments } from '@/server/actions/charge-codes';
 import { getAllLaborCategories, getUserLaborCategoryAssignments, getAssignableLaborCategories } from '@/server/actions/labor-categories';
@@ -8,9 +8,6 @@ import { findOverlaps, overlapAssignmentIds } from '@/server/internal/cost-basis
 import { effectiveDesignee, type ApprovalFacts } from '@/server/internal/approval-rules';
 import { firstParam, parseAssignmentsParams } from '@/lib/assignments-params';
 import { rateDisplay } from '@/lib/labor-rates';
-import { getDb } from '@/db';
-import { clins, contracts } from '@/db/schema';
-import { and, eq } from 'drizzle-orm';
 import { AssignmentsClient } from './AssignmentsClient';
 import type { Metadata } from 'next';
 
@@ -30,17 +27,14 @@ export default async function AssignmentsPage({ searchParams }: { searchParams: 
   await requirePageRole('admin');
   const sp = await searchParams;
   const { tab } = parseAssignmentsParams((k) => firstParam(sp[k as keyof SearchParams]));
-  const db = await getDb();
 
-  const [assignments, allUsers, activeClins, allChargeCodes, chargeCodeAssignments, workspaceTimezone,
+  const [scopeView, allUsers, activeClins, allChargeCodes, chargeCodeAssignments, workspaceTimezone,
     laborCategories, lcatAssignments, assignableLcats, today] = await Promise.all([
-    getAssignments(),
+    // feature-plan-approval-scope.md §4.2: the scope rows (with the review flag) and CLIN membership, one load slot.
+    getApprovalScopesView(),
     getUsers(),
     // §4.1: the CLIN pickers and the uncovered line offer active CLINs on active contracts only.
-    db.select({ clinId: clins.id, clinNumber: clins.clinNumber, clinDescription: clins.description, contractId: contracts.id, contractName: contracts.name, contractNumber: contracts.contractNumber })
-      .from(clins).innerJoin(contracts, eq(clins.contractId, contracts.id))
-      .where(and(eq(clins.status, 'active'), eq(contracts.status, 'active')))
-      .orderBy(contracts.name, clins.clinNumber),
+    getApprovalClinOptions(),
     listChargeCodes(),
     getChargeCodeAssignments(),
     getWorkspaceTimezone(),
@@ -83,7 +77,7 @@ export default async function AssignmentsPage({ searchParams }: { searchParams: 
   return (
     <AssignmentsClient
       initialTab={tab}
-      initialAssignments={assignments}
+      initialScopes={scopeView}
       users={allUsers}
       activeClins={activeClins}
       chargeCodes={allChargeCodes}

@@ -146,9 +146,14 @@ describe('Users row actions (T9)', () => {
 describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16, T-C16)', () => {
   const OUT = " They'll be signed out within a minute and must sign in again.";
   const TEAM = [user('me', 'Ann Admin', { role: 'admin' }), user('u2', 'Pat Doe'), user('s1', 'Sam Super', { role: 'supervisor' })];
+  const CLINS = [
+    { clinId: 'clin-1', clinNumber: '0001', clinDescription: 'Base', contractId: 'k1', contractName: 'NAVAIR' },
+    { clinId: 'clin-2', clinNumber: '0002', clinDescription: null, contractId: 'k1', contractName: 'NAVAIR' },
+    { clinId: 'clin-9', clinNumber: '0009', clinDescription: null, contractId: 'k2', contractName: 'Army' },
+  ];
   const renderTeam = async (people = TEAM) => {
     actions.getUsers.mockResolvedValue(people as never);
-    m = await mount(<UsersClient initialUsers={people} currentUserId="me" />);
+    m = await mount(<UsersClient initialUsers={people} currentUserId="me" approvalClins={CLINS} />);
   };
   const edit = (name: string) => click([...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Edit' && b.closest('tr')?.textContent?.includes(name)));
   const form = () => dialogTitled('Edit user')!;
@@ -172,29 +177,33 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
   });
 
   it('each transition has its own title, message, tone and button, and every message ends with the sign-out line', () => {
-    expect(roleChangeCopy('Pat', 'employee', 'supervisor', false)).toEqual({
+    // feature-plan-approval-scope.md §5: a promotion summarizes the CLINs chosen; a demotion removes the scope.
+    expect(roleChangeCopy('Pat', 'employee', 'supervisor', false, ['NAVAIR CLIN 0001', 'Army CLIN 0009'])).toEqual({
       tone: 'neutral', title: 'Make Pat a supervisor?', confirmLabel: 'Make supervisor',
-      message: 'They can review and approve timesheets for employees who share a CLIN with them, and for supervisors or admins who have them set as their approver.'
-        + " They'll approve employees on the CLINs they're assigned to. Check Assignments → Approval scope." + OUT,
+      message: 'They can review and approve timesheets for employees on the CLINs they approve, and for supervisors or admins who have them set as their approver.'
+        + " Charge code access doesn't change. They'll approve: NAVAIR CLIN 0001, Army CLIN 0009." + OUT,
     });
+    expect(roleChangeCopy('Pat', 'employee', 'supervisor', false).message).toContain(" They won't approve any CLINs yet." + OUT);
     expect(roleChangeCopy('Pat', 'supervisor', 'admin', false)).toEqual({
       tone: 'danger', title: 'Make Pat an admin?', confirmLabel: 'Make admin',
-      message: 'Admins have full access: every timesheet and cost figure, users, contracts, billing and workspace settings.' + OUT,
+      message: 'Admins have full access: every timesheet and cost figure, users, contracts, billing and workspace settings.'
+        + " Their approval scope is removed. Charge code access doesn't change." + OUT,
     });
+    expect(roleChangeCopy('Pat', 'employee', 'admin', false).message).not.toContain('approval scope');
     expect(roleChangeCopy('Pat', 'employee', 'admin', true).message).toBe(
       'Admins have full access: every timesheet and cost figure, users, contracts, billing and workspace settings.'
       + " You'll no longer be able to approve your own timesheets, because another admin can." + OUT,
     );
-    expect(roleChangeCopy('Pat', 'admin', 'supervisor', true)).toEqual({
+    expect(roleChangeCopy('Pat', 'admin', 'supervisor', true, ['NAVAIR CLIN 0001'])).toEqual({
       tone: 'neutral', title: 'Change Pat from admin to supervisor?', confirmLabel: 'Change role',
-      message: 'They lose access to users, contracts, costs and settings, and keep approving timesheets in their review scope.' + OUT,
+      message: "They lose access to users, contracts, costs and settings. They'll approve: NAVAIR CLIN 0001." + OUT,
     });
-    const toEmployee = {
+    const toEmployee = 'They can no longer review or approve timesheets. Admins, and any supervisor who approves those employees\' CLINs, can still approve them.';
+    expect(roleChangeCopy('Pat', 'admin', 'employee', false)).toEqual({ tone: 'neutral', title: 'Change Pat to employee?', confirmLabel: 'Change role', message: toEmployee + OUT });
+    expect(roleChangeCopy('Pat', 'supervisor', 'employee', false)).toEqual({
       tone: 'neutral', title: 'Change Pat to employee?', confirmLabel: 'Change role',
-      message: 'They can no longer review or approve timesheets. Admins, and any other supervisor who shares a CLIN with those employees, can still approve them.' + OUT,
-    };
-    expect(roleChangeCopy('Pat', 'admin', 'employee', false)).toEqual(toEmployee);
-    expect(roleChangeCopy('Pat', 'supervisor', 'employee', false)).toEqual(toEmployee);
+      message: toEmployee + " Their approval scope is removed. Charge code access doesn't change." + OUT,
+    });
   });
 
   it('a role change asks first: Cancel → no update; Confirm → one update with the role, and both dialogs close', async () => {
@@ -203,7 +212,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     await choose('Role', 'Supervisor');
     await click(inDialog(form(), 'Save changes'));
     const confirm = dialogTitled('Make Pat Doe a supervisor?')!;
-    expect(confirm.textContent).toContain('share a CLIN with them');
+    expect(confirm.textContent).toContain("They won't approve any CLINs yet.");
     expect(confirm.textContent).toContain(OUT.trim());
     expect(inDialog(confirm, 'Make supervisor').getAttribute('style') ?? '').not.toContain('--mantine-color-red');
     await click(inDialog(confirm, 'Cancel'));
@@ -215,7 +224,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     await click(inDialog(dialogTitled('Make Pat Doe a supervisor?')!, 'Make supervisor'));
     await wait();
     expect(actions.updateUser).toHaveBeenCalledTimes(1);
-    expect(actions.updateUser).toHaveBeenCalledWith('u2', { role: 'supervisor' });
+    expect(actions.updateUser).toHaveBeenCalledWith('u2', { role: 'supervisor', approvalClinIds: [] });
     expect(dialogTitled('Make Pat Doe a supervisor?')).toBeUndefined();
     expect(dialogTitled('Edit user')).toBeUndefined();
   });
@@ -278,13 +287,65 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     await click(form().querySelector('input[type="radio"][value="exempt"]'));
     await click(inDialog(form(), 'Save changes'));
     const confirm = dialogTitled('Make Pat Doe a supervisor?')!;
-    expect(confirm.textContent).toContain('share a CLIN with them');
+    expect(confirm.textContent).toContain('on the CLINs they approve');
     expect(confirm.textContent).toContain('Their overtime status changes to exempt: payroll export uses this to calculate overtime for every period, including past ones.');
     expect(dialogTitled('Mark Pat Doe as FLSA exempt?')).toBeUndefined();
     await click(inDialog(confirm, 'Save changes'));
     await wait();
     expect(actions.updateUser).toHaveBeenCalledTimes(1);
-    expect(actions.updateUser).toHaveBeenCalledWith('u2', { role: 'supervisor', flsaExempt: true });
+    expect(actions.updateUser).toHaveBeenCalledWith('u2', { role: 'supervisor', flsaExempt: true, approvalClinIds: [] });
+  });
+
+  it('AS-15: the CLIN picker shows only for a real change to supervisor (or Add); the confirm summarizes; the ids are sent; Cancel keeps them', async () => {
+    const picker = () => form().querySelector('[data-testid="approval-clins"]');
+    await renderTeam();
+    await edit('Sam Super');                                                         // already a supervisor: no picker
+    expect(picker()).toBeNull();
+    await setName('Sam S');
+    await click(inDialog(form(), 'Save changes'));
+    await wait();
+    expect(actions.updateUser).toHaveBeenLastCalledWith('s1', { fullName: 'Sam S' }); // no approvalClinIds
+    unmount(m);
+    actions.updateUser.mockClear();
+
+    await renderTeam();
+    await edit('Pat Doe');
+    expect(picker()).toBeNull();                                                     // an employee: no picker
+    await choose('Role', 'Supervisor');
+    expect(form().textContent).toContain("Charge code access doesn't change. Their approval scope starts with only what you choose here.");
+    const input = document.getElementById([...form().querySelectorAll<HTMLLabelElement>('label')].find((l) => l.textContent?.startsWith('CLINs they approve'))!.htmlFor)!;
+    for (const option of ['NAVAIR CLIN 0001 — Base', 'Army CLIN 0009']) {
+      await click(input);
+      await click([...document.body.querySelectorAll('[role="option"]')].find((o) => o.textContent === option));
+    }
+    await click(inDialog(form(), 'Save changes'));
+    expect(dialogTitled('Make Pat Doe a supervisor?')!.textContent).toContain("They'll approve: NAVAIR CLIN 0001, Army CLIN 0009.");
+    await click(inDialog(dialogTitled('Make Pat Doe a supervisor?')!, 'Cancel'));
+    await click(inDialog(form(), 'Save changes'));                                   // the selection survived Cancel
+    expect(dialogTitled('Make Pat Doe a supervisor?')!.textContent).toContain("They'll approve: NAVAIR CLIN 0001, Army CLIN 0009.");
+    await click(inDialog(dialogTitled('Make Pat Doe a supervisor?')!, 'Make supervisor'));
+    await wait();
+    expect(actions.updateUser).toHaveBeenCalledWith('u2', { role: 'supervisor', approvalClinIds: ['clin-1', 'clin-9'] });
+    expect(actions.updateUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('AS-15: switching the role away from supervisor hides the picker and sends no ids; demotion copy', async () => {
+    await renderTeam();
+    await edit('Pat Doe');
+    await choose('Role', 'Supervisor');
+    expect(form().querySelector('[data-testid="approval-clins"]')).not.toBeNull();
+    await choose('Role', 'Admin');
+    expect(form().querySelector('[data-testid="approval-clins"]')).toBeNull();      // not a change to supervisor any more
+    unmount(m);
+    await renderTeam();
+    await edit('Sam Super');
+    await choose('Role', 'Employee');
+    expect(form().querySelector('[data-testid="approval-clins"]')).toBeNull();
+    await click(inDialog(form(), 'Save changes'));
+    expect(dialogTitled('Change Sam Super to employee?')!.textContent).toContain("Their approval scope is removed. Charge code access doesn't change.");
+    await click(inDialog(dialogTitled('Change Sam Super to employee?')!, 'Change role'));
+    await wait();
+    expect(actions.updateUser).toHaveBeenCalledWith('s1', { role: 'employee' });
   });
 
   it('a name-only edit saves without a confirm', async () => {
