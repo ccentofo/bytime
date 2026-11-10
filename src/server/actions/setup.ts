@@ -1,19 +1,19 @@
 'use server';
 
 import { requireAdmin } from '@/lib/session';
-import { getSetupAccessGapsInternal, getSetupStatusInternal, type SetupAccessGaps, type SetupStatus } from '@/server/internal/setup';
+import { getSetupPageDataInternal, getSetupStatusInternal, type SetupPageData, type SetupStatus } from '@/server/internal/setup';
 
-/**
- * Get the current setup status by counting core entities.
- * Used by the Setup Wizard.
- */
+/** The Setup checklist status (feature-plan-ux-setup-import.md §3.1): counts and booleans only. Read-only. */
 export async function getSetupStatus(): Promise<SetupStatus> {
   await requireAdmin();
   return getSetupStatusInternal();
 }
 
-/** feature-plan-ux-page-fixes.md C17: who still has no direct charge code (Setup page only; Home never reads names). */
-export async function getSetupAccessGaps(): Promise<SetupAccessGaps> {
+/**
+ * The Setup page's data (§3.1): the status, who has no direct charge code (names ≤ 20, the page only — Home never reads
+ * names, C17), the current settings and the scope count. Read-only.
+ */
+export async function getSetupPageData(): Promise<SetupPageData> {
   await requireAdmin();
-  return getSetupAccessGapsInternal();
+  return getSetupPageDataInternal();
 }

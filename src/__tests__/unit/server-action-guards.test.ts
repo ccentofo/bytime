@@ -181,7 +181,7 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
   },
   'setup.ts': {
     getSetupStatus: 'reads setup-checklist counts; no write',
-    getSetupAccessGaps: 'feature-plan-ux-page-fixes.md C17: reads who has no chargeable code; no write',
+    getSetupPageData: 'feature-plan-ux-setup-import.md §3.1: reads the status, who has no chargeable code (≤ 20 names), the settings and the scope count; no write',
   },
   'slins.ts': { getSlinsByClin: 'reads a CLIN\'s SLINs; no write' },
   'audit.ts': {

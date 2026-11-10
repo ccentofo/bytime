@@ -4,9 +4,13 @@ import * as schema from '@/db/schema';
 import { getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, cleanupTestData } from './helpers';
 
 /**
- * feature-plan-ux-navigation-home.md §4.7 / T14 (UX-AUDIT B1): Setup is complete only when an active employee has an
- * active assignment to a CHARGEABLE code (what makes a direct timesheet row appear) — not when a CLIN assignment
- * (user_assignments, approval scope) exists.
+ * feature-plan-ux-navigation-home.md §4.7 / T14 (UX-AUDIT B1), rewritten for feature-plan-ux-setup-import.md §3.1:
+ * charge code access counts only active assignments to a CHARGEABLE code (what makes a direct timesheet row appear).
+ * SU-2 — the pay schedule step is done by a pay_period_config row OR timesheet data; not otherwise.
+ * SU-3 — charge code access is done when anyone is covered; w < m keeps it done and the page loader names the others.
+ * SU-4 — isComplete is false while any required step isn't done (workweek unset with everything else done); true with an
+ *        indirect-only person uncovered.
+ * SU-9 — an admin-only workspace: an admin with a chargeable code completes People and Charge code access.
  */
 
 vi.mock('@/db', async (importOriginal) => ({
@@ -22,92 +26,127 @@ vi.mock('@/lib/tenant/context', () => ({
   getTenantState: async () => ({ kind: 'full', tenant: { slug: 'test-tenant', dbUrl: 'test-db' } }),
 }));
 
-import { getSetupStatusInternal, getSetupAccessGapsInternal } from '@/server/internal/setup';
+import { getSetupStatusInternal, getSetupAccessGapsInternal, getSetupPageDataInternal } from '@/server/internal/setup';
 
-describe('Setup status (B1)', () => {
+describe('Setup status (B1, feature-plan-ux-setup-import.md §3.1)', () => {
   const db = () => getTestDb();
+  let admin: Awaited<ReturnType<typeof createTestUser>>;
   let emp: Awaited<ReturnType<typeof createTestUser>>;
   let clin: Awaited<ReturnType<typeof createTestClin>>;
   beforeEach(async () => {
     await cleanupTestData();
-    await createTestUser({ role: 'admin' });
+    admin = await createTestUser({ role: 'admin' });
     emp = await createTestUser({ role: 'employee' });
     clin = await createTestClin((await createTestContract()).id);
   });
   afterEach(async () => { await cleanupTestData(); });
 
   const grant = async (userId: string, chargeCodeId: string) => db().insert(schema.userChargeCodes).values({ userId, chargeCodeId, isActive: true });
+  const step = (st: Awaited<ReturnType<typeof getSetupStatusInternal>>, key: string) => st.steps.find((s) => s.key === key)!;
+  /** The two settings steps done: workweek set, and a pay schedule row. */
+  async function settingsDone() {
+    await db().update(schema.workspaceSettings).set({ workweekStartDay: 1 }).where(eq(schema.workspaceSettings.id, 1));
+    await db().insert(schema.payPeriodConfig).values({ periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1, effectiveFrom: '1900-01-01' });
+  }
 
-  it('B1 repro: contract + CLIN + employee + a CLIN assignment, no charge-code access → incomplete', async () => {
+  it('B1 repro: contract + CLIN + employee + a CLIN membership row, no charge-code access → access not done, incomplete', async () => {
+    await settingsDone();
     await db().insert(schema.userAssignments).values({ userId: emp.id, clinId: clin.id, isActive: true });
     const st = await getSetupStatusInternal();
-    expect(st).toMatchObject({ contracts: 1, clins: 1, chargeCodes: 0, employees: 1, employeesWithAccess: 0, isComplete: false });
-    expect(st.steps.find((s) => s.key === 'chargeCodeAccess')).toEqual({ key: 'chargeCodeAccess', done: false, required: true, allCovered: false, withAccess: 0, total: 1 });
+    expect(st.counts).toMatchObject({ contracts: 1, clins: 1, chargeCodes: 0, employees: 1, employeesWithAccess: 0 });
+    expect(step(st, 'chargeCodeAccess')).toEqual({ key: 'chargeCodeAccess', done: false, required: true, withAccess: 0, total: 1 });
+    expect(st.isComplete).toBe(false);
   });
 
-  it('one active employee with an active chargeable code → complete; steps and done/total', async () => {
+  it('SU-2: the pay schedule step is done by a pay_period_config row, or by timesheet data; not otherwise', async () => {
+    expect(step(await getSetupStatusInternal(), 'paySchedule').done).toBe(false);
+    await db().insert(schema.timesheetPeriods).values({ userId: emp.id, periodStart: '2026-01-01', status: 'draft', periodNumDays: 15 });
+    let st = await getSetupStatusInternal();
+    expect([step(st, 'paySchedule').done, st.hasTimesheetData, st.payConfigSet]).toEqual([true, true, false]);
+    await cleanupTestData();
+    await createTestUser({ role: 'admin' });
+    await db().insert(schema.payPeriodConfig).values({ periodType: 'weekly', anchorDate: '2026-01-05', weekStartDay: 1, effectiveFrom: '1900-01-01' });
+    st = await getSetupStatusInternal();
+    expect([step(st, 'paySchedule').done, st.hasTimesheetData, st.payConfigSet]).toEqual([true, false, true]);
+  });
+
+  it('SU-4: workweek unset with everything else done → incomplete (5 of 6); set → complete, with an indirect-only person uncovered', async () => {
     const code = await createTestChargeCode(clin.id);
+    await grant(emp.id, code.id);
+    await createTestUser({ role: 'employee', fullName: 'Ivy Indirect-Only' });   // charges only indirect codes
+    await db().insert(schema.payPeriodConfig).values({ periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1, effectiveFrom: '1900-01-01' });
+    let st = await getSetupStatusInternal();
+    expect([step(st, 'timeAndWeek').done, st.requiredDone, st.requiredTotal, st.isComplete]).toEqual([false, 5, 6, false]);
+    await db().update(schema.workspaceSettings).set({ workweekStartDay: 1 }).where(eq(schema.workspaceSettings.id, 1));
+    st = await getSetupStatusInternal();
+    expect([st.requiredDone, st.isComplete]).toEqual([6, true]);
+    expect(step(st, 'chargeCodeAccess')).toMatchObject({ done: true, withAccess: 1, total: 2 });   // Ivy uncovered: not blocking
+  });
+
+  it('SU-3: anyone covered → done; w < m keeps it done and the page loader names the others (never the status)', async () => {
+    const code = await createTestChargeCode(clin.id);
+    const sup = await createTestUser({ role: 'supervisor', fullName: 'Sam Supervisor' });
+    await db().update(schema.users).set({ fullName: 'Ann Employee' }).where(eq(schema.users.id, emp.id));
+    expect(step(await getSetupStatusInternal(), 'chargeCodeAccess').done).toBe(false);
     await grant(emp.id, code.id);
     const st = await getSetupStatusInternal();
-    expect(st).toMatchObject({ chargeCodes: 1, employeesWithAccess: 1, isComplete: true, total: 7 });
-    expect(st.steps.map((s) => s.key)).toEqual(['indirectCodes', 'contracts', 'clins', 'chargeCodes', 'laborCategories', 'employees', 'chargeCodeAccess']);
-    expect(st.done).toBe(st.steps.filter((s) => s.done).length);
+    expect(step(st, 'chargeCodeAccess')).toMatchObject({ done: true, withAccess: 1, total: 2 });
+    expect(JSON.stringify(st)).not.toContain('Sam Supervisor');
+    const page = await getSetupPageDataInternal();
+    expect(page.gaps).toEqual({ missingCount: 1, names: ['Sam Supervisor'] });
+    void sup;
   });
 
-  it('inactive employee, inactive assignment, inactive code, or an inactive SLIN on the only code → incomplete', async () => {
+  it('SU-9: an admin-only workspace — an admin with a chargeable code completes People and Charge code access', async () => {
+    await db().update(schema.users).set({ isActive: false }).where(eq(schema.users.id, emp.id));
+    let st = await getSetupStatusInternal();
+    expect([step(st, 'people').done, step(st, 'chargeCodeAccess').done]).toEqual([false, false]);
+    await grant(admin.id, (await createTestChargeCode(clin.id)).id);
+    st = await getSetupStatusInternal();
+    expect([step(st, 'people').done, step(st, 'chargeCodeAccess').done]).toEqual([true, true]);
+    expect(step(st, 'chargeCodeAccess')).toMatchObject({ withAccess: 1, total: 1 });
+    expect(st.counts).toMatchObject({ employees: 0, adminsWithAccess: 1 });
+  });
+
+  it('inactive employee, inactive assignment, inactive code, or an inactive SLIN on the only code → access not done', async () => {
     const code = await createTestChargeCode(clin.id);
     await grant(emp.id, code.id);
-    expect((await getSetupStatusInternal()).isComplete).toBe(true);
-
+    const covered = async () => step(await getSetupStatusInternal(), 'chargeCodeAccess').done;
+    expect(await covered()).toBe(true);
     await db().update(schema.users).set({ isActive: false }).where(eq(schema.users.id, emp.id));
-    expect(await getSetupStatusInternal()).toMatchObject({ employees: 0, employeesWithAccess: 0, isComplete: false });
+    expect(await covered()).toBe(false);
     await db().update(schema.users).set({ isActive: true }).where(eq(schema.users.id, emp.id));
-
     await db().update(schema.userChargeCodes).set({ isActive: false }).where(eq(schema.userChargeCodes.userId, emp.id));
-    expect((await getSetupStatusInternal()).isComplete).toBe(false);
+    expect(await covered()).toBe(false);
     await db().update(schema.userChargeCodes).set({ isActive: true }).where(eq(schema.userChargeCodes.userId, emp.id));
-
     await db().update(schema.chargeCodes).set({ isActive: false }).where(eq(schema.chargeCodes.id, code.id));
-    expect(await getSetupStatusInternal()).toMatchObject({ chargeCodes: 0, isComplete: false });
+    expect((await getSetupStatusInternal()).counts.chargeCodes).toBe(0);
+    expect(await covered()).toBe(false);
     await db().update(schema.chargeCodes).set({ isActive: true }).where(eq(schema.chargeCodes.id, code.id));
-
     const [slin] = await db().insert(schema.slins).values({ clinId: clin.id, slinNumber: 'S1', status: 'inactive' }).returning();
     await db().update(schema.chargeCodes).set({ slinId: slin.id }).where(eq(schema.chargeCodes.id, code.id));
-    expect(await getSetupStatusInternal()).toMatchObject({ chargeCodes: 0, employeesWithAccess: 0, isComplete: false });
+    expect(await covered()).toBe(false);
     await db().update(schema.slins).set({ status: 'active' }).where(eq(schema.slins.id, slin.id));
-    expect((await getSetupStatusInternal()).isComplete).toBe(true);
+    expect(await covered()).toBe(true);
   });
 
-  it('distinct counting: two codes for one employee count once; admins with access and inactive parents do not count', async () => {
+  it('counts: two codes for one employee count once; inactive parents don\'t count; CLINs without a code; a connection', async () => {
     const a = await createTestChargeCode(clin.id);
     const b = await createTestChargeCode(clin.id);
     await grant(emp.id, a.id);
     await grant(emp.id, b.id);
-    const admin2 = await createTestUser({ role: 'admin' });
-    await grant(admin2.id, a.id);
     const emp2 = await createTestUser({ role: 'employee' });
     const otherClin = await createTestClin((await createTestContract({ status: 'inactive' })).id);
     await grant(emp2.id, (await createTestChargeCode(otherClin.id)).id);
-    expect(await getSetupStatusInternal()).toMatchObject({ employees: 2, employeesWithAccess: 1, chargeCodes: 2, contracts: 1, clins: 2 });
+    await createTestClin(clin.contractId);                                         // an active CLIN with no code
+    const st = await getSetupStatusInternal();
+    expect(st.counts).toMatchObject({ employees: 2, employeesWithAccess: 1, chargeCodes: 2, contracts: 1, clins: 3, clinsWithoutCode: 1 });
+    expect(step(st, 'connection').done).toBe(false);
+    await db().insert(schema.integrationConnections).values({ provider: 'quickbooks_online', displayName: 'QuickBooks — Acme', connectedBy: admin.id });
+    expect(step(await getSetupStatusInternal(), 'connection').done).toBe(true);
   });
 
   // feature-plan-ux-page-fixes.md C17 / T-C17c (integration half) --------------------------------------------------
-  it('C17: allCovered only when every active employee and supervisor has a chargeable code; the gaps list who lacks one', async () => {
-    const code = await createTestChargeCode(clin.id);
-    const sup = await createTestUser({ role: 'supervisor', fullName: 'Sam Supervisor' });
-    await db().update(schema.users).set({ fullName: 'Ann Employee' }).where(eq(schema.users.id, emp.id));
-    await grant(emp.id, code.id);
-    let st = await getSetupStatusInternal();
-    expect(st.steps.find((s) => s.key === 'chargeCodeAccess')).toMatchObject({ done: true, allCovered: false, withAccess: 1, total: 2 });
-    // Correlation pinned: another user's assignment (emp's) is present, yet the supervisor is still missing.
-    expect(await getSetupAccessGapsInternal()).toEqual({ missingCount: 1, names: ['Sam Supervisor'] });
-
-    await grant(sup.id, code.id);
-    st = await getSetupStatusInternal();
-    expect(st.steps.find((s) => s.key === 'chargeCodeAccess')).toMatchObject({ allCovered: true, withAccess: 2, total: 2 });
-    expect(await getSetupAccessGapsInternal()).toEqual({ missingCount: 0, names: [] });
-  });
-
   it('C17: an inactive assignment or a non-chargeable code still counts as missing; admins and inactive users are never listed', async () => {
     const live = await createTestChargeCode(clin.id);
     const deadClin = await createTestClin((await createTestContract({ status: 'inactive' })).id);

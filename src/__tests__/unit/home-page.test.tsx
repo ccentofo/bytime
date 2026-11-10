@@ -49,7 +49,7 @@ function view(o: Partial<HomeView> = {}): HomeView {
       workweekSet: false,
       pendingConfig: { effectiveFrom: '2026-11-01' },
       overlaps: 2,
-      setup: { isComplete: false, done: 5, total: 7, steps: [{ key: 'contracts', done: true, required: true }, { key: 'chargeCodeAccess', done: false, required: true }] },
+      setup: { isComplete: false, requiredDone: 5, requiredTotal: 6, steps: [{ key: 'contractsClins', done: true, required: true }, { key: 'chargeCodeAccess', done: false, required: true }] },
       approvalScopesToReview: 3,
     },
     ...o,
@@ -78,7 +78,7 @@ describe('Home (T10)', () => {
     expect(items[0]).toMatchObject({ title: '6 timesheets waiting for your approval', sentence: 'Ann, Bob, Cat, Dan and 1 more. Oldest: Sep 16 – Sep 30, 2026.' });
     expect(items[1]).toMatchObject({ title: '2 people haven’t submitted Sep 16 – Sep 30, 2026', sentence: 'Xia, Yan.' });
     expect(items[4]).toMatchObject({ title: '3 approval scopes to review', sentence: 'They were converted from earlier CLIN assignments. Keep the ones that are right.' });
-    expect(items[5]).toMatchObject({ title: 'Finish setting up: 5 of 7 done', sentence: 'Give each employee the charge codes they may use.' });
+    expect(items[5]).toMatchObject({ title: 'Finish setting up: 5 of 6 done', sentence: 'Give each employee the charge codes they may use.' });
     // Only ACTIVE contracts at Watch or above; closed and unfunded never appear.
     expect(items[8]).toMatchObject({ title: '1 contract needs a look', sentence: 'NAVAIR (Near limit)' });
     expect(items[7]).toMatchObject({ title: 'Pay schedule changes on Nov 1, 2026' }); // L1: a readable date, never ISO

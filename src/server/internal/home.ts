@@ -69,7 +69,7 @@ export async function getHomeData(userId: string): Promise<HomeView | { redirect
       workweekSet: workweek !== null,
       pendingConfig: pendingConfig ? { effectiveFrom: pendingConfig.effectiveFrom } : null,
       overlaps: overlaps.length,
-      setup: { isComplete: setup.isComplete, done: setup.done, total: setup.total, steps: setup.steps },
+      setup: { isComplete: setup.isComplete, requiredDone: setup.requiredDone, requiredTotal: setup.requiredTotal, steps: setup.steps.map((s) => ({ key: s.key, done: s.done, required: s.required })) },
       // Outside the gate above: 0 is the usual value and must not hide the admin section.
       approvalScopesToReview: scopesToReview,
     } : null,

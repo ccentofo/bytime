@@ -157,7 +157,8 @@ describe('getHomeData (T9)', () => {
     const v = view(await getHomeData(admin.id));
     expect(attentionItems(v).map((i) => i.key)).toEqual(['waiting', 'last-period', 'unpriced', 'self-approval', 'setup', 'workweek', 'pay-schedule', 'contracts', 'overlaps']);
     expect(v.admin).toMatchObject({ unpricedTotal: 2, workweekSet: false, pendingConfig: { effectiveFrom: '2026-11-01' }, overlaps: 1, notices: { recommendDesignee: true, selfApprovalBackOn: null } });
-    expect(v.admin!.setup).toMatchObject({ isComplete: false, done: 5 });
+    // feature-plan-ux-setup-import.md §3.1: 4 of 6 — the workweek isn't set and nobody holds a charge code.
+    expect(v.admin!.setup).toMatchObject({ isComplete: false, requiredDone: 4, requiredTotal: 6 });
 
     const burstEnds = h.log.filter((l) => l.startsWith('end:') && l !== 'end:setup').map((l) => h.log.indexOf(l));
     expect(h.log).toContain('start:setup');

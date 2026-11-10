@@ -26,7 +26,6 @@ export const ICON_IMPORT_ALLOWLIST = [
   'src/app/(app)/settings/integrations/quickbooks/QBOConfigClient.tsx',
   'src/app/(app)/settings/migration/MigrationClient.tsx',
   'src/app/(app)/profile/notifications/NotificationsClient.tsx',
-  'src/app/(app)/admin/setup/SetupWizardClient.tsx',
   'src/app/(app)/error.tsx',
   'src/app/(app)/profile/MFASetup.tsx',
   'src/app/(app)/profile/ProfileClient.tsx',
