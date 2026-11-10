@@ -1,5 +1,7 @@
 import 'server-only';
-import { getDb } from '@/db';
+import { and, eq } from 'drizzle-orm';
+import { getDb, type ReadDb } from '@/db';
+import { approvalScopes, userAssignments } from '@/db/schema';
 import { approvableScope, effectiveDesignee, loadApprovalFacts } from './approval-rules';
 
 /**
@@ -25,4 +27,16 @@ export async function getSupervisorScopeInfo(supervisorId: string): Promise<{
     approvableEmployeeCount: team.length - designators.length,
     designatedByCount: designators.length,
   };
+}
+
+/**
+ * feature-plan-approval-scope.md S4: the CLINs a supervisor's own report and audit filter dropdowns offer — their active
+ * approval scope ∪ their own active CLIN membership (what they approve, plus what they charge).
+ */
+export async function ownFilterClinIds(db: Pick<ReadDb, 'select'>, userId: string): Promise<string[]> {
+  const [scope, member] = await Promise.all([
+    db.select({ clinId: approvalScopes.clinId }).from(approvalScopes).where(and(eq(approvalScopes.supervisorId, userId), eq(approvalScopes.isActive, true))),
+    db.select({ clinId: userAssignments.clinId }).from(userAssignments).where(and(eq(userAssignments.userId, userId), eq(userAssignments.isActive, true))),
+  ]);
+  return [...new Set([...scope, ...member].map((r) => r.clinId))];
 }

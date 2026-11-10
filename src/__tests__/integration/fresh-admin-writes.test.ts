@@ -3,7 +3,7 @@ import { getTestDb, createTestUser, cleanupTestData } from './helpers';
 import * as schema from '@/db/schema';
 
 /**
- * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4): each of the 42 admin-only writes (incl. the 6
+ * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4): each of the 43 admin-only writes (incl. the 6
  * OAuth-token-refreshing mapping readers) refuses a session whose JWT still says admin while the users row now says
  * supervisor — the real requireAdminFresh() re-reads the role from the tenant DB. Nothing is written.
  */
@@ -41,15 +41,16 @@ import * as users from '@/server/actions/users';
 
 const call = (fn: unknown, ...args: unknown[]) => (fn as (...a: unknown[]) => Promise<unknown>)(...args);
 
-/** Refused by the fresh role check: every one of the 42 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
+/** Refused by the fresh role check: every one of the 43 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
 async function expectRefused(pending: Promise<unknown>): Promise<void> {
   expect(await pending).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/access has changed/i) });
 }
 const ZERO = '00000000-0000-0000-0000-000000000000';
 
 const ADMIN_WRITES: Array<[string, unknown, unknown[]]> = [
-  ['assignUserToClin', assignments.assignUserToClin, [ZERO, ZERO]],
-  ['unassignUserFromClin', assignments.unassignUserFromClin, [ZERO, ZERO]],
+  ['grantApprovalScope', assignments.grantApprovalScope, [{ supervisorId: ZERO, clinIds: [ZERO] }]],
+  ['revokeApprovalScope', assignments.revokeApprovalScope, [{ supervisorId: ZERO, clinId: ZERO }]],
+  ['reviewMigratedScopes', assignments.reviewMigratedScopes, [{ keep: [ZERO], remove: [] }]],
   ['createCostClass', chargeCodes.createCostClass, ['Gov']],
   ['createChargeCode', chargeCodes.createChargeCode, [{ code: 'X', name: 'X', clinId: ZERO }]],
   ['updateChargeCode', chargeCodes.updateChargeCode, [ZERO, { name: 'Y' }]],
@@ -94,7 +95,7 @@ const ADMIN_WRITES: Array<[string, unknown, unknown[]]> = [
   ['removeChargeCodeCategoryChange', ccats.removeChargeCodeCategoryChange, [{ chargeCodeId: 'cc1', changeId: 'x' }]],
 ];
 
-describe('the 42 admin-only writes refuse a JWT-admin whose DB role is supervisor (P3)', () => {
+describe('the 43 admin-only writes refuse a JWT-admin whose DB role is supervisor (P3)', () => {
   beforeAll(async () => {
     await cleanupTestData();
     const demoted = await createTestUser({ role: 'supervisor' }); // DB truth: supervisor
@@ -105,8 +106,8 @@ describe('the 42 admin-only writes refuse a JWT-admin whose DB role is superviso
     await cleanupTestData();
   });
 
-  it('covers exactly 42 actions', () => {
-    expect(ADMIN_WRITES).toHaveLength(42);
+  it('covers exactly 43 actions', () => {
+    expect(ADMIN_WRITES).toHaveLength(43);
   });
 
   it.each(ADMIN_WRITES)('%s', async (_name, fn, args) => {

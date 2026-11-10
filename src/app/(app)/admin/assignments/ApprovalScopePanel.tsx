@@ -14,7 +14,7 @@ import { runAction } from '@/lib/run-action';
 import { toastSuccess } from '@/lib/toast';
 import { formatCount } from '@/lib/format';
 import { calendarDayOf, formatCalendarDate } from '@/lib/calendar-date';
-import { assignUserToClin, unassignUserFromClin } from '@/server/actions/assignments';
+import { grantApprovalScope, revokeApprovalScope } from '@/server/actions/assignments';
 import type { AccessPerson } from './GiveAccessModal';
 import classes from './Assignments.module.css';
 
@@ -100,7 +100,7 @@ export function ApprovalScopePanel({ people, assignments, activeClins, approverN
     if (next.supervisor || next.clin || !form.supervisorId || !form.clinId) return;
     const { supervisorId, clinId } = form;
     await busy.run('add', async () => {
-      const result = await runAction(assignUserToClin({ userId: supervisorId, clinId }), { silent: true });
+      const result = await runAction(grantApprovalScope({ supervisorId, clinIds: [clinId] }), { silent: true });
       if (!result.ok) { setServerError(result.error); return; }
       const sup = people.find((p) => p.id === supervisorId);
       const clin = activeClins.find((c) => c.clinId === clinId);
@@ -113,7 +113,7 @@ export function ApprovalScopePanel({ people, assignments, activeClins, approverN
   async function remove(target: ScopeAssignment) {
     setRemoveError(null);
     await busy.run('remove', async () => {
-      const result = await runAction(unassignUserFromClin(target.userId, target.clinId), { silent: true });
+      const result = await runAction(revokeApprovalScope({ supervisorId: target.userId, clinId: target.clinId }), { silent: true });
       if (!result.ok) { setRemoveError(result.error); return; }
       toastSuccess({ title: 'Approval scope updated', message: `${target.userName} no longer approves employees on ${clinLabel(target)}.` });
       setRemoveTarget(null);

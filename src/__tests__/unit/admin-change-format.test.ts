@@ -43,6 +43,15 @@ describe('describeAdminChange (AU-7)', () => {
       .toEqual({ change: 'Self-approval turned on', details: 'Ann Admin' });
   });
 
+  it('approval scope rows and the new role_changed values (feature-plan-approval-scope.md §4.2)', () => {
+    const v = { supervisorId: 'u-pat', clinId: 'clin-1' };
+    expect(describeAdminChange(row('approval_scope', 'granted', 'scope-1', null, v), names)).toEqual({ change: 'Approval scope added', details: 'Pat Doe · NAVAIR CLIN 0001' });
+    expect(describeAdminChange(row('approval_scope', 'removed', 'scope-1', null, v), names)).toEqual({ change: 'Approval scope removed', details: 'Pat Doe · NAVAIR CLIN 0001' });
+    expect(describeAdminChange(row('approval_scope', 'kept', 'scope-1', null, { supervisorId: 'u-gone', clinId: 'clin-1' }), names)).toEqual({ change: 'Approval scope kept', details: '(deleted) · NAVAIR CLIN 0001' });
+    expect(describeAdminChange(row('user', 'role_changed', 'u-pat', { role: 'employee' }, { role: 'supervisor', clinIds: [] }), names).details).toBe('Pat Doe · Employee → Supervisor · approves no CLINs yet');
+    expect(describeAdminChange(row('user', 'role_changed', 'u-pat', { role: 'supervisor' }, { role: 'employee', membershipRemoved: ['clin-1'] }), names).details).toBe('Pat Doe · Supervisor → Employee · no longer on NAVAIR CLIN 0001');
+  });
+
   it('an unknown pair, or values of the wrong shape, never throw', () => {
     expect(describeAdminChange(row('spaceship', 'warp_engaged', 'x', 7, 'nope'), names)).toEqual({ change: 'Warp engaged', details: 'spaceship' });
     expect(describeAdminChange(row('user', 'teleported', 'u-pat', null, null), names)).toEqual({ change: 'Teleported', details: 'Pat Doe' });

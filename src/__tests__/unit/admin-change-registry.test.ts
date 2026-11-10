@@ -10,7 +10,8 @@ import type { AdminChangeLogRow } from '@/server/internal/admin-change-log';
 describe('admin change registry', () => {
   it('lists the §1.5 pairs and the R5 user actions', () => {
     expect(ADMIN_CHANGE_ACTIONS.user).toEqual(['approver_changed', 'role_changed', 'deactivated', 'reactivated', 'flsa_changed', 'password_reset', 'mfa_reset', 'created']);
-    expect(Object.keys(ADMIN_CHANGE_ACTIONS).sort()).toEqual(['charge_code', 'charge_code_labor_category', 'labor_category_rate', 'self_approval', 'user', 'workspace_settings']);
+    expect(Object.keys(ADMIN_CHANGE_ACTIONS).sort()).toEqual(['approval_scope', 'charge_code', 'charge_code_labor_category', 'labor_category_rate', 'self_approval', 'user', 'workspace_settings']);
+    expect(ADMIN_CHANGE_ACTIONS.approval_scope).toEqual(['granted', 'removed', 'kept']);   // feature-plan-approval-scope.md §4.2
   });
 
   it('known pairs include the legacy one for readers; unknown ones are not known', () => {

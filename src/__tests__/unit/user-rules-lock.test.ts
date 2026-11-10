@@ -88,9 +88,10 @@ function sourceFiles(dir: string): string[] {
 export function approvalScopeWriters(files: Array<{ rel: string; src: string }>): string[] {
   return files.filter((f) => /\.(insert|update)\(\s*(?:\w+\.)?approvalScopes\s*\)/.test(stripComments(f.src))).map((f) => f.rel);
 }
-/** Files importing internal/approval-scopes (the three write helpers). */
+/** Files importing one of the three write helpers from internal/approval-scopes (its reads — the S6 count — are free to import). */
 export function approvalScopeHelperImporters(files: Array<{ rel: string; src: string }>): string[] {
-  return files.filter((f) => /from ['"](?:@\/server\/internal|\.\.?(?:\/[\w.-]+)*)\/approval-scopes['"]/.test(f.src)).map((f) => f.rel);
+  const imports = /import\s*\{([^}]*)\}\s*from\s*['"](?:@\/server\/internal|\.\.?(?:\/[\w.-]+)*)\/approval-scopes['"]/g;
+  return files.filter((f) => [...f.src.matchAll(imports)].some((m) => /\b(grantScopeRows|deactivateScopeRows|markScopeRowsKept)\b/.test(m[1]))).map((f) => f.rel);
 }
 
 describe('approval scope writes (AS-17)', () => {
@@ -118,7 +119,8 @@ describe('approval scope writes (AS-17)', () => {
       { rel: 'scripts/y.ts', src: "await db.insert(schema.approvalScopes).values({});" },
       { rel: 'src/ok.ts', src: "// tx.update(approvalScopes) in a comment\nawait tx.delete(approvalScopes);" },
       { rel: 'src/z.ts', src: "import { grantScopeRows } from '@/server/internal/approval-scopes';" },
-      { rel: 'src/w.ts', src: "import { grantScopeRows } from './approval-scopes';" },
+      { rel: 'src/w.ts', src: "import {\n  UNREVIEWED_MIGRATED_SCOPE, markScopeRowsKept,\n} from './approval-scopes';" },
+      { rel: 'src/reads.ts', src: "import { approvalScopesToReview } from '@/server/internal/approval-scopes';" },
     ];
     expect(approvalScopeWriters(fake)).toEqual(['src/x.ts', 'scripts/y.ts']);
     expect(approvalScopeHelperImporters(fake)).toEqual(['src/z.ts', 'src/w.ts']);

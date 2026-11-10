@@ -1,11 +1,13 @@
 'use server';
 
 import { getDbForWrite } from '@/db';
-import { users, contracts, clins, slins, laborCategories, userAssignments } from '@/db/schema';
+import { users, contracts, clins, slins, laborCategories } from '@/db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
 import { requireAdminFresh } from '@/lib/session';
 import { assertSeatsAvailable } from '@/server/internal/seats';
-import { loadApprovalFacts, lockUserRulesExclusive, newlyEligible, recomputeSelfApproval, snapshotSubmittedEligibility } from '@/server/internal/approval-rules';
+import { loadApprovalFacts, lockUserRulesExclusive, newlyEligible, recomputeSelfApproval, scopeChange, snapshotSubmittedEligibility } from '@/server/internal/approval-rules';
+import { grantScopeRows } from '@/server/internal/approval-scopes';
+import { UserFacingError } from '@/lib/errors';
 import { generateImportPassword } from '@/server/internal/generated-password';
 import { notifyReroutedApprovals } from '@/server/internal/submission-notify';
 import bcrypt from 'bcryptjs';
@@ -280,8 +282,10 @@ export async function bulkImportLaborCategories(rows: LcatImportRow[]): Promise<
 }
 
 // ---------------------------------------------------------------------------
-// Bulk Assignment Import
+// Bulk Approval-Scope Import (the "assignments" tab)
 // ---------------------------------------------------------------------------
+
+const MAX_ASSIGNMENT_ROWS = 500;
 
 export interface AssignmentImportRow {
   email: string;
@@ -289,59 +293,46 @@ export interface AssignmentImportRow {
   clinNumber: string;
 }
 
+/**
+ * The import's approval-scope tab (feature-plan-approval-scope.md S7, §4.2): each row lets one supervisor approve
+ * employees on one CLIN. Up to 500 rows under ONE scopeChange (the user-rules lock first; waiting timesheets re-route
+ * once); each row runs in its own savepoint, so a bad row (unknown user, not an active supervisor, unknown or inactive
+ * CLIN, or a database error) is reported and the others still import. An already-active scope is skipped.
+ */
 export async function bulkImportAssignments(rows: AssignmentImportRow[]): Promise<ActionResult<ImportResult>> {
   return userAction(async () => {
-    await requireAdminFresh();
-
-    const result: ImportResult = { created: 0, skipped: 0, errors: [] };
-
+    const actor = await requireAdminFresh();
+    if (!Array.isArray(rows)) throw new UserFacingError('Nothing to import.');
+    if (rows.length > MAX_ASSIGNMENT_ROWS) throw new UserFacingError('Import 500 rows or fewer at a time.');
     const db = await getDbForWrite();
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      try {
-        // Look up user
-        const [user] = await db.select({ id: users.id }).from(users)
-          .where(eq(users.email, row.email.toLowerCase().trim()));
-        if (!user) {
-          result.errors.push({ row: i + 1, message: `Employee "${row.email}" not found` });
-          continue;
+    const { result, rerouted } = await scopeChange(db, async (tx) => {
+      const result: ImportResult = { created: 0, skipped: 0, errors: [] };
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        try {
+          const outcome = await tx.transaction(async (sp) => {
+            const email = String(row.email ?? '').toLowerCase().trim();
+            const contractNumber = String(row.contractNumber ?? '').trim();
+            const clinNumber = String(row.clinNumber ?? '').trim();
+            const [user] = await sp.select({ id: users.id, role: users.role, isActive: users.isActive }).from(users).where(eq(users.email, email));
+            if (!user) throw new UserFacingError(`User "${row.email}" not found`);
+            if (!user.isActive || user.role !== 'supervisor') throw new UserFacingError(`${row.email} isn't an active supervisor, so they can't approve a CLIN.`);
+            const [clin] = await sp.select({ id: clins.id, status: clins.status, contractStatus: contracts.status })
+              .from(clins).innerJoin(contracts, eq(clins.contractId, contracts.id))
+              .where(and(eq(contracts.contractNumber, contractNumber), eq(clins.clinNumber, clinNumber)));
+            if (!clin) throw new UserFacingError(`CLIN "${row.clinNumber}" not found under contract "${row.contractNumber}"`);
+            if (clin.status !== 'active' || clin.contractStatus !== 'active') throw new UserFacingError(`CLIN "${row.clinNumber}" under contract "${row.contractNumber}" isn't active.`);
+            const granted = await grantScopeRows(sp, { actorId: actor.id, supervisorId: user.id, clinIds: [clin.id], source: 'import' });
+            return granted.length > 0 ? 'created' : 'skipped';
+          });
+          result[outcome]++;
+        } catch (error) {
+          result.errors.push({ row: i + 1, message: importRowMessage(error, 'That approval scope already exists.') });
         }
-
-        // Look up contract + CLIN
-        const [contract] = await db.select({ id: contracts.id }).from(contracts)
-          .where(eq(contracts.contractNumber, row.contractNumber.trim()));
-        if (!contract) {
-          result.errors.push({ row: i + 1, message: `Contract "${row.contractNumber}" not found` });
-          continue;
-        }
-
-        const [clin] = await db.select({ id: clins.id }).from(clins)
-          .where(and(eq(clins.contractId, contract.id), eq(clins.clinNumber, row.clinNumber.trim())));
-        if (!clin) {
-          result.errors.push({ row: i + 1, message: `CLIN "${row.clinNumber}" not found` });
-          continue;
-        }
-
-        // Check for existing assignment
-        const existing = await db.select({ id: userAssignments.id }).from(userAssignments)
-          .where(and(eq(userAssignments.userId, user.id), eq(userAssignments.clinId, clin.id)));
-        if (existing.length > 0) {
-          result.skipped++;
-          continue;
-        }
-
-        await db.insert(userAssignments).values({
-          userId: user.id,
-          clinId: clin.id,
-          isActive: true,
-        });
-
-        result.created++;
-      } catch (error) {
-        result.errors.push({ row: i + 1, message: importRowMessage(error, 'That assignment already exists.') });
       }
-    }
-
+      return result;
+    });
+    await notifyReroutedApprovals(rerouted);
     return result;
   });
 }

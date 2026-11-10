@@ -14,6 +14,8 @@ export const ADMIN_CHANGE_ACTIONS = {
   user: ['approver_changed', 'role_changed', 'deactivated', 'reactivated', 'flsa_changed', 'password_reset', 'mfa_reset', 'created'],
   /** entity_id = the labor category. */
   labor_category_rate: ['rate_change_added', 'rate_corrected', 'rate_change_removed'],
+  /** feature-plan-approval-scope.md §4.2: entity_id = the approval_scopes row; values `{ supervisorId, clinId }`. */
+  approval_scope: ['granted', 'removed', 'kept'],
 } as const;
 
 /**
