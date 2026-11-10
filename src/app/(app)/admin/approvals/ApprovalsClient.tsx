@@ -382,7 +382,8 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
     compact: viewRows.length <= 25,
     enableSorting: false,
     // A3: Waiting keeps the compareWaiting order; the other views keep rowsForView's order (no client re-sort).
-    // The columns change with the view, so the order is set each time (MRT would keep the previous view's).
+    // The columns change with the view, so the order is set each time (MRT would keep the previous view's). It also
+    // shielded this table from the cross-table column-order leak fixed by feature-plan-hotfix-table-state.md; kept.
     state: { sorting: [], columnOrder: [...columns.map((c) => c.id!), 'mrt-row-actions'] },
     enableRowActions: true,
     positionActionsColumn: 'last',
