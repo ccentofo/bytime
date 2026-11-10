@@ -1,108 +1,65 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
-import { act } from 'react';
 
 /**
- * feature-plan-ux-page-fixes.md C10 / T-C10: Data import shows each row's errors as visible text in both wizards (no
- * title= tooltip), a role=status count, a list of rows with errors, and a red alert for missing required columns; a
- * server error is shown at its FILE row (the server numbers the valid rows it was sent), from a snapshot taken when
- * Import was clicked, so choosing another file mid-import doesn't remap it.
+ * feature-plan-ux-page-fixes.md C10, carried onto the rebuilt Import page (feature-plan-ux-setup-import.md §4.2): each
+ * row's problem is visible text in the check table (no title= tooltip), the summary is a role=status line, a file
+ * missing required columns is refused at the file input with the missing names, and a problem the server check reports
+ * is shown at its spreadsheet row (P11: the server echoes the row the browser sent).
  */
 
 const actions = vi.hoisted(() => {
-  const ok = async () => ({ ok: true, data: { created: 0, skipped: 0, errors: [] } });
+  const ok = async () => ({ ok: true, data: { created: 0, skipped: 0, errors: [], skippedRows: [] } });
   return {
-    bulkImportEmployees: vi.fn<(...a: unknown[]) => Promise<unknown>>(ok),
-    bulkImportContracts: vi.fn<(...a: unknown[]) => Promise<unknown>>(ok),
-    bulkImportClins: vi.fn(ok), bulkImportLaborCategories: vi.fn(ok), bulkImportAssignments: vi.fn(ok),
+    bulkImportEmployees: vi.fn<(...a: unknown[]) => Promise<unknown>>(ok), bulkImportContracts: vi.fn<(...a: unknown[]) => Promise<unknown>>(ok),
+    bulkImportClins: vi.fn(ok), bulkImportLaborCategories: vi.fn(ok), bulkImportChargeCodes: vi.fn(ok), bulkImportChargeCodeAccess: vi.fn(ok),
+    bulkImportAssignments: vi.fn(ok),
   };
 });
 vi.mock('@/server/actions/import', () => actions);
+vi.mock('@/server/actions/setup', () => ({ getSetupPageData: vi.fn(async () => { throw new Error('not needed'); }) }));
+vi.mock('@/server/actions/migration', () => ({ getImportWindowStatus: vi.fn(async () => ({ open: true })) }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
 import { ImportClient } from '@/app/(app)/settings/import/ImportClient';
-import { buttonByText, click, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
+import { installDomStubs, mount, unmount, type Mounted } from '../helpers/dom';
+import { checkRow, chooseFile, importPageData } from '../helpers/import-page';
 
 beforeAll(installDomStubs);
 let m: Mounted | undefined;
 beforeEach(() => { vi.clearAllMocks(); });
 afterEach(() => { unmount(m); m = undefined; });
 
-const panel = () => m!.container.querySelector('[role="tabpanel"]:not([style*="display: none"])') as HTMLElement;
-async function upload(text: string, name = 'people.csv') {
-  const input = panel().querySelector('input[type="file"]') as HTMLInputElement;
-  Object.defineProperty(input, 'files', { value: [new File([text], name, { type: 'text/csv' })], configurable: true });
-  await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
-  await wait(50);                                                      // FileReader is asynchronous
-}
-const status = () => panel().querySelector('[role="status"]')?.textContent;
-const row = (n: number) => [...panel().querySelectorAll('tbody tr')].find((tr) => tr.querySelector('td')?.textContent === String(n)) as HTMLElement;
 const HEADER = 'Name,Email,Role,FLSA Exempt';
+const summary = () => document.body.querySelector('[data-testid="check-summary"]')!;
 
-describe('Data import row errors (C10, T-C10)', () => {
-  it('employees: errors are visible text in the status cell (no title=), with the count and the list of rows with errors', async () => {
-    m = await mount(<ImportClient />);
-    await upload(`${HEADER}\nAnn,ann@x.test,employee,false\nBob,,employee,false\nCat,cat@x.test,employee,true\n`);
-    expect(status()).toBe('2 rows ready to import. 1 row has errors. Fix them in your file and upload it again.');
-    const cell = row(2).querySelectorAll('td')[1];
-    expect(cell.textContent).toContain('Error');
-    expect(cell.textContent).toContain('Email is required');
-    expect(panel().querySelector('[title]')).toBeNull();
-    expect(panel().textContent).toContain('Rows with errors (1)');
-    expect(panel().textContent).toContain('Row 1 is the first row after the header. Blank lines aren\'t counted.');
-    expect([...panel().querySelectorAll('li')].map((li) => li.textContent)).toEqual(['Row 2: Email is required']);
+describe('Import row problems (C10 on the new page)', () => {
+  it('a browser problem and a server problem are visible text at their spreadsheet rows, problems first; a role=status summary', async () => {
+    actions.bulkImportEmployees.mockResolvedValueOnce({ ok: true, data: { created: 0, skipped: 0, errors: [{ row: 4, message: 'Role must be Employee, Supervisor or Admin.' }], skippedRows: [] } });
+    m = await mount(<ImportClient initialData={importPageData()} initialType="people" />);
+    await chooseFile(`${HEADER}\nAnn,ann@x.test,Employee,No\nBob,,Employee,No\nCat,cat@x.test,Boss,No\n`, 'people.csv');
+    expect(checkRow(3).textContent).toContain('Email is required');
+    expect(checkRow(4).textContent).toContain('Role must be Employee, Supervisor or Admin.');
+    expect(checkRow(2).textContent).toContain('Ready');
+    expect(checkRow(3).getAttribute('data-outcome')).toBe('problem');
+    expect([...document.body.querySelectorAll('[data-testid="check-table"] tbody tr td:first-child')].map((td) => td.textContent)).toEqual(['3', '4', '2']);
+    expect(document.body.querySelector('[data-testid="check-table"] [title]')).toBeNull();
+    expect(summary().getAttribute('role')).toBe('status');
+    expect(summary().textContent).toContain("1 row is ready. 2 rows have problems and won't be imported unless you fix them in the file and choose it again.");
   });
 
-  it('no errors → only the first sentence; a file missing required columns → the red alert', async () => {
-    m = await mount(<ImportClient />);
-    await upload(`${HEADER}\nAnn,ann@x.test,employee,false\n`);
-    expect(status()).toBe('1 row ready to import.');
-    expect(panel().querySelector('[role="alert"]')).toBeNull();
-    await upload('Name,Email\nAnn,ann@x.test\n');
-    expect(panel().querySelector('[role="alert"]')!.textContent).toBe('This file is missing required columns: Role, FLSA Exempt. Download the template to see the expected headers.');
+  it('a file missing required columns is refused at the file input, naming them; nothing is sent', async () => {
+    m = await mount(<ImportClient initialData={importPageData()} initialType="people" />);
+    await chooseFile('Name,Email\nAnn,ann@x.test\n', 'people.csv');
+    expect(document.body.textContent).toContain('This file is missing required columns: Role, FLSA Exempt.');
+    expect(actions.bulkImportEmployees).not.toHaveBeenCalled();
   });
 
-  it('more than 100 rows with errors → 100 listed, then "…and k more"', async () => {
-    m = await mount(<ImportClient />);
-    await upload(`${HEADER}\n${Array.from({ length: 103 }, (_, i) => `P${i},,employee,false`).join('\n')}\n`);
-    expect(panel().querySelectorAll('li')).toHaveLength(100);
-    expect(panel().textContent).toContain('…and 3 more');
-  });
-
-  it('another tab (contracts) shows row errors as visible text too', async () => {
-    m = await mount(<ImportClient />);
-    await click([...m.container.querySelectorAll('[role="tab"]')].find((t) => t.textContent === 'Contracts'));
-    await upload('Contract Number,Name,Type,Funded Value,Ceiling Value,Start Date,End Date\nC-1,,FFP,1,2,2026-01-01,2026-12-31\n', 'contracts.csv');
-    expect(row(1).querySelectorAll('td')[1].textContent).toContain('Name is required');
-    expect(panel().querySelector('[title]')).toBeNull();
-  });
-
-  it('a server error on the first valid row is shown at its file row (employees and another wizard)', async () => {
-    actions.bulkImportEmployees.mockResolvedValueOnce({ ok: true, data: { created: 1, skipped: 0, errors: [{ row: 1, message: 'That employee already exists.' }], generatedPasswords: [] } });
-    m = await mount(<ImportClient />);
-    await upload(`${HEADER}\nBad,,employee,false\nAnn,ann@x.test,employee,false\nCat,cat@x.test,employee,true\n`);
-    await click(buttonByText('Import 2 Employees'));
-    await wait();
-    expect(panel().textContent).toContain('Row 2: That employee already exists.');
-
-    actions.bulkImportContracts.mockResolvedValueOnce({ ok: true, data: { created: 0, skipped: 0, errors: [{ row: 2, message: 'That contract already exists.' }] } });
-    await click([...m.container.querySelectorAll('[role="tab"]')].find((t) => t.textContent === 'Contracts'));
-    await upload('Contract Number,Name,Type,Funded Value,Ceiling Value,Start Date,End Date\nC-1,One,FFP,1,2,2026-01-01,2026-12-31\nC-2,,FFP,1,2,2026-01-01,2026-12-31\nC-3,Three,FFP,1,2,2026-01-01,2026-12-31\n', 'contracts.csv');
-    await click(buttonByText('Import 2 Valid Rows'));
-    await wait();
-    expect(panel().textContent).toContain('Row 3: That contract already exists.');
-  });
-
-  it('choosing another file while the import runs doesn\'t remap its errors', async () => {
-    let resolve!: (v: unknown) => void;
-    actions.bulkImportEmployees.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
-    m = await mount(<ImportClient />);
-    await upload(`${HEADER}\nBad,,employee,false\nAnn,ann@x.test,employee,false\n`);
-    await click(buttonByText('Import 1 Employee'));
-    await upload(`${HEADER}\nZed,zed@x.test,employee,false\n`, 'other.csv');   // the new file's first valid row is row 1
-    await act(async () => { resolve({ ok: true, data: { created: 0, skipped: 0, errors: [{ row: 1, message: 'That employee already exists.' }] } }); });
-    await wait();
-    expect(panel().textContent).toContain('Row 2: That employee already exists.');
-    expect(panel().textContent).not.toContain('Row 1: That employee already exists.');
+  it('another type (contracts) shows its problems the same way', async () => {
+    actions.bulkImportContracts.mockResolvedValueOnce({ ok: true, data: { created: 0, skipped: 0, errors: [{ row: 2, message: 'Type must be blank (prime), prime or sub.' }], skippedRows: [] } });
+    m = await mount(<ImportClient initialData={importPageData()} initialType="contracts" />);
+    await chooseFile('Contract Number,Name,Type\nC-1,One,FFP\nC-2,,prime\n', 'contracts.csv');
+    expect(checkRow(2).textContent).toContain('Type must be blank (prime), prime or sub.');
+    expect(checkRow(3).textContent).toContain('Name is required');
   });
 });

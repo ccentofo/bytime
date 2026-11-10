@@ -39,8 +39,8 @@ describe('nav-config (T2)', () => {
     expect(SETTINGS_NAV.map((l) => [l.label, l.href])).toEqual([
       ['Setup checklist', '/settings/setup'],   // SU-7: the first Settings item (feature-plan-ux-setup-import.md P1)
       ['Workspace', '/settings/workspace'], ['Pay schedule', '/settings/pay-schedule'], ['Billing', '/settings/billing'],
-      ['Integrations', '/settings/integrations'], ['API keys', '/settings/api-keys'], ['Data import', '/settings/import'],
-      ['Timesheet history import', '/settings/migration'],
+      ['Integrations', '/settings/integrations'], ['API keys', '/settings/api-keys'],
+      ['Import', '/settings/import'],   // IM-13: one Import item (feature-plan-ux-setup-import.md P7)
     ]);
   });
 

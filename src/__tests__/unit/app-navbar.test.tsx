@@ -87,7 +87,7 @@ describe('AppNavbar — expanded (T3)', () => {
     nav.pathname = '/settings/integrations/quickbooks';
     await render({});
     expect(link('Back to the app')!.getAttribute('href')).toBe('/home');
-    expect([...m!.container.querySelectorAll('a')].map((a) => a.textContent)).toEqual(['Back to the app', 'Setup checklist', 'Workspace', 'Pay schedule', 'Billing', 'Integrations', 'API keys', 'Data import', 'Timesheet history import']);
+    expect([...m!.container.querySelectorAll('a')].map((a) => a.textContent)).toEqual(['Back to the app', 'Setup checklist', 'Workspace', 'Pay schedule', 'Billing', 'Integrations', 'API keys', 'Import']);
     expect(link('Integrations')!.getAttribute('aria-current')).toBe('page');
     expect(m!.container.querySelector('h1, h2, h3, h4, h5, h6')).toBeNull();
     expect(m!.container.textContent).toContain('Settings');
@@ -149,7 +149,7 @@ describe('AppNavbar — collapsed rail (T3)', () => {
     nav.pathname = '/settings/billing';
     await render({ collapsed: true });
     const links = [...m!.container.querySelectorAll('a')];
-    expect(links.map((a) => a.getAttribute('aria-label'))).toEqual(['Back to the app', 'Setup checklist', 'Workspace', 'Pay schedule', 'Billing', 'Integrations', 'API keys', 'Data import', 'Timesheet history import']);
+    expect(links.map((a) => a.getAttribute('aria-label'))).toEqual(['Back to the app', 'Setup checklist', 'Workspace', 'Pay schedule', 'Billing', 'Integrations', 'API keys', 'Import']);
     for (const a of links) expect(a.querySelector('svg'), a.getAttribute('aria-label') ?? '').not.toBeNull();
   });
 });

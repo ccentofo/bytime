@@ -12,7 +12,7 @@ const read = (f: string) => stripComments(readFileSync(f, 'utf8'));
 describe('"Returned", not "Rejected" (§3.3.6)', () => {
   it('Notifications, Migration and the submit guard', () => {
     expect(read('src/app/(app)/profile/notifications/NotificationsClient.tsx')).toContain('Receive an email when your timesheet is returned for corrections');
-    expect(read('src/app/(app)/settings/migration/MigrationClient.tsx')).toContain('Only submitted, approved or returned periods that ended before today are imported.');
+    expect(read('src/app/(app)/settings/import/import-types.ts')).toContain('Only submitted, approved or returned periods that ended before today are imported.');
     expect(read('src/server/actions/periods.ts')).toContain('Only draft or returned timesheets can be submitted.');
   });
 

@@ -1,5 +1,5 @@
 import {
-  IconArrowLeft, IconBuilding, IconCalendarTime, IconChecklist, IconCreditCard, IconDatabaseImport, IconHome, IconPlug,
+  IconArrowLeft, IconBuilding, IconCalendarTime, IconChecklist, IconCreditCard, IconHome, IconPlug,
   IconReportAnalytics, IconSettings, IconTableImport,
   IconAlertCircle, IconAlertTriangle, IconArrowsExchange, IconBan, IconBell, IconBriefcase, IconCalendarX, IconCash,
   IconChartBar, IconCheck, IconChevronDown, IconChevronRight, IconClock, IconCopy, IconCurrencyDollar, IconDots,
@@ -76,7 +76,6 @@ export const Icons = {
   apiKeys: IconKey,
   setup: IconListCheck,
   dataImport: IconTableImport,
-  historyImport: IconDatabaseImport,
 
   // Shell
   profile: IconUser,

@@ -3,7 +3,7 @@
 import { and, between, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
 import { getDb, getDbForWrite, type DbTx } from '@/db';
 import { importBatches, periodEvents, timesheetEntries, timesheetPeriods } from '@/db/schema';
-import { requireAdminFresh } from '@/lib/session';
+import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { isUniqueViolation } from '@/lib/db-errors';
 import { ConflictError } from '@/lib/errors';
 import { addDays, isAfter, isBefore, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
@@ -13,7 +13,7 @@ import { getTenantOrThrow } from '@/lib/tenant/context';
 import { lockEmployeeTimesheet, resolvePeriod } from '@/server/internal/periods';
 import { configAt } from '@/server/internal/pay-period-config';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
-import { assertImportWindowOpen, lockImportWindowExclusive } from '@/server/internal/import-window';
+import { assertImportWindowOpen, isImportWindowOpen, lockImportWindowExclusive, readImportWindowFacts } from '@/server/internal/import-window';
 import { validateMigrationDataInternal, validateMigrationPeriodsInternal } from '@/server/internal/migration';
 import {
   MIGRATION_INSERT_CHUNK,
@@ -40,6 +40,22 @@ import { userAction, type ActionResult } from '@/lib/action-result';
  * the import_batches row (final counts) → the rows that reference it. Imported rows are attributed to the importing
  * admin and labelled `source='migration'`; the file's author/dates are kept only as `original_metadata`.
  */
+
+/**
+ * The import window, up front (feature-plan-ux-setup-import.md P14): whether past timesheets can be imported now. Read
+ * only — no lock (the import re-checks under its lock). `open: null` when it can't be read (the control plane is down).
+ */
+export async function getImportWindowStatus(): Promise<{ open: boolean | null }> {
+  await requireAdmin();
+  try {
+    const db = await getDb();
+    const tenant = await getTenantOrThrow();
+    return { open: isImportWindowOpen(await readImportWindowFacts(db, tenant.id), new Date()) };
+  } catch (error) {
+    console.error('Import window status could not be read:', error);
+    return { open: null };
+  }
+}
 
 const RACE_MESSAGE = 'Some rows collided with timesheet data saved while the batch ran. Nothing in this batch was imported — validate the file again and retry.';
 

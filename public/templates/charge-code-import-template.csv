@@ -1,0 +1,5 @@
+Code,Name,Contract Number,CLIN Number,SLIN Number,Labor Category,Location,Billable,Description
+NAVAIR-0001-ONSITE,NAVAIR Base Year — Onsite,W58RGZ-21-C-0001,0001,,SE-III,onsite,Yes,
+NAVAIR-0001-TELEWORK,NAVAIR Base Year — Telework,W58RGZ-21-C-0001,0001,,,telework,Yes,
+NAVAIR-0002,NAVAIR Option Year 1,W58RGZ-21-C-0001,0002,,,,,
+DISA-0001,DISA Cyber Operations,HC1028-22-C-0015,0001,,,,No,Internal support only

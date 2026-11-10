@@ -63,8 +63,7 @@ export const SETTINGS_NAV: NavLeaf[] = [
   { label: 'Billing', href: '/settings/billing', icon: 'billing' },
   { label: 'Integrations', href: '/settings/integrations', icon: 'integrations', match: ['/settings/integrations'] },
   { label: 'API keys', href: '/settings/api-keys', icon: 'apiKeys' },
-  { label: 'Data import', href: '/settings/import', icon: 'dataImport' },
-  { label: 'Timesheet history import', href: '/settings/migration', icon: 'historyImport' },
+  { label: 'Import', href: '/settings/import', icon: 'dataImport' },   // feature-plan-ux-setup-import.md P7
 ];
 
 /** Where people land (UX-D3): admins and supervisors → Home; employees → Timesheet. The ONLY source. */

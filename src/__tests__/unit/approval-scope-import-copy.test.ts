@@ -10,15 +10,14 @@ import path from 'path';
 const ROOT = path.resolve(__dirname, '../../..');
 
 describe('the approval-scope import tab (S7)', () => {
-  const src = readFileSync(path.join(ROOT, 'src/app/(app)/settings/import/ImportClient.tsx'), 'utf8');
+  // feature-plan-ux-setup-import.md P8: the Import page's type list (the order is the numbered list).
+  const src = readFileSync(path.join(ROOT, 'src/app/(app)/settings/import/import-types.ts'), 'utf8');
 
-  it('the copy: what a row grants, the order note, the tab name', () => {
-    expect(src).toContain('description="Give supervisors approval scope on CLINs. Each row lets one supervisor approve employees on one CLIN."');
-    expect(src).toMatch(/importOrderNote="The supervisors must already exist/);
-    expect(src).toContain('<Tabs.Tab value="assignments">Approval scope</Tabs.Tab>');
+  it('the copy: what a row grants, the order note, the type name and its place in the order', () => {
+    expect(src).toContain("note: 'Give supervisors approval scope on CLINs. Each row lets one supervisor approve employees on one CLIN. The supervisors must already exist");
+    expect(src).toContain("kind: 'setup', key: 'approvalScope', n: 7, label: 'Approval scope'");
     expect(src).not.toContain('Bulk assign employees to CLINs');
-    expect(src).toContain('4. Labor Categories → 5. Approval scope');   // APPROVAL-SCOPE-AUDIT.md L8: the order banner
-    expect(src).not.toContain('5. CLIN assignments');
+    expect(src).not.toContain('CLIN assignments');
   });
 
   it('the template keeps the Email header and uses supervisor examples', () => {

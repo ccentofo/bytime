@@ -14,6 +14,7 @@ export const OLD_ADMIN_PATHS = [
   '/admin/settings', '/admin/billing', '/admin/integrations', '/admin/integrations/quickbooks', '/admin/integrations/gusto',
   '/admin/integrations/payroll-export', '/admin/api-keys', '/admin/import', '/admin/migration', '/admin/notifications',
   '/admin/setup',   // feature-plan-ux-setup-import.md P1
+  '/settings/migration',   // feature-plan-ux-setup-import.md P7 (now the Import page's Hours type)
 ];
 
 function files(dir: string): string[] {
@@ -55,7 +56,8 @@ describe('route moves (T1)', () => {
       ['/admin/integrations/:path*', '/settings/integrations/:path*'],
       ['/admin/api-keys', '/settings/api-keys'],
       ['/admin/import', '/settings/import'],
-      ['/admin/migration', '/settings/migration'],
+      ['/admin/migration', '/settings/import?type=hours'],   // IM-13 (feature-plan-ux-setup-import.md P7)
+      ['/settings/migration', '/settings/import?type=hours'],
       ['/admin/notifications', '/profile/notifications'],
       ['/settings', '/settings/workspace'],
       ['/admin/setup', '/settings/setup'],   // SU-7 (feature-plan-ux-setup-import.md P1)
