@@ -158,7 +158,7 @@ describe('Users server (UX-4c §5.1)', () => {
     expect((await logsFor(target.id)).map((l) => l.action)).toEqual(['password_reset']);
     const r = await expectOk(bulkImportEmployees([
       { email: `i1-${Date.now()}@bytime.dev`, name: 'Imp One', role: 'employee', flsaExempt: 'yes' },
-      { email: `i2-${Date.now()}@bytime.dev`, name: 'Imp Two', role: 'supervisor' },
+      { email: `i2-${Date.now()}@bytime.dev`, name: 'Imp Two', role: 'supervisor', flsaExempt: 'No' },
     ] as never));
     expect(r.created).toBe(2);
     const created = await db.select().from(schema.adminChangeLog).where(and(eq(schema.adminChangeLog.entity, 'user'), eq(schema.adminChangeLog.action, 'created')));

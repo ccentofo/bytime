@@ -58,6 +58,7 @@ const ALLOWLIST: Array<{ file: string; expr: string; why: string }> = [
   { file: 'src/server/internal/setup.ts', expr: 'connectionQ', why: 'a drizzle subquery builder in the Setup status\'s one combined statement (feature-plan-ux-setup-import.md §3.1)' },
   { file: 'src/server/internal/setup.ts', expr: 'clinsWithoutCodeQ', why: 'a drizzle subquery builder in the Setup status\'s one combined statement (feature-plan-ux-setup-import.md §3.1)' },
   { file: 'src/server/internal/setup.ts', expr: 'adminsWithAccessQ', why: 'a drizzle subquery builder in the Setup status\'s one combined statement (feature-plan-ux-setup-import.md §3.1)' },
+  { file: 'src/server/actions/import.ts', expr: 'UNREVIEWED_MIGRATED_SCOPE', why: 'the shared S6 review predicate as a select column: the approval-scope import says when a re-imported converted scope is kept (feature-plan-ux-setup-import.md §4.3)' },
   { file: 'src/server/internal/approval-scopes.ts', expr: 'UNREVIEWED_MIGRATED_SCOPE', why: 'the shared S6 review predicate as a select column, so a re-chosen converted row is kept (APPROVAL-SCOPE-AUDIT.md L4)' },
 ];
 

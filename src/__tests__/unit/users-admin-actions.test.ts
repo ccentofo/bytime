@@ -247,7 +247,7 @@ describe('adminResetPassword and the import (US-6 companion)', () => {
   it('bulkImportEmployees logs created per inserted user', async () => {
     db.onReturning('insert', users, [{ id: ID(10) }]);
     db.onReturning('insert', users, [{ id: ID(11) }]);
-    const r = await bulkImportEmployees([{ email: 'a@x.test', name: 'A', role: 'employee', flsaExempt: 'yes' }, { email: 'b@x.test', name: 'B', role: 'supervisor' }] as never);
+    const r = await bulkImportEmployees([{ email: 'a@x.test', name: 'A', role: 'employee', flsaExempt: 'yes' }, { email: 'b@x.test', name: 'B', role: 'supervisor', flsaExempt: 'No' }] as never);
     expect(r).toMatchObject({ ok: true, data: { created: 2 } });
     expect(logs().map((l) => [l.action, l.entityId, l.newValue])).toEqual([
       ['created', ID(10), { role: 'employee', flsaExempt: true }],

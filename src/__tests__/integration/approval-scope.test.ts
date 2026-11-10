@@ -292,12 +292,14 @@ describe('approval scope (feature-plan-approval-scope.md)', () => {
       expect(r.created).toBe(2);
       expect(r.skipped).toBe(1);
       expect(r.errors).toEqual([
-        { row: 2, message: `${emp.email} isn't an active supervisor, so they can't approve a CLIN.` },
-        { row: 3, message: 'Could not import this row.' },
-        { row: 6, message: 'User "Nobody@Bytime.dev" not found' },                               // L2: the trimmed value
-        { row: 7, message: `CLIN "9999" not found under contract "${k.contractNumber}"` },
-        { row: 8, message: `${off.email.toUpperCase()} isn't an active supervisor, so they can't approve a CLIN.` }, // L2: inactive supervisor
+        // Spreadsheet rows (feature-plan-ux-setup-import.md P11): the first data row is row 2.
+        { row: 3, message: `${emp.email} isn't an active supervisor, so they can't approve a CLIN.` },
+        { row: 4, message: 'Could not import this row.' },
+        { row: 7, message: 'User "Nobody@Bytime.dev" not found' },                               // L2: the trimmed value
+        { row: 8, message: `CLIN "9999" not found under contract "${k.contractNumber}"` },
+        { row: 9, message: `${off.email.toUpperCase()} isn't an active supervisor, so they can't approve a CLIN.` }, // L2: inactive supervisor
       ]);
+      expect(r.skippedRows).toEqual([{ row: 6, reason: 'Already approves this CLIN' }]);
       const rows = await scopeRows(sup.id);
       expect(rows.map((x) => [x.clinId, x.source]).sort()).toEqual([[c1.id, 'import'], [c3.id, 'import']].sort());
       expect((await scopeLogs()).map((l) => l.action)).toEqual(['granted', 'granted']);
@@ -305,6 +307,6 @@ describe('approval scope (feature-plan-approval-scope.md)', () => {
       await db().execute(sql.raw('DROP TRIGGER IF EXISTS test_scope_import_fail ON approval_scopes'));
       await db().execute(sql.raw('DROP FUNCTION IF EXISTS test_scope_import_fail()'));
     }
-    await expectFailure(bulkImportAssignments(Array.from({ length: 501 }, () => ({ email: sup.email, contractNumber: k.contractNumber, clinNumber: '0001' }))), 'validation', /^Import 500 rows or fewer at a time\.$/);
+    await expectFailure(bulkImportAssignments(Array.from({ length: 501 }, () => ({ email: sup.email, contractNumber: k.contractNumber, clinNumber: '0001' }))), 'validation', /^This file has 501 rows\. Split it into files of 500 rows or fewer\.$/);
   });
 });

@@ -9,6 +9,7 @@ import type { CalendarDate } from '@/lib/calendar-date';
 import { userAction } from '@/lib/action-result';
 import { UserFacingError } from '@/lib/errors';
 import { getContractsOverviewInternal, type ContractsOverview } from '@/server/internal/contracts-overview';
+import { validateContractInput, validateContractType } from '@/server/internal/setup-validators';
 
 export type Contract = Omit<typeof contracts.$inferSelect, 'startDate' | 'endDate'> & {
   startDate: CalendarDate | null;
@@ -29,17 +30,13 @@ export async function getContractsOverview(): Promise<ContractsOverview> {
 }
 
 const CONTRACT_STATUSES = ['active', 'inactive', 'closed'] as const;
-const CONTRACT_TYPES = ['prime', 'sub'] as const;
 
 /** Runtime checks the TypeScript types can't make (feature-plan-ux-kit-contracts.md §4.1.10). */
 function validStatus(value: unknown): (typeof CONTRACT_STATUSES)[number] {
   if (!(CONTRACT_STATUSES as readonly unknown[]).includes(value)) throw new UserFacingError('Invalid contract status.');
   return value as (typeof CONTRACT_STATUSES)[number];
 }
-function validType(value: unknown): (typeof CONTRACT_TYPES)[number] {
-  if (!(CONTRACT_TYPES as readonly unknown[]).includes(value)) throw new UserFacingError('Invalid contract type.');
-  return value as (typeof CONTRACT_TYPES)[number];
-}
+const validType = validateContractType;
 
 export async function getContractById(id: string): Promise<Contract | null> {
   await requireAdmin();
@@ -61,16 +58,8 @@ export async function createContract(data: {
   return userAction(async () => {
     await requireAdminFresh();
     const db = await getDbForWrite();
-    const validatedData = {
-      contractNumber: validateContractNumber(data.contractNumber),
-      name: validateStringLength(validateRequired(data.name, 'Contract name'), 'Contract name', 1, 255),
-      description: validateOptionalString(data.description, 'Description', 2000),
-      contractType: validType(data.contractType ?? 'prime'),
-      startDate: validateOptionalCalendarDate(data.startDate, 'Start date'),
-      endDate: validateOptionalCalendarDate(data.endDate, 'End date'),
-      fundedValue: validateMonetaryValue(data.fundedValue, 'Funded value'),
-      ceilingValue: validateMonetaryValue(data.ceilingValue, 'Ceiling value'),
-    };
+    // feature-plan-ux-setup-import.md §4.3: the same validator as the contract import.
+    const validatedData = validateContractInput(data);
     const rows = await db.insert(contracts).values(validatedData).returning();
     return rows[0];
   });

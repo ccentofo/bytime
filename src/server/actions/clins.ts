@@ -1,7 +1,8 @@
 'use server';
 
+import { validateClinInput } from '@/server/internal/setup-validators';
 import { getDb, getDbForWrite } from '@/db';
-import { clins, contracts } from '@/db/schema';
+import { clins } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { validateClinNumber, validateOptionalString, validateMonetaryValue, validateUUID } from '@/lib/validation';
@@ -25,15 +26,8 @@ export async function createClin(data: {
     // feature-plan-ux-kit-contracts.md §4.1.10: a real, active parent (C3: a closed contract takes no new CLINs).
     const contractId = validateUUID(data.contractId, 'Contract');
     const db = await getDbForWrite();
-    const [parent] = await db.select({ status: contracts.status }).from(contracts).where(eq(contracts.id, contractId));
-    if (!parent) throw new UserFacingError('That contract no longer exists.', 'not_found');
-    if (parent.status !== 'active') throw new UserFacingError("This contract isn't active. Reopen it before adding CLINs.");
-    const validatedData = {
-      contractId,
-      clinNumber: validateClinNumber(data.clinNumber),
-      description: validateOptionalString(data.description, 'Description', 2000),
-      fundedAmount: validateMonetaryValue(data.fundedAmount, 'Funded amount'),
-    };
+    // feature-plan-ux-setup-import.md §4.3: the same validator as the CLIN import (an active parent, number, money).
+    const validatedData = await validateClinInput(db, { ...data, contractId });
     const rows = await db.insert(clins).values(validatedData).returning();
     return rows[0];
   });
