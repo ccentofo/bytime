@@ -6,9 +6,13 @@ import { eq, and, inArray, isNull, sql } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { UserFacingError } from '@/lib/errors';
 import {
+  assertSlinOnClin,
   assignChargeCodeToUserInternal,
   createChargeCodeInternal,
   createCostClassInternal,
+  validCode,
+  validName,
+  validateChargeCodeInput,
   type ChargeCodeInput,
 } from '@/server/internal/charge-codes';
 import { userAction, type ActionResult } from '@/lib/action-result';
@@ -17,7 +21,7 @@ import type { CategoryChange } from '@/lib/labor-rates';
 import type { CalendarDate } from '@/lib/calendar-date';
 import { CHARGEABLE_CODE } from '@/server/internal/chargeable';
 import { validateOptionalString, validateUUID } from '@/lib/validation';
-import type { TenantWriter, ReadDb } from '@/db';
+import type { ReadDb } from '@/db';
 
 // ---------------------------------------------------------------------------
 // Cost Classes
@@ -94,29 +98,10 @@ export async function listChargeCodes() {
   return rows.map((r) => ({ ...r, categoryChanges: byCode.get(r.id) ?? [] }));
 }
 
-// ── Validation (feature-plan-ux-people-codes.md §3.4): in the actions, not createChargeCodeInternal, so the QBO import
-// keeps its own rules. ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── Validation: validCode / validName / assertSlinOnClin / validateChargeCodeInput live in internal/charge-codes.ts,
+// shared with the charge-code import (feature-plan-ux-setup-import.md §4.3). ──────────────────────────────────────────
 
-function validCode(value: unknown): string {
-  const code = typeof value === 'string' ? value.trim() : '';
-  if (!code) throw new UserFacingError('Enter a code.');
-  if (code.length > 100) throw new UserFacingError('The code must be 100 characters or fewer.');
-  return code;
-}
-function validName(value: unknown): string {
-  const name = typeof value === 'string' ? value.trim() : '';
-  if (!name) throw new UserFacingError('Enter a name.');
-  if (name.length > 255) throw new UserFacingError('The name must be 255 characters or fewer.');
-  return name;
-}
 const optionalUuid = (value: unknown, field: string) => (value === undefined || value === null || value === '' ? undefined : validateUUID(value, field));
-
-/** The SLIN (if any) must sit on the CLIN — checked on the EFFECTIVE pair, after an update is merged. */
-async function assertSlinOnClin(tx: TenantWriter, clinId: string, slinId: string | null | undefined) {
-  if (!slinId) return;
-  const [slin] = await tx.select({ clinId: slins.clinId }).from(slins).where(eq(slins.id, slinId));
-  if (!slin || slin.clinId !== clinId) throw new UserFacingError("That SLIN isn't on the chosen CLIN.");
-}
 
 export async function createChargeCode(data: ChargeCodeInput) {
   return userAction(async () => {
@@ -124,23 +109,17 @@ export async function createChargeCode(data: ChargeCodeInput) {
     const db = await getDbForWrite();
     if (!data?.clinId) throw new UserFacingError('Choose a CLIN.');
     const clinId = validateUUID(data.clinId, 'CLIN');
-    const input: ChargeCodeInput = {
-      code: validCode(data.code),
-      name: validName(data.name),
-      description: validateOptionalString(data.description, 'Description', 2000),
-      clinId,
-      slinId: optionalUuid(data.slinId, 'SLIN'),
-      laborCategoryId: optionalUuid(data.laborCategoryId, 'Labor category'),
-      classId: optionalUuid(data.classId, 'Class'),
-      workLocation: data.workLocation,
-      billable: data.billable,
-    };
     return db.transaction(async (tx) => {
-      // A new code goes on an active CLIN of an active contract.
-      const [clin] = await tx.select({ clinStatus: clins.status, contractStatus: contracts.status })
-        .from(clins).innerJoin(contracts, eq(clins.contractId, contracts.id)).where(eq(clins.id, clinId));
-      if (!clin || clin.clinStatus !== 'active' || clin.contractStatus !== 'active') throw new UserFacingError('Choose an active CLIN.');
-      await assertSlinOnClin(tx, clinId, input.slinId);
+      // The shared rules (feature-plan-ux-setup-import.md §4.3): lengths, an active CLIN of an active contract, the SLIN
+      // on it, the work location's values and the labor category's fit.
+      const input = await validateChargeCodeInput(tx, {
+        code: data.code, name: data.name, description: data.description, clinId,
+        slinId: optionalUuid(data.slinId, 'SLIN'),
+        laborCategoryId: optionalUuid(data.laborCategoryId, 'Labor category'),
+        classId: optionalUuid(data.classId, 'Class'),
+        workLocation: data.workLocation,
+        billable: data.billable,
+      });
       return createChargeCodeInternal(tx, input);
     });
   });

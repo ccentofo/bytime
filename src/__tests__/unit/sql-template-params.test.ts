@@ -43,6 +43,7 @@ const ALLOWLIST: Array<{ file: string; expr: string; why: string }> = [
   { file: 'src/server/internal/team-period-status.ts', expr: 'tz', why: 'the workspace timezone NAME for AT TIME ZONE (a string; UX-2 §4.5.2)' },
   { file: 'src/server/internal/past-periods.ts', expr: 'userId', why: 'the session user id (a UUID string), bound as a parameter: an interpolated column renders unqualified in a single-table select (UX-3 fix round 2, M3)' },
   { file: 'src/server/internal/team-period-status.ts', expr: 'periodEnd', why: "a 'YYYY-MM-DD' calendar-date string, cast ::date (UX-2 §4.5.2)" },
+  { file: 'src/server/actions/import.ts', expr: 'CHARGEABLE_CODE', why: 'the shared chargeable SQL fragment as a select column: the access import refuses a code that can\'t be charged (feature-plan-ux-setup-import.md §4.3)' },
   { file: 'src/server/actions/charge-codes.ts', expr: 'CHARGEABLE_CODE', why: 'the shared chargeable SQL fragment (internal/chargeable.ts) as a select column (UX-4c §3.2)' },
   { file: 'src/server/actions/audit.ts', expr: 'AUDIT_LATE_ROW', why: 'the shared "late row" SQL fragment (internal/audit-export.ts) in a COUNT FILTER (UX-4c R3)' },
   { file: 'src/server/actions/audit.ts', expr: 'tz', why: 'the workspace timezone NAME for AT TIME ZONE (a string; UX-4c §6.4)' },

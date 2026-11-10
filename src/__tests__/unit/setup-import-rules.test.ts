@@ -79,7 +79,7 @@ describe('P11–P13 rules', () => {
 describe('static: every setup import is a dry-runnable transaction', () => {
   const ROOT = path.resolve(__dirname, '../../..');
   const fns = parseExportedFunctions(stripComments(readFileSync(path.join(ROOT, 'src/server/actions/import.ts'), 'utf8')));
-  const SETUP_IMPORTS = ['bulkImportEmployees', 'bulkImportContracts', 'bulkImportClins', 'bulkImportLaborCategories', 'bulkImportAssignments'];
+  const SETUP_IMPORTS = ['bulkImportEmployees', 'bulkImportContracts', 'bulkImportClins', 'bulkImportLaborCategories', 'bulkImportChargeCodes', 'bulkImportChargeCodeAccess', 'bulkImportAssignments'];
 
   it('each one wraps its transaction in catchDryRun( and ends it with throwIfDryRun( (or scopeChange(…, { dryRun })', () => {
     for (const name of SETUP_IMPORTS) {

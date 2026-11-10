@@ -1,7 +1,7 @@
 'use server';
 
 import { getDbForWrite, type DbTx } from '@/db';
-import { users, contracts, clins, laborCategories, approvalScopes } from '@/db/schema';
+import { users, contracts, clins, slins, laborCategories, approvalScopes, chargeCodes, userChargeCodes } from '@/db/schema';
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import { requireAdminFresh } from '@/lib/session';
 import { assertSeatsAvailable } from '@/server/internal/seats';
@@ -14,6 +14,8 @@ import bcrypt from 'bcryptjs';
 import { importRowMessage, parseImportDate } from '@/server/internal/import-errors';
 import { catchDryRun, throwIfDryRun } from '@/server/internal/import-run';
 import { validateClinInput, validateContractInput, validateLaborCategoryInput } from '@/server/internal/setup-validators';
+import { assignChargeCodeToUserInternal, createChargeCodeInternal, validateChargeCodeInput } from '@/server/internal/charge-codes';
+import { CHARGEABLE_CODE } from '@/server/internal/chargeable';
 import { userAction, type ActionResult } from '@/lib/action-result';
 import { validateEmail, validateRequired, validateStringLength } from '@/lib/validation';
 import { logAdminChange } from '@/server/internal/admin-change-log';
@@ -381,5 +383,134 @@ export async function bulkImportAssignments(rows: WithRow<AssignmentImportRow>[]
     }, { dryRun }));
     if (!dryRun) await notifyReroutedApprovals(rerouted);
     return done;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Charge codes
+// ---------------------------------------------------------------------------
+
+export interface ChargeCodeImportRow {
+  code: string;
+  name: string;
+  contractNumber: string;
+  clinNumber: string;
+  slinNumber?: string;
+  laborCategory?: string;
+  location?: string;
+  billable?: string;
+  description?: string;
+}
+
+/** P12: Billable Yes / No (True / False too); blank → billable. */
+function parseBillable(value: unknown): boolean {
+  const v = text(value).toLowerCase();
+  if (v === '' || v === 'yes' || v === 'true') return true;
+  if (v === 'no' || v === 'false') return false;
+  throw new UserFacingError('Billable must be Yes or No.');
+}
+
+/**
+ * The charge-code type (§4.3): the numbers resolve to the CLIN (and SLIN on it), the LCAT code to an active category on
+ * that CLIN; then the same rules as createChargeCode (validateChargeCodeInput: lengths, active CLIN, SLIN on CLIN, the
+ * Location values, the category's fit). An existing code is skipped.
+ */
+export async function bulkImportChargeCodes(rows: WithRow<ChargeCodeImportRow>[], options: ImportOptions = {}): Promise<ActionResult<ImportResult>> {
+  return userAction(async () => {
+    await requireAdminFresh();
+    assertRows('chargeCodes', rows);
+    const dryRun = options?.dryRun === true;
+    const db = await getDbForWrite();
+    const result = emptyResult();
+    const screened = screenRows(rows, result);
+    return catchDryRun(db.transaction(async (tx) => {
+      for (const { row, rowNo } of screened) {
+        await runRow(tx, result, rowNo, 'That charge code already exists.', dryRun, async (sp) => {
+          const code = text(row.code);
+          if (code) {
+            const [existing] = await sp.select({ id: chargeCodes.id }).from(chargeCodes).where(eq(chargeCodes.code, code));
+            if (existing) return { skipped: SKIP_REASON.chargeCode };
+          }
+          const contractNumber = text(row.contractNumber);
+          const clinNumber = text(row.clinNumber);
+          const [clin] = await sp.select({ id: clins.id }).from(clins).innerJoin(contracts, eq(clins.contractId, contracts.id))
+            .where(and(eq(contracts.contractNumber, contractNumber), eq(clins.clinNumber, clinNumber)));
+          if (!clin) throw new UserFacingError(`CLIN "${clinNumber}" not found under contract "${contractNumber}"`);
+          const slinNumber = text(row.slinNumber);
+          let slinId: string | null = null;
+          if (slinNumber) {
+            const [slin] = await sp.select({ id: slins.id }).from(slins).where(and(eq(slins.clinId, clin.id), eq(slins.slinNumber, slinNumber)));
+            if (!slin) throw new UserFacingError(`SLIN "${slinNumber}" isn't on CLIN ${clinNumber}.`);
+            slinId = slin.id;
+          }
+          const lcatCode = text(row.laborCategory);
+          let laborCategoryId: string | null = null;
+          if (lcatCode) {
+            const [category] = await sp.select({ id: laborCategories.id }).from(laborCategories)
+              .where(and(eq(laborCategories.clinId, clin.id), eq(laborCategories.lcatCode, lcatCode), eq(laborCategories.status, 'active')));
+            if (!category) throw new UserFacingError(`Labor category "${lcatCode}" isn't on CLIN ${clinNumber}.`);
+            laborCategoryId = category.id;
+          }
+          const input = await validateChargeCodeInput(sp, {
+            code, name: text(row.name), description: text(row.description) || undefined, clinId: clin.id, slinId, laborCategoryId,
+            workLocation: text(row.location).toLowerCase() || null,
+            billable: parseBillable(row.billable),
+          });
+          await createChargeCodeInternal(sp, input);
+          return { created: true };
+        });
+      }
+      return throwIfDryRun(dryRun, byRow(result));
+    }));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Charge code access
+// ---------------------------------------------------------------------------
+
+export interface ChargeCodeAccessImportRow {
+  email: string;
+  chargeCode: string;
+}
+
+/**
+ * The charge-code access type (§4.3): an active person and a code that can be charged (CHARGEABLE_CODE). Access already
+ * held is skipped; otherwise assignChargeCodeToUserInternal (which also upserts the CLIN membership row), as
+ * assignChargeCodesToUser does.
+ */
+export async function bulkImportChargeCodeAccess(rows: WithRow<ChargeCodeAccessImportRow>[], options: ImportOptions = {}): Promise<ActionResult<ImportResult>> {
+  return userAction(async () => {
+    const actor = await requireAdminFresh();
+    assertRows('chargeCodeAccess', rows);
+    const dryRun = options?.dryRun === true;
+    const db = await getDbForWrite();
+    const result = emptyResult();
+    const screened = screenRows(rows, result);
+    return catchDryRun(db.transaction(async (tx) => {
+      for (const { row, rowNo } of screened) {
+        await runRow(tx, result, rowNo, 'That access already exists.', dryRun, async (sp) => {
+          const shownEmail = text(row.email);
+          const code = text(row.chargeCode);
+          const [user] = await sp.select({ id: users.id, isActive: users.isActive }).from(users).where(eq(users.email, shownEmail.toLowerCase()));
+          if (!user) throw new UserFacingError(`User "${shownEmail}" not found`);
+          if (!user.isActive) throw new UserFacingError(`${shownEmail} isn't active, so they can't be given access.`);
+          const [found] = await sp.select({ id: chargeCodes.id, chargeable: sql<boolean>`${CHARGEABLE_CODE}`.mapWith(Boolean) })
+            .from(chargeCodes)
+            .innerJoin(clins, eq(chargeCodes.clinId, clins.id))
+            .innerJoin(contracts, eq(clins.contractId, contracts.id))
+            .leftJoin(slins, eq(chargeCodes.slinId, slins.id))
+            .where(eq(chargeCodes.code, code));
+          if (!found) throw new UserFacingError(`Charge code "${code}" not found`);
+          if (!found.chargeable) throw new UserFacingError(`${code} can't be charged right now.`);
+          const [held] = await sp.select({ id: userChargeCodes.id }).from(userChargeCodes)
+            .where(and(eq(userChargeCodes.userId, user.id), eq(userChargeCodes.chargeCodeId, found.id), eq(userChargeCodes.isActive, true)));
+          if (held) return { skipped: SKIP_REASON.access };
+          await assignChargeCodeToUserInternal(sp, actor.id, user.id, found.id);
+          return { created: true };
+        });
+      }
+      return throwIfDryRun(dryRun, byRow(result));
+    }));
   });
 }

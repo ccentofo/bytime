@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { count, eq, sql } from 'drizzle-orm';
 import * as schema from '@/db/schema';
-import { getTestDb, createTestUser, createTestContract, createTestClin, cleanupTestData, expectOk, expectFailure } from './helpers';
+import { getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, cleanupTestData, expectOk, expectFailure } from './helpers';
 import type { ActionResult } from '@/lib/action-result';
 
 /**
@@ -19,6 +19,12 @@ import type { ActionResult } from '@/lib/action-result';
  * IM-17 a CLIN onto an inactive contract is refused (shared validator); the contract-number validator is applied.
  * IM-21 "1,000,000" Funded Value refused with the plain-number message (nothing saved); a rate "1,450.00" refused.
  * IM-22 a NUL in a People email → that row errors in the check and the import; the other rows proceed.
+ * IM-7  Charge codes: SLIN not on the CLIN, inactive CLIN, bad Location, a labor category not on the CLIN (or not on the
+ *       code's SLIN) → errors; an existing code → skipped; success inserts (with IM-1/2/16).
+ * IM-8  Charge code access: an inactive user, a code that can't be charged → errors; already held → skipped; success
+ *       creates the access and the CLIN membership row (with IM-1/2/16).
+ * IM-14 the shared validator: createChargeCode and the import both refuse a bad Location with the new message (not a
+ *       Postgres enum error); createChargeCode now refuses a labor category that doesn't fit.
  * (IM-18, 501 approval-scope rows: approval-scope.test.ts AS-12.)
  */
 
@@ -44,18 +50,22 @@ vi.mock('@/lib/email/send', () => ({
 }));
 
 import {
-  bulkImportAssignments, bulkImportClins, bulkImportContracts, bulkImportEmployees, bulkImportLaborCategories, type ImportResult,
+  bulkImportAssignments, bulkImportChargeCodeAccess, bulkImportChargeCodes, bulkImportClins, bulkImportContracts, bulkImportEmployees,
+  bulkImportLaborCategories, type ImportResult,
 } from '@/server/actions/import';
+import { createChargeCode } from '@/server/actions/charge-codes';
 
 const db = () => getTestDb();
 const stamp = () => `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
 
 async function counts() {
-  const n = async (t: typeof schema.users | typeof schema.contracts | typeof schema.clins | typeof schema.laborCategories | typeof schema.approvalScopes | typeof schema.adminChangeLog) =>
-    Number((await db().select({ n: count() }).from(t))[0].n);
+  type Counted = typeof schema.users | typeof schema.contracts | typeof schema.clins | typeof schema.laborCategories | typeof schema.approvalScopes
+    | typeof schema.adminChangeLog | typeof schema.chargeCodes | typeof schema.userChargeCodes | typeof schema.userAssignments;
+  const n = async (t: Counted) => Number((await db().select({ n: count() }).from(t))[0].n);
   return {
     users: await n(schema.users), contracts: await n(schema.contracts), clins: await n(schema.clins),
     laborCategories: await n(schema.laborCategories), approvalScopes: await n(schema.approvalScopes), log: await n(schema.adminChangeLog),
+    chargeCodes: await n(schema.chargeCodes), access: await n(schema.userChargeCodes), memberships: await n(schema.userAssignments),
   };
 }
 
@@ -204,6 +214,96 @@ describe('setup imports: the check (dry run) and the import (§4.3)', () => {
     expect(held.map((r) => r.clinId).sort()).toEqual([c1.id, c2.id, c3.id].sort());
     const [kept] = await db().select().from(schema.approvalScopes).where(eq(schema.approvalScopes.id, converted.id));
     expect(kept.reviewedAt).not.toBeNull();
+  });
+});
+
+describe('the new types: charge codes and charge code access (§4.3)', () => {
+  /** Contract K: CLIN 0001 (SLINs A and A2; categories SE, SA2 on A2), CLIN 0002 (SLIN B; category OT), CLIN 0003 inactive. */
+  async function world() {
+    const k = await createTestContract({ contractNumber: `KCC-${stamp()}` });
+    const [c1, c2] = [await createTestClin(k.id, { clinNumber: '0001' }), await createTestClin(k.id, { clinNumber: '0002' })];
+    await createTestClin(k.id, { clinNumber: '0003', status: 'inactive' });
+    const [a, a2] = await db().insert(schema.slins).values([{ clinId: c1.id, slinNumber: 'A' }, { clinId: c1.id, slinNumber: 'A2' }]).returning();
+    await db().insert(schema.slins).values({ clinId: c2.id, slinNumber: 'B' });
+    const lcats = await db().insert(schema.laborCategories).values([
+      { clinId: c1.id, lcatCode: 'SE', title: 'Engineer', hourlyRate: '100.00', status: 'active' },
+      { clinId: c1.id, slinId: a2.id, lcatCode: 'SA2', title: 'On A2', hourlyRate: '100.00', status: 'active' },
+      { clinId: c2.id, lcatCode: 'OT', title: 'Other CLIN', hourlyRate: '100.00', status: 'active' },
+    ]).returning();
+    return { k, c1, c2, a, a2, lcats };
+  }
+
+  it('IM-7 (+1/2/16): errors, the skip and the inserts; the check matches the import', async () => {
+    const { k, c1, a, lcats } = await world();
+    await createTestChargeCode(c1.id, { code: 'CC-OLD' });
+    const row = (o: Record<string, unknown> & { code: string }) => ({ contractNumber: k.contractNumber, clinNumber: '0001', name: 'Code', ...o });
+    const rows = [
+      row({ row: 2, code: 'CC-1', slinNumber: 'A', laborCategory: 'SE', location: 'Telework', billable: 'No', description: 'First' }),
+      row({ row: 3, code: 'CC-2', slinNumber: 'B' }),
+      row({ row: 4, code: 'CC-3', clinNumber: '0003' }),
+      row({ row: 5, code: 'CC-4', location: 'home' }),
+      row({ row: 6, code: 'CC-5', laborCategory: 'OT' }),
+      row({ row: 7, code: 'CC-OLD' }),
+      row({ row: 8, code: 'CC-6' }),
+      row({ row: 9, code: 'CC-7', slinNumber: 'A', laborCategory: 'SA2' }),
+      row({ row: 10, code: 'CC-8', billable: 'maybe' }),
+    ];
+    const { real, before } = await checkThenImport((o) => bulkImportChargeCodes(rows, o));
+    expect(real).toMatchObject({ created: 2, skipped: 1 });
+    expect(real.errors).toEqual([
+      { row: 3, message: 'SLIN "B" isn\'t on CLIN 0001.' },
+      { row: 4, message: 'Choose an active CLIN.' },
+      { row: 5, message: 'Location must be Onsite, Telework or Other.' },
+      { row: 6, message: 'Labor category "OT" isn\'t on CLIN 0001.' },
+      { row: 9, message: 'That labor category belongs to a different CLIN or SLIN than this charge code.' },
+      { row: 10, message: 'Billable must be Yes or No.' },
+    ]);
+    expect(real.skippedRows).toEqual([{ row: 7, reason: 'Code already exists' }]);
+    expect((await counts()).chargeCodes).toBe(before.chargeCodes + 2);
+    const [one] = await db().select().from(schema.chargeCodes).where(eq(schema.chargeCodes.code, 'CC-1'));
+    expect([one.clinId, one.slinId, one.laborCategoryId, one.workLocation, one.billable, one.description]).toEqual([c1.id, a.id, lcats[0].id, 'telework', false, 'First']);
+    const [six] = await db().select().from(schema.chargeCodes).where(eq(schema.chargeCodes.code, 'CC-6'));
+    expect([six.slinId, six.laborCategoryId, six.workLocation, six.billable]).toEqual([null, null, null, true]);
+  });
+
+  it('IM-8 (+1/2/16): inactive user and an uncharged code refused; held skipped; access and membership created', async () => {
+    const { c1 } = await world();
+    const emp = await createTestUser({ role: 'employee', email: `acc-emp-${stamp()}@bytime.dev` });
+    const gone = await createTestUser({ role: 'employee', isActive: false, email: `acc-off-${stamp()}@bytime.dev` });
+    const open = await createTestChargeCode(c1.id, { code: 'CC-OPEN' });
+    await createTestChargeCode(c1.id, { code: 'CC-SHUT', isActive: false });
+    const held = await createTestChargeCode(c1.id, { code: 'CC-HELD' });
+    await db().insert(schema.userChargeCodes).values({ userId: emp.id, chargeCodeId: held.id, isActive: true, assignedBy: admin.id });
+    const rows = [
+      { row: 2, email: emp.email.toUpperCase(), chargeCode: 'CC-OPEN' },
+      { row: 3, email: gone.email, chargeCode: 'CC-OPEN' },
+      { row: 4, email: emp.email, chargeCode: 'CC-SHUT' },
+      { row: 5, email: emp.email, chargeCode: 'CC-HELD' },
+      { row: 6, email: emp.email, chargeCode: 'NOPE' },
+    ];
+    const { real, before } = await checkThenImport((o) => bulkImportChargeCodeAccess(rows, o));
+    expect(real).toMatchObject({ created: 1, skipped: 1 });
+    expect(real.errors).toEqual([
+      { row: 3, message: `${gone.email} isn't active, so they can't be given access.` },
+      { row: 4, message: 'CC-SHUT can\'t be charged right now.' },
+      { row: 6, message: 'Charge code "NOPE" not found' },
+    ]);
+    expect(real.skippedRows).toEqual([{ row: 5, reason: 'Already has access to this code' }]);
+    const after = await counts();
+    expect([after.access, after.memberships]).toEqual([before.access + 1, before.memberships + 1]);
+    const [access] = await db().select().from(schema.userChargeCodes).where(eq(schema.userChargeCodes.chargeCodeId, open.id));
+    expect([access.userId, access.isActive]).toEqual([emp.id, true]);
+    const [member] = await db().select().from(schema.userAssignments).where(eq(schema.userAssignments.userId, emp.id));
+    expect(member.clinId).toBe(c1.id);
+  });
+
+  it('IM-14: createChargeCode refuses a bad Location with the new message and a labor category that doesn\'t fit', async () => {
+    const { c1, lcats } = await world();
+    await expectFailure(createChargeCode({ code: 'CC-LOC', name: 'Loc', clinId: c1.id, workLocation: 'home' as never }), 'validation', /^Location must be Onsite, Telework or Other\.$/);
+    await expectFailure(createChargeCode({ code: 'CC-FIT', name: 'Fit', clinId: c1.id, laborCategoryId: lcats[2].id }), 'validation', /^That labor category belongs to a different CLIN or SLIN than this charge code\.$/);
+    expect((await counts()).chargeCodes).toBe(0);
+    // The same rules still let a good code through.
+    await expectOk(createChargeCode({ code: 'CC-OK', name: 'Ok', clinId: c1.id, laborCategoryId: lcats[0].id, workLocation: 'onsite' }));
   });
 });
 

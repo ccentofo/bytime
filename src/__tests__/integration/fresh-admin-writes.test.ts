@@ -3,7 +3,7 @@ import { getTestDb, createTestUser, cleanupTestData } from './helpers';
 import * as schema from '@/db/schema';
 
 /**
- * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4): each of the 43 admin-only writes (incl. the 6
+ * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4): each of the 45 admin-only writes (incl. the 6
  * OAuth-token-refreshing mapping readers) refuses a session whose JWT still says admin while the users row now says
  * supervisor — the real requireAdminFresh() re-reads the role from the tenant DB. Nothing is written.
  */
@@ -38,10 +38,11 @@ import * as qbo from '@/server/actions/qbo';
 import * as gusto from '@/server/actions/gusto';
 import * as slins from '@/server/actions/slins';
 import * as users from '@/server/actions/users';
+import * as importActions from '@/server/actions/import';
 
 const call = (fn: unknown, ...args: unknown[]) => (fn as (...a: unknown[]) => Promise<unknown>)(...args);
 
-/** Refused by the fresh role check: every one of the 43 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
+/** Refused by the fresh role check: every one of the 45 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
 async function expectRefused(pending: Promise<unknown>): Promise<void> {
   expect(await pending).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/access has changed/i) });
 }
@@ -93,9 +94,12 @@ const ADMIN_WRITES: Array<[string, unknown, unknown[]]> = [
   ['addChargeCodeCategoryChange', ccats.addChargeCodeCategoryChange, [{ chargeCodeId: 'cc1', effectiveDate: '2027-01-01', laborCategoryId: 'l1' }]],
   ['correctChargeCodeCategory', ccats.correctChargeCodeCategory, [{ chargeCodeId: 'cc1', target: 'starting', laborCategoryId: null }]],
   ['removeChargeCodeCategoryChange', ccats.removeChargeCodeCategoryChange, [{ chargeCodeId: 'cc1', changeId: 'x' }]],
+  // feature-plan-ux-setup-import.md §4.3: the two new import types
+  ['bulkImportChargeCodes', importActions.bulkImportChargeCodes, [[{ code: 'X-FRESH', name: 'X', contractNumber: 'K', clinNumber: '0001' }]]],
+  ['bulkImportChargeCodeAccess', importActions.bulkImportChargeCodeAccess, [[{ email: 'a@x.dev', chargeCode: 'X' }]]],
 ];
 
-describe('the 43 admin-only writes refuse a JWT-admin whose DB role is supervisor (P3)', () => {
+describe('the 45 admin-only writes refuse a JWT-admin whose DB role is supervisor (P3)', () => {
   beforeAll(async () => {
     await cleanupTestData();
     const demoted = await createTestUser({ role: 'supervisor' }); // DB truth: supervisor
@@ -106,8 +110,8 @@ describe('the 43 admin-only writes refuse a JWT-admin whose DB role is superviso
     await cleanupTestData();
   });
 
-  it('covers exactly 43 actions', () => {
-    expect(ADMIN_WRITES).toHaveLength(43);
+  it('covers exactly 45 actions', () => {
+    expect(ADMIN_WRITES).toHaveLength(45);
   });
 
   it.each(ADMIN_WRITES)('%s', async (_name, fn, args) => {
