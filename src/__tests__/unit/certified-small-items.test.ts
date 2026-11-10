@@ -121,10 +121,11 @@ describe('demo seeder conformance (seed-full.ts, reused by seed:demo)', () => {
     expect(seed).toMatch(/submissionCount: returnedOnce \? 2 : status !== 'draft' \? 1 : 0/);
   });
 
-  it('approvals follow C2: supervisors by their designated approver (admin), employees by a supervisor sharing a CLIN', () => {
+  it('approvals follow C2: supervisors by their designated approver (admin), employees by a supervisor whose approval scope covers their CLIN', () => {
     expect(seed).toMatch(/const reviewedBy = status === 'approved' \? reviewerFor\(emp\.id\) : null;/);
     expect(seed).toMatch(/if \(supervisorIds\.includes\(employeeId\)\) return userIds\.admin;/);
-    expect(seed).toMatch(/preferred\.find\(\(s\) => \[\.\.\.clinsOf\(s\)\]\.some\(\(c\) => mine\.has\(c\)\)\)/);
+    // feature-plan-approval-scope.md §6: the reviewer's approval_scopes grants, not their CLIN membership.
+    expect(seed).toMatch(/preferred\.find\(\(s\) => \[\.\.\.scopeOf\(s\)\]\.some\(\(c\) => mine\.has\(c\)\)\)/);
     expect(seed.match(/role: 'supervisor', passwordHash: hash, isActive: true, flsaExempt: true, approverId: userIds\.admin/g)).toHaveLength(2);
     expect(seed).not.toMatch(/\? userIds\.mike : userIds\.sarah\)\s*: null/); // the old peer / self approval
   });

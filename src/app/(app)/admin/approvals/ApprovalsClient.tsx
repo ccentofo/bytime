@@ -515,9 +515,11 @@ export function ApprovalsClient({ initialPeriods, currentUserId, userRole, scope
       {userRole === 'supervisor' && scopeInfo && scopeInfo.approvableEmployeeCount + scopeInfo.designatedByCount === 0 && (
         <Paper withBorder p="xl" ta="center" radius="md" mb="md">
           <Text size="lg" c="dimmed" mb="sm">No employees in your scope</Text>
-          <Text size="sm" c="dimmed">
-            You are not assigned to any CLINs and nobody has designated you as their approver, so there are no
-            timesheets you can review. Contact your administrator to get assigned to the appropriate contracts and CLINs.
+          {/* feature-plan-approval-scope.md §5: approval scope comes only from Assignments → Approval scope. */}
+          <Text size="sm" c="dimmed" data-testid="scope-empty">
+            {scopeInfo.assignedClinCount === 0
+              ? "You don't approve any CLINs yet. An admin can add them on Assignments → Approval scope."
+              : 'Nobody works on the CLINs you approve yet, and nobody has designated you as their approver, so there are no timesheets you can review.'}
           </Text>
         </Paper>
       )}

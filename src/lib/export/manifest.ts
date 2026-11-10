@@ -109,6 +109,7 @@ export function buildReadme(manifest: ExportManifest): string {
   for (const t of EXPORT_TABLES) {
     lines.push(`### ${t.file}.csv`);
     lines.push('');
+    if (t.summary) lines.push(t.summary, '');
     for (const c of t.columns) lines.push(`- \`${c.header}\`: ${c.description}`);
     lines.push('');
   }

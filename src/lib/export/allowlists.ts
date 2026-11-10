@@ -19,6 +19,7 @@ import {
   laborCategoryRates,
   chargeCodeLaborCategories,
   userAssignments,
+  approvalScopes,
   userChargeCodes,
   userLaborCategories,
   payPeriodConfig,
@@ -54,6 +55,8 @@ export interface ExportTableConfig {
   table: PgTable;
   /** `expr`: a DERIVED column (computed in the export query, not stored) — its `key` is the header. */
   columns: { key: string; header: string; description: string; expr?: SQL }[];
+  /** One line under the file's README heading saying what the table holds (optional). */
+  summary?: string;
 }
 
 /** A derived (computed, read-only) column appended after a table's real columns. */
@@ -82,9 +85,10 @@ const COMMON_DESCRIPTIONS: Record<string, string> = {
   completeness_snapshot: 'JSON snapshot of the completeness / total-time warnings shown at submission (advisory only; blank if none).',
 };
 
-function table<T extends PgTable>(file: string, t: T, columns: ExportColumn<T>[], derived: DerivedColumn[] = []): ExportTableConfig {
+function table<T extends PgTable>(file: string, t: T, columns: ExportColumn<T>[], derived: DerivedColumn[] = [], summary?: string): ExportTableConfig {
   return {
     file,
+    ...(summary ? { summary } : {}),
     table: t,
     columns: [
       ...columns.map((c) => ({
@@ -245,6 +249,17 @@ export const EXPORT_TABLES: ExportTableConfig[] = [
     { key: 'assignedAt', header: 'assigned_at' },
     { key: 'assignedBy', header: 'assigned_by' },
   ]),
+  // feature-plan-approval-scope.md §3: approval scope is its own table (user_assignments is CLIN membership only).
+  table('approval_scopes', approvalScopes, [
+    { key: 'id', header: 'id' },
+    { key: 'supervisorId', header: 'supervisor_id', description: 'The supervisor who approves employees on this CLIN (users.csv id).' },
+    { key: 'clinId', header: 'clin_id', description: 'The contract line item they approve (clins.csv id).' },
+    { key: 'isActive', header: 'is_active', description: 'true while the supervisor approves this CLIN; false once the scope was removed.' },
+    { key: 'source', header: 'source', description: 'How it was granted: app (Assignments or Users), import, or migration (converted from earlier CLIN assignments).' },
+    { key: 'grantedAt', header: 'granted_at', description: 'When the scope was granted (UTC).' },
+    { key: 'grantedBy', header: 'granted_by', description: 'Who granted it (users.csv id); blank only for converted rows with no recorded assigner.' },
+    { key: 'reviewedAt', header: 'reviewed_at', description: 'When an admin granted, kept or removed it (UTC); blank for a converted scope nobody has reviewed yet.' },
+  ], [], 'Who approves which CLINs, and who granted it.'),
   table('user_charge_codes', userChargeCodes, [
     { key: 'id', header: 'id' },
     { key: 'userId', header: 'user_id' },

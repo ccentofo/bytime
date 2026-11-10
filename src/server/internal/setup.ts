@@ -28,7 +28,7 @@ export interface SetupStatus {
 /**
  * Setup status (feature-plan-ux-navigation-home.md §4.7, UX-AUDIT B1): counts what actually makes a timesheet usable.
  * A direct timesheet row appears only for an active `user_charge_codes` assignment to a chargeable code, so that — not
- * CLIN assignments (`user_assignments`, approval scope) — is what "charge code access" counts. INTERNAL, no guard: used
+ * CLIN membership (`user_assignments`) — is what "charge code access" counts. INTERNAL, no guard: used
  * by Home (which authorizes) and the admin-guarded getSetupStatus() action. No cache() — callers run it once.
  */
 export async function getSetupStatusInternal(): Promise<SetupStatus> {

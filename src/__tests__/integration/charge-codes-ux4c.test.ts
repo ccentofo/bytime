@@ -5,7 +5,7 @@ import { getTestDb, createTestUser, createTestContract, createTestClin, createTe
 
 /**
  * feature-plan-ux-people-codes.md §3.2–§3.4: CC-4 (peopleCount and chargeable), CC-6 (Create codes from CLINs), CC-7
- * (create / update checks), AS-3 (assignChargeCodesToUser) and AS-8 (assignUserToClin), against Postgres.
+ * (create / update checks), AS-3 (assignChargeCodesToUser) and AS-8 (now grantApprovalScope, feature-plan-approval-scope.md), against Postgres.
  */
 
 // ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@ vi.mock('@/lib/email/send', () => ({
 
 // Imports AFTER the mocks — vitest hoists vi.mock, so this is safe at module top level.
 import { assignChargeCodesToUser, autobridgeChargeCodesFromClins, createChargeCode, listChargeCodes, previewAutobridgeChargeCodes, updateChargeCode } from '@/server/actions/charge-codes';
-import { assignUserToClin } from '@/server/actions/assignments';
+import { grantApprovalScope } from '@/server/actions/assignments';
 import { and } from 'drizzle-orm';
 
 function actingAs(user: { id: string; role: string; email: string; fullName: string }) {
@@ -218,14 +218,15 @@ describe('Charge codes (UX-4c §3)', () => {
     expect(clinRow.isActive).toBe(true);
   });
 
-  it('AS-8: assignUserToClin refuses an inactive person and a non-supervisor', async () => {
+  it('AS-8: grantApprovalScope refuses an inactive person and a non-supervisor', async () => {
     const clin = await createTestClin((await createTestContract()).id);
     const off = await createTestUser({ role: 'supervisor', isActive: false });
     const emp = await createTestUser({ role: 'employee' });
     const sup = await createTestUser({ role: 'supervisor' });
-    await expectFailure(assignUserToClin({ userId: off.id, clinId: clin.id }), 'validation', /^Choose an active supervisor\.$/);
-    await expectFailure(assignUserToClin({ userId: emp.id, clinId: clin.id }), 'validation', /^Choose an active supervisor\.$/);
-    const row = await expectOk(assignUserToClin({ userId: sup.id, clinId: clin.id }));
-    expect([row.isActive, row.slinId]).toEqual([true, null]);
+    await expectFailure(grantApprovalScope({ supervisorId: off.id, clinIds: [clin.id] }), 'validation', /^Choose an active supervisor\.$/);
+    await expectFailure(grantApprovalScope({ supervisorId: emp.id, clinIds: [clin.id] }), 'validation', /^Choose an active supervisor\.$/);
+    expect(await expectOk(grantApprovalScope({ supervisorId: sup.id, clinIds: [clin.id] }))).toEqual({ granted: 1 });
+    const rows = await getTestDb().select().from(schema.approvalScopes).where(eq(schema.approvalScopes.supervisorId, sup.id));
+    expect(rows.map((r) => [r.clinId, r.isActive])).toEqual([[clin.id, true]]);
   });
 });

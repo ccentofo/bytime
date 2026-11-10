@@ -119,8 +119,8 @@ const WRITE_GATE_AUTH_ALLOWLIST: Record<string, { names: string[]; reason: strin
 const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
   'api-keys.ts': { getApiKeys: 'lists key metadata (name/prefix/dates); no write' },
   'assignments.ts': {
-    getAssignments: 'reads CLIN assignments for the admin table; no write',
-    getAssignmentsForUser: 'reads one user\'s CLIN assignments; no write',
+    getApprovalScopesView: 'feature-plan-approval-scope.md §4.2: reads the active approval scopes (with the S6 review flag) and CLIN membership; no write',
+    getApprovalClinOptions: 'feature-plan-approval-scope.md §4.2: reads active CLINs on active contracts for the approval pickers; no write',
   },
   'billing.ts': { getTenantBillingInfo: 'reads the control-plane billing fields; no write' },
   'charge-codes.ts': {

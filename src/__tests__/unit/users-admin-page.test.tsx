@@ -152,6 +152,28 @@ describe('Add user (US-8)', () => {
     expect(actions.create).toHaveBeenCalledWith({ email: 'priya@x.test', fullName: 'Priya N', role: 'employee', password: 'harbor-light', flsaExempt: true, approverId: null });
   });
 
+  it('AS-15: Add user as a supervisor shows "CLINs they approve" and sends the chosen ids (an employee sends none)', async () => {
+    m = await mount(<UsersClient initialUsers={PEOPLE as never} currentUserId="me" seats={{ active: 4, limit: 10 }}
+      approvalClins={[{ clinId: 'clin-1', clinNumber: '0001', clinDescription: null, contractId: 'k1', contractName: 'NAVAIR' }]} />);
+    await wait(10);
+    await click(buttonByText('Add user'));
+    const drawer = dialogTitled('Add user')!;
+    expect(drawer.querySelector('[data-testid="approval-clins"]')).toBeNull();
+    const role = field(drawer, 'Role')!;
+    await click(role);
+    await click([...document.getElementById(role.getAttribute('aria-controls')!)!.querySelectorAll('[role="option"]')].find((o) => o.textContent?.startsWith('Supervisor')));
+    const picker = field(drawer, 'CLINs they approve')!;
+    await click(picker);
+    await click([...document.body.querySelectorAll('[role="option"]')].find((o) => o.textContent === 'NAVAIR CLIN 0001'));
+    await setValue(field(drawer, 'Full name')!, 'Sue Pervisor');
+    await setValue(field(drawer, 'Email')!, 'sue@x.test');
+    await setValue(field(drawer, 'Temporary password')!, 'harbor-light');
+    await click(drawer.querySelector('input[type="radio"][value="exempt"]'));
+    await click([...drawer.querySelectorAll('button')].find((b) => b.textContent === 'Add user'));
+    await wait(10);
+    expect(actions.create).toHaveBeenCalledWith(expect.objectContaining({ role: 'supervisor', approvalClinIds: ['clin-1'] }));
+  });
+
   it('a server error goes in the same Alert', async () => {
     actions.create.mockResolvedValueOnce({ ok: false, code: 'conflict', error: 'A user with that email already exists.' });
     await render();

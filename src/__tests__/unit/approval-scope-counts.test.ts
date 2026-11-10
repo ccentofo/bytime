@@ -30,6 +30,7 @@ describe('supervisor scope counts (UX-2 ruling)', () => {
         ['A', user('A', 'admin')],
       ]),
       clinsByUser: new Map([['S', new Set(['c1'])], ['E', new Set(['c1'])], ['P', new Set(['c1'])]]),
+      scopeClinsBySupervisor: new Map([['S', new Set(['c1'])]]),       // S approves on c1 (approval_scopes)
     };
     h.facts = facts;
     const info = await getSupervisorScopeInfo('S');
@@ -43,6 +44,7 @@ describe('supervisor scope counts (UX-2 ruling)', () => {
     const facts: ApprovalFacts = {
       users: new Map([['S', user('S', 'supervisor')], ['E', user('E', 'supervisor', 'S')]]),
       clinsByUser: new Map([['S', new Set(['c1'])], ['E', new Set(['c1'])]]),
+      scopeClinsBySupervisor: new Map([['S', new Set(['c1'])]]),
     };
     h.facts = facts;
     expect(await getSupervisorScopeInfo('S')).toMatchObject({ approvableEmployeeCount: 0, designatedByCount: 1 });

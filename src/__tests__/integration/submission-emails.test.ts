@@ -7,6 +7,7 @@ import {
   createTestContract,
   createTestClin,
   assignUserToClin,
+  assignApprovalScope,
   cleanupTestData,
   flushAfter,
   expectOk,
@@ -109,12 +110,15 @@ describe('Submission notifications are scoped (R2-10)', () => {
 
     const inScopeSupervisor = await createTestUser({ role: 'supervisor' });
     await assignUserToClin(inScopeSupervisor.id, scopedClin.id);
+    await assignApprovalScope(inScopeSupervisor.id, scopedClin.id); // feature-plan-approval-scope.md S2: explicit scope
 
     const outOfScopeSupervisor = await createTestUser({ role: 'supervisor' });
     await assignUserToClin(outOfScopeSupervisor.id, otherClin.id);
+    await assignApprovalScope(outOfScopeSupervisor.id, otherClin.id);
 
     const inactiveInScopeSupervisor = await createTestUser({ role: 'supervisor', isActive: false });
     await assignUserToClin(inactiveInScopeSupervisor.id, scopedClin.id);
+    await assignApprovalScope(inactiveInScopeSupervisor.id, scopedClin.id); // inactive: still never notified
 
     const inactiveAdmin = await createTestUser({ role: 'admin', isActive: false });
     const activeAdmin = await createTestUser({ role: 'admin' });

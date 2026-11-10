@@ -9,7 +9,8 @@ import { seedReviewReadFixture, REVIEW_START } from './review-read-fixture';
  * feature-plan-ux-approvals-payroll.md §3.1.5 / A-4: getTimesheetForReview against real Postgres on the review-read
  * fixture — periodId (null with no row) and numDays; the flagged cells with their history, originallyLate and
  * sinceReturned; lastReturn only when submitted more than once; and the QUERY COUNT: the baseline recorded on the code
- * before Part 2 was 13 (ux4b2 recorder, 2026-11-04); passing numDays down removes the two period-length reads → 11.
+ * before Part 2 was 13 (ux4b2 recorder, 2026-11-04); passing numDays down removes the two period-length reads → 11;
+ * feature-plan-approval-scope.md §9: the one approval-facts load reads approval_scopes too (+1) → 12.
  * getTimesheetPeriod and getTimesheetEntries still return plain TimesheetEntry[] (no revision chains).
  */
 
@@ -50,14 +51,14 @@ describe('getTimesheetForReview (A-4)', () => {
     return f;
   }
 
-  it('the query count is the recorded baseline − 2', async () => {
+  it('the query count is the recorded baseline − 2, + 1 for approval_scopes', async () => {
     const { rob } = await asAdmin();
     h.counted = countingDb(getTestDb());
     await getTimesheetForReview(rob.id, REVIEW_START);
     const n = h.counted.counter.n;
     h.counted = null;
-    expect(n).toBe(BASELINE_QUERIES - 2);
-    expect(n).toBe(11);
+    expect(n).toBe(BASELINE_QUERIES - 2 + 1);
+    expect(n).toBe(12);
   });
 
   it('periodId, numDays, submit note; flagged cells with history; originallyLate; sinceReturned; lastReturn', async () => {

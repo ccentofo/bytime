@@ -14,16 +14,57 @@ import {
   type ApprovalFacts, type ApprovalUser, type EligibilitySnapshot,
 } from '@/server/internal/approval-rules';
 
-type Spec = Partial<ApprovalUser> & { id: string; clins?: string[] };
+/**
+ * `clins` = active CLIN membership; `scope` = active approval scope (feature-plan-approval-scope.md S1). The C2-era
+ * fixtures predate the split: for a supervisor without an explicit `scope`, their `clins` are also their scope (what
+ * the 0018 backfill does). AS-4 / AS-5 pass `scope` explicitly.
+ */
+type Spec = Partial<ApprovalUser> & { id: string; clins?: string[]; scope?: string[] };
 function facts(...specs: Spec[]): ApprovalFacts {
   const users = new Map<string, ApprovalUser>();
   const clinsByUser = new Map<string, Set<string>>();
+  const scopeClinsBySupervisor = new Map<string, Set<string>>();
   for (const s of specs) {
     users.set(s.id, { id: s.id, role: s.role ?? 'employee', isActive: s.isActive ?? true, approverId: s.approverId ?? null });
     if (s.clins?.length) clinsByUser.set(s.id, new Set(s.clins));
+    const scope = s.scope ?? (s.role === 'supervisor' ? s.clins : undefined);
+    if (scope?.length) scopeClinsBySupervisor.set(s.id, new Set(scope));
   }
-  return { users, clinsByUser };
+  return { users, clinsByUser, scopeClinsBySupervisor };
 }
+
+describe('approval scope only from explicit grants (feature-plan-approval-scope.md S2, S3)', () => {
+  it('AS-4: two supervisors charging the same CLIN with no scope — neither approves nor sees the other\'s employees', () => {
+    const f = facts(
+      { id: 'supA', role: 'supervisor', clins: ['c1'], scope: [] },
+      { id: 'supB', role: 'supervisor', clins: ['c1'], scope: [] },
+      { id: 'empA', role: 'employee', clins: ['c1'] },
+      { id: 'empB', role: 'employee', clins: ['c1'] },
+    );
+    for (const sup of ['supA', 'supB']) {
+      expect(canApprove(f, sup, 'empA'), sup).toBe(false);
+      expect(canApprove(f, sup, 'empB'), sup).toBe(false);
+      expect(reviewScopeFrom(f, sup), sup).toEqual([sup]);
+    }
+    expect(eligibleApprovers(f, 'empA')).toEqual([]);
+  });
+
+  it('AS-5: scope on X — sees a peer supervisor who charges X but can\'t approve them; approves an employee on X', () => {
+    const f = facts(
+      { id: 'sup', role: 'supervisor', scope: ['x'] },
+      { id: 'peer', role: 'supervisor', clins: ['x'], scope: [] },
+      { id: 'emp', role: 'employee', clins: ['x'] },
+      { id: 'away', role: 'employee', clins: ['y'] },
+    );
+    expect([...(reviewScopeFrom(f, 'sup') as string[])].sort()).toEqual(['emp', 'peer', 'sup']);
+    expect(canApprove(f, 'sup', 'peer')).toBe(false);
+    expect(canApprove(f, 'sup', 'emp')).toBe(true);
+    expect(canApprove(f, 'sup', 'away')).toBe(false);
+    // The supervisor's own membership never widens what they see (S3): charging Y adds nobody.
+    const g = facts({ id: 'sup', role: 'supervisor', clins: ['y'], scope: ['x'] }, { id: 'away', role: 'employee', clins: ['y'] });
+    expect(reviewScopeFrom(g, 'sup')).toEqual(['sup']);
+  });
+});
 
 describe('effectiveDesignee', () => {
   it('honoured only for supervisor/admin users, and only while the designee is an active admin/supervisor', () => {

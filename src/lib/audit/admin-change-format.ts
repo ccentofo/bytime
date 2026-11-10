@@ -26,7 +26,7 @@ type Table = { [E in AdminChangeEntity]: Record<AdminChangeReadAction<E>, Descri
 
 const ENTITY_NAMES: Record<string, string> = {
   self_approval: 'Self-approval', charge_code: 'Charge code', workspace_settings: 'Workspace', charge_code_labor_category: 'Charge code',
-  user: 'User', labor_category_rate: 'Labor category',
+  user: 'User', labor_category_rate: 'Labor category', approval_scope: 'Approval scope',
 };
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const ROLE: Record<string, string> = { admin: 'Admin', supervisor: 'Supervisor', employee: 'Employee' };
@@ -54,6 +54,11 @@ const rateChange = (verb: string): Describe => (row, names) => {
   const from = date(n.effectiveDate ?? o.effectiveDate);
   const rates = money(o.hourlyRate) && money(n.hourlyRate) ? `${money(o.hourlyRate)} → ${money(n.hourlyRate)}` : money(n.hourlyRate) ?? money(o.hourlyRate);
   return { change: `Rate ${verb}`, details: join(subject(row, names), rates, from && `from ${from}`) + reason(n) };
+};
+/** feature-plan-approval-scope.md §4.2: "{supervisor} · {contract} CLIN {n}" from the row's `{ supervisorId, clinId }`. */
+const scopeChange = (change: string): Describe => (row, names) => {
+  const v = obj(row.newValue);
+  return { change, details: join(nameOf(names, v.supervisorId), nameOf(names, v.clinId)) };
 };
 const simple = (change: string): Describe => (row, names) => ({ change, details: subject(row, names) });
 /** UX-4C1-AUDIT.md L7: self-approval rows carry a recorded system reason (e.g. "Pat Doe added (admin)") — shown as is. */
@@ -93,9 +98,14 @@ export const ADMIN_CHANGE_TEXT: Table = {
       details: join(subject(row, names), `${nameOf(names, obj(row.oldValue).approverId, 'None (admins approve)')} → ${nameOf(names, obj(row.newValue).approverId, 'None (admins approve)')}`),
     }),
     role_changed: (row, names) => {
-      const clinIds = obj(row.newValue).clinIds;
-      const clins = Array.isArray(clinIds) && clinIds.length > 0 ? `approves on ${clinIds.map((id) => nameOf(names, id)).join(', ')}` : null;
-      return { change: 'Role changed', details: join(subject(row, names), `${ROLE[String(obj(row.oldValue).role)] ?? 'Unknown'} → ${ROLE[String(obj(row.newValue).role)] ?? 'Unknown'}`, clins) };
+      const { clinIds, membershipRemoved } = obj(row.newValue);
+      // feature-plan-approval-scope.md §4.2: a promotion records the CLINs chosen (possibly none); a demotion the CLIN rows
+      // removed because no charge code backed them (S10).
+      const clins = Array.isArray(clinIds)
+        ? (clinIds.length > 0 ? `approves on ${clinIds.map((id) => nameOf(names, id)).join(', ')}` : 'approves no CLINs yet')
+        : null;
+      const left = Array.isArray(membershipRemoved) && membershipRemoved.length > 0 ? `no longer on ${membershipRemoved.map((id) => nameOf(names, id)).join(', ')}` : null;
+      return { change: 'Role changed', details: join(subject(row, names), `${ROLE[String(obj(row.oldValue).role)] ?? 'Unknown'} → ${ROLE[String(obj(row.newValue).role)] ?? 'Unknown'}`, clins, left) };
     },
     deactivated: simple('User deactivated'),
     reactivated: simple('User reactivated'),
@@ -114,6 +124,11 @@ export const ADMIN_CHANGE_TEXT: Table = {
     rate_change_added: rateChange('change added'),
     rate_corrected: rateChange('corrected'),
     rate_change_removed: rateChange('change removed'),
+  },
+  approval_scope: {
+    granted: scopeChange('Approval scope added'),
+    removed: scopeChange('Approval scope removed'),
+    kept: scopeChange('Approval scope kept'),
   },
 };
 

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as schema from '@/db/schema';
 import type { CalendarDate } from '@/lib/calendar-date';
-import { getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, assignUserToClin, cleanupTestData } from './helpers';
+import { getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, assignUserToClin, assignApprovalScope, cleanupTestData } from './helpers';
 
 /**
  * feature-plan-ux-navigation-home.md §4.5.2 / T8: team status buckets over one period — active users only; people
@@ -86,6 +86,7 @@ describe('team period status (T8)', () => {
     const e1 = await user('Eve One');
     await user('Out Side');
     for (const u of [sup, peer, e1]) await assignUserToClin(u.id, clinId);
+    await assignApprovalScope(sup.id, clinId); // feature-plan-approval-scope.md S2: explicit scope
     const scope = approvableScope(await loadApprovalFacts(db()), sup.id);
     expect(scope).toEqual([e1.id]);
     const s = await teamPeriodStatus(db(), START, 15, scope, TZ);

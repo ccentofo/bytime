@@ -6,7 +6,7 @@ import * as schema from '@/db/schema';
 import { getPeriodStartForDate, navigatePeriod, DEFAULT_PERIOD_CONFIG } from '@/lib/date-utils';
 import { addDays, todayIn, type CalendarDate } from '@/lib/calendar-date';
 import {
-  getTestDb, createTestUser, createTestContract, createTestClin, assignUserToClin, cleanupTestData, expectOk, expectFailure, flushAfter,
+  getTestDb, createTestUser, createTestContract, createTestClin, assignUserToClin, assignApprovalScope, cleanupTestData, expectOk, expectFailure, flushAfter,
 } from './helpers';
 
 /**
@@ -90,6 +90,7 @@ describe('approver rules (certified-outputs C2)', () => {
     const supB = await createTestUser({ role: 'supervisor' });
     const emp = await createTestUser({ role: 'employee' });
     for (const u of [supA, supB, emp]) await assignUserToClin(u.id, clin.id);
+    await assignApprovalScope(supA.id, clin.id);                                   // feature-plan-approval-scope.md S2
     const peerPeriod = await submittedPeriod(supB);
     const empPeriod = await submittedPeriod(emp);
 

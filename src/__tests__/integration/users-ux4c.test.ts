@@ -104,7 +104,7 @@ describe('Users server (UX-4c §5.1)', () => {
     expect(await attemptsFor(admin.email)).toHaveLength(before);
   });
 
-  it('US-4: only changed fields are logged (promotion to admin and FLSA included); a promotion to supervisor lists their active CLIN ids; name-only → no log', async () => {
+  it('US-4: only changed fields are logged (promotion to admin and FLSA included); a promotion to supervisor lists the CLINs chosen (feature-plan-approval-scope.md §4.2); name-only → no log', async () => {
     const db = getTestDb();
     const pat = await createTestUser({ role: 'employee', flsaExempt: false });
     const clin = await createTestClin((await createTestContract()).id);
@@ -112,14 +112,15 @@ describe('Users server (UX-4c §5.1)', () => {
     await db.insert(schema.userAssignments).values([{ userId: pat.id, clinId: clin.id, isActive: true }, { userId: pat.id, clinId: off.id, isActive: false }]);
     await expectOk(updateUser(pat.id, { fullName: 'Pat Renamed' }));
     expect(await logsFor(pat.id)).toHaveLength(0);
-    await expectOk(updateUser(pat.id, { role: 'supervisor' }));
+    await expectOk(updateUser(pat.id, { role: 'supervisor', approvalClinIds: [clin.id] }));
     await expectOk(updateUser(pat.id, { role: 'admin' }));
     await expectOk(updateUser(pat.id, { flsaExempt: true }));
     await expectOk(updateUser(pat.id, { flsaExempt: true }));                                // unchanged → no log
     const logs = (await logsFor(pat.id)).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
     expect(logs.map((l) => [l.action, l.oldValue, l.newValue])).toEqual([
       ['role_changed', { role: 'employee' }, { role: 'supervisor', clinIds: [clin.id] }],
-      ['role_changed', { role: 'supervisor' }, { role: 'admin' }],
+      // Leaving supervisor: their CLIN row on `clin` had no charge code behind it, so it goes (S10).
+      ['role_changed', { role: 'supervisor' }, { role: 'admin', membershipRemoved: [clin.id] }],
       ['flsa_changed', { flsaExempt: false }, { flsaExempt: true }],
     ]);
   });

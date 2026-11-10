@@ -26,6 +26,7 @@ export async function clearTenantData(db: PostgresJsDatabase<any>): Promise<void
     await tx.delete(schema.userChargeCodes);
     await tx.delete(schema.chargeCodes);
     await tx.delete(schema.costClasses);
+    await tx.delete(schema.approvalScopes); // feature-plan-approval-scope.md §3: references users and clins
     await tx.delete(schema.userAssignments);
     await tx.delete(schema.userLaborCategories);
     await tx.delete(schema.laborCategoryRates); // dated rates: before their categories

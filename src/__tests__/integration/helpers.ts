@@ -85,6 +85,19 @@ export async function assignUserToClin(userId: string, clinId: string) {
   return assignment;
 }
 
+/**
+ * feature-plan-approval-scope.md S1: give a supervisor approval scope on a CLIN (test setup only — the app writes
+ * approval_scopes through internal/approval-scopes.ts). `assignUserToClin` above is CLIN MEMBERSHIP, which never grants
+ * approval.
+ */
+export async function assignApprovalScope(supervisorId: string, clinId: string, overrides: Partial<typeof schema.approvalScopes.$inferInsert> = {}) {
+  const db = getTestDb();
+  const [row] = await db.insert(schema.approvalScopes).values({
+    supervisorId, clinId, isActive: true, source: 'app', reviewedAt: new Date(), ...overrides,
+  }).returning();
+  return row;
+}
+
 export async function createTestIndirectCode(overrides: Partial<typeof schema.indirectChargeCodes.$inferInsert> = {}) {
   const db = getTestDb();
   const [code] = await db.insert(schema.indirectChargeCodes).values({

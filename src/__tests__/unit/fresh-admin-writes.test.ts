@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 /**
- * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4), unit form: each of the 42 admin-only writes (incl. the
+ * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4), unit form: each of the 43 admin-only writes (incl. the
  * 6 OAuth-token-refreshing mapping readers) authorizes with requireAdminFresh(), never the cached requireAdmin().
  * The session is a stale JWT-admin: requireAdmin() admits it, requireAdminFresh() — which re-reads the DB role —
  * refuses it (DB role is now supervisor). The integration form against a real users row is
@@ -52,15 +52,16 @@ import * as users from '@/server/actions/users';
 type AnyAction = (...args: never[]) => Promise<unknown>;
 const call = (fn: unknown, ...args: unknown[]) => (fn as (...a: unknown[]) => Promise<unknown>)(...args);
 
-/** Refused by the fresh role check: every one of the 42 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
+/** Refused by the fresh role check: every one of the 43 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
 async function expectRefused(pending: Promise<unknown>): Promise<void> {
   expect(await pending).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/access has changed/i) });
 }
 
-/** The 42 (feature-plan-launch-blockers.md §1 "Roles" + §4 P3). */
+/** The 43 (feature-plan-launch-blockers.md §1 "Roles" + §4 P3). */
 const ADMIN_WRITES: Array<[string, AnyAction | unknown, unknown[]]> = [
-  ['assignUserToClin', assignments.assignUserToClin, ['u2', 'c1']],
-  ['unassignUserFromClin', assignments.unassignUserFromClin, ['u2', 'c1']],
+  ['grantApprovalScope', assignments.grantApprovalScope, [{ supervisorId: 'u2', clinIds: ['c1'] }]],
+  ['revokeApprovalScope', assignments.revokeApprovalScope, [{ supervisorId: 'u2', clinId: 'c1' }]],
+  ['reviewMigratedScopes', assignments.reviewMigratedScopes, [{ keep: ['s1'], remove: [] }]],
   ['createCostClass', chargeCodes.createCostClass, ['Gov']],
   ['createChargeCode', chargeCodes.createChargeCode, [{ code: 'X', name: 'X', clinId: 'c1' }]],
   ['updateChargeCode', chargeCodes.updateChargeCode, ['cc1', { name: 'Y' }]],
@@ -105,9 +106,9 @@ const ADMIN_WRITES: Array<[string, AnyAction | unknown, unknown[]]> = [
   ['removeChargeCodeCategoryChange', ccats.removeChargeCodeCategoryChange, [{ chargeCodeId: 'cc1', changeId: 'x' }]],
 ];
 
-describe('the 42 admin-only writes refuse a stale JWT-admin (requireAdminFresh)', () => {
-  it('covers exactly 42 actions, all exported', () => {
-    expect(ADMIN_WRITES).toHaveLength(42);
+describe('the 43 admin-only writes refuse a stale JWT-admin (requireAdminFresh)', () => {
+  it('covers exactly 43 actions, all exported', () => {
+    expect(ADMIN_WRITES).toHaveLength(43);
     for (const [name, fn] of ADMIN_WRITES) expect(typeof fn, name).toBe('function');
   });
 

@@ -55,7 +55,7 @@ import bcrypt from 'bcryptjs';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { SQL } from 'drizzle-orm';
 import * as dbModule from '@/db';
-import { adminChangeLog, loginAttempts, userAssignments, users } from '@/db/schema';
+import { adminChangeLog, approvalScopes, clins, loginAttempts, userAssignments, users } from '@/db/schema';
 import type { FakeControlDb } from '../helpers/fake-control-db';
 import { createUserWithPassword, getUsers, getUsersForAdminPage, updateUser } from '@/server/actions/users';
 import { adminResetMfa } from '@/server/actions/mfa';
@@ -173,14 +173,20 @@ describe('adminResetMfa (US-3 companion)', () => {
 describe('updateUser logs (US-4 companion)', () => {
   const safe = (o: Record<string, unknown>) => ({ id: ID(3), email: 'p@x', fullName: 'Pat', role: 'employee', isActive: true, flsaExempt: false, approverId: null, createdAt: new Date(), updatedAt: new Date(), ...o });
 
-  it('a promotion to supervisor logs role_changed with their active CLIN ids', async () => {
+  it('a promotion to supervisor logs role_changed with the CLINs CHOSEN (feature-plan-approval-scope.md §4.2), not their membership', async () => {
+    const [A, B] = [ID(22), ID(21)];
     db.onSelect(users, [{ role: 'employee', isActive: true, flsaExempt: false }]);   // the old values
+    db.onSelect(clins, [{ id: A }, { id: B }]);                                         // both active, on active contracts
     db.onReturning('update', users, [safe({ role: 'supervisor' })]);
-    db.onSelect(userAssignments, []);                                                  // loadApprovalFacts (before the update)
-    db.onSelect(userAssignments, [{ clinId: 'clin-b' }, { clinId: 'clin-a' }]);
-    expect(await updateUser(ID(3), { role: 'supervisor' })).toMatchObject({ ok: true });
-    expect(logs().map((l) => [l.action, l.oldValue, l.newValue])).toEqual([['role_changed', { role: 'employee' }, { role: 'supervisor', clinIds: ['clin-a', 'clin-b'] }]]);
-    expect(viaTx()).toEqual(['tx', 'tx']);                                             // M2
+    db.onSelect(userAssignments, [{ userId: ID(3), clinId: ID(29) }]);                  // membership elsewhere: never their scope
+    db.onReturning('insert', approvalScopes, [{ id: ID(31), supervisorId: ID(3), clinId: A }, { id: ID(32), supervisorId: ID(3), clinId: B }]);
+    expect(await updateUser(ID(3), { role: 'supervisor', approvalClinIds: [A, B] })).toMatchObject({ ok: true });
+    expect(logs().map((l) => [l.action, l.newValue])).toEqual([
+      ['granted', { supervisorId: ID(3), clinId: A }],
+      ['granted', { supervisorId: ID(3), clinId: B }],
+      ['role_changed', { role: 'supervisor', clinIds: [B, A] }],
+    ]);
+    expect(viaTx()).toEqual(['tx', 'tx', 'tx', 'tx']);                                 // M2
   });
 
   it('overtime and active state log their own action; a name-only edit logs nothing; a missing user is not_found', async () => {

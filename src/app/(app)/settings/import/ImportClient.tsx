@@ -483,7 +483,7 @@ export function ImportClient() {
       <PageHeader title="Data import" />
       <Alert icon={<IconAlertCircle size={16} />} color="signal" variant="light" mb="lg">
         <Text size="sm" fw={600}>Import Order — follow these steps in order:</Text>
-        <Text size="sm">1. Employees → 2. Contracts → 3. CLINs → 4. Labor Categories → 5. CLIN assignments</Text>
+        <Text size="sm">1. Employees → 2. Contracts → 3. CLINs → 4. Labor Categories → 5. Approval scope</Text>
       </Alert>
 
       <Tabs defaultValue="employees">
@@ -492,7 +492,7 @@ export function ImportClient() {
           <Tabs.Tab value="contracts">Contracts</Tabs.Tab>
           <Tabs.Tab value="clins">CLINs</Tabs.Tab>
           <Tabs.Tab value="lcats">Labor Categories</Tabs.Tab>
-          <Tabs.Tab value="assignments">CLIN assignments (approval scope)</Tabs.Tab>
+          <Tabs.Tab value="assignments">Approval scope</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="employees">
@@ -556,8 +556,8 @@ export function ImportClient() {
 
         <Tabs.Panel value="assignments">
           <ImportWizard
-            title="CLIN assignments (approval scope)"
-            description="Bulk assign employees to CLINs. Duplicate assignments are skipped. This doesn't give anyone charge codes. Use Assignments → Charge code access for that."
+            title="Approval scope"
+            description="Give supervisors approval scope on CLINs. Each row lets one supervisor approve employees on one CLIN."
             templateUrl="/templates/assignment-import-template.csv"
             templateName="assignment-import-template.csv"
             requiredColumns={['Email', 'Contract Number', 'CLIN Number']}
@@ -566,7 +566,7 @@ export function ImportClient() {
               contractNumber: r['Contract Number'],
               clinNumber: r['CLIN Number'],
             })))}
-            importOrderNote="Employees, Contracts, and CLINs must be imported before Assignments."
+            importOrderNote="The supervisors must already exist (import Employees first, with the supervisor role), and so must the Contracts and CLINs."
           />
         </Tabs.Panel>
       </Tabs>

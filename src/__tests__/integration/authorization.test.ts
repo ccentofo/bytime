@@ -15,6 +15,7 @@ import {
   createTestClin,
   createTestChargeCode,
   assignUserToClin,
+  assignApprovalScope,
   cleanupTestData,
   expectOk,
   expectFailure,
@@ -170,6 +171,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     const otherClin = await createTestClin(contract.id);
 
     await assignUserToClin(supervisor.id, scopedClin.id);
+    await assignApprovalScope(supervisor.id, scopedClin.id); // feature-plan-approval-scope.md S2: explicit scope
 
     const inScopeEmployee = await createTestUser({ role: 'employee' });
     await assignUserToClin(inScopeEmployee.id, scopedClin.id);
@@ -335,6 +337,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
 
     const supervisor = await createTestUser({ role: 'supervisor' });
     await assignUserToClin(supervisor.id, scopedClin.id);
+    await assignApprovalScope(supervisor.id, scopedClin.id); // feature-plan-approval-scope.md S2: explicit scope
 
     const employeeA = await createTestUser({ role: 'employee' });
     const employeeB = await createTestUser({ role: 'employee' });
@@ -363,6 +366,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
 
     const supervisor = await createTestUser({ role: 'supervisor' });
     await assignUserToClin(supervisor.id, scopedClin.id);
+    await assignApprovalScope(supervisor.id, scopedClin.id); // feature-plan-approval-scope.md S2: explicit scope
 
     const inScopeEmployee = await createTestUser({ role: 'employee' });
     await assignUserToClin(inScopeEmployee.id, scopedClin.id);

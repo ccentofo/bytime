@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
-import { getTestDb, createTestUser, createTestContract, createTestClin, assignUserToClin, cleanupTestData } from './helpers';
+import { getTestDb, createTestUser, createTestContract, createTestClin, assignUserToClin, assignApprovalScope, cleanupTestData } from './helpers';
 
 /**
  * feature-plan-ux-navigation-home.md §4.6 / T7 (UX-AUDIT B3): the approver's queue = submitted periods filtered by
@@ -45,6 +45,7 @@ describe('approval queue (T7)', () => {
     gone = await createTestUser({ role: 'employee', fullName: 'Gus Gone' });
     const clin = await createTestClin((await createTestContract()).id);
     for (const u of [sup, peer, emp, emp2, gone, admin]) await assignUserToClin(u.id, clin.id);
+    await assignApprovalScope(sup.id, clin.id);                             // feature-plan-approval-scope.md S2: sup approves the CLIN
 
     await submit(emp.id, '2026-09-01', new Date('2026-09-17T10:00:00Z'));
     await submit(emp.id, '2026-09-16', new Date('2026-10-02T10:00:00Z'));   // same person twice

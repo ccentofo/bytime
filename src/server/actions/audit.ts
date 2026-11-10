@@ -2,10 +2,11 @@
 
 import { getDb } from '@/db';
 import {
-  timesheetEntries, users, clins, contracts, slins, userAssignments, chargeCodes, indirectChargeCodes, importBatches,
+  timesheetEntries, users, clins, contracts, slins, chargeCodes, indirectChargeCodes, importBatches,
   periodEvents, timesheetPeriods, adminChangeLog, laborCategories,
 } from '@/db/schema';
 import { eq, and, gte, lte, desc, sql, inArray } from 'drizzle-orm';
+import { ownFilterClinIds } from '@/server/internal/supervisor-scope';
 import { alias } from 'drizzle-orm/pg-core';
 import { requireAdmin, requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
 import { addDays, isBefore, type CalendarDate } from '@/lib/calendar-date';
@@ -441,6 +442,10 @@ async function adminChangeNames(db: Awaited<ReturnType<typeof getDb>>, rows: Arr
       add(userIds, v.approverId);
       add(lcIds, v.laborCategoryId);
       if (Array.isArray(v.clinIds)) for (const id of v.clinIds) add(clinIds, id);
+      // feature-plan-approval-scope.md §4.2: approval_scope rows and a demotion's membershipRemoved.
+      add(userIds, v.supervisorId);
+      add(clinIds, v.clinId);
+      if (Array.isArray(v.membershipRemoved)) for (const id of v.membershipRemoved) add(clinIds, id);
     }
   }
   const names: AdminChangeNames = {};
@@ -459,9 +464,8 @@ async function adminChangeNames(db: Awaited<ReturnType<typeof getDb>>, rows: Arr
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Get contracts for the filter dropdown. Admins see every contract; supervisors see only
- * contracts touched by a CLIN they themselves are assigned to (the same basis their scope
- * is derived from).
+ * Get contracts for the filter dropdown. Admins see every contract; supervisors see the contracts
+ * of the CLINs they approve or charge (feature-plan-approval-scope.md S4).
  */
 export async function getContractsForFilter() {
   const actor = await requireApprover();
@@ -474,20 +478,20 @@ export async function getContractsForFilter() {
       .orderBy(contracts.name);
   }
 
-  const rows = await db
+  // feature-plan-approval-scope.md S4: the contracts of the CLINs they approve or charge.
+  const own = await ownFilterClinIds(db, actor.id);
+  if (own.length === 0) return [];
+  return db
     .selectDistinct({ id: contracts.id, name: contracts.name, contractNumber: contracts.contractNumber })
-    .from(userAssignments)
-    .innerJoin(clins, eq(userAssignments.clinId, clins.id))
+    .from(clins)
     .innerJoin(contracts, eq(clins.contractId, contracts.id))
-    .where(and(eq(userAssignments.userId, actor.id), eq(userAssignments.isActive, true)))
+    .where(inArray(clins.id, own))
     .orderBy(contracts.name);
-
-  return rows;
 }
 
 /**
  * Get all CLINs for a specific contract (for filter dropdown cascade). Admins see every CLIN
- * under the contract; supervisors see only the ones they themselves are assigned to.
+ * under the contract; supervisors see the ones they approve or charge (S4).
  */
 export async function getClinsForFilter(contractId: string) {
   const actor = await requireApprover();
@@ -502,20 +506,14 @@ export async function getClinsForFilter(contractId: string) {
       .orderBy(clins.clinNumber);
   }
 
-  const rows = await db
+  // feature-plan-approval-scope.md S4: the CLINs they approve or charge, under this contract.
+  const own = await ownFilterClinIds(db, actor.id);
+  if (own.length === 0) return [];
+  return db
     .selectDistinct({ id: clins.id, clinNumber: clins.clinNumber, description: clins.description })
-    .from(userAssignments)
-    .innerJoin(clins, eq(userAssignments.clinId, clins.id))
-    .where(
-      and(
-        eq(userAssignments.userId, actor.id),
-        eq(userAssignments.isActive, true),
-        eq(clins.contractId, contractId),
-      )
-    )
+    .from(clins)
+    .where(and(inArray(clins.id, own), eq(clins.contractId, contractId)))
     .orderBy(clins.clinNumber);
-
-  return rows;
 }
 
 /**

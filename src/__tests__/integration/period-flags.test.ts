@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as schema from '@/db/schema';
-import { getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, assignUserToClin, cleanupTestData } from './helpers';
+import { getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, assignUserToClin, assignApprovalScope, cleanupTestData } from './helpers';
 
 /**
  * feature-plan-ux-navigation-home.md §4.6 / T13, revised by feature-plan-ux-approvals-payroll.md A4 / A-2: "Worth a
@@ -50,6 +50,7 @@ describe('period flags (T13)', () => {
     clinId = clin.id;
     code = await createTestChargeCode(clin.id);
     await assignUserToClin(sup.id, clin.id);
+    await assignApprovalScope(sup.id, clin.id); // feature-plan-approval-scope.md S2: explicit scope
     await assignUserToClin(emp.id, clin.id);
     session.user = { id: sup.id, role: 'supervisor', email: sup.email, fullName: sup.fullName };
   });

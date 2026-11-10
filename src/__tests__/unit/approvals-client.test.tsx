@@ -172,6 +172,18 @@ describe('Approvals to-do list (T12)', () => {
     expect(m.container.textContent).toContain('No decided timesheets yet.');
   });
 
+  it('feature-plan-approval-scope.md §5: a supervisor with no scope → "You don\'t approve any CLINs yet…"; with scope but nobody → the other text', async () => {
+    const empty = (assignedClinCount: number) => mount(<ApprovalsClient initialPeriods={[]} currentUserId={ME} userRole="supervisor" workspaceTimezone="UTC"
+      scopeInfo={{ assignedContractCount: 0, assignedClinCount, approvableEmployeeCount: 0, designatedByCount: 0 }} />);
+    m = await empty(0);
+    expect(m.container.querySelector('[data-testid="scope-empty"]')!.textContent).toBe("You don't approve any CLINs yet. An admin can add them on Assignments → Approval scope.");
+    unmount(m);
+    m = await empty(2);
+    const text = m.container.querySelector('[data-testid="scope-empty"]')!.textContent!;
+    expect(text).toBe('Nobody works on the CLINs you approve yet, and nobody has designated you as their approver, so there are no timesheets you can review.');
+    expect(text).not.toMatch(/not assigned to any CLINs/);
+  });
+
   it('the header: h1 "Approvals", the description, and the notices below the h1', async () => {
     await render('admin', PERIODS, { notices: <div data-testid="the-notices">notice</div> });
     const h1 = m!.container.querySelector('h1')!;

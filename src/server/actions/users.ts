@@ -1,9 +1,9 @@
 'use server';
 
 import { getDb, getDbForAuth, getDbForWrite } from '@/db';
-import { userAssignments, users } from '@/db/schema';
+import { chargeCodes, userAssignments, userChargeCodes, users, approvalScopes } from '@/db/schema';
 import bcrypt from 'bcryptjs';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, notInArray, sql } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh, AuthorizationError } from '@/lib/session';
 import { getLockoutsForEmails, unlockAccount } from '@/server/internal/login-attempts';
 import { SAFE_USER_COLUMNS } from '@/server/internal/users';
@@ -16,6 +16,7 @@ import { UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
 import { logAdminChange } from '@/server/internal/admin-change-log';
 import { validatePassword } from '@/lib/password-rules';
+import { assertActiveClins, deactivateScopeRows, grantScopeRows } from '@/server/internal/approval-scopes';
 import type { DbTx } from '@/db';
 
 const USER_ROLES = ['admin', 'supervisor', 'employee'] as const;
@@ -46,7 +47,7 @@ export async function getUsersForAdminPage(): Promise<AdminPageUser[]> {
   const db = await getDb();
   const rows = await db.select({ ...SAFE_USER_COLUMNS, mfaEnabled: users.totpEnabled }).from(users).orderBy(users.fullName);
   const locks = await getLockoutsForEmails(db, rows.map((r) => r.email));
-  const facts: ApprovalFacts = { users: new Map(rows.map((r) => [r.id, { id: r.id, role: r.role, isActive: r.isActive, approverId: r.approverId }])), clinsByUser: new Map() };
+  const facts: ApprovalFacts = { users: new Map(rows.map((r) => [r.id, { id: r.id, role: r.role, isActive: r.isActive, approverId: r.approverId }])), clinsByUser: new Map(), scopeClinsBySupervisor: new Map() };
   const nameById = new Map(rows.map((r) => [r.id, r.fullName]));
   return rows.map((r) => {
     const lock = r.isActive ? locks.get(r.email.toLowerCase().trim()) : undefined;
@@ -63,6 +64,34 @@ async function assertValidApprover(tx: Pick<DbTx, 'select'>, approverId: string)
   }
 }
 const APPROVER_ROLES_ONLY = 'Approvers can be designated for supervisors and admins only. Employees are approved by their CLIN supervisors and admins.';
+
+// ── Approval CLINs on promotion / creation (feature-plan-approval-scope.md §4.2) ──────────────────────────────────
+const ALREADY_SUPERVISOR = 'Already a supervisor — edit their approval scope on Assignments.';
+const APPROVAL_CLINS_ONLY_FOR_SUPERVISORS = 'Approval CLINs only apply when making someone a supervisor.';
+
+/** `approvalClinIds`: undefined, or 0–200 deduped, lowercased UUIDs. */
+function approvalClinList(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new UserFacingError('Choose the CLINs they approve.');
+  const ids = [...new Set(value.map((id) => validateUUID(id, 'CLIN')))];
+  if (ids.length > 200) throw new UserFacingError('Choose 200 CLINs or fewer.');
+  return ids;
+}
+
+/**
+ * S10: a demoted supervisor's CLIN membership rows that no active charge code backs are deactivated (rows the old
+ * supervisor-scope action created would otherwise keep them visible, and approvable, on CLINs they only supervised).
+ * Returns the CLIN ids deactivated.
+ */
+async function removeUnbackedMembership(tx: DbTx, userId: string): Promise<string[]> {
+  const backed = tx.select({ clinId: chargeCodes.clinId }).from(userChargeCodes)
+    .innerJoin(chargeCodes, eq(chargeCodes.id, userChargeCodes.chargeCodeId))
+    .where(and(eq(userChargeCodes.userId, userId), eq(userChargeCodes.isActive, true)));
+  const rows = await tx.update(userAssignments).set({ isActive: false })
+    .where(and(eq(userAssignments.userId, userId), eq(userAssignments.isActive, true), notInArray(userAssignments.clinId, backed)))
+    .returning({ clinId: userAssignments.clinId });
+  return rows.map((r) => r.clinId).sort();
+}
 
 export async function unlockUserAccount(email: string): Promise<ActionResult<void>> {
   return userAction(async () => {
@@ -90,10 +119,17 @@ export async function updateUser(id: string, data: {
   role?: 'admin' | 'supervisor' | 'employee';
   isActive?: boolean;
   flsaExempt?: boolean;
+  /**
+   * feature-plan-approval-scope.md §4.2: the CLINs they'll approve — ONLY with a real change of role TO supervisor (their
+   * approval scope is exactly these; charge code access is unchanged). Refused otherwise.
+   */
+  approvalClinIds?: string[];
 }) {
   return userAction(async () => {
     const actor = await requireAdminFresh();
     id = validateUUID(id, 'User');   // lowercased: the self checks below compare with `===` (UX-4C1-AUDIT.md L1)
+    const approvalClinIds = approvalClinList(data.approvalClinIds);
+    if (approvalClinIds !== undefined && data.role !== undefined && data.role !== 'supervisor') throw new UserFacingError(APPROVAL_CLINS_ONLY_FOR_SUPERVISORS);
     const db = await getDbForWrite();
 
     // Server-action arguments are untrusted JSON. The last-admin and self-deactivation checks
@@ -184,6 +220,16 @@ export async function updateUser(id: string, data: {
         }
       }
 
+      // feature-plan-approval-scope.md §4.2 (after the lock and the sole-admin refusal): approval CLINs only with a real
+      // change TO supervisor, and only active CLINs on active contracts. Promoting an inactive user is allowed.
+      const promoting = data.role === 'supervisor' && old.role !== 'supervisor';
+      const demoting = data.role !== undefined && data.role !== 'supervisor' && old.role === 'supervisor';
+      if (approvalClinIds !== undefined && !promoting) {
+        throw new UserFacingError(old.role === 'supervisor' ? ALREADY_SUPERVISOR : APPROVAL_CLINS_ONLY_FOR_SUPERVISORS);
+      }
+      const chosenClins = promoting ? approvalClinIds ?? [] : [];
+      if (promoting) await assertActiveClins(tx, chosenClins);
+
       if (shouldInvalidateSession) {
         // Increment in SQL so two concurrent edits can't both write the same bumped value.
         updateData.sessionVersion = sql`${users.sessionVersion} + 1`;
@@ -194,16 +240,32 @@ export async function updateUser(id: string, data: {
       const before = await snapshotSubmittedEligibility(tx, beforeFacts);
       const rows = await tx.update(users).set(updateData).where(eq(users.id, id)).returning(SAFE_USER_COLUMNS);
       const changed = rows[0];
+      // feature-plan-approval-scope.md §4.2: approval scope follows a real role change — inside this transaction and lock,
+      // after the before-snapshot and before the after-snapshot (so waiting timesheets re-route).
+      let membershipRemoved: string[] | undefined;
+      if (changed && promoting) {
+        // Exactly the chosen CLINs: any other active scope row goes (logged), the chosen ones are granted (logged when new).
+        const stale = await tx.select({ id: approvalScopes.id }).from(approvalScopes)
+          .where(and(eq(approvalScopes.supervisorId, id), eq(approvalScopes.isActive, true),
+            ...(chosenClins.length > 0 ? [notInArray(approvalScopes.clinId, chosenClins)] : [])));
+        await deactivateScopeRows(tx, { actorId: actor.id, rowIds: stale.map((r) => r.id) });
+        await grantScopeRows(tx, { actorId: actor.id, supervisorId: id, clinIds: chosenClins, source: 'app' });
+      }
+      if (changed && demoting) {
+        const scope = await tx.select({ id: approvalScopes.id }).from(approvalScopes)
+          .where(and(eq(approvalScopes.supervisorId, id), eq(approvalScopes.isActive, true)));
+        await deactivateScopeRows(tx, { actorId: actor.id, rowIds: scope.map((r) => r.id) });
+        membershipRemoved = await removeUnbackedMembership(tx, id);
+      }
       // R5: log only what actually changed, in this transaction (a failed log rolls the change back).
       if (data.role !== undefined && changed && changed.role !== old.role) {
-        // A promotion to supervisor lists the CLINs they now approve on (their active CLIN rows — R8).
-        const clinIds = changed.role === 'supervisor'
-          ? (await tx.select({ clinId: userAssignments.clinId }).from(userAssignments)
-            .where(and(eq(userAssignments.userId, id), eq(userAssignments.isActive, true)))).map((r) => r.clinId).sort()
-          : undefined;
+        // A promotion records the CLINs chosen (their whole approval scope); a demotion the CLIN rows removed (S10).
+        const newValue = promoting ? { role: changed.role, clinIds: [...chosenClins].sort() }
+          : membershipRemoved ? { role: changed.role, membershipRemoved }
+          : { role: changed.role };
         await logAdminChange(tx, {
           actorId: actor.id, entity: 'user', entityId: id, action: 'role_changed',
-          oldValue: { role: old.role }, newValue: clinIds ? { role: changed.role, clinIds } : { role: changed.role },
+          oldValue: { role: old.role }, newValue,
         });
       }
       if (data.isActive !== undefined && changed && changed.isActive !== old.isActive) {
@@ -245,6 +307,8 @@ export async function createUserWithPassword(data: {
   password: string;
   flsaExempt: boolean;
   approverId?: string | null;
+  /** feature-plan-approval-scope.md §4.2: a new supervisor's approval CLINs (optional; supervisors only). */
+  approvalClinIds?: string[];
 }) {
   return userAction(async () => {
     const actor = await requireAdminFresh();
@@ -257,12 +321,15 @@ export async function createUserWithPassword(data: {
     if (passwordError) throw new UserFacingError(passwordError);
     const approverId = data.approverId ? validateUUID(data.approverId, 'Approver') : null;
     if (approverId && validatedRole === 'employee') throw new UserFacingError(APPROVER_ROLES_ONLY);
+    const approvalClinIds = approvalClinList(data.approvalClinIds);
+    if (approvalClinIds !== undefined && validatedRole !== 'supervisor') throw new UserFacingError(APPROVAL_CLINS_ONLY_FOR_SUPERVISORS);
     const hash = await bcrypt.hash(data.password, 12);
     // certified-outputs C2 (ruling Q5): one transaction with the self-approval recompute and re-routing snapshot.
     const { user, rerouted } = await db.transaction(async (tx) => {
       await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
       await assertSeatsAvailable(1, tx);
       if (approverId) await assertValidApprover(tx, approverId);
+      if (approvalClinIds) await assertActiveClins(tx, approvalClinIds);
       const beforeFacts = await loadApprovalFacts(tx);
       const before = await snapshotSubmittedEligibility(tx, beforeFacts);
       const [row] = await tx.insert(users).values({
@@ -277,6 +344,7 @@ export async function createUserWithPassword(data: {
       if (approverId) {
         await logAdminChange(tx, { actorId: actor.id, entity: 'user', entityId: row.id, action: 'approver_changed', oldValue: { approverId: null }, newValue: { approverId } });
       }
+      if (approvalClinIds) await grantScopeRows(tx, { actorId: actor.id, supervisorId: row.id, clinIds: approvalClinIds, source: 'app' });
       await recomputeSelfApproval(tx, actor.id, `${row.fullName} added (${row.role})`, { before: beforeFacts });
       return { user: row, rerouted: newlyEligible(before, await snapshotSubmittedEligibility(tx)) };
     });

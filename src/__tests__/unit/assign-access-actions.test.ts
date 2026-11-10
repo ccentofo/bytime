@@ -4,7 +4,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * feature-plan-ux-people-codes.md §4.2, §4.4, unit companion to integration AS-3 / AS-8 (a scripted database):
  * assignChargeCodesToUser refuses an inactive person and, when one code isn't chargeable, writes nothing; codes already
  * held are skipped (assigned counts the rest, which also upsert the CLIN row); inputs are validated before any read.
- * assignUserToClin refuses an inactive person and a non-supervisor, and never writes a SLIN.
+ * grantApprovalScope (feature-plan-approval-scope.md AS-7 companion) takes the lock FIRST, then refuses an inactive
+ * person and a non-supervisor before any write.
  */
 
 vi.mock('server-only', () => ({}));
@@ -24,10 +25,11 @@ vi.mock('@/lib/session', () => {
 });
 
 import * as dbModule from '@/db';
-import { chargeCodes, clins, userAssignments, userChargeCodes, users } from '@/db/schema';
+import { chargeCodes, userAssignments, userChargeCodes, users } from '@/db/schema';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import type { FakeControlDb } from '../helpers/fake-control-db';
 import { assignChargeCodesToUser } from '@/server/actions/charge-codes';
-import { assignUserToClin } from '@/server/actions/assignments';
+import { grantApprovalScope } from '@/server/actions/assignments';
 
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
 beforeEach(() => db.reset());
@@ -71,20 +73,27 @@ describe('assignChargeCodesToUser (AS-3 companion)', () => {
   });
 });
 
-describe('assignUserToClin (AS-8 companion)', () => {
-  it('refuses an inactive person and a non-supervisor; a missing CLIN is not found; writes no SLIN', async () => {
+describe('grantApprovalScope (AS-7 companion)', () => {
+  const lockSql = (q: unknown) => new PgDialect().sqlToQuery(q as never).sql;
+  it('the user-rules lock comes first; an inactive person or a non-supervisor is refused after it, with nothing written', async () => {
+    db.onSelect(users, []);                                                        // the eligibility snapshot's facts
     db.onSelect(users, [{ role: 'supervisor', isActive: false }]);
-    expect(await assignUserToClin({ userId: U, clinId: A })).toMatchObject({ ok: false, error: 'Choose an active supervisor.' });
-    db.onSelect(users, [{ role: 'employee', isActive: true }]);
-    expect(await assignUserToClin({ userId: U, clinId: A })).toMatchObject({ ok: false, error: 'Choose an active supervisor.' });
-    db.onSelect(users, [{ role: 'supervisor', isActive: true }]);
-    db.onSelect(clins, []);
-    expect(await assignUserToClin({ userId: U, clinId: A })).toMatchObject({ ok: false, code: 'not_found' });
+    expect(await grantApprovalScope({ supervisorId: U, clinIds: [A] })).toMatchObject({ ok: false, error: 'Choose an active supervisor.' });
+    expect(db.ops[0]).toBe('execute');
+    expect(lockSql(db.executes[0])).toContain('pg_advisory_xact_lock(');
     expect(db.inserts).toEqual([]);
-    db.onSelect(users, [{ role: 'supervisor', isActive: true }]);
-    db.onSelect(clins, [{ id: A }]);
-    db.onReturning('insert', userAssignments, [{ id: 'ua' }]);
-    expect(await assignUserToClin({ userId: U, clinId: A, slinId: B } as never)).toMatchObject({ ok: true });
-    expect(db.inserts[0].values).toMatchObject({ userId: U, clinId: A, slinId: null });
+    db.reset();
+    db.onSelect(users, []);
+    db.onSelect(users, [{ role: 'employee', isActive: true }]);
+    expect(await grantApprovalScope({ supervisorId: U, clinIds: [A] })).toMatchObject({ ok: false, error: 'Choose an active supervisor.' });
+    expect(db.inserts).toEqual([]);
+  });
+
+  it('inputs are validated before any read: no CLINs, too many, a bad id', async () => {
+    expect(await grantApprovalScope({ supervisorId: U, clinIds: [] })).toMatchObject({ ok: false, error: 'Choose at least one CLIN.' });
+    expect(await grantApprovalScope({ supervisorId: U, clinIds: Array.from({ length: 201 }, (_, i) => ID(100 + i)) })).toMatchObject({ ok: false, error: 'Choose 200 CLINs or fewer at a time.' });
+    expect(await grantApprovalScope({ supervisorId: U, clinIds: ['nope'] })).toMatchObject({ ok: false });
+    expect(await grantApprovalScope({ supervisorId: '', clinIds: [A] })).toMatchObject({ ok: false, error: 'Choose an active supervisor.' });
+    expect(db.ops).toEqual([]);
   });
 });

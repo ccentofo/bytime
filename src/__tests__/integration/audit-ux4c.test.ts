@@ -133,6 +133,7 @@ describe('Audit trail (UX-4c §6)', () => {
     const clin = await createTestClin((await createTestContract()).id);
     const away = await createTestClin((await createTestContract()).id);
     await db().insert(schema.userAssignments).values([{ userId: sup.id, clinId: clin.id, isActive: true }, { userId: emp.id, clinId: clin.id, isActive: true }, { userId: other.id, clinId: away.id, isActive: true }]);
+    await db().insert(schema.approvalScopes).values({ supervisorId: sup.id, clinId: clin.id, reviewedAt: new Date() }); // feature-plan-approval-scope.md S3
     await entry({ clinId: clin.id });
     await entry({ clinId: away.id, userId: other.id, createdBy: other.id });
     actingAs(sup);

@@ -7,6 +7,7 @@ import {
   createTestContract,
   createTestClin,
   assignUserToClin,
+  assignApprovalScope,
   cleanupTestData,
 } from './helpers';
 
@@ -73,6 +74,7 @@ describe('getEmployeeSummaryReport cost visibility (R2-5)', () => {
 
     await assignUserToClin(employee.id, clin.id);
     await assignUserToClin(supervisor.id, clin.id);
+    await assignApprovalScope(supervisor.id, clin.id); // feature-plan-approval-scope.md S2: explicit scope
 
     await db.insert(schema.timesheetEntries).values({
       userId: employee.id,

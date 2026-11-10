@@ -24,13 +24,15 @@ vi.mock('next/navigation', async () => {
   };
 });
 const h = vi.hoisted(() => ({
-  getAssignments: vi.fn(), getUsers: vi.fn(), listChargeCodes: vi.fn(), getChargeCodeAssignments: vi.fn(),
+  getScopesView: vi.fn(), getClinOptions: vi.fn(), getUsers: vi.fn(), listChargeCodes: vi.fn(), getChargeCodeAssignments: vi.fn(),
   getWorkspaceTimezone: vi.fn(), getWorkspaceToday: vi.fn(), getAllLaborCategories: vi.fn(), getUserLaborCategoryAssignments: vi.fn(),
   getAssignableLaborCategories: vi.fn(), endAssignment: vi.fn(), withOverlaps: vi.fn(),
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/session', () => ({ requirePageRole: vi.fn(async () => ({ id: 'a', role: 'admin' })) }));
-vi.mock('@/server/actions/assignments', () => ({ assignUserToClin: vi.fn(), unassignUserFromClin: vi.fn(), getAssignments: h.getAssignments }));
+vi.mock('@/server/actions/assignments', () => ({
+  grantApprovalScope: vi.fn(), revokeApprovalScope: vi.fn(), reviewMigratedScopes: vi.fn(), getApprovalScopesView: h.getScopesView, getApprovalClinOptions: h.getClinOptions,
+}));
 vi.mock('@/server/actions/users', () => ({ getUsers: h.getUsers }));
 vi.mock('@/server/actions/charge-codes', () => ({
   assignChargeCodesToUser: vi.fn(), unassignChargeCodeFromUser: vi.fn(),
@@ -99,7 +101,7 @@ const DEFAULT_SHOWN = 3; // "Current and upcoming" hides Lee's ended X2
 async function render(search: string, lcat: Record<string, unknown> = {}) {
   realReplace(null, '', `/admin/assignments${search}`);
   m = await mount(
-    <AssignmentsClient initialTab="charge-codes" initialAssignments={[]} users={USERS as never} activeClins={[]} chargeCodes={[]}
+    <AssignmentsClient initialTab="charge-codes" initialScopes={{ scopes: [], membership: [] }} users={USERS as never} activeClins={[]} chargeCodes={[]}
       initialChargeCodeAssignments={[]} workspaceTimezone="America/New_York" lcat={{ ...LCAT_PROPS, ...lcat }} />,
   );
 }
@@ -132,7 +134,7 @@ describe('URL parsing (L-2)', () => {
       { id: L2, lcatCode: 'SE-II', clinNumber: '0002', status: 'inactive', hourlyRate: '110.00', ceilingRate: null,
         rateChanges: [{ id: 'r', effectiveDate: '2026-06-01', hourlyRate: '120.00', ceilingRate: null }] },
     ]);
-    for (const f of [h.getAssignments, h.getUsers, h.listChargeCodes, h.getChargeCodeAssignments, h.getUserLaborCategoryAssignments, h.getAssignableLaborCategories]) f.mockResolvedValue([]);
+    for (const f of [h.getScopesView, h.getClinOptions, h.getUsers, h.listChargeCodes, h.getChargeCodeAssignments, h.getUserLaborCategoryAssignments, h.getAssignableLaborCategories]) f.mockResolvedValue([]);
     h.getWorkspaceTimezone.mockResolvedValue('America/New_York');
     h.getWorkspaceToday.mockResolvedValue('2026-11-03');
     const page = async (sp: Record<string, string | string[]>) => ((await AssignmentsPage({ searchParams: Promise.resolve(sp) })) as { props: Record<string, never> }).props;
@@ -266,7 +268,7 @@ describe('statuses, Show and the overlap notice (AS-6)', () => {
   });
 
   it('M4: the page computes each supervisor\'s approver by the approvals rule — an inactive or non-approver designee → null ("admins")', async () => {
-    for (const f of [h.getAssignments, h.listChargeCodes, h.getChargeCodeAssignments, h.getAssignableLaborCategories, h.getAllLaborCategories, h.getUserLaborCategoryAssignments]) f.mockResolvedValue([]);
+    for (const f of [h.getScopesView, h.getClinOptions, h.listChargeCodes, h.getChargeCodeAssignments, h.getAssignableLaborCategories, h.getAllLaborCategories, h.getUserLaborCategoryAssignments]) f.mockResolvedValue([]);
     const p = (id: string, fullName: string, role: string, approverId: string | null, isActive = true) => ({ id, fullName, role, isActive, approverId });
     h.getUsers.mockResolvedValue([
       p('ann', 'Ann Admin', 'admin', null), p('gone', 'Gone Admin', 'admin', null, false), p('emp', 'Eve Employee', 'employee', null),
@@ -284,7 +286,7 @@ describe('statuses, Show and the overlap notice (AS-6)', () => {
       { id: L1, lcatCode: 'SE-I', title: 'Eng I', clinId: 'clin-1', slinId: null, clinNumber: '0001', slinNumber: null, contractId: 'k1', status: 'active', hourlyRate: '100.00', ceilingRate: null, rateChanges: [] },
       { id: L2, lcatCode: 'SE-II', title: 'Eng II', clinId: 'clin-1', slinId: null, clinNumber: '0001', slinNumber: null, contractId: 'k1', status: 'active', hourlyRate: '110.00', ceilingRate: null, rateChanges: [] },
     ]);
-    for (const f of [h.getAssignments, h.getUsers, h.listChargeCodes, h.getChargeCodeAssignments, h.getAssignableLaborCategories]) f.mockResolvedValue([]);
+    for (const f of [h.getScopesView, h.getClinOptions, h.getUsers, h.listChargeCodes, h.getChargeCodeAssignments, h.getAssignableLaborCategories]) f.mockResolvedValue([]);
     h.getUserLaborCategoryAssignments.mockResolvedValue([
       asg(X1, U1, 'Pat Doe', L1, 'SE-I', '2026-01-01'), asg(X2, U1, 'Pat Doe', L2, 'SE-II', '2026-06-01'), asg(X3, U2, 'Lee Roe', L1, 'SE-I', '2026-01-01'),
     ]);

@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from 'react';
 import { Alert, Button, Checkbox, Group, Modal, Select, Stack, Text } from '@mantine/core';
-import { Notice } from '@/components/ui/Notice';
 import { WriteButton } from '@/components/shell/WorkspaceMode';
 import { useBusy } from '@/components/ui/useBusy';
 import { runAction } from '@/lib/run-action';
@@ -25,10 +24,10 @@ const plural = (n: number, one: string, many: string) => `${formatCount(n)} ${n 
 /**
  * "Give access to charge codes" (feature-plan-ux-people-codes.md §4.2): one person (active only), a checklist of
  * chargeable codes grouped by contract and CLIN (a CLIN box selects its selectable codes; indeterminate when partly),
- * codes already held shown checked and aria-disabled. R8: for a supervisor, codes on CLINs they have no active row on
- * also make them an approver there — said in the dialog before saving.
+ * codes already held shown checked and aria-disabled. A charge code never gives approval authority
+ * (feature-plan-approval-scope.md S1, S8): approval scope is granted only on Assignments → Approval scope.
  */
-export function GiveAccessModal({ opened, onClose, onGiven, people, codes, heldBy, clinsBy, initialPersonId }: {
+export function GiveAccessModal({ opened, onClose, onGiven, people, codes, heldBy, initialPersonId }: {
   opened: boolean;
   onClose: () => void;
   /** After a successful save (the caller refetches). */
@@ -38,8 +37,6 @@ export function GiveAccessModal({ opened, onClose, onGiven, people, codes, heldB
   codes: AccessCode[];
   /** personId → the code ids they actively hold. */
   heldBy: Map<string, Set<string>>;
-  /** personId → the CLIN ids of their active user_assignments rows. */
-  clinsBy: Map<string, Set<string>>;
   initialPersonId: string | null;
 }) {
   const busy = useBusy();
@@ -80,15 +77,6 @@ export function GiveAccessModal({ opened, onClose, onGiven, people, codes, heldB
     setErrors((e) => ({ ...e, codes: undefined }));
     setPicked((prev) => { const next = new Set(prev); for (const id of selectable) { if (all) next.delete(id); else next.add(id); } return next; });
   };
-
-  // R8: a supervisor's new CLINs (no active row yet) become approval scope too.
-  const newScope = useMemo(() => {
-    if (!person || person.role !== 'supervisor') return [];
-    const theirs = clinsBy.get(person.id) ?? new Set<string>();
-    const labels = new Map<string, string>();
-    for (const c of codes) if (picked.has(c.id) && !theirs.has(c.clinId)) labels.set(c.clinId, `${c.contractName} CLIN ${c.clinNumber}`);
-    return [...labels.values()].sort();
-  }, [person, picked, codes, clinsBy]);
 
   async function save() {
     const next: typeof errors = {};
@@ -156,13 +144,6 @@ export function GiveAccessModal({ opened, onClose, onGiven, people, codes, heldB
           </div>
           {errors.codes && <Text size="xs" c="red" mt={4} role="alert">{errors.codes}</Text>}
         </div>
-        {newScope.length > 0 && person && (
-          <div data-testid="supervisor-notice">
-            <Notice>
-              {person.fullName} is a supervisor. These codes also let them approve employees on {newScope.join(', ')}. You can change that on Approval scope.
-            </Notice>
-          </div>
-        )}
         <Group justify="flex-end" gap="sm">
           <Text size="sm" c="dimmed" mr="auto" data-testid="give-access-count">{plural(n, 'code', 'codes')} selected</Text>
           <Button variant="default" onClick={() => { if (!busy.any()) onClose(); }}>Cancel</Button>

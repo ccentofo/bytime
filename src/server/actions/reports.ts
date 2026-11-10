@@ -11,10 +11,10 @@ import {
   indirectChargeCodes,
   timesheetEntries,
   timesheetPeriods,
-  userAssignments,
 } from '@/db/schema';
 import { alias } from 'drizzle-orm/pg-core';
 import { eq, and, gte, lt, sql, inArray } from 'drizzle-orm';
+import { ownFilterClinIds } from '@/server/internal/supervisor-scope';
 import { existingPeriodLength, lastCompletedPeriods } from '@/server/internal/pay-period-config';
 import { sumRounded } from '@/server/internal/dashboard';
 import { approvalLabels } from '@/server/internal/approval-label';
@@ -298,7 +298,7 @@ export async function getEmployeeSummaryReport(
 /**
  * Filter dropdown options for reports, scoped to the approver's employees. Admins get every
  * active user and every contract; supervisors get only in-scope employees and the contracts
- * touched by a CLIN they themselves are assigned to.
+ * of the CLINs they approve or charge (feature-plan-approval-scope.md S4).
  */
 export async function getReportFilterOptions() {
   const actor = await requireApprover();
@@ -324,13 +324,16 @@ export async function getReportFilterOptions() {
         .select({ id: contracts.id, name: contracts.name, contractNumber: contracts.contractNumber, startDate: contracts.startDate })
         .from(contracts)
         .orderBy(contracts.name)
-    : await db
-        .selectDistinct({ id: contracts.id, name: contracts.name, contractNumber: contracts.contractNumber, startDate: contracts.startDate })
-        .from(userAssignments)
-        .innerJoin(clins, eq(userAssignments.clinId, clins.id))
-        .innerJoin(contracts, eq(clins.contractId, contracts.id))
-        .where(and(eq(userAssignments.userId, actor.id), eq(userAssignments.isActive, true)))
-        .orderBy(contracts.name);
+    : await (async () => {
+        // feature-plan-approval-scope.md S4: the contracts of the CLINs they approve or charge.
+        const own = await ownFilterClinIds(db, actor.id);
+        return own.length === 0 ? [] : db
+          .selectDistinct({ id: contracts.id, name: contracts.name, contractNumber: contracts.contractNumber, startDate: contracts.startDate })
+          .from(clins)
+          .innerJoin(contracts, eq(clins.contractId, contracts.id))
+          .where(inArray(clins.id, own))
+          .orderBy(contracts.name);
+      })();
 
   // feature-plan-ux-kit-contracts.md §4.5 (additive): startDate labels the "Contract to date" preset.
   return { users: allUsers, contracts: allContracts.map((c) => ({ ...c, startDate: (c.startDate ?? null) as CalendarDate | null })) };

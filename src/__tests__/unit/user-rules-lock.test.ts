@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync, statSync } from 'fs';
 import path from 'path';
 import { parseExportedFunctions, stripComments } from '../helpers/source-scanner';
 
@@ -68,5 +68,61 @@ describe('F1 — user-rules lock', () => {
 
   it('the seeder also serializes its self-approval baseline', () => {
     expect(readFileSync(path.join(ROOT, 'scripts/seed-full.ts'), 'utf8')).toMatch(/await lockUserRulesExclusive\(tx as never\); await recomputeSelfApproval\(/);
+  });
+});
+
+// ── feature-plan-approval-scope.md S5, §4.1 (AS-17) ─────────────────────────────────────────────────────────────────
+
+/** Every .ts/.tsx file under `dir` (relative to ROOT), skipping tests. */
+function sourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(path.join(ROOT, dir))) {
+    const rel = `${dir}/${name}`;
+    if (rel === 'src/__tests__' || name === 'node_modules') continue;
+    if (statSync(path.join(ROOT, rel)).isDirectory()) out.push(...sourceFiles(rel));
+    else if (/\.(ts|tsx)$/.test(name)) out.push(rel);
+  }
+  return out;
+}
+/** Files whose code writes approval_scopes (`insert(approvalScopes)` / `update(approvalScopes)`, any namespace). */
+export function approvalScopeWriters(files: Array<{ rel: string; src: string }>): string[] {
+  return files.filter((f) => /\.(insert|update)\(\s*(?:\w+\.)?approvalScopes\s*\)/.test(stripComments(f.src))).map((f) => f.rel);
+}
+/** Files importing one of the three write helpers from internal/approval-scopes (its reads — the S6 count — are free to import). */
+export function approvalScopeHelperImporters(files: Array<{ rel: string; src: string }>): string[] {
+  const imports = /import\s*\{([^}]*)\}\s*from\s*['"](?:@\/server\/internal|\.\.?(?:\/[\w.-]+)*)\/approval-scopes['"]/g;
+  return files.filter((f) => [...f.src.matchAll(imports)].some((m) => /\b(grantScopeRows|deactivateScopeRows|markScopeRowsKept)\b/.test(m[1]))).map((f) => f.rel);
+}
+
+describe('approval scope writes (AS-17)', () => {
+  const files = [...sourceFiles('src'), ...sourceFiles('scripts')].map((rel) => ({ rel, src: readFileSync(path.join(ROOT, rel), 'utf8') }));
+
+  it('scopeChange opens one transaction whose first statement is the exclusive lock', () => {
+    const fn = parseExportedFunctions(stripComments(readFileSync(path.join(ROOT, 'src/server/internal/approval-rules.ts'), 'utf8'))).find((f) => f.name === 'scopeChange');
+    expect(fn).toBeDefined();
+    expect(firstStatementsOfTransactions(fn!.bodyText)).toHaveLength(1);
+    expect(firstStatementsOfTransactions(fn!.bodyText)[0]).toMatch(LOCK_FIRST);
+  });
+
+  it('approval_scopes is written only in internal/approval-scopes.ts and the seed (src/ and scripts/, tests excluded)', () => {
+    for (const w of approvalScopeWriters(files)) expect(['src/server/internal/approval-scopes.ts', 'scripts/seed-full.ts'], w).toContain(w);
+  });
+
+  it('the write helpers are imported only by the allowed modules', () => {
+    const allowed = ['src/server/internal/approval-rules.ts', 'src/server/actions/assignments.ts', 'src/server/actions/import.ts', 'src/server/actions/users.ts'];
+    for (const f of approvalScopeHelperImporters(files)) expect(allowed, f).toContain(f);
+  });
+
+  it('fixture: the scans flag a stray writer and a stray importer', () => {
+    const fake = [
+      { rel: 'src/x.ts', src: "await tx.update(approvalScopes).set({ isActive: false });" },
+      { rel: 'scripts/y.ts', src: "await db.insert(schema.approvalScopes).values({});" },
+      { rel: 'src/ok.ts', src: "// tx.update(approvalScopes) in a comment\nawait tx.delete(approvalScopes);" },
+      { rel: 'src/z.ts', src: "import { grantScopeRows } from '@/server/internal/approval-scopes';" },
+      { rel: 'src/w.ts', src: "import {\n  UNREVIEWED_MIGRATED_SCOPE, markScopeRowsKept,\n} from './approval-scopes';" },
+      { rel: 'src/reads.ts', src: "import { approvalScopesToReview } from '@/server/internal/approval-scopes';" },
+    ];
+    expect(approvalScopeWriters(fake)).toEqual(['src/x.ts', 'scripts/y.ts']);
+    expect(approvalScopeHelperImporters(fake)).toEqual(['src/z.ts', 'src/w.ts']);
   });
 });

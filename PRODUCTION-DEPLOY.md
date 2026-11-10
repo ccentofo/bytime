@@ -610,6 +610,23 @@ cause, then re-run just that tenant locally with the production values in your s
 counts match), and confirm Sentry and email are still delivering. **Yearly:** rotate `VERCEL_TOKEN` before
 it expires.
 
+### Release notes
+
+**Approval scope (`0018_approval_scopes`, feature-plan-approval-scope.md): FIX-FORWARD ONLY.** Do **not** use
+Instant Rollback for this release or to any deployment before it: the old code reads approval scope from CLIN
+assignments only, so rolling back would re-grant removed scopes and drop new ones.
+1. Write `MIGRATE_START` down (UTC) just before the deploy workflow starts:
+   `export MIGRATE_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"`.
+2. Run the deploy workflow (it migrates every tenant, then deploys, back to back). Make **no** admin edits to
+   assignments, users or charge-code access until the new deployment is live.
+3. When it's live, run the report-only window check with the production values in your shell:
+   `npm run scopes:window-check -- --since "$MIGRATE_START"`. It writes nothing.
+4. For anything it lists that should change, grant or remove the scope by hand on Assignments → Approval scope.
+   On the demo and design-partner workspaces the list is expected to be empty or tiny.
+
+Each workspace's admins then see a one-time "approval scopes to review" item on Home until they keep or remove the
+converted scopes.
+
 ---
 
 ## Phase 15 — Before charging real customers (not deploy blockers, but launch blockers)

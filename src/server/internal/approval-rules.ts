@@ -1,21 +1,23 @@
 import 'server-only';
 import { and, asc, eq, sql } from 'drizzle-orm';
-import { getDb, type DbTx, type ReadDb, type TenantWriter } from '@/db';
-import { adminChangeLog, timesheetPeriods, userAssignments, users } from '@/db/schema';
+import { getDb, type DbTx, type ReadDb, type TenantWriter, type WriteDb } from '@/db';
+import { adminChangeLog, approvalScopes, timesheetPeriods, userAssignments, users } from '@/db/schema';
 import { logAdminChange } from './admin-change-log';
 
 /**
  * Approver rules (feature-plan-certified-outputs.md C2 — CO-D5, CO-D6, CO-D9, CO-D12, CO-D18, CO-D19). INTERNAL:
- * callers authorize first. The rules are pure functions over one snapshot of the workspace's users and active CLIN
- * assignments (`ApprovalFacts`), so the review scope, the approve check, the submission-email recipients and the
- * self-approval switch can never disagree.
+ * callers authorize first. The rules are pure functions over one snapshot of the workspace's users, their active CLIN
+ * MEMBERSHIP (user_assignments) and the supervisors' active APPROVAL SCOPE (approval_scopes) — `ApprovalFacts` — so the
+ * review scope, the approve check, the submission-email recipients and the self-approval switch can never disagree.
  *
  * - effectiveDesignee(E): E.approverId, honoured only while E is supervisor/admin and the designee is ACTIVE with role
  *   admin/supervisor (and not E) — otherwise null (the supervisee falls back to admins).
  * - canApprove(A, E): self → only an admin, with no other active admin and no effective designee (CO-D6/CO-D12);
- *   another admin → yes; a supervisor → E's effective designee, or E is employee-role and shares an active CLIN with A.
- * - reviewScope(A): admin → all; supervisor → CLIN sharers ∪ the users who effectively designated A ∪ A (CO-D18: a
- *   supervisor with no CLINs sees exactly {self, their designators}); anyone else → [] (self access is separate).
+ *   another admin → yes; a supervisor → E's effective designee, or E is employee-role and A's active SCOPE CLINs meet
+ *   E's active MEMBERSHIP CLINs (feature-plan-approval-scope.md S2 — a charge code never gives approval authority).
+ * - reviewScope(A): admin → all; supervisor → A ∪ everyone with active membership on a CLIN in A's scope (any role)
+ *   ∪ the users who effectively designated A (S3; A's own membership no longer widens it; CO-D18: a supervisor with no
+ *   scope sees exactly {self, their designators}); anyone else → [] (self access is separate).
  */
 
 export type Role = 'admin' | 'supervisor' | 'employee';
@@ -29,8 +31,10 @@ export interface ApprovalUser {
 
 export interface ApprovalFacts {
   users: Map<string, ApprovalUser>;
-  /** Active CLIN assignments: userId → CLIN ids. */
+  /** Active CLIN MEMBERSHIP (user_assignments): userId → CLIN ids. Never grants approval by itself. */
   clinsByUser: Map<string, Set<string>>;
+  /** Active APPROVAL SCOPE (approval_scopes): supervisorId → CLIN ids (feature-plan-approval-scope.md S1). */
+  scopeClinsBySupervisor: Map<string, Set<string>>;
 }
 
 /**
@@ -54,12 +58,22 @@ export async function loadApprovalFacts(db: Pick<ReadDb, 'select'> | TenantWrite
   const rows = await db.select({ id: users.id, role: users.role, isActive: users.isActive, approverId: users.approverId }).from(users);
   const assignments = await db.select({ userId: userAssignments.userId, clinId: userAssignments.clinId })
     .from(userAssignments).where(eq(userAssignments.isActive, true));
-  const clinsByUser = new Map<string, Set<string>>();
-  for (const a of assignments) {
-    if (!clinsByUser.has(a.userId)) clinsByUser.set(a.userId, new Set());
-    clinsByUser.get(a.userId)!.add(a.clinId);
+  const scopes = await db.select({ supervisorId: approvalScopes.supervisorId, clinId: approvalScopes.clinId })
+    .from(approvalScopes).where(eq(approvalScopes.isActive, true));
+  return {
+    users: new Map(rows.map((u) => [u.id, u])),
+    clinsByUser: groupClins(assignments.map((a) => [a.userId, a.clinId])),
+    scopeClinsBySupervisor: groupClins(scopes.map((r) => [r.supervisorId, r.clinId])),
+  };
+}
+
+function groupClins(pairs: Array<[string, string]>): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const [id, clinId] of pairs) {
+    if (!out.has(id)) out.set(id, new Set());
+    out.get(id)!.add(clinId);
   }
-  return { users: new Map(rows.map((u) => [u.id, u])), clinsByUser };
+  return out;
 }
 
 const isApproverRole = (role: Role) => role === 'admin' || role === 'supervisor';
@@ -83,11 +97,12 @@ export function selfApprovalAvailable(facts: ApprovalFacts, adminId: string): bo
   return activeAdminIds(facts).every((id) => id === adminId) && effectiveDesignee(facts, adminId) === null;
 }
 
-export function sharesActiveClin(facts: ApprovalFacts, a: string, b: string): boolean {
-  const ca = facts.clinsByUser.get(a);
-  const cb = facts.clinsByUser.get(b);
-  if (!ca || !cb) return false;
-  for (const c of ca) if (cb.has(c)) return true;
+/** S2: one of supervisor A's active scope CLINs is one of user E's active membership CLINs. */
+export function scopeCoversMember(facts: ApprovalFacts, supervisorId: string, userId: string): boolean {
+  const scope = facts.scopeClinsBySupervisor.get(supervisorId);
+  const member = facts.clinsByUser.get(userId);
+  if (!scope || !member) return false;
+  for (const c of scope) if (member.has(c)) return true;
   return false;
 }
 
@@ -99,7 +114,7 @@ export function canApprove(facts: ApprovalFacts, actorId: string, employeeId: st
   if (actorId === employeeId) return actor.role === 'admin' && selfApprovalAvailable(facts, actorId);
   if (actor.role === 'admin') return true;
   if (actor.role === 'supervisor') {
-    return effectiveDesignee(facts, employeeId) === actorId || (employee.role === 'employee' && sharesActiveClin(facts, actorId, employeeId));
+    return effectiveDesignee(facts, employeeId) === actorId || (employee.role === 'employee' && scopeCoversMember(facts, actorId, employeeId));
   }
   return false;
 }
@@ -110,7 +125,7 @@ export function reviewScopeFrom(facts: ApprovalFacts, actorId: string): 'all' | 
   if (actor.role === 'admin') return 'all';
   if (actor.role !== 'supervisor') return [];
   const scope = new Set<string>([actorId]);
-  const mine = facts.clinsByUser.get(actorId);
+  const mine = facts.scopeClinsBySupervisor.get(actorId);
   if (mine) {
     for (const [userId, clins] of facts.clinsByUser) {
       for (const c of clins) if (mine.has(c)) { scope.add(userId); break; }
@@ -273,6 +288,23 @@ export function newlyEligible(before: EligibilitySnapshot, after: EligibilitySna
     if (recipients.length) out.push({ periodId, userId: now.userId, recipients, designeeLost });
   }
   return out;
+}
+
+// ── Scope changes (feature-plan-approval-scope.md S5, §4.1) ──────────────────
+
+/**
+ * The ONE transaction shape for approval-scope writes outside updateUser / createUserWithPassword (which write scope
+ * inline in their own locked transaction): the user-rules lock EXCLUSIVE as the first statement, a snapshot of who may
+ * decide each waiting timesheet, `fn` (which validates roles, active state and CLINs AFTER the lock, then writes through
+ * internal/approval-scopes.ts), and a second snapshot. The caller calls notifyReroutedApprovals AFTER this resolves.
+ */
+export async function scopeChange<R>(db: Pick<WriteDb, 'transaction'>, fn: (tx: DbTx) => Promise<R>): Promise<{ result: R; rerouted: ReroutedApproval[] }> {
+  return db.transaction(async (tx) => {
+    await lockUserRulesExclusive(tx);
+    const before = await snapshotSubmittedEligibility(tx);
+    const result = await fn(tx);
+    return { result, rerouted: newlyEligible(before, await snapshotSubmittedEligibility(tx)) };
+  });
 }
 
 /**
