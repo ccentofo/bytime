@@ -14,21 +14,41 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value) && typeof value !== 'function';
 }
 
+/** A recursive copy of the plain objects in `value`; functions, arrays and other values are kept by reference. */
+function copyPlain<T>(value: T): T {
+  if (!isPlainObject(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) out[key] = copyPlain(value[key]);
+  return out as T;
+}
+
+/** Freezes the plain objects in `value`, recursively (functions and arrays are left alone). */
+function deepFreezePlain<T>(value: T): T {
+  if (isPlainObject(value)) {
+    for (const key of Object.keys(value)) deepFreezePlain(value[key]);
+    Object.freeze(value);
+  }
+  return value;
+}
+
 /**
  * Recursively merges `override` onto `base`. Plain objects are merged key-by-key
  * (so a table customizing e.g. `mantineTableProps.style` doesn't lose sibling
  * defaults like `highlightOnHover`); arrays, functions, and primitives in `override`
  * replace `base` outright, since those can't be meaningfully merged.
+ *
+ * feature-plan-hotfix-table-state.md: it never returns one of `base`'s plain objects — they're copied — so the shared
+ * defaults can't be handed to a table (mantine-react-table writes into the `initialState` it receives).
  */
 function deepMerge<T>(base: T, override: T): T {
   if (isPlainObject(base) && isPlainObject(override)) {
-    const merged: Record<string, unknown> = { ...base };
+    const merged = copyPlain(base) as Record<string, unknown>;
     for (const key of Object.keys(override)) {
       merged[key] = deepMerge((base as Record<string, unknown>)[key], override[key]);
     }
     return merged as T;
   }
-  return override !== undefined ? override : base;
+  return override !== undefined ? override : copyPlain(base);
 }
 
 /** `aria-sort` on sortable headers (UX-AUDIT A11). Trap T-A: a table passing its own table-level
@@ -39,7 +59,12 @@ function sortHeaderProps({ column }: { column: MRT_Column<MRT_RowData> }) {
   return { 'aria-sort': sorted === 'asc' ? 'ascending' : sorted === 'desc' ? 'descending' : 'none' } as const;
 }
 
-const DEFAULT_TABLE_OPTIONS = {
+/**
+ * The defaults every table starts from. Frozen (recursively, plain objects): a table can only ever get a copy
+ * (deepMerge), and any in-place write throws in tests instead of leaking into the next table
+ * (feature-plan-hotfix-table-state.md). Exported for the tests.
+ */
+export const DEFAULT_TABLE_OPTIONS = deepFreezePlain({
   layoutMode: 'semantic',
   enableColumnActions: false,
   enableDensityToggle: false,
@@ -69,7 +94,7 @@ const DEFAULT_TABLE_OPTIONS = {
     },
   },
   localization: { noRecordsToDisplay: 'Nothing here yet.' },
-} as const;
+} as const);
 
 // ── numericColumn (feature-plan-ux-kit-contracts.md §3.4.1) ──────────────────────────────────────────────────────
 
@@ -209,6 +234,9 @@ export function useAppTable<T extends MRT_RowData>(options: MRT_TableOptions<T> 
   }
 
   const merged = deepMerge(deepMerge(DEFAULT_TABLE_OPTIONS as unknown as MRT_TableOptions<T>, kit as MRT_TableOptions<T>), { ...mrt, columns });
+  // Defense in depth (feature-plan-hotfix-table-state.md §2): MRT mutates the initialState it receives, so each call gets
+  // its own object.
+  merged.initialState = { ...merged.initialState };
 
   if (expandable) {
     const callerState = mrt.state ?? {};
