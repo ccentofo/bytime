@@ -5,6 +5,7 @@ import type { HomeView } from '@/lib/home/attention';
 import { approvableScope, loadApprovalFacts } from './approval-rules';
 import { approvalQueue } from './approval-queue';
 import { approvalNotices } from './approval-notices';
+import { approvalScopesToReview } from './approval-scopes';
 import { overlappingAssignments } from './cost-basis';
 import { contractBurnSummary } from './dashboard';
 import { currentPeriodSummary } from './employee-dashboard';
@@ -48,6 +49,8 @@ export async function getHomeData(userId: string): Promise<HomeView | { redirect
 
   // Setup's parallel COUNTs run AFTER the main burst (pool max 10 — trap T-I); admins only, no cache().
   const setup = isAdmin ? await getSetupStatusInternal() : null;
+  // feature-plan-approval-scope.md §4.2: one more query, after the burst and after setup's COUNTs, never alongside them.
+  const scopesToReview = isAdmin ? await approvalScopesToReview(db) : 0;
 
   return {
     userId,
@@ -67,6 +70,8 @@ export async function getHomeData(userId: string): Promise<HomeView | { redirect
       pendingConfig: pendingConfig ? { effectiveFrom: pendingConfig.effectiveFrom } : null,
       overlaps: overlaps.length,
       setup: { isComplete: setup.isComplete, done: setup.done, total: setup.total, steps: setup.steps },
+      // Outside the gate above: 0 is the usual value and must not hide the admin section.
+      approvalScopesToReview: scopesToReview,
     } : null,
   };
 }

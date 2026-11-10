@@ -41,6 +41,8 @@ export interface HomeView {
     pendingConfig: { effectiveFrom: string } | null;
     overlaps: number;
     setup: { isComplete: boolean; done: number; total: number; steps: HomeSetupStep[] };
+    /** feature-plan-approval-scope.md S6: converted approval scopes no admin has kept or removed yet. */
+    approvalScopesToReview: number;
   };
 }
 
@@ -141,6 +143,14 @@ export function attentionItems(v: HomeView): AttentionItem[] {
           ? 'Self-approval is back on: you’re now the only active admin and have no designated approver.'
           : 'Auditors prefer an independent reviewer. Designate another officer or your bookkeeper (supervisor role) to approve your timesheets.',
         action: { label: 'Choose a reviewer', href: '/admin/users' },
+      });
+    }
+    if (a.approvalScopesToReview > 0) {
+      items.push({
+        key: 'approval-scopes',
+        title: `${plural(a.approvalScopesToReview, 'approval scope', 'approval scopes')} to review`,
+        sentence: 'They were converted from earlier CLIN assignments. Keep the ones that are right.',
+        action: { label: 'Review', href: '/admin/assignments?tab=approval-scope' },
       });
     }
     if (!a.setup.isComplete) {
