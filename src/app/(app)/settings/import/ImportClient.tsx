@@ -483,7 +483,7 @@ export function ImportClient() {
       <PageHeader title="Data import" />
       <Alert icon={<IconAlertCircle size={16} />} color="signal" variant="light" mb="lg">
         <Text size="sm" fw={600}>Import Order — follow these steps in order:</Text>
-        <Text size="sm">1. Employees → 2. Contracts → 3. CLINs → 4. Labor Categories → 5. CLIN assignments</Text>
+        <Text size="sm">1. Employees → 2. Contracts → 3. CLINs → 4. Labor Categories → 5. Approval scope</Text>
       </Alert>
 
       <Tabs defaultValue="employees">

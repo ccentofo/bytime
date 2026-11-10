@@ -36,7 +36,7 @@ vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams('
 vi.mock('@/server/actions/labor-categories', () => ({ assignUserToLaborCategory: vi.fn(), endUserLaborCategoryAssignment: vi.fn(), getUserLaborCategoryAssignments: vi.fn() }));
 
 import { AssignmentsClient } from '@/app/(app)/admin/assignments/AssignmentsClient';
-import { holderTag, scopeRows, uncoveredClins } from '@/app/(app)/admin/assignments/ApprovalScopePanel';
+import { REVIEW_CHUNK, holderTag, reviewChunks, scopeRows, uncoveredClins } from '@/app/(app)/admin/assignments/ApprovalScopePanel';
 import { buttonByText, click, dialogTitled, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
 
 beforeAll(installDomStubs);
@@ -264,6 +264,47 @@ describe('Approval scope (AS-7)', () => {
     expect(actions.review).toHaveBeenCalledWith({ keep: ['r1', 'r3'], remove: ['r2'] });
     expect(actions.notify.mock.calls.map((c) => (c[0] as { title: string }).title)).toContain('Approval scopes reviewed');
     expect(actions.getScopesView).toHaveBeenCalled();
+  });
+
+  it('L9: the review table is named "Approval scopes to review"', async () => {
+    await openTab({ initialScopes: { scopes: [...SCOPES, scope('r1', 'u-sarah', 'clin-d2', '0002', 'DISA', { source: 'migration', needsReview: true })], membership: MEMBERSHIP } });
+    expect(panel().querySelector('[data-testid="scope-review"] table')!.getAttribute('aria-label')).toBe('Approval scopes to review');
+  });
+
+  it('L10: "Save review" sends at most 500 rows per call, summing the counts; a failed chunk stops and refetches', async () => {
+    const ids = Array.from({ length: 1201 }, (_, i) => `r${i}`);
+    const chunks = reviewChunks(ids, new Set(['r0', 'r600', 'r1200']));
+    expect(REVIEW_CHUNK).toBe(500);
+    expect(chunks.map((c) => [c.keep.length, c.remove])).toEqual([[499, ['r0']], [499, ['r600']], [200, ['r1200']]]);
+
+    const many = Array.from({ length: 501 }, (_, i) => scope(`m${i}`, 'u-sarah', 'clin-d2', '0002', 'DISA', { source: 'migration', needsReview: true }));
+    actions.review.mockResolvedValueOnce({ ok: true, data: { kept: 500, removed: 0, skipped: 0 } }).mockResolvedValueOnce({ ok: true, data: { kept: 1, removed: 0, skipped: 0 } });
+    await openTab({ initialScopes: { scopes: [...SCOPES, ...many], membership: MEMBERSHIP } });
+    await click([...panel().querySelectorAll('button')].find((b) => b.textContent === 'Save review'));
+    await wait(20);
+    expect(actions.review.mock.calls.map((c) => (c[0] as { keep: string[] }).keep.length)).toEqual([500, 1]);
+    expect(actions.notify.mock.calls.map((c) => (c[0] as { message: string }).message)).toContain('501 kept, 0 removed.');
+
+    unmount(m);
+    vi.clearAllMocks();
+    actions.review.mockResolvedValueOnce({ ok: false, code: 'validation', error: 'Review 500 approval scopes or fewer at a time.' });
+    actions.getScopesView.mockResolvedValueOnce({ scopes: [...SCOPES, ...many], membership: MEMBERSHIP });   // nothing was saved
+    await openTab({ initialScopes: { scopes: [...SCOPES, ...many], membership: MEMBERSHIP } });
+    await click([...panel().querySelectorAll('button')].find((b) => b.textContent === 'Save review'));
+    await wait(20);
+    expect(actions.review).toHaveBeenCalledTimes(1);                                // stopped after the failed chunk
+    expect(panel().querySelector('[data-testid="scope-review"] [role="alert"]')!.textContent).toBe('Review 500 approval scopes or fewer at a time.');
+    expect(actions.getScopesView).toHaveBeenCalled();                               // earlier chunks may be saved: refetch
+  }, 60_000);
+
+  it('L11: Add for a supervisor who already approves every active CLIN says so in the dropdown', async () => {
+    await openTab({ initialScopes: { scopes: [...SCOPES, scope('s9', 'u-sarah', 'clin-d2', '0002', 'DISA')], membership: MEMBERSHIP } });
+    const sarah = [...panel().querySelectorAll('tbody tr')].find((r) => r.textContent?.includes('Sarah Wilson'))!;
+    await click([...sarah.querySelectorAll('button')].find((b) => b.textContent === 'Add CLINs'));
+    const dialog = dialogTitled('Add CLINs to a supervisor')!;
+    const input = document.getElementById([...dialog.querySelectorAll<HTMLLabelElement>('label')].find((l) => l.textContent?.startsWith('CLINs they approve'))!.htmlFor)!;
+    await click(input);
+    expect(document.getElementById(input.getAttribute('aria-controls')!)?.textContent ?? document.body.textContent).toContain('They already approve every active CLIN.');
   });
 
   it('no review rows → no review list', async () => {

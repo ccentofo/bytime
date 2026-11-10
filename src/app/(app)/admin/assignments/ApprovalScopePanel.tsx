@@ -65,6 +65,19 @@ export function uncoveredClins(people: AccessPerson[], scopes: ApprovalScopeRow[
   return activeClins.filter((c) => (employees.get(c.clinId) ?? 0) > 0 && !covered.has(c.clinId));
 }
 
+/** reviewMigratedScopes takes at most this many rows per call (the server's limit). */
+export const REVIEW_CHUNK = 500;
+
+/** APPROVAL-SCOPE-AUDIT.md L10: the review split into calls of ≤ REVIEW_CHUNK rows, each with its keep / remove ids. */
+export function reviewChunks(ids: string[], toRemove: ReadonlySet<string>): Array<{ keep: string[]; remove: string[] }> {
+  const out: Array<{ keep: string[]; remove: string[] }> = [];
+  for (let i = 0; i < ids.length; i += REVIEW_CHUNK) {
+    const part = ids.slice(i, i + REVIEW_CHUNK);
+    out.push({ keep: part.filter((id) => !toRemove.has(id)), remove: part.filter((id) => toRemove.has(id)) });
+  }
+  return out;
+}
+
 /** The review list's supervisor tag: "(inactive)" or "(no longer a supervisor)". Exported for tests. */
 export function holderTag(s: Pick<ApprovalScopeRow, 'holderActive' | 'holderRole'>): string {
   if (!s.holderActive) return ' (inactive)';
@@ -144,11 +157,17 @@ export function ApprovalScopePanel({ people, scopes, membership, activeClins, ap
 
   async function saveReview() {
     setReviewError(null);
-    const ids = reviewRows.map((r) => r.id);
     await busy.run('review', async () => {
-      const result = await runAction(reviewMigratedScopes({ keep: ids.filter((id) => !toRemove.has(id)), remove: ids.filter((id) => toRemove.has(id)) }), { silent: true });
-      if (!result.ok) { setReviewError(result.error); return; }
-      toastSuccess({ title: 'Approval scopes reviewed', message: `${formatCount(result.data.kept)} kept, ${formatCount(result.data.removed)} removed.` });
+      // L10: the server takes ≤ 500 rows per call. A failed chunk stops the save; the chunks before it are saved, so the
+      // list is refetched either way.
+      let kept = 0, removed = 0;
+      for (const chunk of reviewChunks(reviewRows.map((r) => r.id), toRemove)) {
+        const result = await runAction(reviewMigratedScopes(chunk), { silent: true });
+        if (!result.ok) { setReviewError(result.error); await onChanged(); return; }
+        kept += result.data.kept;
+        removed += result.data.removed;
+      }
+      toastSuccess({ title: 'Approval scopes reviewed', message: `${formatCount(kept)} kept, ${formatCount(removed)} removed.` });
       setToRemove(new Set());
       await onChanged();
     });
@@ -212,7 +231,7 @@ export function ApprovalScopePanel({ people, scopes, membership, activeClins, ap
             weren&apos;t intended.
           </Notice>
           {reviewError && <Alert color="red" role="alert">{reviewError}</Alert>}
-          <Table verticalSpacing="xs">
+          <Table verticalSpacing="xs" aria-label="Approval scopes to review">
             <Table.Thead>
               <Table.Tr><Table.Th>Supervisor</Table.Th><Table.Th>CLIN</Table.Th><Table.Th>Keep or remove</Table.Th></Table.Tr>
             </Table.Thead>
@@ -261,6 +280,7 @@ export function ApprovalScopePanel({ people, scopes, membership, activeClins, ap
           <Select label="Supervisor" required searchable data={supervisors.map((p) => ({ value: p.id, label: p.fullName }))}
             value={form.supervisorId} error={formErrors.supervisor} onChange={(v) => setForm((f) => ({ ...f, supervisorId: v, clinIds: [] }))} />
           <MultiSelect label="CLINs they approve" required searchable data={clinGroups}
+            nothingFoundMessage="They already approve every active CLIN."
             placeholder={form.clinIds.length === 0 ? 'Choose CLINs' : undefined}
             value={form.clinIds} error={formErrors.clins} onChange={(v) => setForm((f) => ({ ...f, clinIds: v }))} />
           <Group justify="flex-end">

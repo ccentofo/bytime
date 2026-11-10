@@ -329,6 +329,27 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     expect(actions.updateUser).toHaveBeenCalledTimes(1);
   });
 
+  it('L7: the picker starts empty for the next person — a choice made for someone else never carries over', async () => {
+    await renderTeam([...TEAM, user('u3', 'Joe Doe')]);
+    await edit('Pat Doe');
+    await choose('Role', 'Supervisor');
+    const pickerInput = () => document.getElementById([...form().querySelectorAll<HTMLLabelElement>('label')].find((l) => l.textContent?.startsWith('CLINs they approve'))!.htmlFor)!;
+    await click(pickerInput());
+    await click([...document.body.querySelectorAll('[role="option"]')].find((o) => o.textContent === 'NAVAIR CLIN 0001 — Base'));
+    const chosen = () => [...(pickerInput().closest('.mantine-InputWrapper-root') ?? form()).querySelectorAll('.mantine-Pill-label')].map((p) => p.textContent);
+    expect(chosen()).toEqual(['NAVAIR CLIN 0001 — Base']);
+    await click(inDialog(form(), 'Cancel'));
+    await wait(300);
+    await edit('Joe Doe');
+    await choose('Role', 'Supervisor');
+    expect(chosen()).toEqual([]);
+    await click(inDialog(form(), 'Save changes'));
+    expect(dialogTitled('Make Joe Doe a supervisor?')!.textContent).toContain("They won't approve any CLINs yet.");
+    await click(inDialog(dialogTitled('Make Joe Doe a supervisor?')!, 'Make supervisor'));
+    await wait();
+    expect(actions.updateUser).toHaveBeenCalledWith('u3', { role: 'supervisor', approvalClinIds: [] });
+  });
+
   it('AS-15: switching the role away from supervisor hides the picker and sends no ids; demotion copy', async () => {
     await renderTeam();
     await edit('Pat Doe');

@@ -17,6 +17,8 @@ describe('the approval-scope import tab (S7)', () => {
     expect(src).toMatch(/importOrderNote="The supervisors must already exist/);
     expect(src).toContain('<Tabs.Tab value="assignments">Approval scope</Tabs.Tab>');
     expect(src).not.toContain('Bulk assign employees to CLINs');
+    expect(src).toContain('4. Labor Categories → 5. Approval scope');   // APPROVAL-SCOPE-AUDIT.md L8: the order banner
+    expect(src).not.toContain('5. CLIN assignments');
   });
 
   it('the template keeps the Email header and uses supervisor examples', () => {
