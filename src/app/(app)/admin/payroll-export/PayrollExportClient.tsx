@@ -281,7 +281,7 @@ export function PayrollExportClient({ presets, initialPreview, timeZone }: {
         <div id={refusedId} data-testid="payroll-refused">
           <Notice action={refused.reason === 'workweek-unset'
             ? { label: 'Set the workweek start day', href: '/settings/workspace' }
-            : { label: 'Set pay types in Indirect Codes', href: '/admin/indirect-codes' }}>
+            : { label: 'Set pay types on Indirect codes', href: '/admin/charge-codes?tab=indirect' }}>
             {refused.message}
           </Notice>
         </div>

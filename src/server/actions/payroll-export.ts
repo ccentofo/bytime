@@ -67,7 +67,7 @@ function validRange(data: { periodStart: CalendarDate; periodEnd: CalendarDate }
 
 /**
  * Preview the export for a range: per-employee FLSA totals and the flagged employees — or why the export is refused
- * (workweek start day unset → Settings; leave codes without a pay type → Indirect Codes).
+ * (workweek start day unset → Settings; leave codes without a pay type → Charge codes → Indirect).
  */
 export async function getPayrollExportPreview(data: {
   periodStart: CalendarDate;

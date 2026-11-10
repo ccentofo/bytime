@@ -98,7 +98,7 @@ vi.mock('@/lib/email/send', () => ({
   sendPasswordResetEmail: vi.fn(async () => ({ ok: true as const, id: 'test-message-id' })),
 }));
 
-import { getUsers, updateUser, createUser } from '@/server/actions/users';
+import { getUsers, updateUser, createUserWithPassword } from '@/server/actions/users';
 import { createApiKey } from '@/server/actions/api-keys';
 import { bulkImportEmployees } from '@/server/actions/import';
 import { startCheckout } from '@/server/actions/billing';
@@ -237,7 +237,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     actingAs(asFake(supervisor));
 
     await expectFailure(updateUser(target.id, { fullName: 'New Name' }), 'forbidden', /Admin role required/);
-    await expectFailure(createUser({ email: `new-${Date.now()}@bytime.dev`, fullName: 'New User' }), 'forbidden', /Admin role required/);
+    await expectFailure(createUserWithPassword({ email: `new-${Date.now()}@bytime.dev`, fullName: 'New User', role: 'employee', password: 'TestPass123!', flsaExempt: false }), 'forbidden', /Admin role required/);
     await expectFailure(createApiKey({ name: 'test key' }), 'forbidden', /Admin role required/);
     await expectFailure(bulkImportEmployees([]), 'forbidden', /Admin role required/);
     await expectFailure(startCheckout('starter'), 'forbidden', /Admin role required/);

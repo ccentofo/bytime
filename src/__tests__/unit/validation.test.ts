@@ -81,6 +81,9 @@ describe('validateUUID', () => {
     const uuid = '550e8400-e29b-41d4-a716-446655440000';
     expect(validateUUID(uuid, 'ID')).toBe(uuid);
   });
+  it('returns it lowercased (UX-4C1-AUDIT.md L1)', () => {
+    expect(validateUUID(' 550E8400-E29B-41D4-A716-446655440000 ', 'ID')).toBe('550e8400-e29b-41d4-a716-446655440000');
+  });
   it('throws for invalid UUID', () => {
     expect(() => validateUUID('not-a-uuid', 'ID')).toThrow('not a valid identifier');
   });

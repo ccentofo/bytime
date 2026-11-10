@@ -36,7 +36,11 @@ import type { CostReportEntry } from '@/server/internal/reports';
 
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
 const ROOT = path.resolve(__dirname, '../../..');
-const stored = (o: Record<string, unknown> = {}) => ({ id: 'cc1', clinId: 'clin-A', slinId: null, laborCategoryId: 'lc-1', isActive: true, ...o });
+// UX-4c §3.4: ids are validated as UUIDs.
+const CLIN_A = 'aaaaaaaa-0000-4000-8000-00000000000a';
+const CLIN_B = 'bbbbbbbb-0000-4000-8000-00000000000b';
+const SLIN_9 = '99999999-0000-4000-8000-000000000009';
+const stored = (o: Record<string, unknown> = {}) => ({ id: 'cc1', clinId: CLIN_A, slinId: null, laborCategoryId: 'lc-1', isActive: true, ...o });
 const logs = () => db.inserts.filter((i) => i.table === adminChangeLog).map((i) => i.values);
 
 beforeEach(() => db.reset());
@@ -45,20 +49,20 @@ describe('updateChargeCode — a used code\'s CLIN/SLIN never changes; a used co
   it('changing the CLIN of a used code is refused', async () => {
     db.onSelect(chargeCodes, [stored()]);
     db.onSelect(timesheetEntries, [{ id: 'e1' }]);
-    expect(await updateChargeCode('cc1', { clinId: 'clin-B' })).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/CLIN and SLIN can't change/) });
+    expect(await updateChargeCode('cc1', { clinId: CLIN_B })).toMatchObject({ ok: false, code: 'validation', error: expect.stringMatching(/CLIN and SLIN can't change/) });
     expect(db.updates).toEqual([]);
   });
 
   it('changing the SLIN of a used code is refused', async () => {
     db.onSelect(chargeCodes, [stored()]);
     db.onSelect(timesheetEntries, [{ id: 'e1' }]);
-    expect(await updateChargeCode('cc1', { slinId: 'slin-9' })).toMatchObject({ ok: false, error: expect.stringMatching(/CLIN and SLIN can't change/) });
+    expect(await updateChargeCode('cc1', { slinId: SLIN_9 })).toMatchObject({ ok: false, error: expect.stringMatching(/CLIN and SLIN can't change/) });
   });
 
   it('the unchanged clinId the form always sends is accepted (no "used" check needed)', async () => {
     db.onSelect(chargeCodes, [stored()]);
     db.onReturning('update', chargeCodes, [stored({ name: 'New name' })]);
-    expect(await updateChargeCode('cc1', { clinId: 'clin-A', name: 'New name' })).toMatchObject({ ok: true });
+    expect(await updateChargeCode('cc1', { clinId: CLIN_A, name: 'New name' })).toMatchObject({ ok: true });
     expect(logs()).toEqual([]);
   });
 
@@ -66,27 +70,27 @@ describe('updateChargeCode — a used code\'s CLIN/SLIN never changes; a used co
     db.onSelect(chargeCodes, [stored({ laborCategoryId: null })]);
     db.onSelect(timesheetEntries, []);
     db.onSelect(chargeCodeLaborCategories, []);
-    db.onReturning('update', chargeCodes, [stored({ clinId: 'clin-B' })]);
-    expect(await updateChargeCode('cc1', { clinId: 'clin-B' })).toMatchObject({ ok: true });
+    db.onReturning('update', chargeCodes, [stored({ clinId: CLIN_B })]);
+    expect(await updateChargeCode('cc1', { clinId: CLIN_B })).toMatchObject({ ok: true });
   });
 
   it('dated rates D3 (DR-Q2): an unused code with a labor category can\'t move to another CLIN', async () => {
     db.onSelect(chargeCodes, [stored()]);
     db.onSelect(timesheetEntries, []);
     db.onSelect(chargeCodeLaborCategories, []);
-    expect(await updateChargeCode('cc1', { clinId: 'clin-B' })).toEqual({ ok: false, code: 'validation', error: "Remove this charge code's labor categories before moving it to another CLIN or SLIN." });
+    expect(await updateChargeCode('cc1', { clinId: CLIN_B })).toEqual({ ok: false, code: 'validation', error: "Remove this charge code's labor categories before moving it to another CLIN or SLIN." });
     expect(db.updates).toEqual([]);
   });
 
   it('dated rates D3: a used code\'s labor category changes only through the category actions, which log it (old, new)', async () => {
     const CC = '44444444-4444-4444-8444-444444444444';
     const LC2 = '55555555-5555-4555-8555-555555555555';
-    db.onSelect(chargeCodes, [{ clinId: 'clin-A', slinId: null, laborCategoryId: 'lc-1' }]); // locked row
+    db.onSelect(chargeCodes, [{ clinId: CLIN_A, slinId: null, laborCategoryId: 'lc-1' }]); // locked row
     db.onSelect(chargeCodeLaborCategories, []);
-    db.onSelect(laborCategories, [{ clinId: 'clin-A', slinId: null }]);                      // DR-Q2 placement
+    db.onSelect(laborCategories, [{ clinId: CLIN_A, slinId: null }]);                      // DR-Q2 placement
     db.onSelect(timesheetEntries, [{ hours: '8.00' }]);                                     // re-priced hours
     db.onReturning('update', chargeCodes, [{ id: CC }]);
-    db.onSelect(chargeCodes, [{ clinId: 'clin-A', slinId: null, laborCategoryId: LC2 }]);   // view
+    db.onSelect(chargeCodes, [{ clinId: CLIN_A, slinId: null, laborCategoryId: LC2 }]);   // view
     db.onSelect(chargeCodeLaborCategories, []);
     expect((await correctChargeCodeCategory({ chargeCodeId: CC, target: 'starting', laborCategoryId: LC2, reason: 'rebid' })).ok).toBe(true);
     expect(logs()).toEqual([{

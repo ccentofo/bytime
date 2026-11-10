@@ -1,0 +1,43 @@
+/* feature-plan-ux-people-codes.md §4 (mockup "Assignments"): the person / supervisor group lines, codes in mono, a
+   dimmed row for a code that can't be charged, warn text, and the Give access checklist. */
+.mono {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: var(--mantine-font-size-sm);
+}
+
+.sub {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-sm);
+  margin-left: 8px;
+}
+
+.dim {
+  color: var(--mantine-color-dimmed);
+}
+
+.warn {
+  color: var(--mantine-color-warning-text);
+  font-size: var(--mantine-font-size-sm);
+  margin-left: 8px;
+}
+
+.oneLine {
+  white-space: nowrap;
+}
+
+.pick {
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-sm);
+  padding: 6px 10px;
+}
+
+.pickGroup {
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+.pickCode {
+  padding-left: 26px;
+}

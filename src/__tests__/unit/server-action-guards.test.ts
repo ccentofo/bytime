@@ -98,8 +98,8 @@ const WRITE_GATE_AUTH_ALLOWLIST: Record<string, { names: string[]; reason: strin
       'locked-out user still needs to be able to reset their password.',
   },
   'mfa.ts': {
-    names: ['completeMFASetup', 'disableMFA'],
-    reason: 'Credential-only write (TOTP secret / recovery codes). Same rationale as password.ts.',
+    names: ['completeMFASetup', 'disableMFA', 'adminResetMfa'],
+    reason: 'Credential-only write (TOTP secret / recovery codes; UX-4c R6: an admin turning off another user\'s two-step sign-in). Same rationale as password.ts.',
   },
   'notifications.ts': {
     names: ['updateNotificationPreferences'],
@@ -129,6 +129,7 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getUserChargeCodeIds: 'reads one user\'s active charge-code ids; no write',
     getChargeCodeAssignments: 'reads user↔charge-code assignments; no write',
     getChargeCodeReactivationInfo: 'certified-outputs C3: counts still-assigned users for the reactivate dialog; no write',
+    previewAutobridgeChargeCodes: 'UX-4c §3.3: lists the CLINs "Create codes from CLINs" would code; no write',
   },
   'clins.ts': { getClinsByContract: 'reads CLINs of a contract; no write' },
   'contracts.ts': {
@@ -153,6 +154,7 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getAssignableLaborCategories: 'reads assignable labor categories; no write',
     getLaborCategoriesByClin: 'reads a CLIN\'s labor categories; no write',
     getUserLaborCategoryAssignments: 'reads one user\'s LCAT assignments; no write',
+    getLaborCategoryAssignmentsWithOverlaps: 'UX-4C1-AUDIT.md M3: reads the LCAT assignments and the overlap ids (cost-basis.ts); no write',
     getUnpricedReport: 'UX-4b §4.4: reads the grouped unpriced report via cost-basis.ts; no write',
     getUnpricedSummary: 'UX-4b §4.4: reads the unpriced totals via cost-basis.ts; no write',
     getLaborCategoryPeopleCounts: 'UX-4b §4.2: one grouped COUNT(DISTINCT user_id) read; no write',
@@ -182,9 +184,13 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getSetupAccessGaps: 'feature-plan-ux-page-fixes.md C17: reads who has no chargeable code; no write',
   },
   'slins.ts': { getSlinsByClin: 'reads a CLIN\'s SLINs; no write' },
+  'audit.ts': {
+    getAdminChanges: 'UX-4c §6.4: reads admin_change_log (with names) for the Audit trail; no write',
+  },
   'users.ts': {
     getUsers: 'reads users (SAFE_USER_COLUMNS); no write',
     getApprovalNotices: 'certified-outputs C2: reads the approval rules + admin_change_log for the notices; no write',
+    getUsersForAdminPage: 'UX-4c §5.1: users + two-step on/off + lock state + approver name for the Users page; no write',
   },
 };
 

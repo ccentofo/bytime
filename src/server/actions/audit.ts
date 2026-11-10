@@ -3,12 +3,14 @@
 import { getDb } from '@/db';
 import {
   timesheetEntries, users, clins, contracts, slins, userAssignments, chargeCodes, indirectChargeCodes, importBatches,
-  periodEvents, timesheetPeriods,
+  periodEvents, timesheetPeriods, adminChangeLog, laborCategories,
 } from '@/db/schema';
-import { eq, and, gte, lt, lte, desc, sql, inArray } from 'drizzle-orm';
+import { eq, and, gte, lte, desc, sql, inArray } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
-import { requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
+import { requireAdmin, requireApprover, getEmployeeScope, assertCanAccessEmployee } from '@/lib/session';
 import { addDays, isBefore, type CalendarDate } from '@/lib/calendar-date';
+import { AUDIT_LATE_ROW, auditEntryWhere, validAuditFilters, type AuditEntryFilters } from '@/server/internal/audit-export';
+import { describeAdminChange, type AdminChangeNames } from '@/lib/audit/admin-change-format';
 import { existingPeriodLength } from '@/server/internal/pay-period-config';
 import { cellCodeLabel, cellKind, type CellKind } from '@/lib/cell-code';
 import { indirectCategoryLabel } from '@/lib/indirect-categories';
@@ -53,17 +55,12 @@ export interface AuditEntry {
   createdAt: Date;
   createdById: string | null;
   createdByName: string | null;
+  /** 'app' or an import source (R3: a late row is an app-recorded revision 1 with a reason). */
+  source: string;
 }
 
-export interface AuditFilters {
-  userId?: string;
-  contractId?: string;
-  clinId?: string;
-  startDate?: CalendarDate;
-  endDate?: CalendarDate;
-  reasonCode?: string;
-  revisionsOnly?: boolean; // if true, only show entries where revision_number > 1
-}
+/** The entry filters (feature-plan-ux-people-codes.md §6.2); `revisionsOnly` = "Changed entries only" (revision ≥ 2). */
+export type AuditFilters = AuditEntryFilters;
 
 export interface CellRevisionHistory {
   userId: string;
@@ -94,9 +91,15 @@ export interface AuditPeriodEvent {
   userId: string;
   userName: string;
   periodStart: CalendarDate;
+  /** The period's last day (its stored length, else the schedule's), for "Oct 1 – 15, 2026". */
+  periodEnd: CalendarDate;
   event: 'submitted' | 'approved' | 'rejected';
   text: string;
   selfApproved: boolean;
+  /** §6.3: who acted, and whether it was the employee themselves (a self-approval or self-return). */
+  actorId: string | null;
+  actorName: string | null;
+  self: boolean;
   /** Self-approvals: the recorded context (active admins at the time, last switch-on). */
   context: string | null;
   comment: string | null;
@@ -113,51 +116,25 @@ export interface AuditPeriodEvent {
  * the provided filter criteria, ordered by most recent first.
  * Limits to 500 rows to prevent overwhelming the UI.
  */
-/** Rows shown per audit search; one more is fetched so a capped result says so (fix round 1, F12). */
-const AUDIT_ROW_LIMIT = 500;
+/** §6.2: the entries list pages 50 at a time, with a total. */
+const AUDIT_PAGE_SIZE = 50;
+/** Period events shown per search; one more is fetched so a capped result says so (fix round 1, F12). */
+const EVENT_ROW_LIMIT = 500;
 /** Candidate period events read for a date-filtered search before the exact overlap check (R3). */
 const EVENT_CANDIDATE_LIMIT = 5000;
 
-export async function getAuditEntries(filters: AuditFilters): Promise<{ entries: AuditEntry[]; truncated: boolean }> {
+export async function getAuditEntries(filters: AuditFilters & { page?: number }): Promise<{ entries: AuditEntry[]; total: number; page: number; pageSize: number }> {
   const actor = await requireApprover();
   // F12: every id / date input validated after the guard.
-  if (filters.userId) validateUUID(filters.userId, 'Employee');
-  if (filters.contractId) validateUUID(filters.contractId, 'Contract');
-  if (filters.clinId) validateUUID(filters.clinId, 'CLIN');
-  const startDate = validateOptionalCalendarDate(filters.startDate, 'Start date');
-  const endDate = validateOptionalCalendarDate(filters.endDate, 'End date');
+  const f = validAuditFilters(filters);
+  const page = Number.isInteger(filters?.page) && (filters.page as number) >= 1 ? (filters.page as number) : 1;
   const scope = await getEmployeeScope(actor);
-  if (scope !== 'all' && scope.length === 0) return { entries: [], truncated: false };
+  if (scope !== 'all' && scope.length === 0) return { entries: [], total: 0, page, pageSize: AUDIT_PAGE_SIZE };
 
   const db = await getDb();
-
-  const conditions = [];
-
-  if (scope !== 'all') {
-    conditions.push(inArray(timesheetEntries.userId, scope));
-  }
-  if (filters.userId) {
-    conditions.push(eq(timesheetEntries.userId, filters.userId));
-  }
-  if (filters.clinId) {
-    conditions.push(eq(timesheetEntries.clinId, filters.clinId));
-  }
-  if (startDate) {
-    conditions.push(gte(timesheetEntries.entryDate, startDate));
-  }
-  if (endDate) {
-    // endDate is inclusive, so add 1 day for lt comparison
-    conditions.push(lt(timesheetEntries.entryDate, addDays(endDate, 1)));
-  }
-  if (filters.reasonCode) {
-    conditions.push(eq(timesheetEntries.changeReasonCode, filters.reasonCode));
-  }
-  if (filters.revisionsOnly) {
-    conditions.push(gte(timesheetEntries.revisionNumber, 2));
-  }
-  if (filters.contractId) {
-    conditions.push(eq(contracts.id, filters.contractId));
-  }
+  // §6.2: the ONE filter builder (shared with the count, the summary and the CSV).
+  const where = auditEntryWhere(db, scope, f);
+  const [{ total }] = await db.select({ total: sql<number>`COUNT(*)`.mapWith(Number) }).from(timesheetEntries).where(where);
 
   // C6: LEFT JOINs — indirect entries (no CLIN) are included; the code shown is the true cell code.
   const rows = await db
@@ -199,13 +176,13 @@ export async function getAuditEntries(filters: AuditFilters): Promise<{ entries:
     .leftJoin(indirectChargeCodes, eq(timesheetEntries.indirectCodeId, indirectChargeCodes.id))
     .leftJoin(importBatches, eq(timesheetEntries.importBatchId, importBatches.id))
     .leftJoin(importer, eq(importBatches.importedBy, importer.id))
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .where(where)
     // F12: a stable order — rows written in one transaction share created_at.
     .orderBy(desc(timesheetEntries.createdAt), desc(timesheetEntries.id))
-    .limit(AUDIT_ROW_LIMIT + 1);
+    .limit(AUDIT_PAGE_SIZE)
+    .offset((page - 1) * AUDIT_PAGE_SIZE);
 
-  const truncated = rows.length > AUDIT_ROW_LIMIT;
-  const entries = rows.slice(0, AUDIT_ROW_LIMIT).map((r) => {
+  const entries = rows.map((r) => {
     const kind = cellKind(r);
     return {
       id: r.id, userId: r.userId, userName: r.userName, userEmail: r.userEmail,
@@ -217,9 +194,10 @@ export async function getAuditEntries(filters: AuditFilters): Promise<{ entries:
       entryDate: r.entryDate as CalendarDate, hours: r.hours, revisionNumber: r.revisionNumber,
       changeReasonCode: r.changeReasonCode, comment: r.comment, createdAt: r.createdAt,
       createdById: r.createdById, createdByName: r.createdByName,
+      source: r.source,
     };
   });
-  return { entries, truncated };
+  return { entries, total, page, pageSize: AUDIT_PAGE_SIZE };
 }
 
 /**
@@ -341,22 +319,25 @@ export async function getAuditPeriodEvents(filters: Pick<AuditFilters, 'userId' 
       endDate ? lte(timesheetPeriods.periodStart, endDate) : undefined,
     ))
     .orderBy(desc(periodEvents.createdAt), desc(periodEvents.id))
-    .limit(startDate ? EVENT_CANDIDATE_LIMIT : AUDIT_ROW_LIMIT + 1);
+    .limit(startDate ? EVENT_CANDIDATE_LIMIT : EVENT_ROW_LIMIT + 1);
 
   const lengths = new Map<string, number>();
+  const lengthOf = async (start: CalendarDate, numDays: number | null) => {
+    const key = `${start}|${numDays ?? ''}`;
+    if (!lengths.has(key)) lengths.set(key, await existingPeriodLength(db, start, numDays));
+    return lengths.get(key)!;
+  };
   const overlapping = [];
   for (const r of candidates) {
     if (startDate) {
       const start = r.periodStart as CalendarDate;
-      const key = `${start}|${r.periodNumDays ?? ''}`;
-      if (!lengths.has(key)) lengths.set(key, await existingPeriodLength(db, start, r.periodNumDays));
-      if (isBefore(addDays(start, lengths.get(key)! - 1), startDate)) continue; // ended before the range
+      if (isBefore(addDays(start, (await lengthOf(start, r.periodNumDays)) - 1), startDate)) continue; // ended before the range
     }
     overlapping.push(r);
   }
   // R3: also truncated when the candidate prefetch itself hit its cap (more events may exist beyond it).
-  const truncated = overlapping.length > AUDIT_ROW_LIMIT || candidates.length === EVENT_CANDIDATE_LIMIT;
-  const rows = overlapping.slice(0, AUDIT_ROW_LIMIT);
+  const truncated = overlapping.length > EVENT_ROW_LIMIT || candidates.length === EVENT_CANDIDATE_LIMIT;
+  const rows = overlapping.slice(0, EVENT_ROW_LIMIT);
 
   // Names for actors and for whoever switched self-approval on (approval_context).
   const ids = new Set<string>();
@@ -369,52 +350,113 @@ export async function getAuditPeriodEvents(filters: Pick<AuditFilters, 'userId' 
   const nameById = new Map(names.map((n) => [n.id, n.fullName]));
   const timeZone = await getWorkspaceTimezone();
 
+  const ends = new Map<string, CalendarDate>();
+  for (const r of rows) {
+    const start = r.periodStart as CalendarDate;
+    ends.set(r.id, addDays(start, (await lengthOf(start, r.periodNumDays)) - 1));
+  }
   const events = rows.map((r) => {
     const label = periodEventLabel(r, r.userId, (id) => nameById.get(id) ?? null, timeZone);
     return {
-      id: r.id, userId: r.userId, userName: r.userName, periodStart: r.periodStart as CalendarDate, event: r.event,
+      id: r.id, userId: r.userId, userName: r.userName, periodStart: r.periodStart as CalendarDate, periodEnd: ends.get(r.id)!, event: r.event,
       text: label.text, selfApproved: label.selfApproved, context: label.context, comment: r.comment, createdAt: r.createdAt,
+      actorId: r.actorId, actorName: r.actorId ? nameById.get(r.actorId) ?? null : null, self: r.actorId !== null && r.actorId === r.userId,
     };
   });
   return { events, truncated };
 }
 
 /**
- * Get summary statistics for the audit trail, scoped to the approver's employees.
+ * The strip above the entries (feature-plan-ux-people-codes.md §6.2), for the SAME scope and filters as the list:
+ * entries, changed (revision ≥ 2), late (R3: an app-recorded revision 1 with a reason — rows, so it can differ from
+ * Approvals, which counts a cell late only if it was never corrected) and distinct people. COUNTs map to numbers.
  */
-export async function getAuditSummary(): Promise<{
-  totalEntries: number;
-  totalCorrections: number;
-  totalLateEntries: number;
-  uniqueUsers: number;
-}> {
+export async function getAuditSummary(filters: AuditFilters = {}): Promise<{ entries: number; changed: number; late: number; people: number }> {
   const actor = await requireApprover();
+  const f = validAuditFilters(filters);
   const scope = await getEmployeeScope(actor);
-  if (scope !== 'all' && scope.length === 0) {
-    return { totalEntries: 0, totalCorrections: 0, totalLateEntries: 0, uniqueUsers: 0 };
-  }
+  if (scope !== 'all' && scope.length === 0) return { entries: 0, changed: 0, late: 0, people: 0 };
 
   const db = await getDb();
-  const whereClause = scope === 'all' ? undefined : inArray(timesheetEntries.userId, scope);
-
-  // Single query with FILTER clauses — replaces 4 sequential COUNT queries
   const [result] = await db
     .select({
-      totalEntries: sql<number>`COUNT(*)`,
-      totalCorrections: sql<number>`COUNT(*) FILTER (WHERE ${timesheetEntries.changeReasonCode} = 'CORRECTION')`,
-      totalLateEntries: sql<number>`COUNT(*) FILTER (WHERE ${timesheetEntries.changeReasonCode} = 'LATE_ENTRY')`,
-      uniqueUsers: sql<number>`COUNT(DISTINCT ${timesheetEntries.userId})`,
+      entries: sql<number>`COUNT(*)`.mapWith(Number),
+      changed: sql<number>`COUNT(*) FILTER (WHERE ${timesheetEntries.revisionNumber} >= 2)`.mapWith(Number),
+      late: sql<number>`COUNT(*) FILTER (WHERE ${AUDIT_LATE_ROW})`.mapWith(Number),
+      people: sql<number>`COUNT(DISTINCT ${timesheetEntries.userId})`.mapWith(Number),
     })
     .from(timesheetEntries)
-    .where(whereClause);
+    .where(auditEntryWhere(db, scope, f));
+  return { entries: result?.entries ?? 0, changed: result?.changed ?? 0, late: result?.late ?? 0, people: result?.people ?? 0 };
+}
 
+// ── Admin changes (§6.4, admins only) ─────────────────────────────────────────────────────────────────────────────
+
+export interface AdminChangeEntry { id: string; createdAt: Date; change: string; details: string; byName: string | null }
+const ADMIN_CHANGE_PAGE_SIZE = 50;
+
+/**
+ * The admin change log for a date range in the WORKSPACE's days ((created_at AT TIME ZONE tz)::date), newest first, 50
+ * a page with a total; names for the subject AND for ids inside the values are resolved in batches per kind, and each
+ * row is worded by describeAdminChange (an unknown pair never throws).
+ */
+export async function getAdminChanges(input: { start: CalendarDate; end: CalendarDate; page?: number }): Promise<{ rows: AdminChangeEntry[]; total: number; page: number; pageSize: number }> {
+  await requireAdmin();
+  const start = validateCalendarDate(input?.start, 'Start date');
+  const end = validateCalendarDate(input?.end, 'End date');
+  const page = Number.isInteger(input?.page) && (input.page as number) >= 1 ? (input.page as number) : 1;
+  const db = await getDb();
+  const tz = await getWorkspaceTimezone();
+  const inRange = sql`(${adminChangeLog.createdAt} AT TIME ZONE ${tz})::date BETWEEN ${start}::date AND ${end}::date`;
+  const [{ total }] = await db.select({ total: sql<number>`COUNT(*)`.mapWith(Number) }).from(adminChangeLog).where(inRange);
+  const actor = alias(users, 'change_actor');
+  const rows = await db
+    .select({
+      id: adminChangeLog.id, createdAt: adminChangeLog.createdAt, entity: adminChangeLog.entity, action: adminChangeLog.action,
+      entityId: adminChangeLog.entityId, oldValue: adminChangeLog.oldValue, newValue: adminChangeLog.newValue, byName: actor.fullName,
+    })
+    .from(adminChangeLog)
+    .leftJoin(actor, eq(adminChangeLog.actorId, actor.id))
+    .where(inRange)
+    .orderBy(desc(adminChangeLog.createdAt), desc(adminChangeLog.id))
+    .limit(ADMIN_CHANGE_PAGE_SIZE)
+    .offset((page - 1) * ADMIN_CHANGE_PAGE_SIZE);
+  const names = await adminChangeNames(db, rows);
   return {
-    totalEntries: result.totalEntries,
-    totalCorrections: result.totalCorrections,
-    totalLateEntries: result.totalLateEntries,
-    uniqueUsers: result.uniqueUsers,
+    rows: rows.map((r) => ({ id: r.id, createdAt: r.createdAt, byName: r.byName, ...describeAdminChange(r, names) })),
+    total, page, pageSize: ADMIN_CHANGE_PAGE_SIZE,
   };
 }
+
+/** Batch-resolves every id a page of rows mentions: users, charge codes, labor categories and CLINs. Missing → absent ("(deleted)"). */
+async function adminChangeNames(db: Awaited<ReturnType<typeof getDb>>, rows: Array<{ entity: string; entityId: string; oldValue: unknown; newValue: unknown }>): Promise<AdminChangeNames> {
+  const userIds = new Set<string>(), codeIds = new Set<string>(), lcIds = new Set<string>(), clinIds = new Set<string>();
+  const val = (v: unknown) => (v && typeof v === 'object' ? v as Record<string, unknown> : {});
+  const add = (set: Set<string>, id: unknown) => { if (typeof id === 'string' && UUID_RE.test(id)) set.add(id); };
+  for (const r of rows) {
+    if (r.entity === 'user' || r.entity === 'self_approval') add(userIds, r.entityId);
+    if (r.entity === 'charge_code' || r.entity === 'charge_code_labor_category') add(codeIds, r.entityId);
+    if (r.entity === 'labor_category_rate') add(lcIds, r.entityId);
+    for (const v of [val(r.oldValue), val(r.newValue)]) {
+      add(userIds, v.approverId);
+      add(lcIds, v.laborCategoryId);
+      if (Array.isArray(v.clinIds)) for (const id of v.clinIds) add(clinIds, id);
+    }
+  }
+  const names: AdminChangeNames = {};
+  const [u, c, l, k] = await Promise.all([
+    userIds.size ? db.select({ id: users.id, name: users.fullName }).from(users).where(inArray(users.id, [...userIds])) : Promise.resolve([]),
+    codeIds.size ? db.select({ id: chargeCodes.id, name: chargeCodes.code }).from(chargeCodes).where(inArray(chargeCodes.id, [...codeIds])) : Promise.resolve([]),
+    lcIds.size ? db.select({ id: laborCategories.id, code: laborCategories.lcatCode, title: laborCategories.title }).from(laborCategories).where(inArray(laborCategories.id, [...lcIds])) : Promise.resolve([]),
+    clinIds.size ? db.select({ id: clins.id, clinNumber: clins.clinNumber, contractName: contracts.name }).from(clins).innerJoin(contracts, eq(clins.contractId, contracts.id)).where(inArray(clins.id, [...clinIds])) : Promise.resolve([]),
+  ]);
+  for (const r of u) names[r.id] = r.name;
+  for (const r of c) names[r.id] = r.name;
+  for (const r of l) names[r.id] = `${r.code} ${r.title}`;
+  for (const r of k) names[r.id] = `${r.contractName} CLIN ${r.clinNumber}`;
+  return names;
+}
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Get contracts for the filter dropdown. Admins see every contract; supervisors see only

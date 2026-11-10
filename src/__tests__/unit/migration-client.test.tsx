@@ -67,7 +67,7 @@ describe('History import (C11, T-C11)', () => {
     expect(m.container.querySelector('[data-testid="migration-import-order"]')!.textContent).toContain(
       'Import order: 1. Add employees, contracts and CLINs (Data import) and any indirect codes (Indirect codes). 2. Import timesheet entries. 3. Import period statuses.',
     );
-    expect([...m.container.querySelectorAll('a')].find((a) => a.textContent === 'Indirect codes')!.getAttribute('href')).toBe('/admin/indirect-codes');
+    expect([...m.container.querySelectorAll('a')].find((a) => a.textContent === 'Indirect codes')!.getAttribute('href')).toBe('/admin/charge-codes?tab=indirect');
   });
 
   it('a new file clears the old rows and filename before it is parsed; the import sends the new filename', async () => {

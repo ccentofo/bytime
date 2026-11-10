@@ -77,6 +77,8 @@ const nextConfig: NextConfig = {
       // the query passes through (the report accepts the legacy startDate/endDate).
       { source: "/admin/labor-categories", has: [{ type: "query", key: "report", value: "overlaps" }], destination: "/admin/reports/unpriced?reason=conflict", permanent: false },
       { source: "/admin/labor-categories", has: [{ type: "query", key: "report" }], destination: "/admin/reports/unpriced", permanent: false },
+      // UX-4c R1: Indirect codes is a tab of Charge codes.
+      { source: "/admin/indirect-codes", destination: "/admin/charge-codes?tab=indirect", permanent: false },
     ];
   },
 };

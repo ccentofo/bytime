@@ -135,3 +135,15 @@ Mockups were added to `ux-mockups/ux4-batch1.html`:
 - **Unpriced hours** (under Reports): entries grouped by cause × employee × code into "things to fix", each with total hours, a date range and a direct fix action, plus an Excel download with per-entry detail.
 
 The labor-category assignment form moves to People → Assignments as a third tab. Since Reports already absorbs these reports in UX-4b, these pages join UX-4b's scope.
+
+## 9. Product owner decisions on batch 2a (2026-11-06)
+`ux-mockups/ux4-batch2a.html` (Assignments, Charge codes, Users, Audit trail) is **approved as is**, with these defaults taken:
+- **Audit trail "Admin changes" tab: in.** It's a nice-to-have, not a DCAA timekeeping requirement. It shows the existing `admin_change_log` (rate, labor-category, approver, deactivation and workweek changes) to support internal-controls reviews.
+- **Admin reset of a user's two-step sign-in: in** (Users ⋯ menu).
+- **Audit trail CSV download: in.**
+
+## 10. Product owner decisions on batch 2b (2026-11-06)
+`ux-mockups/ux4-batch2b.html` (Setup checklist, Import, Integrations, Billing, Landing) is **approved as is**:
+- **QuickBooks "send on approval" switch: hidden for now.** The stored `autoSyncOnApproval` has nothing acting on it, so it isn't shown.
+- **Prices and the landing headline stay business placeholders** (Q4, Q5).
+- **Standing direction:** polished, usable and professional, not overengineered. The lead decides product details with DCAA in mind; the product owner judges the built result.

@@ -154,8 +154,8 @@ describe('the review Drawer (A-7)', () => {
     const card = dialog()!.querySelector('[data-testid="worth-a-look"]')!;
     expect(card.querySelector('h3')!.textContent).toBe('Worth a look (2)');
     const changes = [...card.querySelectorAll('[data-testid="flagged-change"]')].map((c) => c.textContent);
-    expect(changes[0]).toBe('Fri Oct 2 · Onsite: 8.00 → 6.00Correction of Error · “Left early.” · changed Oct 7');
-    expect(changes[1]).toBe('Mon Oct 5 · Onsite: 4.00, entered Oct 6Late Entry (>24hrs) · “Entered the next morning.”');
+    expect(changes[0]).toBe('Fri Oct 2 · Onsite: 8.00 → 6.00Correction · “Left early.” · changed Oct 7');
+    expect(changes[1]).toBe('Mon Oct 5 · Onsite: 4.00, entered Oct 6Late entry · “Entered the next morning.”');
     expect(dialog()!.textContent).toContain('Notes (1)');
     expect(dialog()!.querySelector('[data-testid="review-notes"]')!.textContent).toContain('Site visit at Pax River.');
   });

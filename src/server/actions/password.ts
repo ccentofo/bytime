@@ -2,29 +2,14 @@
 
 import { getDb, getDbForAuth } from '@/db';
 import { users } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import { requireSession, requireAdminFresh } from '@/lib/session';
 import { verifyCurrentPassword } from '@/server/internal/login-attempts';
 import { UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
-
-// ---------------------------------------------------------------------------
-// Password Validation
-// ---------------------------------------------------------------------------
-
-const MIN_PASSWORD_LENGTH = 8;
-const MAX_PASSWORD_LENGTH = 128;
-
-function validatePassword(password: string): string | null {
-  if (!password || password.length < MIN_PASSWORD_LENGTH) {
-    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
-  }
-  if (password.length > MAX_PASSWORD_LENGTH) {
-    return `Password must not exceed ${MAX_PASSWORD_LENGTH} characters.`;
-  }
-  return null; // Valid
-}
+import { validatePassword } from '@/lib/password-rules';
+import { logAdminChange } from '@/server/internal/admin-change-log';
 
 // ---------------------------------------------------------------------------
 // Self-Service Password Change
@@ -101,14 +86,15 @@ export async function changePassword(data: {
 
 /**
  * Reset a user's password (admin action). Does NOT require the current password.
- * Bumps the target's sessionVersion so their existing sessions end immediately.
+ * Bumps the target's sessionVersion (in SQL) so their existing sessions end, and logs `password_reset` in the same
+ * transaction (feature-plan-ux-people-codes.md R5). The hash is computed before the transaction opens.
  */
 export async function adminResetPassword(data: {
   targetUserId: string;
   newPassword: string;
 }): Promise<ActionResult<void>> {
   return userAction(async () => {
-    await requireAdminFresh();
+    const actor = await requireAdminFresh();
     const db = await getDbForAuth();
     // Validate new password
     const validationError = validatePassword(data.newPassword);
@@ -116,29 +102,23 @@ export async function adminResetPassword(data: {
       throw new UserFacingError(validationError);
     }
 
-    // Verify target user exists
-    const [target] = await db
-      .select({ id: users.id, sessionVersion: users.sessionVersion })
-      .from(users)
-      .where(eq(users.id, data.targetUserId));
-
-    if (!target) {
-      throw new UserFacingError('User not found.', 'not_found');
-    }
-
-    // Hash and save new password + increment session version (invalidates all existing sessions)
+    // Hash first: bcrypt never runs inside a transaction.
     const newHash = await bcrypt.hash(data.newPassword, 12);
 
-    await db.update(users)
-      .set({
-        passwordHash: newHash,
-        passwordChangedAt: new Date(),
-        updatedAt: new Date(),
-        sessionVersion: (target.sessionVersion ?? 1) + 1,
-      })
-      .where(eq(users.id, data.targetUserId));
-
-    return;
+    await db.transaction(async (tx) => {
+      // Save the new password and increment the session version in SQL (invalidates all existing sessions).
+      const updated = await tx.update(users)
+        .set({
+          passwordHash: newHash,
+          passwordChangedAt: new Date(),
+          updatedAt: new Date(),
+          sessionVersion: sql`${users.sessionVersion} + 1`,
+        })
+        .where(eq(users.id, data.targetUserId))
+        .returning({ id: users.id });
+      if (updated.length === 0) throw new UserFacingError('User not found.', 'not_found');
+      await logAdminChange(tx, { actorId: actor.id, entity: 'user', entityId: data.targetUserId, action: 'password_reset', oldValue: null, newValue: null });
+    });
   });
 }
 

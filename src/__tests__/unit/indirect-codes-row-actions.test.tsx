@@ -18,7 +18,7 @@ vi.mock('@/server/actions/indirect-codes', () => ({
 }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: actions.notify } }));
 
-import { IndirectCodesClient } from '@/app/(app)/admin/indirect-codes/IndirectCodesClient';
+import { IndirectCodesPanel as IndirectCodesClient } from '@/app/(app)/admin/charge-codes/IndirectCodesPanel';
 import { buttonByText, chooseRowAction, click, dialogTitled, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
 import { act } from 'react';
 
@@ -28,6 +28,12 @@ const CODES = [{
 }];
 
 beforeAll(installDomStubs);
+/** UX-4c §3.5: the Status filter (Active by default). */
+const showStatus = async (word: 'Active' | 'Inactive' | 'All') => {
+  const label = [...document.body.querySelectorAll<HTMLLabelElement>('label')].find((l) => l.textContent?.trim() === 'Status')!;
+  await click(document.getElementById(label.htmlFor));
+  await click([...document.body.querySelectorAll('[role="option"]')].find((o) => o.textContent === word));
+};
 let m: Mounted | undefined;
 beforeEach(() => { vi.clearAllMocks(); actions.getIndirectChargeCodes.mockResolvedValue(CODES as never); });
 afterEach(() => { unmount(m); m = undefined; });
@@ -64,6 +70,7 @@ describe('Indirect codes row actions (T10)', () => {
   it('L3: the table search finds the Status word', async () => {
     const codes = [CODES[0], { ...CODES[0], id: 'ic2', code: 'GA-01', name: 'G and A', isActive: false }];
     m = await mount(<IndirectCodesClient initialCodes={codes} />);
+    await showStatus('All');
     const input = m.container.querySelector('input[aria-label="Search this table"]') as HTMLInputElement;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Inactive');
@@ -97,13 +104,14 @@ describe('"Show on every timesheet" (C2) and the standard codes (C3)', () => {
     await click([...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Edit' && b.closest('tr')?.textContent?.includes(code)));
   };
 
-  it('T-C2a: the switch label and description; the "On timesheets" column says Yes / Hidden / Inactive; search finds "Hidden"', async () => {
+  it('T-C2a: the switch label and description; "On timesheets" says Everyone / Hidden / "—" when inactive (UX-4c §3.5); search finds "Hidden"', async () => {
     m = await mount(<IndirectCodesClient initialCodes={codes} />);
+    await showStatus('All');
     expect([...m.container.querySelectorAll('thead th')].map((t) => t.textContent)).toContain('On timesheets');
     const rows = rowText();
-    expect(rows.find((r) => r.includes('OH-01'))).toContain('Yes');
+    expect(rows.find((r) => r.includes('OH-01'))).toContain('Everyone');
     expect(rows.find((r) => r.includes('LV-JURY'))).toContain('Hidden');
-    expect(rows.find((r) => r.includes('UA-01'))).toMatch(/Inactive.*Inactive|InactiveInactive/);
+    expect(rows.find((r) => r.includes('UA-01'))).toContain('—Inactive');
     await editAndSave();
     const dialog = document.body.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain('Show on every timesheet');
@@ -142,8 +150,8 @@ describe('"Show on every timesheet" (C2) and the standard codes (C3)', () => {
     expect(actions.updateIndirectCode).toHaveBeenCalledTimes(1);
     expect(actions.updateIndirectCode.mock.calls[0][1]).toMatchObject({ availableToAll: false });
     expect(hideDialog()!.querySelector('[role="alert"]')!.textContent).toBe('That code is in use.');   // inside the confirm
-    // ...and only there: the edit form's own error badge is hidden while the confirm is open.
-    expect([...document.body.querySelectorAll('.mantine-Badge-root')].filter((b) => b.textContent === 'That code is in use.')).toHaveLength(0);
+    // ...and only there: the edit form's own error Alert is hidden while the confirm is open.
+    expect(document.body.querySelector('[data-testid="indirect-form-error"]')).toBeNull();
 
     await click(buttonByText('Hide code'));
     expect(actions.updateIndirectCode).toHaveBeenCalledTimes(2);

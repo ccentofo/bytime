@@ -35,7 +35,7 @@ describe('logAdminChange', () => {
   it('inserts exactly the given row with the CALLER\'s client and returns its id', async () => {
     const tx = createFakeControlDb();
     tx.onReturning('insert', adminChangeLog, [{ id: 'log-1' }]);
-    const row = { actorId: 'a', entity: 'charge_code', entityId: 'c', action: 'deactivated', oldValue: { isActive: true }, newValue: { isActive: false } };
+    const row = { actorId: 'a', entity: 'charge_code', entityId: 'c', action: 'deactivated', oldValue: { isActive: true }, newValue: { isActive: false } } as const;
     expect(await logAdminChange(tx as never, row)).toBe('log-1');
     expect(tx.inserts).toEqual([{ table: adminChangeLog, values: row }]);
   });
@@ -63,7 +63,8 @@ describe('static: no admin_change_log insert outside the writer', () => {
     expect(uses('src/server/actions/charge-codes.ts')).toBe(2);
     expect(uses('src/server/actions/labor-category-rates.ts')).toBe(3);
     expect(uses('src/server/actions/charge-code-categories.ts')).toBe(3);
-    expect(uses('src/server/actions/users.ts')).toBe(1);
+    // UX-4c R5: + updateUser (role / active / overtime) and createUserWithPassword (created, approver).
+    expect(uses('src/server/actions/users.ts')).toBe(6);
     expect(uses('src/server/actions/workspace-settings.ts')).toBe(1);
     expect(readFileSync(path.join(ROOT, 'src/server/internal/approval-rules.ts'), 'utf8')).toMatch(/const logId = await logAdminChange\(tx, \{/);
   });

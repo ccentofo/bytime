@@ -60,18 +60,17 @@ table th,
   font-variant-numeric: tabular-nums;
 }
 
-/* Audit Trail: correction rows (revision > 1, `data-correction` set in AuditTrailClient) get a warm tint that is dark
-   in dark mode — every text colour on it keeps 4.5:1 (body, dimmed, signal) and the icon 3:1 — plus a warning edge on
-   the first cell (a row-level shadow is unreliable in WebKit). Explicit scheme selectors, never the CSS light/dark
-   function (feature-plan-ux-page-fixes.md C14; §15.1 of the timesheet blueprint). Global by nature, so it lives here. */
+/* Audit Trail: a row changed after its first entry (revision ≥ 2, `data-correction`) or entered late (an app revision 1
+   with a reason, `data-late`) gets a warning edge on its first cell (a row-level shadow is unreliable in WebKit) — no
+   fill, so every text colour keeps the table's own contrast (feature-plan-ux-people-codes.md §6.2; the old tint failed
+   dark mode). Explicit scheme selectors, never the CSS light/dark function. Global by nature, so it lives here. */
 :root {
-  --audit-correction-bg: var(--mantine-color-warning-0);
   --audit-correction-edge: var(--mantine-color-warning-7);
 }
 :root[data-mantine-color-scheme='dark'] {
-  --audit-correction-bg: #2a2416;
   --audit-correction-edge: var(--mantine-color-warning-6);
 }
-tr[data-correction='true'] > td:first-child {
+tr[data-correction='true'] > td:first-child,
+tr[data-late='true'] > td:first-child {
   box-shadow: inset 3px 0 0 var(--audit-correction-edge);
 }

@@ -12,6 +12,7 @@ import bcrypt from 'bcryptjs';
 import { importRowMessage, parseImportDate } from '@/server/internal/import-errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
 import { validateRate } from '@/lib/validation';
+import { logAdminChange } from '@/server/internal/admin-change-log';
 
 // ---------------------------------------------------------------------------
 // Bulk Employee Import
@@ -82,15 +83,18 @@ export async function bulkImportEmployees(rows: EmployeeImportRow[]): Promise<Ac
             ? row.role.toLowerCase() as 'admin' | 'supervisor' | 'employee'
             : 'employee';
 
+          const flsaExempt = row.flsaExempt?.toLowerCase() === 'yes' || row.flsaExempt?.toLowerCase() === 'true';
           await tx.transaction(async (sp) => {
-            await sp.insert(users).values({
+            const [created] = await sp.insert(users).values({
               email,
               fullName: row.name.trim(),
               role,
               passwordHash: hash,
               isActive: true,
-              flsaExempt: row.flsaExempt?.toLowerCase() === 'yes' || row.flsaExempt?.toLowerCase() === 'true',
-            });
+              flsaExempt,
+            }).returning({ id: users.id });
+            // feature-plan-ux-people-codes.md R5: logged in the row's own savepoint (a failed row logs nothing).
+            await logAdminChange(sp, { actorId: actor.id, entity: 'user', entityId: created.id, action: 'created', oldValue: null, newValue: { role, flsaExempt } });
           });
 
           result.created++;

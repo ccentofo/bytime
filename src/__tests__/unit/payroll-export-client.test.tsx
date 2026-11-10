@@ -236,6 +236,9 @@ describe('downloads (P-4, F4 in the handler)', () => {
 
   it('a refused or failed preview never downloads; the buttons are WriteButtons with no `disabled`', async () => {
     await render({ ok: true, data: { status: 'refused', reason: 'leave-pay-type', codes: ['LV-X'], message: 'Set a pay type.' } });
+    // UX-4c R1 / §3.1: the fix lives on the Indirect tab of Charge codes.
+    const fix = byTestId('payroll-refused')!.querySelector('a')!;
+    expect([fix.textContent, fix.getAttribute('href')]).toEqual(['Set pay types on Indirect codes', '/admin/charge-codes?tab=indirect']);
     for (const id of ['payroll-download', 'payroll-download-daily']) {
       expect(byTestId(id)!.hasAttribute('disabled'), id).toBe(false);
       expect(byTestId(id)!.getAttribute('aria-disabled'), id).toBe('true');

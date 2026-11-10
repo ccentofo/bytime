@@ -332,7 +332,8 @@ describe('action-result contract (static, launch-blockers P4)', () => {
     const src = (f: string) => read(path.join(ACTIONS_DIR, f));
     const body = (f: string, fn: string) => parseExportedFunctions(src(f)).find((x) => x.name === fn)?.bodyText ?? '';
     expect(src('qbo.ts')).not.toMatch(/(?<![.\w])createCostClass\s*\(|(?<![.\w])createChargeCode\s*\(/);
-    expect(body('charge-codes.ts', 'assignAllUnderClin')).not.toMatch(/(?<![.\w])assignChargeCodeToUser\s*\(/);
+    // assignAllUnderClin / assignChargeCodeToUser are gone (UX-4c §4.2): assignChargeCodesToUser calls the internal writer.
+    expect(body('charge-codes.ts', 'assignChargeCodesToUser')).toMatch(/assignChargeCodeToUserInternal\(/);
     expect(body('migration.ts', 'importMigrationData')).not.toMatch(/(?<![.\w])validateMigrationData\s*\(/);
     expect(body('pay-period-config.ts', 'getCurrentEffectiveConfig')).not.toMatch(/(?<![.\w])getEffectiveConfigAt\s*\(/);
     expect(body('pay-period-config.ts', 'getPayPeriodConfig')).not.toMatch(/(?<![.\w])getCurrentEffectiveConfig\s*\(/);

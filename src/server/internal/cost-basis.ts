@@ -306,6 +306,11 @@ export async function overlappingAssignments(db: Pick<ReadDb, 'select'>): Promis
   return findOverlaps(rows);
 }
 
+/** The assignment ids in any overlap pair (Assignments → Labor categories marks them Overlaps). Pure. */
+export function overlapAssignmentIds(overlaps: OverlapRow[]): string[] {
+  return [...new Set(overlaps.flatMap((o) => [o.a.assignmentId, o.b.assignmentId]))];
+}
+
 /** Pure: the overlap rule over assignment rows (exported for unit tests). */
 export function findOverlaps(rows: Array<{
   assignmentId: string; userId: string; employeeName: string; effectiveDate: string; endDate: string | null;

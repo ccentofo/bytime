@@ -81,6 +81,12 @@ describe('route moves (UX-4b C-6)', () => {
     expect((await rules()).find((r) => r.source === '/admin/dashboard')).toMatchObject({ destination: '/admin/contracts', permanent: false });
   });
 
+  it('CC-1: /admin/indirect-codes → /admin/charge-codes?tab=indirect (307); no source file links to the old address', async () => {
+    expect((await rules()).find((r) => r.source === '/admin/indirect-codes')).toMatchObject({ destination: '/admin/charge-codes?tab=indirect', permanent: false });
+    const offenders = files(path.join(ROOT, 'src')).filter((f) => /\/admin\/indirect-codes/.test(stripComments(readFileSync(f, 'utf8'))));
+    expect(offenders.map((f) => path.relative(ROOT, f))).toEqual([]);
+  });
+
   it('no source file links to /admin/dashboard any more; Home\'s contracts item opens /admin/contracts', () => {
     const offenders = files(path.join(ROOT, 'src')).filter((f) => /['"`]\/admin\/dashboard/.test(stripComments(readFileSync(f, 'utf8'))));
     expect(offenders.map((f) => path.relative(ROOT, f))).toEqual([]);

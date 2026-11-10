@@ -233,7 +233,8 @@ describe('user management Approver select (CO-D12)', () => {
     const { readFileSync } = await import('fs');
     const { resolve } = await import('path');
     const src = readFileSync(resolve(__dirname, '../../app/(app)/admin/users/UsersClient.tsx'), 'utf8');
-    expect(src).toMatch(/approverSelectOptions\(\{ id: editingUser\.id, role: form\.role \}, users\)/);
+    // UX-4c §5.2: Add user offers it too (no id yet).
+    expect(src).toMatch(/approverSelectOptions\(\{ id: editingUser\?\.id \?\? '', role: form\.role \}, users\)/);
     expect(src).toMatch(/return approverOptions && \(/);
   });
 });
