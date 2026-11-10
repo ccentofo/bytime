@@ -43,8 +43,9 @@ export async function createChargeCodeInternal(db: TenantWriter, data: ChargeCod
 }
 
 /**
- * Assign a charge code to a user, and upsert the user_assignments row for the code's CLIN so supervisor approval
- * routing and LCAT rates stay intact.
+ * Assign a charge code to a user, and upsert the user_assignments row (CLIN MEMBERSHIP) for the code's CLIN, so LCAT
+ * rates and who-works-where stay intact. Membership never grants approval authority (feature-plan-approval-scope.md S1,
+ * S8): approval scope is only ever granted on Assignments → Approval scope.
  */
 export async function assignChargeCodeToUserInternal(db: TenantWriter, actorId: string, userId: string, chargeCodeId: string): Promise<void> {
   const [cc] = await db.select({ clinId: chargeCodes.clinId, slinId: chargeCodes.slinId })
@@ -58,8 +59,8 @@ export async function assignChargeCodeToUserInternal(db: TenantWriter, actorId: 
     set: { isActive: true, assignedBy: actorId },
   });
 
-  // CRITICAL: also ensure the user has a user_assignments row for the CLIN
-  // so supervisor scope and LCAT lookups work correctly.
+  // CRITICAL: also ensure the user has a user_assignments (membership) row for the CLIN, so LCAT lookups and the
+  // supervisors whose approval scope covers this CLIN see them. It never gives THIS user approval authority.
   await db.insert(userAssignments).values({
     userId, clinId: cc.clinId, slinId: cc.slinId ?? null, isActive: true, assignedBy: actorId,
   }).onConflictDoUpdate({

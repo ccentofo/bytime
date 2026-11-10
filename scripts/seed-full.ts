@@ -192,13 +192,14 @@ export async function seedRichData(
 
   // ── 6. User Assignments ──
   console.log('  Creating user assignments...');
+  // CLIN MEMBERSHIP (who works on a CLIN). feature-plan-approval-scope.md §6: it never grants approval — the
+  // supervisors' approval scope is seeded separately (approval_scopes, below). Sarah and Mike are members only of the
+  // CLINs they charge.
   const assignments = [
-    // Sarah (supervisor) — assigned to NAVAIR and DISA (so she can approve those employees)
+    // Sarah (supervisor) — charges NAVAIR 0001
     { userId: userIds.sarah, clinId: clinIds.nav01 },
-    { userId: userIds.sarah, clinId: clinIds.disa01 },
-    // Mike (supervisor) — assigned to Army
+    // Mike (supervisor) — charges Army 0001
     { userId: userIds.mike, clinId: clinIds.army01 },
-    { userId: userIds.mike, clinId: clinIds.army02 },
     // Jane — NAVAIR
     { userId: userIds.jane, clinId: clinIds.nav01 },
     { userId: userIds.jane, clinId: clinIds.nav02 },
@@ -227,7 +228,21 @@ export async function seedRichData(
   await db.insert(schema.userAssignments).values([
     { userId: userIds.lisa, clinId: clinIds.nav01, isActive: false, assignedBy: userIds.admin },
   ]);
-  console.log('    ✓ 15 user assignments created');
+  console.log(`    ✓ ${assignments.length} user assignments created`);
+
+  // ── 6a. Approval scopes (feature-plan-approval-scope.md §6): explicit grants by the admin, already reviewed, so the
+  // one-time review list is empty and the demo approvals are what they were.
+  const approvalScopeGrants = [
+    { supervisorId: userIds.sarah, clinId: clinIds.nav01 },
+    { supervisorId: userIds.sarah, clinId: clinIds.disa01 },
+    { supervisorId: userIds.mike, clinId: clinIds.army01 },
+    { supervisorId: userIds.mike, clinId: clinIds.army02 },
+  ];
+  const grantedAt = new Date();
+  await db.insert(schema.approvalScopes).values(approvalScopeGrants.map((g) => ({
+    ...g, isActive: true, source: 'app', grantedAt, grantedBy: userIds.admin, reviewedAt: grantedAt,
+  })));
+  console.log(`    ✓ ${approvalScopeGrants.length} approval scopes granted`);
 
   // ── 6b. Cost Classes + Charge Codes + User Charge Codes ──
   console.log('  Creating cost classes and charge codes...');
@@ -368,11 +383,12 @@ export async function seedRichData(
   const reviewerFor = (employeeId: string): string => {
     if (supervisorIds.includes(employeeId)) return userIds.admin; // their designated approver
     const clinsOf = (u: string) => new Set(assignments.filter((a) => a.userId === u).map((a) => a.clinId));
+    const scopeOf = (s: string) => new Set(approvalScopeGrants.filter((g) => g.supervisorId === s).map((g) => g.clinId));
     const mine = clinsOf(employeeId);
-    // Prefer Mike for Army work (as before), else Sarah — but only a supervisor who really shares a CLIN.
+    // Prefer Mike for Army work (as before), else Sarah — but only a supervisor whose approval scope covers their CLIN.
     const preferred = [...mine].some((c) => c === clinIds.army01 || c === clinIds.army02) ? [userIds.mike, userIds.sarah] : [userIds.sarah, userIds.mike];
-    const reviewer = preferred.find((s) => [...clinsOf(s)].some((c) => mine.has(c)));
-    if (!reviewer) throw new Error(`seed: no supervisor shares a CLIN with ${employeeId}`);
+    const reviewer = preferred.find((s) => [...scopeOf(s)].some((c) => mine.has(c)));
+    if (!reviewer) throw new Error(`seed: no supervisor approves a CLIN of ${employeeId}`);
     return reviewer;
   };
 

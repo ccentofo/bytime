@@ -7,7 +7,8 @@ import { getTestDb, cleanupTestData } from './helpers';
  * Certified outputs fix round 1, T3 (C8): the demo seeder conforms to the rules the app enforces — run it TWICE (it
  * clears and re-seeds), then: every approved period's reviewer passes canApprove; every non-draft period has a
  * `submitted` event and every approved one an `approved` event; workweek = Monday (1); every leave code has a pay type;
- * exactly one baseline self_approval row.
+ * exactly one baseline self_approval row. feature-plan-approval-scope.md AS-16: Sarah and Mike approve the same people
+ * as before the split (their scope = the CLINs they used to be assigned to), and the review list is empty.
  */
 
 vi.mock('@/db', async (importOriginal) => ({
@@ -19,7 +20,8 @@ vi.mock('@/db', async (importOriginal) => ({
 }));
 
 import { seedRichData } from '../../../scripts/seed-full';
-import { canApprove, loadApprovalFacts } from '@/server/internal/approval-rules';
+import { approvableScope, canApprove, loadApprovalFacts } from '@/server/internal/approval-rules';
+import { approvalScopesToReview } from '@/server/internal/approval-scopes';
 
 describe('seeder conformance (T3)', () => {
   afterAll(async () => { await cleanupTestData(); });
@@ -71,5 +73,20 @@ describe('seeder conformance (T3)', () => {
     const baseline = await t.select().from(schema.adminChangeLog).where(and(eq(schema.adminChangeLog.entity, 'self_approval')));
     expect(baseline).toHaveLength(1);
     expect(baseline[0]).toMatchObject({ action: 'enabled', newValue: expect.objectContaining({ reason: 'demo workspace seeded' }) });
+
+    // AS-16: the same approvals as before. Sarah was on NAVAIR 0001 and DISA 0001, Mike on Army 0001 and 0002:
+    // Sarah → Jane (NAVAIR), John (NAVAIR, DISA), Emily (DISA); Mike → Emily and Robert (Army). Lisa is inactive and off.
+    const users = await t.select({ id: schema.users.id, fullName: schema.users.fullName }).from(schema.users);
+    const id = (n: string) => users.find((u) => u.fullName === n)!.id;
+    const nameOf = (uid: string) => users.find((u) => u.id === uid)!.fullName;
+    expect(approvableScope(facts, id('Sarah Wilson')).map(nameOf).sort()).toEqual(['Emily Davis', 'Jane Smith', 'John Doe']);
+    expect(approvableScope(facts, id('Mike Chen')).map(nameOf).sort()).toEqual(['Emily Davis', 'Robert Taylor']);
+    // Their scope is explicit and reviewed (the review list is empty); their membership is only what they charge.
+    expect(await approvalScopesToReview(t)).toBe(0);
+    const scopes = await t.select().from(schema.approvalScopes);
+    expect(scopes).toHaveLength(4);
+    expect(scopes.every((r) => r.isActive && r.source === 'app' && r.reviewedAt !== null && r.grantedBy === id('Admin User'))).toBe(true);
+    const supMembership = await t.select().from(schema.userAssignments).where(inArray(schema.userAssignments.userId, [id('Sarah Wilson'), id('Mike Chen')]));
+    expect(supMembership).toHaveLength(2);
   }, 300_000);
 });

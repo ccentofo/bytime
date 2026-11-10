@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import path from 'path';
 import { eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
-import { getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, assignUserToClin, cleanupTestData } from './helpers';
+import { getTestDb, createTestUser, createTestContract, createTestClin, createTestChargeCode, assignUserToClin, assignApprovalScope, cleanupTestData } from './helpers';
 
 /**
  * feature-plan-ux-navigation-home.md §4.5 / T9: getHomeData — the role comes from fresh facts (a DB employee is sent to
@@ -122,6 +122,7 @@ describe('getHomeData (T9)', () => {
     await user('Ann Admin', 'admin');
     const clin = await createTestClin((await createTestContract()).id);
     for (const u of [sup, mine]) await assignUserToClin(u.id, clin.id);
+    await assignApprovalScope(sup.id, clin.id); // feature-plan-approval-scope.md S2: explicit scope
     await period(mine.id, '2026-10-01', 'submitted');
 
     const v = view(await getHomeData(sup.id));
