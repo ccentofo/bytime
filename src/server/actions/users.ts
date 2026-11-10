@@ -127,9 +127,9 @@ export async function updateUser(id: string, data: {
 }) {
   return userAction(async () => {
     const actor = await requireAdminFresh();
-    id = validateUUID(id, 'User');
+    id = validateUUID(id, 'User');   // lowercased: the self checks below compare with `===` (UX-4C1-AUDIT.md L1)
     const approvalClinIds = approvalClinList(data.approvalClinIds);
-    if (approvalClinIds !== undefined && data.role !== undefined && data.role !== 'supervisor') throw new UserFacingError(APPROVAL_CLINS_ONLY_FOR_SUPERVISORS);   // lowercased: the self checks below compare with `===` (UX-4C1-AUDIT.md L1)
+    if (approvalClinIds !== undefined && data.role !== undefined && data.role !== 'supervisor') throw new UserFacingError(APPROVAL_CLINS_ONLY_FOR_SUPERVISORS);
     const db = await getDbForWrite();
 
     // Server-action arguments are untrusted JSON. The last-admin and self-deactivation checks

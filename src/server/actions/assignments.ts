@@ -1,7 +1,7 @@
 'use server';
 
 import { getDb, getDbForWrite } from '@/db';
-import { approvalScopes, userAssignments, users, clins, contracts, slins } from '@/db/schema';
+import { approvalScopes, userAssignments, users, clins, contracts } from '@/db/schema';
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
@@ -15,57 +15,6 @@ import {
 import { notifyReroutedApprovals } from '@/server/internal/submission-notify';
 
 const CHOOSE_SUPERVISOR = 'Choose an active supervisor.';
-
-export async function getAssignments() {
-  await requireAdmin();
-  const db = await getDb();
-  return db
-    .select({
-      id: userAssignments.id,
-      userId: userAssignments.userId,
-      clinId: userAssignments.clinId,
-      slinId: userAssignments.slinId,
-      isActive: userAssignments.isActive,
-      assignedAt: userAssignments.assignedAt,
-      userName: users.fullName,
-      userEmail: users.email,
-      clinNumber: clins.clinNumber,
-      clinDescription: clins.description,
-      contractName: contracts.name,
-      contractNumber: contracts.contractNumber,
-      slinNumber: slins.slinNumber,
-      slinDescription: slins.description,
-    })
-    .from(userAssignments)
-    .innerJoin(users, eq(userAssignments.userId, users.id))
-    .innerJoin(clins, eq(userAssignments.clinId, clins.id))
-    .innerJoin(contracts, eq(clins.contractId, contracts.id))
-    .leftJoin(slins, eq(userAssignments.slinId, slins.id))
-    .orderBy(users.fullName, contracts.name);
-}
-
-export async function getAssignmentsForUser(userId: string) {
-  await requireAdmin();
-  const db = await getDb();
-  return db
-    .select({
-      id: userAssignments.id,
-      clinId: userAssignments.clinId,
-      slinId: userAssignments.slinId,
-      isActive: userAssignments.isActive,
-      clinNumber: clins.clinNumber,
-      clinDescription: clins.description,
-      contractName: contracts.name,
-      contractNumber: contracts.contractNumber,
-      slinNumber: slins.slinNumber,
-    })
-    .from(userAssignments)
-    .innerJoin(clins, eq(userAssignments.clinId, clins.id))
-    .innerJoin(contracts, eq(clins.contractId, contracts.id))
-    .leftJoin(slins, eq(userAssignments.slinId, slins.id))
-    .where(eq(userAssignments.userId, userId))
-    .orderBy(contracts.name);
-}
 
 // ── Approval scope (feature-plan-approval-scope.md §4.2) ───────────────────────────────────────────────────────────
 

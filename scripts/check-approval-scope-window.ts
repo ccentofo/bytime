@@ -23,24 +23,21 @@ import * as schema from '../src/db/schema';
 import { decrypt } from '../src/lib/encryption';
 import { printTargetBanner } from './lib/target';
 import { MIGRATABLE_TENANT_STATUSES } from './lib/tenant-migration';
-import { approvalScopeWindowFindings, formatWindowFindings } from '../src/server/internal/approval-scope-window';
+import {
+  WINDOW_CAVEAT, approvalScopeWindowFindings, formatWindowFindings, parseWindowSince, windowErrorDetail,
+} from '../src/server/internal/approval-scope-window';
 
 function fail(msg: string): never {
   console.error(`✗ ${msg}`);
   process.exit(1);
 }
 
-/** Never let a raw connection string reach the console — only tenant slugs are logged. */
-const redact = (message: string) => message.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[redacted-connection-string]');
-
 function parseArgs(argv: string[]) {
   const sinceIdx = argv.indexOf('--since');
-  const raw = sinceIdx !== -1 ? argv[sinceIdx + 1] : undefined;
-  if (!raw) fail('--since is required: the time `db:migrate:all` started (MIGRATE_START), e.g. --since "2026-11-12T14:05:00Z".');
-  const since = new Date(raw);
-  if (Number.isNaN(since.getTime())) fail(`--since "${raw}" is not a date/time.`);
+  const parsed = parseWindowSince(sinceIdx !== -1 ? argv[sinceIdx + 1] : undefined);
+  if ('error' in parsed) fail(parsed.error);
   const tenantIdx = argv.indexOf('--tenant');
-  return { since, tenant: tenantIdx !== -1 ? argv[tenantIdx + 1] : undefined };
+  return { since: parsed.since, tenant: tenantIdx !== -1 ? argv[tenantIdx + 1] : undefined };
 }
 
 async function main() {
@@ -61,7 +58,8 @@ async function main() {
   if (onlySlug) rows = rows.filter((t) => t.slug === onlySlug);
   if (rows.length === 0) fail(onlySlug ? `No tenant with slug "${onlySlug}".` : 'No tenants found.');
 
-  console.log(`Approval-scope window check since ${since.toISOString()} — ${rows.length} tenant(s). Read-only.\n`);
+  console.log(`Approval-scope window check since ${since.toISOString()} — ${rows.length} tenant(s). Read-only.`);
+  console.log(`${WINDOW_CAVEAT}\n`);
   let failed = false;
   for (const t of rows) {
     let sql: ReturnType<typeof postgres> | null = null;
@@ -71,7 +69,7 @@ async function main() {
       for (const line of formatWindowFindings(t.slug, findings)) console.log(line);
     } catch (err) {
       failed = true;
-      console.log(`✗ ${t.slug}: couldn't be read — ${redact(String((err as Error)?.message ?? err))}`);
+      console.log(`✗ ${t.slug}: couldn't be read — ${windowErrorDetail(err)}`);
     } finally {
       if (sql) await sql.end({ timeout: 5 });
     }

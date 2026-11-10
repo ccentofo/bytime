@@ -334,8 +334,7 @@ export async function getUserChargeCodeIds(userId: string): Promise<string[]> {
 
 /**
  * Read-only: all user↔charge-code assignments (active and inactive) with joined
- * display fields, for the admin Assignments table. Mirrors the CLIN-assignment
- * table's shape (getAssignments in assignments.ts).
+ * display fields, for the admin Assignments table (Charge code access).
  */
 export async function getChargeCodeAssignments() {
   await requireAdmin();

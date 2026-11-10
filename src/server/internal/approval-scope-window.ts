@@ -75,3 +75,31 @@ export function formatWindowFindings(slug: string, f: ApprovalScopeWindowFinding
   }
   return lines;
 }
+
+// ── The script's argument and error handling (APPROVAL-SCOPE-AUDIT.md L3), pure for tests ───────────────────────────
+
+const ISO_SINCE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2}))?$/;
+
+/** `--since` must be ISO 8601: a date (`2026-11-12`, UTC midnight) or a date-time WITH a zone (`2026-11-12T14:05:00Z`). */
+export function parseWindowSince(raw: string | undefined): { since: Date } | { error: string } {
+  if (!raw) return { error: '--since is required: the time `db:migrate:all` started (MIGRATE_START), e.g. --since "2026-11-12T14:05:00Z".' };
+  const since = new Date(raw);
+  if (!ISO_SINCE.test(raw) || Number.isNaN(since.getTime())) {
+    return { error: `--since "${raw}" isn't an ISO 8601 date or date-time with a zone (e.g. 2026-11-12T14:05:00Z).` };
+  }
+  return { since };
+}
+
+/** Never print a connection string. */
+export const redactConnectionStrings = (message: string) => message.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[redacted-connection-string]');
+
+/** A tenant's failure, readable: the driver's cause (Drizzle wraps it as "Failed query: …"), redacted. */
+export function windowErrorDetail(err: unknown): string {
+  const e = err as { message?: unknown; cause?: { message?: unknown } } | null;
+  const message = typeof e?.cause?.message === 'string' ? e.cause.message : typeof e?.message === 'string' ? e.message : String(err);
+  return redactConnectionStrings(message);
+}
+
+/** Printed once before the tenants: what list 1 can also contain. */
+export const WINDOW_CAVEAT = 'Run this right after the deploy goes live: "on a CLIN but has no approval scope row" also lists supervisors given a '
+  + 'charge code after the deploy (charging never grants approval now), which need no action.';
