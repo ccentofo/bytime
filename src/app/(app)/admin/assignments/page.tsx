@@ -71,7 +71,7 @@ export default async function AssignmentsPage({ searchParams }: { searchParams: 
   const overlapIds = overlapAssignmentIds(overlapping);
 
   // §4.4: each active supervisor's effective approver, by the same rule as approvals, from the users already loaded.
-  const facts: ApprovalFacts = { users: new Map(allUsers.map((u) => [u.id, { id: u.id, role: u.role, isActive: u.isActive, approverId: u.approverId }])), clinsByUser: new Map() };
+  const facts: ApprovalFacts = { users: new Map(allUsers.map((u) => [u.id, { id: u.id, role: u.role, isActive: u.isActive, approverId: u.approverId }])), clinsByUser: new Map(), scopeClinsBySupervisor: new Map() };
   const nameById = new Map(allUsers.map((u) => [u.id, u.fullName]));
   const approverNames: Record<string, string | null> = {};
   for (const u of allUsers) {

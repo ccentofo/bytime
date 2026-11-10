@@ -46,7 +46,7 @@ export async function getUsersForAdminPage(): Promise<AdminPageUser[]> {
   const db = await getDb();
   const rows = await db.select({ ...SAFE_USER_COLUMNS, mfaEnabled: users.totpEnabled }).from(users).orderBy(users.fullName);
   const locks = await getLockoutsForEmails(db, rows.map((r) => r.email));
-  const facts: ApprovalFacts = { users: new Map(rows.map((r) => [r.id, { id: r.id, role: r.role, isActive: r.isActive, approverId: r.approverId }])), clinsByUser: new Map() };
+  const facts: ApprovalFacts = { users: new Map(rows.map((r) => [r.id, { id: r.id, role: r.role, isActive: r.isActive, approverId: r.approverId }])), clinsByUser: new Map(), scopeClinsBySupervisor: new Map() };
   const nameById = new Map(rows.map((r) => [r.id, r.fullName]));
   return rows.map((r) => {
     const lock = r.isActive ? locks.get(r.email.toLowerCase().trim()) : undefined;

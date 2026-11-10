@@ -48,7 +48,8 @@ export interface ParsedFunction {
 export function parseExportedFunctions(source: string): ParsedFunction[] {
   const results: ParsedFunction[] = [];
   // Also matches plain `export function` (internal helpers, feature-plan-launch-blockers.md P4).
-  const fnRegex = /export\s+(?:async\s+)?function\s+(\w+)\s*\(/g;
+  // A generic parameter list (`function scopeChange<R>(`) is allowed between the name and the '('.
+  const fnRegex = /export\s+(?:async\s+)?function\s+(\w+)\s*(?:<[^()]*>)?\s*\(/g;
   let match: RegExpExecArray | null;
 
   while ((match = fnRegex.exec(source)) !== null) {

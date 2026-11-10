@@ -5,12 +5,15 @@ import { sql } from 'drizzle-orm';
 import * as schema from '@/db/schema';
 import { getTestDb, createTestUser, createTestContract, createTestClin, cleanupTestData } from './helpers';
 import { approvalScopeWindowFindings } from '@/server/internal/approval-scope-window';
+import { canApprove, loadApprovalFacts } from '@/server/internal/approval-rules';
 
 /**
  * feature-plan-approval-scope.md §3 and §12.1, against Postgres:
  * AS-1  — the backfill statement READ FROM drizzle/0018_*.sql converts active supervisor membership into active,
  *         unreviewed scopes (an inactive supervisor's too), never an employee's or an inactive row; a re-run inserts
  *         nothing.
+ * AS-2  — after the backfill, a fixture (2 supervisors, 3 employees) gives the same literal canApprove matrix as the old
+ *         rule (a supervisor approved every employee sharing an active CLIN row).
  * AS-18 — the window check lists a supervisor's active membership row with no scope row, a role_changed to supervisor
  *         at or after --since, and an active unreviewed migrated scope whose membership row is inactive; it writes
  *         nothing.
@@ -62,6 +65,32 @@ describe('0018 backfill (AS-1)', () => {
     const again = await runBackfill() as unknown as { count: number };
     expect(again.count).toBe(0);
     expect(await scopes()).toHaveLength(2);
+  });
+});
+
+describe('no silent loss or gain (AS-2)', () => {
+  beforeEach(async () => { await cleanupTestData(); });
+  afterEach(async () => { await cleanupTestData(); });
+
+  it('after the backfill the canApprove matrix equals the old shared-CLIN rule, literally', async () => {
+    const [s1, s2] = [await createTestUser({ role: 'supervisor' }), await createTestUser({ role: 'supervisor' })];
+    const [e1, e2, e3] = [await createTestUser({ role: 'employee' }), await createTestUser({ role: 'employee' }), await createTestUser({ role: 'employee' })];
+    const k = await createTestContract();
+    const [c1, c2, c3] = [await createTestClin(k.id), await createTestClin(k.id), await createTestClin(k.id)];
+    await db().insert(schema.userAssignments).values([
+      { userId: s1.id, clinId: c1.id }, { userId: s1.id, clinId: c2.id },
+      { userId: s2.id, clinId: c2.id }, { userId: s2.id, clinId: c3.id },
+      { userId: e1.id, clinId: c1.id }, { userId: e2.id, clinId: c2.id }, { userId: e3.id, clinId: c3.id },
+      { userId: e3.id, clinId: c1.id, isActive: false },                                  // inactive: never counted
+    ]);
+    const matrix = async () => {
+      const f = await loadApprovalFacts(db() as never);
+      return [s1, s2].map((s) => [s1, s2, e1, e2, e3].map((u) => (u.id === s.id ? '-' : canApprove(f, s.id, u.id) ? 'Y' : 'n')).join(''));
+    };
+    expect(await matrix()).toEqual(['-nnnn', 'n-nnn']);                                 // before: no scope rows at all
+    await runBackfill();
+    // Columns: s1 s2 e1 e2 e3. The old rule: s1 shared c1 (e1) and c2 (e2); s2 shared c2 (e2) and c3 (e3); peers never.
+    expect(await matrix()).toEqual(['-nYYn', 'n-nYY']);
   });
 });
 
