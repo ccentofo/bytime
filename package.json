@@ -17,6 +17,7 @@
     "db:deploy": "tsx scripts/migrate.ts",
     "db:migrate:all": "node --conditions=react-server --import tsx scripts/migrate-all.ts",
     "db:migrate:check": "node --conditions=react-server --import tsx scripts/migrate-all.ts --check",
+    "scopes:window-check": "node --conditions=react-server --import tsx scripts/check-approval-scope-window.ts",
     "db:safety": "tsx scripts/check-migration-safety.ts",
     "db:generate:cp": "drizzle-kit generate --config=drizzle.control-plane.config.ts",
     "db:migrate:cp": "drizzle-kit migrate --config=drizzle.control-plane.config.ts",

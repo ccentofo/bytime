@@ -175,6 +175,29 @@ export const userAssignments = pgTable('user_assignments', {
 ]);
 
 // ---------------------------------------------------------------------------
+// Approval scopes (feature-plan-approval-scope.md S1): which CLINs each supervisor approves. The ONLY source of
+// CLIN-based approval — user_assignments is CLIN membership (who works on a CLIN) and never grants approval.
+// Every write goes through src/server/internal/approval-scopes.ts (locked, logged, re-routed).
+// ---------------------------------------------------------------------------
+
+export const approvalScopes = pgTable('approval_scopes', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  supervisorId: uuid('supervisor_id').notNull().references(() => users.id),
+  clinId: uuid('clin_id').notNull().references(() => clins.id),
+  isActive: boolean('is_active').notNull().default(true),
+  /** 'app' | 'migration' | 'import'. */
+  source: varchar('source', { length: 20 }).notNull().default('app'),
+  grantedAt: timestamp('granted_at', { withTimezone: true }).notNull().defaultNow(),
+  /** Null only for rows converted by 0018 with no recorded assigner. */
+  grantedBy: uuid('granted_by').references(() => users.id),
+  /** Set at grant for 'app' / 'import'; null for 'migration' until kept, removed or demoted (S6). */
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+}, (table) => [
+  uniqueIndex('approval_scopes_supervisor_clin_unique_idx').on(table.supervisorId, table.clinId),
+  index('idx_approval_scopes_active_clin').on(table.clinId).where(sql`${table.isActive}`),
+]);
+
+// ---------------------------------------------------------------------------
 // Labor Categories (billing rates per CLIN)
 // ---------------------------------------------------------------------------
 
