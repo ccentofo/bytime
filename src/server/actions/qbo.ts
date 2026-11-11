@@ -1,77 +1,54 @@
 'use server';
 
-import { getDefaultSyncWindow } from '@/server/internal/workspace-settings';
 import { getDb, getDbForWrite } from '@/db';
 import { integrationConnections, users, contracts, clins, integrationEntityMappings } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
-import { decrypt } from '@/lib/encryption';
 import { ensureValidToken, fetchQBOEmployees, fetchQBOCustomers, fetchQBOServiceItems, fetchQBOVendors, fetchQBOClasses } from '@/lib/integrations/connectors/qbo-api';
 import { executeSyncOperation } from '@/lib/integrations/sync-engine';
 import { createCostClassInternal, createChargeCodeInternal } from '@/server/internal/charge-codes';
 import type { CalendarDate } from '@/lib/calendar-date';
-import { validateCalendarDate } from '@/lib/validation';
+import { validateUUID } from '@/lib/validation';
+import { safeErrorMessage } from '@/server/internal/import-errors';
+import { INTEGRATION_DISCONNECTED_MESSAGE } from '@/lib/integrations/provider-errors';
+import { payPeriodStartingOn } from '@/server/internal/integration-send';
 import { UserFacingError } from '@/lib/errors';
 import { userAction } from '@/lib/action-result';
 
 /**
- * Fetch QBO employees for the mapping UI.
- * Automatically refreshes the token if needed.
+ * feature-plan-ux-integrations-billing.md I3: the QuickBooks lists for the matching tabs, loaded when the page opens.
+ * ONE action, so the token is refreshed at most once per load — parallel refreshes rotate the refresh token and the
+ * last write wins (qbo-api.ts ensureValidToken), which could break the connection. The 4 queries then run with
+ * Promise.allSettled: one failed list returns its own (safe) message and the others still load.
  */
-export async function fetchQBOEmployeesForMapping(connectionId: string) {
-  return userAction(async () => {
-    await requireAdminFresh();
-    const db = await getDb();
-    const accessToken = await ensureValidToken(connectionId);
+type QboList<T> = { ok: true; data: T[] } | { ok: false; error: string };
 
-    const [connection] = await db
-      .select({ externalCompanyId: integrationConnections.externalCompanyId })
-      .from(integrationConnections)
-      .where(eq(integrationConnections.id, connectionId));
-
-    if (!connection?.externalCompanyId) throw new UserFacingError('Connection has no company ID.');
-
-    return fetchQBOEmployees(accessToken, connection.externalCompanyId);
-  });
+function settle<T>(result: PromiseSettledResult<T[]>): QboList<T> {
+  if (result.status === 'fulfilled') return { ok: true, data: result.value };
+  return { ok: false, error: safeErrorMessage(result.reason, { fallback: 'Couldn’t load this list from QuickBooks. Try again.', logLabel: 'QuickBooks list load failed:' }) };
 }
 
-/**
- * Fetch QBO customers for the mapping UI.
- */
-export async function fetchQBOCustomersForMapping(connectionId: string) {
+export async function loadQboMappingData(connectionId: string) {
   return userAction(async () => {
     await requireAdminFresh();
+    const id = validateUUID(connectionId, 'Connection');
     const db = await getDb();
-    const accessToken = await ensureValidToken(connectionId);
-
     const [connection] = await db
-      .select({ externalCompanyId: integrationConnections.externalCompanyId })
+      .select({ provider: integrationConnections.provider, isActive: integrationConnections.isActive, externalCompanyId: integrationConnections.externalCompanyId })
       .from(integrationConnections)
-      .where(eq(integrationConnections.id, connectionId));
-
-    if (!connection?.externalCompanyId) throw new UserFacingError('Connection has no company ID.');
-
-    return fetchQBOCustomers(accessToken, connection.externalCompanyId);
-  });
-}
-
-/**
- * Fetch QBO service items for the mapping UI.
- */
-export async function fetchQBOServiceItemsForMapping(connectionId: string) {
-  return userAction(async () => {
-    await requireAdminFresh();
-    const db = await getDb();
-    const accessToken = await ensureValidToken(connectionId);
-
-    const [connection] = await db
-      .select({ externalCompanyId: integrationConnections.externalCompanyId })
-      .from(integrationConnections)
-      .where(eq(integrationConnections.id, connectionId));
-
-    if (!connection?.externalCompanyId) throw new UserFacingError('Connection has no company ID.');
-
-    return fetchQBOServiceItems(accessToken, connection.externalCompanyId);
+      .where(eq(integrationConnections.id, id))
+      .limit(1);
+    if (!connection || !connection.isActive || connection.provider !== 'quickbooks_online') throw new UserFacingError(INTEGRATION_DISCONNECTED_MESSAGE);
+    if (!connection.externalCompanyId) throw new UserFacingError('Connection has no company ID.');
+    const accessToken = await ensureValidToken(id);
+    const realmId = connection.externalCompanyId;
+    const [employees, vendors, customers, items] = await Promise.allSettled([
+      fetchQBOEmployees(accessToken, realmId),
+      fetchQBOVendors(accessToken, realmId),
+      fetchQBOCustomers(accessToken, realmId),
+      fetchQBOServiceItems(accessToken, realmId),
+    ]);
+    return { employees: settle(employees), vendors: settle(vendors), customers: settle(customers), items: settle(items) };
   });
 }
 
@@ -124,49 +101,16 @@ export async function getBytimeClinsForMapping() {
 }
 
 /**
- * Fetch QBO vendors for the mapping UI.
- * Automatically refreshes the token if needed.
+ * Send one pay period's approved hours to QuickBooks (feature-plan-ux-integrations-billing.md I6). `periodStart` must
+ * be a pay-period start; the server resolves its end. Refused while another send for the connection is running
+ * (under 15 minutes old), checked and claimed under the send lock (executeSyncOperation `exclusive`).
  */
-export async function fetchQBOVendorsForMapping(connectionId: string) {
-  return userAction(async () => {
-    await requireAdminFresh();
-    const db = await getDb();
-    const accessToken = await ensureValidToken(connectionId);
-
-    const [connection] = await db
-      .select({ externalCompanyId: integrationConnections.externalCompanyId })
-      .from(integrationConnections)
-      .where(eq(integrationConnections.id, connectionId));
-
-    if (!connection?.externalCompanyId) throw new UserFacingError('Connection has no company ID.');
-
-    return fetchQBOVendors(accessToken, connection.externalCompanyId);
-  });
-}
-
-/**
- * Trigger a manual sync for a QBO connection.
- */
-export async function triggerQBOSync(data: {
-  connectionId: string;
-  /** Omit both to use the default window, computed in the workspace's calendar. */
-  periodStart?: CalendarDate;
-  periodEnd?: CalendarDate;
-}) {
+export async function triggerQBOSync(data: { connectionId: string; periodStart: CalendarDate }) {
   return userAction(async () => {
     const actor = await requireAdminFresh();
-    const window = data.periodStart && data.periodEnd
-      // R4: user dates → a user-facing validation error, never parseCalendarDate's plain Error.
-      ? { periodStart: validateCalendarDate(data.periodStart, 'Start date'), periodEnd: validateCalendarDate(data.periodEnd, 'End date') }
-      : await getDefaultSyncWindow();
-    return executeSyncOperation(
-      data.connectionId,
-      'timesheet_push',
-      window.periodStart,
-      window.periodEnd,
-      actor.id,
-      'manual'
-    );
+    const connectionId = validateUUID(data?.connectionId, 'Connection');
+    const period = await payPeriodStartingOn(await getDb(), data?.periodStart);
+    return executeSyncOperation(connectionId, 'timesheet_push', period.start, period.end, actor.id, 'manual', { exclusive: true });
   });
 }
 

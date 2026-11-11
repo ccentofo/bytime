@@ -1,52 +1,18 @@
 'use server';
 
 import { getDefaultSyncWindow } from '@/server/internal/workspace-settings';
-import { getDb } from '@/db';
-import { integrationConnections, users } from '@/db/schema';
-import { eq } from 'drizzle-orm';
-import { requireAdmin, requireAdminFresh } from '@/lib/session';
-import { ensureValidGustoToken, fetchGustoEmployees } from '@/lib/integrations/connectors/gusto-api';
+import { requireAdminFresh } from '@/lib/session';
 import { executeSyncOperation } from '@/lib/integrations/sync-engine';
 import type { CalendarDate } from '@/lib/calendar-date';
 import { validateCalendarDate } from '@/lib/validation';
-import { UserFacingError } from '@/lib/errors';
 import { userAction } from '@/lib/action-result';
 
 /**
- * Fetch Gusto employees for the mapping UI.
- */
-export async function fetchGustoEmployeesForMapping(connectionId: string) {
-  return userAction(async () => {
-    await requireAdminFresh();
-    const db = await getDb();
-    const accessToken = await ensureValidGustoToken(connectionId);
-
-    const [connection] = await db
-      .select({ externalCompanyId: integrationConnections.externalCompanyId })
-      .from(integrationConnections)
-      .where(eq(integrationConnections.id, connectionId));
-
-    if (!connection?.externalCompanyId) throw new UserFacingError('Connection has no company ID.');
-
-    return fetchGustoEmployees(accessToken, connection.externalCompanyId);
-  });
-}
-
-/**
- * Get ByTime employees for the mapping UI.
- */
-export async function getBytimeEmployeesForGustoMapping() {
-  await requireAdmin();
-  const db = await getDb();
-  return db
-    .select({ id: users.id, fullName: users.fullName, email: users.email })
-    .from(users)
-    .where(eq(users.isActive, true))
-    .orderBy(users.fullName);
-}
-
-/**
  * Trigger a manual sync for a Gusto connection.
+ *
+ * feature-plan-ux-integrations-billing.md I10: the Gusto connector sends nothing to Gusto (it records payroll totals
+ * locally), so the UI no longer offers a send, matching or the employee load. This action stays server-side, unused by
+ * the UI.
  */
 export async function triggerGustoSync(data: {
   connectionId: string;
