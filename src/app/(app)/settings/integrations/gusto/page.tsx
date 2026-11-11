@@ -1,8 +1,6 @@
 import { redirect } from 'next/navigation';
 import { requirePageRole } from '@/lib/session';
-import { getConnections, getMappings, getSyncLogs } from '@/server/actions/integrations';
-import { getBytimeEmployeesForGustoMapping } from '@/server/actions/gusto';
-import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
+import { getIntegrationHub } from '@/server/actions/integrations';
 import { GustoConfigClient } from './GustoConfigClient';
 import type { Metadata } from 'next';
 
@@ -10,45 +8,13 @@ export const metadata: Metadata = { title: 'Gusto' };
 
 export const dynamic = 'force-dynamic';
 
-export default async function GustoConfigPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ connectionId?: string }>;
-}) {
+/**
+ * An existing Gusto connection (feature-plan-ux-integrations-billing.md I10): the connector sends nothing to Gusto, so
+ * the page shows only that note, "Open Payroll export" and Disconnect — no matching, sending or history.
+ */
+export default async function GustoConfigPage() {
   await requirePageRole('admin');
-
-  const { connectionId } = await searchParams;
-
-  const allConnections = await getConnections();
-  const gustoConnections = allConnections.filter(
-    (c) => c.provider === 'gusto' && c.isActive
-  );
-
-  if (gustoConnections.length === 0) {
-    redirect('/settings/integrations');
-  }
-
-  const activeConnectionId = connectionId ?? gustoConnections[0].id;
-  const activeConnection = gustoConnections.find((c) => c.id === activeConnectionId);
-
-  if (!activeConnection) {
-    redirect('/settings/integrations');
-  }
-
-  const [mappings, syncLogs, bytimeEmployees, workspaceTimezone] = await Promise.all([
-    getMappings(activeConnectionId),
-    getSyncLogs(activeConnectionId),
-    getBytimeEmployeesForGustoMapping(),
-    getWorkspaceTimezone(),
-  ]);
-
-  return (
-    <GustoConfigClient
-      connection={activeConnection}
-      mappings={mappings}
-      syncLogs={syncLogs}
-      bytimeEmployees={bytimeEmployees}
-      workspaceTimezone={workspaceTimezone}
-    />
-  );
+  const { gusto } = await getIntegrationHub();
+  if (!gusto) redirect('/settings/integrations');
+  return <GustoConfigClient connection={{ id: gusto.id, companyName: gusto.companyName }} />;
 }
