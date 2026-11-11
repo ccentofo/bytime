@@ -17,6 +17,21 @@ The single source of truth for **where we are**, kept by the lead architect (ses
   - business decisions stay with the product owner and the business session;
   - messages between sessions don't carry the product owner's authority.
 
+## Stability and rollback (product owner's rules, 2026-11-12)
+- **Stable point before tandem mode:** tag `stable-pre-tandem-2026-11-12` = `main` at `ce4eb25` (approval scope + the table hotfix merged; all gates green). Roll back to it at any time (see "Rolling back" below). These rules arrive on `main` with Part 2a.
+- **One new branch per work item** from the latest `main`. Never commit to `main`; the dev never pushes.
+- **Merge gate.** All of these, in order, or no merge:
+  1. the lead's audit verdict is READY (written in the item's `*-AUDIT.md`);
+  2. CI is green on the PR;
+  3. the product owner has run the build plus the browser checks **personally** and said it's stable.
+
+  The lead gives merge commands only after step 3.
+- **Scope check in every audit:** the lead lists any file or behaviour change outside the blueprint's blast radius and brings it to the product owner before anything else.
+- **A new stable tag after each merge** the product owner confirms: `stable-YYYY-MM-DD-<item>`. Every merge is a rollback point.
+- **Rolling back** (code only; production isn't live yet, and local data resets with `npm run demo:local`):
+  - to look: `git checkout stable-pre-tandem-2026-11-12`;
+  - to restore `main`: open a revert PR of the unwanted merge commits (`git revert -m 1 <merge>`), never a force-push.
+
 ## Build queue (software)
 | # | Item | Status |
 |---|---|---|
