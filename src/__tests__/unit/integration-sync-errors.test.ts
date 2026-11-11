@@ -18,6 +18,11 @@ const h = vi.hoisted(() => ({
 
 vi.mock('server-only', () => ({}));
 vi.mock('@sentry/nextjs', () => ({ captureException: () => {}, captureMessage: () => {} }));
+// IN-11: the QuickBooks token refresh is outside this test (the all-skipped run never calls the API).
+vi.mock('@/lib/integrations/connectors/qbo-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/integrations/connectors/qbo-api')>()),
+  ensureValidToken: async () => 'token',
+}));
 vi.mock('@/db', () => {
   const thenable = (run: () => unknown) => {
     const p: Record<string, unknown> = {};
@@ -43,7 +48,7 @@ vi.mock('@/db', () => {
   return { getDb: async () => db, getDbForWrite: async () => db, getDbForAuth: async () => db, getDbForUrl: () => db };
 });
 
-import { integrationConnections, integrationEntityMappings, integrationSyncLogs, integrationSyncRecords, workspaceSettings } from '@/db/schema';
+import { integrationConnections, integrationEntityMappings, integrationSyncLogs, integrationSyncRecords, timesheetEntries, timesheetPeriods, workspaceSettings } from '@/db/schema';
 import { gustoConnector } from '@/lib/integrations/connectors/gusto';
 import { executeSyncOperation } from '@/lib/integrations/sync-engine';
 import type { PayrollSyncInput, SyncContext } from '@/lib/integrations/types';
@@ -67,7 +72,7 @@ describe('integration sync errors are sanitised (audit R7)', () => {
     const result = await gustoConnector.pushPayroll!(context, payroll);
     expect(result.failed).toBe(1);
     expect(result.pushed).toBe(0); // fix round 1 F10: a failed record is not also counted as pushed
-    expect(result.errors).toEqual([{ bytimeEntityId: 'u1', error: 'Could not sync this employee.' }]);
+    expect(result.errors).toEqual([{ bytimeEntityId: 'u1', error: 'Could not sync this employee.', kind: 'failed' }]);
     expect(result.errors.some((e) => leaks(e.error))).toBe(false);
   });
 
@@ -79,5 +84,23 @@ describe('integration sync errors are sanitised (audit R7)', () => {
     const log = h.updates.find((u) => u.table === integrationSyncLogs);
     expect(log?.set).toMatchObject({ status: 'failed', errorSummary: 'The sync failed.' });
     expect(leaks(log?.set.errorSummary)).toBe(false);
+  });
+});
+
+/** feature-plan-ux-integrations-billing.md I7 / IN-11: skips are not failures in the sync log's summary. */
+describe('IN-11: error_summary counts failed records only', () => {
+  it('a QuickBooks run where every entry is skipped (person not matched) → success, skipped counted, no "records failed" text', async () => {
+    h.selects.set(integrationConnections, [{ id: 'c1', provider: 'quickbooks_online', isActive: true, accessTokenEncrypted: 'x', externalCompanyId: 'realm' }]);
+    h.selects.set(timesheetPeriods, [{ userId: 'u1', periodStart: '2026-10-01', periodNumDays: 15, approvedAt: null }]);
+    h.selects.set(timesheetEntries, [{
+      userId: 'u1', employeeName: 'Pat Doe', employeeEmail: 'pat@x.test', entryDate: '2026-10-02', hours: '8.00',
+      clinId: '22222222-2222-4222-8222-222222222222', indirectCodeId: null, clinNumber: '0001',
+      contractId: 'k1', contractNumber: 'K-1', contractName: 'Navy', indirectCode: null, indirectName: null,
+    }]);
+    const { result } = await executeSyncOperation('c1', 'timesheet_push', '2026-10-01' as never, '2026-10-15' as never, 'admin-1');
+    expect(result).toMatchObject({ pushed: 0, failed: 0, skipped: 1 });
+    expect(result.errors).toEqual([expect.objectContaining({ kind: 'skipped' })]);
+    const log = h.updates.find((u) => u.table === integrationSyncLogs);
+    expect(log?.set).toMatchObject({ status: 'success', recordsSkipped: 1, recordsFailed: 0, errorSummary: null });
   });
 });

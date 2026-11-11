@@ -3,7 +3,7 @@ import { getTestDb, createTestUser, cleanupTestData } from './helpers';
 import * as schema from '@/db/schema';
 
 /**
- * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4): each of the 45 admin-only writes (incl. the 6
+ * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4): each of the 43 admin-only writes (incl. the 2
  * OAuth-token-refreshing mapping readers) refuses a session whose JWT still says admin while the users row now says
  * supervisor — the real requireAdminFresh() re-reads the role from the tenant DB. Nothing is written.
  */
@@ -42,7 +42,7 @@ import * as importActions from '@/server/actions/import';
 
 const call = (fn: unknown, ...args: unknown[]) => (fn as (...a: unknown[]) => Promise<unknown>)(...args);
 
-/** Refused by the fresh role check: every one of the 45 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
+/** Refused by the fresh role check: every one of the 43 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
 async function expectRefused(pending: Promise<unknown>): Promise<void> {
   expect(await pending).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/access has changed/i) });
 }
@@ -76,13 +76,13 @@ const ADMIN_WRITES: Array<[string, unknown, unknown[]]> = [
   ['importQboClasses', qbo.importQboClasses, [ZERO, [{ qboId: '1', name: 'Gov' }]]],
   ['importQboChargeCodes', qbo.importQboChargeCodes, [ZERO, []]],
   ['triggerQBOSync', qbo.triggerQBOSync, [{ connectionId: ZERO }]],
-  ['fetchQBOEmployeesForMapping', qbo.fetchQBOEmployeesForMapping, [ZERO]],
-  ['fetchQBOCustomersForMapping', qbo.fetchQBOCustomersForMapping, [ZERO]],
-  ['fetchQBOServiceItemsForMapping', qbo.fetchQBOServiceItemsForMapping, [ZERO]],
-  ['fetchQBOVendorsForMapping', qbo.fetchQBOVendorsForMapping, [ZERO]],
+  // feature-plan-ux-integrations-billing.md I3: one token-refreshing load replaces the four per-list fetches.
+  ['loadQboMappingData', qbo.loadQboMappingData, [ZERO]],
   ['fetchQBOClassesForMapping', qbo.fetchQBOClassesForMapping, [ZERO]],
   ['triggerGustoSync', gusto.triggerGustoSync, [{ connectionId: ZERO }]],
-  ['fetchGustoEmployeesForMapping', gusto.fetchGustoEmployeesForMapping, [ZERO]],
+  // I4, I5: one QuickBooks match per person.
+  ['setPersonMapping', integrations.setPersonMapping, [{ connectionId: ZERO, userId: ZERO, match: null }]],
+  ['matchPeopleByEmail', integrations.matchPeopleByEmail, [{ connectionId: ZERO, pairs: [{ userId: ZERO, match: { type: 'employee', externalId: 'e1', externalName: 'E' } }] }]],
   ['createSlin', slins.createSlin, [{ clinId: ZERO, slinNumber: 'AA' }]],
   ['updateSlin', slins.updateSlin, [ZERO, { slinNumber: 'AB' }]],
   ['unlockUserAccount', users.unlockUserAccount, ['locked@acme.com']],
@@ -99,7 +99,7 @@ const ADMIN_WRITES: Array<[string, unknown, unknown[]]> = [
   ['bulkImportChargeCodeAccess', importActions.bulkImportChargeCodeAccess, [[{ email: 'a@x.dev', chargeCode: 'X' }]]],
 ];
 
-describe('the 45 admin-only writes refuse a JWT-admin whose DB role is supervisor (P3)', () => {
+describe('the 43 admin-only writes refuse a JWT-admin whose DB role is supervisor (P3)', () => {
   beforeAll(async () => {
     await cleanupTestData();
     const demoted = await createTestUser({ role: 'supervisor' }); // DB truth: supervisor
@@ -110,8 +110,8 @@ describe('the 45 admin-only writes refuse a JWT-admin whose DB role is superviso
     await cleanupTestData();
   });
 
-  it('covers exactly 45 actions', () => {
-    expect(ADMIN_WRITES).toHaveLength(45);
+  it('covers exactly 43 actions', () => {
+    expect(ADMIN_WRITES).toHaveLength(43);
   });
 
   it.each(ADMIN_WRITES)('%s', async (_name, fn, args) => {

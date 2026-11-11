@@ -15,6 +15,10 @@ vi.mock('@/lib/session', () => {
 });
 vi.mock('@/db', () => ({ getDb: async () => ({}), getDbForWrite: async () => ({}) }));
 vi.mock('@/server/internal/workspace-settings', () => ({ getDefaultSyncWindow: async () => ({ periodStart: '2026-08-01', periodEnd: '2026-10-31' }) }));
+// feature-plan-ux-integrations-billing.md I6: QuickBooks sends one pay period, resolved from the schedule.
+vi.mock('@/server/internal/pay-period-config', () => ({
+  loadScheduleResolver: async () => ({ periodContaining: () => ({ start: '2026-10-01', numDays: 15 }) }),
+}));
 
 import { generateImportPassword } from '@/server/internal/generated-password';
 import { FORMULA_PATTERN } from '@/lib/csv/escape';
@@ -48,11 +52,17 @@ describe('R4 — sync triggers validate user dates', () => {
   it('Gusto and QBO: an invalid date is a validation result (never a thrown plain Error); valid dates reach the sync', async () => {
     expect(await triggerGustoSync({ connectionId: 'c', periodStart: 'nope' as never, periodEnd: '2026-10-15' as never }))
       .toEqual({ ok: false, code: 'validation', error: 'Start date must be a valid date (YYYY-MM-DD).' });
-    expect(await triggerQBOSync({ connectionId: 'c', periodStart: '2026-10-01' as never, periodEnd: '2026-02-30' as never }))
-      .toEqual({ ok: false, code: 'validation', error: 'End date must be a valid date (YYYY-MM-DD).' });
+    // I6: QuickBooks takes a pay-period start only — an invalid date or a day inside a period is a validation result.
+    const conn = '0c1c1c1c-0000-4000-8000-000000000001';
+    expect(await triggerQBOSync({ connectionId: conn, periodStart: '2026-02-30' as never }))
+      .toEqual({ ok: false, code: 'validation', error: 'Choose a pay period.' });
+    expect(await triggerQBOSync({ connectionId: conn, periodStart: '2026-10-05' as never }))
+      .toEqual({ ok: false, code: 'validation', error: 'Choose a pay period.' });
     expect(sync.execute).not.toHaveBeenCalled();
     expect((await triggerGustoSync({ connectionId: 'c', periodStart: '2026-10-01' as never, periodEnd: '2026-10-15' as never })).ok).toBe(true);
     expect(sync.execute).toHaveBeenCalledWith('c', 'timesheet_push', '2026-10-01', '2026-10-15', 'adm', 'manual');
+    expect((await triggerQBOSync({ connectionId: conn, periodStart: '2026-10-01' as never })).ok).toBe(true);
+    expect(sync.execute).toHaveBeenLastCalledWith(conn, 'timesheet_push', '2026-10-01', '2026-10-15', 'adm', 'manual', { exclusive: true });
   });
 });
 

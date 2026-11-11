@@ -43,8 +43,9 @@ describe('offline layer removed (UX-3 A-T13)', () => {
     expect(effect).toMatch(/useEffect\(\(\) => \{\s*try \{\s*const request = $/);
   });
 
-  it('no offline claims on the landing page, the timesheet error page or in the README', () => {
-    for (const rel of ['src/app/page.tsx', 'src/app/(app)/timesheet/error.tsx', 'README.md']) {
+  // feature-plan-ux-integrations-billing.md LA-3: the landing copy now lives in landing-copy.ts and the preview component.
+  it('no offline claims on the landing page (its copy file and preview), the timesheet error page or in the README', () => {
+    for (const rel of ['src/app/page.tsx', 'src/lib/marketing/landing-copy.ts', 'src/components/marketing/ProductPreview.tsx', 'src/app/(app)/timesheet/error.tsx', 'README.md']) {
       expect(stripComments(read(rel)), rel).not.toMatch(/offline|dexie|indexeddb|sync(s|ed)? (automatically|when)/i);
     }
   });

@@ -138,7 +138,6 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getContractsOverview: 'UX-4b §4.1: reads the contract hierarchy with its money (internal/contracts-overview); no write',
   },
   'migration.ts': { getImportWindowStatus: 'feature-plan-ux-setup-import.md P14: reads the import-window facts (no lock); no write' },
-  'gusto.ts': { getBytimeEmployeesForGustoMapping: 'reads active employees for the mapping UI; no token refresh, no write' },
   'indirect-codes.ts': {
     getIndirectChargeCodes: 'reads indirect codes; no write',
     getActiveIndirectCodes: 'reads active indirect codes; no write',
@@ -149,6 +148,9 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getMappings: 'reads entity mappings; no write',
     getSyncLogs: 'reads sync logs; no write',
     getSyncRecords: 'reads sync records; no write',
+    getIntegrationHub: 'feature-plan-ux-integrations-billing.md §3.1: reads the active connections (no tokens), latest logs and counts; no write',
+    getSendPreview: 'feature-plan-ux-integrations-billing.md I6: reads approved entries (getApprovedEntriesForSync is read-only), mappings and logs; no write',
+    getSyncFailures: 'feature-plan-ux-integrations-billing.md I7: reads a send\'s failed records (≤ 500) with labels; no write',
   },
   'labor-categories.ts': {
     getAllLaborCategories: 'reads labor categories; no write',
