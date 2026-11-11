@@ -1,0 +1,49 @@
+/* The landing page (feature-plan-ux-integrations-billing.md L2, §4). */
+
+/* Skip link: visually hidden until keyboard focus, then a pill at the top left above the sticky header. */
+.skip {
+  position: absolute;
+  left: -10000px;
+  top: auto;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.skip:focus-visible {
+  position: fixed;
+  left: 12px;
+  top: 12px;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  z-index: 300;
+  padding: 8px 16px;
+  border-radius: 9999px;
+  background: var(--mantine-color-signal-7);
+  color: #ffffff;
+  font-weight: 600;
+  outline: 2px solid var(--mantine-color-signal-6);
+  outline-offset: 2px;
+}
+
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 200;
+  background: var(--mantine-color-body);
+  border-bottom: 1px solid var(--mantine-color-default-border);
+}
+
+.headerInner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mantine-spacing-md);
+  min-height: 60px;
+}
+
+/* The sticky header must not cover the Features heading when "Features" scrolls to it. */
+.features {
+  scroll-margin-top: 80px;
+}

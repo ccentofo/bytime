@@ -165,7 +165,8 @@ export const EXPORT_EXTRA_TABLES: readonly string[] = [
 // ── Terms acceptance (checklist #1–2) ───────────────────────────────────────
 
 /**
- * D13: version recorded with each signup's Terms acceptance. Format: `<effective date>[-draft-N]`.
- * Drop the `-draft-N` suffix and set the published effective date when the final Terms go live.
+ * D13: version recorded with each signup's Terms acceptance. Format: `<effective date>[-draft-N | -interim]`.
+ * `-interim`: the interim Terms §7 / Privacy text (BUSINESS-DECISIONS.md §3 A; product owner 2026-11-11). Drop the
+ * suffix and set the published effective date when the final Terms go live.
  */
-export const TERMS_VERSION = '2026-10-21-draft-1';
+export const TERMS_VERSION = '2026-11-10-interim';

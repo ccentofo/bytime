@@ -61,9 +61,11 @@ export default function TermsPage() {
 
         <Title order={2} size="h3">7. Service Availability</Title>
         <Text>
-          We strive to maintain high availability but do not guarantee uninterrupted access.
-          The Service includes offline support that allows users to continue logging time during
-          temporary network outages.
+          We work to keep the Service available but do not guarantee uninterrupted access. We schedule planned
+          maintenance outside U.S. business hours where possible. The Service requires an internet connection and
+          does not support offline time entry. While you edit a timesheet, your unsaved changes are kept in your
+          browser for that tab so a page reload doesn&apos;t lose them. They are not saved to the Service until you save
+          them, and they are lost if you close the tab first.
         </Text>
 
         <Title order={2} size="h3">8. Limitation of Liability</Title>

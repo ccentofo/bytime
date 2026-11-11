@@ -14,15 +14,15 @@ export default function PrivacyPage() {
       <Title order={1} mb="xl">Privacy Policy</Title>
 
       <Stack gap="md">
-        <Text size="sm" c="dimmed">Last updated: May 2026</Text>
+        <Text size="sm" c="dimmed">Last updated: November 2026</Text>
 
         <Title order={2} size="h3">1. Information We Collect</Title>
         <Text>CadenzPoint collects the following types of information:</Text>
         <Stack gap={4} pl="md">
           <Text size="sm">• <strong>Account information:</strong> Name, email address, role (provided by your administrator)</Text>
           <Text size="sm">• <strong>Timesheet data:</strong> Hours worked, charge codes, daily notes, submission/approval records</Text>
-          <Text size="sm">• <strong>Authentication data:</strong> Hashed passwords, login timestamps, session information</Text>
-          <Text size="sm">• <strong>Usage data:</strong> Login attempts (for security), page access patterns</Text>
+          <Text size="sm">• <strong>Authentication data:</strong> hashed passwords and multi-factor authentication settings (secrets are stored encrypted).</Text>
+          <Text size="sm">• <strong>Security data:</strong> sign-in attempts (the email address used, the time, and whether it succeeded), used to block password guessing. To stop abuse, we keep a one-way, salted hash of the IP address used to sign up or sign in for up to 25 hours.</Text>
         </Stack>
 
         <Title order={2} size="h3">2. How We Use Your Information</Title>
@@ -37,18 +37,26 @@ export default function PrivacyPage() {
 
         <Title order={2} size="h3">3. Data Retention</Title>
         <Text>
-          Timesheet entries are retained indefinitely using an append-only architecture.
-          This is a DCAA requirement — historical records cannot be deleted or modified.
-          Your organization's administrator controls the retention of all other data.
+          Timesheet entries and their revision history are kept for as long as your organization subscribes. They
+          are never overwritten or deleted during the subscription. When a free trial ends without a subscription,
+          or a subscription ends, the workspace becomes read-only for 90 days so administrators can export their
+          data. It is then permanently deleted, after at least 14 days&apos; email notice. Deleted data may remain in
+          backups for up to 30 days. Signup records are deleted 7 days after signup if the email address is never
+          verified, and otherwise 30 days after the workspace is set up or the signup is abandoned.
         </Text>
 
         <Title order={2} size="h3">4. Data Sharing</Title>
-        <Text>
-          We do not sell, trade, or share your personal information with third parties.
-          Your data may be accessed by your organization's administrators and supervisors
-          as permitted by their role-based access controls. Data may be disclosed if required
-          by law, court order, or government audit.
-        </Text>
+        <Text>We do not sell your personal information or share it for advertising. We share it only:</Text>
+        <Stack gap={4} pl="md">
+          <Text size="sm">• <strong>With service providers that run the Service for us:</strong> Vercel (hosting), Neon (databases), Amazon Web
+            Services (encrypted backups), Resend (email), Stripe (payments), Sentry (error monitoring), Upstash
+            (abuse prevention), and Cloudflare (bot protection on the signup page). Our application data is stored
+            in the United States.</Text>
+          <Text size="sm">• <strong>Within your organization:</strong> administrators and supervisors can see the time records their role
+            permits.</Text>
+          <Text size="sm">• <strong>With integrations your organization chooses to connect</strong>, such as QuickBooks Online.</Text>
+          <Text size="sm">• <strong>When required by law, court order, or government audit.</strong></Text>
+        </Stack>
 
         <Title order={2} size="h3">5. Security</Title>
         <Text>We protect your data with:</Text>
@@ -67,12 +75,23 @@ export default function PrivacyPage() {
           DCAA compliance requirements may prevent deletion of timesheet records.
         </Text>
 
-        <Title order={2} size="h3">7. Cookies and Local Storage</Title>
+        <Title order={2} size="h3">7. Cookies and Browser Storage</Title>
         <Text>
-          CadenzPoint uses HTTP-only session cookies for authentication. The offline support feature
-          stores timesheet data in your browser's IndexedDB for sync purposes. No third-party
-          tracking cookies are used.
+          CadenzPoint uses only the cookies and browser storage needed for the Service to work. We do not use
+          advertising or analytics cookies.
         </Text>
+        <Stack gap={4} pl="md">
+          <Text size="sm">• <strong>Sign-in cookies:</strong> HTTP-only cookies keep you signed in (for up to 24 hours) and protect against
+            cross-site request forgery.</Text>
+          <Text size="sm">• <strong>Preferences:</strong> a cookie and your browser&apos;s local storage remember display choices, such as the menu
+            layout, light or dark theme, your last-used payroll export format, and notices you&apos;ve dismissed. They
+            contain no timesheet data.</Text>
+          <Text size="sm">• <strong>Unsaved timesheet edits:</strong> while you edit a timesheet, your unsaved changes are kept in your browser&apos;s
+            session storage for that tab, so a page reload doesn&apos;t lose them. They stay on your device until you
+            save, and your browser erases them when you close the tab.</Text>
+          <Text size="sm">• <strong>Signup protection:</strong> the signup page uses Cloudflare Turnstile, which processes your IP address and
+            browser information to tell people from bots.</Text>
+        </Stack>
 
         <Title order={2} size="h3">8. Changes to This Policy</Title>
         <Text>
