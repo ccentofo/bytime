@@ -172,9 +172,11 @@ export async function getSyncLogs(connectionId: string, limit = 20): Promise<Syn
   const rows = await db
     .select({
       log: integrationSyncLogs,
+      // The outer table by name: drizzle renders a column in a select list unqualified ("id"), which inside this
+      // subquery would bind to the records table's own id.
       failedRecords: sql<number>`(
         SELECT count(*)::int FROM integration_sync_records r
-        WHERE r.sync_log_id = ${integrationSyncLogs.id} AND r.status = 'failed'
+        WHERE r.sync_log_id = integration_sync_logs.id AND r.status = 'failed'
       )`,
     })
     .from(integrationSyncLogs)
