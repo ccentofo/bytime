@@ -104,3 +104,11 @@ describe('IN-11: error_summary counts failed records only', () => {
     expect(log?.set).toMatchObject({ status: 'success', recordsSkipped: 1, recordsFailed: 0, errorSummary: null });
   });
 });
+
+/** feature-plan-ux-integrations-billing.md I10 / IN-13: the Gusto connector sends nothing to Gusto, and says so. */
+describe('IN-13: the Gusto connector description is honest', () => {
+  it('no claim that it pushes or sends hours to Gusto; it points to Payroll export', () => {
+    expect(gustoConnector.metadata.description).not.toMatch(/push|\bsends?\b|directly|auto-match/i);
+    expect(gustoConnector.metadata.description).toContain('Payroll export');
+  });
+});

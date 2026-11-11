@@ -25,7 +25,7 @@ vi.mock('@/lib/session', async (importOriginal) => {
 });
 
 import {
-  saveMapping, deleteMapping, setPersonMapping, matchPeopleByEmail, getSyncFailures, getIntegrationHub, getSendPreview,
+  saveMapping, deleteMapping, setPersonMapping, matchPeopleByEmail, getSyncFailures, getIntegrationHub, getSendPreview, getSyncLogs,
 } from '@/server/actions/integrations';
 import { triggerQBOSync } from '@/server/actions/qbo';
 import { saveIntegrationConnection } from '@/server/internal/integrations';
@@ -192,6 +192,8 @@ describe('sends: failures, the running guard, the hub, the preview (I6, I7, I9)'
       { syncLogId: log.id, bytimeEntityType: 'timesheet_entry', bytimeEntityId: 'legacy-id', status: 'failed', errorMessage: 'Old' },
       { syncLogId: log.id, bytimeEntityType: 'timesheet_entry', bytimeEntityId: `${pat.id}-${clin.id}-2026-10-17`, status: 'success' },
     ]);
+    // "See {n} failures" counts the stored failed records (not records_failed).
+    expect((await getSyncLogs(qbo)).find((l) => l.id === log.id)?.failedRecords).toBe(3);
     const failures = await getSyncFailures(log.id);
     expect(failures.map((f) => [f.label, f.error])).toEqual([
       ['Pat Doe · Navy / 0001 · Oct 15, 2026', 'Bad item'],
