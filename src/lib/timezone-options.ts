@@ -10,4 +10,18 @@ export function timezoneOptions(current: string | null): Array<{ value: string; 
   return zones.map((tz) => ({ value: tz, label: tz }));
 }
 
+/**
+ * A friendly name for an IANA zone (UX-4C2A-AUDIT.md S10, product owner 2026-11-11): the standard generic name built
+ * into Intl, e.g. America/New_York → "Eastern Time". An unknown id (or no name) falls back to the id itself.
+ */
+export function timezoneLabel(tz: string): string {
+  try {
+    const name = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'longGeneric' }).formatToParts(new Date())
+      .find((p) => p.type === 'timeZoneName')?.value;
+    return name || tz;
+  } catch {
+    return tz;   // not a zone Intl knows
+  }
+}
+
 export const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];

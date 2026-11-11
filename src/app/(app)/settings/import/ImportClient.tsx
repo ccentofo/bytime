@@ -81,7 +81,7 @@ export function ImportClient({ initialData, initialType }: { initialData: SetupP
           <StepRow phase={state.phase} />
           {def.kind === 'setup'
             ? <SetupPipeline key={def.key} def={def} state={state} dispatch={dispatch} onImported={refresh} />
-            : <HistoryPipeline key={def.key} def={def} state={state} dispatch={dispatch} windowOpen={windowOpen} payConfigSet={data.status.payConfigSet} onImported={refresh} />}
+            : <HistoryPipeline key={def.key} def={def} state={state} dispatch={dispatch} windowOpen={windowOpen} payConfigSet={data.status.payConfigSet} hasTimesheetData={data.status.hasTimesheetData} onImported={refresh} />}
         </section>
       </div>
     </Container>

@@ -154,3 +154,20 @@ describe('fix round 1 (UX-4C2A-AUDIT.md F6)', () => {
     expect(document.body.querySelector('[data-testid="import-window"]')!.textContent).toBe("Import window: Couldn't check whether past timesheets can be imported.");
   });
 });
+
+describe('UX-4C2A-AUDIT.md F7: the pay-schedule notice once hours exist', () => {
+  it('no schedule row and timesheet data → the future-date wording, linking to Pay schedule', async () => {
+    m = await mount(<ImportClient initialData={importPageData({ payConfigSet: false, hasTimesheetData: true })} initialType="hours" />);
+    const notice = document.body.querySelector('[data-testid="pay-schedule-first"]')!;
+    expect(notice.textContent).toContain('Hours are already imported, so the pay schedule can only change on a future date.');
+    expect(notice.textContent).not.toContain('Confirm your pay schedule first');
+    expect(notice.querySelector('a')!.getAttribute('href')).toBe('/settings/pay-schedule');
+  });
+
+  it('no schedule row and no timesheet data → still "Confirm your pay schedule first…"', async () => {
+    m = await mount(<ImportClient initialData={importPageData({ payConfigSet: false, hasTimesheetData: false })} initialType="timesheetStatus" />);
+    const notice = document.body.querySelector('[data-testid="pay-schedule-first"]')!;
+    expect(notice.textContent).toContain('Confirm your pay schedule first. After hours are imported it can only change on a future date.');
+    expect(notice.querySelector('a')!.getAttribute('href')).toBe('/settings/setup');
+  });
+});

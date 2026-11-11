@@ -8,6 +8,7 @@ import { and, asc, count, countDistinct, eq, inArray, isNotNull, isNull, notExis
 import { CHARGEABLE_CODE } from '@/server/internal/chargeable';
 import { EXPECTED_SUBMITTER_ROLES } from '@/server/internal/team-period-status';
 import { getCurrentEffectiveConfigInternal } from '@/server/internal/pay-period-config';
+import { timezoneLabel } from '@/lib/timezone-options';
 
 /**
  * The Setup checklist (feature-plan-ux-setup-import.md §3.1, P2–P4). Six required steps in dependency order, then three
@@ -179,6 +180,8 @@ export interface SetupPageData {
   gaps: SetupAccessGaps;
   settings: {
     timezone: string;
+    /** The time zone's friendly name for the checklist (S10), computed here so the server and browser render the same text. */
+    timezoneLabel: string;
     workweekStartDay: number | null;
     /** The current pay schedule (`set` = a pay_period_config row exists; otherwise the default is in use). */
     payConfig: { set: boolean; periodType: string; anchorDate: string; weekStartDay: number };
@@ -209,6 +212,7 @@ export async function getSetupPageDataInternal(): Promise<SetupPageData> {
     gaps,
     settings: {
       timezone: settings?.timezone ?? 'America/New_York',
+      timezoneLabel: timezoneLabel(settings?.timezone ?? 'America/New_York'),
       workweekStartDay: settings?.workweekStartDay ?? null,
       payConfig: { set: status.payConfigSet, periodType: config.periodType, anchorDate: config.anchorDate, weekStartDay: config.weekStartDay },
       connectionName: connection?.name ?? null,

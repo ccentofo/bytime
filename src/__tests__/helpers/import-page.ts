@@ -4,16 +4,16 @@ import { wait } from './dom';
 
 /** The Import page's tests (feature-plan-ux-setup-import.md §4): page data, and choosing a file in its FileInput. */
 
-export function importPageData(o: { payConfigSet?: boolean; counts?: Partial<SetupPageData['status']['counts']>; scopeCount?: number } = {}): SetupPageData {
+export function importPageData(o: { payConfigSet?: boolean; hasTimesheetData?: boolean; counts?: Partial<SetupPageData['status']['counts']>; scopeCount?: number } = {}): SetupPageData {
   const counts = { indirectCodes: 0, contracts: 0, clins: 0, chargeCodes: 0, laborCategories: 0, employees: 0, employeesWithAccess: 0, adminsWithAccess: 0, clinsWithoutCode: 0, ...o.counts };
   const keys = ['timeAndWeek', 'paySchedule', 'contractsClins', 'chargeCodes', 'people', 'chargeCodeAccess', 'indirectCodes', 'laborCategories', 'connection'] as const;
   return {
     status: {
       steps: keys.map((key, i) => ({ key, required: i < 6, done: false, ...(key === 'chargeCodeAccess' ? { withAccess: counts.employeesWithAccess, total: counts.employees } : {}) })),
-      requiredDone: 0, requiredTotal: 6, isComplete: false, counts, hasTimesheetData: false, payConfigSet: o.payConfigSet ?? true,
+      requiredDone: 0, requiredTotal: 6, isComplete: false, counts, hasTimesheetData: o.hasTimesheetData ?? false, payConfigSet: o.payConfigSet ?? true,
     },
     gaps: { missingCount: 0, names: [] },
-    settings: { timezone: 'America/New_York', workweekStartDay: null, payConfig: { set: o.payConfigSet ?? true, periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1 }, connectionName: null },
+    settings: { timezone: 'America/New_York', timezoneLabel: 'Eastern Time', workweekStartDay: null, payConfig: { set: o.payConfigSet ?? true, periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1 }, connectionName: null },
     scopeCount: o.scopeCount ?? 0,
   };
 }

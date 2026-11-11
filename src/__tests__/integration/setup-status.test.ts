@@ -164,6 +164,13 @@ describe('Setup status (B1, feature-plan-ux-setup-import.md §3.1)', () => {
     expect(gaps).toEqual({ missingCount: 2, names: ['Bob Dead-Code', 'Cat Inactive-Assignment'] });
   });
 
+  it('S10 (UX-4C2A-AUDIT.md): the page data carries the time zone\'s friendly name; an unknown id falls back to itself', async () => {
+    await db().update(schema.workspaceSettings).set({ timezone: 'America/Chicago' }).where(eq(schema.workspaceSettings.id, 1));
+    expect((await getSetupPageDataInternal()).settings).toMatchObject({ timezone: 'America/Chicago', timezoneLabel: 'Central Time' });
+    await db().update(schema.workspaceSettings).set({ timezone: 'Mars/Olympus_Mons' }).where(eq(schema.workspaceSettings.id, 1));
+    expect((await getSetupPageDataInternal()).settings.timezoneLabel).toBe('Mars/Olympus_Mons');
+  });
+
   it('C17: the gaps list stops at 20 names (by name) while missingCount counts everyone', async () => {
     for (let i = 0; i < 22; i++) await createTestUser({ role: 'employee', fullName: `Person ${String(i).padStart(2, '0')}` });
     const gaps = await getSetupAccessGapsInternal();

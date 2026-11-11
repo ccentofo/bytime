@@ -41,9 +41,10 @@ export function stepDetail(key: SetupStepKey, data: SetupPageData): string {
   const step = data.status.steps.find((s) => s.key === key);
   switch (key) {
     case 'timeAndWeek':
+      // S10: the friendly name (e.g. "Eastern Time"), else the IANA id.
       return data.settings.workweekStartDay === null
-        ? `${data.settings.timezone} · the workweek isn't set yet`
-        : `${data.settings.timezone} · weeks start ${DAY_NAMES[data.settings.workweekStartDay]}`;
+        ? `${data.settings.timezoneLabel} · the workweek isn't set yet`
+        : `${data.settings.timezoneLabel} · weeks start ${DAY_NAMES[data.settings.workweekStartDay]}`;
     case 'paySchedule':
       return data.settings.payConfig.set ? payScheduleSummary(data.settings.payConfig) : 'Using the default: twice a month';
     case 'contractsClins':

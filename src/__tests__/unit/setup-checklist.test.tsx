@@ -21,6 +21,7 @@ vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 import { SetupChecklistClient } from '@/app/(app)/settings/setup/SetupChecklistClient';
 import { showsInlineForm } from '@/app/(app)/settings/setup/setup-view';
 import { anchorDayMessage } from '@/lib/pay-schedule-messages';
+import { timezoneLabel } from '@/lib/timezone-options';
 import type { SetupPageData } from '@/server/internal/setup';
 import { click, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
 
@@ -49,7 +50,7 @@ function data(done: Done = {}, o: { hasTimesheetData?: boolean; workweek?: numbe
       hasTimesheetData: o.hasTimesheetData ?? false, payConfigSet: !!done.paySchedule,
     },
     gaps: { missingCount: o.gaps?.length ?? 0, names: o.gaps ?? [] },
-    settings: { timezone: 'America/New_York', workweekStartDay: o.workweek ?? null, payConfig: { set: !!done.paySchedule, periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1, ...o.pay }, connectionName: null },
+    settings: { timezone: 'America/New_York', timezoneLabel: 'Eastern Time', workweekStartDay: o.workweek ?? null, payConfig: { set: !!done.paySchedule, periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1, ...o.pay }, connectionName: null },
     scopeCount: 0,
   };
 }
@@ -175,5 +176,20 @@ describe('fix round 1 (UX-4C2A-AUDIT.md F1, F4, F6)', () => {
     await wait(30);
     expect(stepEl('paySchedule').querySelector('[role="alert"]')!.textContent).toBe('A pay schedule change must start on a period start date.');
     expect(stepEl('paySchedule').textContent).not.toContain('The first period must start on a Monday.');
+  });
+});
+
+describe('UX-4C2A-AUDIT.md S10: friendly time zone names on the checklist', () => {
+  it('a known id gets its friendly name; an unknown id shows the raw id', () => {
+    expect(timezoneLabel('America/New_York')).toBe('Eastern Time');
+    expect(timezoneLabel('America/Los_Angeles')).toBe('Pacific Time');
+    expect(timezoneLabel('Mars/Olympus_Mons')).toBe('Mars/Olympus_Mons');
+  });
+
+  it('the time zone step shows the friendly name, not the IANA id', async () => {
+    await render(data({ timeAndWeek: true }, { workweek: 1 }));
+    const detail = document.body.querySelector('[data-testid="detail-timeAndWeek"]')!.textContent;
+    expect(detail).toBe('Eastern Time · weeks start Monday');
+    expect(detail).not.toContain('America/New_York');
   });
 });

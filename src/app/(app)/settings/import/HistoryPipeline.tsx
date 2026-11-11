@@ -23,6 +23,8 @@ export function windowCopy(open: boolean | null | undefined): string {
   return open ? 'Open — you can import past timesheets.' : 'Closed — contact support to reopen it.';
 }
 export const PAY_SCHEDULE_FIRST = 'Confirm your pay schedule first. After hours are imported it can only change on a future date.';
+/** UX-4C2A-AUDIT.md F7: once timesheet data exists, the schedule can't change immediately any more. */
+export const PAY_SCHEDULE_FUTURE_ONLY = 'Hours are already imported, so the pay schedule can only change on a future date.';
 export const SOURCE_REQUIRED = 'Enter the source system before importing.';
 const WINDOW_ID = 'import-window-status';
 
@@ -43,12 +45,13 @@ const STATUS_COLUMNS: KeyColumn[] = [
  * The check is validateMigration* through runMigrationBatches; Import sends every row (the server re-validates and
  * reports the rows it refused), so the batch file-row numbers stay right. The window and the pay schedule come first.
  */
-export function HistoryPipeline({ def, state, dispatch, windowOpen, payConfigSet, onImported }: {
+export function HistoryPipeline({ def, state, dispatch, windowOpen, payConfigSet, hasTimesheetData, onImported }: {
   def: HistoryTypeDef;
   state: PipelineState;
   dispatch: (e: PipelineEvent) => void;
   windowOpen: boolean | null | undefined;
   payConfigSet: boolean;
+  hasTimesheetData: boolean;
   onImported: () => void;
 }) {
   const busy = useBusy();
@@ -125,7 +128,9 @@ export function HistoryPipeline({ def, state, dispatch, windowOpen, payConfigSet
       </Group>
       {!payConfigSet && (
         <div data-testid="pay-schedule-first">
-          <Notice tone="warn" action={{ label: 'Open the Setup checklist', href: SETUP_HREF }}>{PAY_SCHEDULE_FIRST}</Notice>
+          {hasTimesheetData
+            ? <Notice tone="warn" action={{ label: 'Open Pay schedule', href: '/settings/pay-schedule' }}>{PAY_SCHEDULE_FUTURE_ONLY}</Notice>
+            : <Notice tone="warn" action={{ label: 'Open the Setup checklist', href: SETUP_HREF }}>{PAY_SCHEDULE_FIRST}</Notice>}
         </div>
       )}
       <FileStep def={def} columns={columns} state={state} dispatch={dispatch} prepare={(text) => prepareHistoryFile(text, def)}>
