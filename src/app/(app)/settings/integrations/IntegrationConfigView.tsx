@@ -138,6 +138,9 @@ export function IntegrationConfigView({
   const listData = <T,>(l: QboList<T> | undefined): T[] => (l && l.ok ? l.data : []);
   const employees = listData(lists?.employees);
   const vendors = listData(lists?.vendors);
+  // UX-4C2B-AUDIT.md F2, F3: a list counts only once it loaded.
+  const employeesOk = !!lists?.employees.ok;
+  const vendorsOk = !!lists?.vendors.ok;
 
   // ── People (I4, I5) ───────────────────────────────────────────────────────────────────────────────────────────
   const personRows = useMemo(() => {
@@ -149,7 +152,9 @@ export function IntegrationConfigView({
     return persons.map((p) => ({ ...p, ...byUser.get(p.id) }));
   }, [persons, mappings]);
   const matchedCount = personRows.filter((p) => p.employee || p.vendor).length;
-  const suggestions = useMemo(() => emailSuggestions(
+  // F3: email suggestions (and "Match by email") need BOTH lists — with one missing, an email on an employee and a
+  // vendor wouldn't be seen as ambiguous.
+  const suggestions = useMemo(() => !(employeesOk && vendorsOk) ? new Map<string, EmailSuggestion>() : emailSuggestions(
     persons,
     employees,
     vendors,
@@ -158,7 +163,7 @@ export function IntegrationConfigView({
       employeeIds: new Set(mappings.filter((m) => m.entityType === 'employee').map((m) => m.externalEntityId)),
       vendorIds: new Set(mappings.filter((m) => m.entityType === 'vendor').map((m) => m.externalEntityId)),
     },
-  ), [persons, employees, vendors, personRows, mappings]);
+  ), [persons, employees, vendors, personRows, mappings, employeesOk, vendorsOk]);
 
   async function choosePerson(userId: string, name: string, match: { type: PersonMatchType; externalId: string; externalName: string } | null) {
     const key = `person:${userId}`;
@@ -290,6 +295,7 @@ export function IntegrationConfigView({
             rows={personRows}
             employees={employees}
             vendors={vendors}
+            listsOk={{ employee: employeesOk, vendor: vendorsOk }}
             suggestions={suggestions}
             listError={listError(lists?.employees) ?? listError(lists?.vendors)}
             onRetry={() => void load()}
@@ -308,6 +314,7 @@ export function IntegrationConfigView({
             rows={contracts.map((c) => ({ id: c.id, name: c.name, detail: c.contractNumber }))}
             entityType="contract"
             options={listData(lists?.customers).map((c) => ({ value: c.id, label: c.name }))}
+            listOk={!!lists?.customers.ok}
             mappings={mappings}
             busyRows={busyRows}
             unavailable={loading || !canWrite}
@@ -324,6 +331,7 @@ export function IntegrationConfigView({
             rows={clins.map((c) => ({ id: c.id, name: c.clinNumber, detail: c.description ?? '' }))}
             entityType="clin"
             options={listData(lists?.items).map((i) => ({ value: i.id, label: i.name }))}
+            listOk={!!lists?.items.ok}
             mappings={mappings}
             busyRows={busyRows}
             unavailable={loading || !canWrite}
@@ -368,10 +376,11 @@ export function IntegrationConfigView({
 type PersonRow = { id: string; fullName: string; email: string; employee?: ConfigMapping; vendor?: ConfigMapping };
 type Show = 'unmatchedFirst' | 'unmatchedOnly' | 'all';
 
-function PeopleTab({ rows, employees, vendors, suggestions, listError, onRetry, busyRows, readOnly, onChoose, matchingByEmail, onMatchByEmail }: {
+function PeopleTab({ rows, employees, vendors, listsOk, suggestions, listError, onRetry, busyRows, readOnly, onChoose, matchingByEmail, onMatchByEmail }: {
   rows: PersonRow[];
   employees: ProviderPerson[];
   vendors: ProviderPerson[];
+  listsOk: Record<PersonMatchType, boolean>;
   suggestions: Map<string, EmailSuggestion>;
   listError: string | null;
   onRetry: () => void;
@@ -425,7 +434,9 @@ function PeopleTab({ rows, employees, vendors, suggestions, listError, onRetry, 
                   const own = r[type];
                   const items = list.map((p) => ({ value: `${type}:${p.id}`, label: `${p.name} · ${type === 'employee' ? 'Employee' : 'Vendor'}` }));
                   if (own && !list.some((p) => p.id === own.externalEntityId)) {
-                    items.unshift({ value: `${type}:${own.externalEntityId}`, label: `${own.externalEntityName ?? own.externalEntityId} (not found in QuickBooks)` });
+                    // F2: "not found" only against a loaded list; otherwise the saved name.
+                    const kind = type === 'employee' ? 'Employee' : 'Vendor';
+                    items.unshift({ value: `${type}:${own.externalEntityId}`, label: `${own.externalEntityName ?? own.externalEntityId}${listsOk[type] ? ' (not found in QuickBooks)' : ` · ${kind}`}` });
                   }
                   return items;
                 };
@@ -505,11 +516,12 @@ function PeopleTab({ rows, employees, vendors, suggestions, listError, onRetry, 
 
 // ── Contracts / CLINs ───────────────────────────────────────────────────────────────────────────────────────────
 
-function EntityTable({ heading, rows, entityType, options, mappings, busyRows, unavailable, placeholder, onSave, onClear }: {
+function EntityTable({ heading, rows, entityType, options, listOk, mappings, busyRows, unavailable, placeholder, onSave, onClear }: {
   heading: string;
   rows: Array<{ id: string; name: string; detail: string }>;
   entityType: 'contract' | 'clin';
   options: Array<{ value: string; label: string }>;
+  listOk: boolean;
   mappings: ConfigMapping[];
   busyRows: ReadonlySet<string>;
   unavailable: boolean;
@@ -546,6 +558,7 @@ function EntityTable({ heading, rows, entityType, options, mappings, busyRows, u
                       name={r.name}
                       mapping={mapping}
                       options={options}
+                      listOk={listOk}
                       busy={unavailable || busyRows.has(`${entityType}:${r.id}`)}
                       placeholder={placeholder}
                       onSelect={(value, label) => onSave(entityType, r.id, r.name, value, label)}
