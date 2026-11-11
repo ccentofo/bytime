@@ -109,7 +109,16 @@ export async function triggerQBOSync(data: { connectionId: string; periodStart: 
   return userAction(async () => {
     const actor = await requireAdminFresh();
     const connectionId = validateUUID(data?.connectionId, 'Connection');
-    const period = await payPeriodStartingOn(await getDb(), data?.periodStart);
+    const db = await getDb();
+    // UX-4C2B-AUDIT.md F8: only an active QuickBooks connection (a Gusto id would run Gusto's local-record path).
+    const [connection] = await db
+      .select({ provider: integrationConnections.provider, isActive: integrationConnections.isActive })
+      .from(integrationConnections)
+      .where(eq(integrationConnections.id, connectionId))
+      .limit(1);
+    if (!connection || !connection.isActive) throw new UserFacingError(INTEGRATION_DISCONNECTED_MESSAGE);
+    if (connection.provider !== 'quickbooks_online') throw new UserFacingError('This isn’t a QuickBooks Online connection.');
+    const period = await payPeriodStartingOn(db, data?.periodStart);
     return executeSyncOperation(connectionId, 'timesheet_push', period.start, period.end, actor.id, 'manual', { exclusive: true });
   });
 }

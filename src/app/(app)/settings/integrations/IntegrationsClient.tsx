@@ -9,6 +9,7 @@ import { Icons } from '@/components/ui/icons';
 import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 import { formatInstant } from '@/lib/calendar-date';
 import type { HubConnection } from '@/server/actions/integrations';
+import { syncResultText } from '@/lib/integrations/sync-display';
 
 export interface CallbackParams {
   connected: string | null;
@@ -44,13 +45,20 @@ export function callbackBanner({ connected, provider, error }: CallbackParams): 
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-/** "Last sent {date} · {pushed} sent, {failed} failed · {n} people not matched", or "Nothing sent yet". */
-export function qboCardLine(conn: HubConnection, timeZone: string): string {
-  const parts = [
-    conn.lastSend
-      ? `Last sent ${formatInstant(new Date(conn.lastSend.at), timeZone, 'MMM D, YYYY')} · ${conn.lastSend.pushed} sent, ${conn.lastSend.failed} failed`
-      : 'Nothing sent yet',
-  ];
+/**
+ * "Last sent {date} · {pushed} sent, {failed} failed · {n} people not matched", or "Nothing sent yet". A failed or
+ * still-running last send reads in the §6 wording instead ("Failed: …", "Sending…", "Didn’t finish";
+ * UX-4C2B-AUDIT.md F7).
+ */
+export function qboCardLine(conn: HubConnection, timeZone: string, now = Date.now()): string {
+  const last = conn.lastSend;
+  const result = last && (last.status === 'failed' || last.status === 'running')
+    ? (() => {
+      const t = syncResultText({ status: last.status, recordsPushed: last.pushed, recordsSkipped: last.skipped, errorSummary: last.errorSummary, startedAt: new Date(last.at), createdAt: new Date(last.at) }, now);
+      return t.head + t.rest;
+    })()
+    : last ? `${last.pushed} sent, ${last.failed} failed` : null;
+  const parts = [last ? `Last sent ${formatInstant(new Date(last.at), timeZone, 'MMM D, YYYY')} · ${result}` : 'Nothing sent yet'];
   if (conn.unmatchedPeople > 0) parts.push(`${plural(conn.unmatchedPeople, 'person', 'people')} not matched`);
   return parts.join(' · ');
 }

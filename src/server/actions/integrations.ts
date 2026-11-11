@@ -169,6 +169,10 @@ export type SyncLog = Omit<typeof integrationSyncLogs.$inferSelect, 'periodStart
 export async function getSyncLogs(connectionId: string, limit = 20): Promise<SyncLog[]> {
   const db = await getDb();
   await requireAdmin();
+  // UX-4C2B-AUDIT.md F11: a valid id, and 1–100 rows.
+  const id = validateUUID(connectionId, 'Connection');
+  const n = Number(limit);
+  const rowsWanted = Number.isFinite(n) ? Math.min(100, Math.max(1, Math.trunc(n))) : 20;
   const rows = await db
     .select({
       log: integrationSyncLogs,
@@ -180,9 +184,9 @@ export async function getSyncLogs(connectionId: string, limit = 20): Promise<Syn
       )`,
     })
     .from(integrationSyncLogs)
-    .where(eq(integrationSyncLogs.connectionId, connectionId))
+    .where(eq(integrationSyncLogs.connectionId, id))
     .orderBy(desc(integrationSyncLogs.createdAt))
-    .limit(limit);
+    .limit(rowsWanted);
   return rows.map((r) => ({ ...r.log, failedRecords: Number(r.failedRecords) })) as SyncLog[];
 }
 

@@ -38,7 +38,7 @@ export function syncResultText(log: SyncLogFacts, now: number): { head: string; 
   switch (log.status) {
     case 'running':
       return isStaleRunning(log, now)
-        ? { head: "Didn't finish", rest: '', tone: 'warn' }
+        ? { head: 'Didn’t finish', rest: '', tone: 'warn' }
         : { head: 'Sending…', rest: '', tone: 'info' };
     case 'success':
       if (log.recordsPushed === 0 && log.recordsSkipped === 0) {

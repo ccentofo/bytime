@@ -426,7 +426,7 @@ function PeopleTab({ rows, employees, vendors, listsOk, suggestions, listError, 
             </Table.Thead>
             <Table.Tbody>
               {shown.length === 0 ? (
-                <Table.Tr><Table.Td colSpan={3}><Text c="dimmed" ta="center" py="md" size="sm">Everyone is matched.</Text></Table.Td></Table.Tr>
+                <Table.Tr><Table.Td colSpan={3}><Text c="dimmed" ta="center" py="md" size="sm">{rows.length === 0 ? 'No active people yet.' : 'Everyone is matched.'}</Text></Table.Td></Table.Tr>
               ) : shown.map((r) => {
                 const current = r.employee ?? r.vendor;
                 const value = current ? `${current.entityType}:${current.externalEntityId}` : NONE;
