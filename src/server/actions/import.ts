@@ -115,9 +115,10 @@ const ROLES = { employee: 'employee', supervisor: 'supervisor', admin: 'admin' }
 
 /** P12: Employee / Supervisor / Admin (any case); anything else — blank included — is refused. */
 function parseRole(value: unknown): (typeof ROLES)[keyof typeof ROLES] {
-  const role = ROLES[text(value).toLowerCase() as keyof typeof ROLES];
-  if (!role) throw new UserFacingError('Role must be Employee, Supervisor or Admin.');
-  return role;
+  const key = text(value).toLowerCase();
+  // Own keys only: "constructor" or "__proto__" must not pass as a role (UX-4C2A-AUDIT.md L1).
+  if (!Object.hasOwn(ROLES, key)) throw new UserFacingError('Role must be Employee, Supervisor or Admin.');
+  return ROLES[key as keyof typeof ROLES];
 }
 
 /** P12: Yes / No / True / False (any case); anything else — blank included — is refused (R7: overtime status is required). */

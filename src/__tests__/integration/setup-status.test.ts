@@ -139,8 +139,10 @@ describe('Setup status (B1, feature-plan-ux-setup-import.md §3.1)', () => {
     const otherClin = await createTestClin((await createTestContract({ status: 'inactive' })).id);
     await grant(emp2.id, (await createTestChargeCode(otherClin.id)).id);
     await createTestClin(clin.contractId);                                         // an active CLIN with no code
+    const onlyInactive = await createTestClin(clin.contractId);                    // UX-4C2A-AUDIT.md L6: only an inactive code
+    await createTestChargeCode(onlyInactive.id, { isActive: false });
     const st = await getSetupStatusInternal();
-    expect(st.counts).toMatchObject({ employees: 2, employeesWithAccess: 1, chargeCodes: 2, contracts: 1, clins: 3, clinsWithoutCode: 1 });
+    expect(st.counts).toMatchObject({ employees: 2, employeesWithAccess: 1, chargeCodes: 2, contracts: 1, clins: 4, clinsWithoutCode: 2 });
     expect(step(st, 'connection').done).toBe(false);
     await db().insert(schema.integrationConnections).values({ provider: 'quickbooks_online', displayName: 'QuickBooks — Acme', connectedBy: admin.id });
     expect(step(await getSetupStatusInternal(), 'connection').done).toBe(true);

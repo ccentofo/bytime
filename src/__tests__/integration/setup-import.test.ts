@@ -43,6 +43,8 @@ vi.mock('@/lib/tenant/context', () => ({
 vi.mock('next/headers', () => ({ headers: async () => new Headers({ host: 'test-tenant.localhost' }) }));
 const sessionState = vi.hoisted(() => ({ user: null as null | { id: string; role: string; email: string; fullName: string } }));
 vi.mock('@/auth', () => ({ auth: async () => (sessionState.user ? { user: { ...sessionState.user, tenantSlug: 'test-tenant' } } : null) }));
+const sentry = vi.hoisted(() => ({ captureException: vi.fn(), captureMessage: vi.fn() }));
+vi.mock('@sentry/nextjs', () => sentry);
 vi.mock('@/lib/email/send', () => ({
   sendTimesheetSubmittedEmail: vi.fn(async () => ({ ok: true as const, id: 'm' })),
   sendTimesheetApprovedEmail: vi.fn(async () => ({ ok: true as const, id: 'm' })),
@@ -111,12 +113,19 @@ describe('setup imports: the check (dry run) and the import (§4.3)', () => {
       { row: 4, name: 'Bad Role', email: `badrole-${s}@bytime.dev`, role: 'manager', flsaExempt: 'no' },
       { row: 5, name: 'Bad FLSA', email: `badflsa-${s}@bytime.dev`, role: 'supervisor', flsaExempt: 'maybe' },
       { row: 6, name: 'New Two', email: `new2-${s}@bytime.dev`, role: 'SUPERVISOR', flsaExempt: 'False' },
+      // UX-4C2A-AUDIT.md L1: an object's own keys only ("constructor" isn't a role); L2: blank Role / FLSA are refused.
+      { row: 7, name: 'Proto Role', email: `proto-${s}@bytime.dev`, role: 'constructor', flsaExempt: 'no' },
+      { row: 8, name: 'Blank Role', email: `blankrole-${s}@bytime.dev`, role: '', flsaExempt: 'no' },
+      { row: 9, name: 'Blank FLSA', email: `blankflsa-${s}@bytime.dev`, role: 'employee', flsaExempt: '' },
     ];
     const { real, before } = await checkThenImport((o) => bulkImportEmployees(rows, o));
     expect(real).toMatchObject({ created: 2, skipped: 1 });
     expect(real.errors).toEqual([
       { row: 4, message: 'Role must be Employee, Supervisor or Admin.' },
       { row: 5, message: 'Overtime (FLSA Exempt) must be Yes or No.' },
+      { row: 7, message: 'Role must be Employee, Supervisor or Admin.' },
+      { row: 8, message: 'Role must be Employee, Supervisor or Admin.' },
+      { row: 9, message: 'Overtime (FLSA Exempt) must be Yes or No.' },
     ]);
     expect(real.skippedRows).toEqual([{ row: 3, reason: 'Already a user' }]);
     expect(real.generatedPasswords!.map((p) => p.email).sort()).toEqual([`new1-${s}@bytime.dev`, `new2-${s}@bytime.dev`]);
@@ -229,6 +238,7 @@ describe('the new types: charge codes and charge code access (§4.3)', () => {
       { clinId: c1.id, lcatCode: 'SE', title: 'Engineer', hourlyRate: '100.00', status: 'active' },
       { clinId: c1.id, slinId: a2.id, lcatCode: 'SA2', title: 'On A2', hourlyRate: '100.00', status: 'active' },
       { clinId: c2.id, lcatCode: 'OT', title: 'Other CLIN', hourlyRate: '100.00', status: 'active' },
+      { clinId: c1.id, lcatCode: 'GONE', title: 'Inactive', hourlyRate: '100.00', status: 'inactive' },
     ]).returning();
     return { k, c1, c2, a, a2, lcats };
   }
@@ -247,6 +257,7 @@ describe('the new types: charge codes and charge code access (§4.3)', () => {
       row({ row: 8, code: 'CC-6' }),
       row({ row: 9, code: 'CC-7', slinNumber: 'A', laborCategory: 'SA2' }),
       row({ row: 10, code: 'CC-8', billable: 'maybe' }),
+      row({ row: 11, code: 'CC-9', laborCategory: 'GONE' }),   // UX-4C2A-AUDIT.md L3: an inactive category isn't on the CLIN
     ];
     const { real, before } = await checkThenImport((o) => bulkImportChargeCodes(rows, o));
     expect(real).toMatchObject({ created: 2, skipped: 1 });
@@ -257,6 +268,7 @@ describe('the new types: charge codes and charge code access (§4.3)', () => {
       { row: 6, message: 'Labor category "OT" isn\'t on CLIN 0001.' },
       { row: 9, message: 'That labor category belongs to a different CLIN or SLIN than this charge code.' },
       { row: 10, message: 'Billable must be Yes or No.' },
+      { row: 11, message: 'Labor category "GONE" isn\'t on CLIN 0001.' },
     ]);
     expect(real.skippedRows).toEqual([{ row: 7, reason: 'Code already exists' }]);
     expect((await counts()).chargeCodes).toBe(before.chargeCodes + 2);
@@ -274,15 +286,19 @@ describe('the new types: charge codes and charge code access (§4.3)', () => {
     await createTestChargeCode(c1.id, { code: 'CC-SHUT', isActive: false });
     const held = await createTestChargeCode(c1.id, { code: 'CC-HELD' });
     await db().insert(schema.userChargeCodes).values({ userId: emp.id, chargeCodeId: held.id, isActive: true, assignedBy: admin.id });
+    // UX-4C2A-AUDIT.md L4: access that was taken away (an inactive row) is given back, not skipped.
+    const revoked = await createTestChargeCode(c1.id, { code: 'CC-REVOKED' });
+    await db().insert(schema.userChargeCodes).values({ userId: emp.id, chargeCodeId: revoked.id, isActive: false, assignedBy: admin.id });
     const rows = [
       { row: 2, email: emp.email.toUpperCase(), chargeCode: 'CC-OPEN' },
       { row: 3, email: gone.email, chargeCode: 'CC-OPEN' },
       { row: 4, email: emp.email, chargeCode: 'CC-SHUT' },
       { row: 5, email: emp.email, chargeCode: 'CC-HELD' },
       { row: 6, email: emp.email, chargeCode: 'NOPE' },
+      { row: 7, email: emp.email, chargeCode: 'CC-REVOKED' },
     ];
     const { real, before } = await checkThenImport((o) => bulkImportChargeCodeAccess(rows, o));
-    expect(real).toMatchObject({ created: 1, skipped: 1 });
+    expect(real).toMatchObject({ created: 2, skipped: 1 });
     expect(real.errors).toEqual([
       { row: 3, message: `${gone.email} isn't active, so they can't be given access.` },
       { row: 4, message: 'CC-SHUT can\'t be charged right now.' },
@@ -290,9 +306,11 @@ describe('the new types: charge codes and charge code access (§4.3)', () => {
     ]);
     expect(real.skippedRows).toEqual([{ row: 5, reason: 'Already has access to this code' }]);
     const after = await counts();
-    expect([after.access, after.memberships]).toEqual([before.access + 1, before.memberships + 1]);
+    expect([after.access, after.memberships]).toEqual([before.access + 1, before.memberships + 1]);   // the revoked row is reused
     const [access] = await db().select().from(schema.userChargeCodes).where(eq(schema.userChargeCodes.chargeCodeId, open.id));
     expect([access.userId, access.isActive]).toEqual([emp.id, true]);
+    const [back] = await db().select().from(schema.userChargeCodes).where(eq(schema.userChargeCodes.chargeCodeId, revoked.id));
+    expect([back.userId, back.isActive]).toEqual([emp.id, true]);
     const [member] = await db().select().from(schema.userAssignments).where(eq(schema.userAssignments.userId, emp.id));
     expect(member.clinId).toBe(c1.id);
   });
@@ -324,6 +342,15 @@ describe('setup imports: one transaction, a savepoint per row (§4.3)', () => {
       ['A', 'B', 'C'].map((lcatCode) => ({ contractNumber: `KF1-${s}`, clinNumber: '0001', lcatCode, title: lcatCode, hourlyRate: '100' })),
     )));
     expect(lcatResult).toMatchObject({ created: 2, errors: [{ row: 3, message: 'Could not import this row.' }] });
+    expect(sentry.captureException).toHaveBeenCalled();   // a real import reports the unexpected error…
+
+    // …a check (dry run) doesn't: no Sentry event per bad row on every check (UX-4C2A-AUDIT.md L5).
+    sentry.captureException.mockClear();
+    const checked = await withFailingInsert('contracts', 'contract_number', `KF5-${s}`, () => expectOk(bulkImportContracts([
+      { contractNumber: `KF4-${s}`, name: 'Four' }, { contractNumber: `KF5-${s}`, name: 'Five' },
+    ], { dryRun: true })));
+    expect(checked).toMatchObject({ created: 1, errors: [{ row: 3, message: 'Could not import this row.' }] });
+    expect(sentry.captureException).not.toHaveBeenCalled();
     expect((await counts())).toMatchObject({ contracts: 2, clins: 2, laborCategories: 2 });
   });
 
