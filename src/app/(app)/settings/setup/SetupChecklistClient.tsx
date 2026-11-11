@@ -14,6 +14,7 @@ import { toastError } from '@/lib/toast';
 import { REQUIRED_SETUP_STEPS, SETUP_STEP_TITLE, type SetupStepKey } from '@/lib/setup/steps';
 import { DAY_NAMES, timezoneOptions } from '@/lib/timezone-options';
 import { isCalendarDate } from '@/lib/calendar-date';
+import { anchorDayMessage } from '@/lib/pay-schedule-messages';
 import { getSetupPageData } from '@/server/actions/setup';
 import { updateWorkspaceTimezone, updateWorkweekStartDay } from '@/server/actions/workspace-settings';
 import { updatePayPeriodConfig } from '@/server/actions/pay-period-config';
@@ -106,7 +107,8 @@ export function SetupChecklistClient({ initialData }: { initialData: SetupPageDa
           : <Anchor component={Link} href="/settings/workspace" size="sm">Change on Workspace</Anchor>;
       case 'paySchedule':
         return showsInlineForm(s, status.hasTimesheetData)
-          ? <PayScheduleForm data={data} busy={busy} onSaved={() => refresh('paySchedule')} />
+          // Keyed on the saved workweek, so "Pay weeks start on" pre-fills from a workweek just saved in step 1 (UX-4C2A-AUDIT.md F1).
+          ? <PayScheduleForm key={data.settings.workweekStartDay ?? 'unset'} data={data} busy={busy} onSaved={() => refresh('paySchedule')} />
           : <Anchor component={Link} href="/settings/pay-schedule" size="sm">Change on Pay schedule</Anchor>;
       case 'contractsClins':
         return <Anchor component={Link} href="/admin/contracts" size="sm">Open Contracts</Anchor>;
@@ -222,8 +224,8 @@ function PayScheduleForm({ data, busy, onSaved }: { data: SetupPageData; busy: B
         effectiveFrom: null,
       }), { silent: true });
       if (!result.ok) {
-        // The anchor rule's message belongs next to the date (it must fall on the pay week's first day).
-        if (weekly && /anchor|start/i.test(result.error)) setAnchorError(result.error); else setServerError(result.error);
+        // Only the anchor rule's message belongs next to the date (UX-4C2A-AUDIT.md F4); every other error goes to the Alert.
+        if (weekly && result.error === anchorDayMessage(Number(weekStart))) setAnchorError(result.error); else setServerError(result.error);
         return;
       }
       await onSaved();

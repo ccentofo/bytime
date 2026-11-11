@@ -106,8 +106,8 @@ export const HISTORY_TYPES: HistoryTypeDef[] = [
   {
     kind: 'history', key: 'timesheetStatus', n: 9, label: 'Timesheet status', noun: ['timesheet status', 'timesheet statuses'], template: 'migration-periods-template.csv',
     note: 'Only submitted, approved or returned periods that ended before today are imported.',
-    headerColumns: ['Employee Email', 'Period Start', 'Status', 'Submitted At'],
-    optional: ['Reviewed At', 'Reviewed By Email', 'Review Comment'],
+    headerColumns: ['Employee Email', 'Period Start', 'Status'],
+    optional: ['Submitted At', 'Reviewed At', 'Reviewed By Email', 'Review Comment'],   // the server treats Submitted At as optional (UX-4C2A-AUDIT.md F3)
   },
 ];
 

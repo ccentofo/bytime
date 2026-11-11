@@ -259,7 +259,7 @@ describe('Period-lock integrity (R2-2)', () => {
           anchorDate: '2025-01-07' as CalendarDate, // a Tuesday
           weekStartDay: 1, // Monday
           effectiveFrom: '2026-02-16' as CalendarDate,
-        }), 'validation', /week start day/i);
+        }), 'validation', /^The first period must start on a Monday\.$/);   // UX-4C2A-AUDIT.md F4: the reworded message
     });
 
     it('rejects an unknown period type or week start day', async () => {

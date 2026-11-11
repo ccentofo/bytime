@@ -20,6 +20,7 @@ const people = typeDef('people') as SetupTypeDef;
 const scope = typeDef('approvalScope') as SetupTypeDef;
 const contracts = typeDef('contracts') as SetupTypeDef;
 const hours = typeDef('hours') as HistoryTypeDef;
+const status = typeDef('timesheetStatus') as HistoryTypeDef;
 const csv = (header: string, rows: string[]) => `${header}\n${rows.join('\n')}\n`;
 const ok = (f: ReturnType<typeof prepareSetupFile>) => { if (!f.ok) throw new Error(f.error); return f; };
 
@@ -110,6 +111,14 @@ describe('IM-16 / IM-10: the check result', () => {
     expect(lines[0]).not.toMatch(/^"?=/);                      // the formula guard prefixes the cell
     expect(lines[0]).toContain('kept');
     expect(lines[0]).toContain('"Email ""a,b"" is odd"');      // RFC 4180 quoting
+  });
+});
+
+describe('UX-4C2A-AUDIT.md F3: Timesheet status files', () => {
+  it('"Submitted At" is optional: a file without it is accepted; Status is still required in the header', () => {
+    const f = prepareHistoryFile(csv('Employee Email,Period Start,Status', ['a@x.test,2025-01-01,approved']), status);
+    expect(f.ok && f.rows.map((r) => r.row)).toEqual([1]);
+    expect(prepareHistoryFile(csv('Employee Email,Period Start', ['a@x.test,2025-01-01']), status)).toEqual({ ok: false, error: 'This file is missing required columns: Status.' });
   });
 });
 

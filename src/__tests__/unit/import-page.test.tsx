@@ -75,7 +75,12 @@ describe('the Import page (§4)', () => {
     m = await mount(<ImportClient initialData={importPageData()} initialType="people" />);
     await chooseFile(`${PEOPLE}\nAnn,ann@x.test,Employee,No\n`, 'people.csv');
     expect(document.body.querySelector('[data-testid="checking"]')).not.toBeNull();
+    window.history.replaceState({ __NA: true }, '');                                       // the router keeps its own state here
+    const replace = vi.spyOn(window.history, 'replaceState');
     await click(typeButton('contracts'));
+    // UX-4C2A-AUDIT.md F2: a null state, per the Next.js docs, so the router syncs the URL.
+    expect(replace).toHaveBeenCalledWith(null, '', expect.objectContaining({ search: '?type=contracts' }));
+    replace.mockRestore();
     await act(async () => { pending.resolve(result({ errors: [{ row: 2, message: 'stale' }] })); });
     await wait();
     expect(typeButton('contracts').getAttribute('aria-current')).toBe('true');
@@ -138,5 +143,14 @@ describe('the Import page (§4)', () => {
       '1People✓ 7 already', '2Contracts✓ 3 already', '3CLINs', '4Labor categories', '5Charge codesNew', '6Charge code accessNew', '7Approval scope',
       '8Hours', '9Timesheet status',
     ]);
+  });
+});
+
+describe('fix round 1 (UX-4C2A-AUDIT.md F6)', () => {
+  it('the window status that can\'t be read says so', async () => {
+    migration.getImportWindowStatus.mockResolvedValueOnce({ open: null });
+    m = await mount(<ImportClient initialData={importPageData()} initialType="timesheetStatus" />);
+    await wait();
+    expect(document.body.querySelector('[data-testid="import-window"]')!.textContent).toBe("Import window: Couldn't check whether past timesheets can be imported.");
   });
 });

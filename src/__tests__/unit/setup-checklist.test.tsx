@@ -20,6 +20,7 @@ vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
 import { SetupChecklistClient } from '@/app/(app)/settings/setup/SetupChecklistClient';
 import { showsInlineForm } from '@/app/(app)/settings/setup/setup-view';
+import { anchorDayMessage } from '@/lib/pay-schedule-messages';
 import type { SetupPageData } from '@/server/internal/setup';
 import { click, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
 
@@ -34,7 +35,7 @@ beforeEach(() => {
 afterEach(() => { unmount(m); m = undefined; });
 
 type Done = Partial<Record<string, boolean>>;
-function data(done: Done = {}, o: { hasTimesheetData?: boolean; workweek?: number | null; withAccess?: number; total?: number; gaps?: string[] } = {}): SetupPageData {
+function data(done: Done = {}, o: { hasTimesheetData?: boolean; workweek?: number | null; withAccess?: number; total?: number; gaps?: string[]; pay?: { periodType: string; anchorDate: string; weekStartDay: number } } = {}): SetupPageData {
   const keys = ['timeAndWeek', 'paySchedule', 'contractsClins', 'chargeCodes', 'people', 'chargeCodeAccess', 'indirectCodes', 'laborCategories', 'connection'] as const;
   const steps = keys.map((key, i) => ({
     key, required: i < 6, done: done[key] ?? false,
@@ -48,7 +49,7 @@ function data(done: Done = {}, o: { hasTimesheetData?: boolean; workweek?: numbe
       hasTimesheetData: o.hasTimesheetData ?? false, payConfigSet: !!done.paySchedule,
     },
     gaps: { missingCount: o.gaps?.length ?? 0, names: o.gaps ?? [] },
-    settings: { timezone: 'America/New_York', workweekStartDay: o.workweek ?? null, payConfig: { set: !!done.paySchedule, periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1 }, connectionName: null },
+    settings: { timezone: 'America/New_York', workweekStartDay: o.workweek ?? null, payConfig: { set: !!done.paySchedule, periodType: 'semimonthly', anchorDate: '2026-01-01', weekStartDay: 1, ...o.pay }, connectionName: null },
     scopeCount: 0,
   };
 }
@@ -126,7 +127,8 @@ describe('the Setup checklist page (§3.3)', () => {
     expect(document.body.querySelector('[data-testid="setup-complete"]')!.textContent).toBe('Your workspace is set up. People can record time.');
     const access = stepEl('chargeCodeAccess');
     expect(access.textContent).toContain('4 of 6 people can charge a direct code');
-    expect(access.textContent).toContain('4 of 6');                                        // the warn badge
+    const badge = access.querySelector('[data-tone]')!;                                     // the badge itself (UX-4C2A-AUDIT.md F6)
+    expect([badge.textContent, badge.getAttribute('data-tone')]).toEqual(['4 of 6', 'warn']);
     expect(access.querySelector('[data-testid="access-gaps"]')!.textContent)
       .toBe("Without a direct code: Emily Davis and Robert Taylor. If they record only indirect time (overhead, G&A, leave), that's fine.");
     unmount(m);
@@ -135,5 +137,43 @@ describe('the Setup checklist page (§3.3)', () => {
     expect(stepEl('timeAndWeek').hasAttribute('data-now')).toBe(false);
     expect(document.body.querySelector('[data-testid="setup-complete"]')).toBeNull();
     expect(document.body.querySelector('[data-testid="setup-progress"]')!.textContent).toContain('3 recommended steps below.');
+  });
+});
+
+describe('fix round 1 (UX-4C2A-AUDIT.md F1, F4, F6)', () => {
+  const weekly = { periodType: 'weekly', anchorDate: '2026-01-05', weekStartDay: 1 };   // Jan 5, 2026 is a Monday
+
+  it('F1: "Pay weeks start on" pre-fills from a workweek just saved in step 1', async () => {
+    h.pageData.mockResolvedValue(data({ timeAndWeek: true }, { workweek: 0, pay: weekly }));
+    await render(data({}, { pay: weekly }));
+    const pay = () => stepEl('paySchedule');
+    expect(fieldIn(pay(), 'Pay weeks start on').value).toBe('Monday');
+    await choose(stepEl('timeAndWeek'), 'Workweek starts on (FLSA overtime)', 'Sunday');
+    await click(button(stepEl('timeAndWeek'), 'Save'));
+    await wait(30);
+    expect(fieldIn(pay(), 'Pay weeks start on').value).toBe('Sunday');
+  });
+
+  it('F6: the FLSA workweek and the pay week have different labels', async () => {
+    await render(data({}, { pay: weekly }));
+    const labelsIn = (key: string) => [...stepEl(key).querySelectorAll('label')].map((l) => l.textContent?.replace(/\s*\*\s*$/, '').trim());
+    const flsa = labelsIn('timeAndWeek').filter((l) => /start/i.test(l ?? ''));
+    const payWeek = labelsIn('paySchedule').filter((l) => /weeks? start/i.test(l ?? ''));
+    expect(flsa).toEqual(['Workweek starts on (FLSA overtime)']);
+    expect(payWeek).toEqual(['Pay weeks start on']);
+  });
+
+  it('F4: only the anchor message goes to the date field; any other error goes to the Alert', async () => {
+    await render(data({}, { pay: weekly }));
+    h.pay.mockResolvedValueOnce({ ok: false, code: 'validation', error: anchorDayMessage(1) });
+    await click(button(stepEl('paySchedule'), 'Save pay schedule'));
+    await wait(30);
+    expect(stepEl('paySchedule').querySelector('[role="alert"]')).toBeNull();
+    expect(stepEl('paySchedule').textContent).toContain('The first period must start on a Monday.');
+    h.pay.mockResolvedValueOnce({ ok: false, code: 'validation', error: 'A pay schedule change must start on a period start date.' });
+    await click(button(stepEl('paySchedule'), 'Save pay schedule'));
+    await wait(30);
+    expect(stepEl('paySchedule').querySelector('[role="alert"]')!.textContent).toBe('A pay schedule change must start on a period start date.');
+    expect(stepEl('paySchedule').textContent).not.toContain('The first period must start on a Monday.');
   });
 });

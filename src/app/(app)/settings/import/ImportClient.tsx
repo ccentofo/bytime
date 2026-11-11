@@ -42,7 +42,7 @@ export function ImportClient({ initialData, initialType }: { initialData: SetupP
     setType(key);
     const url = new URL(window.location.href);
     url.searchParams.set('type', key);
-    window.history.replaceState(window.history.state, '', url);
+    window.history.replaceState(null, '', url);   // null state, per the Next.js docs, so the router syncs the URL (UX-4C2A-AUDIT.md F2)
   }
 
   // After an import, the type list's counts (and the pay schedule flag) are refreshed.

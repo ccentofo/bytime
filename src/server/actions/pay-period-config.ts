@@ -1,5 +1,6 @@
 'use server';
 
+import { anchorDayMessage } from '@/lib/pay-schedule-messages';
 import { getDb, getDbForWrite } from '@/db';
 import { payPeriodConfig, payPeriodTypeEnum } from '@/db/schema';
 import { requireAdmin, requireAdminFresh, requireSession } from '@/lib/session';
@@ -147,7 +148,7 @@ function parseScheduleInput(input: { periodType: unknown; anchorDate: unknown; w
 function anchorProblem(config: PeriodConfig): string | null {
   if (config.periodType !== 'weekly' && config.periodType !== 'biweekly') return null;
   return dayOfWeek(config.anchorDate) !== config.weekStartDay
-    ? 'The anchor date must fall on the selected week start day.'
+    ? anchorDayMessage(config.weekStartDay)
     : null;
 }
 
