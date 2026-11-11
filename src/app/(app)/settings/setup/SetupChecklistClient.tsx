@@ -26,6 +26,8 @@ import {
 import classes from './SetupChecklist.module.css';
 
 const DAY_OPTIONS = DAY_NAMES.map((d, i) => ({ value: String(i), label: d }));
+/** Inline form rows: descriptions and errors go below the input, so the inputs in a row line up at the same height. */
+const BELOW_INPUT: Array<'label' | 'input' | 'description' | 'error'> = ['label', 'input', 'description', 'error'];
 
 /**
  * The Setup checklist (feature-plan-ux-setup-import.md §3.3): progress, a pointer to Import, the six required steps and
@@ -193,8 +195,8 @@ function TimeAndWeekForm({ data, busy, onSaved }: { data: SetupPageData; busy: B
     <Stack gap="xs" data-testid="form-timeAndWeek">
       {serverError && <Alert color="red" role="alert">{serverError}</Alert>}
       <Group align="flex-start" gap="sm">
-        <Select label="Time zone" searchable data={timezoneOptions(timezone)} value={timezone} onChange={setTimezone} allowDeselect={false} w={260} />
-        <Select label="Workweek starts on (FLSA overtime)" description="Overtime is worked out per workweek." data={DAY_OPTIONS} value={day}
+        <Select label="Time zone" inputWrapperOrder={BELOW_INPUT} searchable data={timezoneOptions(timezone)} value={timezone} onChange={setTimezone} allowDeselect={false} w={260} />
+        <Select label="Workweek starts on (FLSA overtime)" inputWrapperOrder={BELOW_INPUT} description="Overtime is worked out per workweek." data={DAY_OPTIONS} value={day}
           onChange={(v) => { setDay(v); setError(null); }} error={error} placeholder="Choose a day" w={260} />
       </Group>
       <Group><WriteButton size="xs" {...busy.props('time')} onClick={() => { void save(); }}>Save</WriteButton></Group>
@@ -236,12 +238,12 @@ function PayScheduleForm({ data, busy, onSaved }: { data: SetupPageData; busy: B
     <Stack gap="xs" data-testid="form-paySchedule">
       {serverError && <Alert color="red" role="alert">{serverError}</Alert>}
       <Group align="flex-start" gap="sm">
-        <Select label="Pay periods" data={PERIOD_OPTIONS.map((o) => ({ ...o }))} value={periodType} allowDeselect={false}
+        <Select label="Pay periods" inputWrapperOrder={BELOW_INPUT} data={PERIOD_OPTIONS.map((o) => ({ ...o }))} value={periodType} allowDeselect={false}
           onChange={(v) => setPeriodType((v as PeriodChoice) ?? 'semimonthly')} w={300} />
         {weekly && (
           <>
-            <DateInput label="First period starts" value={anchor} onChange={(d) => { setAnchor(d); setAnchorError(null); }} error={anchorError} valueFormat="MMM D, YYYY" w={200} />
-            <Select label="Pay weeks start on" data={DAY_OPTIONS} value={weekStart} allowDeselect={false} onChange={(v) => setWeekStart(v ?? '1')} w={180} />
+            <DateInput label="First period starts" inputWrapperOrder={BELOW_INPUT} value={anchor} onChange={(d) => { setAnchor(d); setAnchorError(null); }} error={anchorError} valueFormat="MMM D, YYYY" w={200} />
+            <Select label="Pay weeks start on" inputWrapperOrder={BELOW_INPUT} data={DAY_OPTIONS} value={weekStart} allowDeselect={false} onChange={(v) => setWeekStart(v ?? '1')} w={180} />
           </>
         )}
       </Group>

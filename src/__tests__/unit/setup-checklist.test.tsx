@@ -193,3 +193,28 @@ describe('UX-4C2A-AUDIT.md S10: friendly time zone names on the checklist', () =
     expect(detail).not.toContain('America/New_York');
   });
 });
+
+describe('inline forms line up (product owner\'s browser check)', () => {
+  it('in every inline row the description and the error come after the input, so the inputs sit at the same height', async () => {
+    await render(data({}, { pay: { periodType: 'weekly', anchorDate: '2026-01-05', weekStartDay: 1 } }));
+    await click(button(stepEl('timeAndWeek'), 'Save'));                                   // shows the workweek error too
+    h.pay.mockResolvedValueOnce({ ok: false, code: 'validation', error: anchorDayMessage(1) });
+    await click(button(stepEl('paySchedule'), 'Save pay schedule'));                      // and the date field's error
+    await wait(30);
+    const fields: Array<[string, string]> = [
+      ['timeAndWeek', 'Time zone'], ['timeAndWeek', 'Workweek starts on (FLSA overtime)'],
+      ['paySchedule', 'Pay periods'], ['paySchedule', 'First period starts'], ['paySchedule', 'Pay weeks start on'],
+    ];
+    let checked = 0;
+    for (const [step, label] of fields) {
+      const input = fieldIn(stepEl(step), label);
+      for (const suffix of ['description', 'error']) {
+        const below = document.getElementById(`${input.id}-${suffix}`);
+        if (!below) continue;
+        checked++;
+        expect(input.compareDocumentPosition(below) & Node.DOCUMENT_POSITION_FOLLOWING, `${label} ${suffix}`).toBeTruthy();
+      }
+    }
+    expect(checked).toBe(3);                                                              // the workweek's description and error, the date's error
+  });
+});
