@@ -68,6 +68,14 @@ describe('IN-1: the callback banner (I1)', () => {
   });
 });
 
+describe('S2: the page description (product owner, 2026-11-11)', () => {
+  it('is exactly the approved sentence', async () => {
+    await render();
+    expect(m!.container.querySelector('[data-testid="page-description"]')?.textContent)
+      .toBe('Send approved hours to QuickBooks Online, or download payroll files for your payroll system.');
+  });
+});
+
 describe('IN-3: the hub cards', () => {
   it('each connector once, the last send in words, the unmatched count, no Auto-sync badge', async () => {
     await render({ qbo: qbo() });
@@ -128,9 +136,11 @@ describe('IN-13 (hub): Gusto is honest (I10)', () => {
     expect(gusto.textContent).not.toMatch(/\bsent\b|sends/i);
   });
 
-  it('an existing Gusto connection: the same note, plus a way to its page (to disconnect)', async () => {
+  it('an existing Gusto connection: the same note, plus a way to its page (to disconnect); no "Connected" badge (S3)', async () => {
     await render({ gusto: { ...qbo(), id: 'g1', companyName: 'Gusto Co', lastSend: null, unmatchedPeople: 0 } });
     expect(links(card('Gusto'))).toEqual(['Open Payroll export', 'Manage connection']);
+    expect(card('Gusto').textContent).not.toMatch(/Connected/);
+    expect(card('Gusto').querySelector('[data-tone]')).toBeNull();
     expect(card('Gusto').textContent).not.toMatch(/\bsent\b|sends/i);
   });
 });

@@ -117,7 +117,8 @@ export function IntegrationsClient({ hub, callback, workspaceTimezone }: {
     <Container size="lg" py="xl">
       <PageHeader
         title="Integrations"
-        description="Send approved hours to your accounting and payroll systems."
+        // UX-4C2B-AUDIT.md S2 (product owner, 2026-11-11): nothing is sent to payroll systems (I10).
+        description="Send approved hours to QuickBooks Online, or download payroll files for your payroll system."
         notices={banner && (
           <Alert
             role={banner.kind === 'error' ? 'alert' : 'status'}
@@ -153,7 +154,7 @@ export function IntegrationsClient({ hub, callback, workspaceTimezone }: {
         <Card
           title="Gusto"
           sub={gusto?.companyName ?? 'Payroll'}
-          badge={gusto ? <StatusBadge word="Connected" tone="ok" /> : undefined}
+          // S3 (product owner, 2026-11-11): no "Connected" badge next to "isn’t available yet"; "Manage connection" stays.
           description={GUSTO_HUB_NOTE}
         >
           <Button component={Link} href={PAYROLL_EXPORT} size="sm" variant="default">Open Payroll export</Button>
