@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
-import { StrictMode } from 'react';
+import { StrictMode, act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { MantineProvider } from '@mantine/core';
+import { theme } from '@/theme';
 
 /**
  * feature-plan-ux-integrations-billing.md §3.2: the QuickBooks page (IntegrationConfigView) and the Gusto page.
@@ -85,7 +88,16 @@ const render = async (opts: { mappings?: ConfigMapping[]; logs?: SyncLog[]; stri
       workspaceTimezone="America/New_York"
     />
   );
-  m = await mount(opts.strict ? <StrictMode>{ui}</StrictMode> : ui);
+  if (opts.strict) {
+    // StrictMode must wrap the ROOT for React to double-invoke effects (nested inside mount()'s providers it doesn't).
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<StrictMode><MantineProvider env="test" theme={theme}>{ui}</MantineProvider></StrictMode>); });
+    m = { container, root };
+  } else {
+    m = await mount(ui);
+  }
   await wait();
 };
 const tab = async (label: RegExp) => click([...document.body.querySelectorAll('[role="tab"]')].find((t) => label.test(t.textContent ?? '')));
@@ -291,7 +303,8 @@ describe('IN-10 / I7: History in words', () => {
       'Nothing to send: no approved hours in this period',
       'Nothing sent · 3 entries skipped: people not matched',
     ]);
-    const see = [...panel().querySelectorAll('button')].filter((b) => /^See \d+ failures?$/.test(b.textContent ?? ''));
+    // Only the row with failed records has a button in its Result cell.
+    const see = [...panel().querySelectorAll('tbody tr td:last-child button')];
     expect(see.map((b) => b.textContent)).toEqual(['See 2 failures']);
     expect(row('Nov 3').textContent).toContain('Oct 16 – 31, 2026');
     await click(see[0]);

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
+import postgres from 'postgres';
 import * as schema from '@/db/schema';
 import { getTestDb, createTestUser, cleanupTestData, expectOk, expectFailure, createTestContract, createTestClin, createTestIndirectCode } from './helpers';
 
@@ -124,6 +125,39 @@ describe('people matching (I4, I5)', () => {
       ]);
       expect(a.ok && b.ok).toBe(true);
       expect(await personRows(qbo, person)).toHaveLength(1);
+    }
+  });
+
+  // The test DB has one connection (setup-db.ts, max 1), so parallel calls serialize anyway: prove the lock directly. A
+  // second connection holds the person's advisory lock; setPersonMapping must WAIT on it (seen in pg_locks), then finish.
+  it('IN-5: setPersonMapping waits on the per-person advisory lock (integration-mapping:{connection}:{user})', async () => {
+    const URL = process.env.TEST_DATABASE_URL ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime_test';
+    const holder = postgres(URL, { max: 1 });
+    const observer = postgres(URL, { max: 1 });
+    let settled = false;
+    try {
+      let call: Promise<unknown> | undefined;
+      await holder.begin(async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${'integration-mapping:' + qbo + ':' + person}))`;
+        const [key] = await tx<{ classid: string; objid: string }[]>`
+          SELECT classid::text, objid::text FROM pg_locks WHERE locktype = 'advisory' AND granted AND pid = pg_backend_pid()`;
+        call = setPersonMapping({ connectionId: qbo, userId: person, match: employee() }).finally(() => { settled = true; });
+        for (let i = 0; ; i++) {
+          const [{ w }] = await observer<{ w: number }[]>`
+            SELECT count(*)::int AS w FROM pg_locks
+            WHERE locktype = 'advisory' AND NOT granted AND classid::text = ${key.classid} AND objid::text = ${key.objid}`;
+          if (w >= 1) break;
+          // Without the lock the call finishes instead of waiting, and this fails.
+          if (settled || i > 200) throw new Error(`setPersonMapping never waited on the person lock (settled: ${settled})`);
+          await new Promise((r) => setTimeout(r, 25));
+        }
+        expect(settled).toBe(false);
+      });
+      expect(await call).toMatchObject({ ok: true });
+      expect(await personRows(qbo, person)).toHaveLength(1);
+    } finally {
+      await holder.end({ timeout: 1 });
+      await observer.end({ timeout: 1 });
     }
   });
 
