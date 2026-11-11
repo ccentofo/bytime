@@ -124,6 +124,7 @@ const LCAT_IMPORT_ALLOWLIST = new Set([
   'src/lib/export/allowlists.ts',                // workspace export
   'src/server/actions/labor-categories.ts',      // CRUD + the report actions (which call cost-basis.ts)
   'src/server/actions/charge-codes.ts',          // CRUD
+  'src/server/internal/charge-codes.ts',         // feature-plan-ux-setup-import.md §4.3: the category-fit check (placement only, no cost)
   'src/server/actions/import.ts',                // bulk import
   'src/server/internal/setup.ts',                // setup checklist counts
   'src/db/clear-tenant-data.ts',                 // test / seed cleanup (namespace import)

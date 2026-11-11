@@ -12,7 +12,7 @@ import { currentPeriodSummary } from './employee-dashboard';
 import { loadScheduleResolver, pendingConfigChangeInternal } from './pay-period-config';
 import { getSetupStatusInternal } from './setup';
 import { teamPeriodStatus } from './team-period-status';
-import { getWorkspaceTimezone, getWorkspaceToday, workweekStartDayInternal } from './workspace-settings';
+import { getWorkspaceTimezone, getWorkspaceToday } from './workspace-settings';
 
 const label = (start: string, numDays: number) =>
   `${formatCalendarDate(start as never, 'MMM D')} – ${formatCalendarDate(addDays(start as never, numDays - 1), 'MMM D, YYYY')}`;
@@ -35,14 +35,13 @@ export async function getHomeData(userId: string): Promise<HomeView | { redirect
   const prev = resolver.neighbor(cur.start, 'prev');
   const teamScope: 'all' | string[] = isAdmin ? 'all' : approvableScope(facts, userId);
 
-  const [waiting, myPeriod, team, lastTeam, notices, contracts, workweek, pendingConfig, overlaps] = await Promise.all([
+  const [waiting, myPeriod, team, lastTeam, notices, contracts, pendingConfig, overlaps] = await Promise.all([
     approvalQueue(db, userId, facts, { names: 4 }),
     currentPeriodSummary(db, userId, cur, today),
     teamPeriodStatus(db, cur.start, cur.numDays, teamScope, tz),
     teamPeriodStatus(db, prev.start, prev.numDays, teamScope, tz),
     isAdmin ? approvalNotices(db, userId, facts) : null,
     isAdmin ? contractBurnSummary(db) : null,
-    isAdmin ? workweekStartDayInternal(db) : null,
     isAdmin ? pendingConfigChangeInternal(db, today) : null,
     isAdmin ? overlappingAssignments(db) : null,
   ]);
@@ -66,10 +65,9 @@ export async function getHomeData(userId: string): Promise<HomeView | { redirect
       contracts: contracts.map((c) => ({ contractId: c.contractId, contractName: c.contractName, status: c.status, fundedValue: c.fundedValue, pricedCost: c.pricedCost, unpricedHours: c.unpricedHours })),
       // ALL contracts (any status): equals the unpriced report "Fix pricing" opens. Active-only applies to the card.
       unpricedTotal: Math.round(contracts.reduce((s, c) => s + c.unpricedHours, 0) * 100) / 100,
-      workweekSet: workweek !== null,
       pendingConfig: pendingConfig ? { effectiveFrom: pendingConfig.effectiveFrom } : null,
       overlaps: overlaps.length,
-      setup: { isComplete: setup.isComplete, done: setup.done, total: setup.total, steps: setup.steps },
+      setup: { isComplete: setup.isComplete, requiredDone: setup.requiredDone, requiredTotal: setup.requiredTotal, steps: setup.steps.map((s) => ({ key: s.key, done: s.done, required: s.required })) },
       // Outside the gate above: 0 is the usual value and must not hide the admin section.
       approvalScopesToReview: scopesToReview,
     } : null,

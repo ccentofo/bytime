@@ -19,12 +19,15 @@ export interface ParseResult {
 }
 
 /**
- * Parse a CSV file and validate each row against required columns.
+ * Parse a CSV file and validate each row against required columns (present in the header AND filled in each row).
+ * `headerColumns` (feature-plan-ux-setup-import.md §4.4) must be present in the header but may be blank in a row — the
+ * Hours file leaves either Contract/CLIN or Indirect Code blank, and status rows leave the Reviewed columns blank.
  */
 export function parseCSV(
   csvText: string,
   requiredColumns: string[],
-  validateRow?: (row: Record<string, string>, index: number) => string[]
+  validateRow?: (row: Record<string, string>, index: number) => string[],
+  options: { headerColumns?: string[] } = {},
 ): ParseResult {
   const parsed = Papa.parse(csvText, {
     header: true,
@@ -35,7 +38,7 @@ export function parseCSV(
   const headers: string[] = parsed.meta?.fields ?? [];
 
   // Check for missing required columns
-  const missingColumns = requiredColumns.filter((col) => !headers.includes(col));
+  const missingColumns = [...new Set([...requiredColumns, ...(options.headerColumns ?? [])])].filter((col) => !headers.includes(col));
   if (missingColumns.length > 0) {
     return {
       headers,

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 /**
- * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4), unit form: each of the 43 admin-only writes (incl. the
+ * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4), unit form: each of the 45 admin-only writes (incl. the
  * 6 OAuth-token-refreshing mapping readers) authorizes with requireAdminFresh(), never the cached requireAdmin().
  * The session is a stale JWT-admin: requireAdmin() admits it, requireAdminFresh() — which re-reads the DB role —
  * refuses it (DB role is now supervisor). The integration form against a real users row is
@@ -48,16 +48,17 @@ import * as qbo from '@/server/actions/qbo';
 import * as gusto from '@/server/actions/gusto';
 import * as slins from '@/server/actions/slins';
 import * as users from '@/server/actions/users';
+import * as importActions from '@/server/actions/import';
 
 type AnyAction = (...args: never[]) => Promise<unknown>;
 const call = (fn: unknown, ...args: unknown[]) => (fn as (...a: unknown[]) => Promise<unknown>)(...args);
 
-/** Refused by the fresh role check: every one of the 43 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
+/** Refused by the fresh role check: every one of the 45 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
 async function expectRefused(pending: Promise<unknown>): Promise<void> {
   expect(await pending).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/access has changed/i) });
 }
 
-/** The 43 (feature-plan-launch-blockers.md §1 "Roles" + §4 P3). */
+/** The 45 (feature-plan-launch-blockers.md §1 "Roles" + §4 P3). */
 const ADMIN_WRITES: Array<[string, AnyAction | unknown, unknown[]]> = [
   ['grantApprovalScope', assignments.grantApprovalScope, [{ supervisorId: 'u2', clinIds: ['c1'] }]],
   ['revokeApprovalScope', assignments.revokeApprovalScope, [{ supervisorId: 'u2', clinId: 'c1' }]],
@@ -104,11 +105,14 @@ const ADMIN_WRITES: Array<[string, AnyAction | unknown, unknown[]]> = [
   ['addChargeCodeCategoryChange', ccats.addChargeCodeCategoryChange, [{ chargeCodeId: 'cc1', effectiveDate: '2027-01-01', laborCategoryId: 'l1' }]],
   ['correctChargeCodeCategory', ccats.correctChargeCodeCategory, [{ chargeCodeId: 'cc1', target: 'starting', laborCategoryId: null }]],
   ['removeChargeCodeCategoryChange', ccats.removeChargeCodeCategoryChange, [{ chargeCodeId: 'cc1', changeId: 'x' }]],
+  // feature-plan-ux-setup-import.md §4.3: the two new import types
+  ['bulkImportChargeCodes', importActions.bulkImportChargeCodes, [[{ code: 'X', name: 'X', contractNumber: 'K', clinNumber: '0001' }]]],
+  ['bulkImportChargeCodeAccess', importActions.bulkImportChargeCodeAccess, [[{ email: 'a@x.dev', chargeCode: 'X' }]]],
 ];
 
-describe('the 43 admin-only writes refuse a stale JWT-admin (requireAdminFresh)', () => {
-  it('covers exactly 43 actions, all exported', () => {
-    expect(ADMIN_WRITES).toHaveLength(43);
+describe('the 45 admin-only writes refuse a stale JWT-admin (requireAdminFresh)', () => {
+  it('covers exactly 45 actions, all exported', () => {
+    expect(ADMIN_WRITES).toHaveLength(45);
     for (const [name, fn] of ADMIN_WRITES) expect(typeof fn, name).toBe('function');
   });
 

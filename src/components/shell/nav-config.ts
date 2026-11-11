@@ -46,7 +46,7 @@ const SUPERVISOR_REPORTS_GROUP: NavGroup = {
   ],
 };
 
-/** The main menu by role. Admins end with Settings (rendered at the bottom). `/admin/setup` is in no menu. */
+/** The main menu by role. Admins end with Settings (rendered at the bottom); the Setup checklist is Settings' first item. */
 export function mainNav(role: NavRole): NavEntry[] {
   if (role === 'admin') return [HOME, MY_TIMESHEET, APPROVALS, CONTRACTS_GROUP, PEOPLE_GROUP, ADMIN_REPORTS_GROUP, SETTINGS];
   if (role === 'supervisor') return [HOME, MY_TIMESHEET, APPROVALS, SUPERVISOR_REPORTS_GROUP];
@@ -56,13 +56,14 @@ export function mainNav(role: NavRole): NavEntry[] {
 
 /** The Settings area's own menu (admins only — every page guards with requirePageRole('admin')). */
 export const SETTINGS_NAV: NavLeaf[] = [
+  // feature-plan-ux-setup-import.md P1: the Setup checklist lives in Settings, first.
+  { label: 'Setup checklist', href: '/settings/setup', icon: 'setup' },
   { label: 'Workspace', href: '/settings/workspace', icon: 'workspace' },
   { label: 'Pay schedule', href: '/settings/pay-schedule', icon: 'paySchedule' },
   { label: 'Billing', href: '/settings/billing', icon: 'billing' },
   { label: 'Integrations', href: '/settings/integrations', icon: 'integrations', match: ['/settings/integrations'] },
   { label: 'API keys', href: '/settings/api-keys', icon: 'apiKeys' },
-  { label: 'Data import', href: '/settings/import', icon: 'dataImport' },
-  { label: 'Timesheet history import', href: '/settings/migration', icon: 'historyImport' },
+  { label: 'Import', href: '/settings/import', icon: 'dataImport' },   // feature-plan-ux-setup-import.md P7
 ];
 
 /** Where people land (UX-D3): admins and supervisors → Home; employees → Timesheet. The ONLY source. */

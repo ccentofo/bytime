@@ -16,12 +16,13 @@ vi.mock('@/lib/session', () => ({
 }));
 vi.mock('@/db', () => {
   const selectChain = { from: () => selectChain, where: async () => [] };
-  return {
-    getDbForWrite: async () => ({
-      select: () => selectChain,
-      insert: () => ({ values: async () => { throw h.insertError; } }),
-    }),
+  // The imports run in one transaction with a savepoint per row (feature-plan-ux-setup-import.md §4.3).
+  const db: Record<string, unknown> = {
+    select: () => selectChain,
+    insert: () => ({ values: async () => { throw h.insertError; } }),
+    transaction: async (cb: (tx: unknown) => unknown) => cb(db),
   };
+  return { getDbForWrite: async () => db };
 });
 
 import { bulkImportContracts } from '@/server/actions/import';

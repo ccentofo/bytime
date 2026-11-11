@@ -3,6 +3,7 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 import { getDb, type DbTx, type ReadDb, type TenantWriter, type WriteDb } from '@/db';
 import { adminChangeLog, approvalScopes, timesheetPeriods, userAssignments, users } from '@/db/schema';
 import { logAdminChange } from './admin-change-log';
+import { throwIfDryRun } from './import-run';
 
 /**
  * Approver rules (feature-plan-certified-outputs.md C2 — CO-D5, CO-D6, CO-D9, CO-D12, CO-D18, CO-D19). INTERNAL:
@@ -298,12 +299,19 @@ export function newlyEligible(before: EligibilitySnapshot, after: EligibilitySna
  * decide each waiting timesheet, `fn` (which validates roles, active state and CLINs AFTER the lock, then writes through
  * internal/approval-scopes.ts), and a second snapshot. The caller calls notifyReroutedApprovals AFTER this resolves.
  */
-export async function scopeChange<R>(db: Pick<WriteDb, 'transaction'>, fn: (tx: DbTx) => Promise<R>): Promise<{ result: R; rerouted: ReroutedApproval[] }> {
+export async function scopeChange<R>(
+  db: Pick<WriteDb, 'transaction'>,
+  fn: (tx: DbTx) => Promise<R>,
+  /** feature-plan-ux-setup-import.md P9: a dry run rolls everything back after the second snapshot (the caller wraps catchDryRun). */
+  opts: { dryRun?: boolean } = {},
+): Promise<{ result: R; rerouted: ReroutedApproval[] }> {
   return db.transaction(async (tx) => {
     await lockUserRulesExclusive(tx);
     const before = await snapshotSubmittedEligibility(tx);
     const result = await fn(tx);
-    return { result, rerouted: newlyEligible(before, await snapshotSubmittedEligibility(tx)) };
+    const rerouted = newlyEligible(before, await snapshotSubmittedEligibility(tx));
+    throwIfDryRun(opts.dryRun, { result, rerouted: [] });
+    return { result, rerouted };
   });
 }
 

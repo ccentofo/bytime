@@ -275,11 +275,11 @@ describe('No silent edit, Import', () => {
     expect(db.updates[0].set).not.toHaveProperty('ceilingRate');
   });
 
-  it('bulk import: hourly "$145" or blank is a row error (validator message), nothing inserted; "  " ceiling = none', async () => {
+  it('bulk import: hourly "$145" or blank is a row error (P12 strict message), nothing inserted; "  " ceiling = none', async () => {
     const row = (o: Record<string, string>) => ({ contractNumber: 'K', clinNumber: '0001', lcatCode: 'L', title: 'T', hourlyRate: '145', ceilingRate: '', ...o });
     for (let i = 0; i < 3; i++) { db.onSelect(contracts, [{ id: 'k' }]); db.onSelect(clins, [{ id: 'c' }]); }
     const r = await bulkImportLaborCategories([row({ hourlyRate: '$145' }), row({ hourlyRate: '' }), row({ ceilingRate: '  ' })]);
-    expect(r).toMatchObject({ ok: true, data: { created: 1, errors: [{ row: 1, message: 'Hourly rate must be a valid number.' }, { row: 2, message: 'Hourly rate cannot be empty.' }] } });
+    expect(r).toMatchObject({ ok: true, data: { created: 1, errors: [{ row: 2, message: 'Hourly Rate must be a plain number (for example 145.00).' }, { row: 3, message: 'Hourly Rate is required.' }] } });
     expect(db.inserts.map((i) => i.values)).toEqual([expect.objectContaining({ hourlyRate: '145.00', ceilingRate: undefined })]);
   });
 });

@@ -43,6 +43,7 @@ const ALLOWLIST: Array<{ file: string; expr: string; why: string }> = [
   { file: 'src/server/internal/team-period-status.ts', expr: 'tz', why: 'the workspace timezone NAME for AT TIME ZONE (a string; UX-2 §4.5.2)' },
   { file: 'src/server/internal/past-periods.ts', expr: 'userId', why: 'the session user id (a UUID string), bound as a parameter: an interpolated column renders unqualified in a single-table select (UX-3 fix round 2, M3)' },
   { file: 'src/server/internal/team-period-status.ts', expr: 'periodEnd', why: "a 'YYYY-MM-DD' calendar-date string, cast ::date (UX-2 §4.5.2)" },
+  { file: 'src/server/actions/import.ts', expr: 'CHARGEABLE_CODE', why: 'the shared chargeable SQL fragment as a select column: the access import refuses a code that can\'t be charged (feature-plan-ux-setup-import.md §4.3)' },
   { file: 'src/server/actions/charge-codes.ts', expr: 'CHARGEABLE_CODE', why: 'the shared chargeable SQL fragment (internal/chargeable.ts) as a select column (UX-4c §3.2)' },
   { file: 'src/server/actions/audit.ts', expr: 'AUDIT_LATE_ROW', why: 'the shared "late row" SQL fragment (internal/audit-export.ts) in a COUNT FILTER (UX-4c R3)' },
   { file: 'src/server/actions/audit.ts', expr: 'tz', why: 'the workspace timezone NAME for AT TIME ZONE (a string; UX-4c §6.4)' },
@@ -51,6 +52,14 @@ const ALLOWLIST: Array<{ file: string; expr: string; why: string }> = [
   { file: 'src/server/internal/audit-export.ts', expr: 'lastId', why: 'the CSV keyset cursor: the previous batch\'s last row id (a UUID), bound as a parameter (UX-4c §6.5)' },
   { file: 'src/server/internal/audit-export.ts', expr: 'topId', why: 'the CSV snapshot: the newest row id read with the count (a UUID), bound as a parameter (UX-4C1-AUDIT.md L3)' },
   { file: 'src/server/actions/assignments.ts', expr: 'UNREVIEWED_MIGRATED_SCOPE', why: 'the shared S6 review predicate (internal/approval-scopes.ts) as a select column (feature-plan-approval-scope.md S6)' },
+  { file: 'src/server/internal/setup.ts', expr: 'workweekSetQ', why: 'a drizzle subquery builder in the Setup status\'s one combined statement (feature-plan-ux-setup-import.md §3.1)' },
+  { file: 'src/server/internal/setup.ts', expr: 'payConfigQ', why: 'a drizzle subquery builder in the Setup status\'s one combined statement (feature-plan-ux-setup-import.md §3.1)' },
+  { file: 'src/server/internal/setup.ts', expr: 'entryQ', why: 'a drizzle subquery builder in the Setup status\'s one combined statement (feature-plan-ux-setup-import.md §3.1)' },
+  { file: 'src/server/internal/setup.ts', expr: 'periodQ', why: 'a drizzle subquery builder in the Setup status\'s one combined statement (feature-plan-ux-setup-import.md §3.1)' },
+  { file: 'src/server/internal/setup.ts', expr: 'connectionQ', why: 'a drizzle subquery builder in the Setup status\'s one combined statement (feature-plan-ux-setup-import.md §3.1)' },
+  { file: 'src/server/internal/setup.ts', expr: 'clinsWithoutCodeQ', why: 'a drizzle subquery builder in the Setup status\'s one combined statement (feature-plan-ux-setup-import.md §3.1)' },
+  { file: 'src/server/internal/setup.ts', expr: 'adminsWithAccessQ', why: 'a drizzle subquery builder in the Setup status\'s one combined statement (feature-plan-ux-setup-import.md §3.1)' },
+  { file: 'src/server/actions/import.ts', expr: 'UNREVIEWED_MIGRATED_SCOPE', why: 'the shared S6 review predicate as a select column: the approval-scope import says when a re-imported converted scope is kept (feature-plan-ux-setup-import.md §4.3)' },
   { file: 'src/server/internal/approval-scopes.ts', expr: 'UNREVIEWED_MIGRATED_SCOPE', why: 'the shared S6 review predicate as a select column, so a re-chosen converted row is kept (APPROVAL-SCOPE-AUDIT.md L4)' },
 ];
 

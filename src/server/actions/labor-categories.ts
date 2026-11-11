@@ -5,7 +5,7 @@ import { laborCategories, laborCategoryRates, userLaborCategories, users, clins,
 import { eq, and, asc, inArray, isNull, or, gte, lte, countDistinct } from 'drizzle-orm';
 import type { RateChange } from '@/lib/labor-rates';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
-import { validateRequired, validateStringLength, validateOptionalString, validateRate, validateUUID } from '@/lib/validation';
+import { validateRequired, validateStringLength, validateOptionalString, validateUUID } from '@/lib/validation';
 import { isBefore, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
 import { userAction } from '@/lib/action-result';
@@ -16,6 +16,7 @@ import {
   type OverlapRow, type UnpricedEntryRow, type UnpricedReport, type UnpricedGroup, type UnpricedScopeNames,
 } from '@/server/internal/cost-basis';
 import { parseUnpricedFilters } from '@/lib/unpriced-filters';
+import { validateLaborCategoryInput } from '@/server/internal/setup-validators';
 
 // ---------------------------------------------------------------------------
 // Labor Category CRUD
@@ -114,14 +115,8 @@ export async function createLaborCategory(data: {
   return userAction(async () => {
     await requireAdminFresh();
     const db = await getDbForWrite();
-    const validatedData = {
-      clinId: data.clinId,
-      slinId: data.slinId,
-      lcatCode: validateStringLength(validateRequired(data.lcatCode, 'LCAT code'), 'LCAT code', 1, 50),
-      title: validateStringLength(validateRequired(data.title, 'Title'), 'Title', 1, 255),
-      hourlyRate: validateRate(data.hourlyRate, 'Hourly rate'),
-      ceilingRate: data.ceilingRate ? validateRate(data.ceilingRate, 'Ceiling rate') : undefined,
-    };
+    // feature-plan-ux-setup-import.md §4.3: the same validator as the labor-category import.
+    const validatedData = { clinId: data.clinId, slinId: data.slinId, ...validateLaborCategoryInput(data) };
     const rows = await db.insert(laborCategories).values(validatedData).returning();
     return rows[0];
   });

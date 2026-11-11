@@ -1,5 +1,5 @@
 import 'server-only';
-import { payPeriodConfig } from '@/db/schema';
+import { payPeriodConfig, timesheetEntries, timesheetPeriods } from '@/db/schema';
 import { desc, gt, lte } from 'drizzle-orm';
 import { getDb, type ReadDb } from '@/db';
 import { getWorkspaceToday } from '@/server/internal/workspace-settings';
@@ -155,4 +155,17 @@ export async function pendingConfigChangeInternal(db: Pick<ReadDb, 'select'>, to
     effectiveFrom: r.effectiveFrom as CalendarDate,
     createdAt: r.createdAt,
   };
+}
+
+/**
+ * True when no timesheet has been entered or submitted yet. Then there are no periods to keep consistent, so a new
+ * schedule may replace the old one outright, effective immediately. This is how a new workspace sets its schedule without
+ * waiting for a common boundary, which for some changes (e.g. a different week start day) never comes. INTERNAL (moved
+ * out of the 'use server' actions file, where an export would be an unguarded endpoint — feature-plan-ux-setup-import.md §3.1).
+ */
+export async function workspaceHasNoTimesheetData(db: Pick<ReadDb, 'select'>): Promise<boolean> {
+  const [entry] = await db.select({ id: timesheetEntries.id }).from(timesheetEntries).limit(1);
+  if (entry) return false;
+  const [period] = await db.select({ id: timesheetPeriods.id }).from(timesheetPeriods).limit(1);
+  return !period;
 }

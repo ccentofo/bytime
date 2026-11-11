@@ -137,6 +137,7 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getContractById: 'reads one contract; no write',
     getContractsOverview: 'UX-4b §4.1: reads the contract hierarchy with its money (internal/contracts-overview); no write',
   },
+  'migration.ts': { getImportWindowStatus: 'feature-plan-ux-setup-import.md P14: reads the import-window facts (no lock); no write' },
   'gusto.ts': { getBytimeEmployeesForGustoMapping: 'reads active employees for the mapping UI; no token refresh, no write' },
   'indirect-codes.ts': {
     getIndirectChargeCodes: 'reads indirect codes; no write',
@@ -181,7 +182,7 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
   },
   'setup.ts': {
     getSetupStatus: 'reads setup-checklist counts; no write',
-    getSetupAccessGaps: 'feature-plan-ux-page-fixes.md C17: reads who has no chargeable code; no write',
+    getSetupPageData: 'feature-plan-ux-setup-import.md §3.1: reads the status, who has no chargeable code (≤ 20 names), the settings and the scope count; no write',
   },
   'slins.ts': { getSlinsByClin: 'reads a CLIN\'s SLINs; no write' },
   'audit.ts': {

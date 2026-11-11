@@ -1,7 +1,8 @@
 'use server';
 
-import { getDb, getDbForWrite, type ReadDb } from '@/db';
-import { payPeriodConfig, payPeriodTypeEnum, timesheetEntries, timesheetPeriods } from '@/db/schema';
+import { anchorDayMessage } from '@/lib/pay-schedule-messages';
+import { getDb, getDbForWrite } from '@/db';
+import { payPeriodConfig, payPeriodTypeEnum } from '@/db/schema';
 import { requireAdmin, requireAdminFresh, requireSession } from '@/lib/session';
 import type { PeriodConfig, PeriodType } from '@/lib/date-utils';
 import { getPeriodStartForDate, sameSchedule } from '@/lib/date-utils';
@@ -11,7 +12,7 @@ import { validateEnum } from '@/lib/validation';
 
 /** effective_from for the first schedule row (matches the migration-0008 backfill sentinel). */
 const SCHEDULE_HISTORY_START = '1900-01-01' as CalendarDate;
-import { configAt, getCurrentEffectiveConfigInternal, getEffectiveConfigAtInternal, loadScheduleResolver, pendingConfigChangeInternal } from '@/server/internal/pay-period-config';
+import { configAt, getCurrentEffectiveConfigInternal, getEffectiveConfigAtInternal, loadScheduleResolver, pendingConfigChangeInternal, workspaceHasNoTimesheetData } from '@/server/internal/pay-period-config';
 import { eq, desc, gt, sql } from 'drizzle-orm';
 import { UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
@@ -147,7 +148,7 @@ function parseScheduleInput(input: { periodType: unknown; anchorDate: unknown; w
 function anchorProblem(config: PeriodConfig): string | null {
   if (config.periodType !== 'weekly' && config.periodType !== 'biweekly') return null;
   return dayOfWeek(config.anchorDate) !== config.weekStartDay
-    ? 'The anchor date must fall on the selected week start day.'
+    ? anchorDayMessage(config.weekStartDay)
     : null;
 }
 
@@ -163,19 +164,6 @@ function isCommonBoundary(day: CalendarDate, configA: PeriodConfig, configB: Per
 }
 
 const SCHEDULE_CHANGE_SEARCH_HORIZON_DAYS = 730; // 2 years — generous for even rare common boundaries
-
-/**
- * True when no timesheet has been entered or submitted yet. Then there are no periods to keep
- * consistent, so a new schedule may replace the old one outright, effective immediately. This is
- * how a new workspace sets its schedule without waiting for a common boundary, which for some
- * changes (e.g. a different week start day) never comes.
- */
-async function workspaceHasNoTimesheetData(db: Pick<ReadDb, 'select'>): Promise<boolean> {
-  const [entry] = await db.select({ id: timesheetEntries.id }).from(timesheetEntries).limit(1);
-  if (entry) return false;
-  const [period] = await db.select({ id: timesheetPeriods.id }).from(timesheetPeriods).limit(1);
-  return !period;
-}
 
 export type ScheduleChangeOptions = {
   /** The change can apply immediately (no timesheet data exists yet). */
@@ -272,7 +260,13 @@ export async function updatePayPeriodConfig(data: {
       const currentConfig = await configAt(tx, today);
       if (sameSchedule(candidateConfig, currentConfig)) {
         if (pending) return cancel();
-        throw new UserFacingError('This is already your pay schedule. Change a setting before saving.');
+        // feature-plan-ux-setup-import.md P6: a new workspace CONFIRMS the default schedule (its first save, with no row
+        // at all and effective immediately) — it falls through to the immediate path below, which still requires no
+        // timesheet data. Every other case (a row exists, or a future date) keeps the refusal.
+        const anyRow = (await tx.select({ id: payPeriodConfig.id }).from(payPeriodConfig).limit(1)).length > 0;
+        if (anyRow || data.effectiveFrom !== null) {
+          throw new UserFacingError('This is already your pay schedule. Change a setting before saving.');
+        }
       }
       if (pending && sameSchedule(candidateConfig, pending) && data.effectiveFrom === pending.effectiveFrom) {
         return { effectiveFrom: pending.effectiveFrom };

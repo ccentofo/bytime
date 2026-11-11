@@ -30,7 +30,7 @@ vi.mock('@/server/internal/pay-period-config', () => ({
 vi.mock('@/server/internal/workspace-settings', () => ({
   getWorkspaceToday: async () => '2026-11-10', getWorkspaceTimezone: async () => 'America/New_York', workweekStartDayInternal: h.later('burst', 1),
 }));
-vi.mock('@/server/internal/setup', () => ({ getSetupStatusInternal: h.later('setup', { isComplete: true, done: 7, total: 7, steps: [] }) }));
+vi.mock('@/server/internal/setup', () => ({ getSetupStatusInternal: h.later('setup', { isComplete: true, requiredDone: 6, requiredTotal: 6, steps: [] }) }));
 vi.mock('@/server/internal/approval-scopes', () => ({ approvalScopesToReview: async () => { h.order.push('count'); return h.count; } }));
 
 import { getHomeData } from '@/server/internal/home';

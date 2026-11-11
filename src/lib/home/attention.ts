@@ -6,6 +6,7 @@
 import { formatCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { UNPRICED_REPORT_HREF } from '@/lib/cost-labels';
 import { BURN_TIER_LABEL, NEEDS_A_LOOK, burnPercent, burnTier, type BurnTier } from '@/lib/ui/burn';
+import { SETUP_HREF, type SetupStepKey } from '@/lib/setup/steps';
 
 export type TeamBucket = 'submitted' | 'returned' | 'inProgress' | 'notStarted';
 export type TeamStatus = Record<TeamBucket, { count: number; names: string[] }>;
@@ -19,7 +20,7 @@ export interface HomeContract {
   unpricedHours: number;
 }
 
-export interface HomeSetupStep { key: string; done: boolean; required: boolean }
+export interface HomeSetupStep { key: SetupStepKey; done: boolean; required: boolean }
 
 export interface HomeView {
   userId: string;
@@ -37,10 +38,9 @@ export interface HomeView {
     notices: { selfApprovalBackOn: { logId: string } | null; recommendDesignee: boolean };
     contracts: HomeContract[];
     unpricedTotal: number;
-    workweekSet: boolean;
     pendingConfig: { effectiveFrom: string } | null;
     overlaps: number;
-    setup: { isComplete: boolean; done: number; total: number; steps: HomeSetupStep[] };
+    setup: { isComplete: boolean; requiredDone: number; requiredTotal: number; steps: HomeSetupStep[] };
     /** feature-plan-approval-scope.md S6: converted approval scopes no admin has kept or removed yet. */
     approvalScopesToReview: number;
   };
@@ -56,15 +56,17 @@ export interface AttentionItem {
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-/** One-liners for the next missing setup step (Home item 5). */
-export const SETUP_STEP_HINT: Record<string, string> = {
-  indirectCodes: 'Add indirect codes for leave, overhead and G&A.',
-  contracts: 'Create your first contract.',
-  clins: 'Add CLINs to your contracts.',
+/** One-liners for the next missing setup step (Home item 5). Typed by the step key, so a missing key fails tsc. */
+export const SETUP_STEP_HINT: Record<SetupStepKey, string> = {
+  timeAndWeek: 'Set the time zone and the workweek overtime is worked out on.',
+  paySchedule: 'Confirm how often people are paid.',
+  contractsClins: 'Add your contracts and their CLINs.',
   chargeCodes: 'Create charge codes — they are what employees log time against.',
-  laborCategories: 'Add labor categories so hours have rates.',
-  employees: 'Add the people who will record time.',
+  people: 'Add the people who will record time.',
   chargeCodeAccess: 'Give each employee the charge codes they may use.',
+  indirectCodes: 'Add indirect codes for leave, overhead and G&A.',
+  laborCategories: 'Add labor categories so hours have rates.',
+  connection: 'Connect QuickBooks Online or Gusto.',
 };
 
 /** A contract's tier on Home (from funded value, priced cost and the remaining amount). */
@@ -157,17 +159,9 @@ export function attentionItems(v: HomeView): AttentionItem[] {
       const next = a.setup.steps.find((s) => s.required && !s.done) ?? a.setup.steps.find((s) => !s.done);
       items.push({
         key: 'setup',
-        title: `Finish setting up: ${a.setup.done} of ${a.setup.total} done`,
+        title: `Finish setting up: ${a.setup.requiredDone} of ${a.setup.requiredTotal} done`,
         sentence: next ? SETUP_STEP_HINT[next.key] : undefined,
-        action: { label: 'Continue', href: '/admin/setup' },
-      });
-    }
-    if (!a.workweekSet) {
-      items.push({
-        key: 'workweek',
-        title: 'Payroll workweek isn’t set',
-        sentence: 'Payroll export stays off until you set it.',
-        action: { label: 'Set workweek', href: '/settings/workspace' },
+        action: { label: 'Continue', href: SETUP_HREF },
       });
     }
     if (a.pendingConfig) {

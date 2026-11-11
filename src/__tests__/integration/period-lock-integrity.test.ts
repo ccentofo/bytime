@@ -259,7 +259,7 @@ describe('Period-lock integrity (R2-2)', () => {
           anchorDate: '2025-01-07' as CalendarDate, // a Tuesday
           weekStartDay: 1, // Monday
           effectiveFrom: '2026-02-16' as CalendarDate,
-        }), 'validation', /week start day/i);
+        }), 'validation', /^The first period must start on a Monday\.$/);   // UX-4C2A-AUDIT.md F4: the reworded message
     });
 
     it('rejects an unknown period type or week start day', async () => {
@@ -323,7 +323,8 @@ describe('Period-lock integrity (R2-2)', () => {
       it('saving the current schedule with nothing pending is refused and writes no row', async () => {
         actingAs(admin);
         await expectFailure(updatePayPeriodConfig({ ...current, effectiveFrom: '2026-02-01' as CalendarDate }), 'validation', /already your pay schedule/);
-        await expectFailure(updatePayPeriodConfig({ ...current, anchorDate: '2024-06-09' as CalendarDate, effectiveFrom: null }), 'validation', /already your pay schedule/);
+        // feature-plan-ux-setup-import.md P6: the IMMEDIATE save of the default with no row at all is a new workspace's
+        // first save (it inserts the row) — integration/setup-pay-schedule.test.ts SU-5. A future date is still refused.
         expect(await configRows()).toHaveLength(0);
       });
 

@@ -40,7 +40,7 @@ vi.mock('@/lib/session', async (importOriginal) => {
 });
 vi.mock('@/server/internal/workspace-settings', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/server/internal/workspace-settings')>();
-  return { ...actual, getWorkspaceToday: async () => '2026-10-07', workweekStartDayInternal: h.track('workweek', actual.workweekStartDayInternal) };
+  return { ...actual, getWorkspaceToday: async () => '2026-10-07' };
 });
 vi.mock('@/server/internal/dashboard', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/server/internal/dashboard')>();
@@ -81,7 +81,7 @@ import { unpricedEntries } from '@/server/internal/cost-basis';
 import { getContractsOverview } from '@/server/actions/contracts';
 
 const EARLY = new Date('2026-01-01T12:00:00Z');
-const ADMIN_ONLY = ['notices', 'contracts', 'workweek', 'pendingConfig', 'overlaps', 'setup'];
+const ADMIN_ONLY = ['notices', 'contracts', 'pendingConfig', 'overlaps', 'setup'];
 
 describe('getHomeData (T9)', () => {
   const db = () => getTestDb();
@@ -155,9 +155,11 @@ describe('getHomeData (T9)', () => {
     // No charge-code access → setup incomplete; workweek unset (cleanup resets it).
 
     const v = view(await getHomeData(admin.id));
-    expect(attentionItems(v).map((i) => i.key)).toEqual(['waiting', 'last-period', 'unpriced', 'self-approval', 'setup', 'workweek', 'pay-schedule', 'contracts', 'overlaps']);
-    expect(v.admin).toMatchObject({ unpricedTotal: 2, workweekSet: false, pendingConfig: { effectiveFrom: '2026-11-01' }, overlaps: 1, notices: { recommendDesignee: true, selfApprovalBackOn: null } });
-    expect(v.admin!.setup).toMatchObject({ isComplete: false, done: 5 });
+    // feature-plan-ux-setup-import.md §3.1: no separate workweek item — the Setup checklist covers it.
+    expect(attentionItems(v).map((i) => i.key)).toEqual(['waiting', 'last-period', 'unpriced', 'self-approval', 'setup', 'pay-schedule', 'contracts', 'overlaps']);
+    expect(v.admin).toMatchObject({ unpricedTotal: 2, pendingConfig: { effectiveFrom: '2026-11-01' }, overlaps: 1, notices: { recommendDesignee: true, selfApprovalBackOn: null } });
+    // feature-plan-ux-setup-import.md §3.1: 4 of 6 — the workweek isn't set and nobody holds a charge code.
+    expect(v.admin!.setup).toMatchObject({ isComplete: false, requiredDone: 4, requiredTotal: 6 });
 
     const burstEnds = h.log.filter((l) => l.startsWith('end:') && l !== 'end:setup').map((l) => h.log.indexOf(l));
     expect(h.log).toContain('start:setup');

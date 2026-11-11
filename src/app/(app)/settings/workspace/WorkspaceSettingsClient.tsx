@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useTransition } from 'react';
+import { DAY_NAMES, timezoneOptions } from '@/lib/timezone-options';
 import { Container, Title, Text, Paper, Group, Select, Button, Modal, Loader } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { runAction } from '@/lib/run-action';
@@ -20,19 +21,6 @@ interface Props {
   initialWorkweekStartDay: number | null;
 }
 
-const BROWSER_TIMEZONES: string[] = typeof Intl.supportedValuesOf === 'function'
-  ? Intl.supportedValuesOf('timeZone')
-  : [];
-
-/** The browser's zone list, always including `current`: browsers disagree on names
- *  (e.g. Asia/Calcutta vs Asia/Kolkata) and some omit UTC, and a Select whose value isn't
- *  among its options renders blank. */
-function timezoneOptions(current: string | null) {
-  const zones = current && !BROWSER_TIMEZONES.includes(current) ? [current, ...BROWSER_TIMEZONES] : BROWSER_TIMEZONES;
-  return zones.map((tz) => ({ value: tz, label: tz }));
-}
-
-const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 export function WorkspaceSettingsClient({ initialTimezone, initialWorkweekStartDay }: Props) {
   const [timezone, setTimezone] = useState<string | null>(initialTimezone);

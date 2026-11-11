@@ -68,7 +68,11 @@ const nextConfig: NextConfig = {
       { source: "/admin/integrations/:path*", destination: "/settings/integrations/:path*", permanent: false },
       { source: "/admin/api-keys", destination: "/settings/api-keys", permanent: false },
       { source: "/admin/import", destination: "/settings/import", permanent: false },
-      { source: "/admin/migration", destination: "/settings/migration", permanent: false },
+      // feature-plan-ux-setup-import.md P7: one Import page; past timesheets are its Hours type.
+      { source: "/admin/migration", destination: "/settings/import?type=hours", permanent: false },
+      { source: "/settings/migration", destination: "/settings/import?type=hours", permanent: false },
+      // feature-plan-ux-setup-import.md P1: the Setup checklist moved into Settings.
+      { source: "/admin/setup", destination: "/settings/setup", permanent: false },
       { source: "/admin/notifications", destination: "/profile/notifications", permanent: false },
       { source: "/settings", destination: "/settings/workspace", permanent: false },
       // feature-plan-ux-kit-contracts.md C1: the Overview merged into Contracts and CLINs.

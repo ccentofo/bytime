@@ -1,9 +1,9 @@
 import {
-  IconArrowLeft, IconBuilding, IconCalendarTime, IconChecklist, IconCreditCard, IconDatabaseImport, IconHome, IconPlug,
+  IconArrowLeft, IconBuilding, IconCalendarTime, IconChecklist, IconCreditCard, IconHome, IconPlug,
   IconReportAnalytics, IconSettings, IconTableImport,
   IconAlertCircle, IconAlertTriangle, IconArrowsExchange, IconBan, IconBell, IconBriefcase, IconCalendarX, IconCash,
   IconChartBar, IconCheck, IconChevronDown, IconChevronRight, IconClock, IconCopy, IconCurrencyDollar, IconDots,
-  IconDownload, IconEye, IconHistory, IconInfoCircle, IconKey, IconKeyOff, IconList, IconLock, IconLockOpen,
+  IconDownload, IconEye, IconHistory, IconInfoCircle, IconKey, IconKeyOff, IconList, IconListCheck, IconLock, IconLockOpen,
   IconLogout, IconMoon, IconPassword, IconPencil, IconPencilCog, IconPlus, IconReceipt, IconRefresh, IconReportMoney, IconRestore,
   IconScale, IconSearch, IconSun, IconTrash, IconUpload, IconUser, IconUsers, IconWand, IconX,
   IconArrowBack, IconCalendarEvent, IconChevronLeft, IconDeviceFloppy, IconFileImport, IconLockSquareRounded, IconNote, IconSend,
@@ -74,8 +74,8 @@ export const Icons = {
   billing: IconCreditCard,
   integrations: IconPlug,
   apiKeys: IconKey,
+  setup: IconListCheck,
   dataImport: IconTableImport,
-  historyImport: IconDatabaseImport,
 
   // Shell
   profile: IconUser,

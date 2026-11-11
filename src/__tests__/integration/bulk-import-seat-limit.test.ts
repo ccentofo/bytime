@@ -118,4 +118,15 @@ describe('Bulk import respects the plan seat limit atomically (R2-11)', () => {
     expect(result.skipped).toBe(1);
     expect(result.created).toBe(3);
   });
+
+  it('counts only rows that pass validation (feature-plan-ux-setup-import.md P12): refused rows never refuse the batch for seats', async () => {
+    await cleanupTestData();
+    const admin = await createTestUser({ role: 'admin' });
+    actingAs(admin);
+    // 1 admin + 9 valid = 10 (the limit); the 5 bad-role rows would make 15 if they were counted.
+    const rows = [...makeRows(9, 'valid'), ...makeRows(5, 'badrole').map((r) => ({ ...r, role: 'manager' }))];
+    const result = await expectOk(bulkImportEmployees(rows));
+    expect(result.created).toBe(9);
+    expect(result.errors).toHaveLength(5);
+  });
 });

@@ -26,9 +26,12 @@ export function safeErrorMessage(
   return opts.fallback;
 }
 
-/** Per-row error message for the bulk imports (audit A5): safeErrorMessage with the import wording. */
-export function importRowMessage(error: unknown, duplicateFallback: string): string {
-  return safeErrorMessage(error, { fallback: 'Could not import this row.', duplicateFallback, logLabel: 'Bulk import row failed:' });
+/**
+ * Per-row error message for the bulk imports (audit A5): safeErrorMessage with the import wording. On a check (dry run)
+ * an unexpected error isn't reported to Sentry — one event per bad row on every check (feature-plan-ux-setup-import.md §4.3).
+ */
+export function importRowMessage(error: unknown, duplicateFallback: string, opts: { dryRun?: boolean } = {}): string {
+  return safeErrorMessage(error, { fallback: 'Could not import this row.', duplicateFallback, logLabel: 'Bulk import row failed:', report: opts.dryRun !== true });
 }
 
 /** A YYYY-MM-DD import cell → CalendarDate, or a row-level UserFacingError naming the field. */

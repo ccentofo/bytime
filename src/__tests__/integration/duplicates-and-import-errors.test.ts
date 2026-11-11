@@ -72,6 +72,7 @@ import { createUserWithPassword } from '@/server/actions/users';
 import { createContract } from '@/server/actions/contracts';
 import { createChargeCode } from '@/server/actions/charge-codes';
 import { bulkImportContracts } from '@/server/actions/import';
+import { sql } from 'drizzle-orm';
 
 describe('duplicate and import error messages (audit A5/A6)', () => {
   beforeEach(async () => {
@@ -102,12 +103,20 @@ describe('duplicate and import error messages (audit A5/A6)', () => {
   });
 
   it('a varchar overflow in a bulk-import row → the generic message, no SQL or params', async () => {
-    const result = await expectOk(bulkImportContracts([
-      { contractNumber: 'OVERFLOW-' + 'X'.repeat(80), name: 'Too long', type: 'prime', fundedValue: '', ceilingValue: '', startDate: '', endDate: '' },
-    ]));
-    expect(result.created).toBe(0);
-    expect(result.errors).toEqual([{ row: 1, message: 'Could not import this row.' }]);
-    expect(JSON.stringify(result)).not.toMatch(/insert into|params|OVERFLOW-X/i);
-    void getTestDb;
+    // The shared validator now refuses an over-long number before the insert (feature-plan-ux-setup-import.md §4.3), so
+    // the database's own overflow (SQLSTATE 22001) is forced with a trigger to keep this the unexpected-error path.
+    await getTestDb().execute(sql.raw(`CREATE OR REPLACE FUNCTION test_contract_overflow() RETURNS trigger AS $$ BEGIN IF NEW.contract_number LIKE 'OVERFLOW-%' THEN RAISE EXCEPTION 'value too long for type character varying(50)' USING ERRCODE = '22001'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql`));
+    await getTestDb().execute(sql.raw('CREATE TRIGGER test_contract_overflow BEFORE INSERT ON contracts FOR EACH ROW EXECUTE FUNCTION test_contract_overflow()'));
+    try {
+      const result = await expectOk(bulkImportContracts([
+        { contractNumber: 'OVERFLOW-XYZ', name: 'Too long', type: 'prime', fundedValue: '', ceilingValue: '', startDate: '', endDate: '' },
+      ]));
+      expect(result.created).toBe(0);
+      expect(result.errors).toEqual([{ row: 2, message: 'Could not import this row.' }]);
+      expect(JSON.stringify(result)).not.toMatch(/insert into|params|OVERFLOW-X/i);
+    } finally {
+      await getTestDb().execute(sql.raw('DROP TRIGGER IF EXISTS test_contract_overflow ON contracts'));
+      await getTestDb().execute(sql.raw('DROP FUNCTION IF EXISTS test_contract_overflow()'));
+    }
   });
 });
