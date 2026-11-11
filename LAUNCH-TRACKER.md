@@ -37,7 +37,9 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 |---|---|---|
 | 1 | Hotfix: table column order leaks between pages (`feature-plan-hotfix-table-state.md`) | **merged** (PR #23) |
 | 2 | UX-4c Part 2a: Setup checklist and Import (`feature-plan-ux-setup-import.md`) | audited (`UX-4C2A-AUDIT.md`): no HIGH or MEDIUM; break-it 11/11. fix round 1 **verified** (gates, break-it 11/11). **READY TO MERGE** (product owner confirmed stable 2026-11-11). Merge after CI is green, then tag `stable-2026-11-11-ux-setup-import`. |
-| 3 | UX-4c Part 2b: Integrations, Billing, Landing (`feature-plan-ux-integrations-billing.md`) | blueprint FINAL; after #2 |
+| 3 | UX-4c Part 2b: Integrations, Landing, Terms/Privacy text (`feature-plan-ux-integrations-billing.md` v3.1) | blueprint FINAL (billing moved out); **waiting on the landing-claim check** (lead → product owner), then the fresh dev session |
+| 3b | **Database backups**: daily encrypted `pg_dump` of every tenant and the control plane to S3 us-east-1, 30-day lifecycle, write-only credentials, monitoring, restore drill (`BUSINESS-DECISIONS.md` §5) | **approved 2026-11-11** as its own blueprint; blueprint to write |
+| 3a | **Per-user billing** (new model, billing rules and Billing page, from `BUSINESS-DECISIONS.md` §1) | **approved 2026-11-11**; blueprint to write |
 | 4 | Launch hardening audit + follow-ups (below) | **approved 2026-11-12**; the lead runs it with the dev |
 | 5 | Excel cost report: charge codes and Class | **approved 2026-11-12**; blueprint to write |
 | 6 | Distributed rate limiting (Upstash) | **approved 2026-11-12**; blueprint to write (constraints in the decisions log) |
@@ -45,6 +47,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 8 | Staging rehearsal (PRODUCTION-DEPLOY Phase 12), then production (Phase 13) | after the above. The approval-scope release is fix-forward only, with the window check. |
 
 ## Launch hardening follow-ups (approved for the lead to run directly with the dev)
+- **Daily reminders: employees can't opt out** (product owner 2026-11-11). Remove the opt-out for the daily reminder.
 - Employee-side "Self-rejected" badge still uses old wording.
 - Slow-CI flaky screen tests (lighten the heaviest).
 - Clean-up migration: current supervisors' membership rows not backed by a charge code (deferred until approval scope has been live once).
@@ -68,6 +71,13 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 2026-11-11 | Part 2a scope: S3 (Home workweek card removed), S4 (skipped-rows line) and S9 (Setup visual tweaks) accepted; **S10: friendly time zone names**; **F7: change the Hours notice wording** once hours exist. |
 | 2026-11-11 | S10: time zone labels use Intl's generic names ("Eastern Time"); Setup checklist only. |
 | 2026-11-11 | The time zone dropdown keeps raw IANA names (only the Setup summary line is friendly). |
+| 2026-11-11 | Part 2b split: Integrations + Landing now; Billing moves to a new per-user billing blueprint (added to the queue). |
+| 2026-11-11 | Landing uses the business's exact strings (`BUSINESS-DECISIONS.md` §2); the lead flags any claim the code doesn't support. |
+| 2026-11-11 | The dev may apply the business's Terms §7 / Privacy text (§3 A1, A2) to those two pages "for now". |
+| 2026-11-11 | Landing copy: the lead's five accuracy fixes accepted (DB enforcement wording; "keep employees on track"; "return" not "reject"; "an audit trail you can filter by person, contract and reason"; "Submitted and approved timesheets lock"). |
+| 2026-11-11 | Employees can't opt out of daily reminder emails. |
+| 2026-11-11 | Certification recording: add **only if DCAA requires a stored artifact** (lead's assessment pending the product owner's read). |
+| 2026-11-11 | Backups: their own blueprint (database backups per `BUSINESS-DECISIONS.md` §5). |
 | 2026-11-12 | Rate limiting: **Upstash** (expected to stay in the free tier). Rate-limit keys must be **salted hashes that expire within 25 hours** (matches the Privacy Policy). Raw IPs are never stored. |
 
 ## Open questions for the product owner
