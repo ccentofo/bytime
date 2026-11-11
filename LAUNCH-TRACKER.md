@@ -36,7 +36,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | # | Item | Status |
 |---|---|---|
 | 1 | Hotfix: table column order leaks between pages (`feature-plan-hotfix-table-state.md`) | **merged** (PR #23) |
-| 2 | UX-4c Part 2a: Setup checklist and Import (`feature-plan-ux-setup-import.md`) | **built** on `ux-setup-import` (6 commits); waiting on the dev's report, then the lead audit |
+| 2 | UX-4c Part 2a: Setup checklist and Import (`feature-plan-ux-setup-import.md`) | audited (`UX-4C2A-AUDIT.md`): no HIGH or MEDIUM; break-it 11/11. fix round 1 **verified** (gates, break-it 11/11). **READY TO MERGE** (product owner confirmed stable 2026-11-11). Merge after CI is green, then tag `stable-2026-11-11-ux-setup-import`. |
 | 3 | UX-4c Part 2b: Integrations, Billing, Landing (`feature-plan-ux-integrations-billing.md`) | blueprint FINAL; after #2 |
 | 4 | Launch hardening audit + follow-ups (below) | **approved 2026-11-12**; the lead runs it with the dev |
 | 5 | Excel cost report: charge codes and Class | **approved 2026-11-12**; blueprint to write |
@@ -65,6 +65,9 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 2026-11-12 | UX-5 accessibility verification: **no**. |
 | 2026-11-12 | Deferred list stays out of launch; the product owner will pick items up later. |
 | 2026-11-12 | Every session reads `LAUNCH-TRACKER.md` first (added to `AGENTS.md`). |
+| 2026-11-11 | Part 2a scope: S3 (Home workweek card removed), S4 (skipped-rows line) and S9 (Setup visual tweaks) accepted; **S10: friendly time zone names**; **F7: change the Hours notice wording** once hours exist. |
+| 2026-11-11 | S10: time zone labels use Intl's generic names ("Eastern Time"); Setup checklist only. |
+| 2026-11-11 | The time zone dropdown keeps raw IANA names (only the Setup summary line is friendly). |
 | 2026-11-12 | Rate limiting: **Upstash** (expected to stay in the free tier). Rate-limit keys must be **salted hashes that expire within 25 hours** (matches the Privacy Policy). Raw IPs are never stored. |
 
 ## Open questions for the product owner
