@@ -249,6 +249,56 @@ describe('sends: failures, the running guard, the hub, the preview (I6, I7, I9)'
     expect((await db().select().from(schema.integrationSyncLogs)).length).toBe(2); // the new send got its own log
   });
 
+  // UX-4C2B-AUDIT.md F4: the one-connection test DB serializes calls anyway, so prove the send lock directly — a second
+  // connection holds integration-send:{connection}; triggerQBOSync must WAIT on it (seen in pg_locks), then run.
+  it('IN-14: triggerQBOSync takes the send lock (integration-send:{connection}) before claiming a log', async () => {
+    const URL = process.env.TEST_DATABASE_URL ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime_test';
+    const holder = postgres(URL, { max: 1 });
+    const observer = postgres(URL, { max: 1 });
+    let settled = false;
+    try {
+      let call: Promise<unknown> | undefined;
+      await holder.begin(async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${'integration-send:' + qbo}))`;
+        const [key] = await tx<{ classid: string; objid: string }[]>`
+          SELECT classid::text, objid::text FROM pg_locks WHERE locktype = 'advisory' AND granted AND pid = pg_backend_pid()`;
+        call = triggerQBOSync({ connectionId: qbo, periodStart: '2026-10-01' as never }).finally(() => { settled = true; });
+        for (let i = 0; ; i++) {
+          const [{ w }] = await observer<{ w: number }[]>`
+            SELECT count(*)::int AS w FROM pg_locks
+            WHERE locktype = 'advisory' AND NOT granted AND classid::text = ${key.classid} AND objid::text = ${key.objid}`;
+          if (w >= 1) break;
+          if (settled || i > 200) throw new Error(`triggerQBOSync never waited on the send lock (settled: ${settled})`);
+          await new Promise((r) => setTimeout(r, 25));
+        }
+        // Nothing claimed while waiting (read on the observer: the test's own connection is parked in the waiting call).
+        const [{ n }] = await observer<{ n: number }[]>`SELECT count(*)::int AS n FROM integration_sync_logs`;
+        expect(n).toBe(0);
+      });
+      expect(await call).toMatchObject({ ok: true });
+      expect(await db().select().from(schema.integrationSyncLogs)).toHaveLength(1);
+    } finally {
+      await holder.end({ timeout: 1 });
+      await observer.end({ timeout: 1 });
+    }
+  });
+
+  it('F8: triggerQBOSync refuses a Gusto connection and an inactive one, before any log', async () => {
+    const [{ id: gusto }] = await db().insert(schema.integrationConnections).values({ provider: 'gusto', displayName: 'Gusto', connectedBy: h.adminId }).returning();
+    await expectFailure(triggerQBOSync({ connectionId: gusto, periodStart: '2026-10-01' as never }), 'validation', /isn’t a QuickBooks Online connection/);
+    await db().update(schema.integrationConnections).set({ isActive: false }).where(eq(schema.integrationConnections.id, qbo));
+    await expectFailure(triggerQBOSync({ connectionId: qbo, periodStart: '2026-10-01' as never }), 'validation', /disconnected/);
+    expect(await db().select().from(schema.integrationSyncLogs)).toHaveLength(0);
+  });
+
+  it('F11: getSyncLogs refuses a non-UUID connection and returns 1–100 rows', async () => {
+    await expect(getSyncLogs('not-a-uuid')).rejects.toThrow(/not a valid identifier/);
+    await db().insert(schema.integrationSyncLogs).values(Array.from({ length: 101 }, () => ({ connectionId: qbo, syncType: 'timesheet_push', status: 'success' as const })));
+    expect(await getSyncLogs(qbo, 1000)).toHaveLength(100);
+    expect(await getSyncLogs(qbo, 0)).toHaveLength(1);
+    expect(await getSyncLogs(qbo)).toHaveLength(20);
+  });
+
   it('IN-14: a date that isn’t a pay-period start is refused (no custom ranges)', async () => {
     await expectFailure(triggerQBOSync({ connectionId: qbo, periodStart: '2026-10-05' as never }), 'validation', /^Choose a pay period\.$/);
     expect(await db().select().from(schema.integrationSyncLogs)).toHaveLength(0);
@@ -279,19 +329,64 @@ describe('sends: failures, the running guard, the hub, the preview (I6, I7, I9)'
 
   it('getSendPreview: unmatched people with approved hours, not-yet-approved people, and a legacy window as already sent', async () => {
     const pat = await createTestUser({ fullName: 'Pat' });
-    const sam = await createTestUser({ fullName: 'Sam' });
+    const nora = await createTestUser({ fullName: 'Nora' }); // approved, no hours
+    const sam = await createTestUser({ fullName: 'Sam' });   // submitted
+    const rita = await createTestUser({ fullName: 'Rita' }); // returned
+    const dan = await createTestUser({ fullName: 'Dan' });   // draft
     const contract = await createTestContract();
     const clin = await createTestClin(contract.id);
     await db().insert(schema.timesheetEntries).values({ userId: pat.id, clinId: clin.id, entryDate: '2026-10-02', hours: '8' });
     await db().insert(schema.timesheetPeriods).values([
       { userId: pat.id, periodStart: '2026-10-01', status: 'approved', periodNumDays: 15, reviewedAt: new Date() },
+      { userId: nora.id, periodStart: '2026-10-01', status: 'approved', periodNumDays: 15, reviewedAt: new Date() },
       { userId: sam.id, periodStart: '2026-10-01', status: 'submitted', periodNumDays: 15, submittedAt: new Date() },
+      { userId: rita.id, periodStart: '2026-10-01', status: 'rejected', periodNumDays: 15 },
+      { userId: dan.id, periodStart: '2026-10-01', status: 'draft', periodNumDays: 15 },
+      // Another period: not counted.
+      { userId: sam.id, periodStart: '2026-10-16', status: 'submitted', periodNumDays: 16, submittedAt: new Date() },
     ]);
     await addLog({ status: 'success', recordsPushed: 12, periodStart: '2026-08-01', periodEnd: '2026-10-31' });
     const preview = await getSendPreview(qbo, '2026-10-01' as never);
-    expect(preview).toMatchObject({ periodStart: '2026-10-01', periodEnd: '2026-10-15', unmatchedPeople: 1, notApprovedPeople: 1, partlySentAt: null });
+    // UX-4C2B-AUDIT.md F5: exact counts — 3 not approved (submitted, returned, draft; inverting the filter gives 2), and
+    // 1 unmatched (Pat has hours; Nora is approved without hours, so nothing of hers is sent).
+    expect(preview).toMatchObject({ periodStart: '2026-10-01', periodEnd: '2026-10-15', unmatchedPeople: 1, notApprovedPeople: 3, partlySentAt: null });
     expect(preview.sentAt).toBeInstanceOf(Date);
     await expectOk(setPersonMapping({ connectionId: qbo, userId: pat.id, match: employee() }));
     expect((await getSendPreview(qbo, '2026-10-01' as never)).unmatchedPeople).toBe(0);
+  });
+});
+
+/**
+ * UX-4C2B-AUDIT.md F1: legacy data can hold several ACTIVE rows for one QuickBooks company (every old reconnect inserted
+ * one). The hub, the page and the preview use the OLDEST (the row the old page mapped and sent against — the same row
+ * reconnect revives), and the duplicate warning counts sends from every row of the same company.
+ */
+describe('F1: legacy duplicate active rows', () => {
+  beforeEach(async () => {
+    await cleanupTestData();
+    h.adminId = (await createTestUser({ role: 'admin' })).id;
+  });
+  afterEach(async () => { await cleanupTestData(); });
+
+  it('the oldest active row is used; a send logged on the newer row of the same company still warns', async () => {
+    const row = (createdAt: string) => ({
+      provider: 'quickbooks_online' as const, displayName: 'QuickBooks — Acme', externalCompanyId: 'realm-1', connectedBy: h.adminId,
+      accessTokenEncrypted: 'x', refreshTokenEncrypted: 'y', createdAt: new Date(createdAt), connectedAt: new Date(createdAt),
+    });
+    const [oldest] = await db().insert(schema.integrationConnections).values(row('2026-01-01T00:00:00Z')).returning();
+    const [newer] = await db().insert(schema.integrationConnections).values(row('2026-03-01T00:00:00Z')).returning();
+    const [otherCompany] = await db().insert(schema.integrationConnections).values({ ...row('2026-02-01T00:00:00Z'), externalCompanyId: 'realm-2', isActive: false }).returning();
+
+    const hub = await getIntegrationHub();
+    expect(hub.qbo?.id).toBe(oldest.id); // the hub and the QuickBooks page (which reads the hub) use the oldest
+
+    await db().insert(schema.integrationSyncLogs).values({
+      connectionId: newer.id, syncType: 'timesheet_push', status: 'success', recordsPushed: 9, periodStart: '2026-10-01', periodEnd: '2026-10-15',
+    });
+    await db().insert(schema.integrationSyncLogs).values({
+      connectionId: otherCompany.id, syncType: 'timesheet_push', status: 'success', recordsPushed: 9, periodStart: '2026-10-16', periodEnd: '2026-10-31',
+    });
+    expect((await getSendPreview(oldest.id, '2026-10-01' as never)).sentAt).toBeInstanceOf(Date);
+    expect((await getSendPreview(oldest.id, '2026-10-16' as never)).sentAt).toBeNull(); // another company's send doesn't count
   });
 });

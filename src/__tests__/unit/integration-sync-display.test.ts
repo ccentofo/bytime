@@ -22,7 +22,7 @@ const text = (over: Partial<Parameters<typeof syncResultText>[0]>) => {
 describe('IN-10: the sync log in words (§6)', () => {
   it('every row of the §6 table', () => {
     expect(text({ status: 'running' })).toBe('Sending…');
-    expect(text({ status: 'running', startedAt: new Date(NOW - STALE_RUNNING_MS), createdAt: new Date(NOW - STALE_RUNNING_MS) })).toBe("Didn't finish");
+    expect(text({ status: 'running', startedAt: new Date(NOW - STALE_RUNNING_MS), createdAt: new Date(NOW - STALE_RUNNING_MS) })).toBe('Didn’t finish'); // F10: the curly ’ like the rest of the copy
     expect(text({ status: 'success' })).toBe('Nothing to send: no approved hours in this period');
     expect(text({ status: 'success', recordsSkipped: 4 })).toBe('Nothing sent · 4 entries skipped: people not matched');
     expect(text({ status: 'success', recordsPushed: 42 })).toBe('Sent');

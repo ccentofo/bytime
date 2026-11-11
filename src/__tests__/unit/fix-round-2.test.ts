@@ -13,7 +13,11 @@ vi.mock('@/lib/session', () => {
   const admin = async () => ({ id: 'adm', email: 'a@x', fullName: 'A', role: 'admin' });
   return { requireAdmin: admin, requireAdminFresh: admin, AuthorizationError: class extends Error {} };
 });
-vi.mock('@/db', () => ({ getDb: async () => ({}), getDbForWrite: async () => ({}) }));
+// UX-4C2B-AUDIT.md F8: triggerQBOSync reads the connection first (an active QuickBooks one).
+vi.mock('@/db', () => {
+  const chain = { from: () => chain, where: () => chain, limit: async () => [{ provider: 'quickbooks_online', isActive: true }] };
+  return { getDb: async () => ({ select: () => chain }), getDbForWrite: async () => ({}) };
+});
 vi.mock('@/server/internal/workspace-settings', () => ({ getDefaultSyncWindow: async () => ({ periodStart: '2026-08-01', periodEnd: '2026-10-31' }) }));
 // feature-plan-ux-integrations-billing.md I6: QuickBooks sends one pay period, resolved from the schedule.
 vi.mock('@/server/internal/pay-period-config', () => ({

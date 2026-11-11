@@ -90,6 +90,17 @@ describe('IN-3: the hub cards', () => {
   });
 });
 
+describe('F7: a failed or running last send reads in the §6 wording', () => {
+  it('failed → "Last sent {date} · Failed: {errorSummary}"; running → "Sending…"', async () => {
+    await render({ qbo: qbo({ lastSend: { at: new Date('2026-11-03T19:14:00Z'), pushed: 0, failed: 0, skipped: 0, status: 'failed', errorSummary: 'QuickBooks returned an error (HTTP 500).' } }) });
+    expect(card('QuickBooks Online').textContent).toContain('Last sent Nov 3, 2026 EST · Failed: QuickBooks returned an error (HTTP 500). · 5 people not matched');
+    expect(card('QuickBooks Online').textContent).not.toContain('0 sent, 0 failed');
+    unmount(m);
+    await render({ qbo: qbo({ lastSend: { at: new Date(), pushed: 0, failed: 0, skipped: 0, status: 'running', errorSummary: null } }) });
+    expect(card('QuickBooks Online').textContent).toMatch(/Last sent .* · Sending… · 5 people not matched/);
+  });
+});
+
 describe('IN-15 (unit): Reconnect only while the connection is expired', () => {
   it('expired → Reconnect (to the connect route) plus Open; after a reconnect (expired false) → no Reconnect', async () => {
     await render({ qbo: qbo({ expired: true }) });

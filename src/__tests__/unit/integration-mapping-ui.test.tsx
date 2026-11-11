@@ -210,6 +210,37 @@ describe('IN-6 / I4: one match per person', () => {
     expect(row('John Doe').textContent).toContain('Matched');
   });
 
+  it('F6b: the change shows at once, before setPersonMapping answers (optimistic)', async () => {
+    const pending = deferred();
+    h.setPersonMapping.mockImplementationOnce(() => pending.promise);
+    await render();
+    await choose('QuickBooks match for John Doe', 'Bob QBO · Employee');
+    expect(select('QuickBooks match for John Doe').value).toBe('Bob QBO · Employee');
+    expect(row('John Doe').textContent).toContain('Matched');
+    expect(select('QuickBooks match for John Doe').getAttribute('aria-disabled')).toBe('true');
+    pending.resolve({ ok: true, data: { mapping: map('m-new', 'employee', 'u2', 'e2', 'Bob QBO') } });
+    await wait();
+    expect(select('QuickBooks match for John Doe').getAttribute('aria-disabled')).toBeNull();
+  });
+
+  it('F9 (G8): "Keep the employee match" saves the employee match', async () => {
+    h.setPersonMapping.mockResolvedValueOnce({ ok: true, data: { mapping: map('m-e2', 'employee', 'u2', 'e2', 'Bob QBO') } });
+    await render({ mappings: [map('m-e', 'employee', 'u2', 'e2', 'Bob QBO'), map('m-v0', 'vendor', 'u2', 'v1', 'Davis Consulting LLC')] });
+    await click([...row('John Doe').querySelectorAll('button')].find((b) => b.textContent === 'Keep the employee match'));
+    expect(h.setPersonMapping).toHaveBeenCalledWith({ connectionId: 'conn-1', userId: 'u2', match: { type: 'employee', externalId: 'e2', externalName: 'Bob QBO' } });
+    expect(row('John Doe').textContent).not.toContain('Also matched');
+  });
+
+  it('F10: with no active people, the People tab says "No active people yet."', async () => {
+    m = await mount(
+      <IntegrationConfigView connection={{ id: 'conn-1', companyName: 'Acme', connectedAt: new Date(), expired: false }} people={[]} contracts={[]} clins={[]}
+        mappings={[]} syncLogs={[]} periods={PERIODS} expiredMessage="x" workspaceTimezone="UTC" />,
+    );
+    await wait();
+    expect(panel().textContent).toContain('No active people yet.');
+    expect(panel().textContent).not.toContain('Everyone is matched.');
+  });
+
   it('"Not matched only" hides matched people', async () => {
     await render({ mappings: [map('m-e', 'employee', 'u2', 'e2', 'Bob QBO')] });
     await choose('Show', 'Not matched only');
@@ -217,7 +248,33 @@ describe('IN-6 / I4: one match per person', () => {
   });
 });
 
+describe('F2: a saved match is "not found" only against a loaded list', () => {
+  it('while QuickBooks data loads, saved matches show their saved name (no "not found")', async () => {
+    h.load.mockImplementation(() => new Promise(() => {})); // never answers
+    await render({ mappings: [map('m-e', 'employee', 'u2', 'e9', 'Old Bob'), map('m-k', 'contract', 'k-ann', 'k9', 'Navy Old')] });
+    expect(select('QuickBooks match for John Doe').value).toBe('Old Bob · Employee');
+    await tab(/^Contracts/);
+    expect(select('QuickBooks match for Navy').value).toBe('Navy Old');
+  });
+
+  it('when a list failed, its saved matches show their saved name; a loaded list still marks "not found"', async () => {
+    h.load.mockImplementation(async () => ({ ok: true, data: { ...LISTS, employees: { ok: false, error: 'HTTP 500' }, customers: { ok: false, error: 'HTTP 500' } } }));
+    await render({ mappings: [map('m-e', 'employee', 'u2', 'e9', 'Old Bob'), map('m-v', 'vendor', 'u1', 'v9', 'Gone LLC'), map('m-k', 'contract', 'k-ann', 'k9', 'Navy Old')] });
+    expect(select('QuickBooks match for John Doe').value).toBe('Old Bob · Employee');
+    expect(select('QuickBooks match for Emily Davis').value).toBe('Gone LLC (not found in QuickBooks)');
+    await tab(/^Contracts/);
+    expect(select('QuickBooks match for Navy').value).toBe('Navy Old');
+  });
+});
+
 describe('IN-8 / I5: email suggestions and match by email', () => {
+  it('F3: with one list failed (employees), no suggestion and no "Match by email"', async () => {
+    h.load.mockImplementation(async () => ({ ok: true, data: { ...LISTS, employees: { ok: false, error: 'HTTP 500' }, vendors: { ok: true, data: [{ id: 'v1', name: 'Emily LLC', email: 'emily.davis@acme.test' }] } } }));
+    await render();
+    expect(row('Emily Davis').textContent).not.toContain('Suggested');
+    expect([...document.body.querySelectorAll('button')].some((b) => /by email/.test(b.textContent ?? ''))).toBe(false);
+  });
+
   it('the unique same-email record is suggested; "Match 1 person by email" sends the pairs and refreshes', async () => {
     await render();
     expect(row('Emily Davis').textContent).toContain('Suggested: Emily Davis (same email)');
@@ -289,7 +346,8 @@ describe('IN-10 / I7: History in words', () => {
       logs: [
         log({ id: 'a', recordsPushed: 42, recordsSkipped: 5 }),
         log({ id: 'b', status: 'partial', recordsPushed: 30, recordsFailed: 2, failedRecords: 2 }),
-        log({ id: 'c', status: 'failed', errorSummary: 'Your QuickBooks connection has expired.', failedRecords: 0 }),
+        // F6a: records_failed > 0 but no stored failed records → no button (the button follows failedRecords).
+        log({ id: 'c', status: 'failed', errorSummary: 'Your QuickBooks connection has expired.', recordsFailed: 3, failedRecords: 0 }),
         log({ id: 'd' }),
         log({ id: 'e', recordsSkipped: 3 }),
       ],
