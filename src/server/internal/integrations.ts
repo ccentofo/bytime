@@ -1,5 +1,5 @@
 import 'server-only';
-import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, ne, sql } from 'drizzle-orm';
 import type { ReadDb, TenantWriter } from '@/db';
 import { integrationConnections, integrationProviderEnum } from '@/db/schema';
 import { encrypt } from '@/lib/encryption';
@@ -81,8 +81,9 @@ export async function saveIntegrationConnection(db: TenantWriter, connectedBy: s
 }
 
 /**
- * The provider's active connection (I9: one per provider; if legacy data still has several, the newest, chosen
- * deterministically). Never selects tokens. INTERNAL — callers authorize first.
+ * The provider's active connection (I9: one per provider). If legacy data still has several active rows (every old
+ * reconnect inserted one), the OLDEST — the row the old page mapped and sent against, and the one reconnect revives
+ * (UX-4C2B-AUDIT.md F1). Never selects tokens. INTERNAL — callers authorize first.
  */
 export async function activeConnection(db: Pick<ReadDb, 'select'>, provider: Provider) {
   const [row] = await db
@@ -97,7 +98,7 @@ export async function activeConnection(db: Pick<ReadDb, 'select'>, provider: Pro
     })
     .from(integrationConnections)
     .where(and(eq(integrationConnections.provider, provider), eq(integrationConnections.isActive, true)))
-    .orderBy(desc(integrationConnections.connectedAt), desc(integrationConnections.createdAt), desc(integrationConnections.id))
+    .orderBy(asc(integrationConnections.createdAt), asc(integrationConnections.id))
     .limit(1);
   return row ?? null;
 }

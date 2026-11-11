@@ -426,6 +426,20 @@ export async function getSendPreview(connectionId: string, periodStart: Calendar
       lt(timesheetPeriods.periodStart, addDays(period.end, 1)),
     ));
 
+  // UX-4C2B-AUDIT.md F1: sends from EVERY row of the same QuickBooks company count (legacy reconnects inserted new
+  // rows), so a period sent from an older row still warns.
+  const [conn] = await db
+    .select({ provider: integrationConnections.provider, companyId: integrationConnections.externalCompanyId })
+    .from(integrationConnections)
+    .where(eq(integrationConnections.id, id))
+    .limit(1);
+  const sameCompany = conn?.companyId
+    ? (await db
+      .select({ id: integrationConnections.id })
+      .from(integrationConnections)
+      .where(and(eq(integrationConnections.provider, conn.provider), eq(integrationConnections.externalCompanyId, conn.companyId))))
+      .map((r) => r.id)
+    : [id];
   const logs = await db
     .select({
       status: integrationSyncLogs.status,
@@ -436,7 +450,7 @@ export async function getSendPreview(connectionId: string, periodStart: Calendar
       createdAt: integrationSyncLogs.createdAt,
     })
     .from(integrationSyncLogs)
-    .where(eq(integrationSyncLogs.connectionId, id));
+    .where(inArray(integrationSyncLogs.connectionId, sameCompany.length > 0 ? sameCompany : [id]));
   const coverage = periodCoverage(
     logs.map((l) => ({ ...l, periodStart: l.periodStart as CalendarDate | null, periodEnd: l.periodEnd as CalendarDate | null })),
     period.start,
