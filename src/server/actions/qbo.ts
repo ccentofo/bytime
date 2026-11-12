@@ -17,8 +17,8 @@ import { userAction } from '@/lib/action-result';
 
 /**
  * feature-plan-ux-integrations-billing.md I3: the QuickBooks lists for the matching tabs, loaded when the page opens.
- * ONE action, so the token is refreshed at most once per load — parallel refreshes rotate the refresh token and the
- * last write wins (qbo-api.ts ensureValidToken), which could break the connection. The 4 queries then run with
+ * ONE action, so the token is refreshed at most once per load. Refreshes across requests are serialized by
+ * ensureValidToken (qbo-api.ts, launch hardening H6: the integration-token lock plus a re-read). The 4 queries then run with
  * Promise.allSettled: one failed list returns its own (safe) message and the others still load.
  */
 type QboList<T> = { ok: true; data: T[] } | { ok: false; error: string };
