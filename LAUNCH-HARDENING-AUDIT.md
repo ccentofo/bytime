@@ -79,3 +79,10 @@ Two sub-agents, run after break-it, each leaving the tree clean.
    - a new account's progress line;
    - Connect / Reconnect: JS on, JS off, a direct GET to `/api/integrations/qbo-connect` returns 404, and the config-missing banner.
 3. After the product owner says it's stable: merge, then tag `stable-YYYY-MM-DD-launch-hardening`.
+
+## 7. Product owner's browser checks (2026-11-12)
+- **A–D and F–G passed:** Notifications by role, the new account's "0 of 1", Self-returned on both screens, Connect to Intuit, both 404s, both Reconnect buttons, and the config-missing banner.
+- **E (JavaScript off) is withdrawn, not failed.** With JavaScript off, the Integrations page body never renders: the settings pages finish loading in the browser (`src/app/(app)/settings/loading.tsx`, on `main` before this branch). CadenzPoint doesn't support use without JavaScript, so the check couldn't run.
+  - The blueprint's no-JavaScript scenario (§8.2 item 4, §11 item 4) was the lead's over-reach. The real case, a click in the moment before the page finishes loading, is covered by T15 and the lead's hop check.
+  - No code change is needed.
+- **Verdict stands: READY.** The merge waits only on green CI.

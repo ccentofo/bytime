@@ -98,16 +98,10 @@ Your `.env.local` has a real QuickBooks client ID, so Connect really goes to Int
 3. Open **http://acme.localhost:3000/api/integrations/gusto-connect**.
    **Expect:** a 404 as well.
 
-## E. Connect QuickBooks, with JavaScript off (H5: the security setting lets the form reach Intuit)
-1. Go to `/settings/integrations`. Open Chrome DevTools: **View → Developer → Developer Tools**, or Cmd+Option+I.
-2. In DevTools, open the **Console** tab. Click the gear icon (⚙) and tick **Preserve log**.
-3. Press **Cmd+Shift+P** inside DevTools, type `Disable JavaScript`, and press Enter.
-4. Reload the page (Cmd+R). It still shows the cards.
-5. Click **Connect QuickBooks**.
-   **Expect:**
-   - you arrive on Intuit's sign-in page;
-   - the Console has **no** red or yellow line mentioning **"form-action"**. Other lines are fine.
-6. Turn JavaScript back on: **Cmd+Shift+P** → `Enable JavaScript` → Enter. Then close DevTools. (JavaScript stays off only while DevTools is open, but turn it back on anyway.)
+## E. ~~Connect QuickBooks, with JavaScript off~~: withdrawn (2026-11-12)
+The product owner ran it: with JavaScript off, the Integrations page shows only the settings menu, and the page body never appears. CadenzPoint needs JavaScript. The settings pages finish loading in a step that runs in the browser (`settings/loading.tsx`, unchanged by this branch), so there's no Connect button to click. No-JavaScript use isn't supported, so this check had nothing to test.
+
+The security setting it targeted (`form-action` allowing `*.intuit.com`) only matters for a click in the split second before the page finishes loading. That is covered by test T15 and by the lead's redirect check with the real client ID (every hop is on `*.intuit.com`).
 
 ## F. Reconnect buttons, with an expired connection (H5)
 The demo has no QuickBooks connection, so you'll create a fake expired one. It has no tokens, which the app shows as "needs reconnecting".
