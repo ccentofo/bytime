@@ -45,7 +45,8 @@ vi.mock('@/db', () => {
   const db: Record<string, unknown> = {
     select: () => ({ from: (table: unknown) => thenable(() => h.selects.get(table) ?? []) }),
     insert: () => ({ values: () => thenable(() => [{ id: 'log-1' }]) }),
-    update: (table: unknown) => ({ set: (set: Record<string, unknown>) => { h.updates.push({ table, set }); return thenable(() => []); } }),
+    // H6: the token write is a compare-and-swap `… RETURNING id` — like Postgres, report the one row it updated.
+    update: (table: unknown) => ({ set: (set: Record<string, unknown>) => { h.updates.push({ table, set }); return thenable(() => ('refreshTokenEncrypted' in set ? [{ id: 'row' }] : [])); } }),
     execute: async () => [], // the send lock (I6)
   };
   db.transaction = async (fn: (tx: unknown) => unknown) => fn(db);
