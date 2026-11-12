@@ -31,7 +31,7 @@ export interface PastPeriodRow {
   reviewedAt: Date | null;
   /** At most 140 characters, then an ellipsis. */
   reviewComment: string | null;
-  /** "Self-approved" / "Self-rejected" (approvalLabel), else null. */
+  /** approvalLabel().uiBadge — "Self-approved" / "Self-returned" — else null (launch hardening H2). */
   approvalBadge: string | null;
   isCurrent: boolean;
 }
@@ -123,7 +123,7 @@ export async function pastPeriods(
       submittedAt: row?.submittedAt ?? null,
       reviewedAt: row?.reviewedAt ?? null,
       reviewComment: commentPreview(row?.reviewComment ?? null),
-      approvalBadge: row ? labels.get(row.id)?.badge ?? null : null,
+      approvalBadge: row ? labels.get(row.id)?.uiBadge ?? null : null, // H2: the in-app wording
       isCurrent: p.start === current.start,
     };
   });

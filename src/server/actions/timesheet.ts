@@ -91,7 +91,7 @@ export async function getTimesheetPeriod(requested?: string | string[]): Promise
   const [approvalBadge, facts] = await Promise.all([
     periodInfo.id
       ? approvalLabels(db, [{ id: periodInfo.id, userId: actor.id, status: periodInfo.status, reviewedBy: periodInfo.reviewedBy, reviewedAt: periodInfo.reviewedAt }], timeZone)
-        .then((labels) => labels.get(periodInfo.id!)?.badge ?? null)
+        .then((labels) => labels.get(periodInfo.id!)?.uiBadge ?? null) // H2: the in-app wording ("Self-returned")
       : null,
     selectedPeriodFacts(db, actor.id, { start, numDays, config: periodConfig }, today, timeZone),
   ]);

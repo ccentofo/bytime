@@ -43,7 +43,7 @@ vi.mock('@/lib/email/send', () => ({
 }));
 
 import { approvePeriod, rejectPeriod, getScopedPeriods, submitPeriod } from '@/server/actions/periods';
-import { getTimesheetForReview, getTimesheetPeriod } from '@/server/actions/timesheet';
+import { getPastTimesheets, getTimesheetForReview, getTimesheetPeriod } from '@/server/actions/timesheet';
 import { setUserApprover, updateUser, getApprovalNotices, getUsers } from '@/server/actions/users';
 import { getCellRevisionHistory, getAuditEntries, getAuditPeriodEvents } from '@/server/actions/audit';
 import { getTimesheetReportData, getEmployeeSummaryReport } from '@/server/actions/reports';
@@ -433,4 +433,21 @@ describe('approver rules (certified-outputs C2)', () => {
     const body = await res.json();
     expect(body.data.find((p: { id: string }) => p.id === period.id)).toMatchObject({ selfApproved: true, approvalSource: 'app' });
   });
+
+  // feature-plan-launch-hardening.md H2 (T6): the employee's own screens (Timesheet page, Past timesheets) show the
+  // in-app wording "Self-returned"; certified outputs keep "Self-rejected" (T7, approval-decisions.test.ts).
+  it('T6: a self-returned period reads "Self-returned" on the Timesheet page and Past timesheets; self-approved stays "Self-approved"', async () => {
+    const returned = await submittedPeriod(admin, prevStart(1));
+    const approved = await submittedPeriod(admin, prevStart(2));
+    actingAs(admin);
+    await expectOk(rejectPeriod({ periodId: returned.id, comment: 'fix', seen: 1 }));
+    await expectOk(approvePeriod({ periodId: approved.id, seen: 1 }));
+
+    expect((await getTimesheetPeriod(prevStart(1))).approvalBadge).toBe('Self-returned');
+    expect((await getTimesheetPeriod(prevStart(2))).approvalBadge).toBe('Self-approved');
+    const rows = (await getPastTimesheets()).rows;
+    expect(rows.find((r) => r.start === prevStart(1))?.approvalBadge).toBe('Self-returned');
+    expect(rows.find((r) => r.start === prevStart(2))?.approvalBadge).toBe('Self-approved');
+  });
 });
+
