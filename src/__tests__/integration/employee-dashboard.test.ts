@@ -50,7 +50,8 @@ describe('currentPeriodSummary (T21)', () => {
     await entry(b, '2026-10-05', '3');
     await entry(a, '2026-10-09', '8');            // Fri after "today"
     await entry(a, '2026-10-20', '8');            // next period — excluded
-    const s = await currentPeriodSummary(db(), emp.id, { start: '2026-10-01' as CalendarDate, numDays: 15, config: DEFAULT_PERIOD_CONFIG }, '2026-10-07' as CalendarDate);
+    // H4: countFrom at the period start keeps the whole-period counts (this user's real created_at is after 'today').
+    const s = await currentPeriodSummary(db(), emp.id, { start: '2026-10-01' as CalendarDate, numDays: 15, config: DEFAULT_PERIOD_CONFIG }, '2026-10-07' as CalendarDate, '2026-10-01' as CalendarDate);
     expect(s.dailyHours).toEqual({ '2026-10-01': 8, '2026-10-02': 0, '2026-10-03': 4, '2026-10-05': 5, '2026-10-09': 8 });
     expect(s.totalHoursEntered).toBe(25);
     expect(s.daysWithEntries).toBe(4);       // 01, 03, 05, 09 — the cleared 02 does not count
@@ -59,4 +60,17 @@ describe('currentPeriodSummary (T21)', () => {
     expect(s.workdaysFilled).toBeLessThanOrEqual(s.expectedWorkdays);
     expect(s).toMatchObject({ periodLabel: 'Oct 1 – Oct 15, 2026', status: 'draft' });
   });
+
+  // feature-plan-launch-hardening.md H4 (T10): for a person created mid-period the workday counts start at the creation
+  // day; earlier hours still count in the total.
+  it('T10: countFrom mid-period — expectedWorkdays and workdaysFilled count only from the creation day', async () => {
+    await entry(a, '2026-10-01', '8');            // Thu, before the creation day
+    await entry(a, '2026-10-02', '8');            // Fri, before
+    await entry(a, '2026-10-05', '6');            // Mon = the creation day
+    const s = await currentPeriodSummary(db(), emp.id, { start: '2026-10-01' as CalendarDate, numDays: 15, config: DEFAULT_PERIOD_CONFIG }, '2026-10-07' as CalendarDate, '2026-10-05' as CalendarDate);
+    expect(s.expectedWorkdays).toBe(3);      // Oct 5, 6, 7
+    expect(s.workdaysFilled).toBe(1);        // Oct 5
+    expect(s.totalHoursEntered).toBe(22);    // all hours, earlier days included
+  });
 });
+

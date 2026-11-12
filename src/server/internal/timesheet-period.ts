@@ -7,6 +7,7 @@ import { calendarDayOf, isAfter, isCalendarDate, type CalendarDate } from '@/lib
 import { outsideWeekDates } from '@/lib/timesheet/weekly';
 import { loadScheduleResolver } from './pay-period-config';
 import { currentPeriodSummary, type CurrentPeriodSummary } from './employee-dashboard';
+import { periodProgress } from '@/lib/timesheet/period-progress';
 import { workweekStartDayInternal } from './workspace-settings';
 import { latestDayTotals } from './day-totals';
 
@@ -54,21 +55,27 @@ export async function selectedPeriodFacts(
   today: CalendarDate,
   timeZone: string,
 ): Promise<SelectedPeriodFacts> {
-  const [summary, workweekStartDay, [user]] = await Promise.all([
+  const [fullSummary, workweekStartDay, [user]] = await Promise.all([
     currentPeriodSummary(db, userId, period, today),
     workweekStartDayInternal(db),
     db.select({ createdAt: users.createdAt }).from(users).where(eq(users.id, userId)).limit(1),
   ]);
+  const userCreatedOn = calendarDayOf(user?.createdAt ?? new Date(), timeZone);
+  const submitOpensOn = getLastWeekdayInPeriod(period.start, period.config);
+  // feature-plan-launch-hardening.md H4: the workday counts start at the account's creation day. Recomputed here from
+  // the summary's own day totals, so the three reads above stay parallel (no extra query, no serial round trip).
+  const progress = periodProgress({ start: period.start, numDays: period.numDays, dailyHours: fullSummary.dailyHours, today, submitOpensOn, countFrom: userCreatedOn });
+  const summary: CurrentPeriodSummary = { ...fullSummary, expectedWorkdays: progress.expectedWorkdays, workdaysFilled: progress.workdaysFilled };
   const outside = outsideWeekDates(period.start, period.numDays, workweekStartDay);
   const totals = await latestDayTotals(db, userId, outside);
   const outsideWeekHours: Record<string, number> = {};
   for (const d of outside) outsideWeekHours[d] = totals[d] ?? 0;
   return {
     summary,
-    submitOpensOn: getLastWeekdayInPeriod(period.start, period.config),
+    submitOpensOn,
     workweekStartDay,
     outsideWeekHours,
-    userCreatedOn: calendarDayOf(user?.createdAt ?? new Date(), timeZone),
+    userCreatedOn,
     submittedOn: summary.submittedAt ? calendarDayOf(summary.submittedAt, timeZone) : null,
     reviewedOn: summary.reviewedAt ? calendarDayOf(summary.reviewedAt, timeZone) : null,
   };

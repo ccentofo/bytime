@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
+import { eq } from 'drizzle-orm';
 import * as schema from '@/db/schema';
 import { getPeriodStartForDate, DEFAULT_PERIOD_CONFIG } from '@/lib/date-utils';
 import { addDays, todayIn, type CalendarDate } from '@/lib/calendar-date';
@@ -123,6 +124,17 @@ describe('timesheet read: the selected period (UX-3 A-T4)', () => {
     expect(p).toMatchObject({ periodStart: MAR, isCurrent: false, reviewComment: 'Please split Tuesday.', submitOpensOn: '2026-03-13', userCreatedOn: '2025-12-31' });
     expect(p.summary).toMatchObject({ periodStart: MAR, periodEnd: '2026-03-15', status: 'rejected', expectedWorkdays: 10, workdaysFilled: 1, totalHoursEntered: 8, submissionDeadline: 'Mar 13, 2026' });
     expect(p.summary.dailyHours).toEqual({ '2026-03-03': 6, '2026-03-07': 2 });
+  });
+
+  // feature-plan-launch-hardening.md H4: the selected period's summary counts workdays from the account's creation day too
+  // (recomputed in selectedPeriodFacts from the summary's own day totals).
+  it('H4: summary workday counts start at userCreatedOn (created Thu Mar 5 → Mar 5, 6, 9–13 expected)', async () => {
+    await db().update(schema.users).set({ createdAt: new Date('2026-03-05T17:00:00Z') }).where(eq(schema.users.id, emp.id));
+    await hours('2026-03-03', '8'); // before the creation day: counts in the total only
+    await hours('2026-03-06', '4');
+    const p = await getTimesheetPeriod('2026-03-05');
+    expect(p.userCreatedOn).toBe('2026-03-05');
+    expect(p.summary).toMatchObject({ expectedWorkdays: 7, workdaysFilled: 1, totalHoursEntered: 12 });
   });
 
   it('outsideWeekHours: the edge weeks\' days outside the period — Monday workweek, then none set (Sunday)', async () => {

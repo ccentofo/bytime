@@ -23,7 +23,10 @@ export function StatusLine() {
     const due = isBefore(progress.dueDate, state.today)
       ? `Was due ${formatCalendarDate(progress.dueDate, 'MMM D')}`
       : `Due ${formatCalendarDate(progress.dueDate, 'dddd, MMM D')}`;
-    text = `${n(progress.total)} hours entered · ${progress.workdaysFilled} of ${progress.expectedWorkdays} workdays so far are filled in · ${due}`;
+    // H4: nothing expected yet (the account was created after today's last counted day) → no "X of Y" clause.
+    text = progress.expectedWorkdays === 0
+      ? `${n(progress.total)} hours entered · ${due}`
+      : `${n(progress.total)} hours entered · ${progress.workdaysFilled} of ${progress.expectedWorkdays} workdays so far are filled in · ${due}`;
   }
   return <p className={styles.statusLine} data-testid="status-line">{text}</p>;
 }

@@ -177,4 +177,11 @@ describe('Home (T10)', () => {
     expect(body).toMatch(/if \('redirect' in data\) redirect\(data\.redirect\);/);
     expect(src).toContain("export const metadata: Metadata = { title: 'Home' };");
   });
+
+  // feature-plan-launch-hardening.md H4 (T11): nothing expected yet → no second sentence.
+  it('T11: with expectedWorkdays 0 the cadence summary is "{h} hours entered." only', async () => {
+    m = await mount(<HomeClient view={view({ myPeriod: { ...view().myPeriod, totalHoursEntered: 6, expectedWorkdays: 0, workdaysFilled: 0 } })} />);
+    expect(m.container.querySelector('[data-testid="cadence-summary"]')!.textContent).toBe('6 hours entered.');
+  });
 });
+

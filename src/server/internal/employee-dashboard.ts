@@ -16,7 +16,7 @@ export interface CurrentPeriodSummary {
   reviewedAt: Date | null;
   reviewComment: string | null;
   totalHoursEntered: number;
-  /** Mon–Fri days in the period up to and including today. */
+  /** Mon–Fri days in the period from the account's creation day (countFrom) up to and including today. */
   expectedWorkdays: number;
   /** Days with hours > 0 (a cleared, zero-hour cell is not a day with entries). */
   daysWithEntries: number;
@@ -42,6 +42,12 @@ export async function currentPeriodSummary(
   userId: string,
   period: { start: CalendarDate; numDays: number; config: PeriodConfig },
   today: CalendarDate,
+  /**
+   * feature-plan-launch-hardening.md H4: the account's creation day; the workday counts start there. Home passes it
+   * (read before its burst — no query here); selectedPeriodFacts recomputes the counts itself after its parallel reads.
+   * Absent = the period's start (the whole period counts).
+   */
+  countFrom?: CalendarDate,
 ): Promise<CurrentPeriodSummary> {
   const start = period.start;
   const end = addDays(start, period.numDays - 1);
@@ -68,7 +74,7 @@ export async function currentPeriodSummary(
   }
   const lastWeekday = getLastWeekdayInPeriod(start, period.config);
   // feature-plan-ux-timesheet-ui.md §4.4: the one progress rule, shared with the timesheet screen.
-  const progress = periodProgress({ start, numDays: period.numDays, dailyHours, today, submitOpensOn: lastWeekday });
+  const progress = periodProgress({ start, numDays: period.numDays, dailyHours, today, submitOpensOn: lastWeekday, countFrom: countFrom ?? start });
   const row = periodRows[0];
   return {
     periodStart: start,

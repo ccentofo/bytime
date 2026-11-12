@@ -75,7 +75,9 @@ export function HomeClient({ view }: { view: HomeView }) {
                 })}
               </div>
               <Text size="sm" mt="xs" data-testid="cadence-summary">
-                {p.totalHoursEntered} hours entered. {p.workdaysFilled} of {p.expectedWorkdays} workdays so far are filled in.
+                {p.expectedWorkdays === 0 // H4: nothing expected yet → no second sentence
+                  ? `${p.totalHoursEntered} hours entered.`
+                  : `${p.totalHoursEntered} hours entered. ${p.workdaysFilled} of ${p.expectedWorkdays} workdays so far are filled in.`}
               </Text>
               <Button component={Link} href="/timesheet" variant="default" size="compact-sm" mt="sm">Open timesheet</Button>
             </Paper>

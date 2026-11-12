@@ -135,6 +135,30 @@ describe('page layout (B-T6)', () => {
     expect(statusLine()).toBe('47.5 hours entered · 6 of 11 workdays so far are filled in · Was due Jan 15');
   });
 
+  // feature-plan-launch-hardening.md H4 (Q4 a): the status line counts from the account's creation day (userCreatedOn).
+  it('H4: the workday count starts at userCreatedOn (Jan 7 → Jan 7–15 expected, only Jan 7 filled)', () => {
+    renderTimesheet(page({ userCreatedOn: '2026-01-07' as CalendarDate }), <TimesheetPage />);
+    expect(statusLine()).toBe('40 hours entered · 1 of 7 workdays so far are filled in · Was due Jan 15');
+  });
+
+  it('T11: nothing expected yet → "{h} hours entered · Due …" / "· Was due …", without the "X of Y" clause', () => {
+    // Created on Sat Jan 10, today Sat Jan 10: no workday has come yet (earlier hours still count in the total).
+    const { unmount } = renderTimesheet(page({ today: '2026-01-10' as CalendarDate, userCreatedOn: '2026-01-10' as CalendarDate }), <TimesheetPage />);
+    expect(statusLine()).toBe('40 hours entered · Due Thursday, Jan 15');
+    unmount();
+    // Created after the period ended (today Jan 20): nothing in this period counts.
+    renderTimesheet(page({ userCreatedOn: '2026-01-16' as CalendarDate }), <TimesheetPage />);
+    expect(statusLine()).toBe('40 hours entered · Was due Jan 15');
+  });
+
+  it('T9 guard (Q4 b): the submit warnings still list and count weekdays before the account\'s creation day', () => {
+    // Hours only on Jan 7–9; the account was created Jan 7.
+    renderTimesheet(page({ userCreatedOn: '2026-01-07' as CalendarDate, entries: [{ chargeCodeId: CC, hours: [0, 0, 0, 0, 0, 0, 8, 8, 8, ...Array(6).fill(0)] }] }), <TimesheetPage />);
+    const warnings = live.ctx!.checks.completenessWarnings;
+    expect(warnings[0]).toBe('8 workdays with no hours recorded: Thu Jan 1, Fri Jan 2, Mon Jan 5, Tue Jan 6, Mon Jan 12, Tue Jan 13, Wed Jan 14, Thu Jan 15');
+    expect(warnings).toContain('Total period hours (24.00) seem low for 11 workdays. Ensure all time is accounted for.');
+  });
+
   it('"Due {dddd, MMM D}" while due; submittedOn / reviewedOn for submitted and approved periods', () => {
     const { unmount } = renderTimesheet(page({ today: '2026-01-07' as CalendarDate }), <TimesheetPage />);
     expect(statusLine()).toBe('40 hours entered · 5 of 5 workdays so far are filled in · Due Thursday, Jan 15');

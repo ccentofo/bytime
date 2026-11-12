@@ -1,4 +1,4 @@
-import { addDays, dayOfWeek, isAfter, type CalendarDate } from '@/lib/calendar-date';
+import { addDays, dayOfWeek, isAfter, isBefore, type CalendarDate } from '@/lib/calendar-date';
 
 /**
  * A pay period's progress (feature-plan-ux-timesheet-ui.md §4.4). Pure and client-safe: the server's
@@ -8,9 +8,9 @@ import { addDays, dayOfWeek, isAfter, type CalendarDate } from '@/lib/calendar-d
 export interface PeriodProgress {
   /** Hours across all rows and days, rounded to 2 decimals. */
   total: number;
-  /** Mon–Fri days up to and including today with a day total above 0. */
+  /** Mon–Fri days from countFrom up to and including today with a day total above 0. */
   workdaysFilled: number;
-  /** Mon–Fri days in the period up to and including today. */
+  /** Mon–Fri days in the period from countFrom up to and including today (0 when countFrom is after both). */
   expectedWorkdays: number;
   /** When Submit opens (the period's last weekday): the due date. */
   dueDate: CalendarDate;
@@ -26,6 +26,12 @@ export function periodProgress(input: {
   dailyHours: Record<string, number>;
   today: CalendarDate;
   submitOpensOn: CalendarDate;
+  /**
+   * feature-plan-launch-hardening.md H4 (Q4 a): the first day that counts as a workday — the account's creation day in
+   * the workspace timezone. Days before it are neither expected nor filled (their hours still count in `total`, so the
+   * line never reads "9 of 8"). Required, so every caller decides.
+   */
+  countFrom: CalendarDate;
 }): PeriodProgress {
   let total = 0;
   let workdaysFilled = 0;
@@ -34,7 +40,7 @@ export function periodProgress(input: {
     const day = addDays(input.start, i);
     const hours = input.dailyHours[day] ?? 0;
     total += hours;
-    if (!isWeekday(day) || isAfter(day, input.today)) continue;
+    if (!isWeekday(day) || isAfter(day, input.today) || isBefore(day, input.countFrom)) continue;
     expectedWorkdays++;
     if (hours > 0) workdaysFilled++;
   }
