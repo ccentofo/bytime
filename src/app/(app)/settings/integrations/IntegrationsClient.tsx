@@ -8,7 +8,7 @@ import { StatusBadge } from '@/components/ui/StatusBadge';
 import { Icons } from '@/components/ui/icons';
 import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
 import { formatInstant } from '@/lib/calendar-date';
-import type { HubConnection } from '@/server/actions/integrations';
+import { startQuickBooksConnect, type HubConnection } from '@/server/actions/integrations';
 import { syncResultText } from '@/lib/integrations/sync-display';
 
 export interface CallbackParams {
@@ -63,11 +63,19 @@ export function qboCardLine(conn: HubConnection, timeZone: string, now = Date.no
   return parts.join(' · ');
 }
 
-/** A link to a connect route (an API route, so a plain anchor). Connecting stores a connection: read-only → WriteButton. */
-function ConnectLink({ href, children, variant = 'filled' }: { href: string; children: string; variant?: 'filled' | 'default' }) {
+/**
+ * Connect / Reconnect QuickBooks (launch hardening H5): a plain <form> posting the startQuickBooksConnect server action
+ * (POST-only, same-origin), which redirects to Intuit. Never called through runAction or a catch — Next's redirect
+ * handling does the navigation. `display: contents` keeps the button's place in the row. Read-only → WriteButton.
+ */
+function ConnectQuickBooks({ children, variant = 'filled' }: { children: string; variant?: 'filled' | 'default' }) {
   const canWrite = useCanWrite();
   if (!canWrite) return <WriteButton size="sm" variant={variant}>{children}</WriteButton>;
-  return <Button component="a" href={href} size="sm" variant={variant}>{children}</Button>;
+  return (
+    <form action={startQuickBooksConnect} style={{ display: 'contents' }}>
+      <Button type="submit" size="sm" variant={variant}>{children}</Button>
+    </form>
+  );
 }
 
 function Card({ title, sub, badge, description, line, children }: {
@@ -144,8 +152,8 @@ export function IntegrationsClient({ hub, callback, workspaceTimezone }: {
           description="Sends approved hours as time activities, by employee, customer and service item."
           line={qbo ? qboCardLine(qbo, workspaceTimezone) : undefined}
         >
-          {!qbo && <ConnectLink href="/api/integrations/qbo-connect">Connect QuickBooks</ConnectLink>}
-          {qbo?.expired && <ConnectLink href="/api/integrations/qbo-connect">Reconnect</ConnectLink>}
+          {!qbo && <ConnectQuickBooks>Connect QuickBooks</ConnectQuickBooks>}
+          {qbo?.expired && <ConnectQuickBooks>Reconnect</ConnectQuickBooks>}
           {qbo && (
             <Button component={Link} href={QBO_PAGE} size="sm" variant={qbo.expired ? 'default' : 'filled'}>Open</Button>
           )}

@@ -29,6 +29,7 @@ const h = vi.hoisted(() => ({
   getSendPreview: vi.fn<(...a: unknown[]) => Promise<unknown>>(),
   getSyncFailures: vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => [{ id: 'r1', label: 'Ann · Navy / 0001 · Oct 15, 2026', error: 'Bad item' }]),
   triggerQBOSync: vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({ ok: true, data: { syncLogId: 'l', result: { pushed: 3, failed: 0, skipped: 0, errors: [] } } })),
+  startQuickBooksConnect: vi.fn(async () => {}),
 }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: h.refresh }) }));
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
@@ -36,6 +37,7 @@ vi.mock('@/server/actions/qbo', () => ({ loadQboMappingData: h.load, triggerQBOS
 vi.mock('@/server/actions/integrations', () => ({
   saveMapping: h.saveMapping, deleteMapping: h.deleteMapping, disconnectIntegration: vi.fn(), setPersonMapping: h.setPersonMapping,
   matchPeopleByEmail: h.matchPeopleByEmail, getSendPreview: h.getSendPreview, getSyncFailures: h.getSyncFailures,
+  startQuickBooksConnect: h.startQuickBooksConnect,
 }));
 
 import { IntegrationConfigView, type ConfigMapping, type SendPeriodOption } from '@/app/(app)/settings/integrations/IntegrationConfigView';
@@ -141,7 +143,12 @@ describe('IN-4 (UI): QuickBooks data loads when the page opens', () => {
     h.load.mockImplementation(async () => ({ ok: false, code: 'validation', error: 'Your QuickBooks connection has expired — reconnect it on the Integrations page.' }));
     await render();
     const status = m!.container.querySelector('[data-testid="qbo-status-line"]')!;
-    expect(status.querySelector('a[href="/api/integrations/qbo-connect"]')?.textContent).toBe('Reconnect');
+    // H5: Reconnect is a submit button in a form posting the startQuickBooksConnect server action.
+    const reconnect = status.querySelector('form button[type="submit"]') as HTMLButtonElement;
+    expect(reconnect?.textContent).toBe('Reconnect');
+    expect(status.querySelector('a[href*="qbo-connect"]')).toBeNull();
+    await act(async () => { reconnect.click(); });
+    expect(h.startQuickBooksConnect).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -20,7 +20,9 @@ const csp = [
   "frame-src 'self' https://js.stripe.com https://hooks.stripe.com https://challenges.cloudflare.com",
   "frame-ancestors 'none'",
   "base-uri 'self'",
-  "form-action 'self'",
+  // Launch hardening H5: Connect QuickBooks is a form POST answered with a redirect to Intuit (before hydration / no JS);
+  // browsers check form-action on every redirect hop (appcenter.intuit.com → accounts.intuit.com, checked 2026-11-11).
+  "form-action 'self' https://*.intuit.com",
   "object-src 'none'",
 ].join("; ");
 
