@@ -39,8 +39,7 @@ export function DailyReminderEmail({ employeeName, todayDate, appUrl }: Props) {
           </Section>
           <Hr style={hrStyle} />
           <Text style={footerStyle}>
-            CadenzPoint — DCAA-Compliant Timekeeping<br />
-            You can disable these reminders in your notification settings.
+            CadenzPoint — DCAA-Compliant Timekeeping
           </Text>
         </Container>
       </Body>

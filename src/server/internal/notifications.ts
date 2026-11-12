@@ -3,11 +3,14 @@ import { getDb } from '@/db';
 import { notificationPreferences } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 
+/**
+ * The switchable email preferences. The daily time-entry reminder is not one of them: it always goes to employees
+ * (feature-plan-launch-hardening.md H1), so `email_daily_reminder` is unused.
+ */
 export type NotificationPrefs = {
   emailOnSubmit: boolean;
   emailOnApprove: boolean;
   emailOnReject: boolean;
-  emailDailyReminder: boolean;
   emailDeadlineReminder: boolean;
 };
 
@@ -15,7 +18,6 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
   emailOnSubmit: true,
   emailOnApprove: true,
   emailOnReject: true,
-  emailDailyReminder: true,
   emailDeadlineReminder: true,
 };
 
@@ -40,7 +42,6 @@ export async function getNotificationPreferencesFor(userId: string): Promise<Not
     emailOnSubmit: row.emailOnSubmit,
     emailOnApprove: row.emailOnApprove,
     emailOnReject: row.emailOnReject,
-    emailDailyReminder: row.emailDailyReminder,
     emailDeadlineReminder: row.emailDeadlineReminder,
   };
 }

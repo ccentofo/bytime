@@ -22,18 +22,18 @@ const NOTIFICATION_PREF_KEYS = [
   'emailOnSubmit',
   'emailOnApprove',
   'emailOnReject',
-  'emailDailyReminder',
   'emailDeadlineReminder',
 ] as const satisfies readonly (keyof NotificationPrefs)[];
 
 /**
  * Update the session user's own notification preferences (upsert).
  *
- * R2-6: builds the write from an explicit allowlist of the five boolean preference keys,
+ * R2-6: builds the write from an explicit allowlist of the four boolean preference keys,
  * each required to be a real boolean, with `userId` always `actor.id` — the caller-supplied preferences
  * object is never spread wholesale into the write. Previously it was spread after `userId:
  * actor.id`, so a caller sending an extra `userId` field in the request body could create or
- * retarget another user's notification row.
+ * retarget another user's notification row. A key outside the allowlist (e.g. the removed `emailDailyReminder`,
+ * H1) writes nothing.
  */
 export async function updateNotificationPreferences(
   prefs: Partial<NotificationPrefs>
