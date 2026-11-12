@@ -1,0 +1,55 @@
+/* feature-plan-ux-integrations-billing.md L2: a static picture of the timesheet (HTML/CSS, role="img"). */
+.shot {
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-md);
+  background: var(--mantine-color-body);
+  box-shadow: var(--mantine-shadow-md);
+  padding: var(--mantine-spacing-md);
+  font-size: var(--mantine-font-size-xs);
+  width: 100%;
+  max-width: 520px;
+}
+
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--mantine-spacing-sm);
+  font-weight: 600;
+  font-size: var(--mantine-font-size-sm);
+}
+
+.pill {
+  font-weight: 500;
+  font-size: var(--mantine-font-size-xs);
+  color: var(--mantine-color-dimmed);
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: 9999px;
+  padding: 1px 8px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(96px, 1.6fr) repeat(6, minmax(32px, 1fr));
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+
+.grid > span {
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--mantine-color-default-border);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.grid > span:nth-child(7n + 1) {
+  text-align: left;
+}
+
+.head {
+  color: var(--mantine-color-dimmed);
+  font-weight: 600;
+}
+
+.total {
+  font-weight: 600;
+}

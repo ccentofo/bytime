@@ -16,11 +16,12 @@ import {
   contracts,
   indirectChargeCodes,
 } from '@/db/schema';
-import { eq, and, gte, lt, sql } from 'drizzle-orm';
+import { eq, and, gt, gte, lt, sql } from 'drizzle-orm';
 import { decrypt } from '@/lib/encryption';
 import { safeErrorMessage } from '@/server/internal/import-errors';
 import { UserFacingError } from '@/lib/errors';
 import { INTEGRATION_DISCONNECTED_MESSAGE } from './provider-errors';
+import { SEND_RUNNING_MESSAGE, STALE_RUNNING_MS } from './sync-display';
 import { ensureValidToken } from './connectors/qbo-api';
 import { getConnector } from './registry';
 import { existingPeriodLength } from '@/server/internal/pay-period-config';
@@ -147,7 +148,15 @@ export async function executeSyncOperation(
   periodStart: CalendarDate,
   periodEnd: CalendarDate,
   triggeredBy: string | null,
-  triggerType: 'manual' | 'auto' | 'retry' = 'manual'
+  triggerType: 'manual' | 'auto' | 'retry' = 'manual',
+  opts: {
+    /**
+     * feature-plan-ux-integrations-billing.md I6: refuse while this connection has a `running` log under 15 minutes old.
+     * The check and the new log's insert run in ONE transaction under
+     * pg_advisory_xact_lock(hashtext('integration-send:'||connectionId)), so two sends at once can't both start.
+     */
+    exclusive?: boolean;
+  } = {},
 ): Promise<{ syncLogId: string; result: SyncResult }> {
   // A sync writes logs/records and pushes data out: only in `full` mode (write gate).
   const db = await getDbForWrite();
@@ -174,16 +183,32 @@ export async function executeSyncOperation(
     : null;
 
   // Create sync log
-  const [syncLog] = await db.insert(integrationSyncLogs).values({
+  const newLog = {
     connectionId,
     syncType,
     periodStart,
     periodEnd,
     triggeredBy,
     triggerType,
-    status: 'running',
+    status: 'running' as const,
     startedAt: new Date(),
-  }).returning();
+  };
+  const [syncLog] = opts.exclusive
+    ? await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'integration-send:' + connectionId}))`);
+      const [running] = await tx
+        .select({ id: integrationSyncLogs.id })
+        .from(integrationSyncLogs)
+        .where(and(
+          eq(integrationSyncLogs.connectionId, connectionId),
+          eq(integrationSyncLogs.status, 'running'),
+          gt(integrationSyncLogs.createdAt, new Date(Date.now() - STALE_RUNNING_MS)),
+        ))
+        .limit(1);
+      if (running) throw new UserFacingError(SEND_RUNNING_MESSAGE);
+      return tx.insert(integrationSyncLogs).values(newLog).returning();
+    })
+    : await db.insert(integrationSyncLogs).values(newLog).returning();
 
   try {
     // Audit R9: QuickBooks access tokens last an hour — refresh (if due) now, after the `running` row exists, so a
@@ -259,9 +284,8 @@ export async function executeSyncOperation(
         recordsPushed: result.pushed,
         recordsFailed: result.failed,
         recordsSkipped: result.skipped,
-        errorSummary: result.errors.length > 0
-          ? `${result.errors.length} records failed. First error: ${result.errors[0]?.error}`
-          : null,
+        // I7: skips (people not matched) are counted in records_skipped, never as failures in the summary.
+        errorSummary: failureSummary(result),
         completedAt: new Date(),
       })
       .where(eq(integrationSyncLogs.id, syncLog.id));
@@ -299,6 +323,12 @@ export async function executeSyncOperation(
 
     throw error;
   }
+}
+
+/** The sync log's error_summary: the failed records only (I7); null when nothing failed. */
+export function failureSummary(result: SyncResult): string | null {
+  const failed = result.errors.filter((e) => e.kind === 'failed');
+  return failed.length > 0 ? `${failed.length} records failed. First error: ${failed[0].error}` : null;
 }
 
 function toPayrollSyncInput(payroll: PayrollData): PayrollSyncInput {

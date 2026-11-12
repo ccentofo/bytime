@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
   refresh: { status: 200, body: '' },
   batch: { status: 200, body: '' },
   gusto: { status: 200, body: '[]' },
+  /** QuickBooks list queries by entity (IN-4); a missing entity → 404. */
+  queries: {} as Record<string, { status: number; body: string }>,
 }));
 
 vi.mock('server-only', () => ({}));
@@ -40,24 +42,29 @@ vi.mock('@/db', () => {
     p.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => Promise.resolve().then(run).then(res, rej);
     return p;
   };
-  const db = {
+  const db: Record<string, unknown> = {
     select: () => ({ from: (table: unknown) => thenable(() => h.selects.get(table) ?? []) }),
     insert: () => ({ values: () => thenable(() => [{ id: 'log-1' }]) }),
     update: (table: unknown) => ({ set: (set: Record<string, unknown>) => { h.updates.push({ table, set }); return thenable(() => []); } }),
+    execute: async () => [], // the send lock (I6)
   };
+  db.transaction = async (fn: (tx: unknown) => unknown) => fn(db);
   return { getDb: async () => db, getDbForWrite: async () => db, getDbForAuth: async () => db, getDbForUrl: () => db };
 });
 
 import { integrationConnections, integrationEntityMappings, integrationSyncLogs, timesheetEntries, timesheetPeriods } from '@/db/schema';
-import { triggerQBOSync, fetchQBOEmployeesForMapping } from '@/server/actions/qbo';
-import { fetchGustoEmployeesForMapping } from '@/server/actions/gusto';
+import { triggerQBOSync, loadQboMappingData } from '@/server/actions/qbo';
+import { fetchGustoEmployees } from '@/lib/integrations/connectors/gusto-api';
+
+const C1 = '0c1c1c1c-0000-4000-8000-000000000001';
 
 const HOUR = 3_600_000;
 const connection = (tokenExpiresAt: Date) => ({
-  id: 'c1', provider: 'quickbooks_online', isActive: true, externalCompanyId: 'realm-1',
+  id: C1, provider: 'quickbooks_online', isActive: true, externalCompanyId: 'realm-1',
   accessTokenEncrypted: 'enc:old-access', refreshTokenEncrypted: 'enc:old-refresh', tokenExpiresAt,
 });
-const sync = () => triggerQBOSync({ connectionId: 'c1', periodStart: '2026-10-01' as never, periodEnd: '2026-10-15' as never });
+// I6: one pay period, by its start (the default schedule is semimonthly, so Oct 1 is a period start).
+const sync = () => triggerQBOSync({ connectionId: C1, periodStart: '2026-10-01' as never });
 const syncLog = () => h.updates.find((u) => u.table === integrationSyncLogs)?.set;
 const batchOk = JSON.stringify({ BatchItemResponse: [{ bId: '0', TimeActivity: { Id: 'ta-1' } }] });
 
@@ -67,6 +74,7 @@ beforeEach(() => {
   h.refresh = { status: 200, body: JSON.stringify({ access_token: 'new-access', refresh_token: 'new-refresh', expires_in: 3600 }) };
   h.batch = { status: 200, body: batchOk };
   h.gusto = { status: 200, body: '[]' };
+  h.queries = {};
   h.selects = new Map<unknown, unknown[]>([
     [timesheetPeriods, [{ userId: 'u1', periodStart: '2026-10-01', periodNumDays: 15, approvedAt: new Date() }]],
     [timesheetEntries, [{
@@ -80,7 +88,9 @@ beforeEach(() => {
   vi.stubEnv('QBO_CLIENT_SECRET', 'csecret');
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     h.fetches.push({ url, authorization: new Headers(init?.headers).get('Authorization') });
-    const r = url.includes('oauth2/v1/tokens/bearer') ? h.refresh : url.includes('/batch') ? h.batch : url.includes('gusto') ? h.gusto : { status: 404, body: 'unexpected' };
+    const query = url.includes('/query?') ? decodeURIComponent(url).match(/FROM (\w+)/)?.[1] : undefined;
+    const r = url.includes('oauth2/v1/tokens/bearer') ? h.refresh : url.includes('/batch') ? h.batch : url.includes('gusto') ? h.gusto
+      : query ? (h.queries[query] ?? { status: 404, body: 'unexpected' }) : { status: 404, body: 'unexpected' };
     return new Response(r.body, { status: r.status });
   }));
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -137,29 +147,61 @@ describe('mapping actions (audit R9)', () => {
   it('(4) a mapping action whose refresh returns 401 → the reconnect message in its result, no body', async () => {
     h.selects.set(integrationConnections, [connection(new Date(Date.now() - HOUR))]);
     h.refresh = { status: 401, body: PROVIDER_BODY };
-    const result = await fetchQBOEmployeesForMapping('c1');
+    const result = await loadQboMappingData(C1);
     expect(result).toEqual({ ok: false, code: 'validation', error: RECONNECT });
   });
 
   it('refresh 400 (invalid_grant) → reconnect too; other refresh failures → the HTTP-status message', async () => {
     h.selects.set(integrationConnections, [connection(new Date(Date.now() - HOUR))]);
     h.refresh = { status: 400, body: PROVIDER_BODY };
-    expect(await fetchQBOEmployeesForMapping('c1')).toEqual({ ok: false, code: 'validation', error: RECONNECT });
+    expect(await loadQboMappingData(C1)).toEqual({ ok: false, code: 'validation', error: RECONNECT });
     h.refresh = { status: 503, body: PROVIDER_BODY };
-    expect(await fetchQBOEmployeesForMapping('c1')).toEqual({
+    expect(await loadQboMappingData(C1)).toEqual({
       ok: false, code: 'validation', error: 'QuickBooks returned an error (HTTP 503). Try again; if it keeps happening, reconnect the integration.',
     });
   });
 
+  // I10 dropped the Gusto employee load from the UI; the Gusto API client keeps its R9 error mapping.
   it('Gusto: a 401 from an API call → "Your Gusto connection has expired — reconnect"; a 502 → the status message', async () => {
-    h.selects.set(integrationConnections, [{ ...connection(new Date(Date.now() + HOUR)), provider: 'gusto' }]);
     h.gusto = { status: 401, body: PROVIDER_BODY };
-    expect(await fetchGustoEmployeesForMapping('c1')).toEqual({
-      ok: false, code: 'validation', error: 'Your Gusto connection has expired — reconnect it on the Integrations page.',
-    });
+    await expect(fetchGustoEmployees('token', 'co')).rejects.toThrow('Your Gusto connection has expired — reconnect it on the Integrations page.');
     h.gusto = { status: 502, body: PROVIDER_BODY };
-    expect(await fetchGustoEmployeesForMapping('c1')).toEqual({
-      ok: false, code: 'validation', error: 'Gusto returned an error (HTTP 502). Try again; if it keeps happening, reconnect the integration.',
+    await expect(fetchGustoEmployees('token', 'co')).rejects.toThrow('Gusto returned an error (HTTP 502). Try again; if it keeps happening, reconnect the integration.');
+  });
+});
+
+/** feature-plan-ux-integrations-billing.md I3 / IN-4: one action, one token refresh, a result per list. */
+describe('IN-4: loadQboMappingData', () => {
+  const list = (entity: string, rows: unknown[]) => ({ status: 200, body: JSON.stringify({ QueryResponse: { [entity]: rows } }) });
+
+  it('an expired token is refreshed ONCE for the 4 lists; one failed list → its own error, the others load', async () => {
+    h.selects.set(integrationConnections, [connection(new Date(Date.now() - HOUR))]);
+    h.queries = {
+      Employee: list('Employee', [{ Id: 'e1', DisplayName: 'Emily Davis', PrimaryEmailAddr: { Address: 'emily@acme.test' } }]),
+      Vendor: { status: 500, body: PROVIDER_BODY },
+      Customer: list('Customer', [{ Id: 'k1', DisplayName: 'Navy' }]),
+      Item: list('Item', [{ Id: 'i1', Name: 'Labor' }]),
+    };
+    const result = await loadQboMappingData(C1);
+    expect(h.fetches.filter((f) => f.url.includes('oauth2/v1/tokens/bearer'))).toHaveLength(1);
+    expect(h.fetches.filter((f) => f.url.includes('/query?')).every((f) => f.authorization === 'Bearer new-access')).toBe(true);
+    expect(result).toEqual({
+      ok: true,
+      data: {
+        employees: { ok: true, data: [{ id: 'e1', name: 'Emily Davis', email: 'emily@acme.test' }] },
+        vendors: { ok: false, error: 'QuickBooks returned an error (HTTP 500). Try again; if it keeps happening, reconnect the integration.' },
+        customers: { ok: true, data: [{ id: 'k1', name: 'Navy' }] },
+        items: { ok: true, data: [{ id: 'i1', name: 'Labor' }] },
+      },
     });
+    expect(JSON.stringify(result)).not.toMatch(/provider-secret-body|invalid_grant/);
+  });
+
+  it('a Gusto or inactive connection is refused before any provider call', async () => {
+    h.selects.set(integrationConnections, [{ ...connection(new Date(Date.now() + HOUR)), provider: 'gusto' }]);
+    expect(await loadQboMappingData(C1)).toMatchObject({ ok: false });
+    h.selects.set(integrationConnections, [{ ...connection(new Date(Date.now() + HOUR)), isActive: false }]);
+    expect(await loadQboMappingData(C1)).toMatchObject({ ok: false });
+    expect(h.fetches).toHaveLength(0);
   });
 });

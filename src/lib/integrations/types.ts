@@ -16,7 +16,7 @@ export interface ConnectorMetadata {
   capabilities: ConnectorCapability[];
 }
 
-export type EntityMappingType = 'employee' | 'contract' | 'clin' | 'indirect_code' | 'charge_code' | 'class';
+export type EntityMappingType = 'employee' | 'vendor' | 'contract' | 'clin' | 'indirect_code' | 'charge_code' | 'class';
 
 export type ConnectorCapability =
   | 'push_timesheets'       // Push approved hours
@@ -52,6 +52,11 @@ export interface SyncResult {
   errors: Array<{
     bytimeEntityId: string;
     error: string;
+    /**
+     * feature-plan-ux-integrations-billing.md I7: a skip (person not matched) or a real failure. Only failures count in
+     * the sync log's error_summary.
+     */
+    kind: 'skipped' | 'failed';
   }>;
 }
 

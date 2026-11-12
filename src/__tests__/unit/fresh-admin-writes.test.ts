@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 
 /**
- * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4), unit form: each of the 45 admin-only writes (incl. the
- * 6 OAuth-token-refreshing mapping readers) authorizes with requireAdminFresh(), never the cached requireAdmin().
+ * feature-plan-launch-blockers.md P3 / §9 "Roles" (LB-D4), unit form: each of the 43 admin-only writes (incl. the
+ * 2 OAuth-token-refreshing mapping readers) authorizes with requireAdminFresh(), never the cached requireAdmin().
  * The session is a stale JWT-admin: requireAdmin() admits it, requireAdminFresh() — which re-reads the DB role —
  * refuses it (DB role is now supervisor). The integration form against a real users row is
  * src/__tests__/integration/fresh-admin-writes.test.ts.
@@ -53,12 +53,12 @@ import * as importActions from '@/server/actions/import';
 type AnyAction = (...args: never[]) => Promise<unknown>;
 const call = (fn: unknown, ...args: unknown[]) => (fn as (...a: unknown[]) => Promise<unknown>)(...args);
 
-/** Refused by the fresh role check: every one of the 45 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
+/** Refused by the fresh role check: every one of the 43 returns { ok: false, code: 'forbidden' } (launch-blockers P4). */
 async function expectRefused(pending: Promise<unknown>): Promise<void> {
   expect(await pending).toMatchObject({ ok: false, code: 'forbidden', error: expect.stringMatching(/access has changed/i) });
 }
 
-/** The 45 (feature-plan-launch-blockers.md §1 "Roles" + §4 P3). */
+/** The 43 (feature-plan-launch-blockers.md §1 "Roles" + §4 P3; feature-plan-ux-integrations-billing.md I3–I5: −5 fetches, +3). */
 const ADMIN_WRITES: Array<[string, AnyAction | unknown, unknown[]]> = [
   ['grantApprovalScope', assignments.grantApprovalScope, [{ supervisorId: 'u2', clinIds: ['c1'] }]],
   ['revokeApprovalScope', assignments.revokeApprovalScope, [{ supervisorId: 'u2', clinId: 'c1' }]],
@@ -87,13 +87,13 @@ const ADMIN_WRITES: Array<[string, AnyAction | unknown, unknown[]]> = [
   ['importQboClasses', qbo.importQboClasses, ['conn1', []]],
   ['importQboChargeCodes', qbo.importQboChargeCodes, ['conn1', []]],
   ['triggerQBOSync', qbo.triggerQBOSync, [{ connectionId: 'conn1' }]],
-  ['fetchQBOEmployeesForMapping', qbo.fetchQBOEmployeesForMapping, ['conn1']],
-  ['fetchQBOCustomersForMapping', qbo.fetchQBOCustomersForMapping, ['conn1']],
-  ['fetchQBOServiceItemsForMapping', qbo.fetchQBOServiceItemsForMapping, ['conn1']],
-  ['fetchQBOVendorsForMapping', qbo.fetchQBOVendorsForMapping, ['conn1']],
+  // feature-plan-ux-integrations-billing.md I3: one token-refreshing load replaces the four per-list fetches.
+  ['loadQboMappingData', qbo.loadQboMappingData, ['conn1']],
   ['fetchQBOClassesForMapping', qbo.fetchQBOClassesForMapping, ['conn1']],
   ['triggerGustoSync', gusto.triggerGustoSync, [{ connectionId: 'conn1' }]],
-  ['fetchGustoEmployeesForMapping', gusto.fetchGustoEmployeesForMapping, ['conn1']],
+  // I4, I5: one QuickBooks match per person.
+  ['setPersonMapping', integrations.setPersonMapping, [{ connectionId: 'conn1', userId: 'u2', match: null }]],
+  ['matchPeopleByEmail', integrations.matchPeopleByEmail, [{ connectionId: 'conn1', pairs: [] }]],
   ['createSlin', slins.createSlin, [{ clinId: 'c1', slinNumber: 'AA' }]],
   ['updateSlin', slins.updateSlin, ['s1', { slinNumber: 'AB' }]],
   ['unlockUserAccount', users.unlockUserAccount, ['locked@acme.com']],
@@ -110,9 +110,9 @@ const ADMIN_WRITES: Array<[string, AnyAction | unknown, unknown[]]> = [
   ['bulkImportChargeCodeAccess', importActions.bulkImportChargeCodeAccess, [[{ email: 'a@x.dev', chargeCode: 'X' }]]],
 ];
 
-describe('the 45 admin-only writes refuse a stale JWT-admin (requireAdminFresh)', () => {
-  it('covers exactly 45 actions, all exported', () => {
-    expect(ADMIN_WRITES).toHaveLength(45);
+describe('the 43 admin-only writes refuse a stale JWT-admin (requireAdminFresh)', () => {
+  it('covers exactly 43 actions, all exported', () => {
+    expect(ADMIN_WRITES).toHaveLength(43);
     for (const [name, fn] of ADMIN_WRITES) expect(typeof fn, name).toBe('function');
   });
 

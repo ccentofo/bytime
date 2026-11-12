@@ -33,6 +33,10 @@ const ALLOWLIST: Array<{ file: string; expr: string; why: string }> = [
   { file: 'src/lib/tenant/migrate-tenant.ts', expr: 'MIGRATION_LOCK_KEY', why: 'advisory-lock key (a number constant)' },
   { file: 'src/server/internal/import-window.ts', expr: 'IMPORT_WINDOW_LOCK', why: 'advisory-lock key (a string constant for hashtext; certified-outputs C1)' },
   { file: 'src/server/internal/approval-rules.ts', expr: 'USER_RULES_LOCK', why: 'advisory-lock key (a string constant for hashtext; certified-outputs fix round 1 F1)' },
+  // feature-plan-ux-integrations-billing.md I4, I6, I9: advisory-lock keys (strings for hashtext).
+  { file: 'src/lib/integrations/sync-engine.ts', expr: "'integration-send:' + connectionId", why: 'advisory-lock key (a string for hashtext; the send lock, I6)' },
+  { file: 'src/server/internal/integration-mapping.ts', expr: "'integration-mapping:' + connectionId + ':' + userId", why: 'advisory-lock key (a string for hashtext; the per-person mapping lock, I4)' },
+  { file: 'src/server/internal/integrations.ts', expr: "'integration-connection:' + provider", why: 'advisory-lock key (a string for hashtext; the reconnect lock, I9)' },
   { file: 'src/server/internal/labor-rates.ts', expr: 'laborCategoryId', why: 'typed `SQL` fragment parameter — the type forbids values (dated rates D1.3)' },
   { file: 'src/server/internal/labor-rates.ts', expr: 'onDate', why: 'typed `SQL` fragment parameter — the type forbids values (dated rates D1.3)' },
   { file: 'src/server/internal/cost-basis.ts', expr: 'APPLIED_RATE', why: 'SQL fragment from hourlyRateOnSql (dated rates D1.4)' },

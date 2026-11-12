@@ -125,6 +125,7 @@ export const quickbooksOnlineConnector: IntegrationConnector = {
         result.errors.push({
           bytimeEntityId: entry.chargeCodeId,
           error: `Employee "${entry.employeeName}" is not mapped to a QBO employee or vendor. Skipping.`,
+          kind: 'skipped',
         });
         continue;
       }
@@ -185,6 +186,7 @@ export const quickbooksOnlineConnector: IntegrationConnector = {
         result.errors.push({
           bytimeEntityId: pr.entryId,
           error: pr.error ?? 'Unknown error',
+          kind: 'failed',
         });
       }
 

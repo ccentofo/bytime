@@ -11,6 +11,12 @@ const NONCE_COOKIES: Record<string, string> = {
   gusto: 'gusto_oauth_nonce',
 };
 
+/** feature-plan-ux-integrations-billing.md I8: the Integrations page's banner names the provider by its short value. */
+const PROVIDER_PARAM: Record<string, string> = {
+  quickbooks_online: 'qbo',
+  gusto: 'gusto',
+};
+
 /**
  * Tenant-side OAuth completion route — where the apex callback (callback/[provider]/route.ts)
  * forwards to after verifying the signed `state`. Runs on the TENANT subdomain, so a real
@@ -84,7 +90,8 @@ async function complete(request: NextRequest, provider: string, cookieNonce: str
       tokenExpiresAt: new Date(Date.now() + tokens.expiresIn * 1000),
     });
 
-    return redirectTo('/settings/integrations?connected=true');
+    const providerParam = PROVIDER_PARAM[provider];
+    return redirectTo(`/settings/integrations?connected=true${providerParam ? `&provider=${providerParam}` : ''}`);
   } catch (err) {
     console.error(`OAuth completion error for ${provider}:`, err);
     return redirectTo('/settings/integrations?error=connection_failed');

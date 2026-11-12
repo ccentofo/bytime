@@ -1,6 +1,6 @@
 'use client';
 
-import { Select, Text } from '@mantine/core';
+import { Select } from '@mantine/core';
 
 export interface MappingLike {
   id: string;
@@ -9,51 +9,39 @@ export interface MappingLike {
 }
 
 /**
- * One row's match in an integration's mapping table (feature-plan-ux-page-fixes.md C13), shared by QuickBooks and Gusto.
- * Before the provider's data is loaded, a mapped row shows its saved match and how to change it. After loading, a
- * saved match missing from the provider's list is kept as "(not found in …)". Clearing the Select removes the
- * mapping. While the row's save or delete is in flight, the Select is aria-disabled and ignores changes.
+ * One contract's or CLIN's QuickBooks match (feature-plan-ux-page-fixes.md C13; feature-plan-ux-integrations-billing.md
+ * §3.2 — QuickBooks data loads on its own, so there's no "load first" mode). A saved match missing from a LOADED list
+ * is kept as "(not found in QuickBooks)"; while the list loads or after it failed, the saved name shows as it is
+ * (UX-4C2B-AUDIT.md F2). Clearing the Select removes the mapping. While the row's save or delete
+ * is in flight, or the list isn't available, the Select is aria-disabled and ignores changes.
  */
 export function MappingSelect({
-  provider,
   name,
   mapping,
   options,
-  loaded,
+  listOk,
   busy,
   placeholder,
-  emptyMessage,
   onSelect,
   onClear,
 }: {
-  provider: 'QuickBooks' | 'Gusto';
   /** The CadenzPoint entity's name. */
   name: string;
   mapping: MappingLike | undefined;
   options: Array<{ value: string; label: string }>;
-  loaded: boolean;
+  /** QuickBooks's list loaded (only then can a saved match be "not found"). */
+  listOk: boolean;
   busy: boolean;
   placeholder: string;
-  /** Shown for an unmapped row before the provider's data is loaded. */
-  emptyMessage: string;
   onSelect: (externalId: string, label: string) => void;
   onClear: () => void;
 }) {
-  if (!loaded) {
-    if (!mapping) return <Text size="xs" c="dimmed">{emptyMessage}</Text>;
-    return (
-      <>
-        <Text size="sm">{mapping.externalEntityName ?? mapping.externalEntityId}</Text>
-        <Text size="xs" c="dimmed">Load {provider} data to change</Text>
-      </>
-    );
-  }
   const data = mapping && !options.some((o) => o.value === mapping.externalEntityId)
-    ? [{ value: mapping.externalEntityId, label: `${mapping.externalEntityName ?? mapping.externalEntityId} (not found in ${provider})` }, ...options]
+    ? [{ value: mapping.externalEntityId, label: `${mapping.externalEntityName ?? mapping.externalEntityId}${listOk ? ' (not found in QuickBooks)' : ''}` }, ...options]
     : options;
   return (
     <Select
-      aria-label={`${provider} match for ${name}`}
+      aria-label={`QuickBooks match for ${name}`}
       placeholder={placeholder}
       data={data}
       value={mapping?.externalEntityId ?? null}
@@ -65,7 +53,7 @@ export function MappingSelect({
       searchable
       clearable
       allowDeselect={false}
-      clearButtonProps={{ 'aria-label': `Remove mapping for ${name}` }}
+      clearButtonProps={{ 'aria-label': `Remove match for ${name}` }}
       readOnly={busy}
       aria-disabled={busy || undefined}
       data-disabled={busy || undefined}

@@ -81,22 +81,37 @@ describe('/ (landing)', () => {
 
   it('on the apex renders the marketing page', async () => {
     const out = html(await LandingPage());
-    expect(out).toContain('Start Free Trial');
+    expect(out).toMatch(/Start free trial/i);
   });
 
   it('hides the demo buttons and credentials when NEXT_PUBLIC_DEMO_URL is unset', async () => {
     const out = html(await LandingPage());
-    expect(out).not.toContain('Try the Demo');
-    expect(out).not.toContain('Launch Demo');
+    expect(out).not.toMatch(/Try the demo/i);
+    expect(out).not.toMatch(/Launch demo/i);
     expect(out).not.toContain('Password123!');
   });
 
-  it('links the demo buttons to NEXT_PUBLIC_DEMO_URL when set (never the apex /login)', async () => {
+  it('links the demo buttons to NEXT_PUBLIC_DEMO_URL when set; the demo block itself has no /login link', async () => {
     vi.stubEnv('NEXT_PUBLIC_DEMO_URL', 'https://demo.cadenzpoint.com/login');
     const out = html(await LandingPage());
-    expect(out).toContain('Try the Demo');
+    expect(out).toMatch(/Try the demo/i); // positive control: the env is set
     expect(out).toContain('href="https://demo.cadenzpoint.com/login"');
-    expect(out).not.toMatch(/href="\/login"/);
+    const demoBlock = out.slice(out.indexOf('Demo Credentials'), out.indexOf('id="features"'));
+    expect(demoBlock).toContain('Password123!');
+    expect(demoBlock).not.toMatch(/href="\/login"/);
+  });
+
+  // feature-plan-ux-integrations-billing.md L2 / LA-1: the header's Sign in goes to the apex /login ("Find your
+  // workspace"); the Tech stack panel and the "fault-tolerant" claim are gone.
+  it('LA-1: header Sign in → /login; no Tech stack; no "fault-tolerant"', async () => {
+    const out = html(await LandingPage());
+    const header = out.slice(out.indexOf('<header'), out.indexOf('</header>'));
+    expect(header).toMatch(/<a[^>]*href="\/login"[^>]*>Sign in<\/a>/);
+    expect(header).toMatch(/href="\/signup"[^>]*>.*Start free trial/);
+    expect(out).toContain('href="#main-content"');
+    expect(out).toMatch(/<main[^>]*id="main-content"[^>]*tabindex="-1"/);
+    expect(out).not.toMatch(/Tech stack|Drizzle|Next\.js 16/i);
+    expect(out).not.toMatch(/fault-tolerant/i);
   });
 });
 

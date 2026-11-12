@@ -26,7 +26,9 @@ import { FLSA_LABEL } from './payroll-export';
 const metadata: ConnectorMetadata = {
   id: 'gusto',
   name: 'Gusto',
-  description: 'Push approved timesheet hours directly to Gusto for payroll processing. Auto-matches employees by email.',
+  // feature-plan-ux-integrations-billing.md I10: this connector sends nothing to Gusto (pushPayroll only writes local
+  // records), so the description says so.
+  description: 'Sending hours straight to Gusto isn\'t available yet. Download a Gusto payroll file from Payroll export.',
   icon: 'IconCash',
   color: 'teal',
   category: 'payroll',
@@ -158,6 +160,7 @@ export const gustoConnector: IntegrationConnector = {
         result.errors.push({
           bytimeEntityId: emp.userId,
           error: `Employee "${emp.employeeName}" is not mapped to a Gusto employee. Skipping.`,
+          kind: 'skipped',
         });
         continue;
       }
@@ -192,6 +195,7 @@ export const gustoConnector: IntegrationConnector = {
           bytimeEntityId: emp.userId,
           // Audit R7: shown in the admin sync log and the export — never a raw DB error (SQL + params).
           error: safeErrorMessage(error, { fallback: 'Could not sync this employee.', logLabel: 'Gusto sync record failed:' }),
+          kind: 'failed',
         });
       }
     }

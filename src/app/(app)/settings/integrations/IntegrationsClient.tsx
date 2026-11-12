@@ -1,267 +1,182 @@
 'use client';
 
-import {
-  Container,
-  Title,
-  Text,
-  SimpleGrid,
-  Paper,
-  Group,
-  Badge,
-  Button,
-  Stack,
-  ThemeIcon,
-  Alert,
-  Divider,
-} from '@mantine/core';
-import {
-  IconPlugConnected,
-  IconRefresh,
-  IconCash,
-  IconFileExport,
-  IconCalculator,
-} from '@tabler/icons-react';
-import dayjs from 'dayjs';
-import relativeTime from 'dayjs/plugin/relativeTime';
-
-dayjs.extend(relativeTime);
-import type { ConnectorMetadata } from '@/lib/integrations/types';
-import { formatDateTime } from '@/lib/format';
-import { SYNC_STATUS_COLOR } from '@/lib/ui/status-colors';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { Alert, Anchor, Button, Container, Group, Paper, SimpleGrid, Stack, Text, Title } from '@mantine/core';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { StatusBadge } from '@/components/ui/StatusBadge';
+import { Icons } from '@/components/ui/icons';
 import { WriteButton, useCanWrite } from '@/components/shell/WorkspaceMode';
+import { formatInstant } from '@/lib/calendar-date';
+import type { HubConnection } from '@/server/actions/integrations';
+import { syncResultText } from '@/lib/integrations/sync-display';
 
-interface Connection {
-  id: string;
-  provider: string;
-  displayName: string;
-  externalCompanyName: string | null;
-  isActive: boolean;
-  autoSyncOnApproval: boolean;
-  lastSyncAt: Date | null;
-  lastSyncStatus: string | null;
-  connectedAt: Date;
+export interface CallbackParams {
+  connected: string | null;
+  provider: string | null;
+  error: string | null;
 }
 
-interface Props {
-  initialConnections: Connection[];
-  availableConnectors: ConnectorMetadata[];
-  workspaceTimezone: string;
+export type Banner = { kind: 'success' | 'error'; text: string; action?: { label: string; href: string } };
+
+const QBO_PAGE = '/settings/integrations/quickbooks';
+const PAYROLL_EXPORT = '/admin/payroll-export';
+
+/** I10: the Gusto connector sends nothing to Gusto. */
+export const GUSTO_HUB_NOTE = 'Sending hours straight to Gusto isn’t available yet. Download a Gusto payroll file from Payroll export.';
+
+/** §3.1: the OAuth callback's result in words (null when the URL carries none). */
+export function callbackBanner({ connected, provider, error }: CallbackParams): Banner | null {
+  if (error) {
+    const text = {
+      connection_cancelled: 'Connecting was cancelled. Nothing changed.',
+      connection_failed: 'Couldn’t finish connecting. Try again; if it keeps happening, contact support.',
+      qbo_config_missing: 'QuickBooks isn’t set up for this server yet. Contact support.',
+    }[error] ?? 'Couldn’t finish connecting.';
+    return { kind: 'error', text };
+  }
+  if (connected === 'true') {
+    return provider === 'qbo'
+      ? { kind: 'success', text: 'QuickBooks Online is connected. Next, match your people, contracts and CLINs.', action: { label: 'Match now', href: QBO_PAGE } }
+      : { kind: 'success', text: 'Connected.' };
+  }
+  return null;
 }
 
-const CATEGORY_ICONS: Record<string, React.ReactNode> = {
-  accounting: <IconCalculator size={28} />,
-  payroll: <IconCash size={28} />,
-  export: <IconFileExport size={28} />,
-};
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-const CATEGORY_LABELS: Record<string, string> = {
-  accounting: 'Accounting',
-  payroll: 'Payroll',
-  export: 'Data Export',
-};
+/**
+ * "Last sent {date} · {pushed} sent, {failed} failed · {n} people not matched", or "Nothing sent yet". A failed or
+ * still-running last send reads in the §6 wording instead ("Failed: …", "Sending…", "Didn’t finish";
+ * UX-4C2B-AUDIT.md F7).
+ */
+export function qboCardLine(conn: HubConnection, timeZone: string, now = Date.now()): string {
+  const last = conn.lastSend;
+  const result = last && (last.status === 'failed' || last.status === 'running')
+    ? (() => {
+      const t = syncResultText({ status: last.status, recordsPushed: last.pushed, recordsSkipped: last.skipped, errorSummary: last.errorSummary, startedAt: new Date(last.at), createdAt: new Date(last.at) }, now);
+      return t.head + t.rest;
+    })()
+    : last ? `${last.pushed} sent, ${last.failed} failed` : null;
+  const parts = [last ? `Last sent ${formatInstant(new Date(last.at), timeZone, 'MMM D, YYYY')} · ${result}` : 'Nothing sent yet'];
+  if (conn.unmatchedPeople > 0) parts.push(`${plural(conn.unmatchedPeople, 'person', 'people')} not matched`);
+  return parts.join(' · ');
+}
 
-
-export function IntegrationsClient({ initialConnections, availableConnectors, workspaceTimezone }: Props) {
+/** A link to a connect route (an API route, so a plain anchor). Connecting stores a connection: read-only → WriteButton. */
+function ConnectLink({ href, children, variant = 'filled' }: { href: string; children: string; variant?: 'filled' | 'default' }) {
   const canWrite = useCanWrite();
-  const activeConnections = initialConnections.filter((c) => c.isActive);
+  if (!canWrite) return <WriteButton size="sm" variant={variant}>{children}</WriteButton>;
+  return <Button component="a" href={href} size="sm" variant={variant}>{children}</Button>;
+}
 
-  // Group connectors by category
-  const categories = ['accounting', 'payroll', 'export'];
+function Card({ title, sub, badge, description, line, children }: {
+  title: string;
+  sub: string;
+  badge?: React.ReactNode;
+  description: string;
+  line?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Paper withBorder p="md" radius="md" component="section" aria-label={title}>
+      <Stack gap="xs">
+        <Group justify="space-between" align="flex-start" wrap="nowrap">
+          <div>
+            <Title order={2} size="h4">{title}</Title>
+            <Text size="sm" c="dimmed">{sub}</Text>
+          </div>
+          {badge}
+        </Group>
+        <Text size="sm" c="dimmed">{description}</Text>
+        {line && <Text size="sm">{line}</Text>}
+        <Group gap="xs" mt={4}>{children}</Group>
+      </Stack>
+    </Paper>
+  );
+}
+
+export function IntegrationsClient({ hub, callback, workspaceTimezone }: {
+  hub: { qbo: HubConnection | null; gusto: HubConnection | null; activeApiKeys: number };
+  callback: CallbackParams;
+  workspaceTimezone: string;
+}) {
+  // I1: the banner lives in state initialised from the server's props; the effect only drops the params from the URL.
+  const [banner] = useState(() => callbackBanner(callback));
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (!['connected', 'provider', 'error'].some((k) => url.searchParams.has(k))) return;
+    for (const k of ['connected', 'provider', 'error']) url.searchParams.delete(k);
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  }, []);
+
+  const { qbo, gusto } = hub;
+  const BannerIcon = banner?.kind === 'error' ? Icons.statusError : Icons.statusSuccess;
 
   return (
     <Container size="lg" py="xl">
       <PageHeader
         title="Integrations"
-        description="Connect CadenzPoint to your accounting and payroll systems."
+        // UX-4C2B-AUDIT.md S2 (product owner, 2026-11-11): nothing is sent to payroll systems (I10).
+        description="Send approved hours to QuickBooks Online, or download payroll files for your payroll system."
+        notices={banner && (
+          <Alert
+            role={banner.kind === 'error' ? 'alert' : 'status'}
+            color={banner.kind === 'error' ? 'red' : 'success'}
+            variant="light"
+            icon={<BannerIcon size={16} aria-hidden="true" />}
+          >
+            <Group justify="space-between" gap="sm">
+              <Text size="sm">{banner.text}</Text>
+              {banner.action && <Anchor component={Link} href={banner.action.href} size="sm" fw={600}>{banner.action.label}</Anchor>}
+            </Group>
+          </Alert>
+        )}
       />
 
-      {/* Active Connections */}
-      {activeConnections.length > 0 && (
-        <>
-          <Title order={4} mb="sm">Active Connections</Title>
-          <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="md" mb="xl">
-            {activeConnections.map((conn) => (
-              <Paper key={conn.id} withBorder p="md" radius="md">
-                <Group justify="space-between" mb="sm">
-                  <Group gap="xs">
-                    <IconPlugConnected size={18} color="var(--mantine-color-success-6)" />
-                    <Text fw={600} size="sm">{conn.displayName}</Text>
-                  </Group>
-                  <Badge color="success" variant="light" size="sm">Connected</Badge>
-                </Group>
-                {conn.externalCompanyName && (
-                  <Text size="xs" c="dimmed" mb="xs">{conn.externalCompanyName}</Text>
-                )}
-                <Group gap="xs" mb="sm">
-                  {conn.autoSyncOnApproval && (
-                    <Badge size="xs" variant="light" color="signal">Auto-sync</Badge>
-                  )}
-                  {conn.lastSyncStatus && (
-                    <Badge size="xs" variant="light" color={SYNC_STATUS_COLOR[conn.lastSyncStatus] ?? 'gray'}>
-                      Last sync: {conn.lastSyncStatus}
-                    </Badge>
-                  )}
-                </Group>
-                <Text size="xs" c="dimmed">
-                  Connected {formatDateTime(conn.connectedAt, workspaceTimezone)}
-                  {conn.lastSyncAt && ` • Last sync ${dayjs(conn.lastSyncAt).fromNow()}`}
-                </Text>
-                {conn.provider === 'quickbooks_online' && (
-                  <Button
-                    component="a"
-                    href={`/settings/integrations/quickbooks?connectionId=${conn.id}`}
-                    size="xs"
-                    variant="subtle"
-                    mt="xs"
-                    fullWidth
-                  >
-                    Configure →
-                  </Button>
-                )}
-                {conn.provider === 'gusto' && (
-                  <Button
-                    component="a"
-                    href={`/settings/integrations/gusto?connectionId=${conn.id}`}
-                    size="xs"
-                    variant="subtle"
-                    mt="xs"
-                    fullWidth
-                  >
-                    Configure →
-                  </Button>
-                )}
-              </Paper>
-            ))}
-          </SimpleGrid>
-          <Divider mb="xl" />
-        </>
-      )}
+      <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+        <Card
+          title="QuickBooks Online"
+          sub={qbo?.companyName ?? 'Accounting'}
+          badge={qbo
+            ? (qbo.expired ? <StatusBadge word="Needs reconnecting" tone="warn" /> : <StatusBadge word="Connected" tone="ok" />)
+            : <StatusBadge word="Not connected" tone="dim" />}
+          description="Sends approved hours as time activities, by employee, customer and service item."
+          line={qbo ? qboCardLine(qbo, workspaceTimezone) : undefined}
+        >
+          {!qbo && <ConnectLink href="/api/integrations/qbo-connect">Connect QuickBooks</ConnectLink>}
+          {qbo?.expired && <ConnectLink href="/api/integrations/qbo-connect">Reconnect</ConnectLink>}
+          {qbo && (
+            <Button component={Link} href={QBO_PAGE} size="sm" variant={qbo.expired ? 'default' : 'filled'}>Open</Button>
+          )}
+        </Card>
 
-      {/* Available Connectors by Category */}
-      {categories.map((category) => {
-        const categoryConnectors = availableConnectors.filter((c) => c.category === category);
-        if (categoryConnectors.length === 0) return null;
+        <Card
+          title="Gusto"
+          sub={gusto?.companyName ?? 'Payroll'}
+          // S3 (product owner, 2026-11-11): no "Connected" badge next to "isn’t available yet"; "Manage connection" stays.
+          description={GUSTO_HUB_NOTE}
+        >
+          <Button component={Link} href={PAYROLL_EXPORT} size="sm" variant="default">Open Payroll export</Button>
+          {gusto && <Button component={Link} href="/settings/integrations/gusto" size="sm" variant="subtle">Manage connection</Button>}
+        </Card>
 
-        return (
-          <div key={category}>
-            <Group gap="sm" mb="sm">
-              <ThemeIcon size="sm" variant="light" color="gray">
-                {CATEGORY_ICONS[category]}
-              </ThemeIcon>
-              <Title order={4}>{CATEGORY_LABELS[category]}</Title>
-            </Group>
-            <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="md" mb="xl">
-              {categoryConnectors.map((connector) => {
-                const isConnected = activeConnections.some((c) => c.provider === connector.id);
-                return (
-                  <Paper key={connector.id} withBorder p="md" radius="md">
-                    <Group justify="space-between" mb="sm">
-                      <Text fw={600} size="sm">{connector.name}</Text>
-                      {isConnected ? (
-                        <Badge color="success" variant="light" size="sm">Connected</Badge>
-                      ) : (
-                        <Badge color="gray" variant="light" size="sm">Available</Badge>
-                      )}
-                    </Group>
-                    <Text size="xs" c="dimmed" mb="md">{connector.description}</Text>
-                    <Group gap="xs" mb="sm">
-                      {connector.capabilities.map((cap) => (
-                        <Badge key={cap} size="xs" variant="outline">
-                          {cap.replace(/_/g, ' ')}
-                        </Badge>
-                      ))}
-                    </Group>
-                    {!isConnected && connector.id === 'quickbooks_online' && (
-                      canWrite ? (
-                        <Button
-                          component="a"
-                          href={`/api/integrations/qbo-connect`}
-                          size="sm"
-                          variant="light"
-                          fullWidth
-                        >
-                          Connect to QuickBooks
-                        </Button>
-                      ) : (
-                        // Connecting stores a connection (a write): read-only workspaces get the disabled control.
-                        <WriteButton size="sm" variant="light" fullWidth>Connect to QuickBooks</WriteButton>
-                      )
-                    )}
-                    {!isConnected && connector.id === 'csv_export' && (
-                      <Button
-                        component="a"
-                        href="/admin/payroll-export"
-                        size="sm"
-                        variant="light"
-                        fullWidth
-                      >
-                        Configure Export
-                      </Button>
-                    )}
-                    {!isConnected && connector.id === 'gusto' && (
-                      canWrite ? (
-                        <Button
-                          component="a"
-                          href="/api/integrations/gusto-connect"
-                          size="sm"
-                          variant="light"
-                          fullWidth
-                        >
-                          Connect to Gusto
-                        </Button>
-                      ) : (
-                        // Connecting stores a connection (a write): read-only workspaces get the disabled control.
-                        <WriteButton size="sm" variant="light" fullWidth>Connect to Gusto</WriteButton>
-                      )
-                    )}
-                    {!isConnected && connector.id !== 'quickbooks_online' && connector.id !== 'csv_export' && connector.id !== 'gusto' && (
-                      <Button
-                        size="sm"
-                        variant="light"
-                        fullWidth
-                        disabled
-                      >
-                        {connector.authType === 'oauth2' ? 'Connect' : 'Configure'}
-                      </Button>
-                    )}
-                    {isConnected && connector.id === 'gusto' && (
-                      <Button
-                        component="a"
-                        href={`/settings/integrations/gusto?connectionId=${activeConnections.find((c) => c.provider === connector.id)?.id}`}
-                        size="sm"
-                        variant="filled"
-                        fullWidth
-                      >
-                        Configure Mappings
-                      </Button>
-                    )}
-                    {isConnected && connector.id === 'quickbooks_online' && (
-                      <Button
-                        component="a"
-                        href={`/settings/integrations/quickbooks?connectionId=${activeConnections.find((c) => c.provider === connector.id)?.id}`}
-                        size="sm"
-                        variant="filled"
-                        fullWidth
-                      >
-                        Configure Mappings
-                      </Button>
-                    )}
-                  </Paper>
-                );
-              })}
-            </SimpleGrid>
-          </div>
-        );
-      })}
+        <Card
+          title="Payroll file"
+          sub="ADP, Paychex, Gusto or generic"
+          description="Download approved hours with weekly overtime worked out, for any payroll system."
+        >
+          <Button component={Link} href={PAYROLL_EXPORT} size="sm" variant="default">Open Payroll export</Button>
+        </Card>
 
-      {availableConnectors.length === 0 && (
-        <Alert color="signal" variant="light">
-          <Text size="sm">
-            No integration connectors are installed yet. Connectors will appear here as they are added to the system.
-          </Text>
-        </Alert>
-      )}
+        <Card
+          title="API keys"
+          sub={plural(hub.activeApiKeys, 'active key', 'active keys')}
+          description="Read hours and costs from your own tools."
+        >
+          <Button component={Link} href="/settings/api-keys" size="sm" variant="default">Open API keys</Button>
+        </Card>
+      </SimpleGrid>
     </Container>
   );
 }

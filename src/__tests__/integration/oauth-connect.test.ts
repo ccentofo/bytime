@@ -66,6 +66,7 @@ import crypto from 'crypto';
 import { GET } from '@/app/api/integrations/complete/[provider]/route';
 import { GET as apexCallback } from '@/app/api/integrations/callback/[provider]/route';
 import { mintOAuthState, generateOAuthNonce } from '@/lib/integrations/oauth-state';
+import { saveIntegrationConnection } from '@/server/internal/integrations';
 import { NextRequest } from 'next/server';
 
 // Signing secret for this suite; CI's integration job doesn't set AUTH_SECRET.
@@ -126,7 +127,8 @@ describe('OAuth completion route (R2-9)', () => {
 
     const response = await GET(request, { params: Promise.resolve({ provider: 'quickbooks_online' }) });
     expect(response.status).toBe(307); // redirect
-    expect(response.headers.get('location')).toContain('connected=true');
+    // feature-plan-ux-integrations-billing.md I8 / IN-2: the route's provider value (quickbooks_online) → provider=qbo.
+    expect(new URL(response.headers.get('location')!).search).toBe('?connected=true&provider=qbo');
     expect(connectorState.exchangeCodeForTokens).toHaveBeenCalledTimes(1);
     expect(clearsNonceCookie(response)).toBe(true);
 
@@ -303,5 +305,63 @@ describe('Apex OAuth callback (R2-9)', () => {
     const response = await apexCallback(apexUrl(`error=%3Cscript%3E&state=${encodeURIComponent(state)}`), QBO);
     const location = response.headers.get('location')!;
     expect(location).toBe('http://acme.localhost:3000/settings/integrations?error=connection_cancelled');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// feature-plan-ux-integrations-billing.md I9 / IN-12: reconnecting keeps the matches; one active connection per provider.
+// ---------------------------------------------------------------------------
+describe('saveIntegrationConnection: reconnect (I9)', () => {
+  let admin: Awaited<ReturnType<typeof createTestUser>>;
+  const db = () => getTestDb();
+  const connect = (company: string | undefined, token = 'tok') => saveIntegrationConnection(db() as never, admin.id, {
+    provider: 'quickbooks_online', displayName: `QuickBooks — ${company ?? 'none'}`, externalCompanyId: company, externalCompanyName: company,
+    accessToken: token, refreshToken: `${token}-r`, tokenExpiresAt: new Date(Date.now() + 3_600_000),
+  });
+  const rows = async () => (await db().select().from(schema.integrationConnections)).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  const active = async () => (await rows()).filter((r) => r.isActive).map((r) => r.id);
+
+  beforeEach(async () => { await cleanupTestData(); admin = await createTestUser({ role: 'admin' }); });
+  afterEach(async () => { await cleanupTestData(); });
+
+  it('the same company after a disconnect → the same row active again, new tokens, matches kept', async () => {
+    const { id } = await connect('A');
+    await db().insert(schema.integrationEntityMappings).values({ connectionId: id, entityType: 'employee', bytimeEntityId: admin.id, externalEntityId: 'e1' });
+    await db().update(schema.integrationConnections).set({ isActive: false, accessTokenEncrypted: null, refreshTokenEncrypted: null, disconnectedAt: new Date() }).where(eq(schema.integrationConnections.id, id));
+    const again = await connect('A', 'new');
+    expect(again.id).toBe(id);
+    const [row] = await rows();
+    expect(await rows()).toHaveLength(1);
+    expect(row).toMatchObject({ isActive: true, disconnectedAt: null });
+    expect(row.accessTokenEncrypted).not.toBeNull();
+    expect(await db().select().from(schema.integrationEntityMappings).where(eq(schema.integrationEntityMappings.connectionId, id))).toHaveLength(1);
+  });
+
+  it('a different company deactivates the old one (tokens cleared); A → B → A leaves only A active, on its first row', async () => {
+    const a = await connect('A');
+    const b = await connect('B');
+    expect(await active()).toEqual([b.id]);
+    const old = (await rows()).find((r) => r.id === a.id)!;
+    expect(old).toMatchObject({ isActive: false, accessTokenEncrypted: null, refreshTokenEncrypted: null });
+    const a2 = await connect('A');
+    expect(a2.id).toBe(a.id);
+    expect(await active()).toEqual([a.id]);
+    expect(await rows()).toHaveLength(2);
+  });
+
+  it('a null company id never matches: it inserts, and only the new row is active', async () => {
+    const first = await connect(undefined);
+    const second = await connect(undefined);
+    expect(second.id).not.toBe(first.id);
+    expect(await active()).toEqual([second.id]);
+  });
+
+  it('legacy duplicates for one company → the OLDEST row is updated; the others are deactivated', async () => {
+    const [oldest] = await db().insert(schema.integrationConnections).values({ provider: 'quickbooks_online', displayName: 'Q', externalCompanyId: 'A', connectedBy: admin.id, createdAt: new Date('2026-01-01T00:00:00Z') }).returning();
+    const [newer] = await db().insert(schema.integrationConnections).values({ provider: 'quickbooks_online', displayName: 'Q', externalCompanyId: 'A', connectedBy: admin.id, createdAt: new Date('2026-02-01T00:00:00Z') }).returning();
+    const { id } = await connect('A');
+    expect(id).toBe(oldest.id);
+    expect(await active()).toEqual([oldest.id]);
+    expect((await rows()).find((r) => r.id === newer.id)?.isActive).toBe(false);
   });
 });

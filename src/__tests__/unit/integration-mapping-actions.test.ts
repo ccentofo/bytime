@@ -30,7 +30,8 @@ import { saveMapping, deleteMapping } from '@/server/actions/integrations';
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
 beforeEach(() => db.reset());
 const ID = '22222222-2222-4222-8222-222222222222';
-const input = { connectionId: 'c1', entityType: 'employee', bytimeEntityId: 'u1', bytimeEntityName: 'Ann', externalEntityId: 'q1', externalEntityName: 'Ann QBO', metadata: '{}' };
+// feature-plan-ux-integrations-billing.md I4: person rows (employee/vendor) go through setPersonMapping; this is a contract.
+const input = { connectionId: 'c1', entityType: 'contract', bytimeEntityId: 'u1', bytimeEntityName: 'Ann', externalEntityId: 'q1', externalEntityName: 'Ann QBO', metadata: '{}' };
 
 describe('saveMapping / deleteMapping (C13)', () => {
   it('saveMapping: one upsert on the unique index, updating every field, returning { id }; no select first', async () => {
@@ -53,5 +54,14 @@ describe('saveMapping / deleteMapping (C13)', () => {
     expect(await deleteMapping(ID)).toEqual({ ok: false, code: 'validation', error: 'That mapping no longer exists.' });
     db.onReturning('delete', integrationEntityMappings, [{ id: ID }]);
     expect(await deleteMapping(ID)).toEqual({ ok: true, data: undefined });
+  });
+});
+
+describe('saveMapping refuses person rows (I4)', () => {
+  it('employee and vendor → "Use the People tab." before any write', async () => {
+    for (const entityType of ['employee', 'vendor']) {
+      expect(await saveMapping({ ...input, entityType })).toEqual({ ok: false, code: 'validation', error: 'Use the People tab.' });
+    }
+    expect(db.ops).toEqual([]);
   });
 });
