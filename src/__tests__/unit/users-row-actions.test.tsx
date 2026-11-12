@@ -24,7 +24,7 @@ vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
 import { UsersClient, editConfirmCopy, roleChangeCopy } from '@/app/(app)/admin/users/UsersClient';
 import { notifications } from '@mantine/notifications';
-import { buttonByText, chooseRowAction, click, dialogTitled, installDomStubs, menuItem, mount, openRowMenu, unmount, wait, type Mounted } from '../helpers/dom';
+import { buttonByText, chooseRowAction, click, dialogTitled, installDomStubs, menuItem, mount, openRowMenu, unmount, wait, waitUntil, type Mounted } from '../helpers/dom';
 import { act } from 'react';
 import { readFileSync } from 'node:fs';
 import { expectNoAxeViolations } from '../helpers/axe';
@@ -271,7 +271,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     expect(form()).toBeDefined();
     await click(inDialog(form(), 'Save changes'));
     await click(inDialog(dialogTitled('Mark Pat Doe as FLSA exempt?')!, 'Mark as exempt'));
-    await wait();
+    await waitUntil(() => actions.updateUser.mock.calls.length > 0, 'updateUser is called');
     expect(actions.updateUser).toHaveBeenCalledWith('u2', { flsaExempt: true });
   });
 
@@ -303,7 +303,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     expect(picker()).toBeNull();
     await setName('Sam S');
     await click(inDialog(form(), 'Save changes'));
-    await wait();
+    await waitUntil(() => actions.updateUser.mock.calls.length > 0, 'updateUser is called');
     expect(actions.updateUser).toHaveBeenLastCalledWith('s1', { fullName: 'Sam S' }); // no approvalClinIds
     unmount(m);
     actions.updateUser.mockClear();
@@ -346,7 +346,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     await click(inDialog(form(), 'Save changes'));
     expect(dialogTitled('Make Joe Doe a supervisor?')!.textContent).toContain("They won't approve any CLINs yet.");
     await click(inDialog(dialogTitled('Make Joe Doe a supervisor?')!, 'Make supervisor'));
-    await wait();
+    await waitUntil(() => actions.updateUser.mock.calls.some(([id]) => id === 'u3'), 'updateUser is called for Joe Doe');
     expect(actions.updateUser).toHaveBeenCalledWith('u3', { role: 'supervisor', approvalClinIds: [] });
   });
 
@@ -365,7 +365,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     await click(inDialog(form(), 'Save changes'));
     expect(dialogTitled('Change Sam Super to employee?')!.textContent).toContain("Their approval scope is removed. Charge code access doesn't change.");
     await click(inDialog(dialogTitled('Change Sam Super to employee?')!, 'Change role'));
-    await wait();
+    await waitUntil(() => actions.updateUser.mock.calls.length > 0, 'updateUser is called');
     expect(actions.updateUser).toHaveBeenCalledWith('s1', { role: 'employee' });
   });
 
@@ -386,7 +386,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     await choose('Role', 'Employee');
     await click(inDialog(form(), 'Save changes'));
     await click(inDialog(dialogTitled('Change Sam Super to employee?')!, 'Change role'));
-    await wait();
+    await waitUntil(() => !!dialogTitled('Change Sam Super to employee?')?.querySelector('[role="alert"]'), 'the refusal shows in the role confirm');
     const confirm = dialogTitled('Change Sam Super to employee?')!;
     expect(confirm.querySelector('[role="alert"]')!.textContent).toBe('The last admin can’t be demoted.');
     expect(form().textContent).not.toContain('The last admin can’t be demoted.');
@@ -399,7 +399,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     await choose('Role', 'Employee');
     await click(inDialog(form(), 'Save changes'));
     await click(inDialog(dialogTitled('Change Sam Super to employee?')!, 'Change role'));
-    await wait();
+    await waitUntil(() => !!dialogTitled('Change Sam Super to employee?')?.textContent?.includes('The last admin can’t be demoted.'), 'the refusal shows in the role confirm');
     expect(dialogTitled('Change Sam Super to employee?')!.textContent).toContain('The last admin can’t be demoted.');
     await click(inDialog(dialogTitled('Change Sam Super to employee?')!, 'Cancel'));
     await wait(300);
@@ -436,7 +436,7 @@ describe('Users role changes and FLSA wording (feature-plan-ux-page-fixes.md C16
     await renderTeam();
     await chooseRowAction('Pat Doe', 'Mark as exempt…');
     await click(buttonByText('Mark as exempt'));
-    await wait();
+    await waitUntil(() => vi.mocked(notifications.show).mock.calls.length > 0, 'a notification is shown');
     const shown = vi.mocked(notifications.show).mock.calls.map(([n]) => n);
     expect(shown).toContainEqual(expect.objectContaining({ title: 'Marked exempt', message: 'Pat Doe is now FLSA exempt.' }));
     expect(JSON.stringify(shown)).not.toMatch(/salaried|hourly/i);

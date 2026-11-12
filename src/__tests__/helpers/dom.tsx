@@ -43,6 +43,22 @@ export function unmount(m: Mounted | undefined): void {
 }
 
 export const wait = (ms = 20) => act(async () => new Promise((r) => setTimeout(r, ms)));
+
+/**
+ * Poll until `check()` is true (launch hardening H3): for a UI state that is expected to APPEAR, instead of a fixed
+ * sleep that a slow CI runner can outlast. Only each 20 ms sleep runs inside act — never the loop: React 19 flushes the
+ * renders scheduled inside an act scope only when its callback resolves, so a loop inside one act would never see the
+ * change. Throws with `description` after `timeout` ms. Not for "nothing happened" / debounce / negative checks — those
+ * keep their fixed wait().
+ */
+export async function waitUntil(check: () => boolean, description: string, { timeout = 2000 }: { timeout?: number } = {}): Promise<void> {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    if (check()) return;
+    if (Date.now() > deadline) throw new Error(`waitUntil timed out: ${description}`);
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  }
+}
 export async function click(el: Element | null | undefined): Promise<void> {
   if (!el) throw new Error('click: element not found');
   await act(async () => { (el as HTMLElement).click(); });

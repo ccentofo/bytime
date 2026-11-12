@@ -25,7 +25,7 @@ describe('ESLint accessibility config (T17)', () => {
       'Anchor with onClick needs href or component="button"',
     ]);
     expect(config.settings?.['jsx-a11y']).toMatchObject({ polymorphicPropName: 'component', components: { ActionIcon: 'button', Anchor: 'a' } });
-  });
+  }, 60_000); // launch hardening H3: ESLint's lazy config load takes ~2 s locally; a 2–3× slower CI runner passes the 5 s default
 
   it('the guards flag an unlabeled ActionIcon and an href-less Anchor onClick, and pass the fixed forms', async () => {
     const eslint = new ESLint({ cwd: ROOT });
@@ -35,5 +35,5 @@ describe('ESLint accessibility config (T17)', () => {
     expect(await lint('export const A = () => <ActionIcon aria-label="Close" onClick={() => {}}>x</ActionIcon>;')).toEqual([]);
     expect(await lint('export const A = () => <Anchor onClick={() => {}}>x</Anchor>;')).toEqual(['Anchor with onClick needs href or component="button"']);
     expect(await lint('export const A = () => <Anchor component="button" type="button" onClick={() => {}}>x</Anchor>;')).toEqual([]);
-  });
+  }, 60_000); // H3: same reason (matches the timesheet-lint tests' explicit timeouts)
 });
