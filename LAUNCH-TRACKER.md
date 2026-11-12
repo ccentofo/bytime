@@ -40,7 +40,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 3 | UX-4c Part 2b: Integrations, Landing, Terms/Privacy text (`feature-plan-ux-integrations-billing.md` v3.1) | **merged** (PR #25, `8ecd8c6`, 2026-11-11; audit `UX-4C2B-AUDIT.md` READY; CI green; product owner's browser checks passed). Tag `stable-2026-11-11-ux-integrations-landing`. |
 | 3b | **Database backups**: daily encrypted `pg_dump` of every tenant and the control plane to S3 us-east-1, 30-day lifecycle, write-only credentials, monitoring, restore drill (`BUSINESS-DECISIONS.md` §5) | **approved 2026-11-11** as its own blueprint; blueprint to write |
 | 3a | **Per-user billing** (new model, billing rules and Billing page, from `BUSINESS-DECISIONS.md` §1) | **approved 2026-11-11**; blueprint to write |
-| 4 | Launch hardening audit + follow-ups (below) | **audited READY** (`LAUNCH-HARDENING-AUDIT.md`, 2026-11-11): branch `launch-hardening`, `f795a77..0af93b0` (7 commits; blueprint `feature-plan-launch-hardening.md` FINAL v3.2, H1–H6). Lead gates green (tsc clean apart from stale `.next` validator files), break-it 27/29 (both survivors explained), two auditors: no HIGH or MEDIUM, scope clean (only the pre-approved `qbo.ts` comment). **Open for the product owner:** L1 (curly vs straight apostrophes in the Q2 line; not blocking). **Next:** the product owner pushes and opens the PR → CI green → `npm run build` + `demo:local` + the §11 browser checks → merge, tag `stable-YYYY-MM-DD-launch-hardening`. |
+| 4 | Launch hardening audit + follow-ups (below) | **audited READY** (`LAUNCH-HARDENING-AUDIT.md`, 2026-11-11): branch `launch-hardening`, `f795a77..0af93b0` (7 commits; blueprint `feature-plan-launch-hardening.md` FINAL v3.2, H1–H6). Lead gates green (tsc clean apart from stale `.next` validator files), break-it 27/29 (both survivors explained), two auditors: no HIGH or MEDIUM, scope clean (only the pre-approved `qbo.ts` comment). L1 decided: keep curly (2026-11-12). **Next:** the product owner pushes and opens the PR → CI green → `npm run build` + `demo:local` + the browser checks in `LAUNCH-HARDENING-BROWSER-CHECKS.md` → merge, tag `stable-YYYY-MM-DD-launch-hardening`. |
 | 4b | **Reminder email capacity**: the three cron senders use Resend batch send (today about 480 sends per run across all workspaces) | **approved 2026-11-11** (hardening Q8); small blueprint to write |
 | 5 | Excel cost report: charge codes and Class | **approved 2026-11-12**; blueprint to write (research started) |
 | 6 | Distributed rate limiting (Upstash) | **approved 2026-11-12**; blueprint to write (constraints in the decisions log) |
@@ -84,10 +84,10 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 2026-11-11 | Part 2b scope items (`UX-4C2B-AUDIT.md` §4) **all accepted**. S1 and S4–S7 stay as built (landing CTA, © line, preview, hub, QuickBooks page and modal wording, the Disconnect promise, `?connectionId` ignored). **S2:** the hub description becomes "Send approved hours to QuickBooks Online, or download payroll files for your payroll system." **S3:** no "Connected" badge on the Gusto card. |
 | 2026-11-11 | **R1** (QuickBooks token refresh race across requests) goes into the launch hardening blueprint as **H6**. |
 | 2026-11-12 | Rate limiting: **Upstash** (expected to stay in the free tier). Rate-limit keys must be **salted hashes that expire within 25 hours** (matches the Privacy Policy). Raw IPs are never stored. |
+| 2026-11-12 | **Launch hardening L1:** keep the curly apostrophes in the notifications line ("You’ll", "haven’t"), matching the rest of the app. |
 
 ## Open questions for the product owner
-1. **Launch hardening L1 (not blocking):** the notifications line uses curly apostrophes ("You’ll", "haven’t"), like the rest of the app; the approved text has straight ones. Lead recommends keeping the curly ones.
-2. Product questions (not blocking):
+1. Product questions (not blocking):
    - should a QuickBooks resend send only entries not already sent?
    - should a real Gusto connection be built?
 
@@ -115,9 +115,11 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 
 ## Lead handoff notes (for a fresh "CadenzPoint Planning" session)
 **In flight:**
-- **Launch hardening audited READY** (`LAUNCH-HARDENING-AUDIT.md`). Waiting on the product owner: PR + CI, build and browser checks, and the L1 wording answer.
+- **Launch hardening audited READY** (`LAUNCH-HARDENING-AUDIT.md`). Waiting on the product owner: PR + CI, build and the browser checks in `LAUNCH-HARDENING-BROWSER-CHECKS.md`.
 - **The lead is writing** the reminder email capacity blueprint (4b), then the Excel cost report, Upstash, per-user billing and backups; each gets two pre-mortem rounds and goes to the product owner before the dev.
 - **Note for the rate-limiting blueprint:** `login_attempts.ip_address` exists, but nothing writes to it. Drop the column or guard it so raw IPs stay unstored.
+
+**Browser checks:** for every item, the lead writes a step-by-step `<ITEM>-BROWSER-CHECKS.md` (accounts, URLs, clicks, expected text, setup and cleanup commands). Never point the product owner at a blueprint section (product owner, 2026-11-12).
 
 **Lead audit process (repeat for every item):**
 1. **Lead gates:** `npx tsc --noEmit`, `npm run lint`, `npm run test`.
