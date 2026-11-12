@@ -1,6 +1,8 @@
 import 'server-only';
+import { eq } from 'drizzle-orm';
 import { getDb } from '@/db';
-import { addDays, formatCalendarDate } from '@/lib/calendar-date';
+import { users } from '@/db/schema';
+import { addDays, calendarDayOf, formatCalendarDate } from '@/lib/calendar-date';
 import type { HomeView } from '@/lib/home/attention';
 import { approvableScope, loadApprovalFacts } from './approval-rules';
 import { approvalQueue } from './approval-queue';
@@ -30,14 +32,22 @@ export async function getHomeData(userId: string): Promise<HomeView | { redirect
   if (!me || !me.isActive || (me.role !== 'admin' && me.role !== 'supervisor')) return { redirect: '/timesheet' };
   const isAdmin = me.role === 'admin';
 
-  const [today, tz, resolver] = await Promise.all([getWorkspaceToday(), getWorkspaceTimezone(), loadScheduleResolver(db)]);
+  // H4: the user's creation time is read HERE, before the burst (pool max 10 — trap T-I), not inside it.
+  const [today, tz, resolver, [created]] = await Promise.all([
+    getWorkspaceToday(),
+    getWorkspaceTimezone(),
+    loadScheduleResolver(db),
+    db.select({ createdAt: users.createdAt }).from(users).where(eq(users.id, userId)).limit(1),
+  ]);
+  // feature-plan-launch-hardening.md H4: "X of Y workdays" counts from the account's creation day.
+  const createdOn = calendarDayOf(created?.createdAt ?? new Date(), tz);
   const cur = resolver.periodContaining(today);
   const prev = resolver.neighbor(cur.start, 'prev');
   const teamScope: 'all' | string[] = isAdmin ? 'all' : approvableScope(facts, userId);
 
   const [waiting, myPeriod, team, lastTeam, notices, contracts, pendingConfig, overlaps] = await Promise.all([
     approvalQueue(db, userId, facts, { names: 4 }),
-    currentPeriodSummary(db, userId, cur, today),
+    currentPeriodSummary(db, userId, cur, today, createdOn),
     teamPeriodStatus(db, cur.start, cur.numDays, teamScope, tz),
     teamPeriodStatus(db, prev.start, prev.numDays, teamScope, tz),
     isAdmin ? approvalNotices(db, userId, facts) : null,

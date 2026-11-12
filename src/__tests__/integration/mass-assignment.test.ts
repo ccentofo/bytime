@@ -94,6 +94,39 @@ describe('Mass assignment is blocked (R2-6)', () => {
     expect(rowsB).toHaveLength(0); // userB's row was never created/touched
   });
 
+  // feature-plan-launch-hardening.md H1 (T3): the daily reminder is no longer a preference — a request that still sends
+  // the key is ok and writes nothing for it.
+  it('T3: updateNotificationPreferences({ emailDailyReminder: false }) returns ok and writes nothing for that key', async () => {
+    await cleanupTestData();
+    const db = getTestDb();
+    const prefsOf = async (userId: string) =>
+      db.select().from(schema.notificationPreferences).where(eq(schema.notificationPreferences.userId, userId));
+
+    // (a) No row yet: the inserted row keeps the column default.
+    const fresh = await createTestUser({ role: 'employee' });
+    actingAs(fresh);
+    await expectOk(updateNotificationPreferences({
+      // @ts-expect-error — the key was removed from NotificationPrefs (H1); an old client may still send it.
+      emailDailyReminder: false,
+    }));
+    const insertedRows = await prefsOf(fresh.id);
+    expect(insertedRows).toHaveLength(1);
+    expect(insertedRows[0].emailDailyReminder).toBe(true);
+
+    // (b) Existing row: the value is unchanged (other keys still save).
+    const existing = await createTestUser({ role: 'employee' });
+    await db.insert(schema.notificationPreferences).values({ userId: existing.id, emailDailyReminder: true, emailDeadlineReminder: true });
+    actingAs(existing);
+    await expectOk(updateNotificationPreferences({
+      emailDeadlineReminder: false,
+      // @ts-expect-error — the key was removed from NotificationPrefs (H1); an old client may still send it.
+      emailDailyReminder: false,
+    }));
+    const [after] = await prefsOf(existing.id);
+    expect(after.emailDailyReminder).toBe(true);
+    expect(after.emailDeadlineReminder).toBe(false);
+  });
+
   it('updateUser ignores passwordHash, sessionVersion, and totpEnabled sent in the request', async () => {
     await cleanupTestData();
     const db = getTestDb();

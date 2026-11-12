@@ -14,7 +14,7 @@ const nav = vi.hoisted(() => ({ pathname: '/timesheet' }));
 vi.mock('next/navigation', () => ({ usePathname: () => nav.pathname }));
 
 import { AppNavbar, NAV_GROUPS_KEY } from '@/components/shell/AppNavbar';
-import { click, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
+import { click, installDomStubs, mount, unmount, wait, waitUntil, type Mounted } from '../helpers/dom';
 import { expectNoAxeViolations } from '../helpers/axe';
 import { stripComments } from '../helpers/source-scanner';
 
@@ -113,7 +113,7 @@ describe('AppNavbar — collapsed rail (T3)', () => {
     expect(people.getAttribute('data-active')).toBe('true');
     expect(m!.container.querySelector('button[aria-label="Contracts"]')!.getAttribute('data-active')).toBeNull();
     await click(people);
-    await wait(20);
+    await waitUntil(() => document.body.querySelectorAll('[role="menuitem"]').length === 2, 'the People flyout lists its two items');
     const items = [...document.body.querySelectorAll('[role="menuitem"]')] as HTMLAnchorElement[];
     expect(items.map((i) => i.textContent)).toEqual(['Users', 'Assignments']);
     expect(items[1].getAttribute('aria-current')).toBe('page');
@@ -128,7 +128,7 @@ describe('AppNavbar — collapsed rail (T3)', () => {
       expect(trigger.getAttribute('aria-haspopup'), label).toBe('menu');
       expect(trigger.getAttribute('aria-expanded'), label).toBe('false');
       await act(async () => { trigger.focus(); });
-      await wait(300);
+      await waitUntil(() => [...document.body.querySelectorAll('[role="tooltip"]')].some((t) => t.textContent === label), `the "${label}" tooltip shows`);
       const tip = [...document.body.querySelectorAll('[role="tooltip"]')].find((t) => t.textContent === label);
       expect(tip, label).toBeDefined();
       await expectNoAxeViolations(document.body);

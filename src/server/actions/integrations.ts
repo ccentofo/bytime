@@ -14,7 +14,12 @@ import {
   users,
 } from '@/db/schema';
 import { and, count, countDistinct, desc, eq, gt, gte, inArray, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
-import { requireAdmin, requireAdminFresh } from '@/lib/session';
+import { cookies } from 'next/headers';
+import { redirect, unstable_rethrow } from 'next/navigation';
+import { AuthorizationError, requireAdmin, requireAdminFresh } from '@/lib/session';
+import { getTenantSlug } from '@/lib/tenant/context';
+import { getQBOAuthUrl } from '@/lib/integrations/connectors/qbo-api';
+import { generateOAuthNonce, mintOAuthState } from '@/lib/integrations/oauth-state';
 import { getAllConnectorMetadata } from '@/lib/integrations/registry';
 import { addDays, type CalendarDate } from '@/lib/calendar-date';
 import { userAction } from '@/lib/action-result';
@@ -73,6 +78,54 @@ export async function disconnectIntegration(connectionId: string) {
       })
       .where(eq(integrationConnections.id, connectionId));
   });
+}
+
+const QBO_NONCE_COOKIE = 'qbo_oauth_nonce';
+const QBO_CONFIG_MISSING = '/settings/integrations?error=qbo_config_missing';
+
+/**
+ * Start connecting (or reconnecting) QuickBooks Online: feature-plan-launch-hardening.md H5. It replaces the old
+ * GET `qbo-connect` API route (deleted), which any site could trigger with a top-level link (the session cookie is
+ * SameSite=Lax). A Server Action is POST-only and Next aborts it when the request's Origin host isn't this host
+ * (action-handler.js), which refuses other sites and sibling tenant subdomains.
+ *
+ * R2-9 (unchanged): mints a signed `state` binding this tenant + admin + a single-use nonce, and stores the nonce in an
+ * httpOnly cookie on THIS tenant host (no `domain`). The apex callback can't check a session, so this is what proves the
+ * eventual callback belongs to the admin who clicked Connect, on the same tenant, within 10 minutes.
+ *
+ * Always ends in redirect() (it throws), so it isn't wrapped in userAction, and the UI calls it as a plain <form action>
+ * (never through runAction / a catch, which would swallow the redirect — the A4 bug). Every redirect is outside a try.
+ */
+export async function startQuickBooksConnect(): Promise<void> {
+  let actor;
+  try {
+    actor = await requireAdminFresh();
+  } catch (error) {
+    unstable_rethrow(error);
+    redirect(error instanceof AuthorizationError && error.kind === 'unauthenticated' ? '/login' : '/timesheet');
+  }
+
+  const tenantSlug = await getTenantSlug();
+  if (!tenantSlug) redirect(QBO_CONFIG_MISSING);
+
+  let nonce: string;
+  let authUrl: string;
+  try {
+    nonce = generateOAuthNonce();
+    authUrl = getQBOAuthUrl(mintOAuthState({ tenantSlug, userId: actor.id, provider: 'quickbooks_online', nonce }));
+  } catch {
+    redirect(QBO_CONFIG_MISSING); // QBO_CLIENT_ID / the state secret not configured
+  }
+
+  (await cookies()).set(QBO_NONCE_COOKIE, nonce, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    maxAge: 600, // 10 minutes
+    path: '/',
+    // No `domain` — host-only, scoped to this exact tenant subdomain.
+  });
+  redirect(authUrl); // an absolute URL: the client hard-navigates (JS on) or follows the 303 (JS off)
 }
 
 export async function toggleAutoSync(connectionId: string, enabled: boolean) {

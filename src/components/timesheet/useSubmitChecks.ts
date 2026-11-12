@@ -23,16 +23,17 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
  * Submit-time checks (feature-plan-ux-timesheet-ui.md §4.1), moved out of the old toolbar: completeness warnings exactly as
  * before; the overtime figure now uses the workspace workweek (weeklyTotals), still counting incomplete weeks.
  */
-export function useSubmitChecks(state: Pick<TimesheetState, 'periodStart' | 'numDays' | 'entries' | 'today' | 'submitOpensOn' | 'workweekStartDay' | 'outsideWeekHours'>): SubmitChecks {
-  const { periodStart, numDays, entries, today, submitOpensOn, workweekStartDay, outsideWeekHours } = state;
+export function useSubmitChecks(state: Pick<TimesheetState, 'periodStart' | 'numDays' | 'entries' | 'today' | 'submitOpensOn' | 'workweekStartDay' | 'outsideWeekHours' | 'userCreatedOn'>): SubmitChecks {
+  const { periodStart, numDays, entries, today, submitOpensOn, workweekStartDay, outsideWeekHours, userCreatedOn } = state;
   return useMemo(() => {
     const dailyHours = dailyTotalsOf(periodStart, numDays, entries);
-    const progress = periodProgress({ start: periodStart, numDays, dailyHours, today, submitOpensOn });
+    // H4 (Q4 a): the progress line counts from the account's creation day; completenessWarnings (Q4 b) is unchanged.
+    const progress = periodProgress({ start: periodStart, numDays, dailyHours, today, submitOpensOn, countFrom: userCreatedOn });
     const days = Array.from({ length: numDays }, (_, i) => addDays(periodStart, i));
     const weeks = weeklyTotals(days, dailyHours, outsideWeekHours, workweekStartDay, today);
     const uncompensatedHours = round2(weeks.reduce((s, w) => s + Math.max(0, w.total - 40), 0));
     return { completenessWarnings: completenessWarnings(periodStart, numDays, dailyHours, today), uncompensatedHours, totalPeriodHours: progress.total, progress, dailyHours };
-  }, [periodStart, numDays, entries, today, submitOpensOn, workweekStartDay, outsideWeekHours]);
+  }, [periodStart, numDays, entries, today, submitOpensOn, workweekStartDay, outsideWeekHours, userCreatedOn]);
 }
 
 /** The period completeness warnings (unchanged from the old toolbar). */

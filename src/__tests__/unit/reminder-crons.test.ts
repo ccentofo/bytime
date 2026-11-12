@@ -22,6 +22,10 @@ const h = vi.hoisted(() => ({
   outcomes: [] as Outcome[],
   log: [] as string[],
   gtCalls: [] as unknown[][],
+  /** H1: rows the notification_preferences table answers with (the old opt-out column included). */
+  prefRows: [] as Array<Record<string, unknown>>,
+  /** H1 / T2: when set, any notification_preferences query throws (the deadline cron still reads it, so per test). */
+  throwOnPrefs: false,
   daily: vi.fn(async (args: { employeeEmail: string; appUrl: string }) => { void args; return { ok: true as const, id: 'm' }; }),
   deadline: vi.fn(async (args: { employeeEmail: string; appUrl: string }) => { void args; return { ok: true as const, id: 'm' }; }),
 }));
@@ -70,7 +74,8 @@ vi.mock('@/db', () => ({
       from: (table: unknown) => {
         const rows = table === workspaceSettings ? [{ timezone: 'America/New_York' }]
           : table === users ? h.employees[url] ?? []
-          : table === timesheetEntries || table === notificationPreferences || table === timesheetPeriods ? []
+          : table === notificationPreferences ? (h.throwOnPrefs ? (() => { throw new Error('notification_preferences queried'); })() : h.prefRows)
+          : table === timesheetEntries || table === timesheetPeriods ? []
           : (() => { throw new Error('unexpected table'); })();
         const whereResult = Object.assign(Promise.resolve(rows), { orderBy: async () => rows });
         return Object.assign(Promise.resolve(rows), { limit: async () => rows, where: () => whereResult });
@@ -97,6 +102,8 @@ beforeEach(() => {
   h.outcomes = [];
   h.log = [];
   h.gtCalls = [];
+  h.prefRows = [];
+  h.throwOnPrefs = false;
   h.tenants = [
     { slug: 'demo', status: 'active', lifecycleExempt: true, dbUrlEncrypted: 'db-demo' },
     { slug: 'comped', status: 'active', lifecycleExempt: true, dbUrlEncrypted: 'db-comped' },
@@ -153,5 +160,30 @@ describe.each([
     h.resumeAfter = { comped: 'c1' };
     await run();
     expect(h.gtCalls).toEqual([[users.id, 'c1']]);
+  });
+});
+
+/**
+ * feature-plan-launch-hardening.md H1 (§4.3): employees can't opt out of the daily reminder — the cron no longer reads
+ * notification_preferences at all.
+ */
+describe('daily-reminder: always on (H1)', () => {
+  it('T1: an employee whose preference row says email_daily_reminder = false, with no entry today, is sent the reminder', async () => {
+    h.tenants = [h.tenants[1]];
+    h.employees['db-comped'] = [{ id: 'c1', fullName: 'Real Person', email: 'real@comped-customer.com' }];
+    h.prefRows = [{ enabled: false, emailDailyReminder: false, emailDeadlineReminder: true }];
+    const body = await (await dailyReminder(req('/api/cron/daily-reminder'))).json();
+    expect(h.daily.mock.calls.map(([a]) => a.employeeEmail)).toEqual(['real@comped-customer.com']);
+    expect(body.sent).toBe(1);
+  });
+
+  it('T2: no notification_preferences query runs (and the employee is still sent the reminder)', async () => {
+    h.tenants = [h.tenants[1]];
+    h.employees['db-comped'] = [{ id: 'c1', fullName: 'Real Person', email: 'real@comped-customer.com' }];
+    h.throwOnPrefs = true;
+    const body = await (await dailyReminder(req('/api/cron/daily-reminder'))).json();
+    // Positive check: the sweep would swallow the throw, so a missing send is how a lookup would show.
+    expect(h.daily.mock.calls.map(([a]) => a.employeeEmail)).toEqual(['real@comped-customer.com']);
+    expect(body.sent).toBe(1);
   });
 });

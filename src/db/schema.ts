@@ -496,7 +496,7 @@ export const notificationPreferences = pgTable('notification_preferences', {
   emailOnSubmit: boolean('email_on_submit').notNull().default(true),       // supervisor: when employee submits
   emailOnApprove: boolean('email_on_approve').notNull().default(true),     // employee: when timesheet approved
   emailOnReject: boolean('email_on_reject').notNull().default(true),       // employee: when timesheet rejected
-  emailDailyReminder: boolean('email_daily_reminder').notNull().default(true), // employee: daily entry reminder
+  emailDailyReminder: boolean('email_daily_reminder').notNull().default(true), // UNUSED since 2026-11 (launch hardening H1): daily reminders always go to employees
   emailDeadlineReminder: boolean('email_deadline_reminder').notNull().default(true), // employee: submission deadline
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

@@ -1,7 +1,8 @@
 import { getDb, getDbForWrite } from '@/db';
 import { integrationConnections } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { decrypt, encrypt } from '@/lib/encryption';
+import { UserFacingError } from '@/lib/errors';
 import { connectionExpiredError, providerHttpError, providerRefreshError } from '../provider-errors';
 
 // ---------------------------------------------------------------------------
@@ -93,8 +94,17 @@ export async function exchangeQBOCode(code: string): Promise<{
   };
 }
 
+/** feature-plan-launch-hardening.md H6: how long a token refresh may take before it's abandoned. */
+const REFRESH_TIMEOUT_MS = 15_000;
+export const QBO_NO_RESPONSE_MESSAGE = 'QuickBooks didn’t respond. Try again in a minute.';
+
 /**
  * Refresh an expired access token using the refresh token.
+ *
+ * H6: the request (and reading its body) is bounded by a 15 s timeout. A timeout (`TimeoutError`) or a network failure
+ * (`TypeError` from fetch) becomes "QuickBooks didn't respond…"; HTTP error responses keep the providerRefreshError
+ * mapping (400/401 → reconnect). Intuit rotates the refresh token about once a day, and the previous value then expires,
+ * so callers must store exactly what this returns (ensureValidToken does, under a lock).
  */
 export async function refreshQBOToken(refreshToken: string): Promise<{
   accessToken: string;
@@ -104,22 +114,31 @@ export async function refreshQBOToken(refreshToken: string): Promise<{
   const { clientId, clientSecret } = getClientCredentials();
   const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
-  const response = await fetch(QBO_TOKEN_URL, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Basic ${basicAuth}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Accept': 'application/json',
-    },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-    }),
-  });
+  let data: { access_token: string; refresh_token: string; expires_in?: number };
+  try {
+    const response = await fetch(QBO_TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${basicAuth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+      },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+      }),
+      signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS),
+    });
 
-  if (!response.ok) throw await providerRefreshError('QuickBooks', response); // audit R9
+    if (!response.ok) throw await providerRefreshError('QuickBooks', response); // audit R9
 
-  const data = await response.json();
+    data = await response.json();
+  } catch (error) {
+    if (error instanceof UserFacingError) throw error;
+    const name = (error as { name?: unknown } | null)?.name;
+    if (name === 'TimeoutError' || error instanceof TypeError) throw new UserFacingError(QBO_NO_RESPONSE_MESSAGE);
+    throw error;
+  }
 
   return {
     accessToken: data.access_token,
@@ -128,52 +147,84 @@ export async function refreshQBOToken(refreshToken: string): Promise<{
   };
 }
 
+const TOKEN_COLUMNS = {
+  provider: integrationConnections.provider,
+  isActive: integrationConnections.isActive,
+  accessTokenEncrypted: integrationConnections.accessTokenEncrypted,
+  refreshTokenEncrypted: integrationConnections.refreshTokenEncrypted,
+  tokenExpiresAt: integrationConnections.tokenExpiresAt,
+};
+type TokenRow = {
+  provider: string;
+  isActive: boolean;
+  accessTokenEncrypted: string | null;
+  refreshTokenEncrypted: string | null;
+  tokenExpiresAt: Date | null;
+};
+type UsableTokenRow = TokenRow & { accessTokenEncrypted: string; refreshTokenEncrypted: string };
+
+/** An active QuickBooks connection with both tokens stored. Anything else (a Gusto id included) → reconnect. */
+function usable(row: TokenRow | undefined): row is UsableTokenRow {
+  return !!row && row.provider === 'quickbooks_online' && row.isActive && !!row.accessTokenEncrypted && !!row.refreshTokenEncrypted;
+}
+
+/** The access token is good for more than 5 more minutes. */
+function stillValid(row: TokenRow): boolean {
+  const expiresAt = row.tokenExpiresAt ? new Date(row.tokenExpiresAt).getTime() : 0;
+  return expiresAt > Date.now() + 5 * 60 * 1000;
+}
+
 /**
- * Ensure the access token for a connection is valid.
- * If it's expired or about to expire (within 5 minutes), refresh it.
- * Returns the valid access token.
+ * Ensure the access token for a QuickBooks connection is valid; refresh it if it expires within 5 minutes. Returns the
+ * valid access token.
+ *
+ * feature-plan-launch-hardening.md H6 — one refresh at a time per connection:
+ * - fast path (no lock): an active QuickBooks row whose token is still valid → that token. Not QuickBooks, inactive, or
+ *   no tokens → connectionExpiredError (a Gusto id never gets a token handed to Intuit);
+ * - refresh path: the write client first (read-only mode throws before Intuit is called), then ONE transaction under
+ *   pg_advisory_xact_lock(hashtext('integration-token:'||id)) that re-reads the row. Another request may have refreshed
+ *   while this one waited (→ its token, no refresh), or a reconnect / disconnect may have won (→ reconnect error, no
+ *   write). Otherwise it refreshes with the RE-READ refresh token and stores the new pair by compare-and-swap on the
+ *   ciphertext it read (AND is_active): under READ COMMITTED the WHERE is re-checked against the latest committed row,
+ *   so a reconnect (same row, new tokens) or disconnect that committed during the Intuit call updates 0 rows → the
+ *   reconnect's tokens win and this throws connectionExpiredError.
+ * Lock order: only this lock, never with another family; reconnect takes integration-connection:{provider} and then
+ * row locks, and this transaction holds no row lock until its final update — so no deadlock.
  */
 export async function ensureValidToken(connectionId: string): Promise<string> {
   const db = await getDb();
-  const [connection] = await db
-    .select({
-      accessTokenEncrypted: integrationConnections.accessTokenEncrypted,
-      refreshTokenEncrypted: integrationConnections.refreshTokenEncrypted,
-      tokenExpiresAt: integrationConnections.tokenExpiresAt,
-    })
-    .from(integrationConnections)
-    .where(eq(integrationConnections.id, connectionId));
+  const [connection] = await db.select(TOKEN_COLUMNS).from(integrationConnections).where(eq(integrationConnections.id, connectionId));
 
-  if (!connection?.accessTokenEncrypted || !connection?.refreshTokenEncrypted) {
-    throw connectionExpiredError('QuickBooks'); // audit R9: no stored tokens → reconnect
-  }
+  if (!usable(connection)) throw connectionExpiredError('QuickBooks'); // audit R9: no stored tokens → reconnect
+  if (stillValid(connection)) return decrypt(connection.accessTokenEncrypted);
 
-  const expiresAt = connection.tokenExpiresAt ? new Date(connection.tokenExpiresAt).getTime() : 0;
-  const fiveMinutesFromNow = Date.now() + 5 * 60 * 1000;
-
-  // Token is still valid
-  if (expiresAt > fiveMinutesFromNow) {
-    return decrypt(connection.accessTokenEncrypted);
-  }
-
-  // Token expired or about to expire — refresh
-  const currentRefreshToken = decrypt(connection.refreshTokenEncrypted);
   // Get the write client BEFORE refreshing: in a read-only workspace this throws here, before the
   // provider rotates the refresh token, so the stored token is never invalidated and lost.
   const writeDb = await getDbForWrite();
-  const newTokens = await refreshQBOToken(currentRefreshToken);
+  return writeDb.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'integration-token:' + connectionId}))`);
+    const [row] = await tx.select(TOKEN_COLUMNS).from(integrationConnections).where(eq(integrationConnections.id, connectionId));
+    if (!usable(row)) throw connectionExpiredError('QuickBooks'); // a disconnect / reconnect won
+    if (stillValid(row)) return decrypt(row.accessTokenEncrypted); // refreshed by another request while this one waited
 
-  // Store the new tokens
-  await writeDb.update(integrationConnections)
-    .set({
-      accessTokenEncrypted: encrypt(newTokens.accessToken),
-      refreshTokenEncrypted: encrypt(newTokens.refreshToken),
-      tokenExpiresAt: new Date(Date.now() + newTokens.expiresIn * 1000),
-      updatedAt: new Date(),
-    })
-    .where(eq(integrationConnections.id, connectionId));
-
-  return newTokens.accessToken;
+    const newTokens = await refreshQBOToken(decrypt(row.refreshTokenEncrypted));
+    const now = new Date();
+    const stored = await tx.update(integrationConnections)
+      .set({
+        accessTokenEncrypted: encrypt(newTokens.accessToken),
+        refreshTokenEncrypted: encrypt(newTokens.refreshToken),
+        tokenExpiresAt: new Date(now.getTime() + newTokens.expiresIn * 1000),
+        updatedAt: now,
+      })
+      .where(and(
+        eq(integrationConnections.id, connectionId),
+        eq(integrationConnections.isActive, true),
+        eq(integrationConnections.refreshTokenEncrypted, row.refreshTokenEncrypted),
+      ))
+      .returning({ id: integrationConnections.id });
+    if (stored.length === 0) throw connectionExpiredError('QuickBooks'); // a reconnect / disconnect committed meanwhile
+    return newTokens.accessToken;
+  });
 }
 
 // ---------------------------------------------------------------------------

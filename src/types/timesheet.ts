@@ -71,7 +71,7 @@ export interface TimesheetState {
   savedEntries: TimesheetEntry[];      // last-saved snapshot (from DB)
   savedCellRevisions: Record<string, number>; // key="rowId-dayIndex", value=max revision number
   periodStatus: PeriodStatus; // current period's approval status
-  approvalBadge: string | null; // certified-outputs C2: "Self-approved" / "Self-rejected" (approvalLabel), else null
+  approvalBadge: string | null; // approvalLabel().uiBadge: "Self-approved" / "Self-returned", else null (launch hardening H2)
   notes: Record<string, string>;       // working copy of note BODIES, key = "rowId-dayIndex" (UX-3 A4.9)
   savedNotes: Record<string, SavedNote>; // the saved baseline; a cleared note stays as { body: '', revision: n }
   reviewComment: string | null;
@@ -139,7 +139,7 @@ export interface TimesheetPeriodData {
   entries: TimesheetEntry[];
   revisions: Record<string, number>;
   periodStatus: PeriodStatus;
-  approvalBadge: string | null;
+  approvalBadge: string | null; // approvalLabel().uiBadge ("Self-returned", not the outputs' "Self-rejected"; launch hardening H2)
   chargeCodes: ChargeCode[];
   notes: Record<string, SavedNote>;
   reviewComment: string | null;

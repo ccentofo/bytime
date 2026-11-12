@@ -88,23 +88,21 @@ export function NotificationsClient({ initialPrefs, userRole }: Props) {
             disabled={isPending}
           />
 
-          <Divider label="Reminder Notifications" labelPosition="left" />
+          {/* feature-plan-launch-hardening.md H1 / Q1: both reminders only ever go to employees. The daily one can't be
+              switched off; the deadline switch is shown to employees only, and supervisors and admins get no reminder section. */}
+          {userRole === 'employee' && <>
+            <Divider label="Reminder Notifications" labelPosition="left" />
 
-          <Switch
-            label="Daily Time Entry Reminder"
-            description="Receive a daily reminder (weekdays) if you haven't entered time for the day"
-            checked={prefs.emailDailyReminder}
-            onChange={(e) => handleToggle('emailDailyReminder', e.currentTarget.checked)}
-            disabled={isPending}
-          />
+            <Text size="sm">Daily time entry reminders are always on. You’ll get one on weekdays when you haven’t entered time.</Text>
 
-          <Switch
-            label="Period Submission Deadline Reminder"
-            description="Receive a reminder 2 days before and on the last day of each pay period if your timesheet is still in draft"
-            checked={prefs.emailDeadlineReminder}
-            onChange={(e) => handleToggle('emailDeadlineReminder', e.currentTarget.checked)}
-            disabled={isPending}
-          />
+            <Switch
+              label="Period Submission Deadline Reminder"
+              description="Receive a reminder 2 days before and on the last day of each pay period if your timesheet is still in draft"
+              checked={prefs.emailDeadlineReminder}
+              onChange={(e) => handleToggle('emailDeadlineReminder', e.currentTarget.checked)}
+              disabled={isPending}
+            />
+          </>}
         </Stack>
       </Paper>
     </>

@@ -5,7 +5,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 - Audit records: `*-AUDIT.md`.
 - Business decisions: `BUSINESS-DECISIONS.md` (kept by the business session).
 
-**Last updated:** 2026-11-12.
+**Last updated:** 2026-11-11 (earlier entries dated 2026-11-12 were written on 2026-11-11; the dates are kept as recorded).
 
 ## How we work
 - **Scope is the product owner's.** Nothing is added, removed or changed in what the product does without the product owner's yes. The lead decides software design inside approved scope and brings every assumption or open question to the product owner.
@@ -36,12 +36,13 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | # | Item | Status |
 |---|---|---|
 | 1 | Hotfix: table column order leaks between pages (`feature-plan-hotfix-table-state.md`) | **merged** (PR #23) |
-| 2 | UX-4c Part 2a: Setup checklist and Import (`feature-plan-ux-setup-import.md`) | audited (`UX-4C2A-AUDIT.md`): no HIGH or MEDIUM; break-it 11/11. fix round 1 **verified** (gates, break-it 11/11). **READY TO MERGE** (product owner confirmed stable 2026-11-11). Merge after CI is green, then tag `stable-2026-11-11-ux-setup-import`. |
-| 3 | UX-4c Part 2b: Integrations, Landing, Terms/Privacy text (`feature-plan-ux-integrations-billing.md` v3.1) | blueprint FINAL (billing moved out); **waiting on the landing-claim check** (lead → product owner), then the fresh dev session |
+| 2 | UX-4c Part 2a: Setup checklist and Import (`feature-plan-ux-setup-import.md`) | **merged** (PR #24, `3babd0d`; audit `UX-4C2A-AUDIT.md` READY). Tag `stable-2026-11-11-ux-setup-import`. |
+| 3 | UX-4c Part 2b: Integrations, Landing, Terms/Privacy text (`feature-plan-ux-integrations-billing.md` v3.1) | **merged** (PR #25, `8ecd8c6`, 2026-11-11; audit `UX-4C2B-AUDIT.md` READY; CI green; product owner's browser checks passed). Tag `stable-2026-11-11-ux-integrations-landing`. |
 | 3b | **Database backups**: daily encrypted `pg_dump` of every tenant and the control plane to S3 us-east-1, 30-day lifecycle, write-only credentials, monitoring, restore drill (`BUSINESS-DECISIONS.md` §5) | **approved 2026-11-11** as its own blueprint; blueprint to write |
 | 3a | **Per-user billing** (new model, billing rules and Billing page, from `BUSINESS-DECISIONS.md` §1) | **approved 2026-11-11**; blueprint to write |
-| 4 | Launch hardening audit + follow-ups (below) | **approved 2026-11-12**; the lead runs it with the dev |
-| 5 | Excel cost report: charge codes and Class | **approved 2026-11-12**; blueprint to write |
+| 4 | Launch hardening audit + follow-ups (below) | **audited READY** (`LAUNCH-HARDENING-AUDIT.md`, 2026-11-11): branch `launch-hardening`, `f795a77..0af93b0` (7 commits; blueprint `feature-plan-launch-hardening.md` FINAL v3.2, H1–H6). Lead gates green (tsc clean apart from stale `.next` validator files), break-it 27/29 (both survivors explained), two auditors: no HIGH or MEDIUM, scope clean (only the pre-approved `qbo.ts` comment). L1 decided: keep curly (2026-11-12). **Product owner's browser checks passed 2026-11-12** (E, the no-JavaScript check, was withdrawn: the app needs JavaScript; audit §7). **Next:** CI green on the PR → merge → tag `stable-2026-11-12-launch-hardening`. |
+| 4b | **Reminder email capacity**: the three cron senders use Resend batch send (today about 480 sends per run across all workspaces) | **approved 2026-11-11** (hardening Q8); small blueprint to write |
+| 5 | Excel cost report: charge codes and Class | **approved 2026-11-12**; blueprint to write (research started) |
 | 6 | Distributed rate limiting (Upstash) | **approved 2026-11-12**; blueprint to write (constraints in the decisions log) |
 | 7 | ~~UX-5 accessibility (Section 508) verification~~ | **not doing** (product owner, 2026-11-12) |
 | 8 | Staging rehearsal (PRODUCTION-DEPLOY Phase 12), then production (Phase 13) | after the above. The approval-scope release is fix-forward only, with the window check. |
@@ -78,7 +79,12 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 2026-11-11 | Employees can't opt out of daily reminder emails. |
 | 2026-11-11 | Certification recording: add **only if DCAA requires a stored artifact** (lead's assessment pending the product owner's read). |
 | 2026-11-11 | Backups: their own blueprint (database backups per `BUSINESS-DECISIONS.md` §5). |
+| 2026-11-11 | Launch hardening blueprint: **all 9 recommendations accepted**. Daily switch removed for everyone; employees see "Daily time entry reminders are always on. You'll get one on weekdays when you haven't entered time."; the deadline switch is shown to employees only; the "disable" sentence is removed from the daily email; the progress line counts from the account's creation day, while the submit warnings stay unchanged; C5 closed as a watch item; QuickBooks connect becomes a server action and the Gusto connect route is deleted; a reminder-capacity follow-up blueprint is added; H3 works from measured causes. |
+| 2026-11-11 | **For the business session (the product owner forwards it):** two pieces of text say reminders can be turned off: `business/legal/privacy-policy.md` lines 74 and 163, and the live Privacy page line "Send email notifications (configurable in your preferences)". Both need rewording. |
+| 2026-11-11 | Part 2b scope items (`UX-4C2B-AUDIT.md` §4) **all accepted**. S1 and S4–S7 stay as built (landing CTA, © line, preview, hub, QuickBooks page and modal wording, the Disconnect promise, `?connectionId` ignored). **S2:** the hub description becomes "Send approved hours to QuickBooks Online, or download payroll files for your payroll system." **S3:** no "Connected" badge on the Gusto card. |
+| 2026-11-11 | **R1** (QuickBooks token refresh race across requests) goes into the launch hardening blueprint as **H6**. |
 | 2026-11-12 | Rate limiting: **Upstash** (expected to stay in the free tier). Rate-limit keys must be **salted hashes that expire within 25 hours** (matches the Privacy Policy). Raw IPs are never stored. |
+| 2026-11-12 | **Launch hardening L1:** keep the curly apostrophes in the notifications line ("You’ll", "haven’t"), matching the rest of the app. |
 
 ## Open questions for the product owner
 1. Product questions (not blocking):
@@ -92,6 +98,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 - QuickBooks per-entry de-duplication on resend
 - QuickBooks auto-send on approval
 - Invite emails (need Resend)
+- Watch item (C5): add an index on `timesheet_entries(charge_code_id)` if Charge codes or Assignments load slowly with real data
 
 ## Business items (business session; outcomes land in `BUSINESS-DECISIONS.md`)
 - Plan prices
@@ -105,3 +112,40 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 - Intuit production approval
 - Payroll accountant review
 - Vendor file layouts in staging
+
+## Lead handoff notes (for a fresh "CadenzPoint Planning" session)
+**In flight:**
+- **Launch hardening audited READY** (`LAUNCH-HARDENING-AUDIT.md`). Waiting on the product owner: PR + CI, build and the browser checks in `LAUNCH-HARDENING-BROWSER-CHECKS.md`.
+- **The lead is writing** the reminder email capacity blueprint (4b), then the Excel cost report, Upstash, per-user billing and backups; each gets two pre-mortem rounds and goes to the product owner before the dev.
+- **Note for the rate-limiting blueprint:** `login_attempts.ip_address` exists, but nothing writes to it. Drop the column or guard it so raw IPs stay unstored.
+
+**Browser checks:** for every item, the lead writes a step-by-step `<ITEM>-BROWSER-CHECKS.md` (accounts, URLs, clicks, expected text, setup and cleanup commands). Never point the product owner at a blueprint section (product owner, 2026-11-12).
+
+**Lead audit process (repeat for every item):**
+1. **Lead gates:** `npx tsc --noEmit`, `npm run lint`, `npm run test`.
+2. **A throwaway break-it script** (`breakit-check-<item>.mjs`, uncommitted). Each check applies one exact-text edit to product code, runs one integration file, expects a FAIL, then restores with `git checkout`. It supports `--dry-run`. Run it yourself: local Postgres is reachable, the sandbox is off.
+3. **Two independent auditor sub-agents** (server half, UI and scope half). They run mutations, restore, and leave the tree clean. Don't run them alongside break-it.
+4. **Write `<ITEM>-AUDIT.md`:**
+   - fix round items go **inside** the approved blueprint, sent to the dev directly;
+   - **scope items or anything that changes product behaviour → the product owner first**.
+5. **After fixes:** re-run the gates and break-it, append a verification section, then the product owner's build plus browser checks.
+6. **Merge commands only after the product owner says it's stable.** After merging, tag `stable-YYYY-MM-DD-<item>`.
+
+**Next blueprints for the lead to write** (each goes to the product owner for review before the dev):
+1. ~~Launch hardening follow-ups~~: written and FINAL (`feature-plan-launch-hardening.md`); hand to a fresh dev session after Part 2b merges.
+1b. **Reminder email capacity** (hardening Q8: Resend batch send for the three cron senders).
+2. **Excel cost report: charge codes and Class** (PRODUCTION-DEPLOY Phase 15).
+3. **Distributed rate limiting, Upstash:** keys must be salted hashes that expire ≤ 25 h; no raw IPs (`BUSINESS-DECISIONS.md` §4).
+4. **Per-user billing** (`BUSINESS-DECISIONS.md` §1: plans, Stripe tiered prices, the quantity sync + daily reconcile, prorations, the 100-user cap message, ACH, promotion codes, send-invoice subscriptions + grace, the Billing page redesign). It also adds the landing Pricing section.
+5. **Database backups** (`BUSINESS-DECISIONS.md` §5).
+
+**Founder actions noted in `BUSINESS-DECISIONS.md`** (not engineering):
+- Stripe products and price IDs;
+- the AWS account, bucket and key pair;
+- Resend;
+- form the LLC;
+- the lawyer review.
+
+**Local test helpers:**
+- throwaway workspaces via `npm run seed:tenant -- <slug> <db-url> admin@<slug>.test Admin 'Password123!'` after creating the DB with `psql`;
+- import test files in `test-data/import-walkthrough/` (uncommitted).

@@ -9,7 +9,20 @@ import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
  */
 
 vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams(), useRouter: () => ({ refresh: vi.fn() }) }));
+// Launch hardening H5: Connect / Reconnect post the startQuickBooksConnect server action; T13b renders the server page.
+const h = vi.hoisted(() => ({
+  start: vi.fn(async () => {}),
+  hub: { qbo: null as unknown, gusto: null as unknown, activeApiKeys: 0 },
+}));
+vi.mock('@/server/actions/integrations', () => ({ startQuickBooksConnect: h.start, getIntegrationHub: async () => h.hub }));
+vi.mock('@/lib/session', () => ({ requirePageRole: async () => ({ id: 'admin-1', role: 'admin' }) }));
+vi.mock('@/server/internal/workspace-settings', () => ({ getWorkspaceTimezone: async () => 'America/New_York' }));
 
+import { act } from 'react';
+import { MantineProvider } from '@mantine/core';
+import { theme } from '@/theme';
+import { WorkspaceModeProvider } from '@/components/shell/WorkspaceMode';
+import IntegrationsPage from '@/app/(app)/settings/integrations/page';
 import { IntegrationsClient, callbackBanner, type CallbackParams } from '@/app/(app)/settings/integrations/IntegrationsClient';
 import type { HubConnection } from '@/server/actions/integrations';
 import { installDomStubs, mount, unmount, type Mounted } from '../helpers/dom';
@@ -94,7 +107,13 @@ describe('IN-3: the hub cards', () => {
     unmount(m);
     await render();
     expect(links(card('QuickBooks Online'))).toEqual(['Connect QuickBooks']);
-    expect(card('QuickBooks Online').querySelector('a')?.getAttribute('href')).toBe('/api/integrations/qbo-connect');
+    // H5: a submit button in a form that posts the startQuickBooksConnect server action — no link to a GET route.
+    const connect = card('QuickBooks Online').querySelector('form button[type="submit"]') as HTMLButtonElement;
+    expect(connect?.textContent).toBe('Connect QuickBooks');
+    expect(card('QuickBooks Online').querySelector('a')).toBeNull();
+    h.start.mockClear();
+    await act(async () => { connect.click(); });
+    expect(h.start).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -114,6 +133,12 @@ describe('IN-15 (unit): Reconnect only while the connection is expired', () => {
     await render({ qbo: qbo({ expired: true }) });
     expect(links(card('QuickBooks Online'))).toEqual(['Reconnect', 'Open']);
     expect(card('QuickBooks Online').textContent).toContain('Needs reconnecting');
+    // H5: Reconnect posts the same server action.
+    const reconnect = card('QuickBooks Online').querySelector('form button[type="submit"]') as HTMLButtonElement;
+    expect(reconnect?.textContent).toBe('Reconnect');
+    h.start.mockClear();
+    await act(async () => { reconnect.click(); });
+    expect(h.start).toHaveBeenCalledTimes(1);
     unmount(m);
     await render({ qbo: qbo({ expired: false }) });
     expect(links(card('QuickBooks Online'))).not.toContain('Reconnect');
@@ -144,3 +169,46 @@ describe('IN-13 (hub): Gusto is honest (I10)', () => {
     expect(card('Gusto').textContent).not.toMatch(/\bsent\b|sends/i);
   });
 });
+
+/**
+ * feature-plan-launch-hardening.md H5 (T13b): the banner is mount-only state, and Connect's redirect back to the hub is a
+ * soft navigation. page.tsx keys IntegrationsClient on the callback params, so a new error remounts it and the banner
+ * shows. Rendered from the server page into the SAME root, as a soft navigation would.
+ */
+describe('T13b: a redirect back with a new error shows the banner (page.tsx key)', () => {
+  it('render without error, then re-render the page with error=qbo_config_missing into the same root → the banner shows', async () => {
+    const wrap = (el: React.ReactNode) => (
+      <MantineProvider env="test" theme={theme}><WorkspaceModeProvider mode="full">{el}</WorkspaceModeProvider></MantineProvider>
+    );
+    m = await mount(await IntegrationsPage({ searchParams: Promise.resolve({}) }));
+    expect(m.container.querySelector('[role="alert"]')).toBeNull();
+    const next = await IntegrationsPage({ searchParams: Promise.resolve({ error: 'qbo_config_missing' }) });
+    await act(async () => { m!.root.render(wrap(next)); });
+    expect(m.container.querySelector('[role="alert"]')?.textContent).toContain('QuickBooks isn’t set up for this server yet. Contact support.');
+  });
+});
+
+/** H5 (T14): nothing in the product links to or names the deleted connect routes. */
+describe('T14: no source file references the deleted connect routes', () => {
+  it('no non-test file under src/ contains /api/integrations/qbo-connect or /api/integrations/gusto-connect', async () => {
+    const { readdirSync, readFileSync, statSync } = await import('fs');
+    const path = await import('path');
+    const root = path.resolve(__dirname, '../..');
+    const hits: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const full = path.join(dir, name);
+        if (statSync(full).isDirectory()) { if (name !== '__tests__') walk(full); continue; }
+        if (!/\.(ts|tsx|js|mjs|json|md)$/.test(name)) continue;
+        const src = readFileSync(full, 'utf8');
+        if (src.includes('/api/integrations/qbo-connect') || src.includes('/api/integrations/gusto-connect')) hits.push(path.relative(root, full));
+      }
+    };
+    walk(root);
+    expect(hits).toEqual([]);
+    // §8.3: GET /api/integrations/{qbo,gusto}-connect is a 404 — the route handlers are gone.
+    const { existsSync } = await import('fs');
+    for (const p of ['qbo-connect', 'gusto-connect']) expect(existsSync(path.join(root, 'app/api/integrations', p, 'route.ts')), p).toBe(false);
+  });
+});
+

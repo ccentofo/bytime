@@ -32,7 +32,7 @@ vi.mock('@/server/actions/timesheet', () => ({ getTimesheetForReview: actions.ge
 vi.mock('@mantine/notifications', () => ({ notifications: { show: vi.fn() } }));
 
 import { ApprovalsClient } from '@/app/(app)/admin/approvals/ApprovalsClient';
-import { click, installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
+import { click, installDomStubs, mount, unmount, wait, waitUntil, type Mounted } from '../helpers/dom';
 import { chargeCode, CC, IND } from '../helpers/timesheet-fixtures';
 import type { CalendarDate } from '@/lib/calendar-date';
 
@@ -220,7 +220,7 @@ describe('the decision binding (A-8)', () => {
     const err = dialog()!.querySelector('[data-testid="review-read-error"]')!;
     expect(err.textContent).toContain("This timesheet couldn't be loaded.");
     await click([...err.querySelectorAll('button')].find((b) => b.textContent === 'Retry'));
-    await wait(20);
+    await waitUntil(() => !!inDialog('Approve'), 'the retried review shows Approve');
     expect(inDialog('Approve')).toBeDefined();
   });
 
@@ -231,12 +231,12 @@ describe('the decision binding (A-8)', () => {
     actions.getTimesheetForReview.mockImplementationOnce(() => slowB.promise);
     await click(byLabel('Next waiting timesheet'));                              // → B (slow)
     await click(byLabel('Next waiting timesheet'));                              // → C (fast)
-    await wait(20);
+    await waitUntil(() => !!dialog()?.textContent?.includes('Cy Cole · Oct 1 – 15, 2026'), 'the fast review (Cy) shows');
     expect(dialog()!.textContent).toContain('Cy Cole · Oct 1 – 15, 2026');
     await act(async () => { slowB.resolve(reviews['u-b']()); });
     await wait(20);
     await click(inDialog('Approve'));
-    await wait(20);
+    await waitUntil(() => actions.approvePeriod.mock.calls.length > 0, 'approvePeriod is called');
     expect(actions.approvePeriod.mock.calls[0][0]).toMatchObject({ periodId: 'c', seen: 3 });
   });
 
@@ -255,7 +255,7 @@ describe('the decision binding (A-8)', () => {
     await wait(20);
     expect(dialog()!.textContent).toContain('Bea Brown');
     await act(async () => { decision.resolve({ ok: false, code: 'conflict', error: 'This timesheet was just changed by someone else. Please refresh and try again.' }); });
-    await wait(20);
+    await waitUntil(() => !!dialog()?.querySelector('[data-testid="decision-error"]'), 'the decision error shows');
     expect(dialog()!.querySelector('[data-testid="decision-error"]')!.textContent).toContain('just changed by someone else');
   });
 
@@ -270,7 +270,7 @@ describe('the decision binding (A-8)', () => {
     expect(document.activeElement).toBe(dialog()!.querySelector('textarea'));
     await typeComment('  Please add Tuesday.  ');
     await click(inDialog('Return for corrections'));
-    await wait(20);
+    await waitUntil(() => actions.rejectPeriod.mock.calls.length > 0 && toast.success.mock.calls.length > 0, 'rejectPeriod is called and the success toast shows');
     expect(actions.rejectPeriod.mock.calls[0][0]).toEqual({ periodId: 'a', seen: 1, comment: 'Please add Tuesday.' });
     expect(toast.success).toHaveBeenCalledWith(expect.objectContaining({ title: 'Timesheet returned', message: 'Ann Adams · Oct 1 – 15, 2026' }));
   });
@@ -291,7 +291,7 @@ describe('the kept grid (fix round 1, M1)', () => {
     expect(dialog()!.querySelector('[data-testid="worth-a-look"] h3')!.textContent).toBe('Worth a look');
     expect(dialog()!.querySelector('#review-notes-heading')!.textContent).toBe('Notes');
     await act(async () => { pending.resolve(reviews['u-b']()); });
-    await wait(20);
+    await waitUntil(() => dialog()?.querySelector('[data-testid="review-grid"] caption')?.textContent === 'Hours for Bea Brown, Oct 1 – 15, 2026', 'Bea\'s grid replaces the old one');
     const now = dialog()!.querySelector('[data-testid="review-grid"]')!;
     expect(now.querySelector('caption')!.textContent).toBe('Hours for Bea Brown, Oct 1 – 15, 2026');
     expect(now.hasAttribute('aria-busy')).toBe(false);
@@ -339,7 +339,7 @@ describe('focus and announcements (fix round 1, M2)', () => {
     expect(live.getAttribute('aria-live')).toBe('polite');
     expect(live.textContent).toBe('');                                          // not before the review is ready
     await act(async () => { pending.resolve(reviews['u-b']()); });
-    await wait(20);
+    await waitUntil(() => heading().textContent === 'Bea Brown · Oct 1 – 15, 2026' && live.textContent !== '', 'Bea\'s review is ready and announced');
     expect(heading().textContent).toBe('Bea Brown · Oct 1 – 15, 2026');
     expect(document.activeElement).toBe(heading());
     expect(live.textContent).toBe('Opened Bea Brown, 1 of 2 waiting');
@@ -349,7 +349,7 @@ describe('focus and announcements (fix round 1, M2)', () => {
     await render();
     await openRow('Ann Adams');
     await click(byLabel('Next waiting timesheet'));
-    await wait(20);
+    await waitUntil(() => !!dialog()?.querySelector('[data-testid="review-announcement"]')?.textContent, 'the next review is announced');
     expect(dialog()!.querySelector('[data-testid="review-announcement"]')!.textContent).toBe('Opened Bea Brown, 2 of 3 waiting');
   });
 
@@ -358,11 +358,11 @@ describe('focus and announcements (fix round 1, M2)', () => {
     await openRow('Ann Adams');
     actions.getTimesheetForReview.mockRejectedValueOnce(new Error('boom'));
     await click(byLabel('Next waiting timesheet'));
-    await wait(20);
+    await waitUntil(() => !!dialog()?.querySelector('[data-testid="review-read-error"] button'), 'the read error with Retry shows');
     const retry = [...dialog()!.querySelectorAll('[data-testid="review-read-error"] button')].find((b) => b.textContent === 'Retry') as HTMLButtonElement;
     retry.focus();
     await click(retry);
-    await wait(20);
+    await waitUntil(() => document.activeElement === heading(), 'focus moves to the heading after Retry');
     expect(document.activeElement).toBe(heading());
     expect(dialog()!.contains(document.activeElement)).toBe(true);
   });
@@ -442,7 +442,7 @@ describe('approvals LOWs (fix round 1: L2–L5, L8)', () => {
 
   it('L8: a deep-linked row that isn\'t waiting has no Previous / Next', async () => {
     m = await mount(<ApprovalsClient initialPeriods={ROWS as never} currentUserId="sam" userRole="admin" workspaceTimezone="America/New_York" scopeInfo={null} initialReviewId="d" />);
-    await wait(40);
+    await waitUntil(() => !!dialog()?.textContent?.includes('Dee Done · Oct 1 – 15, 2026'), 'the deep-linked review (Dee) opens');
     expect(dialog()!.textContent).toContain('Dee Done · Oct 1 – 15, 2026');
     expect(dialog()!.querySelector('[data-testid="review-nav"]')).toBeNull();
   });
@@ -467,7 +467,7 @@ describe('open next (A-9)', () => {
     await openRow('Bea Brown');
     actions.getScopedPeriods.mockResolvedValueOnce([A, { ...B, status: 'approved', canApprove: false }, C, D]);
     await click(inDialog('Approve'));
-    await wait(40);
+    await waitUntil(() => !!dialog()?.textContent?.includes('Cy Cole · Oct 1 – 15, 2026'), 'the next waiting review (Cy) opens');
     expect(dialog()!.textContent).toContain('Cy Cole · Oct 1 – 15, 2026');
   });
 
@@ -477,7 +477,7 @@ describe('open next (A-9)', () => {
     // B decided; C was decided meanwhile by someone else; A still waits → nothing after B → the first waiting (A).
     actions.getScopedPeriods.mockResolvedValueOnce([A, { ...B, status: 'approved', canApprove: false }, { ...C, status: 'approved', canApprove: false }, D]);
     await click(inDialog('Approve'));
-    await wait(40);
+    await waitUntil(() => !!dialog()?.textContent?.includes('Ann Adams · Oct 1 – 15, 2026'), 'the review wraps to Ann');
     expect(dialog()!.textContent).toContain('Ann Adams · Oct 1 – 15, 2026');
   });
 

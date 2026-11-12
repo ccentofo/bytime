@@ -23,10 +23,14 @@ export default async function IntegrationsPage({
   await requirePageRole('admin');
   const params = await searchParams;
   const [hub, workspaceTimezone] = await Promise.all([getIntegrationHub(), getWorkspaceTimezone()]);
+  const callback = { connected: one(params.connected), provider: one(params.provider), error: one(params.error) };
   return (
     <IntegrationsClient
+      // Launch hardening H5: the banner is mount-only state. Connect is now a server action whose redirect back here is
+      // a soft navigation, so a new callback result must remount the client for its banner to show.
+      key={`${callback.error ?? ''}|${callback.connected ?? ''}|${callback.provider ?? ''}`}
       hub={hub}
-      callback={{ connected: one(params.connected), provider: one(params.provider), error: one(params.error) }}
+      callback={callback}
       workspaceTimezone={workspaceTimezone}
     />
   );

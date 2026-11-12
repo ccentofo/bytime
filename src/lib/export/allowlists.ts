@@ -366,7 +366,7 @@ export const EXPORT_TABLES: ExportTableConfig[] = [
     { key: 'emailOnSubmit', header: 'email_on_submit', description: 'Email when a timesheet is submitted for review.' },
     { key: 'emailOnApprove', header: 'email_on_approve', description: 'Email when this employee\'s timesheet is approved.' },
     { key: 'emailOnReject', header: 'email_on_reject', description: 'Email when this employee\'s timesheet is rejected.' },
-    { key: 'emailDailyReminder', header: 'email_daily_reminder', description: 'Daily time-entry reminder email.' },
+    { key: 'emailDailyReminder', header: 'email_daily_reminder', description: 'Not used: daily reminders always go to employees (since 2026-11).' },
     { key: 'emailDeadlineReminder', header: 'email_deadline_reminder', description: 'Submission-deadline reminder email.' },
     { key: 'createdAt', header: 'created_at' },
     { key: 'updatedAt', header: 'updated_at' },

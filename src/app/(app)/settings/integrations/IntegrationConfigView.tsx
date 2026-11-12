@@ -22,7 +22,7 @@ import {
 } from '@/lib/integrations/sync-display';
 import { loadQboMappingData, triggerQBOSync } from '@/server/actions/qbo';
 import {
-  deleteMapping, disconnectIntegration, getSendPreview, getSyncFailures, matchPeopleByEmail, saveMapping, setPersonMapping,
+  deleteMapping, disconnectIntegration, getSendPreview, getSyncFailures, matchPeopleByEmail, saveMapping, setPersonMapping, startQuickBooksConnect,
   type SendPreview, type SyncLog,
 } from '@/server/actions/integrations';
 import { MappingSelect } from './MappingSelect';
@@ -242,7 +242,8 @@ export function IntegrationConfigView({
 
   const expired = connection.expired || loadError === expiredMessage;
   const reconnect = canWrite
-    ? <Button component="a" href="/api/integrations/qbo-connect" variant="filled">Reconnect</Button>
+    // H5: a plain form posting the startQuickBooksConnect server action (never via runAction — its redirect must navigate).
+    ? <form action={startQuickBooksConnect} style={{ display: 'contents' }}><Button type="submit" variant="filled">Reconnect</Button></form>
     : <WriteButton variant="filled">Reconnect</WriteButton>;
 
   const contractCount = contracts.filter((c) => mappings.some((m) => m.entityType === 'contract' && m.bytimeEntityId === c.id)).length;

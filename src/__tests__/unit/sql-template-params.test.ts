@@ -37,6 +37,7 @@ const ALLOWLIST: Array<{ file: string; expr: string; why: string }> = [
   { file: 'src/lib/integrations/sync-engine.ts', expr: "'integration-send:' + connectionId", why: 'advisory-lock key (a string for hashtext; the send lock, I6)' },
   { file: 'src/server/internal/integration-mapping.ts', expr: "'integration-mapping:' + connectionId + ':' + userId", why: 'advisory-lock key (a string for hashtext; the per-person mapping lock, I4)' },
   { file: 'src/server/internal/integrations.ts', expr: "'integration-connection:' + provider", why: 'advisory-lock key (a string for hashtext; the reconnect lock, I9)' },
+  { file: 'src/lib/integrations/connectors/qbo-api.ts', expr: "'integration-token:' + connectionId", why: 'advisory-lock key (a string for hashtext; one QuickBooks token refresh at a time, launch hardening H6)' },
   { file: 'src/server/internal/labor-rates.ts', expr: 'laborCategoryId', why: 'typed `SQL` fragment parameter — the type forbids values (dated rates D1.3)' },
   { file: 'src/server/internal/labor-rates.ts', expr: 'onDate', why: 'typed `SQL` fragment parameter — the type forbids values (dated rates D1.3)' },
   { file: 'src/server/internal/cost-basis.ts', expr: 'APPLIED_RATE', why: 'SQL fragment from hourlyRateOnSql (dated rates D1.4)' },

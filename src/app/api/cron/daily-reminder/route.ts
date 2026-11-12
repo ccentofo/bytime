@@ -3,7 +3,7 @@ import { getDbForUrl } from '@/db';
 import { controlDb } from '@/db/control-plane';
 import { tenants } from '@/db/control-plane/schema';
 import { decrypt } from '@/lib/encryption';
-import { users, timesheetEntries, notificationPreferences, workspaceSettings } from '@/db/schema';
+import { users, timesheetEntries, workspaceSettings } from '@/db/schema';
 import { eq, and, gt } from 'drizzle-orm';
 import { sendDailyReminderEmail } from '@/lib/email/send';
 import { createSendThrottle } from '@/lib/email/rate';
@@ -90,24 +90,17 @@ async function sendReminders(): Promise<Record<string, unknown>> {
         if (usersWithEntries.has(emp.id)) continue;
         if (isSeedRecipient(emp.email)) { skippedSeedRecipients++; continue; } // P6 §4: demo domains we don't own
 
-        const prefs = await db
-          .select({ enabled: notificationPreferences.emailDailyReminder })
-          .from(notificationPreferences)
-          .where(eq(notificationPreferences.userId, emp.id));
-
-        const enabled = prefs.length === 0 ? true : prefs[0].enabled;
-
-        if (enabled) {
-          await sendThrottle();
-          const outcome = await sendDailyReminderEmail({
-            employeeEmail: emp.email,
-            employeeName: emp.fullName,
-            todayDate: formatCalendarDate(today, 'dddd, MMM D, YYYY'),
-            appUrl: tenantBaseUrl(tenant.slug),
-          });
-          if (outcome.ok) totalSent++;
-          else if (outcome.reason === 'error') totalFailed++;
-        }
+        // feature-plan-launch-hardening.md H1: employees can't opt out of the daily reminder (product owner 2026-11-11),
+        // so there is no preference lookup — the notification_preferences.email_daily_reminder column is unused.
+        await sendThrottle();
+        const outcome = await sendDailyReminderEmail({
+          employeeEmail: emp.email,
+          employeeName: emp.fullName,
+          todayDate: formatCalendarDate(today, 'dddd, MMM D, YYYY'),
+          appUrl: tenantBaseUrl(tenant.slug),
+        });
+        if (outcome.ok) totalSent++;
+        else if (outcome.reason === 'error') totalFailed++;
       }
       return 'done';
     },
