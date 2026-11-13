@@ -3,8 +3,6 @@ import { resend, EMAIL_FROM, isEmailEnabled } from './client';
 import { TimesheetSubmittedEmail } from './templates/timesheet-submitted';
 import { TimesheetApprovedEmail } from './templates/timesheet-approved';
 import { TimesheetRejectedEmail } from './templates/timesheet-rejected';
-import { DailyReminderEmail } from './templates/daily-reminder';
-import { SubmissionDeadlineEmail } from './templates/submission-deadline';
 import { PasswordResetEmail } from './templates/password-reset';
 import React from 'react';
 
@@ -137,46 +135,6 @@ export async function sendTimesheetRejectedEmail(data: {
       rejectionComment: data.rejectionComment,
       appUrl: data.appUrl,
       periodStart: data.periodStart,
-    }),
-  );
-}
-
-/** Daily time-entry reminder. */
-export async function sendDailyReminderEmail(data: {
-  employeeEmail: string;
-  employeeName: string;
-  todayDate: string;
-  appUrl: string;
-}): Promise<SendOutcome> {
-  return deliverEmail(
-    'daily-reminder',
-    data.employeeEmail,
-    `Reminder: Enter Your Time for ${data.todayDate}`,
-    React.createElement(DailyReminderEmail, {
-      employeeName: data.employeeName,
-      todayDate: data.todayDate,
-      appUrl: data.appUrl,
-    }),
-  );
-}
-
-/** Submission-deadline reminder. */
-export async function sendSubmissionDeadlineEmail(data: {
-  employeeEmail: string;
-  employeeName: string;
-  periodLabel: string;
-  deadlineDate: string;
-  appUrl: string;
-}): Promise<SendOutcome> {
-  return deliverEmail(
-    'submission-deadline',
-    data.employeeEmail,
-    `Submit Your Timesheet — Due ${data.deadlineDate}`,
-    React.createElement(SubmissionDeadlineEmail, {
-      employeeName: data.employeeName,
-      periodLabel: data.periodLabel,
-      deadlineDate: data.deadlineDate,
-      appUrl: data.appUrl,
     }),
   );
 }

@@ -5,16 +5,20 @@ import { tenants } from '@/db/control-plane/schema';
 import { decrypt } from '@/lib/encryption';
 import { users, timesheetEntries, workspaceSettings } from '@/db/schema';
 import { eq, and, gt } from 'drizzle-orm';
-import { sendDailyReminderEmail } from '@/lib/email/send';
+import { dailyReminderMessage, type ReminderMessage } from '@/lib/email/reminder-messages';
+import { deliverReminderBatch, reminderBatchKey, REMINDER_BATCH_SIZE, type BatchOutcome } from '@/lib/email/send-batch';
 import { createSendThrottle } from '@/lib/email/rate';
 import { tenantBaseUrl } from '@/lib/tenant/host';
 import { runCron } from '@/lib/cron/run-cron';
-import { isSeedRecipient, sweepTenants } from '@/lib/cron/tenant-sweep';
+import { isSeedRecipient, sweepTenants, type CronStopReason } from '@/lib/cron/tenant-sweep';
 import { getTenantAccess } from '@/lib/tenant/lifecycle';
 import { toLifecycleFacts } from '@/lib/tenant/registry';
 import { dayOfWeek, formatCalendarDate, isValidTimeZone, todayIn } from '@/lib/calendar-date';
 
 const FALLBACK_TIMEZONE = 'America/New_York';
+const CRON = 'daily-reminder';
+/** feature-plan-reminder-capacity.md §6.4: this many failed batches in a row stop the run ('email-failing'). */
+const MAX_CONSECUTIVE_BATCH_FAILURES = 3;
 
 /**
  * Cron endpoint: Send daily time entry reminders.
@@ -22,6 +26,10 @@ const FALLBACK_TIMEZONE = 'America/New_York';
  *
  * Iterates all active tenants and sends reminders to employees who have
  * NOT entered time for today.
+ *
+ * feature-plan-reminder-capacity.md §6.4: reminders go out through Resend's batch endpoint, up to 100 per request,
+ * one workspace per request, each with a fixed idempotency key. A quota or configuration error, or three failed
+ * batches in a row, stops the run's sending.
  *
  * Protect this endpoint with a CRON_SECRET header in production.
  */
@@ -42,16 +50,31 @@ async function sendReminders(): Promise<Record<string, unknown>> {
 
   let totalSent = 0;
   let totalFailed = 0;
-  // Shared Resend budget: ≤ 2 sends/second for this cron (feature-plan-launch-blockers.md P1 §5).
+  let batches = 0;
+  let consecutiveBatchFailures = 0;
+  // Shared Resend budget: ≤ 2 requests/second for this cron (feature-plan-launch-blockers.md P1 §5); a batch is one.
   const sendThrottle = createSendThrottle();
 
   let skippedSeedRecipients = 0;
 
+  /** Count one batch outcome and update the run-level breaker. Returns a stop reason, or null to carry on. */
+  function tally(outcome: BatchOutcome): CronStopReason | null {
+    if (outcome.kind === 'disabled') return null; // no API key: nothing counted, breaker untouched
+    batches++;
+    if (outcome.kind === 'sent') totalSent += outcome.sent;
+    totalFailed += outcome.failed;
+    if (outcome.kind === 'stop') return outcome.reason;
+    if (outcome.kind === 'sent' && outcome.sent > 0) consecutiveBatchFailures = 0;
+    // A concurrent-409 means a duplicate run is sending the same batch, not that Resend is failing.
+    else if (!(outcome.kind === 'failed' && outcome.errorName === 'concurrent_idempotent_requests')) consecutiveBatchFailures++;
+    return consecutiveBatchFailures >= MAX_CONSECUTIVE_BATCH_FAILURES ? 'email-failing' : null;
+  }
+
   // feature-plan-launch-blockers.md P6 §4: time budget, fair rotation, per-tenant failures isolated + reported.
   const sweep = await sweepTenants({
-    name: 'daily-reminder',
+    name: CRON,
     tenants: activeTenants,
-    processTenant: async (tenant, { outOfTime, resumeAfter }) => {
+    processTenant: async (tenant, { outOfTime, resumeAfter, sendCutoff }) => {
       // T7: dbUrlEncrypted is only null for a tombstoned ('deleted') tenant; this query is
       // filtered to status='active', which a deleted tenant never has.
       const db = getDbForUrl(decrypt(tenant.dbUrlEncrypted!));
@@ -81,28 +104,50 @@ async function sendReminders(): Promise<Record<string, unknown>> {
 
       const usersWithEntries = new Set(entriesForToday.map((e) => e.userId));
 
+      // One workspace per batch (never mixed); flushed at 100, when out of time, and at the end.
+      const pending: { userId: string; message: ReminderMessage }[] = [];
+      const flush = async (): Promise<CronStopReason | null> => {
+        if (pending.length === 0) return null;
+        const batch = pending.splice(0);
+        await sendThrottle(); // one throttle per batch request
+        return tally(await deliverReminderBatch(CRON, batch.map((p) => p.message), {
+          idempotencyKey: reminderBatchKey(CRON, tenant.id, today, batch.map((p) => p.userId)),
+          notAfter: sendCutoff,
+        }));
+      };
+
       let lastDone: string | null = resumeAfter;
       for (const emp of allEmployees) {
         // Audit A10: the budget is checked before EVERY employee (a big tenant with nothing to send still costs time);
-        // past the check, this employee is handled completely.
-        if (outOfTime()) return { stoppedAfter: lastDone };
+        // past the check, this employee is handled completely. Queued reminders are sent before the tenant returns.
+        // §6.4: an email stop keeps the position this run started from (resumeAfter), so the next day's run doesn't
+        // skip employees in batches already sent.
+        if (outOfTime()) {
+          const stop = await flush();
+          return stop ? { stoppedAfter: resumeAfter, reason: stop } : { stoppedAfter: lastDone };
+        }
         lastDone = emp.id;
         if (usersWithEntries.has(emp.id)) continue;
         if (isSeedRecipient(emp.email)) { skippedSeedRecipients++; continue; } // P6 §4: demo domains we don't own
 
         // feature-plan-launch-hardening.md H1: employees can't opt out of the daily reminder (product owner 2026-11-11),
         // so there is no preference lookup — the notification_preferences.email_daily_reminder column is unused.
-        await sendThrottle();
-        const outcome = await sendDailyReminderEmail({
-          employeeEmail: emp.email,
-          employeeName: emp.fullName,
-          todayDate: formatCalendarDate(today, 'dddd, MMM D, YYYY'),
-          appUrl: tenantBaseUrl(tenant.slug),
+        pending.push({
+          userId: emp.id,
+          message: dailyReminderMessage({
+            employeeEmail: emp.email,
+            employeeName: emp.fullName,
+            todayDate: formatCalendarDate(today, 'dddd, MMM D, YYYY'),
+            appUrl: tenantBaseUrl(tenant.slug),
+          }),
         });
-        if (outcome.ok) totalSent++;
-        else if (outcome.reason === 'error') totalFailed++;
+        if (pending.length === REMINDER_BATCH_SIZE) {
+          const stop = await flush();
+          if (stop) return { stoppedAfter: resumeAfter, reason: stop };
+        }
       }
-      return 'done';
+      const stop = await flush();
+      return stop ? { stoppedAfter: resumeAfter, reason: stop } : 'done';
     },
   });
 
@@ -118,5 +163,7 @@ async function sendReminders(): Promise<Record<string, unknown>> {
     failedTenantCount: sweep.failedTenants.length,
     cursor: sweep.cursor, // P6 §4: the next run starts after this slug
     resumes: sweep.resumes, // audit A10/R1: per tenant, where a stopped run resumes (after this employee)
+    batches, // feature-plan-reminder-capacity.md §6.6: batch requests made (a retried batch counts once)
+    stopReason: sweep.stopReason, // null, 'budget', 'email-quota', 'email-config' or 'email-failing'
   };
 }
