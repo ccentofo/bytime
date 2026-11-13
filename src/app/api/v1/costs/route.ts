@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { handleApiRequest, apiResponse, apiError } from '@/lib/api-auth';
+import { handleApiRequest, apiStreamResponse, apiError } from '@/lib/api-auth';
 import { getDetailedCostReportData } from '@/server/internal/reports';
 import { isCalendarDate, isBefore, diffDays } from '@/lib/calendar-date';
 
@@ -7,6 +7,10 @@ import { isCalendarDate, isBefore, diffDays } from '@/lib/calendar-date';
 // plain 'YYYY-MM-DD' calendar-date strings — never an ISO instant/timestamp.
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// feature-plan-large-report-responses.md §6.3/§6.5: the body streams; the platform default today, stated so a plan
+// change can't shorten it.
+export const maxDuration = 300;
 
 export async function GET(request: NextRequest) {
   return handleApiRequest(request, () => getCostReport(request));
@@ -47,5 +51,5 @@ async function getCostReport(request: NextRequest): Promise<Response> {
   // total unpriced hours next to the rows' costs — no field removed or renamed.
   // feature-plan-excel-cost-report.md E1 (additive): every row also carries chargeCode and className (string or null).
   const unpricedHours = Math.round(data.reduce((sum, e) => sum + e.unpricedHours, 0) * 100) / 100;
-  return apiResponse(data, { total: data.length, unpricedHours });
+  return apiStreamResponse(data, { total: data.length, unpricedHours });
 }

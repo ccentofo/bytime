@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit';
 import { getTenantState } from '@/lib/tenant/context';
 import type { TenantRecord } from '@/lib/tenant/registry';
+import { streamJoined } from '@/lib/http/stream-text';
 
 const API_RATE_LIMIT = 100;          // requests per minute per key
 const API_RATE_WINDOW = 60 * 1000;   // 1 minute
@@ -172,6 +173,22 @@ export function apiResponse(data: unknown, meta?: Record<string, unknown>): Resp
       headers: { 'Content-Type': 'application/json' },
     }
   );
+}
+
+/**
+ * apiResponse's exact bytes, streamed (feature-plan-large-report-responses.md §6.3): for row lists that can pass Vercel's
+ * 4.5 MB buffered-response limit. Every row is serialized HERE, before the Response exists, so a serialization failure
+ * throws inside handleApiRequest's try and becomes its JSON 500; the stream only slices the prepared strings.
+ * Byte identity: JSON.stringify of an array is '[' + elements.join(',') + ']', and the key order is data, then meta
+ * (timestamp, then the spread), as in apiResponse.
+ */
+export function apiStreamResponse(rows: readonly object[], meta?: Record<string, unknown>): Response {
+  const items = rows.map((r) => JSON.stringify(r));
+  const metaJson = JSON.stringify({ timestamp: new Date().toISOString(), ...meta });
+  return new Response(streamJoined({ head: '{"data":[', items, separator: ',', tail: `],"meta":${metaJson}}` }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
 
 /**
