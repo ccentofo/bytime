@@ -4,7 +4,7 @@ About 25 minutes. This change has no screen of its own, so the checks run in the
 
 Do the checks in order. If anything differs, stop and tell Planning which step and what you saw.
 
-> **Status:** DRAFT. The lead rehearses every command against the finished branch before the merge gate and updates this file. Until then, don't run it.
+> **Status:** rehearsed by the lead against the finished branch (`8f3262a`) on 2026-11-12. Every step passed as written below.
 
 **Run on a weekday** (Monday–Friday, US Eastern time). The daily reminder skips weekends.
 
@@ -28,12 +28,12 @@ npm run build
    ```bash
    npm run seed:tenant -- rccheck postgresql://bytime:bytime_dev@localhost:5432/bytime_rccheck
    ```
-   **Expect:** it ends with a success line naming `rccheck`.
+   **Expect:** it ends with `✓ Tenant "rccheck" is ACTIVE.`
 3. Add 150 employees on a made-up domain, `rc-check.test`. Run it in a transaction you roll back first, to see the count without saving:
    ```bash
    psql "postgresql://bytime:bytime_dev@localhost:5432/bytime_rccheck" -c "BEGIN; INSERT INTO users (email, full_name, role) SELECT 'emp' || lpad(g::text, 3, '0') || '@rc-check.test', 'Check Employee ' || g, 'employee' FROM generate_series(1, 150) g; SELECT count(*) FROM users WHERE role = 'employee'; ROLLBACK;"
    ```
-   **Expect:** `count` is `150`, then `ROLLBACK`.
+   **Expect:** `BEGIN`, `INSERT 0 150`, then `count` is `150`, then `ROLLBACK`.
 4. Now save it:
    ```bash
    psql "postgresql://bytime:bytime_dev@localhost:5432/bytime_rccheck" -c "INSERT INTO users (email, full_name, role) SELECT 'emp' || lpad(g::text, 3, '0') || '@rc-check.test', 'Check Employee ' || g, 'employee' FROM generate_series(1, 150) g;"
@@ -58,7 +58,7 @@ npm run build
        const domains = [...new Set(items.map((e) => String([e.to].flat()[0] ?? '').split('@')[1]))].join(',');
        const repeat = seen.has(key) ? '  KEY SEEN BEFORE' : '';
        seen.add(key);
-       console.log(`#${n} ${req.method} ${req.url} emails=${items.length} domain=${domains} validation=${req.headers['x-batch-validation'] ?? '-'} key=${key.slice(0, 40)}…${repeat}`);
+       console.log(`#${n} ${req.method} ${req.url} emails=${items.length} domain=${domains} validation=${req.headers['x-batch-validation'] ?? '-'} key=${key.slice(0, 20)}…${key.slice(-12)}${repeat}`);
        res.setHeader('content-type', 'application/json');
        if (mode === 'quota' && req.url === '/emails/batch') {
          res.statusCode = 429;
@@ -100,14 +100,14 @@ RESEND_API_KEY=re_standin RESEND_BASE_URL=http://localhost:4010 AUTH_TRUST_HOST=
    - neither says `KEY SEEN BEFORE`.
 
    Lines for other domains (for example `fresh.test`) are other local workspaces; that's fine. **No** line shows `domain=cadenzpoint.dev` or `domain=bytime.dev`: demo addresses are never mailed.
-3. Note the two `rc-check.test` keys (the first 40 characters are enough).
+3. Note the **last 12 characters** of each of the two `rc-check.test` keys (after the `…`). They differ: the start of every key is the same for one workspace.
 
 ## B. Running it again reuses the same keys
 In production, Resend would answer a repeated key without sending. The stand-in only shows that the keys repeat.
 1. In tab A, run the same `curl` command as in A.1.
    **Expect:** the same JSON as A.1.
 2. Look at tab B.
-   **Expect:** two new `rc-check.test` lines (`emails=100`, `emails=50`), each ending in **`KEY SEEN BEFORE`**, with the same keys you noted in A.3.
+   **Expect:** two new `rc-check.test` lines (`emails=100`, `emails=50`), each ending in **`KEY SEEN BEFORE`**, with the same key endings you noted in A.3.
 
 ## C. When Resend's quota runs out, the run stops sending
 1. In tab B, stop the stand-in with **Ctrl+C**, then start it in quota mode:
@@ -121,9 +121,11 @@ In production, Resend would answer a repeated key without sending. The stand-in 
    - `"incomplete": true`
    - `"sent": 0`
    - `"batches": 1`
+   - `"failedSends"` equals the size of that one batch (for example `2` if the `fresh` workspace comes first).
+   - `"resumes"` may list one workspace with `null`. That's expected: a quota stop keeps the workspace's starting position.
 3. Look at tab B.
-   **Expect:** exactly **one** new `POST /emails/batch` line since you restarted it. The run didn't try a second batch. (A `POST /emails` line may follow: that's the ops alert email.)
-4. In tab C (the app's output), **expect** these two lines (the numbers and domain may differ):
+   **Expect:** exactly **one** new `POST /emails/batch` line since you restarted it. The run didn't try a second batch. (A `POST /emails` line may follow: that's the ops alert email. If `OPS_ALERT_EMAIL` isn't set, there's no such line.)
+4. In tab C (the app's output), **expect** these two lines (the numbers and domain may differ). A third line starting `[ops alert] cron-incomplete:daily-reminder raised` may follow:
    - `Reminder batch failed (daily-reminder): daily_quota_exceeded [2 of 2; domains: fresh.test]`
    - `Cron daily-reminder stopped sending: email-quota`
 
@@ -139,11 +141,11 @@ In production, Resend would answer a repeated key without sending. The stand-in 
    ```bash
    npm run tenant:delete -- rccheck
    ```
-   **Expect:** a summary naming `rccheck` and its database `bytime_rccheck`, with no changes made. Then apply it:
+   **Expect:** `Tenant rccheck (rccheck), status=active`, `Database: local database "bytime_rccheck"`, a "Not eligible" list (that's fine: the next command forces it), and `Dry run — pass --yes to apply.` Nothing is changed. Then apply it:
    ```bash
    npm run tenant:delete -- rccheck --yes --force-with-reason "local reminder-capacity check"
    ```
-   **Expect:** a deletion receipt for `rccheck`.
+   **Expect:** `✓ Deletion complete.` and a receipt with `slug: rccheck`, `status: deleted` and `database: database dropped`.
 5. Remove the stand-in file:
    ```bash
    rm /tmp/resend-standin.mjs
