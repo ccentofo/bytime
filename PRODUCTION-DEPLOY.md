@@ -639,4 +639,4 @@ converted scopes.
 | **Terms of Service, Privacy Policy, DPA** reviewed by a lawyer | Required to sell. |
 | **Trademark clearance** for "CadenzPoint" | Before marketing spend. |
 | **QuickBooks / Gusto production approval** | Intuit and Gusto review apps before issuing production keys; test against their sandboxes first. |
-| **Excel cost report** shows charge codes and Class | Feature gap (PDF already does). |
+| ~~**Excel cost report** shows charge codes and Class~~ | **Done** (PR #29, 2026-11-13): the detailed cost report (Excel, CSV and `/api/v1/costs`) has Charge Code and Class. The PDF shows the charge code but not Class. |
