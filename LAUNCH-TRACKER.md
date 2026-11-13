@@ -5,7 +5,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 - Audit records: `*-AUDIT.md`.
 - Business decisions: `BUSINESS-DECISIONS.md` (kept by the business session).
 
-**Last updated:** 2026-11-11 (earlier entries dated 2026-11-12 were written on 2026-11-11; the dates are kept as recorded).
+**Last updated:** 2026-11-12. Before that: 2026-11-11 (earlier entries dated 2026-11-12 were written on 2026-11-11; the dates are kept as recorded).
 
 ## How we work
 - **Scope is the product owner's.** Nothing is added, removed or changed in what the product does without the product owner's yes. The lead decides software design inside approved scope and brings every assumption or open question to the product owner.
@@ -40,23 +40,18 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 3 | UX-4c Part 2b: Integrations, Landing, Terms/Privacy text (`feature-plan-ux-integrations-billing.md` v3.1) | **merged** (PR #25, `8ecd8c6`, 2026-11-11; audit `UX-4C2B-AUDIT.md` READY; CI green; product owner's browser checks passed). Tag `stable-2026-11-11-ux-integrations-landing`. |
 | 3b | **Database backups**: daily encrypted `pg_dump` of every tenant and the control plane to S3 us-east-1, 30-day lifecycle, write-only credentials, monitoring, restore drill (`BUSINESS-DECISIONS.md` §5) | **approved 2026-11-11** as its own blueprint; blueprint to write |
 | 3a | **Per-user billing** (new model, billing rules and Billing page, from `BUSINESS-DECISIONS.md` §1) | **approved 2026-11-11**; blueprint to write |
-| 4 | Launch hardening audit + follow-ups (below) | **audited READY** (`LAUNCH-HARDENING-AUDIT.md`, 2026-11-11): branch `launch-hardening`, `f795a77..0af93b0` (7 commits; blueprint `feature-plan-launch-hardening.md` FINAL v3.2, H1–H6). Lead gates green (tsc clean apart from stale `.next` validator files), break-it 27/29 (both survivors explained), two auditors: no HIGH or MEDIUM, scope clean (only the pre-approved `qbo.ts` comment). L1 decided: keep curly (2026-11-12). **Product owner's browser checks passed 2026-11-12** (E, the no-JavaScript check, was withdrawn: the app needs JavaScript; audit §7). **Next:** CI green on the PR → merge → tag `stable-2026-11-12-launch-hardening`. |
-| 4b | **Reminder email capacity**: the three cron senders use Resend batch send (today about 480 sends per run across all workspaces) | **approved 2026-11-11** (hardening Q8); small blueprint to write |
+| 4 | Launch hardening H1–H6 (`feature-plan-launch-hardening.md` FINAL v3.2) | **merged** (PR #26, `a80ad8b`, 2026-11-12; audit `LAUNCH-HARDENING-AUDIT.md` READY; CI green; product owner's browser checks passed, with the no-JavaScript check withdrawn). Tag `stable-2026-11-12-launch-hardening`. |
+| 4b | **Reminder email capacity**: the cron senders use Resend batch send (today about 480 sends per run across all workspaces) | **approved 2026-11-11** (hardening Q8). **Next:** the lead writes the blueprint on branch `reminder-capacity` (research notes in the Lead handoff notes). |
 | 5 | Excel cost report: charge codes and Class | **approved 2026-11-12**; blueprint to write (research started) |
 | 6 | Distributed rate limiting (Upstash) | **approved 2026-11-12**; blueprint to write (constraints in the decisions log) |
 | 7 | ~~UX-5 accessibility (Section 508) verification~~ | **not doing** (product owner, 2026-11-12) |
 | 8 | Staging rehearsal (PRODUCTION-DEPLOY Phase 12), then production (Phase 13) | after the above. The approval-scope release is fix-forward only, with the window check. |
 
-## Launch hardening follow-ups (approved for the lead to run directly with the dev)
-- **Daily reminders: employees can't opt out** (product owner 2026-11-11). Remove the opt-out for the daily reminder.
-- Employee-side "Self-rejected" badge still uses old wording.
-- Slow-CI flaky screen tests (lighten the heaviest).
-- Clean-up migration: current supervisors' membership rows not backed by a charge code (deferred until approval scope has been live once).
-- "Late" day badge shows for days before a person was created.
-- **Re-verify against current code** (don't assume still open):
-  - the past-hours import skipping the period lock;
-  - the connect routes being triggerable from another site;
-  - the UX-4 database index note (C5).
+## Launch hardening follow-ups: done (PR #26, 2026-11-12)
+- **Fixed:** daily reminders can't be switched off (H1); employee screens say "Self-returned" (H2); slow-CI flaky tests (H3); progress line counts from the account's creation day (H4; the old "Late" badge was already gone); connect is a POST-only server action (H5); one QuickBooks token refresh at a time (H6).
+- **Closed on re-check:** the past-hours import respects the period lock (V1); C5 is a watch item on the Deferred list (V2).
+- **Still deferred:** the clean-up migration for supervisors' membership rows not backed by a charge code (until approval scope has been live once).
+- **Recorded LOWs** (`LAUNCH-HARDENING-AUDIT.md` §5): a non-JSON 200 from Intuit shows the generic error; no pending state on Connect; `fetchQBOClassesForMapping` has no `validateUUID` and no UI caller. Candidates for a later hardening pass; not scheduled.
 
 ## Decisions log (product owner)
 | Date | Decision |
@@ -115,9 +110,23 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 
 ## Lead handoff notes (for a fresh "CadenzPoint Planning" session)
 **In flight:**
-- **Launch hardening audited READY** (`LAUNCH-HARDENING-AUDIT.md`). Waiting on the product owner: PR + CI, build and the browser checks in `LAUNCH-HARDENING-BROWSER-CHECKS.md`.
-- **The lead is writing** the reminder email capacity blueprint (4b), then the Excel cost report, Upstash, per-user billing and backups; each gets two pre-mortem rounds and goes to the product owner before the dev.
+- **Nothing in development.** Launch hardening merged (PR #26), tag `stable-2026-11-12-launch-hardening`. The launch-hardening dev session can be archived.
+- **The lead is writing** the reminder email capacity blueprint (4b) on branch `reminder-capacity`, then the Excel cost report, Upstash, per-user billing and backups. Each gets two pre-mortem rounds and goes to the product owner before the dev.
 - **Note for the rate-limiting blueprint:** `login_attempts.ip_address` exists, but nothing writes to it. Drop the column or guard it so raw IPs stay unstored.
+
+**4b research so far** (lead, 2026-11-11/12; re-verify line numbers before writing):
+- **Senders:**
+  - `daily-reminder` (weekdays 20:00 UTC) and `submission-deadline` (daily 20:00 UTC) both run `sweepTenants` (`src/lib/cron/tenant-sweep.ts`: 240 s budget, fair rotation, per-tenant resume after the last finished employee id, `cron-incomplete` ops alert).
+  - Each awaits `createSendThrottle()` (`src/lib/email/rate.ts`, 500 ms = 2 sends/s per cron) before `deliverEmail` (`src/lib/email/send.ts`: one 429 retry after 2 s; success only with a message id).
+  - The deadline cron still reads `notification_preferences.email_deadline_reminder` per employee.
+- **Notice delivery is different:** `deliverPendingNotices` (`src/lib/tenant/notices.ts`, every 10 min) sends lifecycle and Terms notices to workspace admins, with a lease, a per-notice `sentAt` / `providerMessageId` record, and its own 500 ms throttle. Low volume.
+  - **Question for the product owner:** batch only the two reminder crons and leave notices per-message. Lead's recommendation: yes.
+- **Resend facts (installed `resend` 6.12.4 and resend.com docs, fetched 2026-11-11):**
+  - `resend.batch.send(emails[], { idempotencyKey?, batchValidation?: 'strict' | 'permissive' })` posts to `/emails/batch`, up to 100 emails per call, with no attachments or `scheduledAt`. The SDK renders each `react` element to `html` first (`dist/index.mjs:220-245`).
+  - The response is `{ data: [{ id }] }` in input order. With `permissive`, it also returns `errors: [{ index, message }]`. Default `strict` fails the whole batch on one invalid email.
+  - Idempotency keys: unique per request, up to 256 characters, expire after 24 h.
+  - The rate limit is 10 requests/s per team across all API keys, and a batch counts as one request. The daily and monthly email quotas count emails (the business item: the Resend plan).
+  - Errors come back as `{ error }`, not thrown (as for single sends).
 
 **Browser checks:** for every item, the lead writes a step-by-step `<ITEM>-BROWSER-CHECKS.md` (accounts, URLs, clicks, expected text, setup and cleanup commands). Never point the product owner at a blueprint section (product owner, 2026-11-12).
 
@@ -132,8 +141,8 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 6. **Merge commands only after the product owner says it's stable.** After merging, tag `stable-YYYY-MM-DD-<item>`.
 
 **Next blueprints for the lead to write** (each goes to the product owner for review before the dev):
-1. ~~Launch hardening follow-ups~~: written and FINAL (`feature-plan-launch-hardening.md`); hand to a fresh dev session after Part 2b merges.
-1b. **Reminder email capacity** (hardening Q8: Resend batch send for the three cron senders).
+1. ~~Launch hardening follow-ups~~: merged (PR #26).
+1b. **Reminder email capacity** (hardening Q8: Resend batch send; see the 4b research notes above). **Next up.**
 2. **Excel cost report: charge codes and Class** (PRODUCTION-DEPLOY Phase 15).
 3. **Distributed rate limiting, Upstash:** keys must be salted hashes that expire ≤ 25 h; no raw IPs (`BUSINESS-DECISIONS.md` §4).
 4. **Per-user billing** (`BUSINESS-DECISIONS.md` §1: plans, Stripe tiered prices, the quantity sync + daily reconcile, prorations, the 100-user cap message, ACH, promotion codes, send-invoice subscriptions + grace, the Billing page redesign). It also adds the landing Pricing section.
