@@ -202,7 +202,8 @@ export async function getTimesheetReportData(
 
 /**
  * Get detailed cost report for a date range.
- * Each row = one employee + one CLIN + one day with hours and cost.
+ * One row per latest-revision entry with hours and cost, labelled with its charge code and Class
+ * (feature-plan-excel-cost-report.md E1–E4).
  */
 export async function getDetailedCostReport(
   startDate: CalendarDate,

@@ -5,6 +5,8 @@
  *   funding figure is labelled "priced cost".
  */
 export const CURRENT_RATES_NOTE = 'Costs use the labor-category rate in effect on each day worked.';
+/** feature-plan-excel-cost-report.md E3 (Q4): Class isn't stored per entry, so the cost report shows each code's Class today. */
+export const CURRENT_CLASS_NOTE = 'Class shows the current Class of each charge code, including on past dates.';
 export const UNPRICED_REPORT_HREF = '/admin/reports/unpriced'; // UX-4b R1: Downloads › Unpriced hours
 
 /**

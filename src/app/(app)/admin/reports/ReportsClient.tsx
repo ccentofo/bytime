@@ -195,7 +195,7 @@ export function ReportsClient({ filterOptions, role, periodOptions, today, unpri
 
         {isAdmin && report('costs', 'Contract costs',
           <>
-            Hours and cost by contract, CLIN and labor category, using the rate in effect each day.
+            Hours and cost by contract, CLIN, charge code and labor category, using the rate in effect each day.
             <div className={classes.note}>{CURRENT_RATES_NOTE}</div>
           </>,
           <>

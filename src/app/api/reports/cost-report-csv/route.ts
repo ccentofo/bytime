@@ -4,8 +4,13 @@ import { generateCsv } from '@/lib/reports/csv-generator';
 import { checkReportRateLimit } from '@/lib/rate-limit';
 import { guardErrorResponse } from '@/lib/http-errors';
 import { isCalendarDate } from '@/lib/calendar-date';
-import { CURRENT_RATES_NOTE } from '@/lib/cost-labels';
+import { CURRENT_CLASS_NOTE, CURRENT_RATES_NOTE } from '@/lib/cost-labels';
+import { escapeCsvField } from '@/lib/csv/escape';
 import { noHours, noHoursMessage } from '@/lib/reports/empty-range';
+
+// feature-plan-excel-cost-report.md §6.3 (Q5): a UTF-8 byte-order mark so Excel opens the file as UTF-8 ("—" not "â€”"),
+// as the workspace export does. Written as an escape so it's visible.
+const BOM = '\uFEFF';
 
 export async function GET(request: NextRequest) {
   const rateLimited = checkReportRateLimit(request);
@@ -39,6 +44,8 @@ export async function GET(request: NextRequest) {
       { key: 'contractNumber', header: 'Contract Number' },
       { key: 'clinNumber', header: 'CLIN' },
       { key: 'slinNumber', header: 'SLIN' },
+      { key: 'chargeCode', header: 'Charge Code' }, // feature-plan-excel-cost-report.md E1/E2
+      { key: 'className', header: 'Class' },
       { key: 'lcatCode', header: 'LCAT Code' },
       { key: 'lcatTitle', header: 'LCAT Title' },
       { key: 'hourlyRate', header: 'Rate ($/hr)' },
@@ -49,9 +56,10 @@ export async function GET(request: NextRequest) {
     ]);
     // certified-outputs C3 (CO-D17 / ruling Q6): the unpriced count travels with the cost total, plus the CO-D7 note.
     const unpriced = Math.round(data.reduce((sum, e) => sum + e.unpricedHours, 0) * 100) / 100;
-    const footer = `\nUnpriced hours (no applicable labor category; no cost),${unpriced}\n${CURRENT_RATES_NOTE}\n`;
+    // feature-plan-excel-cost-report.md E3 (Q4): the Class note, escaped (it has a comma, so it comes out quoted).
+    const footer = `\nUnpriced hours (no applicable labor category; no cost),${unpriced}\n${CURRENT_RATES_NOTE}\n${escapeCsvField(CURRENT_CLASS_NOTE)}\n`;
 
-    return new NextResponse(csv + footer, {
+    return new NextResponse(BOM + csv + footer, {
       headers: {
         'Content-Type': 'text/csv',
         'Content-Disposition': `attachment; filename="cost-report-${startDate}-to-${endDate}.csv"`,

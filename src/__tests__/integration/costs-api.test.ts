@@ -7,6 +7,8 @@ import {
   createTestUser,
   createTestContract,
   createTestClin,
+  createTestChargeCode,
+  createTestCostClass,
   cleanupTestData,
 } from './helpers';
 
@@ -101,6 +103,38 @@ describe('/api/v1/costs (R2-4)', () => {
     expect(body.data).toHaveLength(1);
     expect(body.data[0].entryDate).toBe('2026-01-15');
     expect(body.data[0].entryDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  // feature-plan-excel-cost-report.md T8 (E1, additive): every row carries chargeCode and className (string or null);
+  // meta is unchanged.
+  it('every row carries chargeCode and className; a CLIN-only row has both null; meta unchanged', async () => {
+    const db = getTestDb();
+    const clin = await createTestClin((await createTestContract()).id);
+    const employee = await createTestUser({ role: 'employee' });
+    const cls = await createTestCostClass('Government Services');
+    const code = await createTestChargeCode(clin.id, { code: 'T8-CODE', classId: cls.id });
+    await db.insert(schema.timesheetEntries).values([
+      { userId: employee.id, clinId: clin.id, chargeCodeId: code.id, entryDate: '2026-01-15', hours: '8', revisionNumber: 1, createdBy: employee.id },
+      { userId: employee.id, clinId: clin.id, entryDate: '2026-01-16', hours: '4', revisionNumber: 1, createdBy: employee.id, source: 'migration' },
+    ]);
+
+    const request = new Request(
+      'http://localhost:3000/api/v1/costs?startDate=2026-01-01&endDate=2026-01-31',
+      { headers: { Authorization: `Bearer ${rawKey}`, 'x-forwarded-for': '203.0.113.26' } }
+    );
+    const response = await GET(request as any);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data).toHaveLength(2);
+    for (const row of body.data) {
+      expect('chargeCode' in row).toBe(true);
+      expect('className' in row).toBe(true);
+    }
+    const coded = body.data.find((r: { entryDate: string }) => r.entryDate === '2026-01-15');
+    const clinOnly = body.data.find((r: { entryDate: string }) => r.entryDate === '2026-01-16');
+    expect([coded.chargeCode, coded.className]).toEqual(['T8-CODE', 'Government Services']);
+    expect([clinOnly.chargeCode, clinOnly.className]).toEqual([null, null]);
+    expect(body.meta).toEqual({ timestamp: expect.any(String), total: 2, unpricedHours: 12 });
   });
 
   it('returns 401 for a missing Authorization header', async () => {

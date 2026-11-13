@@ -1,7 +1,7 @@
 import ExcelJS from 'exceljs';
 import type { EmployeeSummaryEntry } from '@/server/actions/reports';
 import type { CostReportEntry } from '@/server/internal/reports';
-import { CURRENT_RATES_NOTE } from '@/lib/cost-labels';
+import { CURRENT_CLASS_NOTE, CURRENT_RATES_NOTE } from '@/lib/cost-labels';
 
 /**
  * Generate an Excel workbook with detailed cost report data.
@@ -20,19 +20,19 @@ export async function generateCostReportExcel(
   const detailSheet = workbook.addWorksheet('Detailed Cost Report');
 
   // Title row
-  detailSheet.mergeCells('A1:K1');
+  detailSheet.mergeCells('A1:M1');
   const titleCell = detailSheet.getCell('A1');
   titleCell.value = `${reportTitle} — ${dateRange}`;
   titleCell.font = { bold: true, size: 14 };
 
   // Subtitle
-  detailSheet.mergeCells('A2:K2');
+  detailSheet.mergeCells('A2:M2');
   detailSheet.getCell('A2').value = `Generated: ${new Date().toLocaleDateString('en-US', { dateStyle: 'full' })}`;
   detailSheet.getCell('A2').font = { italic: true, size: 10, color: { argb: '666666' } };
 
-  // Headers
+  // Headers (feature-plan-excel-cost-report.md §6.2: Charge Code and Class after SLIN — 13 columns)
   const headers = [
-    'Employee', 'Contract', 'Contract #', 'CLIN', 'SLIN',
+    'Employee', 'Contract', 'Contract #', 'CLIN', 'SLIN', 'Charge Code', 'Class',
     'LCAT Code', 'LCAT Title', 'Rate ($/hr)', 'Date', 'Hours', 'Cost ($)',
   ];
 
@@ -52,6 +52,8 @@ export async function generateCostReportExcel(
       entry.contractNumber,
       entry.clinNumber,
       entry.slinNumber ?? '',
+      entry.chargeCode ?? '', // E4: blank with no charge code
+      entry.className ?? '', // E3: the code's Class today
       entry.lcatCode,
       entry.lcatTitle,
       entry.hourlyRate,
@@ -65,26 +67,28 @@ export async function generateCostReportExcel(
   const totalHours = data.reduce((sum, e) => sum + e.totalHours, 0);
   const totalCost = data.reduce((sum, e) => sum + e.totalCost, 0);
   const totalsRow = detailSheet.addRow([
-    'TOTALS', '', '', '', '', '', '', '', '',
+    'TOTALS', '', '', '', '', '', '', '', '', '', '',
     Math.round(totalHours * 100) / 100,
     Math.round(totalCost * 100) / 100,
   ]);
   totalsRow.font = { bold: true };
   // certified-outputs C3 (CO-D17 / ruling Q6): the unpriced count travels with every cost total, plus the CO-D7 note.
   const unpriced = Math.round(data.reduce((sum, e) => sum + e.unpricedHours, 0) * 100) / 100;
-  detailSheet.addRow(['UNPRICED HOURS (no applicable labor category — no cost)', '', '', '', '', '', '', '', '', unpriced, '']).font = { italic: true };
+  detailSheet.addRow(['UNPRICED HOURS (no applicable labor category — no cost)', '', '', '', '', '', '', '', '', '', '', unpriced, '']).font = { italic: true };
   detailSheet.addRow([CURRENT_RATES_NOTE]).font = { italic: true, color: { argb: '666666' } };
+  // feature-plan-excel-cost-report.md E3 (Q4): Class is the code's Class today.
+  detailSheet.addRow([CURRENT_CLASS_NOTE]).font = { italic: true, color: { argb: '666666' } };
 
   // Column widths
   detailSheet.columns = [
-    { width: 20 }, { width: 25 }, { width: 18 }, { width: 10 }, { width: 10 },
+    { width: 20 }, { width: 25 }, { width: 18 }, { width: 10 }, { width: 10 }, { width: 22 }, { width: 22 },
     { width: 12 }, { width: 25 }, { width: 12 }, { width: 12 }, { width: 10 }, { width: 14 },
   ];
 
-  // Format currency columns
-  detailSheet.getColumn(8).numFmt = '$#,##0.00';
-  detailSheet.getColumn(11).numFmt = '$#,##0.00';
-  detailSheet.getColumn(10).numFmt = '#,##0.00';
+  // Format number columns: rate (10), hours (12), cost (13). LCAT Code (8) and Date (11) are text.
+  detailSheet.getColumn(10).numFmt = '$#,##0.00';
+  detailSheet.getColumn(12).numFmt = '#,##0.00';
+  detailSheet.getColumn(13).numFmt = '$#,##0.00';
 
   // Generate buffer
   const buffer = await workbook.xlsx.writeBuffer();

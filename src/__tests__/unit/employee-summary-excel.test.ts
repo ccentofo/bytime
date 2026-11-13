@@ -25,6 +25,8 @@ describe('generateEmployeeSummaryExcel includeCost (R2-5)', () => {
 
     const headerValues = (sheet.getRow(2).values as any[]).filter((v) => v !== undefined).map(String);
     expect(headerValues).toContain('Total Cost ($)');
+    // feature-plan-excel-cost-report.md T13: the Hours summary is out of scope — its headers stay exactly these.
+    expect(headerValues).toEqual(['Employee', 'Contract', 'Contract #', 'CLIN', 'Total Hours', 'Total Cost ($)']);
 
     const dataRowValues = sheet.getRow(3).values as any[];
     expect(dataRowValues).toContain(500);
@@ -38,6 +40,7 @@ describe('generateEmployeeSummaryExcel includeCost (R2-5)', () => {
 
     const headerValues = (sheet.getRow(2).values as any[]).filter((v) => v !== undefined).map(String);
     expect(headerValues).not.toContain('Total Cost ($)');
+    expect(headerValues).toEqual(['Employee', 'Contract', 'Contract #', 'CLIN', 'Total Hours']); // excel-cost-report T13
     expect(sheet.columnCount).toBe(5);
   });
 });
