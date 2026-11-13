@@ -42,6 +42,10 @@ const h = vi.hoisted(() => ({
   /** Outcomes the batch helper returns, in order; when empty, every message is sent. */
   batchQueue: [] as BatchOutcome[],
   batch: vi.fn(),
+  /** The sendCutoff the mocked sweep passes (C14(f) needs one in the future of the fake clock). */
+  sendCutoff: 0,
+  /** The Resend client the REAL batch helper sees (C14(f) only; null = disabled). */
+  client: null as unknown,
 }));
 
 vi.mock('server-only', () => ({}));
@@ -64,7 +68,7 @@ vi.mock('@/lib/cron/tenant-sweep', async (importOriginal) => {
       let stopReason: string | null = null;
       for (const t of opts.tenants) {
         const outcome = await opts.processTenant(t, {
-          outOfTime: () => h.checks++ >= h.allowedChecks, resumeAfter: h.resumeAfter[t.slug] ?? null, sendCutoff: SEND_CUTOFF,
+          outOfTime: () => h.checks++ >= h.allowedChecks, resumeAfter: h.resumeAfter[t.slug] ?? null, sendCutoff: h.sendCutoff,
         });
         h.outcomes.push(outcome);
         h.log.push(`return:${t.slug}`);
@@ -82,6 +86,11 @@ vi.mock('@/lib/tenant/registry', () => ({ toLifecycleFacts: (t: unknown) => t })
 vi.mock('@/lib/tenant/lifecycle', () => ({ getTenantAccess: () => 'full' }));
 vi.mock('@/lib/encryption', () => ({ decrypt: (s: string) => s }));
 vi.mock('@/lib/email/rate', () => ({ createSendThrottle: () => async () => { h.log.push('throttle'); } }));
+vi.mock('@/lib/email/client', () => ({
+  get resend() { return h.client; },
+  EMAIL_FROM: 'CadenzPoint <noreply@cadenzpoint.com>',
+  isEmailEnabled: () => h.client !== null,
+}));
 vi.mock('@/lib/email/send-batch', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/email/send-batch')>()),
   deliverReminderBatch: h.batch,
@@ -132,6 +141,8 @@ beforeEach(() => {
     return h.batchQueue.shift() ?? { kind: 'sent', sent: messages.length, failed: 0 };
   });
   h.batchQueue = [];
+  h.sendCutoff = SEND_CUTOFF;
+  h.client = null;
   h.allowedChecks = Infinity;
   h.checks = 0;
   h.resumeAfter = {};
@@ -278,6 +289,15 @@ describe.each([
     }]);
   });
 
+  it('C12 (audit FR5): the key uses the tenant\'s local date — 02:00 UTC on Oct 22 is still Oct 21 in New York', async () => {
+    vi.setSystemTime(new Date('2026-10-22T02:00:00Z'));
+    h.tenants = [h.tenants[1]];
+    await run();
+    expect(batchOpts().map((o) => o.idempotencyKey)).toEqual([
+      reminderBatchKey(cron, '00000000-0000-4000-8000-0000000000c1', '2026-10-21', ['c1', 'c2']),
+    ]);
+  });
+
   it('C13: resumed after r0, out of time with a batch queued, and that flush stops (email-quota) → r0, not lastDone', async () => {
     h.tenants = [h.tenants[1]];
     h.resumeAfter = { comped: 'r0' };
@@ -326,6 +346,40 @@ describe.each([
       expect(h.batch).toHaveBeenCalledTimes(4);
       expect(h.outcomes[3]).toEqual({ stoppedAfter: null, reason: 'email-failing' });
       expect(b.stopReason).toBe('email-failing');
+    });
+
+    it('(f) audit FR1: three batches that time out and then get concurrent-409s (the REAL helper) → email-failing', async () => {
+      fourTenants();
+      vi.useRealTimers(); // useFakeTimers is a no-op while beforeEach's Date-only fake is installed
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      vi.setSystemTime(new Date('2026-10-21T20:00:00Z'));
+      const real = await vi.importActual<typeof import('@/lib/email/send-batch')>('@/lib/email/send-batch');
+      h.batch.mockImplementation(real.deliverReminderBatch);
+      h.sendCutoff = Number.MAX_SAFE_INTEGER;
+      // A slow but working Resend: the first request for each key never answers in time (it's still in flight), and
+      // every retry with that key gets 409 concurrent_idempotent_requests.
+      const keys = new Set<string>();
+      h.client = {
+        batch: {
+          send: (_payload: unknown, options: { idempotencyKey: string }) => {
+            if (!keys.has(options.idempotencyKey)) { keys.add(options.idempotencyKey); return new Promise(() => {}); }
+            return Promise.resolve({ data: null, error: { name: 'concurrent_idempotent_requests', message: 'in flight', statusCode: 409 }, headers: null });
+          },
+        },
+      };
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      let result: Record<string, unknown> | undefined;
+      const done = body().then((b) => { result = b; });
+      // Drive fake time; rendering settles on real setImmediate ticks.
+      for (let i = 0; i < 400 && result === undefined; i++) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        for (let j = 0; j < 5; j++) await new Promise((r) => setImmediate(r));
+      }
+      await done;
+      errSpy.mockRestore();
+      expect(keys.size).toBe(3);
+      expect(h.outcomes).toEqual(['done', 'done', { stoppedAfter: null, reason: 'email-failing' }]);
+      expect(result).toMatchObject({ stopReason: 'email-failing', failedSends: 3, batches: 3 });
     });
 
     it('(e) three concurrent_idempotent_requests failures → no stop', async () => {

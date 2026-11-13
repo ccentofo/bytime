@@ -43,10 +43,14 @@ const opts = (over: Partial<{ idempotencyKey: string; notAfter: number }> = {}) 
 
 /** Real setImmediate ticks (not faked): lets rendering and promise chains settle without moving fake time. */
 async function ticks(n = 10) { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); }
-/** Poll on real setImmediate until `pred` holds. Unlike vi.waitFor, this never advances fake timers. */
+/**
+ * Poll on real setImmediate until `pred` holds, for at most 10 s of REAL time (audit FR7: a slow CI render mustn't trip
+ * a tick count). Unlike vi.waitFor, this never advances fake timers.
+ */
 async function until(pred: () => boolean) {
-  for (let i = 0; i < 5000 && !pred(); i++) await new Promise((r) => setImmediate(r));
-  if (!pred()) throw new Error('until: condition never held');
+  const started = performance.now();
+  while (!pred() && performance.now() - started < 10_000) await new Promise((r) => setImmediate(r));
+  if (!pred()) throw new Error('until: condition never held within 10 s');
   await ticks();
 }
 const calls = (n: number) => until(() => send.mock.calls.length >= n);
@@ -131,14 +135,29 @@ describe('deliverReminderBatch: success and partial results (A1, A2)', () => {
 });
 
 describe('deliverReminderBatch: stops and rejections (A3, A4, A8–A10)', () => {
+  /** Audit FR3: a stop logs exactly one Sentry error and the console line the checks file relies on. */
+  const expectStopLogged = (line: string) => {
+    expect(sentryCalls()).toHaveLength(1);
+    expect(sentryCalls()[0][1].level).toBe('error');
+    expect(consoleLines).toEqual([line]);
+  };
+
   it.each([['B7', 'daily_quota_exceeded'], ['B8', 'monthly_quota_exceeded']] as const)('%s: %s → stop email-quota, one call', async (_n, name) => {
     send.mockResolvedValueOnce(err(name, 429));
     await expect(deliverReminderBatch('daily-reminder', msgs(3), opts())).resolves.toEqual({ kind: 'stop', failed: 3, reason: 'email-quota' });
     expect(send).toHaveBeenCalledTimes(1);
+    expectStopLogged(`Reminder batch failed (daily-reminder): ${name} [3 of 3; domains: acme.com]`);
   });
 
   it.each([401, 403])('B9: %i validation_error → stop email-config, one call', async (status) => {
     send.mockResolvedValueOnce(err('validation_error', status));
+    await expect(deliverReminderBatch('daily-reminder', msgs(2), opts())).resolves.toEqual({ kind: 'stop', failed: 2, reason: 'email-config' });
+    expect(send).toHaveBeenCalledTimes(1);
+    expectStopLogged('Reminder batch failed (daily-reminder): validation_error [2 of 2; domains: acme.com]');
+  });
+
+  it('B9c: restricted_api_key with a status outside 401/403 → stop email-config (by name)', async () => {
+    send.mockResolvedValueOnce(err('restricted_api_key', 422));
     await expect(deliverReminderBatch('daily-reminder', msgs(2), opts())).resolves.toEqual({ kind: 'stop', failed: 2, reason: 'email-config' });
     expect(send).toHaveBeenCalledTimes(1);
   });
@@ -147,6 +166,7 @@ describe('deliverReminderBatch: stops and rejections (A3, A4, A8–A10)', () => 
     send.mockResolvedValueOnce(err('validation_error', 400, 'API key is invalid'));
     await expect(deliverReminderBatch('daily-reminder', msgs(2), opts())).resolves.toEqual({ kind: 'stop', failed: 2, reason: 'email-config' });
     expect(send).toHaveBeenCalledTimes(1);
+    expectStopLogged('Reminder batch failed (daily-reminder): validation_error [2 of 2; domains: acme.com]');
     send.mockResolvedValueOnce(err('validation_error', 400, 'The `subject` field is required'));
     await expect(deliverReminderBatch('daily-reminder', msgs(2), opts())).resolves.toEqual({ kind: 'failed', failed: 2, errorName: 'validation_error' });
     expect(send).toHaveBeenCalledTimes(2);
@@ -264,6 +284,44 @@ describe('deliverReminderBatch: retries (A5–A7), same key and body, time cap',
     expect(send).toHaveBeenCalledTimes(2);
   });
 
+  it('B5b: a 429 with another name (too_many_requests), then success → 2 calls', async () => {
+    const other = { data: null, error: { name: 'too_many_requests', message: 'slow down', statusCode: 429 }, headers: null } as unknown as Resp;
+    await expect(retriedOnce(other)).resolves.toMatchObject({ kind: 'sent', sent: 2 });
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('B24b: a JSON 4xx with no name ({ message: "Bad Request", statusCode: 400 }), then success → 2 calls', async () => {
+    const bare = { data: null, error: { message: 'Bad Request', statusCode: 400 }, headers: null } as unknown as Resp;
+    await expect(retriedOnce(bare)).resolves.toMatchObject({ kind: 'sent', sent: 2 });
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('B25 (audit FR1): times out, then concurrent-409, then concurrent-409 → failed with send_timeout (the breaker counts it)', async () => {
+    send.mockImplementationOnce(never);
+    send.mockResolvedValue(err('concurrent_idempotent_requests', 409));
+    const p = deliverReminderBatch('daily-reminder', msgs(2), opts());
+    await calls(1);
+    await vi.advanceTimersByTimeAsync(BATCH_ATTEMPT_TIMEOUT_MS);
+    await ticks();
+    await vi.advanceTimersByTimeAsync(BATCH_RETRY_DELAY_MS);
+    await calls(2);
+    await vi.advanceTimersByTimeAsync(BATCH_RETRY_DELAY_MS);
+    await calls(3);
+    await expect(p).resolves.toEqual({ kind: 'failed', failed: 2, errorName: 'send_timeout' });
+    expect(consoleLines).toEqual(['Reminder batch failed (daily-reminder): send_timeout [2 of 2; domains: acme.com]']);
+  });
+
+  it('B25 (contrast): concurrent-409 on every attempt, no timeout → keeps concurrent_idempotent_requests (exempt)', async () => {
+    send.mockResolvedValue(err('concurrent_idempotent_requests', 409));
+    const p = deliverReminderBatch('daily-reminder', msgs(2), opts());
+    await calls(1);
+    await vi.advanceTimersByTimeAsync(BATCH_RETRY_DELAY_MS);
+    await calls(2);
+    await vi.advanceTimersByTimeAsync(BATCH_RETRY_DELAY_MS);
+    await calls(3);
+    await expect(p).resolves.toEqual({ kind: 'failed', failed: 2, errorName: 'concurrent_idempotent_requests' });
+  });
+
   it('B19: three timeouts in a row, notAfter far away → failed 40 s after the first call, not later', async () => {
     send.mockImplementation(never);
     let settledAt: number | null = null;
@@ -301,6 +359,32 @@ describe('deliverReminderBatch: retries (A5–A7), same key and body, time cap',
     send.mockResolvedValueOnce(ok(['m1', 'm2']));
     await expect(deliverReminderBatch('daily-reminder', msgs(2), opts({ notAfter: Date.now() - 1 }))).resolves.toMatchObject({ kind: 'sent', sent: 2 });
     expect(send).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('deliverReminderBatch: the retry time cap, exactly (B21b, audit FR2/FR6)', () => {
+  // `now` is injected (ms since the first attempt started). The first attempt times out at 12 s; a retry needs
+  // 2 s wait + 12 s attempt, so it runs only if 12 + 2 + 12 = 26 s ≤ notAfter.
+  it.each([
+    [15_000, 1],
+    [25_000, 1],
+    [27_000, 2],
+  ])('notAfter = start + %i ms → %i attempt(s)', async (notAfter, attempts) => {
+    const start = Date.now();
+    send.mockImplementationOnce(never);
+    send.mockResolvedValueOnce(ok(['m1', 'm2']));
+    const p = deliverReminderBatch('daily-reminder', msgs(2), { idempotencyKey: 'k1', notAfter, now: () => Date.now() - start });
+    await calls(1);
+    await vi.advanceTimersByTimeAsync(BATCH_ATTEMPT_TIMEOUT_MS);
+    await ticks();
+    if (attempts === 1) {
+      await expect(p).resolves.toEqual({ kind: 'failed', failed: 2, errorName: 'send_timeout' });
+    } else {
+      await vi.advanceTimersByTimeAsync(BATCH_RETRY_DELAY_MS);
+      await calls(2);
+      await expect(p).resolves.toMatchObject({ kind: 'sent', sent: 2 });
+    }
+    expect(send).toHaveBeenCalledTimes(attempts);
   });
 });
 

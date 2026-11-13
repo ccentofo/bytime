@@ -176,9 +176,14 @@ export async function deliverReminderBatch(
     return { kind: 'failed', failed: size, errorName };
   }
 
+  // Audit FR1: once an attempt has timed out, later attempts with the same key usually get a concurrent-409 (the first
+  // request is still in flight; the SDK can't abort it). A batch that then fails is named for the timeout, so the
+  // run-level breaker counts it; only a batch whose retries were all concurrent-409s keeps that (exempt) name.
+  let timedOut = false;
   for (let attempt = 1; ; attempt++) {
     // The first attempt always runs: the caller flushes only when it must.
     const a = await attemptOnce(client, payload, opts.idempotencyKey);
+    if (a.kind === 'retry' && a.errorName === 'send_timeout') timedOut = true;
     switch (a.kind) {
       case 'ok':
         return settleOk(label, messages, a.ids, a.errors);
@@ -198,8 +203,9 @@ export async function deliverReminderBatch(
       case 'retry':
         // Checked before waiting: a retry must be able to finish by `notAfter`.
         if (attempt >= BATCH_MAX_ATTEMPTS || now() + BATCH_RETRY_DELAY_MS + BATCH_ATTEMPT_TIMEOUT_MS > opts.notAfter) {
-          report('error', label, a.errorName, size, size, allDomains(), a.message);
-          return { kind: 'failed', failed: size, errorName: a.errorName };
+          const errorName = timedOut ? 'send_timeout' : a.errorName;
+          report('error', label, errorName, size, size, allDomains(), a.message);
+          return { kind: 'failed', failed: size, errorName };
         }
         await new Promise((r) => setTimeout(r, BATCH_RETRY_DELAY_MS));
     }
