@@ -3,7 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 /**
  * feature-plan-large-report-responses.md §11 T10, T11: /api/v1/costs through the REAL handleApiRequest (auth mocks as
  * v1-api-auth.test.ts:20-43). 15,000 rows stream past 4.5 MB in more than one chunk with the same JSON shape; a query
- * failure is still the generic JSON 500, reported to Sentry (it happens before any byte).
+ * failure, or a row that can't be serialized (T11b, audit fix round 1), is still the generic JSON 500, reported to
+ * Sentry (both happen before any byte).
  */
 
 const h = vi.hoisted(() => ({ rows: [] as unknown[], queryError: null as Error | null, captured: [] as unknown[] }));
@@ -80,6 +81,18 @@ describe('/api/v1/costs streams (large-report-responses §6.3)', () => {
     expect(res.headers.get('content-type')).toBe('application/json');
     expect(await res.json()).toEqual({ error: 'Internal server error' });
     expect(h.captured).toEqual([h.queryError]);
+    spy.mockRestore();
+  });
+
+  it('T11b: a row that can\'t be serialized (a BigInt) → still the JSON 500, never a cut-off 200 (§6.3 item 1, §8)', async () => {
+    h.rows = [{ ...entry(0), n: BigInt(1) }];
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await GET(request());
+    expect(res.status).toBe(500);
+    expect(res.headers.get('content-type')).toBe('application/json');
+    expect(await res.json()).toEqual({ error: 'Internal server error' });
+    expect(h.captured).toHaveLength(1);
+    expect(h.captured[0]).toBeInstanceOf(TypeError); // "Do not know how to serialize a BigInt"
     spy.mockRestore();
   });
 });
