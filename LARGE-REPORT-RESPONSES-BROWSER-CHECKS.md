@@ -174,15 +174,17 @@ bash /tmp/lrr-check.sh key
 
 ## M. Record what `main` returns
 
-### M.1 Switch to `main` (tab A)
+This uses the tag of the last merge, `stable-2026-11-13-excel-cost-report` (what `main` is on GitHub), not your local `main` branch, which may be behind.
+
+### M.1 Switch to the last merge (tab A)
 
 ```bash
-git switch main
+git switch --detach stable-2026-11-13-excel-cost-report
 ```
 
-**Expect:** `Switched to branch 'main'`.
+**Expect:** `HEAD is now at 1d44b35 Merge pull request #29 from ccentofo/excel-cost-report`.
 
-### M.2 Build and start `main` (tab B)
+### M.2 Build and start it (tab B)
 
 ```bash
 npm run build && AUTH_TRUST_HOST=true npm run start
@@ -207,7 +209,7 @@ v1 approved: 200 616246
 
 Your sizes can differ a little from Planning's. A line starting `STOP:` says what to do.
 
-### M.4 Stop `main` and switch back
+### M.4 Stop it and switch back
 1. In tab B, press **Ctrl+C**.
 2. In tab A:
 
