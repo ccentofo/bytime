@@ -44,7 +44,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 4b | **Reminder email capacity**: the cron senders use Resend batch send | **merged** (PR #27 at `af2ac7d`, PR #28 with the checks-file fixes; `main` = `9427fba`, 2026-11-13). Audit `REMINDER-CAPACITY-AUDIT.md` READY; CI green; the product owner's integration run and checks passed. Tag `stable-2026-11-13-reminder-capacity`. |
 | 5 | Excel cost report: charge codes and Class | **merged** (PR #29, `1d44b35`, 2026-11-13; audit `EXCEL-COST-REPORT-AUDIT.md` READY, no HIGH or MEDIUM, 5 LOWs recorded; CI green; the product owner's checks passed). Tag `stable-2026-11-13-excel-cost-report`. |
 | 5b | **Large report responses**: stream the cost CSV, `/api/v1/costs`, `/periods` and `/timesheets/approved`; 25,000-row cap on the detailed cost Excel (`feature-plan-large-report-responses.md` FINAL v3.1) | **merged** (PR #30, `02059b0`, 2026-11-13; audit `LARGE-REPORT-RESPONSES-AUDIT.md` READY; CI green; checks run by the lead in the rehearsal). The product owner tags `stable-2026-11-13-large-report-responses`. **Still to prove at staging step 12.13:** the 4.5 MB exemption on Vercel and the cut-off behaviour. |
-| 6 | Distributed rate limiting (Upstash) | **approved 2026-11-12**; **next: blueprint to write** on branch `upstash-rate-limiting` (from `main` at `02059b0`); constraints in the decisions log |
+| 6 | Distributed rate limiting (Upstash) | **approved 2026-11-12**. Blueprint `feature-plan-upstash-rate-limiting.md` **FINAL v3.3, pre-mortem CLEAN** (two rounds plus three confirmation passes). **Waiting on the product owner's answers to Q1–Q5**; then the checks file and the dev hand-off. Branch `upstash-rate-limiting` from `02059b0`. |
 | 7 | ~~UX-5 accessibility (Section 508) verification~~ | **not doing** (product owner, 2026-11-12) |
 | 8 | Staging rehearsal (PRODUCTION-DEPLOY Phase 12), then production (Phase 13) | after the above. The approval-scope release is fix-forward only, with the window check. |
 
@@ -89,6 +89,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 2026-11-13 | **Excel cost report blueprint accepted** (`feature-plan-excel-cost-report.md` FINAL v3.1), **Q1–Q5 all as recommended:** Q1 the existing 4.5 MB response limit and Excel memory stay out of it, with a new follow-up item right after it (stream the CSV and API; cap the Excel range or rows); Q2 the API key dialog gets the `chargeCode` / `className` sentence; Q3 the Downloads description mentions charge codes; Q4 note text "Class shows the current Class of each charge code, including on past dates."; Q5 the cost CSV starts with a UTF-8 byte-order mark. |
 
 ## Open questions for the product owner
+0. **Blueprint 6 (Upstash), Q1–Q5** (`feature-plan-upstash-rate-limiting.md` §2): fallback when Upstash fails; per-IP failed sign-in limit (20/15 min, shared-network trade-off); per-IP reset-request limit; which limits move (the split); a budget alert instead of a hard cap. Recommendations in the blueprint.
 1. Product questions (not blocking):
    - should a QuickBooks resend send only entries not already sent?
    - should a real Gusto connection be built?
