@@ -15,12 +15,14 @@ const h = vi.hoisted(() => ({
   resumes: {} as Record<string, string | null>,
   alertsWithEmail: [] as Array<Record<string, unknown>>,
   resolved: [] as Array<Record<string, unknown>>,
-  sentry: { messages: [] as string[], exceptions: [] as Array<{ err: unknown; ctx: unknown }>, monitors: [] as Array<{ slug: string; config: unknown }>, flushes: [] as unknown[] },
+  /** S3: when set, raiseAlertWithEmail returns this instead of resolving at once. */
+  alertImpl: null as null | (() => Promise<{ opened: boolean; emailed: boolean }>),
+  sentry: { messages: [] as string[], messageOpts: [] as Array<{ level?: string; extra?: Record<string, unknown> } | undefined>, exceptions: [] as Array<{ err: unknown; ctx: unknown }>, monitors: [] as Array<{ slug: string; config: unknown }>, flushes: [] as unknown[] },
 }));
 
 vi.mock('server-only', () => ({}));
 vi.mock('@sentry/nextjs', () => ({
-  captureMessage: (m: string) => { h.sentry.messages.push(m); },
+  captureMessage: (m: string, o?: { level?: string; extra?: Record<string, unknown> }) => { h.sentry.messages.push(m); h.sentry.messageOpts.push(o); },
   captureException: (err: unknown, ctx?: unknown) => { h.sentry.exceptions.push({ err, ctx }); },
   withMonitor: (slug: string, cb: () => unknown, config: unknown) => { h.sentry.monitors.push({ slug, config }); return cb(); },
   flush: async (t: unknown) => { h.sentry.flushes.push(t); return true; },
@@ -33,7 +35,7 @@ vi.mock('@/lib/tenant/lifecycle-store', () => ({
   raiseAlert: async () => ({ opened: true }),
 }));
 vi.mock('@/lib/tenant/ops-alert-email', () => ({
-  raiseAlertWithEmail: async (a: Record<string, unknown>) => { h.alertsWithEmail.push(a); return { opened: true, emailed: true }; },
+  raiseAlertWithEmail: async (a: Record<string, unknown>) => { h.alertsWithEmail.push(a); return h.alertImpl ? h.alertImpl() : { opened: true, emailed: true }; },
 }));
 vi.mock('@/lib/cron/heartbeat', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/cron/heartbeat')>()),
@@ -44,7 +46,7 @@ vi.mock('@/lib/cron/heartbeat', async (importOriginal) => ({
 
 import { CRON_NAMES, CRON_SCHEDULES, cronProblems, type CronRunRow } from '@/lib/cron/heartbeat';
 import { runCron } from '@/lib/cron/run-cron';
-import { rotateAfterCursor, isSeedRecipient, sweepTenants } from '@/lib/cron/tenant-sweep';
+import { rotateAfterCursor, isSeedRecipient, sweepTenants, REMINDER_SEND_GRACE_MS, ALERT_TIMEOUT_MS } from '@/lib/cron/tenant-sweep';
 
 const ROOT = path.resolve(__dirname, '../../..');
 const HOUR = 3_600_000;
@@ -55,7 +57,8 @@ beforeEach(() => {
   h.resumes = {};
   h.alertsWithEmail = [];
   h.resolved = [];
-  h.sentry = { messages: [], exceptions: [], monitors: [], flushes: [] };
+  h.alertImpl = null;
+  h.sentry = { messages: [], messageOpts: [], exceptions: [], monitors: [], flushes: [] };
   delete process.env.SENTRY_CRON_MONITORS;
   process.env.CRON_SECRET = 'test-cron-secret';
 });
@@ -186,6 +189,11 @@ describe('reminder sweep: fair rotation + time budget', () => {
     expect(first).toMatchObject({ incomplete: true, processed: 2, cursor: 'b' });
     expect(h.sentry.messages).toEqual(['cron daily-reminder stopped at its time budget']);
     expect(h.alertsWithEmail).toEqual([expect.objectContaining({ kind: 'cron-incomplete', dedupKey: 'daily-reminder', tenantId: null })]);
+    // feature-plan-reminder-capacity.md S2: budget text and level unchanged; stopReason 'budget', also in the alert detail.
+    expect(h.sentry.messageOpts[0]?.level).toBe('warning');
+    expect(first.stopReason).toBe('budget');
+    expect(h.alertsWithEmail[0].detail).toMatchObject({ stopReason: 'budget' });
+    expect(h.alertsWithEmail[0].summary).toBe(`The daily-reminder cron stopped at its 0 s time budget after 2 of 4 workspaces. The next run starts after "b"; reminders it didn't reach today are not re-sent.`);
 
     // Next run: the saved cursor ('b') → 'c' (starved last time) is served first.
     h.cursor = first.cursor;
@@ -206,6 +214,7 @@ describe('reminder sweep: fair rotation + time budget', () => {
       processTenant: async (t) => (t.slug === 'b' ? { stoppedAfter: 'emp-5' } : 'done'),
     });
     expect(r).toMatchObject({ incomplete: true, processed: 1, cursor: 'a', resumes: { b: 'emp-5' } });
+    expect(r.stopReason).toBe('budget'); // S2: a tenant's stop with no reason is the time budget
   });
 
   it('audit A10: a tenant that always stops can’t stall the rotation — the second run reaches the next tenant', async () => {
@@ -338,6 +347,62 @@ describe('reminder sweep: fair rotation + time budget', () => {
     expect(r.failedTenants).toEqual(['b']);
     expect(h.sentry.exceptions).toEqual([{ err: boom, ctx: { tags: { tenant: 'b', cron: 'daily-reminder' } } }]);
     expect(r.incomplete).toBe(false);
+  });
+
+  /** feature-plan-reminder-capacity.md §6.5, S1–S4. */
+  it.each([
+    ['email-quota', "Resend's email quota ran out"],
+    ['email-config', 'Resend rejected the API key or sender domain'],
+    ['email-failing', 'three email batches in a row failed'],
+  ] as const)('S1: an email stop (%s) → incomplete, stopReason, resume kept, Sentry error, reason text, reason in detail', async (reason, text) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const order: string[] = [];
+    const r = await sweepTenants({
+      name: 'daily-reminder', tenants: [T('a'), T('b')], budgetMs: 10_000,
+      processTenant: async (t) => { order.push(t.slug); return { stoppedAfter: 'x', reason }; },
+    });
+    expect(order).toEqual(['a']); // the run stops: b isn't processed
+    expect(r).toMatchObject({ incomplete: true, stopReason: reason, resumes: { a: 'x' } });
+    expect(h.sentry.messages).toEqual([`cron daily-reminder stopped sending: ${reason}`]);
+    expect(h.sentry.messageOpts[0]?.level).toBe('error');
+    expect(h.sentry.messageOpts[0]?.extra).toMatchObject({ stopReason: reason });
+    expect(warn).toHaveBeenCalledWith(`Cron daily-reminder stopped sending: ${reason}`);
+    expect(h.alertsWithEmail).toHaveLength(1);
+    const alert = h.alertsWithEmail[0] as { summary: string; detail: Record<string, unknown> };
+    expect(alert.summary).toBe(`The daily-reminder cron stopped sending after 0 of 2 workspaces because ${text}. The next run starts after "a"; resumes mid-way: a; reminders it didn't send today are not re-sent.`);
+    expect(alert.summary).not.toContain('time budget');
+    expect(alert.detail).toMatchObject({ stopReason: reason });
+    warn.mockRestore();
+  });
+
+  it('S3: a raiseAlertWithEmail that never settles → sweepTenants still resolves about 10 s later', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      h.alertImpl = () => new Promise(() => {});
+      let result: Awaited<ReturnType<typeof sweepTenants>> | null = null;
+      void sweepTenants({
+        name: 'daily-reminder', tenants: [T('a')], budgetMs: 10_000,
+        processTenant: async () => ({ stoppedAfter: null }),
+      }).then((r) => { result = r; });
+      await vi.advanceTimersByTimeAsync(ALERT_TIMEOUT_MS - 1);
+      expect(result).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(result).toMatchObject({ incomplete: true, stopReason: 'budget', resumes: { a: null } });
+    } finally {
+      errSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('S4: processTenant gets sendCutoff = start + budget + REMINDER_SEND_GRACE_MS', async () => {
+    const cutoffs: number[] = [];
+    await sweepTenants({
+      name: 'submission-deadline', tenants: [T('a')], budgetMs: 100, clock: () => 1_000,
+      processTenant: async (_t, { sendCutoff }) => { cutoffs.push(sendCutoff); return 'done'; },
+    });
+    expect(REMINDER_SEND_GRACE_MS).toBe(20_000);
+    expect(cutoffs).toEqual([1_000 + 100 + 20_000]);
   });
 
   it('SEED_EMAIL_DOMAINS recipients are recognised (demo domains we do not own)', () => {
