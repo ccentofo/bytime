@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDetailedCostReport } from '@/server/actions/reports';
-import { generateCsv } from '@/lib/reports/csv-generator';
+import { csvLines } from '@/lib/reports/csv-generator';
+import { streamJoined } from '@/lib/http/stream-text';
 import { checkReportRateLimit } from '@/lib/rate-limit';
 import { guardErrorResponse } from '@/lib/http-errors';
 import { isCalendarDate } from '@/lib/calendar-date';
@@ -11,6 +12,9 @@ import { noHours, noHoursMessage } from '@/lib/reports/empty-range';
 // feature-plan-excel-cost-report.md §6.3 (Q5): a UTF-8 byte-order mark so Excel opens the file as UTF-8 ("—" not "â€”"),
 // as the workspace export does. Written as an escape so it's visible.
 const BOM = '\uFEFF';
+
+// feature-plan-large-report-responses.md §6.2 item 4: the platform default today, stated so a plan change can't shorten it.
+export const maxDuration = 300;
 
 export async function GET(request: NextRequest) {
   const rateLimited = checkReportRateLimit(request);
@@ -38,7 +42,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: noHoursMessage(startDate, endDate) }, { status: 422 });
     }
 
-    const csv = generateCsv(data, [
+    const lines = csvLines(data, [
       { key: 'employeeName', header: 'Employee' },
       { key: 'contractName', header: 'Contract' },
       { key: 'contractNumber', header: 'Contract Number' },
@@ -59,7 +63,10 @@ export async function GET(request: NextRequest) {
     // feature-plan-excel-cost-report.md E3 (Q4): the Class note, escaped (it has a comma, so it comes out quoted).
     const footer = `\nUnpriced hours (no applicable labor category; no cost),${unpriced}\n${CURRENT_RATES_NOTE}\n${escapeCsvField(CURRENT_CLASS_NOTE)}\n`;
 
-    return new NextResponse(BOM + csv + footer, {
+    // feature-plan-large-report-responses.md §6.2: streamed past Vercel's 4.5 MB buffered-response limit. Every line is
+    // built above (inside the try, so a failure is still the JSON 500); the stream only slices them and never holds `data`.
+    // The bytes equal BOM + lines.join('\n') + footer, exactly the old body.
+    return new Response(streamJoined({ head: BOM, items: lines, separator: '\n', tail: footer }), {
       headers: {
         'Content-Type': 'text/csv',
         'Content-Disposition': `attachment; filename="cost-report-${startDate}-to-${endDate}.csv"`,

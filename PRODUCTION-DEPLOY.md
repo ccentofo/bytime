@@ -548,6 +548,161 @@ confirm an event appears in Sentry tagged **`staging`**.
 crons after a day; `npm run backfill:neon-retention -- --check` shows every staging tenant project at the
 expected retention.
 
+**12.13** Large downloads (`feature-plan-large-report-responses.md`, build queue 5b). This proves on Vercel
+what a laptop can't: the cost CSV and `/api/v1/costs` get past Vercel's 4.5 MB response limit, the Excel shows its
+25,000-row message, and a download cut off mid-way is never saved as a short file. About 1 hour, most of it waiting.
+Do the steps in order. Report every result to Planning, including any surprise.
+
+1. **A fresh throwaway workspace.** Sign up through the real flow as in 12.4, with a new name such as `stagebig`
+   plus today's date (never `stagetest2`: after 12.8b it's suspended and data reads return 403; and never a
+   workspace later steps use: time entries can't be deleted). Then, with staging's `CONTROL_PLANE_DATABASE_URL` in
+   your shell as in Phase 1d:
+```bash
+npm run tenant:admin -- show <slug>
+```
+   ↑ expect the line `access mode now:            full`.
+
+2. **Seed 40,800 cost rows in one year.** In Neon, open the project `cadenzpoint-<slug>` → **SQL Editor** →
+   database `tenant_<slug>`, paste this and run it:
+```sql
+WITH c AS (
+  INSERT INTO contracts (contract_number, name, start_date)
+  VALUES ('STG5B-2026-LARGE-REPORT-RESPONSES-0001', 'Staging Large Report Responses Rehearsal Contract', current_date - 401)
+  RETURNING id),
+cl AS (
+  INSERT INTO clins (contract_id, clin_number)
+  SELECT c.id, '000' || g FROM c, generate_series(1, 6) g RETURNING id),
+u AS (
+  INSERT INTO users (email, full_name, role)
+  SELECT 'stg5b-' || lpad(g::text, 2, '0') || '@example.com',
+         'Staging Rehearsal Employee Number ' || lpad(g::text, 2, '0'), 'employee'
+  FROM generate_series(1, 20) g RETURNING id)
+INSERT INTO timesheet_entries (user_id, clin_id, entry_date, hours)
+SELECT u.id, cl.id, current_date - 1 - d, '1.5' FROM u, cl, generate_series(0, 339) d;
+```
+   ↑ expect `INSERT 0 40800`. (Planning measured this data locally: a 7.1 MB CSV and a 19.5 MB API response.)
+   The rows end yesterday by Neon's clock (UTC), so they all fall inside the helper's year at any hour of your day.
+
+3. **An API key.** Sign in as that workspace's admin, open **Settings › API keys**, create a key (name
+   `5b check`, Read Only), click **Copy key**, then in Terminal:
+```bash
+pbpaste > /tmp/stg5b-key
+```
+
+4. **The helper.** Paste this block once (from the first `cat` line to the closing `EOF`):
+```bash
+cat > /tmp/stg5b.sh <<'EOF'
+#!/bin/bash
+# Helper for PRODUCTION-DEPLOY step 12.13 (large report responses). Usage: bash /tmp/stg5b.sh <step>
+set -uo pipefail
+J=/tmp/stg5b-jar
+S=$(date -v-365d +%F); E=$(date +%F)
+base() { [ -s /tmp/stg5b-base ] || { echo "STOP: run: bash /tmp/stg5b.sh base <workspace URL>" >&2; exit 1; }; cat /tmp/stg5b-base; }
+csv_url() { echo "$(base)/api/reports/cost-report-csv?startDate=$S&endDate=$E"; }
+lastline() { python3 -I -c 'import sys; l=[x for x in open(sys.argv[1],encoding="utf-8-sig",errors="replace").read().split("\n") if x]; print(l[-1] if l else "(empty)")' "$1"; }
+enc() { grep -i '^content-encoding:' "$1" | tr -d '\r' || echo "content-encoding: none"; }
+case "${1:-}" in
+  base)
+    [ -n "${2:-}" ] || { echo "Usage: base https://<slug>.staging.cadenzpoint.com"; exit 1; }
+    echo "${2%/}" > /tmp/stg5b-base && echo "Saved $(base)"
+    ;;
+  login)
+    [ -n "${2:-}" ] || { echo "Usage: login <admin email>"; exit 1; }
+    read -rsp "Password for $2: " PW; echo
+    rm -f "$J"
+    csrf=$(curl -sS -c "$J" -b "$J" "$(base)/api/auth/csrf" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["csrfToken"])') || exit 1
+    curl -sS -o /dev/null -c "$J" -b "$J" --data-urlencode "csrfToken=$csrf" --data-urlencode "email=$2" \
+      --data-urlencode "password=$PW" "$(base)/api/auth/callback/credentials"
+    case "$(curl -sS -b "$J" "$(base)/api/auth/session")" in *"$2"*) echo "Signed in.";; *) echo "STOP: sign-in failed"; exit 1;; esac
+    ;;
+  fetch)
+    [ -s /tmp/stg5b-key ] || { echo "STOP: save the API key first: pbpaste > /tmp/stg5b-key"; exit 1; }
+    echo "CSV: $(curl -sS -b "$J" -D /tmp/stg5b-csv.h -o /tmp/stg5b.csv -w '%{http_code} %{size_download} bytes %{time_total}s' "$(csv_url)")"
+    echo "  $(enc /tmp/stg5b-csv.h)"; echo "  last line: $(lastline /tmp/stg5b.csv)"
+    wc -c < /tmp/stg5b.csv | tr -d ' ' > /tmp/stg5b-size
+    echo "API: $(curl -sS -H "Authorization: Bearer $(tr -d '[:space:]' < /tmp/stg5b-key)" -D /tmp/stg5b-api.h -o /tmp/stg5b.json \
+      -w '%{http_code} %{size_download} bytes %{time_total}s' "$(base)/api/v1/costs?startDate=$S&endDate=$E")"
+    echo "  $(enc /tmp/stg5b-api.h)"
+    python3 -I -c 'import json; d=json.load(open("/tmp/stg5b.json")); print("  meta.total:", d["meta"]["total"])' 2>/dev/null \
+      || echo "  not JSON rows: $(head -c 200 /tmp/stg5b.json)"
+    ;;
+  excel)
+    echo "Excel: $(curl -sS -b "$J" -o /tmp/stg5b.xlsx -w '%{http_code}' "$(base)/api/reports/cost-report-xlsx?startDate=$S&endDate=$E")"
+    python3 -I -c 'import json; b=open("/tmp/stg5b.xlsx","rb").read(); print("  message:", json.loads(b)["error"]) if b[:1]==b"{" else print("  a spreadsheet file (no message)")'
+    ;;
+  slow)
+    [ -s /tmp/stg5b-size ] || { echo "STOP: run fetch first"; exit 1; }
+    FULL=$(cat /tmp/stg5b-size); RATE="${2:-4k}"
+    echo "Downloading at $RATE (full size $FULL bytes). Started $(date -u +%H:%M:%S) UTC; this takes a while."
+    curl -sS -b "$J" -D /tmp/stg5b-slow.h -o /tmp/stg5b-slow.csv --limit-rate "$RATE" "$(csv_url)"; CODE=$?
+    GOT=$(wc -c < /tmp/stg5b-slow.csv | tr -d ' '); LAST=$(lastline /tmp/stg5b-slow.csv)
+    echo "Finished $(date -u +%H:%M:%S) UTC. curl exit $CODE, $GOT of $FULL bytes. $(enc /tmp/stg5b-slow.h)"
+    echo "Last line: $LAST"
+    if [ "$CODE" != "0" ]; then echo "RESULT: cut off with an error (pass). Check the runtime logs for a timeout."
+    elif [ "$GOT" = "$FULL" ] && [ "$LAST" = "$(lastline /tmp/stg5b.csv)" ]; then
+      echo "RESULT: complete file. Check the runtime logs: no timeout means not exercised (rerun with: slow 1k)."
+    else echo "RESULT: STOP. A short or changed file ended cleanly. Tell Planning before production."; fi
+    ;;
+  cleanup)
+    rm -f /tmp/stg5b-* /tmp/stg5b.csv /tmp/stg5b.json /tmp/stg5b.xlsx /tmp/stg5b-slow.csv && echo "Removed the saved files."
+    ;;
+  *)
+    echo "Usage: bash /tmp/stg5b.sh base <url>|login <email>|fetch|excel|slow [rate]|cleanup"; exit 1
+    ;;
+esac
+EOF
+```
+   Then, with your workspace's address:
+```bash
+bash /tmp/stg5b.sh base https://<slug>.staging.cadenzpoint.com
+```
+```bash
+bash /tmp/stg5b.sh login <admin email>
+```
+   ↑ type the password when asked; expect `Signed in.` The helper never asks for compression, so the sizes are
+   real (browsers do get compressed files; this is the worst case).
+
+5. **Baseline, before 5b (optional but wanted).** If **Actions → Deploy to Staging** lets you pick a tag under
+   "Use workflow from", deploy `stable-2026-11-13-excel-cost-report`, wait for it, then:
+```bash
+bash /tmp/stg5b.sh fetch
+```
+   Write down the `CSV:` and `API:` status codes (`413` means the old code hit the limit; `200` means it didn't).
+   Then redeploy `main` (12.1). If the tag can't be picked, skip this and say so.
+
+6. **With 5b** (`main` deployed):
+```bash
+bash /tmp/stg5b.sh fetch
+```
+   ↑ expect `CSV: 200` with more than 4,500,000 bytes, `content-encoding: none`, and the last line
+   `"Class shows the current Class of each charge code, including on past dates."`; then `API: 200` with more
+   than 4,500,000 bytes, `content-encoding: none`, `meta.total: 40800`. Write down the CSV time.
+```bash
+bash /tmp/stg5b.sh excel
+```
+   ↑ expect `Excel: 422` and
+   `message: More than 25,000 rows match. Choose a shorter date range, or download the CSV.`
+
+7. **A download cut off at 300 s.** Note the start time it prints, then wait (about 30 minutes):
+```bash
+bash /tmp/stg5b.sh slow 4k
+```
+   Then open Vercel → the staging project → **Logs** **right away** (they're kept only briefly), filter on
+   `/api/reports/cost-report-csv` around the start time, and note whether that request ended in a timeout.
+   - `RESULT: cut off with an error (pass)`: good.
+   - `RESULT: complete file`: also fine for the file. But if the logs show no timeout, the 300 s cut didn't
+     happen: run `bash /tmp/stg5b.sh slow 1k` once. If it still doesn't time out, report "not exercised".
+   - `RESULT: STOP`: a short or changed file ended cleanly. **Don't deploy production.** Tell Planning.
+
+8. **Clean up.** Delete the workspace (with staging's `CONTROL_PLANE_DATABASE_URL`, `ENCRYPTION_KEY` and
+   `NEON_API_KEY` in your shell):
+```bash
+npm run tenant:delete -- <slug> --yes --force-with-reason "5b staging rehearsal throwaway"
+```
+```bash
+bash /tmp/stg5b.sh cleanup
+```
+
 ✅ **Check:** every step above passed on staging. **Do not touch production until it does.**
 
 ---
@@ -639,4 +794,4 @@ converted scopes.
 | **Terms of Service, Privacy Policy, DPA** reviewed by a lawyer | Required to sell. |
 | **Trademark clearance** for "CadenzPoint" | Before marketing spend. |
 | **QuickBooks / Gusto production approval** | Intuit and Gusto review apps before issuing production keys; test against their sandboxes first. |
-| **Excel cost report** shows charge codes and Class | Feature gap (PDF already does). |
+| ~~**Excel cost report** shows charge codes and Class~~ | **Done** (PR #29, 2026-11-13): the detailed cost report (Excel, CSV and `/api/v1/costs`) has Charge Code and Class. The PDF shows the charge code but not Class. |

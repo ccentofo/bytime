@@ -203,9 +203,10 @@ describe('cost exports carry the unpriced count (ruling Q6)', () => {
   it('CSV footer and v1 meta carry the total (static)', () => {
     const csv = readFileSync(path.join(ROOT, 'src/app/api/reports/cost-report-csv/route.ts'), 'utf8');
     expect(csv).toMatch(/Unpriced hours \(no applicable labor category; no cost\),\$\{unpriced\}/);
-    expect(csv).toMatch(/new NextResponse\(BOM \+ csv \+ footer,/); // excel-cost-report §6.3 item 3 (Q5)
+    // large-report-responses §10.1: the body streams (byte identity is cost-report-csv.test.ts T6).
+    expect(csv).toMatch(/streamJoined\(\{ head: BOM, items: lines, separator: '\\n', tail: footer \}\)/);
     const v1 = readFileSync(path.join(ROOT, 'src/app/api/v1/costs/route.ts'), 'utf8');
-    expect(v1).toMatch(/return apiResponse\(data, \{ total: data\.length, unpricedHours \}\);/);
+    expect(v1).toMatch(/return apiStreamResponse\(data, \{ total: data\.length, unpricedHours \}\);/);
   });
 
   // ── feature-plan-excel-cost-report.md ─────────────────────────────────────

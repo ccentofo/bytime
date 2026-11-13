@@ -2,12 +2,16 @@ import { NextRequest } from 'next/server';
 import { getDb } from '@/db';
 import { timesheetEntries, timesheetPeriods, users, clins, contracts, indirectChargeCodes, importBatches } from '@/db/schema';
 import { eq, and, gte, lt, sql } from 'drizzle-orm';
-import { handleApiRequest, apiResponse, apiError } from '@/lib/api-auth';
+import { handleApiRequest, apiStreamResponse, apiError } from '@/lib/api-auth';
 import { addDays, isCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { existingPeriodLength } from '@/server/internal/pay-period-config';
 import { importedPeriodIds } from '@/server/internal/import-provenance';
 import { approvalLabels } from '@/server/internal/approval-label';
 import { getWorkspaceTimezone } from '@/server/internal/workspace-settings';
+
+// feature-plan-large-report-responses.md §6.3/§6.5: the body streams; the platform default today, stated so a plan
+// change can't shorten it.
+export const maxDuration = 300;
 
 // Date format: `startDate`/`endDate` query params and every `periodStart`/`entryDate` in the
 // response are plain 'YYYY-MM-DD' calendar-date strings — never an ISO instant/timestamp.
@@ -111,5 +115,5 @@ async function listApprovedTimesheets(request: NextRequest): Promise<Response> {
     });
   }
 
-  return apiResponse(results, { total: results.length });
+  return apiStreamResponse(results, { total: results.length });
 }

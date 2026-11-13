@@ -6,6 +6,7 @@ import { guardErrorResponse } from '@/lib/http-errors';
 import { getSessionUser } from '@/lib/session';
 import { isCalendarDate } from '@/lib/calendar-date';
 import { noHours, noHoursMessage } from '@/lib/reports/empty-range';
+import { EXCEL_COST_MAX_ROWS, EXCEL_COST_TOO_MANY_ROWS } from '@/lib/reports/limits';
 
 export async function GET(request: NextRequest) {
   const rateLimited = checkReportRateLimit(request);
@@ -46,6 +47,11 @@ export async function GET(request: NextRequest) {
       // R4: no hours in range (cleared-only included) → 422, shown in place.
       if (noHours(data, (e) => e.totalHours)) {
         return NextResponse.json({ error: noHoursMessage(startDate, endDate) }, { status: 422 });
+      }
+      // feature-plan-large-report-responses.md §6.4 (Q1/Q2): building the workbook takes ~610 MB at 25,000 rows, so more
+      // than the cap is refused before building it (after the no-hours check, so an empty range keeps its own message).
+      if (data.length > EXCEL_COST_MAX_ROWS) {
+        return NextResponse.json({ error: EXCEL_COST_TOO_MANY_ROWS }, { status: 422 });
       }
       buffer = await generateCostReportExcel(data, 'Cost Report', dateRange);
     }

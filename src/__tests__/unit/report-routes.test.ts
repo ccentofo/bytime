@@ -24,7 +24,11 @@ vi.mock('@/lib/session', () => ({ getSessionUser: async () => ({ role: 'admin' }
 vi.mock('@/server/internal/workspace-settings', () => ({ getWorkspaceTimezone: vi.fn(async () => 'America/New_York') }));
 vi.mock('@/lib/reports/timesheet-pdf', () => ({ TimesheetPdfDocument: () => null }));
 vi.mock('@react-pdf/renderer', () => ({ renderToBuffer: vi.fn(async () => { if (h.failRender) throw new Error('font missing'); return Buffer.from('%PDF'); }) }));
-vi.mock('@/lib/reports/csv-generator', () => ({ generateCsv: vi.fn(() => { if (h.failCsv) throw new Error('bad row'); return 'a,b\n'; }) }));
+// large-report-responses §10.1: the route builds its lines with csvLines (before the stream), so that's what fails here.
+vi.mock('@/lib/reports/csv-generator', () => ({
+  generateCsv: vi.fn(() => { if (h.failCsv) throw new Error('bad row'); return 'a,b\n'; }),
+  csvLines: vi.fn(() => { if (h.failCsv) throw new Error('bad row'); return ['a,b']; }),
+}));
 
 import { GET as pdfGET } from '@/app/api/reports/timesheet-pdf/route';
 import { GET as csvGET } from '@/app/api/reports/cost-report-csv/route';
