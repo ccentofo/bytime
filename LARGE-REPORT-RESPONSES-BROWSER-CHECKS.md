@@ -162,7 +162,7 @@ bash /tmp/lrr-check.sh
 npm run demo:local
 ```
 
-**Expect:** it ends with `✅ Local demo ready.`
+**Expect:** the output includes `✅ Local demo ready.`
 
 ### 0.3 Add a test API key to the demo (tab A)
 
@@ -255,7 +255,7 @@ approved.json: SAME ROWS (… bytes)
 1. Open `http://acme.localhost:3000` and sign in as `admin@cadenzpoint.dev`, password `Password123!`.
 2. Open **Downloads**: `http://acme.localhost:3000/admin/reports`.
 3. In the **Contract costs** row, set **Contract** to `NAVAIR Systems Support (W58RGZ-21-C-0001)` and **Dates** to the option starting `Contract to date`.
-4. Click **CSV** and open the downloaded `cost-report-….csv`.
+4. Click **CSV** and open the downloaded `cost-report-….csv` in Excel or Numbers.
 
    **Expect:** the same file as before this change. The headers are `Employee`, `Contract`, `Contract Number`, `CLIN`, `SLIN`, `Charge Code`, `Class`, `LCAT Code`, `LCAT Title`, `Rate ($/hr)`, `Date`, `Hours`, `Cost ($)`, `Cost Basis`. The last line is `Class shows the current Class of each charge code, including on past dates.`
 5. Click **Excel** and open the downloaded `cost-report-….xlsx`.
@@ -271,7 +271,7 @@ A deleted workspace's name stays reserved, so every run makes a new one, named `
 bash /tmp/lrr-check.sh new
 ```
 
-**Expect:** `Workspace name: lrr…`, then `CREATE DATABASE`. Some database notices may print in between. It ends with `✓ Tenant "lrr…" is ACTIVE.` and a `Login:` line.
+**Expect:** `Workspace name: lrr…`, then `CREATE DATABASE`. Some database notices may print in between. It includes `✓ Tenant "lrr…" is ACTIVE.` and a `Login:` line.
 
 ### C.2 Add the cost rows (tab A)
 This adds a contract (`Big Check Contract`, CLIN `0001`), 10 employees, and 8 hours a day for each of them for the last 2,600 days: 26,000 entries. First, a preview that rolls back:
@@ -306,7 +306,7 @@ cat /tmp/lrr-check-name
    **Expect:** no download. The row shows exactly: `More than 25,000 rows match. Choose a shorter date range, or download the CSV.`
 6. Click **CSV**.
 
-   **Expect:** `cost-report-….csv` downloads. It opens with 26,000 data rows, all `Unpriced`, and the Class note as its last line.
+   **Expect:** `cost-report-….csv` downloads. Opened in Excel or Numbers, it has 26,000 data rows (each with LCAT Title `Unpriced` and Cost Basis `unpriced`) and the Class note as its last line.
 
 ### C.5 The same, by the helper (tab A)
 
@@ -335,7 +335,7 @@ The last line shows the Hours summary Excel has no limit: it still downloads for
 bash /tmp/lrr-check.sh delete
 ```
 
-**Expect:** a report ending with `database: database dropped` and `FORCED: local large-report-responses check`.
+**Expect:** the report includes `database:` … `database dropped` and `FORCED:` … `local large-report-responses check`.
 
 3. Remove the test key and saved files:
 
@@ -351,7 +351,7 @@ bash /tmp/lrr-check.sh cleanup
 npm run demo:local
 ```
 
-**Expect:** `✅ Local demo ready.`
+**Expect:** the output includes `✅ Local demo ready.`
 
 ## What to report back
 For each of M, A, B, C: **passed**, or the step number and what you saw instead.

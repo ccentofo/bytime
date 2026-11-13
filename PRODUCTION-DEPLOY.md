@@ -567,7 +567,7 @@ npm run tenant:admin -- show <slug>
 ```sql
 WITH c AS (
   INSERT INTO contracts (contract_number, name, start_date)
-  VALUES ('STG5B-2026-LARGE-REPORT-RESPONSES-0001', 'Staging Large Report Responses Rehearsal Contract', current_date - 400)
+  VALUES ('STG5B-2026-LARGE-REPORT-RESPONSES-0001', 'Staging Large Report Responses Rehearsal Contract', current_date - 401)
   RETURNING id),
 cl AS (
   INSERT INTO clins (contract_id, clin_number)
@@ -578,9 +578,10 @@ u AS (
          'Staging Rehearsal Employee Number ' || lpad(g::text, 2, '0'), 'employee'
   FROM generate_series(1, 20) g RETURNING id)
 INSERT INTO timesheet_entries (user_id, clin_id, entry_date, hours)
-SELECT u.id, cl.id, current_date - d, '1.5' FROM u, cl, generate_series(0, 339) d;
+SELECT u.id, cl.id, current_date - 1 - d, '1.5' FROM u, cl, generate_series(0, 339) d;
 ```
    ↑ expect `INSERT 0 40800`. (Planning measured this data locally: a 7.1 MB CSV and a 19.5 MB API response.)
+   The rows end yesterday by Neon's clock (UTC), so they all fall inside the helper's year at any hour of your day.
 
 3. **An API key.** Sign in as that workspace's admin, open **Settings › API keys**, create a key (name
    `5b check`, Read Only), click **Copy key**, then in Terminal:
