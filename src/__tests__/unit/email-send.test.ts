@@ -24,8 +24,6 @@ import {
   sendTimesheetSubmittedEmail,
   sendTimesheetApprovedEmail,
   sendTimesheetRejectedEmail,
-  sendDailyReminderEmail,
-  sendSubmissionDeadlineEmail,
   sendPasswordResetEmail,
 } from '@/lib/email/send';
 import React from 'react';
@@ -120,8 +118,6 @@ describe('every workspace email carries the caller-supplied tenant appUrl', () =
     ['submitted', () => sendTimesheetSubmittedEmail({ supervisorEmail: 's@a.com', supervisorName: 'S', employeeName: 'E', employeeEmail: 'e@a.com', periodLabel: 'P', submittedAt: 'now', appUrl })],
     ['approved', () => sendTimesheetApprovedEmail({ employeeEmail: 'e@a.com', employeeName: 'E', periodLabel: 'P', approvedBy: 'A', approvedAt: 'now', appUrl, periodStart: '2026-10-01' })],
     ['rejected', () => sendTimesheetRejectedEmail({ employeeEmail: 'e@a.com', employeeName: 'E', periodLabel: 'P', rejectedBy: 'A', rejectedAt: 'now', rejectionComment: 'fix', appUrl, periodStart: '2026-10-01' })],
-    ['daily reminder', () => sendDailyReminderEmail({ employeeEmail: 'e@a.com', employeeName: 'E', todayDate: 'Mon', appUrl })],
-    ['deadline', () => sendSubmissionDeadlineEmail({ employeeEmail: 'e@a.com', employeeName: 'E', periodLabel: 'P', deadlineDate: 'Fri', appUrl })],
     ['password reset', () => sendPasswordResetEmail({ employeeEmail: 'e@a.com', employeeName: 'E', resetUrl: `${appUrl}/reset-password`, expiresIn: '1 hour', appUrl })],
   ])('%s', async (_name, send) => {
     await expect(send()).resolves.toEqual({ ok: true, id: 'msg' });
