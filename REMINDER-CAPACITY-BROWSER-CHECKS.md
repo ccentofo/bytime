@@ -19,7 +19,7 @@ npm run build
 **Expect:** the build finishes with no errors.
 
 ### 0.2 Create a throwaway workspace with 150 employees (tab A)
-A deleted workspace's name stays reserved, so every run uses a **new** name. Keep all of section 0.2 and D.4 in tab A, where the name is set.
+A deleted workspace's name stays reserved, so every run uses a **new** name. Step 2 saves it in a small file, `/tmp/rc-check-name`, and every later command reads it from there, so it works in any tab or with the Run buttons. Each of those commands stops at once if the file is missing.
 
 1. **Only if an earlier attempt left it behind:** remove the half-made database from that attempt. First check whether it exists:
    ```bash
@@ -30,29 +30,29 @@ A deleted workspace's name stays reserved, so every run uses a **new** name. Kee
    psql "postgresql://bytime:bytime_dev@localhost:5432/bytime" -c 'DROP DATABASE "bytime_rccheck"'
    ```
    **Expect:** `DROP DATABASE`. If the first command printed nothing, skip this.
-2. Pick this run's workspace name:
+2. Pick this run's workspace name and save it:
    ```bash
-   RC=rc$(date +%m%d%H%M); echo "$RC"
+   echo "rc$(date +%m%d%H%M)" > /tmp/rc-check-name && cat /tmp/rc-check-name
    ```
-   **Expect:** a name like `rc11131405`. If you close tab A before cleanup, set it again with `RC=<that name>`.
+   **Expect:** a name like `rc11131405`. That's `<name>` below. Run this step only once per run.
 3. Create its database:
    ```bash
-   psql "postgresql://bytime:bytime_dev@localhost:5432/bytime" -c "CREATE DATABASE \"bytime_$RC\""
+   N=$(cat /tmp/rc-check-name) && [ -n "$N" ] && psql "postgresql://bytime:bytime_dev@localhost:5432/bytime" -c "CREATE DATABASE \"bytime_$N\""
    ```
    **Expect:** `CREATE DATABASE`.
 4. Register the workspace. This creates only an admin, `admin@<name>.test`:
    ```bash
-   npm run seed:tenant -- "$RC" "postgresql://bytime:bytime_dev@localhost:5432/bytime_$RC"
+   N=$(cat /tmp/rc-check-name) && [ -n "$N" ] && npm run seed:tenant -- "$N" "postgresql://bytime:bytime_dev@localhost:5432/bytime_$N"
    ```
    **Expect:** it ends with `✓ Tenant "<name>" is ACTIVE.`
 5. Add 150 employees on a made-up domain, `rc-check.test`. Run it in a transaction you roll back first, to see the count without saving:
    ```bash
-   psql "postgresql://bytime:bytime_dev@localhost:5432/bytime_$RC" -c "BEGIN; INSERT INTO users (email, full_name, role) SELECT 'emp' || lpad(g::text, 3, '0') || '@rc-check.test', 'Check Employee ' || g, 'employee' FROM generate_series(1, 150) g; SELECT count(*) FROM users WHERE role = 'employee'; ROLLBACK;"
+   N=$(cat /tmp/rc-check-name) && [ -n "$N" ] && psql "postgresql://bytime:bytime_dev@localhost:5432/bytime_$N" -c "BEGIN; INSERT INTO users (email, full_name, role) SELECT 'emp' || lpad(g::text, 3, '0') || '@rc-check.test', 'Check Employee ' || g, 'employee' FROM generate_series(1, 150) g; SELECT count(*) FROM users WHERE role = 'employee'; ROLLBACK;"
    ```
    **Expect:** `BEGIN`, `INSERT 0 150`, then `count` is `150`, then `ROLLBACK`.
 6. Now save it:
    ```bash
-   psql "postgresql://bytime:bytime_dev@localhost:5432/bytime_$RC" -c "INSERT INTO users (email, full_name, role) SELECT 'emp' || lpad(g::text, 3, '0') || '@rc-check.test', 'Check Employee ' || g, 'employee' FROM generate_series(1, 150) g;"
+   N=$(cat /tmp/rc-check-name) && [ -n "$N" ] && psql "postgresql://bytime:bytime_dev@localhost:5432/bytime_$N" -c "INSERT INTO users (email, full_name, role) SELECT 'emp' || lpad(g::text, 3, '0') || '@rc-check.test', 'Check Employee ' || g, 'employee' FROM generate_series(1, 150) g;"
    ```
    **Expect:** `INSERT 0 150`.
 
@@ -153,18 +153,18 @@ In production, Resend would answer a repeated key without sending. The stand-in 
 2. In tab A, run the `curl` command from A.1 once more. A complete run clears the alert that check C opened.
    **Expect:** `"incomplete": false`, `"stopReason": null`.
 3. Stop the app (tab C) and the stand-in (tab B) with **Ctrl+C**.
-4. Delete the throwaway workspace (in tab A, where `RC` is set). A dry run comes first:
+4. Delete the throwaway workspace. A dry run comes first:
    ```bash
-   npm run tenant:delete -- "$RC"
+   N=$(cat /tmp/rc-check-name) && [ -n "$N" ] && npm run tenant:delete -- "$N"
    ```
    **Expect:** `Tenant <name> (<name>), status=active`, `Database: local database "bytime_<name>"`, a "Not eligible" list (that's fine: the next command forces it), and `Dry run — pass --yes to apply.` Nothing is changed. Then apply it:
    ```bash
-   npm run tenant:delete -- "$RC" --yes --force-with-reason "local reminder-capacity check"
+   N=$(cat /tmp/rc-check-name) && [ -n "$N" ] && npm run tenant:delete -- "$N" --yes --force-with-reason "local reminder-capacity check"
    ```
    **Expect:** `✓ Deletion complete.` and a receipt with `slug: <name>`, `status: deleted` and `database: database dropped`.
-5. Remove the stand-in file:
+5. Remove the stand-in and the name file:
    ```bash
-   rm /tmp/resend-standin.mjs
+   rm /tmp/resend-standin.mjs /tmp/rc-check-name
    ```
 
 ## What to report back
