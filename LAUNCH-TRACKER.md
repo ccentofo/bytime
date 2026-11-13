@@ -41,7 +41,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 3b | **Database backups**: daily encrypted `pg_dump` of every tenant and the control plane to S3 us-east-1, 30-day lifecycle, write-only credentials, monitoring, restore drill (`BUSINESS-DECISIONS.md` §5) | **approved 2026-11-11** as its own blueprint; blueprint to write |
 | 3a | **Per-user billing** (new model, billing rules and Billing page, from `BUSINESS-DECISIONS.md` §1) | **approved 2026-11-11**; blueprint to write |
 | 4 | Launch hardening H1–H6 (`feature-plan-launch-hardening.md` FINAL v3.2) | **merged** (PR #26, `a80ad8b`, 2026-11-12; audit `LAUNCH-HARDENING-AUDIT.md` READY; CI green; product owner's browser checks passed, with the no-JavaScript check withdrawn). Tag `stable-2026-11-12-launch-hardening`. |
-| 4b | **Reminder email capacity**: the cron senders use Resend batch send (today about 480 sends per run across all workspaces) | **approved 2026-11-11** (hardening Q8). **Next:** the lead writes the blueprint on branch `reminder-capacity` (research notes in the Lead handoff notes). |
+| 4b | **Reminder email capacity**: the cron senders use Resend batch send (today about 480 sends per run across all workspaces) | **approved 2026-11-11** (hardening Q8). **Blueprint `feature-plan-reminder-capacity.md` v3.1: pre-mortem CLEAN** (2 rounds + confirmation pass, 2026-11-12). Checks: `REMINDER-CAPACITY-BROWSER-CHECKS.md` (draft; the lead rehearses it before the merge gate). **Accepted by the product owner 2026-11-12. Next: a fresh dev session on `reminder-capacity`.** |
 | 5 | Excel cost report: charge codes and Class | **approved 2026-11-12**; blueprint to write (research started) |
 | 6 | Distributed rate limiting (Upstash) | **approved 2026-11-12**; blueprint to write (constraints in the decisions log) |
 | 7 | ~~UX-5 accessibility (Section 508) verification~~ | **not doing** (product owner, 2026-11-12) |
@@ -80,6 +80,8 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 2026-11-11 | **R1** (QuickBooks token refresh race across requests) goes into the launch hardening blueprint as **H6**. |
 | 2026-11-12 | Rate limiting: **Upstash** (expected to stay in the free tier). Rate-limit keys must be **salted hashes that expire within 25 hours** (matches the Privacy Policy). Raw IPs are never stored. |
 | 2026-11-12 | **Launch hardening L1:** keep the curly apostrophes in the notifications line ("You’ll", "haven’t"), matching the rest of the app. |
+| 2026-11-12 | **4b reminder capacity:** Resend batch send applies to the two reminder crons only (`daily-reminder`, `submission-deadline`). Admin notice delivery (`deliverPendingNotices`) stays one email per send. |
+| 2026-11-12 | **4b blueprint accepted** (`feature-plan-reminder-capacity.md` FINAL v3.1). **Q2:** no Resend account yet, so the live batch check moves to the staging rehearsal (Phase 12). **Q3:** no quota-reserve code; the Resend Free tier for now (the product owner revisits before customers beyond the design partner; lead's estimate: Free covers about one 30-person workspace's reminders a day). |
 
 ## Open questions for the product owner
 1. Product questions (not blocking):
@@ -100,7 +102,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 - Landing copy
 - Terms and Privacy §7 wording (also gates signup controls)
 - Retention and backup policy
-- Resend account
+- Resend account (the product owner: Free tier for now; the live batch check runs at the staging rehearsal once the account exists; upgrade before reminders exceed ~100 emails/day)
 - Lawyer review
 - Security posture (NIST 800-171 / CMMC, SOC 2, CUI)
 - Trademark
@@ -111,7 +113,8 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 ## Lead handoff notes (for a fresh "CadenzPoint Planning" session)
 **In flight:**
 - **Nothing in development.** Launch hardening merged (PR #26), tag `stable-2026-11-12-launch-hardening`. The launch-hardening dev session can be archived.
-- **The lead is writing** the reminder email capacity blueprint (4b) on branch `reminder-capacity`, then the Excel cost report, Upstash, per-user billing and backups. Each gets two pre-mortem rounds and goes to the product owner before the dev.
+- **4b blueprint FINAL and accepted (2026-11-12)**; it goes to a fresh dev session on `reminder-capacity`. The lead then writes the Excel cost report, Upstash, per-user billing and backups blueprints. Each gets two pre-mortem rounds (plus a confirmation pass if round 2 finds a MEDIUM) and goes to the product owner before the dev.
+- **4b audit notes for the lead:** rehearse `REMINDER-CAPACITY-BROWSER-CHECKS.md` against the finished branch (it creates a throwaway `rccheck` workspace) before handing it to the product owner. The live Resend batch check (blueprint §12.1) runs at the staging rehearsal.
 - **Note for the rate-limiting blueprint:** `login_attempts.ip_address` exists, but nothing writes to it. Drop the column or guard it so raw IPs stay unstored.
 
 **4b research so far** (lead, 2026-11-11/12; re-verify line numbers before writing):
@@ -120,10 +123,10 @@ The single source of truth for **where we are**, kept by the lead architect (ses
   - Each awaits `createSendThrottle()` (`src/lib/email/rate.ts`, 500 ms = 2 sends/s per cron) before `deliverEmail` (`src/lib/email/send.ts`: one 429 retry after 2 s; success only with a message id).
   - The deadline cron still reads `notification_preferences.email_deadline_reminder` per employee.
 - **Notice delivery is different:** `deliverPendingNotices` (`src/lib/tenant/notices.ts`, every 10 min) sends lifecycle and Terms notices to workspace admins, with a lease, a per-notice `sentAt` / `providerMessageId` record, and its own 500 ms throttle. Low volume.
-  - **Question for the product owner:** batch only the two reminder crons and leave notices per-message. Lead's recommendation: yes.
+  - **Decided (product owner, 2026-11-12):** batch only the two reminder crons; notices stay per-message.
 - **Resend facts (installed `resend` 6.12.4 and resend.com docs, fetched 2026-11-11):**
   - `resend.batch.send(emails[], { idempotencyKey?, batchValidation?: 'strict' | 'permissive' })` posts to `/emails/batch`, up to 100 emails per call, with no attachments or `scheduledAt`. The SDK renders each `react` element to `html` first (`dist/index.mjs:220-245`).
-  - The response is `{ data: [{ id }] }` in input order. With `permissive`, it also returns `errors: [{ index, message }]`. Default `strict` fails the whole batch on one invalid email.
+  - The API body is `{ data: [{ id }] }` in input order, and the SDK wraps it, so the array is at `result.data.data` (corrected 2026-11-12 by pre-mortem round 1). With `permissive`, the body also has `errors: [{ index, message }]`. Default `strict` fails the whole batch on one invalid email.
   - Idempotency keys: unique per request, up to 256 characters, expire after 24 h.
   - The rate limit is 10 requests/s per team across all API keys, and a batch counts as one request. The daily and monthly email quotas count emails (the business item: the Resend plan).
   - Errors come back as `{ error }`, not thrown (as for single sends).
@@ -142,8 +145,8 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 
 **Next blueprints for the lead to write** (each goes to the product owner for review before the dev):
 1. ~~Launch hardening follow-ups~~: merged (PR #26).
-1b. **Reminder email capacity** (hardening Q8: Resend batch send; see the 4b research notes above). **Next up.**
-2. **Excel cost report: charge codes and Class** (PRODUCTION-DEPLOY Phase 15).
+1b. ~~Reminder email capacity~~: blueprint FINAL v3.1, accepted 2026-11-12; with the dev.
+2. **Excel cost report: charge codes and Class** (PRODUCTION-DEPLOY Phase 15). **Next up.**
 3. **Distributed rate limiting, Upstash:** keys must be salted hashes that expire ≤ 25 h; no raw IPs (`BUSINESS-DECISIONS.md` §4).
 4. **Per-user billing** (`BUSINESS-DECISIONS.md` §1: plans, Stripe tiered prices, the quantity sync + daily reconcile, prorations, the 100-user cap message, ACH, promotion codes, send-invoice subscriptions + grace, the Billing page redesign). It also adds the landing Pricing section.
 5. **Database backups** (`BUSINESS-DECISIONS.md` §5).
