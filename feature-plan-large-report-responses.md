@@ -1,6 +1,6 @@
 # Large report responses: stream the cost CSV and `/api/v1/costs`; cap the Excel download (build queue 5b)
 
-> **Status:** **FINAL v3.1**, 2026-11-13, lead architect. **Pre-mortem CLEAN**: round 1 (0 HIGH, 8 MEDIUM) and round 2 (0 HIGH, 2 MEDIUM) were fixed, and a confirmation pass found only LOWs, now written in (§14). **Awaiting the product owner's answers to Q1–Q6** (§2) before the dev hand-off.
+> **Status:** **FINAL v3.1**, 2026-11-13, lead architect. **Pre-mortem CLEAN**: round 1 (0 HIGH, 8 MEDIUM) and round 2 (0 HIGH, 2 MEDIUM) were fixed, and a confirmation pass found only LOWs, now written in (§14). **Accepted by the product owner on 2026-11-13, with Q1–Q6 all as recommended** (§2): §6.5 and T15 are in scope. Ready for a fresh dev session.
 >
 > **Branch:** `large-report-responses`, from `main` at `1d44b35` (after the Excel cost report, PR #29). This file and its checks file are committed there first. The §3 references were checked on `2631621` (only docs changed since `1d44b35`).
 >
@@ -354,7 +354,7 @@ No persisted state, no state machine beyond the stream's own (§6.1 table). Rout
 - **Seeders, crons, scripts and migrations:** none involved. No schema change, so no `demo:local` re-seed is needed for the code.
 
 ### 10.3 For the lead, on this branch at audit time (not the dev)
-- `PRODUCTION-DEPLOY.md` Phase 12: add step **12.13 Large downloads** (§12, step 5).
+- `PRODUCTION-DEPLOY.md` Phase 12, step **12.13 Large downloads** (§12, step 5): **written 2026-11-13** with the accepted answers; its helper and seed SQL were rehearsed locally (40,800 rows: a 7.1 MB CSV and a 19.5 MB API body).
 - `LAUNCH-TRACKER.md`.
 - If Q4 is no: add `/api/v1/periods` and `/api/v1/timesheets/approved` to the Deferred list as watch items.
 
@@ -390,7 +390,7 @@ Unit tests unless marked. Synthetic `CostReportEntry` rows come from one shared 
    ```
    Check the skipped count (about 1 file is normal).
 3. `npm run build` (Turbopack).
-4. **Browser checks:** `LARGE-REPORT-RESPONSES-BROWSER-CHECKS.md` (step by step; the lead rehearses it against the finished branch before the merge gate). It covers:
+4. **Browser checks:** `LARGE-REPORT-RESPONSES-BROWSER-CHECKS.md` (step by step; its helper steps were rehearsed against `main`, and the lead rehearses the whole file against the finished branch before the merge gate). It covers:
    - the Contract costs CSV and Excel download and open as before;
    - the CSV's bytes match a capture taken from `main` for the same range (a helper script compares them);
    - `/api/v1/costs` with a key returns the same JSON as on `main` apart from `timestamp`;
