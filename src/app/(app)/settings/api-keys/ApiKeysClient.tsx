@@ -266,6 +266,11 @@ export function ApiKeysClient({ initialKeys, workspaceTimezone }: Props) {
             Each row&apos;s <Code>hourlyRate</Code> is the labor-category rate in effect on that entry&apos;s date, so one
             labor category can appear at different rates across a range.
           </Text>
+          {/* feature-plan-excel-cost-report.md E1 (Q2): the additive charge code and Class fields. */}
+          <Text size="sm" c="dimmed">
+            Each row also has <Code>chargeCode</Code> and <Code>className</Code> (null when the entry has no charge code
+            or the code has no Class). <Code>className</Code> is the charge code&apos;s current Class.
+          </Text>
           <Button onClick={() => { setNewKeyModalOpen(false); setNewKeyValue(''); }} color="success">
             I&apos;ve copied the key
           </Button>

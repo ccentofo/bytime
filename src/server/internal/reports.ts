@@ -1,9 +1,15 @@
 import 'server-only';
 import { getDb } from '@/db';
-import { users, contracts, clins, slins, timesheetEntries } from '@/db/schema';
+import { users, contracts, clins, slins, timesheetEntries, chargeCodes, costClasses } from '@/db/schema';
 import { eq, and, gte, lt, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { addDays, parseCalendarDate, type CalendarDate } from '@/lib/calendar-date';
 import { COST_BASIS_LATERAL, COST_LC_ON, costBasisFields, costLaborCategory, type CostBasis } from './cost-basis';
+
+// feature-plan-excel-cost-report.md §6.1: the entry's charge code and its Class, under aliases distinct from the
+// cost-basis lateral's own (dr_cc_start / dr_cc_change). Both are LEFT joins: the row set must not change (invariant 3).
+const reportChargeCode = alias(chargeCodes, 'report_cc');
+const reportClass = alias(costClasses, 'report_class');
 
 export interface CostReportEntry {
   employeeName: string;
@@ -12,6 +18,10 @@ export interface CostReportEntry {
   contractNumber: string;
   clinNumber: string;
   slinNumber: string | null;
+  /** feature-plan-excel-cost-report.md E2/E4: the entry's charge code, or null (imported history, CLIN-only). */
+  chargeCode: string | null;
+  /** E3: the charge code's Class today (not stored per entry); null with no charge code or no Class. */
+  className: string | null;
   lcatCode: string;
   lcatTitle: string;
   hourlyRate: number;
@@ -27,7 +37,8 @@ export interface CostReportEntry {
 }
 
 /**
- * Detailed cost report query. Each row = one employee + one CLIN + one day with hours and cost.
+ * Detailed cost report query. One row per latest-revision entry (employee, CLIN, day) with hours and cost, labelled
+ * with its charge code and that code's current Class (feature-plan-excel-cost-report.md E1–E4).
  *
  * INTERNAL — not a server action, so it carries no guard of its own. Callers must authorize
  * first: the admin-only getDetailedCostReport() server action (requireAdmin), and the
@@ -70,6 +81,8 @@ export async function getDetailedCostReportData(
       contractNumber: contracts.contractNumber,
       clinNumber: clins.clinNumber,
       slinNumber: slins.slinNumber,
+      chargeCode: reportChargeCode.code,
+      className: reportClass.name,
       entryDate: timesheetEntries.entryDate,
       hours: timesheetEntries.hours,
       ...costBasisFields,
@@ -79,11 +92,17 @@ export async function getDetailedCostReportData(
     .innerJoin(clins, eq(timesheetEntries.clinId, clins.id))
     .innerJoin(contracts, eq(clins.contractId, contracts.id))
     .leftJoin(slins, eq(timesheetEntries.slinId, slins.id))
+    // feature-plan-excel-cost-report.md §6.1: LEFT joins (imported / CLIN-only entries have no code) and no is_active
+    // filter (a deactivated code or Class still labels the hours it covered).
+    .leftJoin(reportChargeCode, eq(timesheetEntries.chargeCodeId, reportChargeCode.id))
+    .leftJoin(reportClass, eq(reportChargeCode.classId, reportClass.id))
     // certified-outputs C3: the one cost-basis resolution — exactly one row per entry (no duplicate rows).
     .leftJoinLateral(COST_BASIS_LATERAL, sql`true`)
     .leftJoin(costLaborCategory, COST_LC_ON)
     .where(and(...conditions))
-    .orderBy(contracts.name, clins.clinNumber, users.fullName, timesheetEntries.entryDate);
+    // §6.1 item 6: ids keep same-named contracts / employees grouped; the code orders two codes on one CLIN and day; the
+    // entry id makes any remaining tie deterministic.
+    .orderBy(contracts.name, contracts.id, clins.clinNumber, users.fullName, users.id, timesheetEntries.entryDate, reportChargeCode.code, timesheetEntries.id);
 
   return rows.map((row): CostReportEntry => {
     const hours = parseFloat(row.hours) || 0;
@@ -96,6 +115,8 @@ export async function getDetailedCostReportData(
       contractNumber: row.contractNumber,
       clinNumber: row.clinNumber,
       slinNumber: row.slinNumber,
+      chargeCode: row.chargeCode ?? null,
+      className: row.className ?? null,
       lcatCode: priced ? row.lcatCode ?? '—' : '—',
       lcatTitle: priced ? row.lcatTitle ?? '' : 'Unpriced',
       hourlyRate: rate,

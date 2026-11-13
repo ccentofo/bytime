@@ -33,6 +33,7 @@ import { correctChargeCodeCategory } from '@/server/actions/charge-code-categori
 import { endUserLaborCategoryAssignment } from '@/server/actions/labor-categories';
 import { generateCostReportExcel, generateEmployeeSummaryExcel } from '@/lib/reports/cost-report-excel';
 import type { CostReportEntry } from '@/server/internal/reports';
+import { CURRENT_CLASS_NOTE, CURRENT_RATES_NOTE } from '@/lib/cost-labels';
 
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
 const ROOT = path.resolve(__dirname, '../../..');
@@ -174,7 +175,7 @@ describe('endUserLaborCategoryAssignment — optional end date (promotion: end y
 describe('cost exports carry the unpriced count (ruling Q6)', () => {
   const entry = (o: Partial<CostReportEntry>): CostReportEntry => ({
     employeeName: 'Pat', employeeEmail: 'p@x', contractName: 'C', contractNumber: 'N', clinNumber: '0001', slinNumber: null,
-    lcatCode: 'SE2', lcatTitle: 'Eng', hourlyRate: 100, totalHours: 8, totalCost: 800, entryDate: '2026-09-01',
+    chargeCode: null, className: null, lcatCode: 'SE2', lcatTitle: 'Eng', hourlyRate: 100, totalHours: 8, totalCost: 800, entryDate: '2026-09-01',
     costBasis: 'priced', unpricedReason: null, unpricedHours: 0, ...o,
   });
 
@@ -189,7 +190,7 @@ describe('cost exports carry the unpriced count (ruling Q6)', () => {
   it('the detailed XLSX adds the unpriced-hours row and the current-rates note after the totals', async () => {
     const data = [entry({}), entry({ costBasis: 'unpriced', unpricedReason: 'no-category', unpricedHours: 4, totalHours: 4, totalCost: 0, hourlyRate: 0, lcatCode: '—', lcatTitle: 'Unpriced' })];
     const r = await rows(await generateCostReportExcel(data, 'Cost Report', 'Sep'));
-    expect(r.find((x) => String(x[0]).startsWith('UNPRICED HOURS'))?.[9]).toBe(4);
+    expect(r.find((x) => String(x[0]).startsWith('UNPRICED HOURS'))?.[11]).toBe(4); // excel-cost-report §6.2: hours in column 12
     expect(r.some((x) => x[0] === 'Costs use the labor-category rate in effect on each day worked.')).toBe(true);
   });
 
@@ -202,8 +203,65 @@ describe('cost exports carry the unpriced count (ruling Q6)', () => {
   it('CSV footer and v1 meta carry the total (static)', () => {
     const csv = readFileSync(path.join(ROOT, 'src/app/api/reports/cost-report-csv/route.ts'), 'utf8');
     expect(csv).toMatch(/Unpriced hours \(no applicable labor category; no cost\),\$\{unpriced\}/);
-    expect(csv).toMatch(/new NextResponse\(csv \+ footer,/);
+    expect(csv).toMatch(/new NextResponse\(BOM \+ csv \+ footer,/); // excel-cost-report §6.3 item 3 (Q5)
     const v1 = readFileSync(path.join(ROOT, 'src/app/api/v1/costs/route.ts'), 'utf8');
     expect(v1).toMatch(/return apiResponse\(data, \{ total: data\.length, unpricedHours \}\);/);
+  });
+
+  // ── feature-plan-excel-cost-report.md ─────────────────────────────────────
+  async function sheet(data: CostReportEntry[]): Promise<ExcelJS.Worksheet> {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load((await generateCostReportExcel(data, 'Cost Report', 'Sep')) as unknown as ArrayBuffer);
+    return wb.worksheets[0];
+  }
+  const HEADERS_13 = ['Employee', 'Contract', 'Contract #', 'CLIN', 'SLIN', 'Charge Code', 'Class', 'LCAT Code', 'LCAT Title', 'Rate ($/hr)', 'Date', 'Hours', 'Cost ($)'];
+
+  it('T9: the detailed XLSX has Charge Code and Class after SLIN, totals and unpriced in columns 12/13, the Class note, A1:M1, number formats on 10/12/13 only', async () => {
+    const data = [
+      entry({ chargeCode: 'NAVAIR-0001-ONSITE', className: 'Government Services' }),
+      entry({ chargeCode: null, className: null, totalHours: 2, totalCost: 200 }),
+      entry({ costBasis: 'unpriced', unpricedReason: 'no-category', unpricedHours: 4, totalHours: 4, totalCost: 0, hourlyRate: 0, lcatCode: '—', lcatTitle: 'Unpriced' }),
+    ];
+    const r = await rows(await generateCostReportExcel(data, 'Cost Report', 'Sep'));
+    const ws = await sheet(data);
+    expect((ws.getRow(3).values as unknown[]).slice(1)).toEqual(HEADERS_13);
+    expect(r[3].slice(5, 7)).toEqual(['NAVAIR-0001-ONSITE', 'Government Services']);
+    expect(r[4].slice(5, 7)).toEqual(['', '']); // E4: no charge code → blank cells
+    const totals = r.find((x) => x[0] === 'TOTALS')!;
+    expect([totals.length, totals[11], totals[12]]).toEqual([13, 14, 1000]);
+    expect(r.find((x) => String(x[0]).startsWith('UNPRICED HOURS'))?.[11]).toBe(4);
+    const notes = r.findIndex((x) => x[0] === CURRENT_RATES_NOTE);
+    expect(r[notes + 1]).toEqual([CURRENT_CLASS_NOTE]);
+    expect(ws.model.merges).toEqual(expect.arrayContaining(['A1:M1', 'A2:M2']));
+    expect(ws.getCell('M1').isMerged).toBe(true);
+    expect([ws.getColumn(10).numFmt, ws.getColumn(12).numFmt, ws.getColumn(13).numFmt]).toEqual(['$#,##0.00', '#,##0.00', '$#,##0.00']);
+    expect(ws.getColumn(8).numFmt).toBeUndefined();
+    expect(ws.getColumn(11).numFmt).toBeUndefined();
+  });
+
+  it('T10 (Excel half): a code that looks like a formula and a Class with a comma and quotes are stored as text', async () => {
+    const ws = await sheet([entry({ chargeCode: '=1+1', className: 'R&D, "Labs"' })]);
+    const code = ws.getRow(4).getCell(6);
+    expect(code.type).toBe(ExcelJS.ValueType.String);
+    expect(code.value).toBe('=1+1');
+    expect(ws.getRow(4).getCell(7).value).toBe('R&D, "Labs"');
+  });
+
+  it('T12: the Class note text (Q4), used by the XLSX and the CSV (static)', () => {
+    expect(CURRENT_CLASS_NOTE).toBe('Class shows the current Class of each charge code, including on past dates.');
+    for (const rel of ['src/lib/reports/cost-report-excel.ts', 'src/app/api/reports/cost-report-csv/route.ts']) {
+      expect(readFileSync(path.join(ROOT, rel), 'utf8'), rel).toContain('CURRENT_CLASS_NOTE');
+    }
+  });
+
+  it('T14 (Q2): the API key dialog describes chargeCode and className (static)', () => {
+    const src = readFileSync(path.join(ROOT, 'src/app/(app)/settings/api-keys/ApiKeysClient.tsx'), 'utf8');
+    expect(src).toContain('<Code>chargeCode</Code>');
+    expect(src).toContain('<Code>className</Code>');
+  });
+
+  it('T15 (Q3): the Downloads Contract costs description mentions charge codes (static)', () => {
+    const src = readFileSync(path.join(ROOT, 'src/app/(app)/admin/reports/ReportsClient.tsx'), 'utf8');
+    expect(src).toContain('Hours and cost by contract, CLIN, charge code and labor category, using the rate in effect each day.');
   });
 });
