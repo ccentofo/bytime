@@ -8,7 +8,7 @@ About 30 minutes, most of it two builds. You'll check five things:
 
 Do the checks in order. If anything differs, stop and tell Planning which step and what you saw.
 
-> **Status:** DRAFT, 2026-11-13. Planning rehearsed the helper script and every helper step (`key`, `capture main`, `new`, `seed-dry`, `seed`, `big`, `delete`, `cleanup`) against `main` on 2026-11-13, each block copied verbatim into its own fresh interactive zsh. The steps that need the finished branch (`capture branch`, `compare`, the Excel message) are rehearsed against it before the merge gate.
+> **Status:** DRAFT, 2026-11-13. Planning rehearsed the helper script and every helper step (`key`, `capture main`, `new`, `seed-dry`, `seed`, `big`, `delete`, `cleanup`) against `main` on 2026-11-13, each block copied verbatim into its own fresh interactive zsh. `compare` was rehearsed on two captures of `main` (after the dev's impact analysis showed two of the API routes don't fix row order). The steps that need the finished branch (`capture branch`, `compare`, the Excel message) are rehearsed against it before the merge gate.
 
 **What you can't see locally.** Your machine doesn't enforce Vercel's 4.5 MB response limit, so these checks prove that the output is unchanged and that the cap works. The limit itself is checked on staging (PRODUCTION-DEPLOY step 12.13).
 
@@ -88,15 +88,20 @@ case "${1:-}" in
     ;;
   compare)
     python3 -I - <<'PY'
-import re
+import json, re
 def norm(b): return re.sub(rb'"timestamp":"[^"]*"', b'"timestamp":""', b)
+def rows(b):
+    d = json.loads(b); d["meta"].pop("timestamp", None)
+    return d["meta"], sorted(json.dumps(r, sort_keys=True) for r in d["data"])
 for name in ["costs.csv", "costs.json", "periods.json", "approved.json"]:
     try:
         a = open(f"/tmp/lrr-main-{name}", "rb").read(); b = open(f"/tmp/lrr-branch-{name}", "rb").read()
     except FileNotFoundError as e:
         print(f"STOP: missing {e.filename}"); continue
-    same = (a == b) if name.endswith(".csv") else (norm(a) == norm(b))
-    print(f"{name}: {'IDENTICAL' if same else 'DIFFERENT'} ({len(b)} bytes)")
+    if name.endswith(".csv"): same, word = a == b, "IDENTICAL"
+    elif name == "costs.json": same, word = norm(a) == norm(b), "IDENTICAL"
+    else: same, word = rows(a) == rows(b), "SAME ROWS"
+    print(f"{name}: {word if same else 'DIFFERENT'} ({len(b)} bytes)")
 PY
     ;;
   new)
@@ -239,11 +244,12 @@ bash /tmp/lrr-check.sh compare
 ```text
 costs.csv: IDENTICAL (… bytes)
 costs.json: IDENTICAL (… bytes)
-periods.json: IDENTICAL (… bytes)
-approved.json: IDENTICAL (… bytes)
+periods.json: SAME ROWS (… bytes)
+approved.json: SAME ROWS (… bytes)
 ```
 
-The three API files are compared with their `timestamp` value blanked, since that's the time of each request. Everything else must match byte for byte.
+- The cost CSV and the cost API are compared byte for byte, with the API's `timestamp` value blanked (it's the time of each request).
+- The periods and approved-timesheets APIs are compared row by row, in any order: those two queries don't fix the order of tied rows, so two runs of the same code can list them differently. Their exact bytes are checked by the automated tests.
 
 ## B. The Contract costs downloads still work in the browser
 1. Open `http://acme.localhost:3000` and sign in as `admin@cadenzpoint.dev`, password `Password123!`.
