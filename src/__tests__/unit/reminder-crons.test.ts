@@ -235,6 +235,16 @@ describe.each([
     expect(b.stopReason).toBe('email-config');
   });
 
+  it('C8 (full batch): the first batch of 100 stops (email-quota) mid-tenant → stoppedAfter null, not employee 100; no second batch', async () => {
+    h.tenants = [h.tenants[1]];
+    h.employees['db-comped'] = people('u', 150);
+    h.batchQueue = [{ kind: 'stop', failed: 100, reason: 'email-quota' }];
+    const b = await body();
+    expect(batches().map((x) => x.length)).toEqual([100]);
+    expect(h.outcomes).toEqual([{ stoppedAfter: null, reason: 'email-quota' }]);
+    expect(b).toMatchObject({ sent: 0, failedSends: 100, stopReason: 'email-quota' });
+  });
+
   it('C9: tenant 1\'s batch fails → failedSends counts it; tenant 2 is still sent', async () => {
     h.employees['db-demo'] = [{ id: 'd3', fullName: 'Demo Real', email: 'person@demo-customer.com' }];
     h.batchQueue = [failed(1)];
