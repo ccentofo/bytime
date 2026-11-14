@@ -1,6 +1,6 @@
 # Distributed rate limiting with Upstash (build queue 6)
 
-> **Status:** **FINAL v3.3**, 2026-11-13, lead architect. **Pre-mortem CLEAN:** round 1 (1 HIGH, 12 MEDIUM; redesign in v2), round 2 (4 MEDIUM; v3), confirmation passes 1 (3 MEDIUM; v3.1) and 2 (1 MEDIUM; v3.2) were fixed, and confirmation pass 3 found only LOWs, now written in (§14). **Awaiting the product owner's answers to Q1–Q5** (§2) before the dev hand-off.
+> **Status:** **FINAL v3.3**, 2026-11-13, lead architect. **Pre-mortem CLEAN:** round 1 (1 HIGH, 12 MEDIUM; redesign in v2), round 2 (4 MEDIUM; v3), confirmation passes 1 (3 MEDIUM; v3.1) and 2 (1 MEDIUM; v3.2) were fixed, and confirmation pass 3 found only LOWs, now written in (§14). **Accepted by the product owner on 2026-11-13, with Q1–Q5 all as recommended** (§2). Ready for the dev.
 >
 > **Branch:** `upstash-rate-limiting`, from `main` at `02059b0` (after 5b, PR #30). The §3 references were checked there.
 >

@@ -336,7 +336,8 @@ values and production gets production values):
 | `NEXT_PUBLIC_DEMO_URL` | *optional* — a demo workspace URL for the marketing page's demo buttons (hidden when unset) | same |
 | `SIGNUP_CONTROLS_ENABLED` | leave unset (signup works as before) until the product owner decides to enable signup controls (P5) | **leave unset until the updated Privacy Policy is published** (LB-D3, LB-D5) |
 | `NEXT_PUBLIC_TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile widget keys (staging hostname) | production hostname keys |
-| `SIGNUP_IP_SALT` | `openssl rand -hex 32` (secret; never shown to browsers) | a different `openssl rand -hex 32` |
+| `SIGNUP_IP_SALT` | `openssl rand -hex 32` (secret; never shown to browsers). **Required even with signup controls off:** it also keys the rate-limit hashes, and without it sign-in and signup limits stay per-instance | a different `openssl rand -hex 32` |
+| `KV_REST_API_URL` / `KV_REST_API_TOKEN` (or `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`) | **set by the Upstash integration** (Phase 8b) for the staging database; don't type them | set by the integration for the production database |
 | `SENTRY_ORG` / `SENTRY_PROJECT` / `SENTRY_AUTH_TOKEN` | *optional* — enables source-map upload for readable stack traces | same |
 | `CSP_MODE` | `report-only` | `report-only` (flip to `enforce` in Phase 13) |
 
@@ -397,6 +398,26 @@ record) into **Vercel → Domains → cadenzpoint.com → DNS Records**, exactly
 `production`. Put them in each Vercel project's `RESEND_API_KEY` (Phase 6.4).
 
 ✅ **Check:** Resend shows `cadenzpoint.com` **Verified**.
+
+---
+
+## Phase 8b — Rate limiting: Upstash (you, ~10 min)
+
+Sign-in and signup limits are shared across Vercel instances through Upstash Redis (`feature-plan-upstash-rate-limiting.md`). Each project gets its own database. Only hashed IPs are stored, and every entry expires within 2 hours.
+
+**8b.1** Vercel → the **`cadenzpoint-staging`** project → **Storage** (or **Integrations → Marketplace**) → **Upstash** → **Upstash for Redis** → **Create**:
+- name `cadenzpoint-staging-ratelimit`;
+- region **US East (N. Virginia), us-east-1**;
+- plan **Pay as You Go** (or Free while testing);
+- connect it to `cadenzpoint-staging` with the **Production** environment checked.
+
+**8b.2** Repeat for the **`cadenzpoint`** project: name `cadenzpoint-ratelimit`, us-east-1, connected to `cadenzpoint` (Production).
+
+**8b.3** In each project, **Settings → Environment Variables** now shows the integration's variables: `KV_REST_API_URL` and `KV_REST_API_TOKEN`, or `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`. Either pair works. Don't add them by hand, and never paste the `REDIS_URL` (`rediss://…`) into the REST URL.
+
+**8b.4** Usage alerts (product owner decision Q5: alerts, **no hard cap**), in the Upstash console (or Vercel's usage settings, whichever offers it): an email alert at **$5** and another at **$10** for each database.
+
+✅ **Check:** both projects list the two variables, and both databases show region us-east-1.
 
 ---
 
@@ -702,6 +723,21 @@ npm run tenant:delete -- <slug> --yes --force-with-reason "5b staging rehearsal 
 ```bash
 bash /tmp/stg5b.sh cleanup
 ```
+
+**12.14** Shared rate limits (`feature-plan-upstash-rate-limiting.md`, build queue 6). About 15 minutes.
+
+1. **Before deploying the release that contains it:** the new migration adds a rule that `login_attempts.ip_address` stays empty, and it fails if any row has a value. Nothing has ever written that column, but check each staging tenant in Neon (project `cadenzpoint-<slug>` → **SQL Editor** → database `tenant_<slug>`):
+```sql
+SELECT count(*) FROM login_attempts WHERE ip_address IS NOT NULL;
+```
+   ↑ expect `0` for every tenant. If not, stop and tell Planning.
+2. **After the deploy,** on a staging workspace's sign-in page: sign in with a wrong password 3 times, then correctly once.
+   ↑ expect "Invalid email or password." three times, then a normal sign-in.
+3. **Upstash console** → `cadenzpoint-staging-ratelimit` → **Data Browser**.
+   ↑ expect only keys like `cp-rl:signInFailure:<64 hex characters>:<number>`, each with a TTL under 30 minutes. **No IP address and no email anywhere.** Any other kind of key: stop and tell Planning.
+4. **The config alert:** in the `cadenzpoint-staging` project, temporarily delete the token variable (`KV_REST_API_TOKEN` or `UPSTASH_REDIS_REST_TOKEN`), redeploy (12.1), and open a staging sign-in page once.
+   ↑ expect the "rate-limit-config-missing" ops email within a few minutes, and sign-in still works.
+   Put the variable back (Upstash console → the database → **REST API** → copy the token), redeploy, and wait for the next notice-delivery run (up to 10 minutes). The alert resolves, and the next daily ops digest no longer lists it.
 
 ✅ **Check:** every step above passed on staging. **Do not touch production until it does.**
 
