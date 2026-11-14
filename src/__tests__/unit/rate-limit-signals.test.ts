@@ -29,6 +29,7 @@ vi.mock('@/lib/tenant/lifecycle-store', () => ({ resolveAlert: async (...a: unkn
 vi.mock('@/db/control-plane/locked', () => ({ withLockedPool: async (fn: (db: unknown) => Promise<unknown>) => fn('db') }));
 
 import { noteOutage, noteConfigMissing, resolveRateLimitSignals, __resetSignalThrottlesForTests } from '@/lib/rate-limit/signals';
+import { __setClientFactoriesForTests } from '@/lib/rate-limit/store';
 
 async function flushAfter() {
   while (h.afterTasks.length) await h.afterTasks.shift()!();
@@ -142,6 +143,22 @@ describe('resolveRateLimitSignals', () => {
     vi.stubEnv('SIGNUP_IP_SALT', 'salt');
     h.lastSignal = at(-5 * 60_000);
     await resolveRateLimitSignals(T0);
+    expect(resolvedKinds()).toEqual([]);
+  });
+
+  it("FR5: a 'rate-limit setup' failure (the Ratelimit objects don't build) does not resolve the config alert", async () => {
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', 'https://example-123.upstash.io');
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', 'tok');
+    vi.stubEnv('SIGNUP_IP_SALT', 'salt');
+    h.lastSignal = at(-5 * 60_000);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    __setClientFactoriesForTests({ makeRatelimit: () => { throw new TypeError('bad limiter'); } });
+    try {
+      await resolveRateLimitSignals(T0);
+    } finally {
+      __setClientFactoriesForTests();
+      err.mockRestore();
+    }
     expect(resolvedKinds()).toEqual([]);
   });
 

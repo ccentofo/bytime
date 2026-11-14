@@ -47,9 +47,12 @@ export async function authorizeCredentials(credentials: Record<string, unknown> 
   const rawEmail = credentials?.email;
   const rawPassword = credentials?.password;
   if (typeof rawEmail !== 'string' || typeof rawPassword !== 'string' || !rawEmail || !rawPassword) return null;
-  if (rawEmail.length > 255 || rawEmail.includes('\0') || rawPassword.includes('\0')) return null;
+  if (rawEmail.includes('\0') || rawPassword.includes('\0')) return null;
 
   const email = rawEmail.toLowerCase().trim();
+  // The length is checked on the NORMALIZED email, the value that is stored: some characters grow when lowercased
+  // ('İ' → 'i̇', 1 → 2 code units), so a raw check would let a 256+ character email reach the varchar(255) insert.
+  if (email.length > 255) return null;
   const password = rawPassword;
   // No code submitted = missing, blank, not a string, or "undefined"/"null": URLSearchParams serialises an undefined
   // value as the string "undefined" (feature-plan-hotfix-mfa-qr.md §7) — that must ask for a code, not count a failure.

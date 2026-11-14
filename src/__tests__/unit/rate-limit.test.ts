@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { memoryConsume, memoryRefund } from '@/lib/rate-limit/memory';
+import { memoryConsume, memoryRefund, __memoryEntryForTests } from '@/lib/rate-limit/memory';
 
 describe('checkRateLimit', () => {
   it('allows first request', () => {
@@ -74,5 +74,24 @@ describe('memoryRefund', () => {
     expect(refused).toMatchObject({ allowed: false, resetAt: first.resetAt });
     memoryRefund(key);
     expect(memoryConsume(key, 1, 60000).allowed).toBe(true);
+  });
+
+  it('FR6: after the window has ended, a refund does nothing', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-13T12:00:00Z'));
+      const key = 'test-refund-fr6';
+      memoryConsume(key, 5, 60000);
+      memoryConsume(key, 5, 60000);
+      const { resetAt } = __memoryEntryForTests(key)!;
+      vi.setSystemTime(resetAt); // the window has ended (resetAt <= now)
+      memoryRefund(key);
+      expect(__memoryEntryForTests(key)).toEqual({ count: 2, resetAt });
+      vi.setSystemTime(resetAt - 1); // inside the window, it refunds
+      memoryRefund(key);
+      expect(__memoryEntryForTests(key)).toEqual({ count: 1, resetAt });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

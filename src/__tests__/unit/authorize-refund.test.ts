@@ -138,8 +138,14 @@ describe('T23: input refused before the gate (nothing counted, nothing checked)'
     ['a 256-character email', { email: `${'a'.repeat(244)}@example.com` }],
     ['an email with a NUL', { email: 'jane\u0000@example.com' }],
     ['a password with a NUL', { password: `${PASSWORD}\u0000` }],
+    // FR1: 252 characters raw, 492 once lowercased ('İ' → 'i̇'): the stored (normalized) value is what is checked.
+    ['an email that grows past 255 when lowercased', { email: `${'\u0130'.repeat(240)}@example.com` }],
   ])('%s → null, zero consume, zero refund', async (label, over: Record<string, unknown>) => {
     if (label.includes('256')) expect(over.email).toHaveLength(256);
+    if (label.includes('grows')) {
+      expect(over.email).toHaveLength(252);
+      expect((over.email as string).toLowerCase()).toHaveLength(492);
+    }
     h.lockoutThrows = true; // would throw if the body ran
     expect(await attempt(over)).toBeNull();
     expect(h.consume).not.toHaveBeenCalled();

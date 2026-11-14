@@ -257,6 +257,28 @@ describe('T11: refund', () => {
   });
 });
 
+describe('FR3: the ephemeral cache is bounded', () => {
+  it('a cache past 10,000 entries is cleared before the next limit call', async () => {
+    upstashEnv();
+    await consume('signInFailure', ipIdentifier(IP)); // builds the limiters
+    const cache = h.ratelimitArgs.find((a) => a.name === 'signInFailure')!.options.ephemeralCache as Map<string, number>;
+    for (let i = 0; i < 10_001; i++) cache.set(`blocked-${i}`, Date.now() + 60_000);
+    let sizeSeenByLimit = -1;
+    h.answer = async () => { sizeSeenByLimit = cache.size; return { success: true, reset: Date.now() + 60_000 }; };
+    await consume('signInFailure', ipIdentifier(IP));
+    expect(sizeSeenByLimit).toBe(0);
+  });
+
+  it('at exactly 10,000 entries it is kept', async () => {
+    upstashEnv();
+    await consume('signInFailure', ipIdentifier(IP));
+    const cache = h.ratelimitArgs.find((a) => a.name === 'signInFailure')!.options.ephemeralCache as Map<string, number>;
+    for (let i = 0; i < 10_000; i++) cache.set(`blocked-${i}`, Date.now() + 60_000);
+    await consume('signInFailure', ipIdentifier(IP));
+    expect(cache.size).toBe(10_000);
+  });
+});
+
 describe('T24: no refund across a window', () => {
   it('memory: at resetAt − 1 s the refund does nothing; inside the window it refunds', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });

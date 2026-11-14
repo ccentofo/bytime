@@ -13,6 +13,39 @@ const ROOT = path.resolve(__dirname, '../../..');
 const read = (rel: string) => readFileSync(path.join(ROOT, rel), 'utf8');
 const count = (src: string, needle: string) => src.split(needle).length - 1;
 
+describe('FR7: the shared limits are exactly the approved numbers (Q2, Q3, Q4)', () => {
+  it('SHARED_LIMITS', () => {
+    expect(SHARED_LIMITS).toEqual({
+      slugLookup: { limit: 30, windowMs: 60_000 },
+      signup: { limit: 8, windowMs: 3_600_000 },
+      signInFailure: { limit: 20, windowMs: 900_000 },
+      resetRequest: { limit: 10, windowMs: 3_600_000 },
+    });
+  });
+});
+
+describe('FR2: the Credentials provider passes the client IP to authorizeCredentials', () => {
+  it('src/auth.ts wires authorize with getClientIp(request)', () => {
+    // Without the ip argument every sign-in would share the one ip:unknown budget.
+    expect(read('src/auth.ts')).toContain('authorize: (credentials, request) => authorizeCredentials(credentials, getClientIp(request))');
+  });
+});
+
+describe('FR4: the reset limit runs before any database work', () => {
+  it("in requestPasswordReset, consume('resetRequest' comes before getDbForAuth(", () => {
+    const src = read('src/server/actions/password-reset.ts');
+    const start = src.indexOf('export async function requestPasswordReset(');
+    const end = src.indexOf('export async function', start + 1);
+    const body = src.slice(start, end === -1 ? undefined : end);
+    const gate = body.indexOf("consume('resetRequest'");
+    const db = body.indexOf('getDbForAuth(');
+    expect(start).toBeGreaterThan(-1);
+    expect(gate).toBeGreaterThan(-1);
+    expect(db).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(db);
+  });
+});
+
 describe('T4: every shared window keeps keys well within 25 hours', () => {
   it('each windowMs ≤ 12 h; the longest is 1 h', () => {
     const windows = Object.values(SHARED_LIMITS).map((l) => l.windowMs);

@@ -63,6 +63,12 @@ export function memoryRefund(key: string): void {
   entry.count -= 1;
 }
 
+/** Test hook (read-only): a copy of the entry for `key`, so a test can see a refund that no later consume reveals. */
+export function __memoryEntryForTests(key: string): { count: number; resetAt: number } | null {
+  const entry = store.get(key);
+  return entry ? { ...entry } : null;
+}
+
 /** Test hook: forget every counter. */
 export function memoryReset(): void {
   store.clear();
