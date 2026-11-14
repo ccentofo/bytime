@@ -88,6 +88,12 @@ export function LoginForm({ next = null }: { next?: string | null } = {}) {
         return;
       }
 
+      // The per-IP failed sign-in limit (feature-plan-upstash-rate-limiting.md Q2): no lockout lookup for this one.
+      if (result?.code === 'rate_limited') {
+        setError('Too many failed sign-in attempts from your network. Try again in 15 minutes.');
+        return;
+      }
+
       if (result?.error) {
         // Check updated lockout status after this failure
         const updatedLockout = await checkLockout(email.toLowerCase().trim());

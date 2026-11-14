@@ -5,7 +5,7 @@ import { slugify } from '@/lib/tenant/slugify';
 
 export async function GET(req: NextRequest) {
   const ip = getClientIp(req);
-  const limit = checkSlugLookupRateLimit(ip); // shared with the apex workspace finder
+  const limit = await checkSlugLookupRateLimit(ip); // shared with the apex workspace finder
   if (!limit.allowed) {
     return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
   }

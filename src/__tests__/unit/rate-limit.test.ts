@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { memoryConsume, memoryRefund } from '@/lib/rate-limit/memory';
 
 describe('checkRateLimit', () => {
   it('allows first request', () => {
@@ -41,5 +42,37 @@ describe('checkRateLimit', () => {
         resolve();
       }, 10);
     });
+  });
+});
+
+// feature-plan-upstash-rate-limiting.md T16: the shared-limit fallback's refund.
+describe('memoryRefund', () => {
+  it('takes one count back in the current window', () => {
+    const key = 'test-refund-1';
+    for (let i = 0; i < 5; i++) memoryConsume(key, 5, 60000);
+    expect(memoryConsume(key, 5, 60000).allowed).toBe(false);
+    memoryRefund(key);
+    expect(memoryConsume(key, 5, 60000).allowed).toBe(true);
+    expect(memoryConsume(key, 5, 60000).allowed).toBe(false);
+  });
+
+  it('never goes below 0, and does nothing for an unknown key', () => {
+    const key = 'test-refund-2';
+    memoryConsume(key, 2, 60000);
+    memoryRefund(key);
+    memoryRefund(key);
+    memoryRefund('test-refund-never-seen');
+    expect(memoryConsume(key, 2, 60000).allowed).toBe(true);
+    expect(memoryConsume(key, 2, 60000).allowed).toBe(true);
+    expect(memoryConsume(key, 2, 60000).allowed).toBe(false);
+  });
+
+  it('a refused call is not counted, and resetAt is the window end', () => {
+    const key = 'test-refund-3';
+    const first = memoryConsume(key, 1, 60000);
+    const refused = memoryConsume(key, 1, 60000);
+    expect(refused).toMatchObject({ allowed: false, resetAt: first.resetAt });
+    memoryRefund(key);
+    expect(memoryConsume(key, 1, 60000).allowed).toBe(true);
   });
 });

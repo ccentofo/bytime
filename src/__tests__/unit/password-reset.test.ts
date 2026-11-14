@@ -38,6 +38,8 @@ vi.mock('@/db', () => dbAccess);
 const afterTasks = vi.hoisted(() => [] as Array<() => Promise<unknown>>);
 vi.mock('next/server', () => ({ after: (fn: () => Promise<unknown>) => { afterTasks.push(fn); } }));
 vi.mock('@sentry/nextjs', () => ({ captureException: vi.fn(), captureMessage: vi.fn() }));
+// The per-IP reset limit (feature-plan-upstash-rate-limiting.md Q3) reads the client IP from the request headers.
+vi.mock('next/headers', () => ({ headers: async () => new Headers({ 'x-forwarded-for': '198.51.100.20' }) }));
 
 const sendReset = vi.hoisted(() => vi.fn(async () => ({ ok: true as const, id: 'msg' })));
 vi.mock('@/lib/email/send', () => ({ sendPasswordResetEmail: sendReset }));

@@ -198,14 +198,19 @@ describe('notice-delivery cron', () => {
       nullExpiredSignupIpHashes: async () => { h.order.push('null-ip-hashes'); return 4; },
       resolveSignupSignals: async () => { h.order.push('resolve-signals'); },
     }));
+    // feature-plan-upstash-rate-limiting.md §6.6 / T12: its own module, so its own mock.
+    vi.doMock('@/lib/rate-limit/signals', () => ({
+      resolveRateLimitSignals: async (now: Date) => { expect(now).toBeInstanceOf(Date); h.order.push('resolve-rate-limit-signals'); },
+    }));
     const { GET } = await import('@/app/api/cron/notice-delivery/route');
     const { NextRequest } = await import('next/server');
     const body = await (await GET(new NextRequest('https://cadenzpoint.com/api/cron/notice-delivery'))).json();
-    expect(h.order).toEqual(['null-ip-hashes', 'resolve-signals']);
+    expect(h.order).toEqual(['null-ip-hashes', 'resolve-signals', 'resolve-rate-limit-signals']);
     expect(body.ipHashesCleared).toBe(4);
     vi.doUnmock('@/lib/cron/run-cron');
     vi.doUnmock('@/lib/tenant/notices');
     vi.doUnmock('@/lib/signup/signals');
+    vi.doUnmock('@/lib/rate-limit/signals');
     vi.resetModules();
   });
 });

@@ -11,6 +11,9 @@ import { users } from '@/db/schema';
 import { and, eq, isNull, lt, or } from 'drizzle-orm';
 import { decrypt, encrypt } from '@/lib/encryption';
 import { getTOTPStep, verifyRecoveryCode } from '@/lib/totp';
+import { getClientIp } from '@/lib/rate-limit';
+import { consume, refund } from '@/lib/rate-limit/store';
+import { ipIdentifier } from '@/lib/rate-limit/identifier';
 
 /** Thrown from authorize() when the account has MFA enabled and no code was submitted yet.
  *  No session is issued — the client re-submits with mfaCode once the user enters one. */
@@ -23,21 +26,54 @@ class MFAInvalidSignin extends CredentialsSignin {
   code = 'mfa_invalid';
 }
 
+/** Thrown from authorize() when this IP has used its failed sign-in budget (feature-plan-upstash-rate-limiting.md Q2). */
+class SignInRateLimited extends CredentialsSignin {
+  code = 'rate_limited';
+}
+
 /**
  * Credentials provider authorize logic, extracted to a standalone function so it can be
  * exercised directly in integration tests without driving the full NextAuth request stack.
- * Behavior is unchanged from when this lived inline in the Credentials provider config.
+ *
+ * feature-plan-upstash-rate-limiting.md §6.7 (Q2): every attempt from an IP is counted BEFORE any work (atomically, so
+ * parallel requests can't slip past) and refunded at exactly one site when it succeeds, stops at the MFA step, or hits
+ * an unexpected exception. 20 failures per IP per 15 minutes across workspaces; over it, sign-in is refused even with
+ * the right password. `ip` defaults to 'unknown' for direct (test) callers.
  */
-export async function authorizeCredentials(credentials: Record<string, unknown> | undefined) {
-  if (!credentials?.email || !credentials?.password) return null;
+export async function authorizeCredentials(credentials: Record<string, unknown> | undefined, ip = 'unknown') {
+  // Input checks first: nothing counted, nothing checked. Auth.js accepts a JSON body, so the types aren't guaranteed.
+  // An over-long or NUL-carrying email can't match any user and would only make the workspace database throw (which
+  // the refund path below would refund), so it's refused here too.
+  const rawEmail = credentials?.email;
+  const rawPassword = credentials?.password;
+  if (typeof rawEmail !== 'string' || typeof rawPassword !== 'string' || !rawEmail || !rawPassword) return null;
+  if (rawEmail.length > 255 || rawEmail.includes('\0') || rawPassword.includes('\0')) return null;
 
-  const email = (credentials.email as string).toLowerCase().trim();
-  const password = credentials.password as string;
+  const email = rawEmail.toLowerCase().trim();
+  const password = rawPassword;
   // No code submitted = missing, blank, not a string, or "undefined"/"null": URLSearchParams serialises an undefined
   // value as the string "undefined" (feature-plan-hotfix-mfa-qr.md §7) — that must ask for a code, not count a failure.
-  const rawMfa = credentials.mfaCode;
+  const rawMfa = credentials?.mfaCode;
   const mfaCode = typeof rawMfa === 'string' && !['', 'undefined', 'null'].includes(rawMfa.trim()) ? rawMfa.trim() : undefined;
 
+  const ipId = ipIdentifier(ip);
+  const gate = await consume('signInFailure', ipId);
+  if (!gate.allowed) throw new SignInRateLimited(); // never refunded
+  let refundDue = false;
+  try {
+    const user = await authorizeChecked(email, password, mfaCode); // records the success before returning
+    if (user) refundDue = true;                                    // success
+    return user;                                                   // null = a counted failure
+  } catch (e) {
+    if (e instanceof MFARequiredSignin || !(e instanceof CredentialsSignin)) refundDue = true; // MFA step, or an infrastructure error
+    throw e;                                                       // MFAInvalidSignin and other CredentialsSignin keep the count
+  } finally {
+    if (refundDue) await refund('signInFailure', ipId, gate);      // the ONLY refund call: at most once per attempt
+  }
+}
+
+/** The sign-in checks (unchanged from before the per-IP gate): the user, `null` for a failure, or a throw. */
+async function authorizeChecked(email: string, password: string, mfaCode: string | undefined) {
   // Use suspended-tolerant DB resolver so suspended admins can still log in
   // and reach the billing wall. getDb() stays strict everywhere else.
   let authDb: Awaited<ReturnType<typeof getDbForAuth>>;
@@ -283,7 +319,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         password: { label: 'Password', type: 'password' },
         mfaCode: { label: 'Authentication code', type: 'text' },
       },
-      authorize: authorizeCredentials,
+      authorize: (credentials, request) => authorizeCredentials(credentials, getClientIp(request)),
     }),
   ],
   session: {

@@ -102,10 +102,13 @@ export const indirectChargeCodes = pgTable('indirect_charge_codes', {
 export const loginAttempts = pgTable('login_attempts', {
   id: uuid('id').defaultRandom().primaryKey(),
   email: varchar('email', { length: 255 }).notNull(),
-  ipAddress: varchar('ip_address', { length: 45 }), // IPv4 or IPv6
+  // Always NULL (feature-plan-upstash-rate-limiting.md §6.8): raw IPs are never stored; the constraint enforces it.
+  ipAddress: varchar('ip_address', { length: 45 }),
   attemptedAt: timestamp('attempted_at', { withTimezone: true }).notNull().defaultNow(),
   successful: boolean('successful').notNull().default(false),
-});
+}, (table) => [
+  check('login_attempts_no_raw_ip', sql`${table.ipAddress} IS NULL`),
+]);
 
 // ---------------------------------------------------------------------------
 // Contracts

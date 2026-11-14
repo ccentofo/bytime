@@ -1,74 +1,16 @@
 /**
- * In-memory sliding window rate limiter.
- * Tracks request counts per IP address within a configurable time window.
- *
- * Limitations:
- * - Not shared across server instances (OK for single-instance MVP)
- * - Resets on server restart (OK — DB-backed brute force protection covers auth)
- * - Memory grows with unique IPs (cleanup runs automatically)
+ * Rate limiting. Two stores:
+ * - **In memory, per server instance** (`./rate-limit/memory.ts`): reports, the v1 API, the workspace export and the
+ *   wrong-cron-secret limit (`checkRateLimit`), unchanged.
+ * - **Shared through Upstash** (`./rate-limit/store.ts`, feature-plan-upstash-rate-limiting.md): the signup and
+ *   sign-in limits named in `./rate-limit/limits.ts`, with a fallback to memory when Upstash is unavailable.
  */
 
-type RateLimitEntry = {
-  count: number;
-  resetAt: number; // Unix timestamp (ms)
-};
+import { consume } from './rate-limit/store';
+import { ipIdentifier } from './rate-limit/identifier';
+import { checkRateLimit } from './rate-limit/memory';
 
-const store = new Map<string, RateLimitEntry>();
-
-// Cleanup stale entries every 5 minutes
-const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
-let lastCleanup = Date.now();
-
-function cleanup() {
-  const now = Date.now();
-  if (now - lastCleanup < CLEANUP_INTERVAL_MS) return;
-  lastCleanup = now;
-
-  for (const [key, entry] of store.entries()) {
-    if (entry.resetAt <= now) {
-      store.delete(key);
-    }
-  }
-}
-
-/**
- * Check if a request should be rate limited.
- *
- * @param key - Unique identifier (typically IP address + endpoint)
- * @param limit - Maximum number of requests allowed in the window
- * @param windowMs - Time window in milliseconds
- * @returns Object with `allowed` boolean, `remaining` count, and `retryAfterMs`
- */
-export function checkRateLimit(
-  key: string,
-  limit: number,
-  windowMs: number
-): {
-  allowed: boolean;
-  remaining: number;
-  retryAfterMs: number;
-} {
-  cleanup();
-
-  const now = Date.now();
-  const entry = store.get(key);
-
-  if (!entry || entry.resetAt <= now) {
-    // New window
-    store.set(key, { count: 1, resetAt: now + windowMs });
-    return { allowed: true, remaining: limit - 1, retryAfterMs: 0 };
-  }
-
-  if (entry.count >= limit) {
-    // Rate limited
-    const retryAfterMs = entry.resetAt - now;
-    return { allowed: false, remaining: 0, retryAfterMs };
-  }
-
-  // Increment
-  entry.count += 1;
-  return { allowed: true, remaining: limit - entry.count, retryAfterMs: 0 };
-}
+export { checkRateLimit };
 
 /**
  * Extract client IP from Next.js request headers.
@@ -132,8 +74,9 @@ export function checkCronRateLimit(request: Request): Response | null {
 /**
  * One shared budget for every "does this workspace name exist?" lookup — the signup availability check
  * (/signup/check) and the apex workspace finder (goToWorkspace) — so neither can be used to enumerate faster.
+ * Shared across instances (Upstash), 30 per clock minute per IP (IPv6 by /64).
  */
-export function checkSlugLookupRateLimit(ip: string): { allowed: boolean; retryAfterMs: number } {
-  const result = checkRateLimit(`signup-check:${ip}`, 30, ONE_MINUTE); // 30/min
+export async function checkSlugLookupRateLimit(ip: string): Promise<{ allowed: boolean; retryAfterMs: number }> {
+  const result = await consume('slugLookup', ipIdentifier(ip));
   return { allowed: result.allowed, retryAfterMs: result.retryAfterMs };
 }

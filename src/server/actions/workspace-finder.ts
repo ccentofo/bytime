@@ -33,7 +33,7 @@ export async function goToWorkspace(slug: string, target: string): Promise<Actio
       throw new UserFacingError('Enter your workspace name: letters, numbers and hyphens (for example, acme).');
     }
 
-    const limit = checkSlugLookupRateLimit(getClientIpFromHeaders(await headers()));
+    const limit = await checkSlugLookupRateLimit(getClientIpFromHeaders(await headers()));
     if (!limit.allowed) {
       throw new UserFacingError('Too many attempts. Please wait a minute and try again.');
     }

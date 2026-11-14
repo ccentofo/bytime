@@ -12,6 +12,10 @@ import { getTenantSlug } from '@/lib/tenant/context';
 import { tenantBaseUrl } from '@/lib/tenant/host';
 import { UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
+import { headers } from 'next/headers';
+import { getClientIpFromHeaders } from '@/lib/rate-limit';
+import { consume } from '@/lib/rate-limit/store';
+import { ipIdentifier } from '@/lib/rate-limit/identifier';
 
 const TOKEN_EXPIRY_HOURS = 1;
 const MAX_REQUESTS_PER_HOUR = 3;
@@ -44,6 +48,10 @@ export async function requestPasswordReset(email: string): Promise<ActionResult<
     // No workspace on this host → nothing to reset; same generic answer, no email.
     const slug = await requestSlugOrEmpty();
     if (!slug) return;
+
+    // Per-IP limit across workspaces (feature-plan-upstash-rate-limiting.md Q3): 10 requests an hour. Over it, the same
+    // generic answer, with no email and no database work.
+    if (!(await consume('resetRequest', ipIdentifier(getClientIpFromHeaders(await headers())))).allowed) return;
 
     const db = await getDbForAuth();
 
