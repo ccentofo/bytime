@@ -5,12 +5,12 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 - Audit records: `*-AUDIT.md`.
 - Business decisions: `BUSINESS-DECISIONS.md` (kept by the business session).
 
-**Last updated:** 2026-11-13 (5b merged; the lead now runs the checks). Earlier on 2026-11-13: Excel cost report merged. Before that: 2026-11-11 (earlier entries dated 2026-11-12 were written on 2026-11-11; the dates are kept as recorded).
+**Last updated:** 2026-11-13 (item 6 audit READY). Earlier on 2026-11-13: Excel cost report merged. Before that: 2026-11-11 (earlier entries dated 2026-11-12 were written on 2026-11-11; the dates are kept as recorded).
 
 ## How we work
 - **Scope is the product owner's.** Nothing is added, removed or changed in what the product does without the product owner's yes. The lead decides software design inside approved scope and brings every assumption or open question to the product owner.
 - **Tandem mode:** the lead sends approved work to "CadenzPoint Development" and audits the results. The product owner sees every blueprint and every audit verdict, and runs all pushes, PRs and merges plus the browser checks.
-- **Sessions:** a fresh dev session per blueprint; fix rounds stay in it. The lead checkpoints this file and its memory before starting a fresh planning session, and tells the product owner exactly when and how.
+- **Sessions:** a fresh dev session per blueprint; fix rounds stay in it. **Since 2026-11-13 the lead starts each dev session itself** and talks to it directly (product owner's OK); the product owner archives old ones. The lead checkpoints this file and its memory before starting a fresh planning session, and tells the product owner exactly when and how.
 - **Guardrails:**
   - the dev never pushes;
   - destructive operations run only against throwaway local tenants;
@@ -44,7 +44,19 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 4b | **Reminder email capacity**: the cron senders use Resend batch send | **merged** (PR #27 at `af2ac7d`, PR #28 with the checks-file fixes; `main` = `9427fba`, 2026-11-13). Audit `REMINDER-CAPACITY-AUDIT.md` READY; CI green; the product owner's integration run and checks passed. Tag `stable-2026-11-13-reminder-capacity`. |
 | 5 | Excel cost report: charge codes and Class | **merged** (PR #29, `1d44b35`, 2026-11-13; audit `EXCEL-COST-REPORT-AUDIT.md` READY, no HIGH or MEDIUM, 5 LOWs recorded; CI green; the product owner's checks passed). Tag `stable-2026-11-13-excel-cost-report`. |
 | 5b | **Large report responses**: stream the cost CSV, `/api/v1/costs`, `/periods` and `/timesheets/approved`; 25,000-row cap on the detailed cost Excel (`feature-plan-large-report-responses.md` FINAL v3.1) | **merged** (PR #30, `02059b0`, 2026-11-13; audit `LARGE-REPORT-RESPONSES-AUDIT.md` READY; CI green; checks run by the lead in the rehearsal). The product owner tags `stable-2026-11-13-large-report-responses`. **Still to prove at staging step 12.13:** the 4.5 MB exemption on Vercel and the cut-off behaviour. |
-| 6 | Distributed rate limiting (Upstash) | **approved 2026-11-12**. Blueprint `feature-plan-upstash-rate-limiting.md` **FINAL v3.3, pre-mortem CLEAN** (two rounds plus three confirmation passes). **Accepted 2026-11-13, Q1–Q5 as recommended.** Next: PRODUCTION-DEPLOY steps, the checks file, the dev hand-off. Branch `upstash-rate-limiting` from `02059b0`. |
+| 6 | Distributed rate limiting (Upstash) | Built (`c3e3ad8`, fix round 1 `0315163`). **Audit `UPSTASH-RATE-LIMITING-AUDIT.md`: READY**, no HIGH or MEDIUM in the code. **Checks run by the lead**, with results in the audit §6. **Next: the product owner reviews the audit §6, pushes, opens the PR, waits for green CI, merges**; then the founder's Phase 8b (Upstash databases). |
+    - F1: trim the URL like the token;
+    - F2: the pre-gate check also returns `null` for an email over 255 characters or a NUL in the email or password, with no consume (a T23 case);
+    - F3: the §12 diff is against `02059b0`;
+    - D1: the memory fallback keeps today's first-request window and doesn't count refused calls;
+    - D2: refund failures never touch the circuit or `noteOutage`;
+    - D3: signals are imported lazily and awaited inside `try`;
+    - D4: one pure `buildUpstash(env)`, shared by the store and the cron's config check;
+    - D5: the Q3 gate sits right after `if (!slug) return;`, before `getDbForAuth()`;
+    - D6: the slug-lookup result keeps its shape (now a Promise);
+    - D7: the `signup-ops` order assertion gains `resolve-rate-limit-signals`;
+    - D8: existing tests keep the `ip:unknown` bucket, and new scenarios use distinct IPs;
+    - D9: the test seam resolves per name, and T8 uses the real constructor. Branch `upstash-rate-limiting` from `02059b0`. |
 | 7 | ~~UX-5 accessibility (Section 508) verification~~ | **not doing** (product owner, 2026-11-12) |
 | 8 | Staging rehearsal (PRODUCTION-DEPLOY Phase 12), then production (Phase 13) | after the above. The approval-scope release is fix-forward only, with the window check. |
 

@@ -732,10 +732,10 @@ SELECT count(*) FROM login_attempts WHERE ip_address IS NOT NULL;
 ```
    ↑ expect `0` for every tenant. If not, stop and tell Planning.
 2. **After the deploy,** on a staging workspace's sign-in page: sign in with a wrong password 3 times, then correctly once.
-   ↑ expect "Invalid email or password." three times, then a normal sign-in.
+   ↑ expect "Invalid email or password." for the first two and "Invalid email or password. 2 attempts remaining before account lockout." for the third (the per-email lockout's countdown), then a normal sign-in.
 3. **Upstash console** → `cadenzpoint-staging-ratelimit` → **Data Browser**.
    ↑ expect only keys like `cp-rl:signInFailure:<64 hex characters>:<number>`, each with a TTL under 30 minutes. **No IP address and no email anywhere.** Any other kind of key: stop and tell Planning.
-4. **The config alert:** in the `cadenzpoint-staging` project, temporarily delete the token variable (`KV_REST_API_TOKEN` or `UPSTASH_REDIS_REST_TOKEN`), redeploy (12.1), and open a staging sign-in page once.
+4. **The config alert:** in the `cadenzpoint-staging` project, temporarily delete **every** token variable present (`KV_REST_API_TOKEN` and/or `UPSTASH_REDIS_REST_TOKEN`; the app reads either), redeploy (12.1), and **submit one sign-in** on a staging workspace (any password; just opening the page doesn't touch the limiter).
    ↑ expect the "rate-limit-config-missing" ops email within a few minutes, and sign-in still works.
    Put the variable back (Upstash console → the database → **REST API** → copy the token), redeploy, and wait for the next notice-delivery run (up to 10 minutes). The alert resolves, and the next daily ops digest no longer lists it.
 
