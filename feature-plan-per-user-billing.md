@@ -707,7 +707,7 @@ ON CONFLICT (tenant_id) DO UPDATE SET sync_due_at = COALESCE(tenant_seat_billing
     - The list includes `uncollectible` invoices as a fallback (second call, `status: 'uncollectible'`, only when no open invoice exists): their `hosted_invoice_url` still accepts payment.
   - `payUrl` is chosen by a pure helper `choosePayInvoice` in **`src/lib/billing/pay-url.ts`** (not in the `'use server'` actions file, which may only export async functions) (§6.7, U13):
     - first the **earliest by `created`** among open invoices with a null due date (on a charge-automatically subscription all are null; the earliest is the one driving the dunning; F37);
-    - else the earliest open invoice with `due_date <= now`;
+    - else the open invoice with the earliest `due_date` that is `<= now` (audit D13);
     - else the earliest open invoice by `created`.
   - `openInvoiceCount` is the number of open invoices.
   - A failure leaves `payUrl` null, and is logged.
