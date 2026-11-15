@@ -4,7 +4,10 @@
 
 **Audited commit:** `9fc2ced` on `per-user-billing` (the dev's single commit after the lead's `1a0484a`).
 
-## Verdict (round 1): NOT READY — fix round 1 required
+## Verdict: **READY** at `77c103a` (after fix round 1)
+Round 1 (`9fc2ced`) was NOT READY: no HIGH, 1 MEDIUM code gap and MEDIUM test gaps. Fix round 1 (FR1–FR9) is verified in §6. The checks pass (§7). No scope items for the product owner.
+
+## Round 1 verdict (kept for the record): NOT READY, fix round 1 required
 No HIGH findings. 1 MEDIUM code gap, plus MEDIUM test gaps (guarded behaviour that survives mutation), plus LOWs. None changes what the product does, so nothing goes to the product owner first. The fix round below goes to the dev directly, inside the approved blueprint.
 
 ## 1. Scope check
@@ -97,8 +100,65 @@ Mutation results: A caught 18 of 28, B caught 12 of 18. **Every miss was a test 
 
 Then re-run every gate, write a fix-round section in the dev report, commit, and message the lead.
 
-## 6. Verification after fix round 1
-*(pending)*
+## 6. Verification after fix round 1 (`77c103a`)
+**Scope.** Fix round 1 touched only `seat-sync.ts`, `billing.ts`, the tests and `PRODUCTION-DEPLOY.md`, all named in §5. No new behaviour beyond FR1–FR9. The one new string is the FR6 error text, approved by the lead.
 
-## 7. Checks run by the lead
-*(pending: `PER-USER-BILLING-BROWSER-CHECKS.md`, rehearsed and run against the fixed branch)*
+**Code read by the lead:**
+- FR1: the in-window email is keyed `${subId}:${periodEnd}`, and a clear resolves both keys.
+- FR3: `GREATEST(next_attempt_at, now + 10 min)`.
+- FR4: a failed list re-marks the tenant (a Stripe error doesn't abort the SQL transaction).
+- FR5: `maxNetworkRetries: 0` on both lists.
+- FR6: a 3 s cap through the `billingTenantReads` seam.
+- FR7: both alert writes are caught.
+- FR8: `outcome.corrected` is counted in the summary.
+- FR9: the runbook is reworded.
+
+**The dev's FR2 tests:** 27 of 27 targeted mutations caught; the round-0 set re-run, 20 of 20 still caught.
+
+**Lead gates:**
+
+| Gate | Result |
+|---|---|
+| `npx tsc --noEmit` | ✅ exit 0 |
+| `npm run lint` | ✅ 0 errors, 39 warnings (all pre-existing). Auditor worktrees removed. |
+| `npm run test` | ✅ 2,761 passed |
+| Integration, **run alone** with the control-plane env (the memory-noted command, so control-plane suites can't skip silently) | ✅ 93 files passed, 2 skipped (the isolation-DB suites, as before); 822 tests passed |
+
+A first integration attempt without `CONTROL_PLANE_DATABASE_URL` in the environment failed in setup (95 files, "no tests"). It was re-run with the env and is green.
+
+**Lead break-it** (`/tmp/pub-breakit/breakit-check-pub.mjs`, uncommitted; one exact-text edit per check, run its test file, expect FAIL, restore): **8 of 8 caught, tree clean.**
+- D only in the window;
+- year → `always_invoice`;
+- the window ends 5 minutes early;
+- the FR1 per-renewal key;
+- the ended old-debt guard;
+- unsuspend on a later anchor;
+- the Standard cap message;
+- ACH offered in Checkout.
+
+The integration checks loaded the control-plane env, so a missing env can't be mistaken for a catch.
+
+## 7. Checks run by the lead (`PER-USER-BILLING-BROWSER-CHECKS.md`, at `77c103a`, 2026-11-15)
+**Method.** The helper block was extracted verbatim and run in a fresh `zsh -i`. `npm run demo:local` was run ("✅ Local demo ready"). The app ran under the preview tool's `app-dev` config, with real clicks and fills in the preview browser. The throwaway workspace was `pub11151414`.
+
+| Section | Result | Evidence |
+|---|---|---|
+| 0 Setup | ✅ | helper usage line; demo ready; `Ready: http://pub11151414.localhost:3000` |
+| A Landing Pricing | ✅ | header `Features, Pricing`; h2 `Pricing`, h3 `Trial/Standard/Enterprise`; all price, detail and users strings exact; mailto exact; no "tax"; screenshot after clicking `Pricing` (at 1280 px) |
+| B Billing, trial | ✅ | tiles `Free trial / Ends Dec 3, 2026 · 18 days left`, `1 of 10 used / Active users count. Inactive users don't.`, `None yet / Choose a plan before your trial ends to keep editing.`; cards and footnote exact; both Choose buttons disabled with `Not available yet.`; headings h1 → h2 → h3; no raw status; screenshot |
+| C Billing, Standard states | ✅ all 8 | `monthly`, `annual`, `ending` (`Ends Dec 5, 2026`), `held 9` (`Billed for 9 users until Dec 5, 2026. Removed users leave your bill at renewal.`), `held 4` (standard line, no held line), `overdue` (`Payment overdue … Use Manage billing to pay.`), `inv-open` (`Invoice open / Pay it by the due date on the invoice.`), `ended` (`Canceled / Ended on Nov 13, 2026. Choose a plan to start again.`, with cards shown); no cards in the other 7 |
+| D BillingWall | ✅ | h1 `Workspace suspended`, h2 `Billing`; `Suspended / Pay the open invoice to restore access. / Use Manage billing to pay.`; no error; screenshot |
+| E Users seat line | ✅ | trial `1 active · 9 of 10 seats free` + drawer `Uses 1 of 9 free seats`; Standard `1 active · up to 100`, no drawer line |
+| F 100-user cap | ✅ | user 101 on Standard: `Your plan covers up to 100 users. Contact us at support@cadenzpoint.com to add more.` (screenshot); trial: `Your Trial plan allows 10 active users (you currently have 100). …` |
+| G Enterprise | ✅ | dry run `Would: set the plan to ENTERPRISE …` / `Dry run — pass --yes to apply.`; `plan: enterprise`; Billing `Enterprise / Custom terms`, `100 active users / No user limit.`; user 101 added (101 active in the DB); `set-plan standard` → `plan: standard` |
+| H Seat-sync mark and cron | ✅ | add → `due t, mark_seq 1`; deactivate → `mark_seq 2`; rename another user → still 2; cron JSON `counts: {"not-applicable":1}`; then `due f` |
+| I Stripe-mode guard | ✅ | no key → refused; dummy test key without `--stripe-mode` → `Pass --stripe-mode live|test`; `--stripe-mode live` with a test key → `doesn't match … refusing`; `show` prints plan (interval), `collection_method`, the seat row, the live active count |
+| J Clean up | ✅ | `tenant:delete` dropped the database; name file removed; helper removed |
+
+**Checks-file fixes from the rehearsal** (folded into the file):
+- a note that the app caches workspace facts for 60 s (wait before checking pages other than Billing);
+- the window width needed for the header link;
+- the exact Section I refusal texts;
+- a new `prune` helper step, because Section H couldn't add a user after F's 100+ users (re-rehearsed verbatim).
+
+**Not covered locally (staging 12.8/12.8b):** Checkout redirect, quantity updates in Stripe, ACH, invoices, renewals and the §4 test-mode checks.

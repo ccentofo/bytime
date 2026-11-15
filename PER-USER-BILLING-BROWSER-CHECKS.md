@@ -4,13 +4,15 @@
 
 Everything here runs locally **without a Stripe key**. Steps that need Stripe test mode (checkout, quantity updates, ACH, invoices, renewals) run at the staging rehearsal: PRODUCTION-DEPLOY 12.8 and 12.8b, as rewritten by the blueprint §12.
 
-> **Status: DRAFT (2026-11-15).** Written from blueprint FINAL v3.7 before the code exists. Planning rehearses every block against the finished branch before the merge gate: each block is copied verbatim into its own fresh `zsh -i` and run. Expected strings are checked against the built code then, and this note is replaced by the rehearsal record.
+> **Status: RUN by Planning on 2026-11-15 against `77c103a`** (results in `PER-USER-BILLING-AUDIT.md` §7). The rehearsal added the 60-second cache note, the window-width note, the exact Section I refusal texts and the `prune` step; the helper block was re-rehearsed verbatim after the edit.
 
 **Setup facts**
 - **The app:** start it with the preview tool's `app-dev` config (`npm run dev` on port 3000). Browser steps use the preview browser on `http://<workspace>.localhost:3000`.
 - **The workspace:** every check uses a **throwaway workspace** with a fresh name saved in `/tmp/pub-check-name`. Each helper step reads that file; never a shell variable.
   - Its admin is `admin@<name>.test`, password `Password123!`.
   - Billing states are set by SQL on its control-plane row, through the helper.
+- **The app caches workspace facts for 60 seconds.** The Billing page reads them fresh, but other pages (the read-only banner, the suspended wall, access) can show the previous state for up to a minute after a helper step. Wait one minute before checking those.
+- **Window width:** use a browser window at least 768 px wide; the header's `Pricing` link and other `sm` items are hidden below that by design.
 - **No Stripe key locally:** the Billing page can't read invoices, so `payUrl` is empty. Where a Pay button would show, expect the fallback text `Use Manage billing to pay.` The page must still render.
 
 ## 0. Set up
@@ -72,10 +74,13 @@ case "${1:-}" in
     psql "$PG/bytime_$N" -v ON_ERROR_STOP=1 -q -c "INSERT INTO users (email, full_name, role, is_active, flsa_exempt)
       SELECT 'u'||g||'@$N.test', 'User '||g, 'employee', true, false FROM generate_series($have + 1, $want) g;"
     echo "active users: $(psql "$PG/bytime_$N" -Atc "SELECT count(*) FROM users WHERE is_active")" ;;
+  prune)     # deactivate every test user added by `users` or the drawer (direct SQL: no seat-sync mark)
+    N=$(name); psql "$PG/bytime_$N" -v ON_ERROR_STOP=1 -q -c "UPDATE users SET is_active=false WHERE email LIKE 'u%@$N.test' OR email LIKE '%@pubcheck.test';"
+    echo "active users: $(psql "$PG/bytime_$N" -Atc "SELECT count(*) FROM users WHERE is_active")" ;;
   seatrow)   psql "$CP" -c "SELECT sync_due_at IS NOT NULL AS due, mark_seq, stripe_quantity, failures FROM tenant_seat_billing WHERE tenant_id=(SELECT id FROM tenants WHERE slug='$(name)');" ;;
   cron)      curl -sS -H "Authorization: Bearer devsecret" http://localhost:3000/api/cron/seat-sync; echo ;;
   delete)    N=$(name); npm run tenant:delete -- "$N" --yes --force-with-reason "local per-user billing check" && rm -f "$NAME_FILE" ;;
-  *) echo "Usage: bash /tmp/pub-check.sh new|trial|monthly|annual|ending|held <q>|overdue|suspended|inv-open|ended|users <n>|seatrow|cron|delete"; exit 1 ;;
+  *) echo "Usage: bash /tmp/pub-check.sh new|trial|monthly|annual|ending|held <q>|overdue|suspended|inv-open|ended|users <n>|prune|seatrow|cron|delete"; exit 1 ;;
 esac
 EOF
 ```
@@ -130,13 +135,13 @@ For each row, run the helper step, reload `/settings/billing` and compare the ti
 **Expect for every row except `ended`:** no `Choose a plan` cards, and the line `Use Manage billing to update your payment method, see invoices or cancel.` For `ended`, the cards show.
 
 ## D. BillingWall when suspended
-1. Run `bash /tmp/pub-check.sh suspended`, then reload any page.
+1. Run `bash /tmp/pub-check.sh suspended`, **wait one minute** (the cache), then reload any page.
 2. **Expect** the full-page wall: the h1 `Workspace suspended`, then the Billing header as an h2.
 3. **Expect** the Payment tile: `Suspended` / `Pay the open invoice to restore access.` / `Use Manage billing to pay.`
 4. **Expect:** the page renders (no error screen), and the heading order is h1, then h2 `Billing`.
 
 ## E. Users page seat line
-1. Run `bash /tmp/pub-check.sh trial`, then open **Admin → Users**.
+1. Run `bash /tmp/pub-check.sh trial`, **wait one minute**, then open **People → Users** (`/admin/users`).
    - **Expect** the seat line `1 active · 9 of 10 seats free`.
    - Open **Add user**. **Expect** `Uses 1 of 9 free seats` in the drawer.
 2. Run `bash /tmp/pub-check.sh monthly`, then reload.
@@ -145,7 +150,7 @@ For each row, run the helper step, reload `/settings/billing` and compare the ti
 
 ## F. The 100-user cap
 1. Run `bash /tmp/pub-check.sh monthly`, then `bash /tmp/pub-check.sh users 100`. **Expect:** `active users: 100`.
-2. On **Admin → Users**, add a user (any new email, overtime status chosen).
+2. On **People → Users**, open **Add user**, fill Full name, Email, overtime status and a temporary password, and click **Add user**.
    - **Expect** the error, exactly: `Your plan covers up to 100 users. Contact us at support@cadenzpoint.com to add more.`
 3. Run `bash /tmp/pub-check.sh trial` (the plan goes back to trial with 100 users).
    - Try to add one. **Expect** today's trial message, starting `Your Trial plan allows 10 active users`.
@@ -159,7 +164,7 @@ For each row, run the helper step, reload `/settings/billing` and compare the ti
 5. Run `npm run tenant:admin -- set-plan "$(cat /tmp/pub-check-name)" standard --yes`. **Expect** `plan: standard`.
 
 ## H. The seat-sync mark and cron
-1. Run `bash /tmp/pub-check.sh trial`, then `bash /tmp/pub-check.sh seatrow`. **Expect** no rows.
+1. Run `bash /tmp/pub-check.sh prune` (**expect** `active users: 1`), then `bash /tmp/pub-check.sh trial`, then `bash /tmp/pub-check.sh seatrow`. **Expect** no rows.
 2. Add a user on Admin → Users, then `bash /tmp/pub-check.sh seatrow`. **Expect** `due = t`, `mark_seq = 1`.
 3. Deactivate that user, then `seatrow`. **Expect** `mark_seq = 2`.
 4. Rename a different user, then `seatrow`. **Expect** `mark_seq` still `2`.
@@ -168,9 +173,11 @@ For each row, run the helper step, reload `/settings/billing` and compare the ti
 
 ## I. Founder commands: Stripe-mode guard
 1. Run `npm run tenant:admin -- ensure-customer "$(cat /tmp/pub-check-name)" --yes`.
-   - **Expect** a refusal naming `--stripe-mode`; no customer is created.
+   - **Expect** (no Stripe key locally): `✗ STRIPE_SECRET_KEY is missing or not a recognizable Stripe key …`; no customer is created.
+   - Then `STRIPE_SECRET_KEY=sk_test_dummy npm run tenant:admin -- ensure-customer "$(cat /tmp/pub-check-name)" --yes`. **Expect** `✗ This command calls Stripe. Pass --stripe-mode live|test …`.
+   - Then the same with `--stripe-mode live`. **Expect** `✗ --stripe-mode live doesn't match the key … refusing.`
 2. Run `npm run tenant:admin -- show "$(cat /tmp/pub-check-name)"`.
-   - **Expect** the lines `plan_interval`, `collection_method`, the seat row, and a live active-user count.
+   - **Expect** the lines `plan: … (month|year)`, `collection_method:`, `seat sync:` and `active users (live count):`.
 
 ## J. Clean up
 1. Run `bash /tmp/pub-check.sh delete`. **Expect** the deletion to finish and `/tmp/pub-check-name` to be removed.
