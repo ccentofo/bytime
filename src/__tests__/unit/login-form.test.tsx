@@ -87,6 +87,19 @@ describe('LoginForm loading state', () => {
   });
 });
 
+// feature-plan-upstash-rate-limiting.md T19 (Q2): the per-IP failed sign-in limit's own sentence.
+describe('LoginForm: rate_limited', () => {
+  it('shows exactly the Q2 sentence, and asks for no lockout status after the refusal', async () => {
+    auth.checkLockout.mockResolvedValue({ isLocked: false, failedAttempts: 0, minutesRemaining: 0 });
+    auth.signIn.mockResolvedValue({ code: 'rate_limited', error: 'CredentialsSignin', ok: false });
+    const button = await submitForm();
+    expect(container.textContent).toContain('Too many failed sign-in attempts from your network. Try again in 15 minutes.');
+    expect(container.textContent).not.toContain('Invalid email or password.');
+    expect(auth.checkLockout).toHaveBeenCalledTimes(1); // the pre-submit check only
+    expect(button.hasAttribute('data-loading')).toBe(false);
+  });
+});
+
 describe('LoginForm structure (feature-plan-ux-foundations.md T16)', () => {
   it('one <main> and one h1 ("Sign in")', async () => {
     await act(async () => { root.render(<MantineProvider><LoginForm /></MantineProvider>); });

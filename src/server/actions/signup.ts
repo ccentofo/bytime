@@ -13,7 +13,9 @@ import { sendSignupVerifyEmail } from '@/lib/email/send-signup';
 import { scheduleEmail } from '@/lib/email/schedule';
 import { apexBaseUrl } from '@/lib/tenant/host';
 import { slugify } from '@/lib/tenant/slugify';
-import { checkRateLimit, getClientIpFromHeaders } from '@/lib/rate-limit';
+import { getClientIpFromHeaders } from '@/lib/rate-limit';
+import { consume } from '@/lib/rate-limit/store';
+import { ipIdentifier } from '@/lib/rate-limit/identifier';
 import { canonicalTimeZone } from '@/lib/calendar-date';
 import { SIGNUP_PER_IP_WORKSPACES_PER_DAY, TERMS_VERSION } from '@/lib/tenant/lifecycle-config';
 import { UserFacingError } from '@/lib/errors';
@@ -71,9 +73,8 @@ export async function startSignup(input: {
       await nullExpiredSignupIpHashes().catch((err) => console.error('[signup] ip_hash cleanup failed:', err));
     }
 
-    // IP-based rate limit: 8 signups per hour per IP to prevent abuse and spam provisioning.
-    const rateResult = checkRateLimit(`signup:${ip}`, 8, 60 * 60 * 1000);
-    if (!rateResult.allowed) {
+    // IP-based rate limit: 8 signups per hour per IP (shared with resend, across instances) to prevent abuse and spam provisioning.
+    if (!(await consume('signup', ipIdentifier(ip))).allowed) {
       throw new UserFacingError('Too many signup attempts. Please try again later.');
     }
 
@@ -134,14 +135,14 @@ function scheduleVerifyEmail(email: string, companyName: string, rawToken: strin
  * first; acts only on the newest PENDING row (unverified, not waitlisted, not consumed) for this email + slug that is
  * still inside its 24 h life: rotates the token (the old link dies) and keeps the expiry at most created_at + 24 h —
  * the IP hash lives 24 h. Always the same generic answer, so it can't be used to probe who signed up. Counts only
- * toward the in-memory attempt limiter, never toward the per-IP workspace limit.
+ * toward the shared attempt limiter (with startSignup), never toward the per-IP workspace limit.
  */
 export async function resendSignupVerification(input: { email: string; slug: string; turnstileToken?: string }): Promise<ActionResult<{ message: string }>> {
   return userAction(async () => {
     if (!signupControlsEnabled()) return { message: RESEND_GENERIC_RESPONSE };
     const ip = getClientIpFromHeaders(await headers());
     await requireHumanSignup(input.turnstileToken, ip);
-    if (!checkRateLimit(`signup:${ip}`, 8, 60 * 60 * 1000).allowed) {
+    if (!(await consume('signup', ipIdentifier(ip))).allowed) {
       throw new UserFacingError('Too many signup attempts. Please try again later.');
     }
 

@@ -5,12 +5,12 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 - Audit records: `*-AUDIT.md`.
 - Business decisions: `BUSINESS-DECISIONS.md` (kept by the business session).
 
-**Last updated:** 2026-11-13 (blueprint 5b accepted). Earlier on 2026-11-13: Excel cost report merged. Before that: 2026-11-11 (earlier entries dated 2026-11-12 were written on 2026-11-11; the dates are kept as recorded).
+**Last updated:** 2026-11-13 (item 6 audit READY). Earlier on 2026-11-13: Excel cost report merged. Before that: 2026-11-11 (earlier entries dated 2026-11-12 were written on 2026-11-11; the dates are kept as recorded).
 
 ## How we work
 - **Scope is the product owner's.** Nothing is added, removed or changed in what the product does without the product owner's yes. The lead decides software design inside approved scope and brings every assumption or open question to the product owner.
 - **Tandem mode:** the lead sends approved work to "CadenzPoint Development" and audits the results. The product owner sees every blueprint and every audit verdict, and runs all pushes, PRs and merges plus the browser checks.
-- **Sessions:** a fresh dev session per blueprint; fix rounds stay in it. The lead checkpoints this file and its memory before starting a fresh planning session, and tells the product owner exactly when and how.
+- **Sessions:** a fresh dev session per blueprint; fix rounds stay in it. **Since 2026-11-13 the lead starts each dev session itself** and talks to it directly (product owner's OK); the product owner archives old ones. The lead checkpoints this file and its memory before starting a fresh planning session, and tells the product owner exactly when and how.
 - **Guardrails:**
   - the dev never pushes;
   - destructive operations run only against throwaway local tenants;
@@ -23,7 +23,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 - **Merge gate.** All of these, in order, or no merge:
   1. the lead's audit verdict is READY (written in the item's `*-AUDIT.md`);
   2. CI is green on the PR;
-  3. the product owner has run the build plus the browser checks **personally** and said it's stable.
+  3. **the lead runs the checks** against the finished branch: real browser clicks with the preview tool (`.claude/launch.json` config `app-dev`), plus scripted file and API checks. The results go in the audit with evidence (screenshots, outputs). The product owner reviews those results and says it's stable (changed by the product owner, 2026-11-13; it was "the product owner runs the checks personally").
 
   The lead gives merge commands only after step 3.
 - **Scope check in every audit:** the lead lists any file or behaviour change outside the blueprint's blast radius and brings it to the product owner before anything else.
@@ -43,8 +43,20 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 4 | Launch hardening H1–H6 (`feature-plan-launch-hardening.md` FINAL v3.2) | **merged** (PR #26, `a80ad8b`, 2026-11-12; audit `LAUNCH-HARDENING-AUDIT.md` READY; CI green; product owner's browser checks passed, with the no-JavaScript check withdrawn). Tag `stable-2026-11-12-launch-hardening`. |
 | 4b | **Reminder email capacity**: the cron senders use Resend batch send | **merged** (PR #27 at `af2ac7d`, PR #28 with the checks-file fixes; `main` = `9427fba`, 2026-11-13). Audit `REMINDER-CAPACITY-AUDIT.md` READY; CI green; the product owner's integration run and checks passed. Tag `stable-2026-11-13-reminder-capacity`. |
 | 5 | Excel cost report: charge codes and Class | **merged** (PR #29, `1d44b35`, 2026-11-13; audit `EXCEL-COST-REPORT-AUDIT.md` READY, no HIGH or MEDIUM, 5 LOWs recorded; CI green; the product owner's checks passed). Tag `stable-2026-11-13-excel-cost-report`. |
-| 5b | **Large report responses** (from Excel cost report Q1): stream the cost CSV and `/api/v1/costs` past Vercel's 4.5 MB response limit; cap the Excel download's range or rows (memory reaches 2 GB at about 100,000 rows) | **approved 2026-11-13**. Blueprint `feature-plan-large-report-responses.md` **FINAL v3.1, pre-mortem CLEAN** (rounds 1 and 2 plus a confirmation pass). **Accepted 2026-11-13, Q1–Q6 as recommended.** Built (`a8c0462`, fix round 1 `8265d27`). **Audit `LARGE-REPORT-RESPONSES-AUDIT.md`: READY**, no HIGH or MEDIUM in the code; checks rehearsed against the finished branch (`e322f50`). **Next: the product owner pushes, opens the PR, waits for green CI, and runs the checks file**; then the lead gives the merge commands. Branch `large-report-responses` from `1d44b35`. |
-| 6 | Distributed rate limiting (Upstash) | **approved 2026-11-12**; blueprint to write (constraints in the decisions log) |
+| 5b | **Large report responses**: stream the cost CSV, `/api/v1/costs`, `/periods` and `/timesheets/approved`; 25,000-row cap on the detailed cost Excel (`feature-plan-large-report-responses.md` FINAL v3.1) | **merged** (PR #30, `02059b0`, 2026-11-13; audit `LARGE-REPORT-RESPONSES-AUDIT.md` READY; CI green; checks run by the lead in the rehearsal). The product owner tags `stable-2026-11-13-large-report-responses`. **Still to prove at staging step 12.13:** the 4.5 MB exemption on Vercel and the cut-off behaviour. |
+| 6 | Distributed rate limiting (Upstash) | Built (`c3e3ad8`, fix round 1 `0315163`). **Audit `UPSTASH-RATE-LIMITING-AUDIT.md`: READY**, no HIGH or MEDIUM in the code. **Checks run by the lead**, with results in the audit §6. **Next: the product owner reviews the audit §6, pushes, opens the PR, waits for green CI, merges**; then the founder's Phase 8b (Upstash databases). |
+    - F1: trim the URL like the token;
+    - F2: the pre-gate check also returns `null` for an email over 255 characters or a NUL in the email or password, with no consume (a T23 case);
+    - F3: the §12 diff is against `02059b0`;
+    - D1: the memory fallback keeps today's first-request window and doesn't count refused calls;
+    - D2: refund failures never touch the circuit or `noteOutage`;
+    - D3: signals are imported lazily and awaited inside `try`;
+    - D4: one pure `buildUpstash(env)`, shared by the store and the cron's config check;
+    - D5: the Q3 gate sits right after `if (!slug) return;`, before `getDbForAuth()`;
+    - D6: the slug-lookup result keeps its shape (now a Promise);
+    - D7: the `signup-ops` order assertion gains `resolve-rate-limit-signals`;
+    - D8: existing tests keep the `ip:unknown` bucket, and new scenarios use distinct IPs;
+    - D9: the test seam resolves per name, and T8 uses the real constructor. Branch `upstash-rate-limiting` from `02059b0`. |
 | 7 | ~~UX-5 accessibility (Section 508) verification~~ | **not doing** (product owner, 2026-11-12) |
 | 8 | Staging rehearsal (PRODUCTION-DEPLOY Phase 12), then production (Phase 13) | after the above. The approval-scope release is fix-forward only, with the window check. |
 
@@ -84,6 +96,8 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 2026-11-12 | **4b reminder capacity:** Resend batch send applies to the two reminder crons only (`daily-reminder`, `submission-deadline`). Admin notice delivery (`deliverPendingNotices`) stays one email per send. |
 | 2026-11-12 | **4b blueprint accepted** (`feature-plan-reminder-capacity.md` FINAL v3.1). **Q2:** no Resend account yet, so the live batch check moves to the staging rehearsal (Phase 12). **Q3:** no quota-reserve code; the Resend Free tier for now (the product owner revisits before customers beyond the design partner; lead's estimate: Free covers about one 30-person workspace's reminders a day). |
 | 2026-11-12 | **Excel cost report E1–E4 (all lead recommendations accepted):** E1 the detailed cost report gets the columns in Excel and CSV, and `/api/v1/costs` gets additive `chargeCode` and `className` fields; the Hours summary and Cost by pay period are unchanged. E2 the columns are "Charge Code" and "Class" only. E3 Class is the charge code's Class today, with a one-line note in the file. E4 entries with no charge code (imported history, CLIN-only) get blank cells. |
+| 2026-11-13 | **Upstash blueprint accepted** (`feature-plan-upstash-rate-limiting.md` FINAL v3.3), **Q1–Q5 all as recommended:** Q1 fall back to per-instance memory plus an ops alert; Q2 20 failed sign-ins per IP per 15 minutes across workspaces (counted first, refunded on success), message "Too many failed sign-in attempts from your network. Try again in 15 minutes."; Q3 10 reset requests per IP per hour, silent; Q4 the split (signup, workspace-name lookups and the two new limits on Upstash; reports, API, export and cron stay in memory); Q5 usage alerts at $5 and $10, no hard cap. |
+| 2026-11-13 | **Checks process changed:** the lead runs the browser checks itself (real clicks in the preview browser, plus scripts) and records the results with evidence. The product owner only reviews the results before saying "stable". The lead talks to the dev session directly, not through the product owner. Steps needing the product owner's accounts (Vercel, Neon, GitHub, Stripe, real inboxes) stay with the product owner. |
 | 2026-11-13 | **5b blueprint accepted** (`feature-plan-large-report-responses.md` FINAL v3.1), **Q1–Q6 all as recommended:** Q1 Excel cap 25,000 rows; Q2 message "More than 25,000 rows match. Choose a shorter date range, or download the CSV."; Q3 no CSV cap (watch item); Q4 `/api/v1/periods` and `/api/v1/timesheets/approved` also stream; Q5 no warning on Downloads; Q6 build now, prove the 4.5 MB premise at staging step 12.13 (baseline then 5b). |
 | 2026-11-13 | **Excel cost report blueprint accepted** (`feature-plan-excel-cost-report.md` FINAL v3.1), **Q1–Q5 all as recommended:** Q1 the existing 4.5 MB response limit and Excel memory stay out of it, with a new follow-up item right after it (stream the CSV and API; cap the Excel range or rows); Q2 the API key dialog gets the `chargeCode` / `className` sentence; Q3 the Downloads description mentions charge codes; Q4 note text "Class shows the current Class of each charge code, including on past dates."; Q5 the cost CSV starts with a UTF-8 byte-order mark. |
 
@@ -164,7 +178,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
   - The rate limit is 10 requests/s per team across all API keys, and a batch counts as one request. The daily and monthly email quotas count emails (the business item: the Resend plan).
   - Errors come back as `{ error }`, not thrown (as for single sends).
 
-**Browser checks:** for every item, the lead writes a step-by-step `<ITEM>-BROWSER-CHECKS.md` (accounts, URLs, clicks, expected text, setup and cleanup commands). Never point the product owner at a blueprint section (product owner, 2026-11-12).
+**Browser checks:** for every item, the lead writes a step-by-step `<ITEM>-BROWSER-CHECKS.md` (accounts, URLs, clicks, expected text, setup and cleanup commands). **Since 2026-11-13 the lead runs it** (preview browser config `app-dev` for real clicks: the preview can open `http://acme.localhost:3000` and sign in; curl and scripts for file and API content). The results and evidence go in the audit; the product owner reviews them. Never point the product owner at a blueprint section (product owner, 2026-11-12).
 
 **Lead audit process (repeat for every item):**
 1. **Lead gates:** `npx tsc --noEmit`, `npm run lint`, `npm run test`.

@@ -5,6 +5,12 @@
       "name": "dev",
       "port": 3000,
       "url": "http://acme.localhost:3000"
+    },
+    {
+      "name": "app-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000
     }
   ]
 }

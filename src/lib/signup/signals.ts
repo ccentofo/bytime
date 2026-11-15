@@ -21,7 +21,7 @@ export const TURNSTILE_HOSTNAME_MISMATCH_THRESHOLD = 3;
  * Count one signal in a shared one-hour window (`<key>`), and record its time (`<key>:last`) — the resolution rule
  * ("quiet for an hour") reads the last time. Returns the count in the current window.
  */
-async function recordWindowedSignal(key: string, now: Date): Promise<number> {
+export async function recordWindowedSignal(key: string, now: Date): Promise<number> {
   const stale = new Date(now.getTime() - HOUR);
   const [row] = await controlDb.insert(signalCounters).values({ key, windowStart: now, count: 1 })
     .onConflictDoUpdate({
@@ -39,7 +39,7 @@ async function recordWindowedSignal(key: string, now: Date): Promise<number> {
 }
 
 /** When the last signal for `key` happened (null = never). */
-async function lastSignalAt(key: string): Promise<Date | null> {
+export async function lastSignalAt(key: string): Promise<Date | null> {
   const [last] = await controlDb.select({ at: signalCounters.windowStart }).from(signalCounters)
     .where(sql`${signalCounters.key} = ${`${key}:last`}`).limit(1);
   return last?.at ?? null;

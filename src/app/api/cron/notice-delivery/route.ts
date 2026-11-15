@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { runCron } from '@/lib/cron/run-cron';
 import { deliverPendingNotices } from '@/lib/tenant/notices';
 import { nullExpiredSignupIpHashes, resolveSignupSignals } from '@/lib/signup/signals';
+import { resolveRateLimitSignals } from '@/lib/rate-limit/signals';
 
 /**
  * Notice delivery cron, every 10 minutes (feature-plan-terms-compliance-fixes.md §4.4/§4.5): retries every
@@ -18,6 +19,8 @@ export async function GET(request: NextRequest) {
     // 24 h (LB-D5: ≤ ~24 h 10 min), and resolve turnstile-outage / signup-config-missing once their condition cleared.
     const ipHashesCleared = await nullExpiredSignupIpHashes();
     await resolveSignupSignals();
+    // feature-plan-upstash-rate-limiting.md §6.6: resolve rate-limit-outage / rate-limit-config-missing.
+    await resolveRateLimitSignals(new Date());
     return { message: 'Notice delivery processed', ...counts, ipHashesCleared };
   }, { maxRuntimeMinutes: Math.ceil(maxDuration / 60) });
 }

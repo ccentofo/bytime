@@ -134,6 +134,13 @@
       "when": 1794325565236,
       "tag": "0018_approval_scopes",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1794624648703,
+      "tag": "0019_huge_starfox",
+      "breakpoints": true
     }
   ]
 }

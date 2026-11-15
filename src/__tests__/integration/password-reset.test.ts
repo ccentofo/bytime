@@ -19,12 +19,15 @@ vi.mock('@/db', async (importOriginal) => ({
 }));
 
 vi.mock('@/lib/tenant/context', () => ({ getTenantSlug: async () => 'test-tenant' }));
+// The per-IP reset limit (feature-plan-upstash-rate-limiting.md Q3) reads the client IP from the request headers.
+vi.mock('next/headers', () => ({ headers: async () => new Headers({ 'x-forwarded-for': '198.51.100.21' }) }));
 
 const sent = vi.hoisted(() => vi.fn(async (args: { resetUrl: string; appUrl: string }) => { void args; return { ok: true as const, id: 'test-message-id' }; }));
 vi.mock('@/lib/email/send', () => ({ sendPasswordResetEmail: sent }));
 
 import { requestPasswordReset, verifyResetToken, resetPassword } from '@/server/actions/password-reset';
 import { tenantBaseUrl } from '@/lib/tenant/host';
+import { __resetForTests as resetRateLimits } from '@/lib/rate-limit/store';
 
 const hash = (t: string) => crypto.createHash('sha256').update(t).digest('hex');
 
@@ -37,6 +40,7 @@ describe('password reset (P1)', () => {
     await cleanupTestData();
     await getTestDb().delete(schema.passwordResetTokens);
     sent.mockClear();
+    resetRateLimits(); // memory mode: a fresh per-IP reset budget per test
   });
   afterEach(async () => {
     await getTestDb().delete(schema.passwordResetTokens);
@@ -92,5 +96,32 @@ describe('password reset (P1)', () => {
     expect(token.usedAt).not.toBeNull();
     // Reusing the token fails.
     await expectFailure(resetPassword({ email: user.email, token: 'tok-ok', newPassword: 'Another123!!' }), 'validation', /Invalid or expired/);
+  });
+});
+
+// feature-plan-upstash-rate-limiting.md T20 (Q3): 10 reset requests per IP per hour, across emails. Over it, the same
+// generic result, no email and no token.
+describe('password reset: per-IP request limit (Q3)', () => {
+  beforeEach(async () => {
+    await cleanupTestData();
+    await getTestDb().delete(schema.passwordResetTokens);
+    sent.mockClear();
+    resetRateLimits();
+  });
+
+  it('10 requests for 10 emails send 10; the 11th returns the same generic result and sends nothing', async () => {
+    const users: Array<Awaited<ReturnType<typeof createTestUser>>> = [];
+    for (let i = 0; i < 11; i++) users.push(await createTestUser());
+    const results: Array<Awaited<ReturnType<typeof requestPasswordReset>>> = [];
+    for (let i = 0; i < 10; i++) results.push(await requestPasswordReset(users[i].email));
+    await flushAfter();
+    expect(sent).toHaveBeenCalledTimes(10);
+    const eleventh = await requestPasswordReset(users[10].email);
+    await flushAfter();
+    expect(eleventh).toEqual(results[0]);
+    expect(sent).toHaveBeenCalledTimes(10);
+    const tokens = await getTestDb().select().from(schema.passwordResetTokens);
+    expect(tokens).toHaveLength(10);
+    expect(tokens.some((t) => t.email === users[10].email)).toBe(false);
   });
 });

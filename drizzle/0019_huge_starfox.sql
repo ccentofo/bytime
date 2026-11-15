@@ -1,0 +1,1 @@
+ALTER TABLE "login_attempts" ADD CONSTRAINT "login_attempts_no_raw_ip" CHECK ("login_attempts"."ip_address" IS NULL);

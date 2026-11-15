@@ -137,16 +137,12 @@ export async function verifyCurrentPassword(
  * INTERNAL — called from auth.ts's authorize(), before any session exists, with the getDbForAuth client
  * (tolerates suspended tenants — F10) rather than the strict getDb().
  */
-export async function recordFailedAttempt(
-  db: AttemptsWriter,
-  email: string,
-  ipAddress?: string
-): Promise<void> {
+export async function recordFailedAttempt(db: AttemptsWriter, email: string): Promise<void> {
   const normalizedEmail = email.toLowerCase().trim();
 
+  // No IP: login_attempts.ip_address stays NULL (feature-plan-upstash-rate-limiting.md §6.8).
   await db.insert(loginAttempts).values({
     email: normalizedEmail,
-    ipAddress: ipAddress ?? null,
     successful: false,
   });
 }
@@ -154,16 +150,12 @@ export async function recordFailedAttempt(
 /**
  * Record a successful login (resets the failure counter).
  */
-export async function recordSuccessfulLogin(
-  db: AttemptsWriter,
-  email: string,
-  ipAddress?: string
-): Promise<void> {
+export async function recordSuccessfulLogin(db: AttemptsWriter, email: string): Promise<void> {
   const normalizedEmail = email.toLowerCase().trim();
 
+  // No IP: login_attempts.ip_address stays NULL (feature-plan-upstash-rate-limiting.md §6.8).
   await db.insert(loginAttempts).values({
     email: normalizedEmail,
-    ipAddress: ipAddress ?? null,
     successful: true,
   });
 }
