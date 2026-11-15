@@ -1,6 +1,6 @@
 # Per-user billing (build queue 3a)
 
-> **Status:** **FINAL v3.7**, 2026-11-15, lead architect. **Pre-mortem CLEAN** (confirmation pass 7: no HIGH or MEDIUM; its 11 LOWs are written in). Waiting on the product owner's answers to Q1–Q11 (§2).
+> **Status:** **FINAL v3.7**, 2026-11-15, lead architect. **Pre-mortem CLEAN** (confirmation pass 7: no HIGH or MEDIUM; its 11 LOWs are written in). **Accepted by the product owner on 2026-11-15, with Q1–Q11 all as recommended** (§2). Ready for the dev.
 > - Pre-mortem round 1 (3 HIGH, 11 MEDIUM) is fixed in v2.
 > - Round 2 (10 MEDIUM) is fixed in v3, including a simpler quantity-sync design (§15).
 > - Confirmation pass 1 (5 distinct MEDIUM) is fixed in v3.1.
