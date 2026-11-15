@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eq, and } from 'drizzle-orm';
 import * as schema from '@/db/schema';
 import { getPeriodStartForDate, DEFAULT_PERIOD_CONFIG } from '@/lib/date-utils';
-import { diffDays, todayIn, type CalendarDate } from '@/lib/calendar-date';
+import { addDays, diffDays, todayIn, type CalendarDate } from '@/lib/calendar-date';
 import {
   getTestDb,
   createTestUser,
@@ -298,11 +298,16 @@ describe('Charge-code server actions — real end-to-end behavior', () => {
   it('rejects a save for a future date', async () => {
     await expectOk(assignChargeCodesToUser({ userId: employee.id, chargeCodeIds: [chargeCode.id] }));
 
+    // Tomorrow in ITS OWN period: on a period's last day, todayIndex + 1 would be past the end of this period and
+    // fail the day-index check ("Invalid day index") before the future-date check is reached.
+    const tomorrow = addDays(todayIn('America/New_York'), 1);
+    const tomorrowPeriod = getPeriodStartForDate(tomorrow, DEFAULT_PERIOD_CONFIG);
+
     actingAs(employee);
     await expectFailure(saveTimesheetBatch({
         expectedUserId: sessionState.user!.id,
-        periodStart,
-        cells: [{ chargeCodeId: chargeCode.id, dayIndex: todayIndex + 1, hours: 8, isEdit: false, isLateEntry: false }],
+        periodStart: tomorrowPeriod,
+        cells: [{ chargeCodeId: chargeCode.id, dayIndex: diffDays(tomorrowPeriod, tomorrow), hours: 8, isEdit: false, isLateEntry: false }],
       }), 'validation', /future date/i);
   });
 
