@@ -1172,6 +1172,7 @@ Additions to `integration/fakes/fake-stripe.ts`:
     - the ACH status while processing;
     - Checkout with quantity > 1;
     - a quantity update while a subscription schedule is attached;
+    - a long `withSeatLock` section (several Stripe calls) isn't cut by Neon's pooler (idle-in-transaction timeout);
     - whether Stripe itself emails a send_invoice `subscription_update` invoice (if it does, step 8's `auto_advance: true` skip prevents a second email; record the invoice's `auto_advance`);
     - a failed card on the hosted page of a not-yet-due send-invoice invoice: record the subscription status and **whether `invoice.payment_failed` fires** (Q11 depends on it; if it doesn't, the lead brings the product owner a follow-up before launch);
     - a schedule with `end_behavior: 'renew'` and no next phase: does it freeze the quantity at renewal? (If so, the schedule check treats it as a next phase with that quantity.)

@@ -147,6 +147,21 @@ The single source of truth for **where we are**, kept by the lead architect (ses
     3. review the impact analysis;
     4. audit;
     5. run the checks.
+  - **Impact analysis reviewed; go-ahead given (2026-11-15, lead → dev directly).** Approved details, within the design (audit against the blueprint plus these):
+    - **B1:** `billingTenantReads` lives in a new `src/server/internal/billing-reads.ts` (`'use server'` files export only async functions); `countActiveUsers(row)` stays in `seats.ts`.
+    - **B2:** the webhook's per-subscription open-invoice list adds `expand: ['data.payment_intent']`, so "processing" is known on both paths.
+    - **B3:** the loader is `loadOpenInvoices(customerDeleted)`. `reconcileInLock` calls it after `readCustomerSubscriptions` with that call's flag; the runner memoizes the first promise and reuses it after the reconcile (one list per section).
+    - **I1:** `computeInvoiceOverdueSince` counts null-due invoices only once failed. `toCancel`, the DUNNING-filter exclusion and `cancelInOwnSection` use `isOverdue` directly; they run only for ended tenants, where null-due counts as failed.
+    - **I2:** `reconcileInLock` resolves every open `subscription-status-drift` for the tenant in its `tx`.
+    - **I3:** the snapshot fields are required, and the test helper is updated.
+    - **I4:** the trial and unknown cap labels are kept as `seats.ts:22` resolves them.
+    - **I5:** bulk import always reads the plan first (accepted).
+    - **I6:** the tenant id comes from `getTenantOrThrow()` in the actions, plus a context mock in `update-user-role-and-active`.
+    - **I7:** early `not-applicable` leaves `billable_count` unchanged.
+    - **I8:** the extra fake capabilities (schedules, `attempt_count`, `auto_advance`, `schedule`, extra items, `trialing`, list by subscription, uncollectible lists) are within §10.1's intent.
+    - **I9:** noted.
+    - **N1:** add to staging 12.8b: check Neon's pooler doesn't cut a long `withSeatLock` section (idle-in-transaction).
+    - **Permission:** the dev may run `npm run db:migrate:cp` on the local control plane (additive; rewrites local legacy plan values). Not `demo:local`.
   - **Then:** database backups (3b).
 - **Checkpoint 2026-11-15 (end of the seventh Planning session).**
   - **Done this session:** 5b merged (PR #30) and Upstash merged (PR #31, `main` = `f958be9`).
