@@ -137,6 +137,8 @@ export interface SeatSyncOutcome {
   error?: string;
   /** Step 8: the proration invoice sent this run, if any. */
   invoiceSent?: string;
+  /** A `seat-quantity-corrected` audit event was written this run (with or without a Stripe call; audit FR8). */
+  corrected?: boolean;
 }
 
 const STRIPE_OPTS = { timeout: 10_000, maxNetworkRetries: 1 } as const;
@@ -357,15 +359,19 @@ async function syncInSection(
     const schedule = await stripe.subscriptionSchedules.retrieve(scheduleId, {}, STRIPE_OPTS);
     const q = nextPhaseQuantity(schedule, nowS);
     if (q !== null && q !== desired) {
-      const a: AlertInput = { tenantId, kind: 'seat-sync-schedule-attached', dedupKey: subId, detail: { schedule: scheduleId, nextPhaseQuantity: q, activeUsers: desired } };
+      const detail = { schedule: scheduleId, nextPhaseQuantity: q, activeUsers: desired };
+      // Mid-term: a digest alert under the subscription id. Inside the renewal window: the emailed variant under a key
+      // per renewal (`${subId}:${periodEnd}`, like renewal-at-risk), so a schedule first seen mid-term still emails
+      // once the window opens (raiseAlertWithEmail emails only when it opens an alert; audit FR1).
       alert(window
-        ? { op: 'email', alert: { ...a, summary: `A subscription schedule on ${row.slug} will set the quantity to ${q} at renewal; ${desired} users are active.` } }
-        : { op: 'raise', alert: a });
+        ? { op: 'email', alert: { tenantId, kind: 'seat-sync-schedule-attached', dedupKey: `${subId}:${periodEnd}`, detail,
+          summary: `A subscription schedule on ${row.slug} will set the quantity to ${q} at renewal; ${desired} users are active.` } }
+        : { op: 'raise', alert: { tenantId, kind: 'seat-sync-schedule-attached', dedupKey: subId, detail } });
     } else {
-      alert({ op: 'resolve', tenantId, kind: 'seat-sync-schedule-attached', dedupKey: subId });
+      alert({ op: 'resolveKind', tenantId, kind: 'seat-sync-schedule-attached' }); // both keys
     }
   } else {
-    alert({ op: 'resolve', tenantId, kind: 'seat-sync-schedule-attached', dedupKey: subId });
+    alert({ op: 'resolveKind', tenantId, kind: 'seat-sync-schedule-attached' }); // both keys
   }
 
   // Items: exactly one item, on a Standard price.
@@ -450,7 +456,7 @@ async function syncInSection(
     : planned.length > 0 ? 'updated'
     : desired < current ? 'held'
     : 'in-sync';
-  return { outcome: { outcome: kind, from: current, to: quantity, billable: desired }, record: true, billable: desired, subId, quantity, markSeq0 };
+  return { outcome: { outcome: kind, from: current, to: quantity, billable: desired, ...(corrected ? { corrected: true } : {}) }, record: true, billable: desired, subId, quantity, markSeq0 };
 }
 
 /** Step 7: the last statements of the section, after every Stripe call. Never touches `mark_seq` or `sync_due_at` (except the compare-and-clear). */
@@ -545,7 +551,16 @@ async function sendProrationInvoices(tenantId: string, subId: string, reason: Se
       }
     }
 
-    const page = await stripe.invoices.list({ subscription: subId, limit: 20 }, STRIPE_OPTS);
+    // A failed list re-marks the tenant (10 minutes ahead) in its own statement, so it's retried soon (audit FR4).
+    let page: Stripe.ApiList<Stripe.Invoice>;
+    try {
+      page = await stripe.invoices.list({ subscription: subId, limit: 20 }, STRIPE_OPTS);
+    } catch (err) {
+      console.error(`[seat-sync] step 8 could not list the invoices of ${subId}:`, err);
+      Sentry.captureException(err);
+      await remarkForStep8(tx, tenantId, now);
+      return null;
+    }
     const unsent = page.data.filter((inv) => (inv.status === 'draft' || inv.status === 'open')
       && inv.billing_reason === 'subscription_update'
       && !inv.metadata?.[SENT_MARKER]
@@ -577,18 +592,28 @@ async function sendProrationInvoices(tenantId: string, subId: string, reason: Se
       }
     }
     const moreRemain = eligible.length > (target ? 1 : 0);
-    if (failed || moreRemain) {
-      const retryAt = new Date(now.getTime() + STEP8_RETRY_MS);
-      await tx.insert(tenantSeatBilling).values({ tenantId, syncDueAt: now, nextAttemptAt: retryAt, updatedAt: now })
-        .onConflictDoUpdate({
-          target: tenantSeatBilling.tenantId,
-          set: { syncDueAt: sql`COALESCE(${tenantSeatBilling.syncDueAt}, ${now.toISOString()}::timestamptz)`, nextAttemptAt: retryAt, updatedAt: now },
-        });
-    }
+    if (failed || moreRemain) await remarkForStep8(tx, tenantId, now);
     return sentId;
   });
   await flushAlerts(alerts, now);
   return sent;
+}
+
+/**
+ * Step 8's retry: due again, about 10 minutes ahead — but never EARLIER than a backoff the main run already set
+ * (GREATEST; Postgres ignores a NULL argument), so a failing main sync keeps its exponential backoff (audit FR3).
+ */
+async function remarkForStep8(tx: ControlTx, tenantId: string, now: Date): Promise<void> {
+  const retryAt = new Date(now.getTime() + STEP8_RETRY_MS);
+  await tx.insert(tenantSeatBilling).values({ tenantId, syncDueAt: now, nextAttemptAt: retryAt, updatedAt: now })
+    .onConflictDoUpdate({
+      target: tenantSeatBilling.tenantId,
+      set: {
+        syncDueAt: sql`COALESCE(${tenantSeatBilling.syncDueAt}, ${now.toISOString()}::timestamptz)`,
+        nextAttemptAt: sql`GREATEST(${tenantSeatBilling.nextAttemptAt}, ${retryAt.toISOString()}::timestamptz)`,
+        updatedAt: now,
+      },
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -687,7 +712,12 @@ export async function runSeatSyncCron(opts: { budgetMs?: number; now?: () => Dat
   const budgetMs = opts.budgetMs ?? DEFAULT_BUDGET_MS;
   const runId = randomUUID();
 
-  await checkPriceConfig(clock());
+  try {
+    await checkPriceConfig(clock());
+  } catch (err) { // one failed alert write never aborts the run (audit FR7)
+    console.error('[seat-sync] the price config check could not write its alert:', err);
+    Sentry.captureException(err);
+  }
   const candidates = await seatSyncCandidates(clock(), opts.onlyTenantIds);
 
   const summary: SeatSyncCronSummary = {
@@ -707,19 +737,27 @@ export async function runSeatSyncCron(opts: { budgetMs?: number; now?: () => Dat
       console.error(`[seat-sync] tenant ${c.slug} crashed:`, err);
       result = { outcome: 'failed', error: errText(err) };
     }
-    summary.counts[result.outcome] = (summary.counts[result.outcome] ?? 0) + 1;
-    if (result.outcome === 'corrected' || result.outcome === 'term-race' || result.outcome === 'failed' || result.outcome === 'busy') {
-      summary.slugs[result.outcome].push(c.slug);
+    // A correction with no Stripe call (Stripe changed outside the sync) is still a correction (audit FR8).
+    const counted: SeatSyncOutcomeKind = result.corrected && (result.outcome === 'in-sync' || result.outcome === 'held')
+      ? 'corrected' : result.outcome;
+    summary.counts[counted] = (summary.counts[counted] ?? 0) + 1;
+    if (counted === 'corrected' || counted === 'term-race' || counted === 'failed' || counted === 'busy') {
+      summary.slugs[counted].push(c.slug);
     }
   }
 
   const doneAt = clock();
-  await withLockedPool(async (db) => {
-    if (summary.incomplete) {
-      await raiseAlert(db, { tenantId: null, kind: 'cron-incomplete', dedupKey: 'seat-sync', detail: { processed: summary.processed, candidates: summary.candidates } }, doneAt);
-    } else {
-      await resolveAlert(db, { tenantId: null, kind: 'cron-incomplete', dedupKey: 'seat-sync' }, doneAt);
-    }
-  });
+  try {
+    await withLockedPool(async (db) => {
+      if (summary.incomplete) {
+        await raiseAlert(db, { tenantId: null, kind: 'cron-incomplete', dedupKey: 'seat-sync', detail: { processed: summary.processed, candidates: summary.candidates } }, doneAt);
+      } else {
+        await resolveAlert(db, { tenantId: null, kind: 'cron-incomplete', dedupKey: 'seat-sync' }, doneAt);
+      }
+    });
+  } catch (err) { // the run itself completed; a failed alert write is logged (audit FR7)
+    console.error('[seat-sync] could not write the cron-incomplete alert:', err);
+    Sentry.captureException(err);
+  }
   return summary;
 }

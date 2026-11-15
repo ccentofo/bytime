@@ -129,6 +129,8 @@ describe.skipIf(!cpReady)('invoiced (send_invoice) subscriptions (§6.2, §6.7)'
     const info = await getTenantBillingInfo();
     expect(info.payUrl).toBe('https://pay.test/older');
     expect(info.overdue).toBe(true);
+    // Row 2 (overdue) beats row 2b (invoiced past_due): "Payment overdue", with the older invoice's Pay button.
+    expect(paymentTile(info)).toMatchObject({ big: 'Payment overdue', action: { label: 'Pay the invoice', href: 'https://pay.test/older' } });
     expect(stripeState.invoices.get(older)!.status).toBe('open');
   });
 

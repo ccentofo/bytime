@@ -269,4 +269,58 @@ describe.skipIf(!cpReady)('per-user checkout and billing info (§6.8, §6.10)', 
     expect(info2.payUrl).toBe('https://pay.test/uncollectible');
     expect(info2.openInvoiceCount).toBe(0);
   });
+
+  it('M4: dates are formatted in the workspace time zone (Pacific/Auckland: a period end of Dec 1, 20:00 UTC is Dec 2 there)', async () => {
+    await getTestDb().insert(schema.workspaceSettings).values({ id: 1, timezone: 'Pacific/Auckland' })
+      .onConflictDoUpdate({ target: schema.workspaceSettings.id, set: { timezone: 'Pacific/Auckland' } });
+    const t = await makeTenant({ trialEndsAt: new Date('2026-12-01T20:00:00Z'), currentPeriodEnd: new Date('2026-12-01T20:00:00Z'), subscriptionEndedAt: null });
+    state.slug = t.slug;
+    const info = await getTenantBillingInfo();
+    expect(info.trialEnd).toBe('Dec 2, 2026');
+    expect(info.renewsOn).toBe('Dec 2, 2026');
+  });
+
+  it('M14: billedQuantityApplies only when the seat row\'s subscription is the tenant\'s', async () => {
+    const { tenantSeatBilling } = await import('@/db/control-plane/schema');
+    const { controlDb } = await import('@/db/control-plane');
+    const t = await makeTenant({ stripeSubscriptionId: 'sub_current', subscriptionStatus: 'active', plan: 'standard' });
+    state.slug = t.slug;
+    await controlDb.insert(tenantSeatBilling).values({ tenantId: t.id, stripeSubscriptionId: 'sub_current', stripeQuantity: 9 });
+    expect(await getTenantBillingInfo()).toMatchObject({ billedQuantity: 9, billedQuantityApplies: true });
+    await controlDb.update(tenantSeatBilling).set({ stripeSubscriptionId: 'sub_previous' });
+    expect(await getTenantBillingInfo()).toMatchObject({ billedQuantity: 9, billedQuantityApplies: false });
+  });
+
+  it('M15: canSubscribe is false when closed and when policy-held (nothing LIVE in either)', async () => {
+    const closed = await makeTenant({ trialEndsAt: daysFrom(NOW, -200), deletionScheduledFor: daysFrom(NOW, -1) });
+    state.slug = closed.slug;
+    expect(await getTenantBillingInfo()).toMatchObject({ access: 'closed', canSubscribe: false });
+    const policy = await makeTenant({ status: 'suspended', suspendedAt: NOW, suspensionReason: 'policy' });
+    state.slug = policy.slug;
+    expect((await getTenantBillingInfo()).canSubscribe).toBe(false);
+    const open = await makeTenant();
+    state.slug = open.slug;
+    expect((await getTenantBillingInfo()).canSubscribe).toBe(true);
+  });
+
+  it('M6: the interval is validated after the tenant, closed and policy guards', async () => {
+    const closed = await makeTenant({ trialEndsAt: daysFrom(NOW, -200), deletionScheduledFor: daysFrom(NOW, -1) });
+    state.slug = closed.slug;
+    await expectFailure(startCheckout('weekly' as never), 'validation', /closed/);
+    const policy = await makeTenant({ status: 'suspended', suspendedAt: NOW, suspensionReason: 'policy' });
+    state.slug = policy.slug;
+    await expectFailure(startCheckout('weekly' as never), 'validation', /contact support/);
+  });
+
+  it('FR6: the checkout count is capped at 3 s: a hanging read → "Couldn\'t count your users. Please try again." and no Stripe call', async () => {
+    const t = await makeTenant();
+    state.slug = t.slug;
+    billingTenantReads.countActiveUsers = () => new Promise(() => {});
+    const started = Date.now();
+    await expectFailure(startCheckout('month'), 'validation', /^Couldn't count your users\. Please try again\.$/);
+    const ms = Date.now() - started;
+    expect(ms).toBeGreaterThanOrEqual(2900);
+    expect(ms).toBeLessThan(4500);
+    expect(stripeState.calls).toEqual([]);
+  });
 });

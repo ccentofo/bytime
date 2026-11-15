@@ -491,8 +491,8 @@ first, customers would be cut off on Stripe's schedule, without the notices the 
    - First run `npm run tenant:admin -- seat-sync <slug> --stripe-mode live --yes` and check in `show` that the seat
      row's quantity equals the live active count.
    - Then, in the Dashboard, schedule the price change at the period end with that quantity.
-   - After the renewal, release the schedule (Dashboard → subscription → schedule → Release) and confirm in `show`
-     that the subscription has no schedule alert.
+   - After the renewal, release the schedule (Dashboard → subscription → schedule → Release) and check in the Stripe
+     Dashboard that the subscription has no schedule.
    - Scheduling earlier freezes an older quantity into the next term; the app then raises
      `seat-sync-schedule-attached`.
 7. When an Enterprise contract ends and the customer moves to self-serve Standard:

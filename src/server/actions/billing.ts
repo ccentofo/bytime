@@ -14,7 +14,6 @@ import { tenantBaseUrl } from '@/lib/tenant/host';
 import { eq } from 'drizzle-orm';
 import { controlDb } from '@/db/control-plane';
 import { tenants, tenantSeatBilling } from '@/db/control-plane/schema';
-import { countActiveUsers } from '@/server/internal/seats';
 import { billingTenantReads, DEFAULT_TIME_ZONE } from '@/server/internal/billing-reads';
 import { ConflictError, UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
@@ -49,8 +48,14 @@ export async function startCheckout(interval: BillingInterval): Promise<ActionRe
     const priceId = standardPriceIds()[interval];
     if (!priceId) throw new UserFacingError('That plan is not available yet.');
 
-    // Through the row's own URL, so it works in billing_only (suspended for non-payment).
-    const activeUsers = await countActiveUsers(row);
+    // Through the row's own URL, so it works in billing_only (suspended for non-payment); capped at 3 s (audit FR6).
+    let activeUsers: number;
+    try {
+      activeUsers = await withTimeout(billingTenantReads.countActiveUsers(row), COUNT_TIMEOUT_MS);
+    } catch (err) {
+      if (err instanceof TimeoutError) throw new UserFacingError("Couldn't count your users. Please try again.");
+      throw err;
+    }
     if (activeUsers > 100) throw new UserFacingError(STANDARD_CAP_MESSAGE);
 
     const customerId = await ensureStripeCustomer(row.id);
@@ -138,26 +143,41 @@ export interface TenantBillingInfo {
 }
 
 const TENANT_READS_TIMEOUT_MS = 3000;
+const COUNT_TIMEOUT_MS = 3000;
+
+class TimeoutError extends Error {}
+
+/**
+ * Resolve `work`, or reject with a TimeoutError after `ms`. The losing branch of the race is caught, so it can never
+ * become an unhandled rejection; the timer is always cleared.
+ */
+async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  work.catch(() => {});
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new TimeoutError(`timed out after ${ms} ms`)), ms);
+  });
+  timeout.catch(() => {});
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 const INVOICE_LIST_TIMEOUT_MS = 5000;
 const DAY_MS = 86_400_000;
 
 /** The count and time zone, capped at 3 s together; the page renders without them (paying never depends on it). */
 async function readSeatsAndTimeZone(row: typeof tenants.$inferSelect): Promise<{ active: number | null; timeZone: string }> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const work = Promise.all([billingTenantReads.countActiveUsers(row), billingTenantReads.readWorkspaceTimeZone(row)]);
-    work.catch(() => {}); // the losing branch of the race must never become an unhandled rejection
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('tenant reads timed out')), TENANT_READS_TIMEOUT_MS);
-    });
-    timeout.catch(() => {});
-    const [active, timeZone] = await Promise.race([work, timeout]);
+    const [active, timeZone] = await withTimeout(
+      Promise.all([billingTenantReads.countActiveUsers(row), billingTenantReads.readWorkspaceTimeZone(row)]),
+      TENANT_READS_TIMEOUT_MS,
+    );
     return { active, timeZone };
   } catch (err) {
     console.error('[billing] could not read the user count / time zone:', err);
     return { active: null, timeZone: DEFAULT_TIME_ZONE };
-  } finally {
-    if (timer) clearTimeout(timer);
   }
 }
 
@@ -169,10 +189,10 @@ async function readPayableInvoices(subscriptionId: string, now: Date): Promise<{
       dueDate: typeof i.due_date === 'number' ? new Date(i.due_date * 1000) : null,
       hostedUrl: i.hosted_invoice_url ?? null,
     });
-    const open = await stripe.invoices.list({ subscription: subscriptionId, status: 'open', limit: 100 }, { timeout: INVOICE_LIST_TIMEOUT_MS });
+    const open = await stripe.invoices.list({ subscription: subscriptionId, status: 'open', limit: 100 }, { timeout: INVOICE_LIST_TIMEOUT_MS, maxNetworkRetries: 0 });
     let candidates = open.data.map(toCandidate);
     if (candidates.length === 0) {
-      const uncollectible = await stripe.invoices.list({ subscription: subscriptionId, status: 'uncollectible', limit: 100 }, { timeout: INVOICE_LIST_TIMEOUT_MS });
+      const uncollectible = await stripe.invoices.list({ subscription: subscriptionId, status: 'uncollectible', limit: 100 }, { timeout: INVOICE_LIST_TIMEOUT_MS, maxNetworkRetries: 0 });
       candidates = uncollectible.data.map(toCandidate);
     }
     return { payUrl: choosePayInvoice(candidates, now)?.hostedUrl ?? null, openInvoiceCount: open.data.length };

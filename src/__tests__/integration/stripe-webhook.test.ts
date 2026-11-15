@@ -574,6 +574,39 @@ describe.skipIf(!cpReady)('Stripe webhook: per-user billing (§6.9)', () => {
     expect(await seatDue(tenant.id)).not.toBeNull();
   });
 
+  it('M10: a revival (ended → not ended) with the mirror already GOOD reports becameGood and marks the seat sync due', async () => {
+    const s = stripeState.addSub(customer, 'active');
+    tenant = await setTenant(tenant.id, {
+      stripeSubscriptionId: s, subscriptionStatus: 'active', firstGoodAt: daysFrom(new Date(), -100),
+      subscriptionEndedAt: daysFrom(new Date(), -3), deletionScheduledFor: daysFrom(new Date(), 87),
+    });
+    await post(subEvent('customer.subscription.updated', customer, s));
+    expect((await getTenantRow(tenant.id)).subscriptionEndedAt).toBeNull();
+    expect(await seatDue(tenant.id)).toBeInstanceOf(Date);
+  });
+
+  it('M11: invoice.payment_failed for an ENDED tenant whose subscription is still LIVE → the founder alert only, no bank-payment-failed', async () => {
+    const s = stripeState.addSub(customer, 'past_due'); // DUNNING after the end: status only, pastDueSince stays null
+    tenant = await setTenant(tenant.id, {
+      stripeSubscriptionId: s, subscriptionStatus: 'past_due', firstGoodAt: daysFrom(new Date(), -100),
+      subscriptionEndedAt: daysFrom(new Date(), -3), deletionScheduledFor: daysFrom(new Date(), 87),
+    });
+    await post(failedInvoice(s));
+    const row = await getTenantRow(tenant.id);
+    expect(row.subscriptionEndedAt).not.toBeNull();
+    expect(row.pastDueSince).toBeNull();
+    expect(await notices('bank-payment-failed')).toEqual([]);
+    expect(await alerts('payment-failed-subscription-active')).toHaveLength(1);
+  });
+
+  it('M11b: the bank-payment-failed email is delivered with the Q6 subject', async () => {
+    const s = stripeState.addSub(customer, 'active');
+    tenant = await setTenant(tenant.id, { stripeSubscriptionId: s, subscriptionStatus: 'active', firstGoodAt: daysFrom(new Date(), -40) });
+    await post(failedInvoice(s));
+    for (const task of afterTasks.splice(0)) await task();
+    expect(resendState.delivered.map((c) => c.subject)).toEqual([`Payment not received for ${tenant.name}`]);
+  });
+
   it('S23 (webhook half): a webhook for a deleting tenant writes no facts and marks nothing', async () => {
     const s = stripeState.addSub(customer, 'active');
     tenant = await setTenant(tenant.id, { status: 'deleting' });

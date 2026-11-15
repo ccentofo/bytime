@@ -198,9 +198,19 @@ describe('U6: the Billing page tiles', () => {
       expect(page({ subscriptionStatus: 'incomplete', payUrl: PAY })).toMatch(link);
       expect(page({ subscriptionStatus: 'incomplete', payUrl: null })).not.toMatch(/<a[^>]*>[\s\S]*?Finish paying/);
     });
-    it('rows 1–3 add the several-invoices line when more than one invoice is open', () => {
-      expect(pageText({ overdue: true, payUrl: PAY, openInvoiceCount: 3 })).toContain('You have 3 open invoices. Manage billing lists them all.');
+    it('rows 1–3 add the several-invoices line when more than one invoice is open (each row)', () => {
+      const line = (n: number) => `You have ${n} open invoices. Manage billing lists them all.`;
+      expect(pageText({ suspensionReason: 'nonpayment', overdue: true, payUrl: PAY, openInvoiceCount: 2 })).toContain(line(2)); // row 1
+      expect(pageText({ overdue: true, payUrl: PAY, openInvoiceCount: 3 })).toContain(line(3));                                // row 2
+      expect(pageText({ subscriptionStatus: 'past_due', collectionMethod: 'send_invoice', payUrl: PAY, openInvoiceCount: 4 })).toContain(line(4)); // row 2b
+      expect(pageText({ subscriptionStatus: 'incomplete', payUrl: PAY, openInvoiceCount: 2 })).toContain(line(2));             // row 3
       expect(pageText({ overdue: true, payUrl: PAY, openInvoiceCount: 1 })).not.toContain('open invoices.');
+      expect(pageText({ subscriptionStatus: 'active', renewsOn: 'Dec 1, 2026', payUrl: PAY, openInvoiceCount: 3 })).not.toContain('open invoices.'); // not rows 5–6
+    });
+    it('row 2 beats row 2b: overdue + past_due + send_invoice → "Payment overdue", not "Invoice open"', () => {
+      const txt = pageText({ overdue: true, subscriptionStatus: 'past_due', collectionMethod: 'send_invoice', payUrl: PAY });
+      tile(txt, 'Payment', 'Payment overdue', 'Pay the open invoice to avoid suspension.');
+      expect(txt).not.toContain('Invoice open');
     });
     it('4. ended → "Canceled" / "Ended on {date}. Choose a plan to start again." (first sentence only when it can\'t subscribe)', () => {
       tile(pageText({ ended: true, endedOn: 'Oct 1, 2026', subscriptionStatus: 'active', plan: 'standard' }), 'Payment', 'Canceled', 'Ended on Oct 1, 2026. Choose a plan to start again.');

@@ -58,7 +58,7 @@ import { controlDb } from '@/db/control-plane';
 import { opsAlerts, tenantSeatBilling, tenants } from '@/db/control-plane/schema';
 import * as schema from '@/db/schema';
 import { encrypt } from '@/lib/encryption';
-import { markSeatSyncDue, runSeatSyncCron, syncSeatQuantity } from '@/lib/billing/seat-sync';
+import { markSeatSyncDue, runSeatSyncCron, seatSyncCandidates, syncSeatQuantity } from '@/lib/billing/seat-sync';
 import { seatSyncCommand } from '@/lib/tenant/admin-commands';
 import { sendOpsDigest } from '@/lib/tenant/ops-digest';
 import { stripeState } from './fakes/fake-stripe';
@@ -521,5 +521,145 @@ describe.skipIf(!cpReady)('seat sync (feature-plan-per-user-billing.md §6.4)', 
     expect((await sync(ended.tenant.id)).outcome).toBe('not-applicable');
     expect((await run([ended.tenant.id])).candidates).toBe(0);
     expect(updatesOf(ended.sub)).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // Audit round 1 (PER-USER-BILLING-AUDIT.md §5): FR1, FR2 (server), FR3, FR4, FR7, FR8
+  // -------------------------------------------------------------------------
+
+  it('FR1: a schedule first seen mid-term (digest only) still emails once the renewal window opens', async () => {
+    await setUsers(9);
+    const nowS = Math.floor(Date.now() / 1000);
+    stripeState.schedules.set('sub_sched_fr1', {
+      id: 'sub_sched_fr1', end_behavior: 'release', current_phase: { start_date: nowS - 86400, end_date: nowS + 10 * 86400 },
+      phases: [
+        { start_date: nowS - 86400, end_date: nowS + 10 * 86400, items: [{ price: env.month, quantity: 8 }] },
+        { start_date: nowS + 10 * 86400, end_date: nowS + 40 * 86400, items: [{ price: env.month, quantity: 3 }] },
+      ],
+    });
+    const { tenant, sub } = await subscriber({ quantity: 9, periodEnd: new Date(Date.now() + 10 * 86_400_000), schedule: 'sub_sched_fr1' });
+    await sync(tenant.id); // mid-term
+    expect(await openKinds(tenant.id)).toContain('seat-sync-schedule-attached');
+    expect(resendState.calls.filter((c) => c.subject.includes('seat-sync-schedule-attached'))).toHaveLength(0);
+    const end = new Date(Date.now() + 12 * HOUR); // the window opens
+    stripeState.setSub(sub, { current_period_end: Math.floor(end.getTime() / 1000) });
+    await sync(tenant.id);
+    expect(resendState.calls.filter((c) => c.subject.includes('seat-sync-schedule-attached'))).toHaveLength(1);
+    stripeState.setSub(sub, { schedule: null }); // released: both keys resolve
+    await sync(tenant.id);
+    expect(await openKinds(tenant.id)).not.toContain('seat-sync-schedule-attached');
+  });
+
+  it('M9: step 8 skips an open proration invoice with auto_advance true (Stripe emails it itself)', async () => {
+    await setUsers(1);
+    const { tenant, customer, sub } = await subscriber({ quantity: 1, collection: 'send_invoice' });
+    stripeState.addInvoice(customer, sub, { status: 'open', billing_reason: 'subscription_update', auto_advance: true, created: Math.floor(Date.now() / 1000) });
+    await sync(tenant.id);
+    expect(stripeState.sentInvoices).toEqual([]);
+  });
+
+  it('M13 / M14: after the third failed send, no more 10-minute retries (and the :stuck email); a stuck invoice is retried only on daily runs', async () => {
+    await setUsers(1);
+    const { tenant, customer, sub } = await subscriber({ quantity: 1, collection: 'send_invoice' });
+    const inv = stripeState.addInvoice(customer, sub, { status: 'open', billing_reason: 'subscription_update', auto_advance: false, created: Math.floor(Date.now() / 1000) });
+    await controlDb.insert(opsAlerts).values({ scope: tenant.id, tenantId: tenant.id, kind: 'seat-sync-invoice-send-failed', dedupKey: inv, occurrences: 2, firstSeenAt: new Date(), lastSeenAt: new Date() });
+    stripeState.failures.set('invoices.sendInvoice', Object.assign(new Error('no email'), { type: 'StripeInvalidRequestError', code: 'email_invalid' }));
+    await sync(tenant.id); // the third failure
+    const seat = await seatRow(tenant.id);
+    expect(seat.syncDueAt).toBeNull();      // no forced early retry
+    expect(seat.nextAttemptAt).toBeNull();
+    expect(resendState.calls.some((c) => c.subject.includes(`seat-sync-invoice-send-failed:${inv}:stuck`))).toBe(true);
+
+    stripeState.failures.clear();
+    stripeState.calls = [];
+    await sync(tenant.id, 'due');
+    expect(stripeState.calls).not.toContain('invoices.sendInvoice'); // stuck: not on a due run
+    await sync(tenant.id, 'daily');
+    expect(stripeState.sentInvoices).toEqual([inv]); // daily runs still try it
+  });
+
+  it('M27: step 8 runs for a LIVE (not only GOOD) send_invoice subscription — an overdue past_due account still has its invoices sent', async () => {
+    await setUsers(1);
+    const { tenant, customer, sub } = await subscriber({ quantity: 1, collection: 'send_invoice', status: 'past_due', tenant: { pastDueSince: daysFrom(new Date(), -3) } });
+    const inv = stripeState.addInvoice(customer, sub, { status: 'draft', billing_reason: 'subscription_update', created: Math.floor(Date.now() / 1000) });
+    expect((await sync(tenant.id)).outcome).toBe('not-applicable');
+    expect(stripeState.sentInvoices).toEqual([inv]);
+  });
+
+  it('M21: a stored quantity for ANOTHER subscription is never a correction', async () => {
+    await setUsers(5);
+    const { tenant, sub } = await subscriber({ quantity: 5 });
+    await controlDb.insert(tenantSeatBilling).values({ tenantId: tenant.id, stripeSubscriptionId: 'sub_old_one', stripeQuantity: 9, checkedAt: new Date() });
+    await sync(tenant.id);
+    expect(await corrections(tenant.id)).toEqual([]);
+    expect((await seatRow(tenant.id)).stripeSubscriptionId).toBe(sub);
+  });
+
+  it('M24: daily candidates require a syncable mirror (a charge-automatically past_due mirror is not one)', async () => {
+    const { tenant } = await subscriber({ quantity: 1, status: 'past_due' });
+    expect(await seatSyncCandidates(new Date(), [tenant.id])).toEqual([]);
+    await setTenant(tenant.id, { subscriptionStatus: 'active' });
+    expect((await seatSyncCandidates(new Date(), [tenant.id])).map((c) => c.reason)).toEqual(['daily']);
+  });
+
+  it('M28: the renewal list starts 5 minutes before the period end (3 minutes away → not a renewal candidate)', async () => {
+    const { tenant } = await subscriber({ quantity: 1, periodEnd: new Date(Date.now() + 3 * MIN) });
+    // Checked 23 h 58 min ago: before this window began (so every other renewal condition holds) and not yet a daily candidate.
+    await controlDb.insert(tenantSeatBilling).values({ tenantId: tenant.id, checkedAt: new Date(Date.now() - 24 * HOUR + 2 * MIN) });
+    expect(await seatSyncCandidates(new Date(), [tenant.id])).toEqual([]);
+    await setTenant(tenant.id, { currentPeriodEnd: new Date(Date.now() + 6 * HOUR) });
+    expect((await seatSyncCandidates(new Date(), [tenant.id])).map((c) => c.reason)).toEqual(['renewal']);
+  });
+
+  it('S45: an ended tenant is never a renewal candidate, even with its period end 6 h away', async () => {
+    const { tenant } = await subscriber({ quantity: 1, periodEnd: new Date(Date.now() + 6 * HOUR), tenant: { subscriptionEndedAt: daysFrom(new Date(), -2), deletionScheduledFor: daysFrom(new Date(), 88) } });
+    await controlDb.insert(tenantSeatBilling).values({ tenantId: tenant.id, checkedAt: new Date(Date.now() - 20 * HOUR) });
+    expect(await seatSyncCandidates(new Date(), [tenant.id])).toEqual([]);
+  });
+
+  it('FR3: the step 8 re-mark never shortens the main run\'s backoff', async () => {
+    await setUsers(2);
+    const { tenant, customer, sub } = await subscriber({ quantity: 1, collection: 'send_invoice' });
+    await controlDb.insert(tenantSeatBilling).values({ tenantId: tenant.id, failures: 1 });
+    stripeState.addInvoice(customer, sub, { status: 'open', billing_reason: 'subscription_update', auto_advance: false, created: Math.floor(Date.now() / 1000) });
+    stripeState.failures.set('subscriptions.update', Object.assign(new Error('down'), { type: 'StripeAPIError' }));
+    stripeState.failures.set('invoices.sendInvoice', Object.assign(new Error('no email'), { type: 'StripeInvalidRequestError' }));
+    const now = new Date();
+    expect((await sync(tenant.id, 'due', now)).outcome).toBe('failed'); // the main run backs off 20 min (2nd failure)…
+    expect(stripeState.calls).toContain('invoices.sendInvoice');          // …then step 8 fails too and re-marks
+    const seat = await seatRow(tenant.id);
+    expect(Math.round((seat.nextAttemptAt!.getTime() - now.getTime()) / MIN)).toBe(20);
+  });
+
+  it('FR4: a failed step 8 invoice list re-marks the tenant 10 minutes ahead', async () => {
+    await setUsers(1);
+    const { tenant } = await subscriber({ quantity: 1, collection: 'send_invoice' });
+    stripeState.failures.set('invoices.list', Object.assign(new Error('down'), { type: 'StripeAPIError' }));
+    const now = new Date();
+    expect((await sync(tenant.id, 'due', now)).outcome).toBe('in-sync');
+    const seat = await seatRow(tenant.id);
+    expect(seat.syncDueAt).toBeInstanceOf(Date);
+    expect(Math.round((seat.nextAttemptAt!.getTime() - now.getTime()) / MIN)).toBe(10);
+  });
+
+  it('FR7: a failed alert write at the start or end of the cron never aborts the run', async () => {
+    await setUsers(1);
+    const { tenant } = await subscriber({ quantity: 1 });
+    process.env.STRIPE_PRICE_STANDARD_ANNUAL = ''; // the start check raises stripe-prices-missing…
+    probe.throwNextRaise = true;                    // …and that write fails
+    const summary = await run([tenant.id]);
+    expect(summary.processed).toBe(1);
+  });
+
+  it('FR8: a correction with no Stripe call counts as corrected in the cron summary', async () => {
+    await setUsers(7);
+    const { tenant, sub } = await subscriber({ quantity: 7 });
+    await sync(tenant.id);
+    stripeState.setSub(sub, { quantity: 9 }); // raised outside the sync: held, no call
+    await markSeatSyncDue(tenant.id);
+    const summary = await run([tenant.id]);
+    expect(stripeState.updates).toEqual([]);
+    expect(summary.counts.corrected).toBe(1);
+    expect(summary.slugs.corrected).toEqual([tenant.slug]);
   });
 });

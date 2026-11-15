@@ -595,4 +595,47 @@ describe.skipIf(!cpReady)('lifecycle runner: per-user billing (§6.2, §6.5)', (
     expect(row.subscriptionEndedAt).toBeNull();
     expect(await seatDue(t.id)).not.toBeNull();
   });
+
+  it('M17: at termination, an invoiced past_due subscription with nothing overdue at the end is NOT queued for cancelling (Stripe\'s past_due isn\'t a debt)', async () => {
+    const { fakeStripe } = await import('./fakes/fake-stripe');
+    const customer = stripeState.addCustomer();
+    const charge = stripeState.addSub(customer, 'past_due', { created: daysFrom(NOW, -200) });
+    const invoiced = stripeState.addSub(customer, 'past_due', { collection_method: 'send_invoice', created: daysFrom(NOW, -10) });
+    stripeState.addInvoice(customer, invoiced, { due_date: Math.floor(NOW.getTime() / 1000) + 5 * 86400, created: Math.floor(NOW.getTime() / 1000) - 86400 });
+    const Sa = daysFrom(NOW, -31);
+    const t = await makeTenant({
+      stripeCustomerId: customer, stripeSubscriptionId: charge, subscriptionStatus: 'past_due', firstGoodAt: daysFrom(NOW, -200),
+      pastDueSince: daysFrom(NOW, -46), status: 'suspended', suspendedAt: Sa, suspensionReason: 'nonpayment',
+    });
+    await insertNotice(t.id, 'suspended', Sa, { sentAt: Sa, providerMessageId: 'msg_x' });
+    const retrieved = vi.spyOn(fakeStripe.subscriptions, 'retrieve');
+    const r = await runTenantLifecycle(t.id, NOW);
+    expect(r.terminated).toBe(true);
+    expect(stripeState.subs.get(charge)!.status).toBe('canceled');
+    expect(stripeState.subs.get(invoiced)!.status).toBe('past_due');
+    expect(retrieved.mock.calls.map((c) => c[0])).not.toContain(invoiced); // never entered a cancel section
+    retrieved.mockRestore();
+  });
+
+  it('M18: an invoiced subscription paid between the evaluation and its cancel section → reconciled (revived, marked due), not cancelled', async () => {
+    const customer = stripeState.addCustomer();
+    const sub = stripeState.addSub(customer, 'active', { collection_method: 'send_invoice', priceId: null });
+    const due = daysFrom(NOW, -46);
+    const inv = stripeState.addInvoice(customer, sub, { due_date: Math.floor(due.getTime() / 1000), created: Math.floor(due.getTime() / 1000) - 30 * 86400 });
+    const Sa = daysFrom(NOW, -31);
+    const t = await makeTenant({
+      stripeCustomerId: customer, stripeSubscriptionId: sub, subscriptionStatus: 'active', collectionMethod: 'send_invoice',
+      firstGoodAt: daysFrom(NOW, -200), pastDueSince: new Date(Math.floor(due.getTime() / 1000) * 1000),
+      status: 'suspended', suspendedAt: Sa, suspensionReason: 'nonpayment',
+    });
+    await insertNotice(t.id, 'suspended', Sa, { sentAt: Sa, providerMessageId: 'msg_x' });
+    let first = true; // the customer pays just before the cancel section re-reads Stripe
+    stripeState.hooks.set('subscriptions.retrieve', () => { if (first) { first = false; stripeState.invoices.get(inv)!.status = 'paid'; } });
+    const r = await runTenantLifecycle(t.id, NOW);
+    expect(r.terminated).toBe(true); // the evaluation terminated it (the invoice was overdue then)
+    expect(stripeState.calls).not.toContain('subscriptions.cancel');
+    expect(stripeState.subs.get(sub)!.status).toBe('active');
+    expect((await getTenantRow(t.id)).subscriptionEndedAt).toBeNull();
+    expect(await seatDue(t.id)).toBeInstanceOf(Date);
+  });
 });
