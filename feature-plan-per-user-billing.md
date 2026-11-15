@@ -1,11 +1,12 @@
 # Per-user billing (build queue 3a)
 
-> **Status:** **DRAFT v3.2**, 2026-11-15, lead architect.
+> **Status:** **DRAFT v3.3**, 2026-11-15, lead architect.
 > - Pre-mortem round 1 (3 HIGH, 11 MEDIUM) is fixed in v2.
 > - Round 2 (10 MEDIUM) is fixed in v3, including a simpler quantity-sync design (§15).
 > - Confirmation pass 1 (5 distinct MEDIUM) is fixed in v3.1.
 > - Confirmation pass 2 (1 MEDIUM) is fixed in v3.2.
-> - Confirmation pass 3 pending.
+> - Confirmation pass 3 (4 MEDIUM, all in invoiced dunning) is fixed in v3.3 by a simpler model: invoiced grace follows the invoices' due dates.
+> - Confirmation pass 4 pending.
 >
 > **Branch:** `per-user-billing`, from `main` at `f958be9` (after Upstash, PR #31). The §3 references were checked there.
 >
@@ -54,7 +55,7 @@ Each question carries the lead's recommendation. The blueprint is written to the
 | Q1 | **When removed users leave the bill.** Rule 2 says to update the Stripe quantity whenever a user is deactivated. Rule 4 says removals take effect at the next renewal, with no mid-term credit. Lowering Stripe's quantity at once means a user re-added later in the same term is charged again: an annual customer who swaps one contractor for another in month 3 pays for that seat twice for months 3–12. | **Hold, then drop before renewal.** During a term the Stripe quantity only goes up. In the last day before renewal it comes down to the real count, so the renewal bills the active users. A re-added user costs nothing within the term, except after the drop in the last day, when it's prorated for the hours left (cents; on an invoiced subscription that's a small separate invoice). The Billing page says "Billed for {q} users until {date}" while the quantity is held above the count. | §6.4, §6.10 |
 | Q2 | **Switching between monthly and annual.** Should customers switch themselves in **Manage billing** (Stripe's portal)? If they can, an annual→monthly switch credits the unused part of a non-refundable annual fee (Terms §4.8). Making the switch wait for the period end attaches a Stripe "schedule" that would reset the user count at renewal. | **Not self-serve at launch.** The portal keeps payment method, invoices and cancel-at-period-end only. A customer who wants to switch emails support, and the founder does it in the Stripe Dashboard at the period end (§12 runbook). | §6.8, §12 |
 | Q3 | **How a workspace becomes Enterprise.** The founder creates Enterprise subscriptions by hand, possibly on a custom price. How does the app learn there's no user limit? | A founder command **`tenant:admin set-plan <slug> enterprise --yes`** (audited; `standard` undoes it). The app never overwrites it. The quantity sync touches **only** subscriptions on the two Standard prices, never a custom price. | §6.2, §6.4 |
-| Q4 | **Overdue invoice email.** For an invoiced (send-invoice) customer, today's "Payment failed" email says "We couldn't process the latest payment". That's wrong: nothing was charged. | **An invoiced variant:** subject "Invoice overdue for {workspace}", body "The invoice for **{workspace}** is past due. Your workspace is still fully active. If payment isn't received, it will be suspended on or after **{date}**, after a further reminder.", button "Pay the invoice" (it opens the Billing page; Stripe's own invoice email holds the direct payment link for a payer who isn't a workspace user). **Also**, when an invoice is overdue but Stripe still shows the subscription active (possible with an older invoice behind a newer paid one), admins get a new notice: subject "Invoice overdue for {workspace}", body "An invoice for **{workspace}** is past due. Please pay it to keep your subscription in good standing.", button "Go to Billing". That meets Terms §4.7, which promises an email. | §6.7 |
+| Q4 | **Overdue invoice email.** For an invoiced (send-invoice) customer, today's "Payment failed" email says "We couldn't process the latest payment". That's wrong: nothing was charged. | **An invoiced variant:** subject "Invoice overdue for {workspace}", body "The invoice for **{workspace}** is past due. Your workspace is still fully active. If payment isn't received, it will be suspended on or after **{date}**, after a further reminder.", button "Pay the invoice" (it opens the Billing page; Stripe's own invoice email holds the direct payment link for a payer who isn't a workspace user). It's sent when an invoice passes its due date unpaid, even if Stripe still shows the subscription active (§6.2). | §6.7 |
 | Q5 | **When the quantity reaches Stripe.** Every user change could hit Stripe at once, but Stripe allows at most 20 invoices per subscription per day, and annual customers would get an emailed invoice per user added. | **Within 10 minutes, batched:** changes made close together become one Stripe update, and one invoice for annual. Side effect: a user removed in roughly the last 15 minutes before a renewal (the 10-minute cadence plus a 5-minute safety margin) is billed for the next term. | §6.5 |
 | Q6 | **Payment that fails while the subscription stays active.** With ACH, Stripe can activate a subscription while the bank payment is still clearing. If the bank later rejects it, Stripe voids the invoice and the subscription stays active, unpaid. Terms §4.7 promises admins an email when a payment fails. | **Email the admins** (a new notice: subject "Payment not received for {workspace}", body "The latest payment for **{workspace}** didn't go through. Please update your payment method in Billing, or contact support@cadenzpoint.com.", button "Go to Billing") **and** alert the founder in the digest. A voided amount is lost unless the founder re-invoices it in Stripe. | §6.9 |
 | Q7 | **New on-screen wording:** the Billing page tiles and buttons, the landing Pricing heading and its "Up to 100 users" line, and the 100-user message also used by bulk import. | Accept the strings in §6.10 and §6.11. The business's §1 strings are used exactly. | §6.10, §6.11 |
@@ -215,8 +216,8 @@ Stripe SDK `stripe@17.7.0`, API `2025-02-24.acacia` (`node_modules/stripe/types/
    - **Upgrade invoices have `auto_advance` off "from the outset"**, and `auto_advance=false` prevents "emailing the invoice" (docs.stripe.com/billing/invoices/subscription). So on a send-invoice subscription the app sends the proration invoice itself (§6.4 step 8), and charge-automatically upgrade invoices get no Smart Retries.
    - *Test-mode checks:*
      - whether a send-invoice proration invoice is `draft` or `open` after the update;
-     - whether such an invoice (`auto_advance: false`), once overdue, moves the subscription to `past_due` under the "all invoices" status setting.
-   - **Status resolution:** with Stripe's default, "Stripe uses the most recent non-voided invoice. Other outstanding invoices don't prevent the subscription from becoming `active`" (docs.stripe.com/billing/subscriptions/overview). Hence the §12 setting and the §6.2 alert.
+     - what Stripe's status does when such an invoice (`auto_advance: false`) becomes overdue. The app no longer depends on it: invoiced dunning follows due dates (§6.2).
+   - **Status resolution:** with Stripe's default, "Stripe uses the most recent non-voided invoice. Other outstanding invoices don't prevent the subscription from becoming `active`" (docs.stripe.com/billing/subscriptions/overview). That's why invoiced dunning reads the invoices themselves (§6.2).
 5. **Quantity update:** `subscriptions.update(id, { items: [{ id: itemId, quantity }], proration_behavior, payment_behavior, expand })` (`SubscriptionsResource.d.ts:1265,1290`). Without the item `id` a new item is added.
    - `incomplete` "can only have metadata and default_source updated", and `canceled` is terminal (`types/Subscriptions.d.ts:210-222`).
    - *Test-mode check:* quantity updates on `past_due`. §6.4 syncs only `active`.
@@ -330,27 +331,26 @@ A unit test pins every string byte for byte against §1, and `TRIAL_DAYS === 30`
 - **The transition patch gains:**
   - `planInterval`, written with `plan` on GOOD, only when the price is a Standard price;
   - `subscriptionCancelAtPeriodEnd` and `collectionMethod`, from every tracked read.
-- **Dunning anchor** (rule 8, Terms §4.7):
-  - `computeSubscriptionTransition` gets a new optional input `dunningAnchor: { kind: 'now' } | { kind: 'date'; at: Date } | { kind: 'not-yet-due' }` (default `now`). In the DUNNING branch, when `f.pastDueSince === null`:
-    - `now` → `P = now`, as today;
-    - `date` → `P = at`;
-    - **`not-yet-due`** → the status is written, but `pastDueSince` stays null and **no `payment-failed` notice** is enqueued. `firstGoodAt` is still set.
-      - Stripe can mark an invoiced subscription `past_due` before any invoice is due: a failed early payment attempt, or "All invoices" counting a finalized, not-yet-due invoice.
-      - Terms §4.3 (net 30), §4.7 (15 days after unpaid **when due**) and rule 8 forbid starting the grace then.
-      - With `P` null, `nextLifecycleActions` neither warns nor suspends (its dunning block needs `P !== null`). A DUNNING mirror reconciles daily (`shouldReconcile`), so the first reconcile after the due date anchors on it.
-      - `reconcileInLock` raises `send-invoice-past-due-before-due-date` (dedup sub id), resolved once `pastDueSince` is set or the subscription is GOOD again.
-  - **How `reconcileInLock` picks the anchor:** `date` with the earliest open invoice `due_date <= now`, else `not-yet-due` when the subscription is send_invoice, else `now`.
-  - `reconcileInLock` computes the anchor (`overdueSince`) only when the selected tracked subscription is DUNNING, `collectionMethod === 'send_invoice'`, the row's `pastDueSince` and `subscriptionEndedAt` are both null, and `allowDeleting` is false (`deleteTenant` and `cancelInOwnSection` never pay for the extra call). It takes the **earliest** `due_date <= now` among the subscription's open invoices:
-    - from `opts.loadOpenInvoices`, a **lazy loader** the lifecycle runner passes. `reconcileInLock` calls it only when it needs the anchor; the runner then reuses the same result (memoized) for `paymentProcessing` and observations, with the `customerDeleted` flag the reconcile learned. The in-lock call count is unchanged. `OpenInvoiceState` gains `dueDate: Date | null`, `subscriptionId` (already present) and `hostedUrl`.
-    - otherwise (the webhook) from one `invoices.list({ subscription: tracked.id, status: 'open', limit: 100 }, IN_LOCK)`. Webhook in-lock calls: subscription list, an optional tracked retrieve, then this list, so ≤3.
-  - A failure of that read throws, and the event or run is retried (as for any in-lock Stripe error).
-- **Overdue but active** (rule 8 with Stripe's default "most recent invoice" status resolution, or before Stripe re-evaluates):
-  - **When:** the lifecycle runner has the open invoices of a GOOD send_invoice subscription, and one has `due_date < now − 24 h`. The 24 h margin lets Stripe's own `past_due` flip and its webhook land first, so admins don't get two "Invoice overdue" emails.
-  - **Alert:** the condition alert `invoice-overdue-subscription-active` (dedup invoice id). It's added to `CONDITION_ALERT_KINDS`, so it resolves itself.
-  - **Notice:** in the same locked section, `enqueueNotice(tx, id, 'invoice-overdue', anchor = the earliest such invoice's due date)` (the same invoice `overdueSince` would pick, so the DUNNING supersession matches).
-    - It's a new notice kind (Q4 second text, `InvoiceOverdueActiveEmail`), so admins are emailed as Terms §4.7 requires.
-    - In `isNoticeSuperseded` it is superseded only by `deleting`/`deleted`, or when the subscription has since gone DUNNING with `pastDueSince` equal to the same anchor (the `payment-failed` invoiced variant then covers it).
-  - Suspension still needs Stripe's `past_due`. The founder's "all invoices" setting (§12) is a **launch gate**, proven at staging.
+- **Invoiced (send_invoice) subscriptions follow their invoices' due dates** (rule 8; Terms §4.3 net 30, §4.7 "unpaid when due … 15 days later"). Charge-automatically subscriptions keep today's rule unchanged: `P = f.pastDueSince ?? now` on first DUNNING sight.
+  - **The invoice facts.** For a tracked send_invoice subscription, `reconcileInLock` computes `invoiceOverdueSince` = the earliest `due_date <= now` among the subscription's **open** invoices, or null when none is past due. Drafts don't count.
+    - It's computed **on every reconcile**, whatever Stripe's status, so it is never stale.
+    - Source: `opts.loadOpenInvoices`, a **lazy loader** the lifecycle runner passes. `reconcileInLock` calls it only for a send_invoice subscription. The runner reuses the memoized result for `paymentProcessing` and observations, with the `customerDeleted` flag the reconcile learned, so the in-lock call count is unchanged.
+    - Otherwise (the webhook): one `invoices.list({ subscription: tracked.id, status: 'open', limit: 100 }, IN_LOCK)`. Webhook in-lock calls stay at 3 or fewer: the subscription list, an optional tracked retrieve, and this list.
+    - It's skipped when `allowDeleting` is true or `subscriptionEndedAt` is set (`deleteTenant`, `cancelInOwnSection`).
+    - `OpenInvoiceState` gains `dueDate: Date | null` and `hostedUrl`. A read failure throws, and the event or run is retried (as for any in-lock Stripe error).
+  - **`computeSubscriptionTransition` gets the optional input `invoiceOverdueSince: Date | null | undefined`.** `undefined` means "not a send_invoice subscription", and the existing rules apply. For a send_invoice subscription that is LIVE (not `paused`) and not ended:
+    - **Grace anchor:** `p.pastDueSince = invoiceOverdueSince`, recomputed each time. It can move later (the oldest overdue invoice was paid but another is overdue) or return to null.
+      - Existing `payment-failed` and `suspension-warning` notices for an old anchor supersede themselves (`isNoticeSuperseded`: `!sameInstant(f.pastDueSince, anchor)`).
+      - When it's non-null and changed, enqueue `payment-failed` (invoiced variant) anchored at it, and set `firstGoodAt` if null.
+    - **Nothing overdue** (`invoiceOverdueSince === null`): `pastDueSince = null`.
+      - If the tenant is `suspended` for `nonpayment` (not policy), unsuspend: `status 'active'`, `suspendedAt null`, `suspensionReason null`. Terms §4.7: "access is restored once payment is received".
+      - Stripe's own status (`past_due` from a failed early payment attempt, or from its own status rules) doesn't start any grace.
+    - **Stripe's status** is still mirrored in `subscriptionStatus`. A paid-in-full send_invoice subscription that Stripe reports GOOD gets the existing GOOD patch (which also clears dunning and unsuspends).
+  - **`nextLifecycleActions`** (`lifecycle.ts:323-335`): the dunning block's condition changes from `isDunning(f.subscriptionStatus)` to `isDunning(f.subscriptionStatus) || f.collectionMethod === 'send_invoice'`, still requiring `P !== null`.
+    - `LifecycleFacts` gains `collectionMethod` (`toLifecycleFacts` maps it).
+    - So an invoiced customer with an overdue invoice gets the warning and suspension on the due-date clock even while Stripe says `active` (an older invoice behind a newer paid one), with **no Stripe setting needed**.
+    - Nothing else in `lifecycle.ts` reads DUNNING for access: DUNNING and GOOD are both `full`.
+  - **No "All invoices" setting.** v3.1 asked the founder for it. v3.3 drops it: invoiced customers no longer depend on Stripe's status resolution, and for charge-automatically customers an older failed invoice behind a newer paid one can't realistically occur (a failed upgrade invoice makes the subscription `past_due` at once, and the dunning clock runs out long before the next renewal).
 - **Enterprise is never overwritten:** `reconcileInLock` deletes `patch.plan` and `patch.planInterval` when `row.plan === 'enterprise'`.
 - **`reconcileInLock` returns `becameGood: boolean`:** `!isGood(row.subscriptionStatus) && isGood(updated.subscriptionStatus)`.
 - **Drift alert resolution:** `reconcileInLock` resolves `subscription-status-drift` for the tenant whenever it writes a tracked status (the mirror then agrees with Stripe).
@@ -403,6 +403,8 @@ A unit test pins every string byte for byte against §1, and `TRIAL_DAYS === 30`
 **Stripe call options.** Every Stripe call in this module passes explicit options: `{ timeout: 10000, maxNetworkRetries: 1 }`, except the step 3 read, which uses `maxNetworkRetries: 0`.
 
 **Alerts are written after the transaction.** Every alert this function raises or resolves (steps 3–7) is collected in memory and written after the `withSeatLock` transaction ends, on `withLockedPool`, followed by any emails. No `ops_alerts` row lock and no Resend call is held across a Stripe call or inside the locked section (`locked.ts:53-55`).
+- If that post-commit alert write throws, it's logged and sent to Sentry. The outcome stays as it was (never `failed`: Stripe already applied the calls).
+- Event-type facts that must not be lost, such as a term race, are also written as an **audit event inside the transaction** (`seat-sync-term-race`, detail from/to/periods/restore result). The audit trail is the durable record; the alert is the notification.
 
 **Steps:**
 
@@ -410,7 +412,7 @@ A unit test pins every string byte for byte against §1, and `TRIAL_DAYS === 30`
 2. **Count:** on `getDbForUrl(decrypt(row.dbUrlEncrypted))`, a tenant transaction with `SET LOCAL statement_timeout = '5s'`, then `SELECT count(*) FROM users WHERE is_active = true`. Set `desired = max(1, count)`.
 3. **Read Stripe:** `subscriptions.retrieve(subId, {}, { timeout: 10000, maxNetworkRetries: 0 })`.
    - **Missing subscription** (`resource_missing`): return `not-applicable` and raise alert `seat-sync-subscription-missing` (dedup sub id).
-   - **Status not `active`:** return `not-applicable`.
+   - **Status not syncable:** return `not-applicable`. Syncable means `active`, **or** `past_due` on a send_invoice subscription whose row has `pastDueSince` null (an invoiced customer who isn't overdue; Stripe's `past_due` there doesn't mean late, §6.2). Users added then reach Stripe as usual, and held quantities drop before renewal.
      - If Stripe's status is not GOOD (`active`/`trialing`) while the row's `subscription_status` is GOOD, also raise alert `subscription-status-drift` (dedup sub id, detail both statuses).
      - A run that finds Stripe GOOD resolves it, and so does `reconcileInLock` (§6.2).
      - `trialing` is not synced (the app doesn't sell trials) and raises no drift.
@@ -533,21 +535,21 @@ ON CONFLICT (tenant_id) DO UPDATE SET sync_due_at = COALESCE(tenant_seat_billing
 
 **Candidates.** `runId = randomUUID()`; each candidate list is one control-plane query, and every list requires `next_attempt_at IS NULL OR next_attempt_at <= now`:
 1. **Due** (reason `due`): `sync_due_at IS NOT NULL`, ordered by `failures ASC, sync_due_at ASC`.
-2. **Renewal** (reason `renewal`): tenants with `status = 'active'`, `subscription_status = 'active'`, and `current_period_end` between `now + 5 min` and `now + 24 h`, whose seat row is missing or has `checked_at < current_period_end − 24 h`, ordered by `current_period_end ASC`.
+2. **Renewal** (reason `renewal`): tenants with `status = 'active'`, a syncable mirror (`subscription_status = 'active'`, or `= 'past_due'` with `collection_method = 'send_invoice'` and `past_due_since IS NULL`), and `current_period_end` between `now + 5 min` and `now + 24 h`, whose seat row is missing or has `checked_at < current_period_end − 24 h`, ordered by `current_period_end ASC`.
    - This runs every tenant once inside its window, even with no user change, so a held quantity comes down before renewal.
    - It relies on the `tenants.current_period_end` mirror. If that's stale, the daily list still reaches the tenant, and step 4 decides from Stripe's own values.
-3. **Daily** (reason `daily`): tenants with `status = 'active'`, `stripe_subscription_id IS NOT NULL` and `subscription_status = 'active'`, whose seat row is missing or has `checked_at < now − 24 h`, ordered by `checked_at ASC NULLS FIRST`.
+3. **Daily** (reason `daily`): tenants with `status = 'active'`, `stripe_subscription_id IS NOT NULL` and a syncable mirror (as above), whose seat row is missing or has `checked_at < now − 24 h`, ordered by `checked_at ASC NULLS FIRST`.
 
 **Per run:**
 - Tenants run one at a time.
 - **Step 8 handles at most one invoice per tenant per run.**
-- **Worst case per tenant:** 5 s lock + 15 s count + 10 s read + 2 updates × 20 s (A+B, or D+restore) + step 8 (list 20 s + finalize, send, mark 3 × 20 s) ≈ 150 s.
-- **No new tenant starts once 120 s have passed** (120 + 150 < 300).
+- **Worst case per tenant:** 5 s lock + 15 s count + 10 s read + 20 s schedule read + 2 updates × 20 s (A+B, or D+restore) + post-commit alerts with emails (≤10 s, `ALERT_TIMEOUT_MS`) + step 8 (5 s lock + list 20 s + finalize, send, mark 3 × 20 s) ≈ 190 s.
+- **No new tenant starts once 100 s have passed** (100 + 190 < 300).
 - At least one tenant runs per run.
 - One tenant failing never stops the others.
 - The summary carries counts per outcome and slugs for `corrected`, `term-race`, `failed` and `busy`.
 
-**Incomplete runs:** a run that stops early raises the existing kind `cron-incomplete` with `dedupKey = 'seat-sync'` (as `tenant-sweep.ts:136` does for its crons), using `raiseAlert` (digest only). A complete run resolves it.
+**Incomplete runs:** a run that stops early raises the existing kind `cron-incomplete` with `dedupKey = 'seat-sync'` (as `tenant-sweep.ts:136` does for its crons), using `raiseAlert`. Digest only, **on purpose**: unlike the reminder crons, a stop here only delays a sync by 10 minutes, and an every-10-minutes cron would email on each flip. A complete run resolves it.
 
 **Config check** at the start of each run: if either `STRIPE_PRICE_STANDARD_*` is empty while any tenant has `subscription_status = 'active'`, raise `stripe-prices-missing`; otherwise resolve it.
 
@@ -557,21 +559,20 @@ ON CONFLICT (tenant_id) DO UPDATE SET sync_due_at = COALESCE(tenant_seat_billing
 - `sendOpsDigest` gains the section "Seat quantities corrected (last 24 h)", one line per `seat-quantity-corrected` event: slug, from→to, the reason, the time. `hasNews` includes it.
 - The new alert kinds show in the existing alert list:
   - `seat-sync-failing`, `seat-sync-unmanaged-price`, `seat-sync-unexpected-items`, `seat-sync-subscription-missing`, `seat-sync-term-race`, `seat-sync-invoice-send-failed`;
-  - `invoice-overdue-subscription-active`;
   - `subscription-status-drift`, `stripe-prices-missing`;
   - `checkout-payment-failed`, `payment-failed-subscription-active`, `stripe-event-unknown-customer`;
   - `seat-sync-schedule-attached`, `seat-sync-renewal-at-risk`;
-  - `cron-incomplete` (dedup `seat-sync`);
-  - `send-invoice-past-due-before-due-date`.
+  - `cron-incomplete` (dedup `seat-sync`).
 - **How each new alert closes:**
-  - **Resolved automatically by a later run that no longer finds the condition:** `seat-sync-failing`, `seat-sync-renewal-at-risk`, `seat-sync-unmanaged-price`, `seat-sync-unexpected-items`, `seat-sync-subscription-missing`, `seat-sync-schedule-attached`, `seat-sync-invoice-send-failed`, `subscription-status-drift`, `stripe-prices-missing`, `invoice-overdue-subscription-active`, `send-invoice-past-due-before-due-date`, `cron-incomplete`.
+  - **Resolved automatically by a later run that no longer finds the condition:** `seat-sync-failing`, `seat-sync-renewal-at-risk`, `seat-sync-unmanaged-price`, `seat-sync-unexpected-items`, `seat-sync-subscription-missing`, `seat-sync-schedule-attached`, `seat-sync-invoice-send-failed`, `subscription-status-drift`, `stripe-prices-missing`, `cron-incomplete`.
   - **Events the founder reviews and closes with `tenant:admin resolve-alert`:** `seat-sync-term-race`, `checkout-payment-failed`, `payment-failed-subscription-active`, `stripe-event-unknown-customer`.
 
 ### 6.7 Send-invoice subscriptions (rule 8)
 - **Linking (round 1 HIGH):** a hand-made subscription must be on the workspace's own Stripe customer. The founder runs `tenant:admin ensure-customer <slug> --stripe-mode live --yes` (or `show`, if one exists) and creates the subscription on that `cus_…` in the Dashboard (§12 runbook). The webhook alerts on events for an unknown customer (§6.9).
 - **Dunning anchor:** `P` is the earliest overdue open invoice's due date (§6.2). So the 15-day grace, the warning and the notice all count from the due date, even when the webhook is late or lost.
 - **The Pay button opens the right invoice:** `payUrl` (§6.10) is the `hosted_invoice_url` of the tracked subscription's **earliest open invoice with `due_date <= now`**, else its earliest open invoice. It's never simply `latest_invoice`, which can be a newer proration invoice that isn't due yet.
-- **Overdue but still active:** admins get the `invoice-overdue` notice and the founder the alert `invoice-overdue-subscription-active` (§6.2). The founder sets "All invoices" (§12, a launch gate).
+- **Overdue while Stripe still says active** (an older invoice behind a newer paid one): the app's own due-date clock (§6.2) still sends the invoiced `payment-failed`, warns and suspends. No Stripe setting is needed.
+- **Paid, but another invoice is open and not yet due:** `pastDueSince` returns to null, and a non-payment suspension lifts (§6.2), whatever Stripe's status says.
 - **Daily reconcile for invoiced subscriptions:** `shouldReconcile` returns true when `collectionMethod === 'send_invoice'` and the mirror is GOOD (new `ReconcileContext.collectionMethod`). A lost `past_due` webhook is then found by the next daily lifecycle run.
 - **Notice wording (Q4):**
   - The `payment-failed` kind is unchanged. At render time, `notices.ts` picks `InvoiceOverdueEmail` (new template, Q4 text, no due date) when `row.collectionMethod === 'send_invoice'`.
@@ -605,12 +606,16 @@ ON CONFLICT (tenant_id) DO UPDATE SET sync_due_at = COALESCE(tenant_seat_billing
   - `_succeeded`: the normal reconcile, then mark due.
   - `_failed`: the normal reconcile, then, in the same locked section:
     - `raiseAlert('checkout-payment-failed', dedup session id)`;
-    - **only if** the session's subscription is **not** GOOD after the reconcile (the `incomplete` path, so no invoice event sends the email): `enqueueNotice(tx, tenantId, 'bank-payment-failed', anchor = session.created)`.
-- **`invoice.payment_failed`:** after the reconcile, **only if** the invoice's subscription is still GOOD. That covers two cases: the ACH case where Stripe voids the invoice and leaves the subscription active, and (Q11) a failed card or bank payment on an invoiced subscription's invoice page. Then, in the same locked section:
+    - **only if** the session's subscription is **not** LIVE after the reconcile (the `incomplete` / `incomplete_expired` path, where the subscription never started): `enqueueNotice(tx, tenantId, 'bank-payment-failed', anchor = session.created)`. A LIVE subscription's failure is covered by `invoice.payment_failed`.
+- **`invoice.payment_failed`:** after the reconcile, **only if no grace notice covers it**, i.e. the tenant's `pastDueSince` is null after the reconcile (whatever Stripe's status). That covers:
+  - the ACH case where Stripe voids the invoice and leaves the subscription active;
+  - (Q11) a failed card or bank payment on an invoiced subscription's invoice page before the due date, even if Stripe flips the subscription to `past_due`.
+
+  Then, in the same locked section:
   - `enqueueNotice(tx, tenantId, 'bank-payment-failed', anchor = invoice.created)`;
   - `raiseAlert('payment-failed-subscription-active', dedup invoice id)`.
-  - A DUNNING subscription already gets `payment-failed` from the transition.
-  - The two triggers are exclusive (GOOD vs not GOOD), so one failure sends one email.
+  - When `pastDueSince` is set, `payment-failed` from the transition is the email instead.
+  - The triggers are exclusive (`pastDueSince` null vs set), so one failure sends one email.
 - **Unknown customer:** for `SUBSCRIPTION_EVENTS` whose customer matches no tenant, `raiseAlert('stripe-event-unknown-customer', tenant null, dedup customer id, detail { event type })` before returning `ignored()`. Checkout events with an unknown slug keep returning `ignored()` (no customer link yet).
 - **The `bank-payment-failed` notice (Q6):**
   - Add it to `NoticeKind` (`lifecycle.ts:144-154`).
@@ -627,8 +632,8 @@ ON CONFLICT (tenant_id) DO UPDATE SET sync_due_at = COALESCE(tenant_seat_billing
   - On error or timeout the page still renders, with `seats: null` and the time zone `America/New_York`, and the error is logged. Paying must never depend on it.
 - **`payUrl` and open invoices:**
   - When the tenant has a tracked subscription that is DUNNING, `incomplete`, GOOD, or suspended for non-payment, one `invoices.list({ subscription: row.stripeSubscriptionId, status: 'open', limit: 100 }, { timeout: 5000 })` replaces today's `latest_invoice` read.
-    - It's needed for GOOD too: the `invoice-overdue` and `bank-payment-failed` emails send admins here while the subscription is active.
-    - `overdueInvoice` is true when one has `due_date <= now`.
+    - It's needed for GOOD too: the `bank-payment-failed` email sends admins here while the subscription is active, and an invoiced subscription can be overdue while Stripe says active.
+    - The list includes `uncollectible` invoices as a fallback (second call, `status: 'uncollectible'`, only when no open invoice exists): their `hosted_invoice_url` still accepts payment.
   - `payUrl` is chosen by a pure helper `choosePayInvoice` in **`src/lib/billing/pay-url.ts`** (not in the `'use server'` actions file, which may only export async functions) (§6.7, U13): the earliest open invoice with `due_date <= now`, else the earliest open invoice by `created`.
   - `openInvoiceCount` is the number of open invoices.
   - A failure leaves `payUrl` null, and is logged.
@@ -671,10 +676,10 @@ ON CONFLICT (tenant_id) DO UPDATE SET sync_due_at = COALESCE(tenant_seat_billing
 | # | Condition | Big | Small | Action |
 |---|---|---|---|---|
 | 1 | suspended for non-payment | `Suspended` | `Pay the open invoice to restore access.` | **Pay the invoice** (`payUrl`). If `payUrl` is null: `Use Manage billing to pay.` |
-| 2 | `past_due` / `unpaid` | `Payment overdue` | `Pay the open invoice to avoid suspension.` | as row 1 |
+| 2 | `pastDueSince` set (DUNNING, or an invoiced subscription with an overdue invoice while Stripe says active) | `Payment overdue` | `Pay the open invoice to avoid suspension.` | as row 1 |
+| 2b | `past_due` / `unpaid` with `pastDueSince` null (an invoiced subscription that isn't overdue) | `Invoice open` | `Pay it by the due date on the invoice.` | **Pay the invoice** (`payUrl`), when present |
 | 3 | `incomplete` | `Payment pending` | `Finish paying in Stripe, or wait for your bank payment to clear. If a bank payment failed, pay another way.` | **Finish paying** (`payUrl`), when present |
 | 4 | `subscriptionEndedAt` set | `Canceled` | `Ended on {endedOn}. Choose a plan to start again.` (without the second sentence when `!canSubscribe`) | — |
-| 4b | `active` / `trialing` with `overdueInvoice` | `Invoice overdue` | `Pay the overdue invoice to keep your subscription in good standing.` | **Pay the invoice** (`payUrl`). If `payUrl` is null: `Use Manage billing to pay.` |
 | 5 | `active` / `trialing`, `cancelAtPeriodEnd` | `Active` | `Ends {renewsOn}` | — |
 | 6 | `active` / `trialing` | `Active` | `Renews {renewsOn}` | — |
 | 7 | `paused` | `Paused` | `Contact support@cadenzpoint.com.` | — |
@@ -682,7 +687,7 @@ ON CONFLICT (tenant_id) DO UPDATE SET sync_due_at = COALESCE(tenant_seat_billing
 | 9 | as 8, not exempt, trial not ended or no trial date | `None yet` | `Choose a plan before your trial ends to keep editing.` | — |
 | 10 | as 8, not exempt, trial ended | `None yet` | `Choose a plan to keep editing.` | — |
 
-- Rows 1–3 and 4b add `You have {openInvoiceCount} open invoices. Manage billing lists them all.` when `openInvoiceCount > 1`.
+- Rows 1–3 add `You have {openInvoiceCount} open invoices. Manage billing lists them all.` when `openInvoiceCount > 1`.
 - **Manage billing** (existing button) sits under the tiles when `hasCustomer`. When `!canSubscribe` and `hasCustomer`, the line beneath reads `Use Manage billing to update your payment method, see invoices or cancel.`
 - **Plan cards**, when `canSubscribe`: a heading `Choose a plan` at `sectionOrder` (`BillingClient.tsx:35`), then cards titled `Standard, monthly`, `Standard, annual` and `Enterprise` at `sectionOrder + 1`.
   - **Standard, monthly:** `PRICE_COPY.standardMonthly.price` / `.detail` / `STANDARD_USERS_LINE`; button `Choose monthly`. When `!standardAvailable.month` it is disabled, with the visible line `Not available yet.`
@@ -753,11 +758,11 @@ ON CONFLICT (tenant_id) DO UPDATE SET sync_due_at = COALESCE(tenant_seat_billing
 
 ### 7.3 Lifecycle (changes only)
 The transition table (`feature-plan-terms-compliance-fixes.md` §4.3) is unchanged except for:
-- the DUNNING-first-sight anchor `P = overdueSince ?? now` (§6.2);
+- send_invoice subscriptions: `pastDueSince` recomputed from the invoices on every reconcile, unsuspension when nothing is overdue, and the dunning block keyed on `collectionMethod` (§6.2);
 - the new fact fields;
 - `plan` is never written while `row.plan === 'enterprise'`;
 - the notice kind `bank-payment-failed` (§6.9);
-- `shouldReconcile` for `send_invoice`, plus the overdue-but-active alert (§6.7).
+- `shouldReconcile` daily for `send_invoice` (§6.7).
 
 **Send-invoice walk-through:**
 
@@ -765,12 +770,13 @@ The transition table (`feature-plan-terms-compliance-fixes.md` §4.3) is unchang
 |---|---|---|
 | founder creates it on the workspace's customer, quantity = active users | `active`, invoice open, due in 30 days | GOOD, full access; `plan standard` (Standard price); `collection_method send_invoice` |
 | users added mid-term | proration invoice | §6.4 step 8 finalizes and **emails** it |
-| due date passes unpaid | `past_due` (with "all invoices" status resolution, §12) | DUNNING; `pastDueSince` = the earliest overdue due date; `payment-failed` in the invoiced variant; Pay button = that invoice |
+| a payment attempt fails before the due date | may turn `past_due` | `pastDueSince` stays null (nothing overdue): no grace; `bank-payment-failed` to admins (Q11); Payment tile "Invoice open"; seat sync continues |
+| due date passes unpaid | `past_due` or still `active` | the next reconcile (webhook, or the daily one) sets `pastDueSince` = the earliest overdue due date; `payment-failed` in the invoiced variant; Pay button = that invoice |
 | webhook lost | `past_due` | the next daily lifecycle run reconciles (send_invoice); `P` = that due date |
-| Stripe still `active` with an overdue invoice | `active` | admins get the `invoice-overdue` notice (Terms §4.7); founder alert `invoice-overdue-subscription-active` (check the status-resolution setting) |
 | due + 12 | — | `suspension-warning` |
 | due + 15 (and at least 3 days after the warning) | — | suspended (non-payment), unless a payment is processing |
-| paid | `active` | GOOD; dunning cleared; unsuspended |
+| the overdue invoice paid, another open but not yet due | `past_due` or `active` | `pastDueSince` null; old notices supersede; a non-payment suspension lifts |
+| all paid | `active` | GOOD; dunning cleared; unsuspended |
 
 ## 8. Failure modes
 | # | Failure | Behaviour |
@@ -806,9 +812,11 @@ The transition table (`feature-plan-terms-compliance-fixes.md` §4.3) is unchang
 | F29 | A send-invoice proration invoice isn't emailed by Stripe, or its response was lost | Step 8 finds every unsent `subscription_update` invoice by its missing marker, finalizes it and sends it. A failure is alerted and retried without blocking the quantity sync. |
 | F31 | A subscription schedule is attached (a Dashboard "at period end" change) | Its next phase can reset the quantity at renewal. The runbook only creates one after the drop, with the active count. Otherwise `seat-sync-schedule-attached` is raised (immediate email inside the window). Test-mode check: quantity updates while a schedule is attached. |
 | F32 | A renewal falls while the subscription is past due | The held quantity isn't dropped (sync only touches active subscriptions), so removed users are billed on that renewal (Q10 discloses it). |
-| F33 | Invoice overdue while Stripe still says active | `invoice-overdue` notice to admins and a founder alert. Suspension waits for Stripe's `past_due` ("all invoices" setting, a launch gate). |
-| F34 | Stripe marks an invoiced subscription `past_due` before any invoice is due | Anchor `not-yet-due`: no grace started, no email, founder alert. The grace starts from the due date once it passes (§6.2, S39). |
-| F30 | An older overdue invoice is hidden behind a newer invoice | `overdueSince` and `payUrl` use the earliest overdue open invoice. The "all invoices" setting is in §12, with the overdue-but-active alert. |
+| F33 | Invoice overdue while Stripe still says active | The app's due-date clock runs regardless: the invoiced `payment-failed`, the warning and the suspension (§6.2). |
+| F34 | Stripe marks an invoiced subscription `past_due` before any invoice is due | `pastDueSince` stays null: no grace, no suspension. A failed attempt emails admins (Q11). Seat sync continues. Payment tile "Invoice open" (§6.2, S39). |
+| F35 | The overdue invoice is paid while a newer one isn't due yet | `pastDueSince` returns to null and the suspension lifts, even if Stripe stays `past_due` (S42). |
+| F36 | An invoice is marked uncollectible | Invoiced dunning reads only `open` invoices, so it drops out of the clock. The founder's 9.5 setting keeps invoices open ("leave as-is"). The Pay button falls back to an uncollectible invoice's hosted URL. |
+| F30 | An older overdue invoice is hidden behind a newer invoice | Invoiced: the due-date clock reads every open invoice. `payUrl` uses the earliest overdue open invoice. |
 
 ## 9. Platform limits
 - **Vercel:**
@@ -822,7 +830,7 @@ The transition table (`feature-plan-terms-compliance-fixes.md` §4.3) is unchang
   - Quantity updates: at most 2 per subscription per run, so 24 an hour (limit 200).
   - Invoices: at most one per run, and only above the held level (limit 20 a day).
   - Global calls are sequential.
-  - Lifecycle in-lock calls stay at 3 or fewer: the runner passes its already-read open invoices (§6.2).
+  - Lifecycle in-lock calls stay at 3 or fewer: the runner's lazy loader is the same read it already makes (§6.2).
 - **Crons:** 5 in total, two of them every 10 minutes (`notice-delivery` and `seat-sync`) (Vercel Pro, already required).
 
 ## 10. Blast radius
@@ -835,10 +843,10 @@ The transition table (`feature-plan-terms-compliance-fixes.md` §4.3) is unchang
 | `src/lib/billing/seat-sync.ts` | **New**: `syncSeatQuantity`, the pure `planSeatUpdates`, `markSeatSyncDue`, `seatMarkStore` |
 | `src/server/internal/plan-source.ts` | **New**: `readPlanFresh` (its own module, so suites can mock it) |
 | `src/lib/billing/stripe-state.ts` | Snapshot fields; `OpenInvoiceState` gains `dueDate`, `subscriptionId`, `hostedUrl`; `listOpenInvoicesForSubscription` |
-| `src/lib/billing/subscription-transitions.ts` | Interval, cancel flag, collection method, `overdueSince` anchor |
-| `src/lib/billing/reconcile.ts` | `openInvoices` option and `overdueSince`; Enterprise protection; `becameGood` |
-| `src/lib/tenant/lifecycle.ts` | `bank-payment-failed` and `invoice-overdue` kinds and their supersession; `shouldReconcile` for send_invoice |
-| `src/lib/tenant/lifecycle-runner.ts` | Read open invoices before the reconcile and pass them in; `collectionMethod` to `shouldReconcile`; overdue-but-active alert; mark due on `becameGood` |
+| `src/lib/billing/subscription-transitions.ts` | Interval, cancel flag, collection method, the send_invoice `invoiceOverdueSince` rules |
+| `src/lib/billing/reconcile.ts` | The lazy `loadOpenInvoices` option and `invoiceOverdueSince`; Enterprise protection; `becameGood`; drift resolve |
+| `src/lib/tenant/lifecycle.ts` | `bank-payment-failed` kind and supersession; `LifecycleFacts.collectionMethod`; the dunning block condition; `shouldReconcile` for send_invoice |
+| `src/lib/tenant/lifecycle-runner.ts` | Pass the lazy invoice loader to `reconcileInLock` and reuse its memoized result; `collectionMethod` to `shouldReconcile`; mark due on `becameGood` |
 | `src/lib/tenant/notices.ts`, `src/lib/email/templates/invoice-overdue.tsx`, `bank-payment-failed.tsx` (**new**) | Variants, the new kind, the clamped stated date |
 | `src/db/control-plane/schema.ts` + migration | Columns, table |
 | `src/db/control-plane/locked.ts` | `withSeatLock` |
@@ -859,7 +867,6 @@ The transition table (`feature-plan-terms-compliance-fixes.md` §4.3) is unchang
 | Suites in §3.8 that call the seat-taking actions | Each declares, **at the top level of the test file** (vitest hoists `vi.mock` to the file top, so a helper function can't wrap it), with the plan held in a `vi.hoisted` state object the suite already uses: `vi.mock('@/server/internal/plan-source', () => ({ readPlanFresh: async () => tenantState.plan }))`. It also mocks `@/lib/billing/seat-sync` with `markSeatSyncDue: vi.fn(async () => {})`. That one is optional, since `markSeatSyncDue` never throws, but it avoids Sentry noise and FK errors on fake tenant ids. Suites that mock the actions wholesale (`import-page`, `import-row-errors`, `users-row-actions`) need nothing. Billing suites (S-tests) use the real modules. |
 | `src/__tests__/unit/action-result.test.ts` | New `assertSeatsAvailable(n, tx, plan)` signature |
 | `src/lib/billing/pay-url.ts` | **New**: `choosePayInvoice` (pure) |
-| `src/lib/email/templates/invoice-overdue-active.tsx` | **New** (Q4 second text) |
 | `src/lib/cron/heartbeat.ts:7` comment, `scripts/smoke-tenancy.sh:80` (cron probe list), `PRODUCTION-DEPLOY.md:126` and 13.5 ("the four jobs") | Fifth cron |
 | `src/__tests__/unit/server-action-guards.test.ts:125` | Allowlist reason text for `getTenantBillingInfo` |
 | `integration/fakes/fake-stripe.ts` | The following additions: |
@@ -892,11 +899,12 @@ Additions to `integration/fakes/fake-stripe.ts`:
   - `seatLimitFor`: trial 10, standard 100, enterprise null, legacy `pro`/`starter` 100, unknown 10;
   - `displayPlan` for each of those values.
 - **U4** — dunning anchor:
-  - send_invoice DUNNING with `overdueSince` set → `pastDueSince = overdueSince`;
+  - send_invoice with `invoiceOverdueSince` set → `pastDueSince` = it, and `payment-failed` is enqueued; when it later moves → updated, and the old notice supersedes;
+  - send_invoice with `invoiceOverdueSince` null while suspended for non-payment → `pastDueSince` null and unsuspended; while policy-suspended → stays suspended;
   - charge_automatically → `now`;
   - an existing anchor is kept;
-  - no overdue invoice on a charge_automatically subscription → `now`;
-  - **send_invoice DUNNING with only not-yet-due open invoices (`not-yet-due`) → no `pastDueSince`, no notice, status written.**
+  - charge_automatically DUNNING → `now` on first sight, kept afterwards (unchanged);
+  - `nextLifecycleActions`: send_invoice with `P` set and Stripe `active` → warning, then suspension on the due-date clock;
 - **U5** — GOOD reconcile:
   - on the annual price → `plan 'standard'`, `planInterval 'year'`;
   - on an unknown price → neither is set;
@@ -919,7 +927,6 @@ Additions to `integration/fakes/fake-stripe.ts`:
 - **U8** — Static (source-scanner): `updateUser`, `createUserWithPassword` and `bulkImportEmployees` call `markSeatSyncDue` after their transaction; `setUserApprover` doesn't.
 - **U9** — Emails:
   - `InvoiceOverdueEmail` and `BankPaymentFailedEmail` render the Q4 and Q6 text;
-  - `InvoiceOverdueActiveEmail` renders the Q4 second text;
   - the stated suspension date clamps to `now + 3 days`.
 - **U10** — `shouldReconcile`: true for a GOOD send_invoice mirror; false for a GOOD charge_automatically mirror inside its period.
 - **U11** — Users seat line:
@@ -928,7 +935,7 @@ Additions to `integration/fakes/fake-stripe.ts`:
   - Trial unchanged.
 - **U12** — `isNoticeSuperseded`:
   - `'bank-payment-failed'` is false except for `deleting`/`deleted`;
-  - `'invoice-overdue'` is also true when `pastDueSince` equals its anchor and the subscription is DUNNING.
+  - `payment-failed` supersedes itself when the send_invoice `pastDueSince` moves.
 - **U13** — `payUrl` choice (pure helper): the earliest open invoice with `due_date <= now`, else the earliest open one; null when there are none.
 
 **Integration** (fake Stripe and real Postgres; billing suites use the real `plan-source` and `seat-sync`):
@@ -955,7 +962,7 @@ Additions to `integration/fakes/fake-stripe.ts`:
   - `getTenantBillingInfo().payUrl` = the older invoice's URL.
 - **S10c** — At due + 15, after the warning → suspended.
 - **S10d** — Paid → unsuspended.
-- **S10e** — Lost webhook: the mirror says `active`, Stripe says `past_due`, no event → the lifecycle cron reconciles and anchors on the due date. Stripe `active` with an overdue open invoice → alert `invoice-overdue-subscription-active`.
+- **S10e** — Lost webhook: the mirror says `active`, Stripe says `past_due`, no event → the lifecycle cron reconciles and anchors on the due date. Stripe `active` with an overdue open invoice (older invoice behind a newer paid one) → the same anchor, the invoiced notice, then suspension at due + 15.
 - **S10f** — Annual send-invoice, users added → update, then `finalizeInvoice`, `sendInvoice` and the metadata marker.
   - With `sendInvoice` throwing → alert, quantity still recorded (not blocked); the next run sends it and the alert resolves.
   - An invoice whose update response was lost (`failAfterApply`) is still found and sent.
@@ -978,7 +985,7 @@ Additions to `integration/fakes/fake-stripe.ts`:
   - the duplicate check is unchanged.
 - **S16** — Webhooks:
   - `invoice.payment_failed` on a GOOD charge-automatically subscription → `bank-payment-failed` enqueued (anchor `invoice.created`) plus an alert;
-  - on GOOD send_invoice → also `bank-payment-failed` (Q11; see S38);
+  - on GOOD send_invoice → also `bank-payment-failed` (Q11; see S38), keyed on `pastDueSince` null;
   - on past_due → only the existing `payment-failed`;
   - `checkout.session.async_payment_failed` with the subscription `incomplete` → `bank-payment-failed` (anchor `session.created`) plus an alert;
   - with the subscription GOOD → alert only (the invoice event sends the email, so there's one email);
@@ -996,10 +1003,7 @@ Additions to `integration/fakes/fake-stripe.ts`:
 - **S26** — The lifecycle runner's `becameGood` marks the tenant due.
 - **S27** — `tenant:admin seat-sync` without `--yes` makes no Stripe write and no row write.
 - **S28** — Renewal candidates: a tenant with no user change, Stripe 10 held, count 8, `current_period_end` 6 h away → picked by the next run, call D to 8.
-- **S29** — Overdue but active: a GOOD send_invoice subscription with an open invoice due yesterday →
-  - the lifecycle cron enqueues `invoice-overdue` (anchor = due date) and raises `invoice-overdue-subscription-active`;
-  - the next run after it's paid resolves the alert;
-  - when the subscription later goes `past_due` with the same anchor, the notice is superseded by the invoiced `payment-failed`.
+- **S29** — Lazy loader: a charge_automatically reconcile never calls `loadOpenInvoices`; a send_invoice one calls it once, and the runner reuses the result (one invoice list in the lock).
 - **S30** — Schedule attached with a next-phase quantity different from `desired` → `seat-sync-schedule-attached` raised, and the sync continues. Inside the window the alert is emailed. The fake gains `subscriptionSchedules.retrieve`.
 - **S31** — Item rules: two items (Standard plus another) → `not-standard` with `seat-sync-unexpected-items`. Missing subscription → `seat-sync-subscription-missing`. A `trialing` subscription → `not-applicable`, no drift.
 - **S32** — Config check: a price env emptied while an active subscription exists → `stripe-prices-missing`; restored → resolved.
@@ -1013,11 +1017,14 @@ Additions to `integration/fakes/fake-stripe.ts`:
 - **S36** — Term race with a failed restore → the alert detail says the restore failed.
 - **S37** — The S20 timeout branch: the tenant-DB read hangs → `getTenantBillingInfo` resolves within about 3 s with `seats: null`. The hang comes from a seam: `countActiveUsers` and `readWorkspaceTimeZone` go through an exported `billingTenantReads` object, which the test stubs with a never-resolving promise.
 - **S39** — Send_invoice past due before the due date: the fake subscription is `past_due` with one open invoice due in 10 days →
-  - no `pastDueSince`, no notice, alert `send-invoice-past-due-before-due-date`;
-  - the lifecycle cron run after the due date → `pastDueSince` = that due date, the invoiced `payment-failed` is sent, the alert resolves.
-- **S40** — Billing page for a GOOD subscription with an overdue open invoice → Payment row 4b with the Pay button.
+  - no `pastDueSince`, no `payment-failed`, Payment tile "Invoice open", and the seat sync still syncs it;
+  - `invoice.payment_failed` for that invoice → `bank-payment-failed` (Q11);
+  - the lifecycle run after the due date → `pastDueSince` = that due date, the invoiced `payment-failed` is sent (within about 24 h of the due date: no Stripe event fires then, and the runner is daily).
+- **S40** — Billing page for an invoiced subscription that is overdue while Stripe says `active` → Payment row 2 with the Pay button. Uncollectible-only → the Pay button uses the uncollectible invoice.
 - **S41** — Schedule: next-phase quantity equals `desired` → no alert; differs → alert; schedule removed → resolved.
-- **S38** — Q11: `invoice.payment_failed` on a GOOD send_invoice subscription → `bank-payment-failed` (anchor `invoice.created`). A second event for the same invoice → no second notice.
+- **S38** — Q11: `invoice.payment_failed` on a GOOD send_invoice subscription → `bank-payment-failed` (anchor `invoice.created`). A second event for the same invoice → no second notice. With `pastDueSince` set → no `bank-payment-failed` (the `payment-failed` covers it).
+- **S42** — Invoiced: invoice A overdue (P = A's due date, suspended), then A is paid while B is open and not yet due and Stripe stays `past_due` → `pastDueSince` null, unsuspended, no warning; the old notices are superseded.
+- **S43** — Alerts kept out of the seat transaction: a spy on `raiseAlert`/`raiseAlertWithEmail` records no call before the `withSeatLock` transaction ends. A throwing post-commit alert write leaves the outcome unchanged (not `failed`).
 
 ## 12. Founder steps (PRODUCTION-DEPLOY changes the dev writes)
 - **9.1**
@@ -1032,7 +1039,8 @@ Additions to `integration/fakes/fake-stripe.ts`:
 - **9.3** — Customer portal: payment method update, invoice history, cancel at end of billing period. **Plan switching off. Quantity changes off.**
 - **9.5**
   - Failed payments: leave the subscription past due (unchanged). Invoices sent to customers: leave past due.
-  - **Settings → Billing → Subscriptions → Manage failed payments → "Configure subscription status resolution" → All invoices** (so an older unpaid invoice keeps the subscription past due). This is a **launch gate**: 12.8b proves it.
+  - Leave "subscription status resolution" at Stripe's default; the app doesn't depend on it (§6.2).
+  - For failed payments and for invoices sent to customers, set the **invoice** outcome to **leave the invoice as-is (open)**, never "mark uncollectible".
 - **Env table and the ✅ check line:** two price IDs.
 - **New runbook, "Invoiced and Enterprise subscriptions"** (env: the control-plane URL, `ENCRYPTION_KEY`, and the `STRIPE_SECRET_KEY` of the intended mode):
   1. For Enterprise only, **first**: `npm run tenant:admin -- set-plan <slug> enterprise --yes`.
@@ -1060,7 +1068,8 @@ Additions to `integration/fakes/fake-stripe.ts`:
   - **Promotion code:** `FOUNDING` at checkout.
   - **Send-invoice subscription,** made per the runbook with `days_until_due: 1`:
     - added users → the proration invoice is **emailed**;
-    - left unpaid → `past_due` the next day, the invoiced email, and the Pay button opens the overdue invoice.
+    - left unpaid → within about a day of the due date, the invoiced email, and the Pay button opens the overdue invoice;
+    - paid → `pastDueSince` clears and the Payment tile returns to Active.
   - **Record the §4 test-mode checks in §15:**
     - a $0 invoice in the flat tier;
     - a send-invoice proration invoice that is draft or open;
@@ -1069,9 +1078,8 @@ Additions to `integration/fakes/fake-stripe.ts`:
     - the ACH status while processing;
     - Checkout with quantity > 1;
     - a quantity update while a subscription schedule is attached;
-    - the "All invoices" setting: an older overdue invoice keeps the subscription `past_due` after a newer one is paid;
-    - with "All invoices" on, a send_invoice subscription with an open invoice that isn't due yet: record whether it stays `active` (if not, S39's handling applies);
-    - a failed card on the hosted page of a not-yet-due send-invoice invoice: record the subscription status and **whether `invoice.payment_failed` fires** (Q11 depends on it).
+    - a failed card on the hosted page of a not-yet-due send-invoice invoice: record the subscription status and **whether `invoice.payment_failed` fires** (Q11 depends on it; if it doesn't, the lead brings the product owner a follow-up before launch);
+    - a schedule with `end_behavior: 'renew'` and no next phase: does it freeze the quantity at renewal? (If so, the schedule check treats it as a next phase with that quantity.)
 
 ## 13. Verification
 1. `npx tsc --noEmit`, `npm run lint` (0 errors), `npm run test`, `npm run test:tz`, `npm run db:safety`.
@@ -1199,3 +1207,30 @@ Additions to `integration/fakes/fake-stripe.ts`:
   - §9 wording;
   - attaching a card in the renewal rehearsal;
   - the S37 seam.
+
+**Confirmation pass 3** (one fresh reviewer, whole blueprint, on v3.2): 4 MEDIUM, 8 LOW. It found no double charge in the sync. The MEDIUMs:
+- a failed early payment flipping an invoiced subscription to `past_due` emailed no one;
+- the grace anchor was never recomputed after it was set (a paid-up customer could be suspended);
+- a not-yet-due DUNNING subscription stopped the seat sync and the renewal drop;
+- under "All invoices", uncollectible invoices kept a subscription past due with no Pay button.
+
+Root cause: invoiced dunning followed Stripe's status, with patches on top. **Fixed in v3.3 by a simpler model** (§6.2):
+- for send_invoice subscriptions, `pastDueSince` is the earliest open invoice past its due date, recomputed on every reconcile;
+- the dunning block runs on it even while Stripe says active;
+- the suspension lifts when nothing is overdue;
+- Stripe's `past_due` alone starts nothing;
+- the failed-payment email is keyed on "no grace notice covers it";
+- the sync treats invoiced-and-not-overdue `past_due` as syncable;
+- "All invoices", the `invoice-overdue` notice and two alerts are removed;
+- 9.5 keeps invoices open, and the Pay button falls back to an uncollectible invoice.
+
+LOWs written in:
+- contradictions in §7.3 and §10.1 removed;
+- post-commit alert failure doesn't change the outcome;
+- term-race audit event;
+- S39 timing;
+- a renew-schedule check;
+- budget recomputed (100 s cutoff);
+- digest-only `cron-incomplete` stated as intended;
+- tests S29 (lazy loader), S40, S42, S43.
+- Not adopted: delivery-time supersession for `bank-payment-failed`. A payment that failed is still a fact worth stating even if paid later.
