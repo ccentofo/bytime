@@ -17,12 +17,14 @@ import {
   retrieveSubscription,
   type OpenInvoiceState,
 } from '@/lib/billing/stripe-state';
-import type { StripeSubSnapshot } from '@/lib/billing/subscription-transitions';
+import { isOverdue, type StripeSubSnapshot } from '@/lib/billing/subscription-transitions';
+import { markSeatSyncDue } from '@/lib/billing/seat-sync';
 import {
   addDays,
   deletionDateFrom,
   isDunning,
   isGood,
+  isLive,
   nextLifecycleActions,
   shouldReconcile,
   type NoticeKind,
@@ -73,6 +75,8 @@ interface InLockResult {
   terminated: boolean;
   readyForDeletion?: { deletionScheduledFor: Date; overdue: boolean };
   blockedDeletion?: string;
+  /** feature-plan-per-user-billing.md §6.5: the reconcile reported `becameGood` (mark the seat sync due). */
+  becameGood: boolean;
 }
 
 function observedSince(obs: Observation[], invoiceId: string, kind: 'processing' | 'microdeposit', now: Date): Date {
@@ -133,10 +137,15 @@ export async function runTenantLifecycle(tenantId: string, now: Date = new Date(
       console.error(`[tenant-lifecycle] ${pre.row.slug} observations failed:`, err);
     }
 
+    // feature-plan-per-user-billing.md §6.5: after the locked section (never throws, time-capped).
+    if (inLock.becameGood) await markSeatSyncDue(tenantId);
+
     // Termination / ended-but-still-LIVE: each subscription in its own locked section.
     for (const subId of inLock.toCancel) {
-      const ok = await cancelInOwnSection(tenantId, subId, pre.obs, now, noticeIds);
+      const marks = { becameGood: false };
+      const ok = await cancelInOwnSection(tenantId, subId, pre.obs, now, noticeIds, marks);
       if (!ok) failed = true;
+      if (marks.becameGood) await markSeatSyncDue(tenantId);
     }
   }
 
@@ -177,18 +186,30 @@ async function evaluateInLock(
     stripeCustomerDeleted: row.stripeCustomerDeletedAt !== null,
     currentPeriodEnd: row.currentPeriodEnd,
     deletionAbortedSinceLastCheck: deletionAborted,
+    collectionMethod: row.collectionMethod,
   }, now);
 
   const noticeIds: string[] = [];
   let subs: StripeSubSnapshot[] = [];
+  let tracked: StripeSubSnapshot | null = null;
   let invoices: OpenInvoiceState[] | null = null;
+  let becameGood = false;
   if (reconciled) {
-    const r = await reconcileInLock(tx, row, now);
+    // feature-plan-per-user-billing.md §6.2 (lead ruling B3): one memoized listing per locked section. reconcileInLock
+    // calls the loader only for a send_invoice subscription (with the customerDeleted flag it learned); otherwise
+    // the first call below makes the listing, exactly as before.
+    const customerId = row.stripeCustomerId!;
+    const rowDeleted = row.stripeCustomerDeletedAt !== null;
+    let memo: Promise<OpenInvoiceState[]> | null = null;
+    const loadOpenInvoices = (customerDeleted: boolean) => (memo ??= readOpenInvoices(customerId, rowDeleted || customerDeleted));
+    const r = await reconcileInLock(tx, row, now, { loadOpenInvoices });
     row = r.row;
     subs = r.subs;
+    tracked = r.tracked;
+    becameGood = r.becameGood;
     noticeIds.push(...r.noticeIds);
     // Always listed when reconciling (paginated); resource_missing = empty only for a confirmed-deleted customer.
-    invoices = await readOpenInvoices(row.stripeCustomerId!, row.stripeCustomerDeletedAt !== null || r.customerDeleted);
+    invoices = await loadOpenInvoices(r.customerDeleted);
   }
   const paymentProcessing = invoices !== null && hasPaymentProcessing(invoices, obs, now);
 
@@ -246,9 +267,24 @@ async function evaluateInLock(
   }
 
   // Ended (incl. just terminated) with Stripe still LIVE: cancel each DUNNING/paused one in its own section.
-  const toCancel = row.subscriptionEndedAt !== null
-    ? subs.filter((s) => isDunning(s.status) || s.status === 'paused').map((s) => s.id)
-    : [];
+  // feature-plan-per-user-billing.md §6.2: for invoiced (send_invoice) subscriptions Stripe's status isn't the debt —
+  // the open invoices are. A send_invoice DUNNING subscription with nothing overdue at the end (E) isn't canceled; the
+  // tracked send_invoice subscription is canceled while LIVE (GOOD included) when an invoice was overdue at E.
+  const toCancel: string[] = [];
+  if (row.subscriptionEndedAt !== null) {
+    const E = row.subscriptionEndedAt;
+    const owesAtEnd = (subId: string) => invoices !== null && invoices.some((i) => i.subscriptionId === subId && isOverdue(i, E));
+    const ids = new Set<string>();
+    for (const s of subs) {
+      if (!isDunning(s.status) && s.status !== 'paused') continue;
+      if (isDunning(s.status) && s.collectionMethod === 'send_invoice' && !owesAtEnd(s.id)) continue;
+      ids.add(s.id);
+    }
+    if (tracked && tracked.collectionMethod === 'send_invoice' && isLive(tracked.status) && owesAtEnd(tracked.id)) {
+      ids.add(tracked.id);
+    }
+    toCancel.push(...ids);
+  }
 
   let readyForDeletion: InLockResult['readyForDeletion'];
   let blockedDeletion: string | undefined;
@@ -264,7 +300,7 @@ async function evaluateInLock(
   return {
     row, reconciled, invoices, noticeIds, toCancel,
     suspended: Boolean(actions.suspend), terminated: Boolean(actions.terminate),
-    readyForDeletion, blockedDeletion,
+    readyForDeletion, blockedDeletion, becameGood,
   };
 }
 
@@ -316,8 +352,19 @@ async function writeObservations(tenantId: string, obs: Observation[], invoices:
  * Cancel one subscription of an ended tenant, in its own locked section: re-read the row (must still be ended),
  * retrieve the subscription; GOOD → apply the GOOD transition (customer paid); DUNNING/paused with no payment in
  * flight → cancel. Voiding its open invoices happens after commit (idempotent, tracked by an alert).
+ *
+ * feature-plan-per-user-billing.md §6.2: a send_invoice subscription reads its open invoices FIRST, and counts as paid
+ * (GOOD and DUNNING alike) only when none of them is overdue now; then it reconciles (with the unfiltered list as the
+ * loader result) instead of cancelling. Otherwise it takes the cancel path after the payment-processing check.
  */
-async function cancelInOwnSection(tenantId: string, subId: string, obs: Observation[], now: Date, noticeIds: string[]): Promise<boolean> {
+async function cancelInOwnSection(
+  tenantId: string,
+  subId: string,
+  obs: Observation[],
+  now: Date,
+  noticeIds: string[],
+  marks: { becameGood: boolean },
+): Promise<boolean> {
   try {
     const action = await withTenantLock(tenantId, async (tx): Promise<'void' | 'skip'> => {
       const row = await readTenant(tx, tenantId);
@@ -325,13 +372,30 @@ async function cancelInOwnSection(tenantId: string, subId: string, obs: Observat
       if (row.status !== 'active' && row.status !== 'suspended') return 'skip';
       const sub = await retrieveSubscription(subId);
       if (!sub || sub.status === 'canceled' || sub.status === 'incomplete_expired') return 'void';
+      const customerDeleted = row.stripeCustomerDeletedAt !== null;
+
+      if (sub.collectionMethod === 'send_invoice' && (isGood(sub.status) || isDunning(sub.status))) {
+        const all = await readOpenInvoices(row.stripeCustomerId, customerDeleted);
+        const mine = all.filter((i) => i.subscriptionId === subId);
+        if (!mine.some((i) => isOverdue(i, now))) {
+          const r = await reconcileInLock(tx, row, now, { loadOpenInvoices: async () => all });
+          noticeIds.push(...r.noticeIds);
+          marks.becameGood = r.becameGood;
+          return 'skip';
+        }
+        if (hasPaymentProcessing(mine, obs, now)) return 'skip'; // re-checked next run
+        await cancelSubscriptionIdempotent(subId);
+        return 'void';
+      }
+
       if (isGood(sub.status)) {
         const r = await reconcileInLock(tx, row, now);
         noticeIds.push(...r.noticeIds);
+        marks.becameGood = r.becameGood;
         return 'skip';
       }
       if (!isDunning(sub.status) && sub.status !== 'paused') return 'skip';
-      const invoices = (await readOpenInvoices(row.stripeCustomerId, row.stripeCustomerDeletedAt !== null))
+      const invoices = (await readOpenInvoices(row.stripeCustomerId, customerDeleted))
         .filter((i) => i.subscriptionId === subId);
       if (hasPaymentProcessing(invoices, obs, now)) return 'skip'; // re-checked next run
       await cancelSubscriptionIdempotent(subId);

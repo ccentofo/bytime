@@ -227,9 +227,10 @@ Part 4. Back in Resend, the domain flips to **Verified** once they propagate.
 
 ## Part 10 — Stripe (optional — only to demo billing)
 
-1. Stripe Dashboard in **Test mode** → copy `sk_test_...`, `pk_test_...`; create your products/prices
-   and copy the `price_...` IDs.
-2. Add `STRIPE_SECRET_KEY`, `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `STRIPE_PRICE_*` to Vercel.
+1. Stripe Dashboard in **Test mode** → copy `sk_test_...`, `pk_test_...`; create the **CadenzPoint Standard** product
+   with its two graduated prices (monthly and yearly, as PRODUCTION-DEPLOY.md 9.1) and copy the two `price_...` IDs.
+2. Add `STRIPE_SECRET_KEY`, `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `STRIPE_PRICE_STANDARD_MONTHLY` and
+   `STRIPE_PRICE_STANDARD_ANNUAL` to Vercel.
 3. **Webhook:** Stripe → Developers → Webhooks → add endpoint
    `https://cadenzpoint.com/api/stripe/webhook`; copy the signing secret into `STRIPE_WEBHOOK_SECRET`.
 4. Redeploy. Demo checkout uses Stripe's hosted pages (test cards like `4242 4242 4242 4242`).

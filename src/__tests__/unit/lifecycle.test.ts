@@ -8,6 +8,7 @@ import {
   deletionDateFrom,
   addDays,
   type LifecycleFacts,
+  type NoticeKind,
   type NoticeState,
   type ReconcileContext,
 } from '@/lib/tenant/lifecycle';
@@ -320,4 +321,65 @@ describe('shouldReconcile (§4.4 step 1)', () => {
     expect(shouldReconcile(facts({ ...paying, subscriptionStatus: 'canceled', subscriptionEndedAt: d(-100), deletionScheduledFor: d(-1) }), ctx(), NOW)).toBe(true));
   it('deletion aborted since the last check → yes', () =>
     expect(shouldReconcile(facts(paying), ctx({ deletionAbortedSinceLastCheck: true }), NOW)).toBe(true));
+});
+
+// ---------------------------------------------------------------------------
+// feature-plan-per-user-billing.md §6.2, §6.7, §6.9
+// ---------------------------------------------------------------------------
+
+describe('U4: nextLifecycleActions on the invoiced due-date clock', () => {
+  const P = d(-13); // grace ends at P + 15 = d(2); the warning is due from P + 12 = d(-1)
+  const invoicedOverdue = { ...paying, collectionMethod: 'send_invoice', pastDueSince: P } as const;
+
+  it('send_invoice with P set and Stripe ACTIVE → the suspension warning (charge-automatically active gets none)', () => {
+    expect(kinds(run(facts(invoicedOverdue)))).toContain('suspension-warning');
+    expect(kinds(run(facts({ ...invoicedOverdue, collectionMethod: 'charge_automatically' })))).not.toContain('suspension-warning');
+    expect(kinds(run(facts({ ...invoicedOverdue, collectionMethod: undefined })))).not.toContain('suspension-warning');
+  });
+
+  it('then suspension at P + 15 once the warning was given (and at least 3 days after it)', () => {
+    const at = d(3);
+    const warned = [sent('suspension-warning', P, d(-1))];
+    expect(run(facts(invoicedOverdue), warned, false, at).suspend).toBe(true);
+    expect(run(facts(invoicedOverdue), warned, false, d(1)).suspend).toBeUndefined(); // before P + 15
+    expect(run(facts(invoicedOverdue), warned, true, at).suspend).toBeUndefined();    // a payment is processing
+  });
+
+  it('never while already suspended, ended, or with nothing overdue', () => {
+    expect(run(facts({ ...invoicedOverdue, status: 'suspended', suspendedAt: d(-1), suspensionReason: 'nonpayment' }), [sent('suspension-warning', P, d(-1))], false, d(3)).suspend).toBeUndefined();
+    expect(kinds(run(facts({ ...invoicedOverdue, subscriptionEndedAt: d(-1) })))).not.toContain('suspension-warning');
+    expect(kinds(run(facts({ ...invoicedOverdue, pastDueSince: null })))).not.toContain('suspension-warning');
+  });
+});
+
+describe('U10: shouldReconcile for invoiced subscriptions (§6.7)', () => {
+  const ctx = (o: Partial<ReconcileContext> = {}): ReconcileContext => ({
+    hasStripeCustomer: true, stripeCustomerDeleted: false, currentPeriodEnd: d(20), deletionAbortedSinceLastCheck: false, ...o,
+  });
+  it('a GOOD send_invoice mirror inside its period → reconciled every day (a lost past_due, or an overdue invoice while Stripe says active)', () => {
+    expect(shouldReconcile(facts(paying), ctx({ collectionMethod: 'send_invoice' }), NOW)).toBe(true);
+  });
+  it('regression guard: a GOOD charge-automatically mirror inside its period → not reconciled', () => {
+    expect(shouldReconcile(facts(paying), ctx({ collectionMethod: 'charge_automatically' }), NOW)).toBe(false);
+    expect(shouldReconcile(facts(paying), ctx(), NOW)).toBe(false);
+  });
+});
+
+describe('U12: isNoticeSuperseded for the new kind (§6.9)', () => {
+  it("'bank-payment-failed' states a past fact: superseded only for deleting/deleted", () => {
+    const kind: NoticeKind = 'bank-payment-failed'; // a NoticeKind (type-checked: fails tsc without the new kind)
+    expect(kind).toBe('bank-payment-failed');
+    const anchor = d(-1);
+    for (const f of [facts(), facts(paying), facts({ ...paying, pastDueSince: d(-2) }), facts({ ...paying, subscriptionEndedAt: d(-1) }),
+      facts({ ...paying, status: 'suspended', suspensionReason: 'nonpayment', suspendedAt: d(-1) })]) {
+      expect(isNoticeSuperseded('bank-payment-failed', anchor, f, NOW)).toBe(false);
+    }
+    expect(isNoticeSuperseded('bank-payment-failed', anchor, facts({ status: 'deleting' }), NOW)).toBe(true);
+    expect(isNoticeSuperseded('bank-payment-failed', anchor, facts({ status: 'deleted' }), NOW)).toBe(true);
+  });
+  it('regression guard: payment-failed supersedes itself when the send_invoice pastDueSince moves', () => {
+    const oldP = d(-10);
+    expect(isNoticeSuperseded('payment-failed', oldP, facts({ ...paying, collectionMethod: 'send_invoice', pastDueSince: d(-3) }), NOW)).toBe(true);
+    expect(isNoticeSuperseded('payment-failed', oldP, facts({ ...paying, collectionMethod: 'send_invoice', pastDueSince: oldP }), NOW)).toBe(false);
+  });
 });

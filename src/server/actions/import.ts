@@ -5,6 +5,9 @@ import { users, contracts, clins, slins, laborCategories, approvalScopes, charge
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import { requireAdminFresh } from '@/lib/session';
 import { assertSeatsAvailable } from '@/server/internal/seats';
+import { readPlanFresh } from '@/server/internal/plan-source';
+import { markSeatSyncDue } from '@/lib/billing/seat-sync';
+import { getTenantOrThrow } from '@/lib/tenant/context';
 import { loadApprovalFacts, lockUserRulesExclusive, newlyEligible, recomputeSelfApproval, scopeChange, snapshotSubmittedEligibility } from '@/server/internal/approval-rules';
 import { UNREVIEWED_MIGRATED_SCOPE, grantScopeRows } from '@/server/internal/approval-scopes';
 import { UserFacingError } from '@/lib/errors';
@@ -149,6 +152,10 @@ export async function bulkImportEmployees(rows: WithRow<EmployeeImportRow>[], op
       }
     }
     const incomingEmails = [...new Set(candidates.map((c) => c.email))];
+    // feature-plan-per-user-billing.md §6.3: the plan, fresh from the control plane, before the transaction opens
+    // (always: the new-row count is only known inside it; the dry run reports the seat check too).
+    const tenantId = (await getTenantOrThrow()).id;
+    const plan = await readPlanFresh(tenantId);
 
     // certified-outputs C2 (CO-D19, ruling Q5): one transaction with the self-approval recompute and the re-routing
     // snapshot. R2-11: the batch is refused up front if its genuinely new, valid users would exceed the plan's seats.
@@ -159,7 +166,7 @@ export async function bulkImportEmployees(rows: WithRow<EmployeeImportRow>[], op
         : [];
       const existingEmails = new Set(existingRows.map((r) => r.email.toLowerCase()));
       const newRowCount = incomingEmails.filter((email) => !existingEmails.has(email)).length;
-      if (newRowCount > 0) await assertSeatsAvailable(newRowCount, tx);
+      if (newRowCount > 0) await assertSeatsAvailable(newRowCount, tx, plan);
 
       const beforeFacts = await loadApprovalFacts(tx);
       const before = await snapshotSubmittedEligibility(tx, beforeFacts);
@@ -181,6 +188,8 @@ export async function bulkImportEmployees(rows: WithRow<EmployeeImportRow>[], op
       const changed = result.created > 0 ? newlyEligible(before, await snapshotSubmittedEligibility(tx)) : [];
       return throwIfDryRun(dryRun, { result: byRow(result), rerouted: changed });
     }));
+    // feature-plan-per-user-billing.md §6.5: after the commit, only when users were created; never throws.
+    if (!dryRun && done.created > 0) await markSeatSyncDue(tenantId);
     if (!dryRun) await notifyReroutedApprovals(rerouted);
     return done;
   });

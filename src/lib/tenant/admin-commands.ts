@@ -1,11 +1,11 @@
 import 'server-only';
 import { and, desc, eq, isNull } from 'drizzle-orm';
-import { opsAlerts, tenantAuditEvents, tenantNotices } from '@/db/control-plane/schema';
+import { opsAlerts, tenantAuditEvents, tenantNotices, tenants } from '@/db/control-plane/schema';
 import { withLockedPool, withTenantLock, type ControlTx } from '@/db/control-plane/locked';
-import { addDays, cycleAnchor, deletionDateFrom, hasSubscribed, type LifecycleFacts } from './lifecycle';
+import { addDays, cycleAnchor, deletionDateFrom, getTenantAccess, hasSubscribed, type LifecycleFacts } from './lifecycle';
 import { DELETION_NOTICE_DAYS, POST_END_RETENTION_DAYS } from './lifecycle-config';
 import { invalidateTenant, toLifecycleFacts } from './registry';
-import { readTenant, recordAudit, updateTenantGuarded, type TenantRow } from './lifecycle-store';
+import { readTenant, recordAudit, resolveAlertsOfKind, updateTenantGuarded, type TenantRow } from './lifecycle-store';
 import { enqueueNotice } from './notices';
 
 /**
@@ -158,6 +158,83 @@ export const plans = {
 };
 
 export const MAX_IMPORT_WINDOW_REOPEN_DAYS = 30;
+
+/**
+ * feature-plan-per-user-billing.md §6.2 (Q3): `set-plan <slug> enterprise|standard`. Enterprise lifts the user limit,
+ * and the app never overwrites it (reconcile skips `plan` while it's enterprise); `standard` only undoes it (the
+ * interval comes from the next reconcile).
+ */
+export function setPlanPlanner(target: string): Planner {
+  if (target !== 'enterprise' && target !== 'standard') throw new AdminCommandError('set-plan needs enterprise|standard.');
+  return (row) => {
+    if (target === 'enterprise') {
+      requireLifecycleStatus(row);
+      return {
+        describe: 'set the plan to ENTERPRISE (no user limit; the seat sync never touches a custom price)',
+        patch: { plan: 'enterprise', planInterval: null },
+        auditKind: 'plan-set',
+        auditDetail: `${row.plan}→enterprise`,
+        after: async (tx, t) => { await resolveAlertsOfKind(tx, row.id, 'seat-sync-unmanaged-price', t, 'plan set to enterprise'); },
+      };
+    }
+    if (row.plan !== 'enterprise') throw new AdminCommandError('set-plan standard only undoes an enterprise plan; this workspace is not enterprise.');
+    return {
+      describe: 'set the plan back to STANDARD (the interval comes from the next Stripe reconcile)',
+      patch: { plan: 'standard' },
+      auditKind: 'plan-set',
+      auditDetail: 'enterprise→standard',
+    };
+  };
+}
+
+export type StripeMode = 'live' | 'test';
+
+/** The Stripe mode of a secret or restricted key, from its prefix; null when it isn't recognizable. */
+export function stripeKeyMode(key: string | undefined): StripeMode | null {
+  if (!key) return null;
+  if (key.startsWith('sk_live_') || key.startsWith('rk_live_')) return 'live';
+  if (key.startsWith('sk_test_') || key.startsWith('rk_test_')) return 'test';
+  return null;
+}
+
+/**
+ * The Stripe-mode guard (§6.2) for commands that call Stripe: refused unless `--stripe-mode live|test` is given and
+ * matches the key in STRIPE_SECRET_KEY, so a test key can never be used on a production workspace (or vice versa).
+ */
+export function checkStripeMode(requested: string | undefined, key: string | undefined): StripeMode {
+  const actual = stripeKeyMode(key);
+  if (actual === null) throw new AdminCommandError('STRIPE_SECRET_KEY is missing or not a recognizable Stripe key (sk_live_, sk_test_, rk_live_, rk_test_).');
+  if (requested !== 'live' && requested !== 'test') {
+    throw new AdminCommandError(`This command calls Stripe. Pass --stripe-mode live|test (the key in STRIPE_SECRET_KEY is ${actual} mode).`);
+  }
+  if (requested !== actual) throw new AdminCommandError(`--stripe-mode ${requested} doesn't match the key in STRIPE_SECRET_KEY (${actual} mode); refusing.`);
+  return actual;
+}
+
+/** `ensure-customer` (§6.2, §6.7): link (or reuse) the workspace's Stripe customer; audited with livemode. */
+export async function ensureCustomerCommand(tenantId: string, mode: StripeMode, actor: string): Promise<string> {
+  const [row] = await withLockedPool((db) => db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1));
+  if (!row) throw new AdminCommandError('Tenant disappeared.');
+  if (getTenantAccess(toLifecycleFacts(row), new Date()) === 'closed') throw new AdminCommandError(`Tenant is closed (${row.status}); refusing.`);
+  const { ensureStripeCustomer } = await import('@/lib/billing/tenant-billing');
+  const customerId = await ensureStripeCustomer(tenantId);
+  await withLockedPool((db) => recordAudit(db, { tenantId, kind: 'stripe-customer-ensured', actor, detail: `customer=${customerId} livemode=${mode === 'live'}` }));
+  return customerId;
+}
+
+/** `seat-sync` (§6.2): one manual sync (or a dry run that writes nothing); the applied run is audited with livemode. */
+export async function seatSyncCommand(tenantId: string, opts: { mode: StripeMode; dryRun: boolean; actor: string }) {
+  const { randomUUID } = await import('node:crypto');
+  const { syncSeatQuantity } = await import('@/lib/billing/seat-sync');
+  const result = await syncSeatQuantity(tenantId, { runId: randomUUID(), reason: 'manual', dryRun: opts.dryRun });
+  if (!opts.dryRun) {
+    await withLockedPool((db) => recordAudit(db, {
+      tenantId, kind: 'seat-sync-manual', actor: opts.actor,
+      detail: `outcome=${result.outcome}${result.from !== undefined ? ` from=${result.from}` : ''}${result.to !== undefined ? ` to=${result.to}` : ''} livemode=${opts.mode === 'live'}`,
+    }));
+  }
+  return result;
+}
 
 /** Apply a plan under the tenant lock, re-planned from the re-read row (so a concurrent change is never lost). */
 export async function applyAdminPlan(tenantId: string, planner: Planner, actor: string): Promise<TenantRow> {

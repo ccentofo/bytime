@@ -1,6 +1,7 @@
 import { requirePageRole } from '@/lib/session';
 import { getApprovalNotices, getUsersForAdminPage } from '@/server/actions/users';
 import { getSeatUsage } from '@/server/internal/seats';
+import { displayPlan } from '@/lib/billing/plans';
 import { getApprovalClinOptions } from '@/server/actions/assignments';
 import { ApprovalNotices } from '@/components/approvals/ApprovalNotices';
 import { UsersClient } from './UsersClient';
@@ -19,7 +20,7 @@ export default async function UsersPage() {
   return (
     <>
       <ApprovalNotices adminId={user.id} notices={notices} show={['recommend']} />
-      <UsersClient initialUsers={users} currentUserId={user.id} seats={{ active: seats.currentActive, limit: seats.limit }} approvalClins={approvalClins} />
+      <UsersClient initialUsers={users} currentUserId={user.id} seats={{ active: seats.currentActive, limit: seats.limit, plan: displayPlan(seats.plan) }} approvalClins={approvalClins} />
     </>
   );
 }

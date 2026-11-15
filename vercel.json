@@ -18,6 +18,10 @@
     {
       "path": "/api/cron/notice-delivery",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/seat-sync",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

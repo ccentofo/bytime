@@ -8,6 +8,9 @@ import { requireAdmin, requireAdminFresh, AuthorizationError } from '@/lib/sessi
 import { getLockoutsForEmails, unlockAccount } from '@/server/internal/login-attempts';
 import { SAFE_USER_COLUMNS } from '@/server/internal/users';
 import { assertSeatsAvailable } from '@/server/internal/seats';
+import { readPlanFresh } from '@/server/internal/plan-source';
+import { markSeatSyncDue } from '@/lib/billing/seat-sync';
+import { getTenantOrThrow } from '@/lib/tenant/context';
 import { effectiveDesignee, loadApprovalFacts, lockUserRulesExclusive, newlyEligible, recomputeSelfApproval, snapshotSubmittedEligibility, type ApprovalFacts } from '@/server/internal/approval-rules';
 import { approvalNotices } from '@/server/internal/approval-notices';
 import { notifyReroutedApprovals } from '@/server/internal/submission-notify';
@@ -180,6 +183,12 @@ export async function updateUser(id: string, data: {
     const deactivating = data.isActive === false;
     const activating = data.isActive === true;
 
+    // feature-plan-per-user-billing.md §6.3/§6.5: only an active-status change touches billing. The plan is read fresh
+    // (never the registry cache) BEFORE the transaction, and only when the call can take a seat, so a rename or role
+    // change never depends on the control plane.
+    const tenantId = data.isActive !== undefined ? (await getTenantOrThrow()).id : null;
+    const plan = activating && tenantId ? await readPlanFresh(tenantId) : null;
+
     const result = await db.transaction(async (tx) => {
       await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
       // feature-plan-ux-people-codes.md R5: the old values, for the change log (a plain read; the lock order is unchanged).
@@ -188,7 +197,7 @@ export async function updateUser(id: string, data: {
       if (activating) {
         // Reactivating a user takes a seat, same as creating one (R2-11).
         const [target] = await tx.select({ isActive: users.isActive }).from(users).where(eq(users.id, id)).for('update');
-        if (target && !target.isActive) await assertSeatsAvailable(1, tx);
+        if (target && !target.isActive) await assertSeatsAvailable(1, tx, plan!);
       }
 
       if (demotingRole || deactivating) {
@@ -286,9 +295,12 @@ export async function updateUser(id: string, data: {
         : data.role !== undefined ? `${changed.fullName}'s role changed to ${changed.role}`
         : `${changed.fullName} updated`;
       await recomputeSelfApproval(tx, actor.id, reason, { before: beforeFacts });
-      return { row: changed, rerouted: newlyEligible(before, await snapshotSubmittedEligibility(tx)) };
+      const activeChanged = Boolean(changed) && data.isActive !== undefined && changed.isActive !== old.isActive;
+      return { row: changed, rerouted: newlyEligible(before, await snapshotSubmittedEligibility(tx)), activeChanged };
     });
 
+    // §6.5: after the commit; never throws and is time-capped, so billing can't fail or roll back the change.
+    if (result.activeChanged && tenantId) await markSeatSyncDue(tenantId);
     await notifyReroutedApprovals(result.rerouted);
     return result.row;
   });
@@ -324,10 +336,13 @@ export async function createUserWithPassword(data: {
     const approvalClinIds = approvalClinList(data.approvalClinIds);
     if (approvalClinIds !== undefined && validatedRole !== 'supervisor') throw new UserFacingError(APPROVAL_CLINS_ONLY_FOR_SUPERVISORS);
     const hash = await bcrypt.hash(data.password, 12);
+    // feature-plan-per-user-billing.md §6.3: the plan, fresh from the control plane, before the transaction opens.
+    const tenantId = (await getTenantOrThrow()).id;
+    const plan = await readPlanFresh(tenantId);
     // certified-outputs C2 (ruling Q5): one transaction with the self-approval recompute and re-routing snapshot.
     const { user, rerouted } = await db.transaction(async (tx) => {
       await lockUserRulesExclusive(tx); // F1: first statement, before any row lock
-      await assertSeatsAvailable(1, tx);
+      await assertSeatsAvailable(1, tx, plan);
       if (approverId) await assertValidApprover(tx, approverId);
       if (approvalClinIds) await assertActiveClins(tx, approvalClinIds);
       const beforeFacts = await loadApprovalFacts(tx);
@@ -348,6 +363,8 @@ export async function createUserWithPassword(data: {
       await recomputeSelfApproval(tx, actor.id, `${row.fullName} added (${row.role})`, { before: beforeFacts });
       return { user: row, rerouted: newlyEligible(before, await snapshotSubmittedEligibility(tx)) };
     });
+    // feature-plan-per-user-billing.md §6.5: after the commit; never throws and is time-capped.
+    await markSeatSyncDue(tenantId);
     await notifyReroutedApprovals(rerouted);
     return user;
   });

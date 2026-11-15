@@ -88,6 +88,22 @@ export async function resolveAlert(
     ));
 }
 
+/**
+ * Resolve every open alert of one kind for a tenant, whatever its dedup key (feature-plan-per-user-billing.md §6.2:
+ * `subscription-status-drift` is keyed by subscription id, and the tracked subscription can change).
+ */
+export async function resolveAlertsOfKind(
+  db: Pick<ControlTx, 'update'>,
+  tenantId: string,
+  kind: string,
+  now: Date,
+  note = 'condition cleared',
+): Promise<void> {
+  await db.update(opsAlerts)
+    .set({ resolvedAt: now, resolutionNote: note })
+    .where(and(eq(opsAlerts.scope, tenantId), eq(opsAlerts.kind, kind), isNull(opsAlerts.resolvedAt)));
+}
+
 /** Append an audit event (founder and system actions that change a tenant's lifecycle). */
 export async function recordAudit(
   db: Pick<ControlTx, 'insert'>,

@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, timestamp, pgEnum, unique, boolean, integer, jsonb, uniqueIndex, index, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, timestamp, pgEnum, unique, boolean, integer, bigint, jsonb, uniqueIndex, index, primaryKey } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 export const tenantStatusEnum = pgEnum('tenant_status', [
@@ -65,6 +65,12 @@ export const tenants = pgTable('tenants', {
   // feature-plan-certified-outputs.md C1 (CO-D1 escape hatch): the founder reopened timesheet-history import for this
   // workspace until this instant (`tenant:admin reopen-import-window`). Read fresh inside every import batch.
   importWindowUntil: timestamp('import_window_until', { withTimezone: true }),
+  // feature-plan-per-user-billing.md §6.2: the Standard price's interval ('month' | 'year' | null), written with `plan`
+  // on a GOOD read of a Standard price; the tracked subscription's cancel-at-period-end flag and collection method
+  // ('charge_automatically' | 'send_invoice'), from every tracked read.
+  planInterval: varchar('plan_interval', { length: 10 }),
+  subscriptionCancelAtPeriodEnd: boolean('subscription_cancel_at_period_end').notNull().default(false),
+  collectionMethod: varchar('collection_method', { length: 30 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -191,4 +197,24 @@ export const signalCounters = pgTable('signal_counters', {
   key: varchar('key', { length: 100 }).primaryKey(),
   windowStart: timestamp('window_start', { withTimezone: true }).notNull(),
   count: integer('count').notNull().default(0),
+});
+
+/**
+ * feature-plan-per-user-billing.md §6.5: the seat-sync bookkeeping per tenant (never a lifecycle fact: no
+ * lifecycle_version bump, its own `seats:` lock). `sync_due_at` is the oldest unserved due mark; `mark_seq` moves on
+ * every mark so a run clears only the marks it served. `stripe_quantity` is the last quantity read or written for
+ * `stripe_subscription_id`. ON DELETE CASCADE: tests delete tenant rows (production tombstones and never deletes).
+ */
+export const tenantSeatBilling = pgTable('tenant_seat_billing', {
+  tenantId: uuid('tenant_id').primaryKey().references(() => tenants.id, { onDelete: 'cascade' }),
+  syncDueAt: timestamp('sync_due_at', { withTimezone: true }),
+  markSeq: bigint('mark_seq', { mode: 'number' }).notNull().default(0),
+  stripeSubscriptionId: varchar('stripe_subscription_id', { length: 100 }),
+  stripeQuantity: integer('stripe_quantity'),
+  billableCount: integer('billable_count'),
+  checkedAt: timestamp('checked_at', { withTimezone: true }),
+  nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }),
+  failures: integer('failures').notNull().default(0),
+  lastError: text('last_error'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

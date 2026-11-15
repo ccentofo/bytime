@@ -14,8 +14,11 @@ import {
   LANDING_FEATURES_HEADING,
   LANDING_FOOTER_DISCLAIMER,
   LANDING_HEADLINE,
+  LANDING_PRICING_CARD_TITLES,
+  LANDING_PRICING_HEADING,
   LANDING_SUBHEAD,
 } from '@/lib/marketing/landing-copy';
+import { ENTERPRISE_MAILTO, PRICE_COPY, STANDARD_USERS_LINE } from '@/lib/billing/plan-copy';
 import styles from './page.module.css';
 import type { Metadata } from 'next';
 
@@ -47,7 +50,8 @@ export default async function LandingPage() {
   const demoUrl = process.env.NEXT_PUBLIC_DEMO_URL || null;
 
   // feature-plan-ux-integrations-billing.md L1, L2, §4: the copy comes from landing-copy.ts (BUSINESS-DECISIONS.md §2).
-  // "Sign in" goes to the apex /login ("Find your workspace"). No Pricing yet (it arrives with per-user billing).
+  // "Sign in" goes to the apex /login ("Find your workspace"). Pricing (feature-plan-per-user-billing.md §6.11) comes
+  // from plan-copy.ts, the business's exact strings (BUSINESS-DECISIONS.md §1).
   return (
     <>
       <a href="#main-content" className={styles.skip}>Skip to main content</a>
@@ -56,6 +60,7 @@ export default async function LandingPage() {
           <Anchor href="/" aria-label="CadenzPoint home" underline="never"><Logo size="md" /></Anchor>
           <Group component="nav" aria-label="Site" gap="md" wrap="nowrap">
             <Anchor href="#features" size="sm" c="var(--mantine-color-text)" visibleFrom="sm">Features</Anchor>
+            <Anchor href="#pricing" size="sm" c="var(--mantine-color-text)" visibleFrom="sm">Pricing</Anchor>
             {demoUrl && <Anchor href={demoUrl} size="sm" c="var(--mantine-color-text)" visibleFrom="sm">Try the demo</Anchor>}
             <Anchor href="/login" size="sm" fw={600}>Sign in</Anchor>
             <Button component="a" href="/signup" size="sm" radius="md">Start free trial</Button>
@@ -128,6 +133,38 @@ export default async function LandingPage() {
                 </Paper>
               );
             })}
+          </SimpleGrid>
+        </section>
+
+        {/* Pricing */}
+        <section id="pricing" className={styles.features} aria-labelledby="pricing-heading">
+          <Title order={2} id="pricing-heading" ta="center" mb="xl">{LANDING_PRICING_HEADING}</Title>
+          <SimpleGrid cols={{ base: 1, md: 3 }} spacing="lg" mb="xl">
+            <Paper withBorder p="lg" radius="md">
+              <Stack gap="xs" h="100%">
+                <Title order={3} size="h4">{LANDING_PRICING_CARD_TITLES.trial}</Title>
+                <Text fw={700} size="lg">{PRICE_COPY.trial.price}</Text>
+                <Text size="sm" c="dimmed">{PRICE_COPY.trial.detail}</Text>
+                <Button component="a" href="/signup" radius="md" mt="auto" w="fit-content">Start free trial</Button>
+              </Stack>
+            </Paper>
+            <Paper withBorder p="lg" radius="md">
+              <Stack gap="xs">
+                <Title order={3} size="h4">{LANDING_PRICING_CARD_TITLES.standard}</Title>
+                <Text fw={700} size="lg">{PRICE_COPY.standardMonthly.price}</Text>
+                <Text size="sm" c="dimmed">{PRICE_COPY.standardMonthly.detail}</Text>
+                <Text fw={700} size="lg" mt="xs">{PRICE_COPY.standardAnnual.price}</Text>
+                <Text size="sm" c="dimmed">{PRICE_COPY.standardAnnual.detail}</Text>
+                <Text size="sm" mt="xs">{STANDARD_USERS_LINE}</Text>
+              </Stack>
+            </Paper>
+            <Paper withBorder p="lg" radius="md">
+              <Stack gap="xs">
+                <Title order={3} size="h4">{LANDING_PRICING_CARD_TITLES.enterprise}</Title>
+                <Anchor href={ENTERPRISE_MAILTO} fw={700} size="lg">{PRICE_COPY.enterprise.price}</Anchor>
+                <Text size="sm" c="dimmed">{PRICE_COPY.enterprise.detail}</Text>
+              </Stack>
+            </Paper>
           </SimpleGrid>
         </section>
 

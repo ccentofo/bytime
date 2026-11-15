@@ -13,6 +13,7 @@ import {
   type NoticeKind,
 } from '@/lib/tenant/lifecycle';
 import { POST_END_RETENTION_DAYS } from '@/lib/tenant/lifecycle-config';
+import type { BillingInterval } from './plans';
 
 /** What we read from Stripe for one subscription. */
 export interface StripeSubSnapshot {
@@ -21,7 +22,65 @@ export interface StripeSubSnapshot {
   created: Date;
   endedAt: Date | null;
   currentPeriodEnd: Date | null;
+  /** 'standard' when some item is on a Standard price (feature-plan-per-user-billing.md §6.2), else null (leave as is). */
   plan: string | null;
+  /** The Standard item's price interval; null when `plan` is null. */
+  interval: BillingInterval | null;
+  cancelAtPeriodEnd: boolean;
+  /** 'charge_automatically' | 'send_invoice' (null if Stripe didn't say). */
+  collectionMethod: string | null;
+}
+
+/** The facts of one open invoice that the invoiced dunning rules read (a subset of stripe-state's OpenInvoiceState). */
+export interface OverdueInvoiceFacts {
+  subscriptionId: string | null;
+  /** Null for a charge-automatically invoice (no due date). */
+  dueDate: Date | null;
+  attemptCount: number;
+  /** A bank payment is settling. */
+  processing: boolean;
+}
+
+/**
+ * feature-plan-per-user-billing.md §6.2: how the transition treats the tracked subscription's dunning.
+ * - `charge`: not send_invoice (the existing GOOD/DUNNING rules);
+ * - `skipped`: send_invoice under `allowDeleting` (deleteTenant): no dunning or suspension field is written;
+ * - `invoiced`: send_invoice, with the earliest overdue open invoice (or null when nothing is overdue).
+ */
+export type InvoiceFacts = { kind: 'charge' } | { kind: 'skipped' } | { kind: 'invoiced'; overdueSince: Date | null };
+
+/** §6.2: the one "overdue" predicate. An invoice with no due date counts as overdue against any cutoff. */
+export function isOverdue(inv: Pick<OverdueInvoiceFacts, 'dueDate'>, cutoff: Date): boolean {
+  return inv.dueDate === null || inv.dueDate.getTime() <= cutoff.getTime();
+}
+
+/**
+ * §6.2 invoice facts for one send_invoice subscription: the earliest of
+ * - every open invoice of `subId` with a due date on or before `now`;
+ * - every open invoice of `subId` with NO due date (a charge invoice left open after a switch to invoicing) that has
+ *   failed — `pastDueSince` set, or the tenant ended, or attempted and not settling — counted as overdue since
+ *   `pastDueSince ?? endedAt ?? now` (on an ended tenant that is old debt, on or before the end).
+ * Null when none. `invoices` are OPEN invoices only (drafts never count).
+ */
+export function computeInvoiceOverdueSince(
+  invoices: readonly OverdueInvoiceFacts[],
+  subId: string,
+  pastDueSince: Date | null,
+  endedAt: Date | null,
+  now: Date,
+): Date | null {
+  let earliest: Date | null = null;
+  const consider = (d: Date) => { if (earliest === null || d.getTime() < earliest.getTime()) earliest = d; };
+  for (const inv of invoices) {
+    if (inv.subscriptionId !== subId) continue;
+    if (inv.dueDate !== null) {
+      if (isOverdue(inv, now)) consider(inv.dueDate);
+      continue;
+    }
+    const failed = pastDueSince !== null || endedAt !== null || (inv.attemptCount > 0 && !inv.processing);
+    if (failed) consider(pastDueSince ?? endedAt ?? now);
+  }
+  return earliest;
 }
 
 /**
@@ -54,6 +113,9 @@ export interface TransitionResult {
     subscriptionStatus: string;
     currentPeriodEnd: Date | null;
     plan: string;
+    planInterval: string | null;
+    subscriptionCancelAtPeriodEnd: boolean;
+    collectionMethod: string | null;
     firstGoodAt: Date;
     pastDueSince: Date | null;
     suspendedAt: Date | null;
@@ -76,6 +138,7 @@ export function computeSubscriptionTransition(
   all: StripeSubSnapshot[],
   duplicateLive: boolean,
   now: Date,
+  invoiceFacts: InvoiceFacts = { kind: 'charge' },
 ): TransitionResult {
   const result: TransitionResult = { patch: {}, notices: [], alerts: [] };
   if (duplicateLive) {
@@ -93,6 +156,8 @@ export function computeSubscriptionTransition(
   p.stripeSubscriptionId = tracked.id;
   p.subscriptionStatus = tracked.status;
   p.currentPeriodEnd = tracked.currentPeriodEnd;
+  p.subscriptionCancelAtPeriodEnd = tracked.cancelAtPeriodEnd;
+  p.collectionMethod = tracked.collectionMethod;
 
   // A paid-before tenant with nothing LIVE whose end was never recorded: apply the cancellation using the newest
   // canceled subscription (a lost `subscription.deleted` followed by a new incomplete checkout can't hide it).
@@ -104,8 +169,45 @@ export function computeSubscriptionTransition(
     return result;
   }
 
+  // feature-plan-per-user-billing.md §6.2: an invoiced (send_invoice) subscription follows its invoices' due dates,
+  // never Stripe's status. This branch runs INSTEAD of the generic GOOD and DUNNING branches and returns.
+  const sendInvoice = tracked.collectionMethod === 'send_invoice' && invoiceFacts.kind !== 'charge';
+  if (sendInvoice && (isGood(tracked.status) || isDunning(tracked.status))) {
+    if (invoiceFacts.kind === 'skipped') { // deleteTenant: write no dunning/suspension field
+      if (isGood(tracked.status) && tracked.plan) { p.plan = tracked.plan; p.planInterval = tracked.interval; }
+      return result;
+    }
+    const P2 = invoiceFacts.kind === 'invoiced' ? invoiceFacts.overdueSince : null;
+    if (f.subscriptionEndedAt !== null) {
+      // Ended. Old debt (overdue on or before the end): status only, never revive (D9 sticks).
+      if (P2 !== null && P2.getTime() <= f.subscriptionEndedAt.getTime()) return result;
+      // Nothing overdue, or a debt newer than the end (a new subscription): a new life.
+      p.subscriptionEndedAt = null;
+    }
+    p.firstGoodAt = f.firstGoodAt ?? now;
+    if (isGood(tracked.status) && tracked.plan) { p.plan = tracked.plan; p.planInterval = tracked.interval; }
+    p.deletionScheduledFor = null; // as the GOOD branch: no deletion while subscribed
+    const P1 = f.subscriptionEndedAt !== null ? null : f.pastDueSince;
+    const suspendedNonpayment = notPolicy && f.status === 'suspended';
+    const unsuspend = () => {
+      if (suspendedNonpayment) { p.status = 'active'; p.suspendedAt = null; p.suspensionReason = null; }
+    };
+    if (P2 === null) { // nothing overdue
+      p.pastDueSince = null;
+      unsuspend();
+    } else if (suspendedNonpayment && P1 !== null && P2.getTime() < P1.getTime()) {
+      // keep P1 while suspended (an earlier anchor can't reach a suspended workspace in practice)
+    } else {
+      p.pastDueSince = P2;
+      // Every reconcile, like the DUNNING branch: enqueueNotice dedups and revives a superseded unsent row.
+      result.notices.push({ kind: 'payment-failed', anchor: P2 });
+      if (P1 !== null && P2.getTime() > P1.getTime()) unsuspend(); // old debt paid: fresh grace for the newer one
+    }
+    return result;
+  }
+
   if (isGood(tracked.status)) {
-    if (tracked.plan) p.plan = tracked.plan;
+    if (tracked.plan) { p.plan = tracked.plan; p.planInterval = tracked.interval; }
     p.firstGoodAt = f.firstGoodAt ?? now;
     p.pastDueSince = null;
     p.subscriptionEndedAt = null;

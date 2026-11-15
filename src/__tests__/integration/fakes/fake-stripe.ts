@@ -17,16 +17,40 @@ export interface FakeSub {
   current_period_end: number | null;
   priceId: string | null;
   latestInvoice?: string | null;
+  // feature-plan-per-user-billing.md §10.1: one item (id, quantity, price interval), the period start, the cancel
+  // flag, the collection method, an attached schedule, and extra items (S31).
+  itemId: string;
+  quantity: number;
+  interval: 'month' | 'year';
+  current_period_start: number | null;
+  cancel_at_period_end: boolean;
+  collection_method: string;
+  schedule: string | null;
+  extraItems: Array<{ id: string; priceId: string; quantity: number }>;
 }
 
 export interface FakeInvoice {
   id: string;
   customer: string;
   subscription: string | null;
-  status: 'open' | 'paid' | 'void' | 'uncollectible';
+  status: 'draft' | 'open' | 'paid' | 'void' | 'uncollectible';
   piStatus?: string;          // payment_intent.status
   piNextAction?: string;      // payment_intent.next_action.type
   hosted_invoice_url?: string;
+  // feature-plan-per-user-billing.md §10.1
+  due_date?: number | null;
+  billing_reason?: string | null;
+  created?: number;
+  metadata?: Record<string, string>;
+  attempt_count?: number;
+  auto_advance?: boolean;
+}
+
+export interface FakeSchedule {
+  id: string;
+  end_behavior: string;
+  current_phase: { start_date: number; end_date: number } | null;
+  phases: Array<{ start_date: number; end_date: number; items: Array<{ price: string; quantity?: number }> }>;
 }
 
 const unix = (d: Date) => Math.floor(d.getTime() / 1000);
@@ -51,6 +75,20 @@ export const stripeState = {
   calls: [] as string[],
   seq: 0,
   createdCustomers: 0,
+  // feature-plan-per-user-billing.md §10.1 additions.
+  schedules: new Map<string, FakeSchedule>(),
+  /** Every subscriptions.update: id, params, options (idempotency key included). */
+  updates: [] as Array<{ id: string; params: Record<string, unknown>; options: Record<string, unknown> | undefined }>,
+  /** Every checkout.sessions.create params object. */
+  checkoutParams: [] as Array<Record<string, unknown>>,
+  /** Invoices sent with invoices.sendInvoice, in order. */
+  sentInvoices: [] as string[],
+  /** Operations that APPLY, then throw (a lost response). One-shot per entry. */
+  failAfterApply: new Set<string>(),
+  /** A promise an operation awaits before applying (the test resolves it). One-shot per entry. */
+  blockers: new Map<string, Promise<void>>(),
+  /** The next subscriptions.update moves the period forward one interval before responding (a renewal race). */
+  renewOnNextUpdate: false,
   reset() {
     this.customers.clear();
     this.subs.clear();
@@ -64,21 +102,40 @@ export const stripeState = {
     this.pageSize = 100;
     this.calls = [];
     this.createdCustomers = 0;
+    this.schedules.clear();
+    this.updates = [];
+    this.checkoutParams = [];
+    this.sentInvoices = [];
+    this.failAfterApply.clear();
+    this.blockers.clear();
+    this.renewOnNextUpdate = false;
   },
   addCustomer(id?: string): string {
     const cid = id ?? `cus_${++stripeState.seq}_${Math.random().toString(36).slice(2, 8)}`;
     stripeState.customers.set(cid, { deleted: false });
     return cid;
   },
-  addSub(customer: string, status: string, o: Partial<Omit<FakeSub, 'created' | 'ended_at' | 'current_period_end'>> & { created?: Date; endedAt?: Date | null; periodEnd?: Date | null } = {}) {
+  addSub(customer: string, status: string, o: Partial<Omit<FakeSub, 'created' | 'ended_at' | 'current_period_end' | 'current_period_start'>> & { created?: Date; endedAt?: Date | null; periodEnd?: Date | null; periodStart?: Date | null } = {}) {
     const id = o.id ?? `sub_${++this.seq}_${Math.random().toString(36).slice(2, 8)}`;
+    const periodEnd = o.periodEnd === null ? null : unix(o.periodEnd ?? new Date(Date.now() + 15 * 86400_000));
+    const interval = o.interval ?? 'month';
     this.subs.set(id, {
       id, customer, status,
       created: unix(o.created ?? new Date(Date.now() - 30 * 86400_000)),
       ended_at: o.endedAt ? unix(o.endedAt) : null,
-      current_period_end: o.periodEnd === null ? null : unix(o.periodEnd ?? new Date(Date.now() + 15 * 86400_000)),
+      current_period_end: periodEnd,
       priceId: o.priceId ?? null,
       latestInvoice: o.latestInvoice ?? null,
+      itemId: o.itemId ?? `si_${id}`,
+      quantity: o.quantity ?? 1,
+      interval,
+      current_period_start: o.periodStart === null ? null
+        : o.periodStart ? unix(o.periodStart)
+        : periodEnd !== null ? periodEnd - (interval === 'year' ? 365 : 30) * 86400 : null,
+      cancel_at_period_end: o.cancel_at_period_end ?? false,
+      collection_method: o.collection_method ?? 'charge_automatically',
+      schedule: o.schedule ?? null,
+      extraItems: o.extraItems ?? [],
     });
     return id;
   },
@@ -97,10 +154,22 @@ export const stripeState = {
 async function op(name: string): Promise<void> {
   stripeState.calls.push(name);
   stripeState.hooks.get(name)?.();
+  const blocker = stripeState.blockers.get(name);
+  if (blocker) {
+    stripeState.blockers.delete(name);
+    await blocker;
+  }
   const delay = stripeState.delays.get(name);
   if (delay) await new Promise((r) => setTimeout(r, delay));
   const failure = stripeState.failures.get(name);
   if (failure) throw failure;
+}
+
+/** After an operation applied: throw if it is marked fail-after-apply (one shot). The SDK's API error shape. */
+function afterApply(name: string): void {
+  if (stripeState.failAfterApply.delete(name)) {
+    throw Object.assign(new Error(`fake: ${name} applied, then the response was lost`), { type: 'StripeAPIError', code: undefined });
+  }
 }
 
 async function postDelay(name: string): Promise<void> {
@@ -114,8 +183,12 @@ async function postDelay(name: string): Promise<void> {
 function toStripeSub(s: FakeSub) {
   return {
     id: s.id, object: 'subscription', customer: s.customer, status: s.status, created: s.created,
-    ended_at: s.ended_at, current_period_end: s.current_period_end,
-    items: { data: [{ price: { id: s.priceId } }] },
+    ended_at: s.ended_at, current_period_end: s.current_period_end, current_period_start: s.current_period_start,
+    cancel_at_period_end: s.cancel_at_period_end, collection_method: s.collection_method, schedule: s.schedule,
+    items: { data: [
+      { id: s.itemId, quantity: s.quantity, price: { id: s.priceId, recurring: { interval: s.interval } } },
+      ...s.extraItems.map((x) => ({ id: x.id, quantity: x.quantity, price: { id: x.priceId, recurring: { interval: s.interval } } })),
+    ] },
   };
 }
 
@@ -124,6 +197,12 @@ function toStripeInvoice(i: FakeInvoice) {
     id: i.id, object: 'invoice', customer: i.customer, subscription: i.subscription, status: i.status,
     hosted_invoice_url: i.hosted_invoice_url ?? null,
     payment_intent: i.piStatus ? { id: `pi_${i.id}`, status: i.piStatus, next_action: i.piNextAction ? { type: i.piNextAction } : null } : null,
+    due_date: i.due_date ?? null,
+    billing_reason: i.billing_reason ?? null,
+    created: i.created ?? 0,
+    metadata: i.metadata ?? {},
+    attempt_count: i.attempt_count ?? 0,
+    auto_advance: i.auto_advance ?? false,
   };
 }
 
@@ -156,6 +235,28 @@ export const fakeStripe = {
       }
       return out;
     },
+    /** feature-plan-per-user-billing.md §10.1: the quantity update (with failAfterApply, blockers, renewOnNextUpdate). */
+    async update(id: string, params: { items?: Array<{ id?: string; quantity?: number }>; [k: string]: unknown }, options?: Record<string, unknown>) {
+      await op('subscriptions.update');
+      const s = stripeState.subs.get(id);
+      if (!s) throw resourceMissing(`subscription: '${id}'`);
+      if (s.status === 'canceled' || s.status === 'incomplete') {
+        throw Object.assign(new Error(`fake: a ${s.status} subscription can't be updated`), { type: 'StripeInvalidRequestError', code: 'resource_invalid' });
+      }
+      stripeState.updates.push({ id, params: params as Record<string, unknown>, options });
+      if (stripeState.renewOnNextUpdate) {
+        stripeState.renewOnNextUpdate = false;
+        const len = (s.interval === 'year' ? 365 : 30) * 86400;
+        s.current_period_start = s.current_period_end;
+        s.current_period_end = (s.current_period_end ?? unix(new Date())) + len;
+      }
+      for (const it of params.items ?? []) {
+        if (it.id === s.itemId) { if (it.quantity !== undefined) s.quantity = it.quantity; }
+        else s.extraItems.push({ id: `si_new_${++stripeState.seq}`, priceId: 'price_unknown', quantity: it.quantity ?? 1 });
+      }
+      afterApply('subscriptions.update');
+      return toStripeSub(s);
+    },
     async cancel(id: string) {
       await op('subscriptions.cancel');
       const s = stripeState.subs.get(id);
@@ -167,13 +268,15 @@ export const fakeStripe = {
     },
   },
   invoices: {
-    async list(params: { customer: string; status?: string; limit?: number; starting_after?: string; expand?: string[] }) {
+    async list(params: { customer?: string; subscription?: string; status?: string; limit?: number; starting_after?: string; expand?: string[] }) {
       await op('invoices.list');
-      customerListGuard(params.customer);
-      // Like Stripe: newest first (ids sort descending here), so the OLDEST open invoice is on the last page.
+      if (params.customer !== undefined) customerListGuard(params.customer);
+      // Like Stripe: newest first (by created, then ids descending), so the OLDEST open invoice is on the last page.
       const all = [...stripeState.invoices.values()]
-        .filter((i) => i.customer === params.customer && (!params.status || i.status === params.status))
-        .sort((a, b) => b.id.localeCompare(a.id));
+        .filter((i) => (params.customer === undefined || i.customer === params.customer)
+          && (params.subscription === undefined || i.subscription === params.subscription)
+          && (!params.status || i.status === params.status))
+        .sort((a, b) => ((b.created ?? 0) - (a.created ?? 0)) || b.id.localeCompare(a.id));
       const start = params.starting_after ? all.findIndex((i) => i.id === params.starting_after) + 1 : 0;
       const size = Math.min(params.limit ?? 10, stripeState.pageSize);
       const page = all.slice(start, start + size);
@@ -196,6 +299,31 @@ export const fakeStripe = {
       const i = stripeState.invoices.get(id);
       if (!i) throw resourceMissing(`invoice: '${id}'`);
       if (!stripeState.stuckOpen.has(id)) i.status = 'void';
+      return toStripeInvoice(i);
+    },
+    async finalizeInvoice(id: string, params?: { auto_advance?: boolean }) {
+      await op('invoices.finalizeInvoice');
+      const i = stripeState.invoices.get(id);
+      if (!i) throw resourceMissing(`invoice: '${id}'`);
+      if (i.status === 'draft') i.status = 'open';
+      if (params?.auto_advance !== undefined) i.auto_advance = params.auto_advance;
+      afterApply('invoices.finalizeInvoice');
+      return toStripeInvoice(i);
+    },
+    async sendInvoice(id: string) {
+      await op('invoices.sendInvoice');
+      const i = stripeState.invoices.get(id);
+      if (!i) throw resourceMissing(`invoice: '${id}'`);
+      stripeState.sentInvoices.push(id);
+      afterApply('invoices.sendInvoice');
+      return toStripeInvoice(i);
+    },
+    async update(id: string, params: { metadata?: Record<string, string> }) {
+      await op('invoices.update');
+      const i = stripeState.invoices.get(id);
+      if (!i) throw resourceMissing(`invoice: '${id}'`);
+      if (params.metadata) i.metadata = { ...(i.metadata ?? {}), ...params.metadata };
+      afterApply('invoices.update');
       return toStripeInvoice(i);
     },
     async markUncollectible(id: string) {
@@ -227,10 +355,19 @@ export const fakeStripe = {
   },
   checkout: {
     sessions: {
-      async create() {
+      async create(params: Record<string, unknown>) {
         await op('checkout.sessions.create');
+        stripeState.checkoutParams.push(params);
         return { id: 'cs_test', url: 'https://checkout.stripe.test/session' };
       },
+    },
+  },
+  subscriptionSchedules: {
+    async retrieve(id: string) {
+      await op('subscriptionSchedules.retrieve');
+      const sch = stripeState.schedules.get(id);
+      if (!sch) throw resourceMissing(`subscription_schedule: '${id}'`);
+      return { object: 'subscription_schedule', ...sch };
     },
   },
   billingPortal: {

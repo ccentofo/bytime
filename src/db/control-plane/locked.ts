@@ -75,3 +75,31 @@ export async function withTenantLock<T>(tenantId: string, fn: (tx: ControlTx) =>
 export async function withLockedPool<T>(fn: (db: ControlDb) => Promise<T>): Promise<T> {
   return fn(getLockedDb());
 }
+
+/** Thrown when the seat-sync lock can't be taken within 5 s (feature-plan-per-user-billing.md §6.4: outcome `busy`). */
+export class SeatLockTimeoutError extends Error {
+  constructor(tenantId: string) {
+    super(`Timed out waiting for the seat-sync lock of tenant ${tenantId}`);
+    this.name = 'SeatLockTimeoutError';
+  }
+}
+
+/**
+ * The seat-sync lock (feature-plan-per-user-billing.md §6.4): one control-plane transaction on the dedicated pool
+ * holding `pg_advisory_xact_lock(hashtext('seats:'||id))`. NOT the `tenant:` lifecycle lock, and it never bumps
+ * lifecycle_version. Like withTenantLock, every statement inside MUST use the passed `tx`. No version-conflict
+ * retry: a seat sync re-reads Stripe on its next run.
+ */
+export async function withSeatLock<T>(tenantId: string, fn: (tx: ControlTx) => Promise<T>): Promise<T> {
+  try {
+    return await getLockedDb().transaction(async (tx) => {
+      await tx.execute(sql.raw(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`));
+      await tx.execute(sql.raw(`SET LOCAL statement_timeout = '${STATEMENT_TIMEOUT}'`));
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'seats:' + tenantId}))`);
+      return fn(tx);
+    });
+  } catch (err) {
+    if (isLockTimeout(err)) throw new SeatLockTimeoutError(tenantId);
+    throw err;
+  }
+}

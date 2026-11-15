@@ -16,6 +16,11 @@ vi.mock('@/lib/session', () => {
   const admin = async () => ({ id: 'admin-1', email: 'pat@acme.com', fullName: 'Pat', role: 'admin' });
   return { AuthorizationError, requireSession: admin, requireAdmin: admin, requireAdminFresh: admin, requireApprover: admin, requireApproverFresh: admin };
 });
+// feature-plan-per-user-billing.md §10.1: the seat-taking actions read the plan fresh and the tenant id before their
+// transaction, and mark the seat sync due after it (top-level mocks: vitest hoists vi.mock to the file top).
+vi.mock('@/lib/tenant/context', () => ({ getTenantOrThrow: async () => ({ id: 'test-tenant-id', plan: 'enterprise' }) }));
+vi.mock('@/server/internal/plan-source', () => ({ readPlanFresh: async () => 'enterprise' }));
+vi.mock('@/lib/billing/seat-sync', () => ({ markSeatSyncDue: vi.fn(async () => {}) }));
 vi.mock('@/db', () => {
   const db = { transaction: async () => { h.transactions++; throw new Error('transaction reached'); } };
   return { getDb: async () => db, getDbForWrite: async () => db, getDbForAuth: async () => db, getDbForUrl: () => db };

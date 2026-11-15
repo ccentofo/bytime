@@ -513,3 +513,129 @@ describe.skipIf(!cpReady)('tenant lifecycle cron (§4.4)', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// feature-plan-per-user-billing.md §6.2, §6.5 — S26, S29, S33 (cancelInOwnSection half)
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!cpReady)('lifecycle runner: per-user billing (§6.2, §6.5)', () => {
+  const NOW = new Date();
+  beforeEach(async () => {
+    stripeState.reset();
+    resendState.reset();
+    setNoticeTimingForTests({ sendTimeoutMs: 200, backoffBaseMs: 5, throttleMs: 0 });
+    await cleanupTestData();
+    await cleanupLifecycleTenants();
+    await createTestUser({ role: 'admin', isActive: true });
+  });
+  afterEach(async () => {
+    await cleanupLifecycleTenants();
+    await cleanupTestData();
+  });
+  const seatDue = async (tenantId: string) => {
+    const { tenantSeatBilling } = await import('@/db/control-plane/schema');
+    const [row] = await controlDb.select().from(tenantSeatBilling).where(eq(tenantSeatBilling.tenantId, tenantId));
+    return row?.syncDueAt ?? null;
+  };
+  const invoiceLists = () => stripeState.calls.filter((c) => c === 'invoices.list').length;
+
+  it('S26: the runner\'s reconcile reports becameGood (past_due mirror, Stripe active) → the tenant is marked due', async () => {
+    const customer = stripeState.addCustomer();
+    const sub = stripeState.addSub(customer, 'active');
+    const t = await makeTenant({ stripeCustomerId: customer, stripeSubscriptionId: sub, subscriptionStatus: 'past_due', pastDueSince: daysFrom(NOW, -3), firstGoodAt: daysFrom(NOW, -60), currentPeriodEnd: daysFrom(NOW, 10) });
+    await runTenantLifecycle(t.id, NOW);
+    expect((await getTenantRow(t.id)).subscriptionStatus).toBe('active');
+    expect(await seatDue(t.id)).not.toBeNull();
+
+    const quiet = await makeTenant({ stripeCustomerId: stripeState.addCustomer(), subscriptionStatus: null });
+    await runTenantLifecycle(quiet.id, NOW);
+    expect(await seatDue(quiet.id)).toBeNull();
+  });
+
+  it('S29: a charge-automatically reconcile never calls the loader; a send_invoice one calls it once and the runner reuses it (one invoice list per section)', async () => {
+    const { withTenantLock } = await import('@/db/control-plane/locked');
+    const { reconcileInLock } = await import('@/lib/billing/reconcile');
+    const { readTenant } = await import('@/lib/tenant/lifecycle-store');
+    const customer = stripeState.addCustomer();
+    const sub = stripeState.addSub(customer, 'past_due');
+    const t = await makeTenant({ stripeCustomerId: customer, stripeSubscriptionId: sub, subscriptionStatus: 'past_due', firstGoodAt: daysFrom(NOW, -60), pastDueSince: daysFrom(NOW, -2) });
+    const loader = vi.fn(async () => []);
+    await withTenantLock(t.id, async (tx) => { await reconcileInLock(tx, (await readTenant(tx, t.id))!, NOW, { loadOpenInvoices: loader }); });
+    expect(loader).not.toHaveBeenCalled();
+    stripeState.calls = [];
+    await runTenantLifecycle(t.id, NOW);
+    expect(invoiceLists()).toBe(1);
+
+    const c2 = stripeState.addCustomer();
+    const s2 = stripeState.addSub(c2, 'active', { collection_method: 'send_invoice' });
+    stripeState.addInvoice(c2, s2, { due_date: Math.floor(NOW.getTime() / 1000) + 86400 * 5 });
+    const t2 = await makeTenant({ stripeCustomerId: c2, stripeSubscriptionId: s2, subscriptionStatus: 'active', collectionMethod: 'send_invoice', firstGoodAt: daysFrom(NOW, -60), currentPeriodEnd: daysFrom(NOW, 10) });
+    const loader2 = vi.fn(async () => []);
+    await withTenantLock(t2.id, async (tx) => { await reconcileInLock(tx, (await readTenant(tx, t2.id))!, NOW, { loadOpenInvoices: loader2 }); });
+    expect(loader2).toHaveBeenCalledTimes(1);
+    expect(loader2).toHaveBeenCalledWith(false);
+    stripeState.calls = [];
+    const r = await runTenantLifecycle(t2.id, NOW);
+    expect(r.reconciled).toBe(true);
+    expect(invoiceLists()).toBe(1); // the reconcile's lazy read, reused by the runner
+  });
+
+  it('S33 (cancelInOwnSection half): a terminated tenant whose subscription is paid between the evaluation and its cancel section → reconciled, revived, and marked due', async () => {
+    const customer = stripeState.addCustomer();
+    const sub = stripeState.addSub(customer, 'past_due');
+    const t = await makeTenant({
+      stripeCustomerId: customer, stripeSubscriptionId: sub, subscriptionStatus: 'past_due', firstGoodAt: daysFrom(NOW, -90),
+      subscriptionEndedAt: daysFrom(NOW, -2), deletionScheduledFor: daysFrom(NOW, 88),
+    });
+    let first = true;
+    stripeState.hooks.set('subscriptions.retrieve', () => { if (first) { first = false; stripeState.setSub(sub, { status: 'active' }); } });
+    await runTenantLifecycle(t.id, NOW);
+    expect(stripeState.calls).not.toContain('subscriptions.cancel');
+    const row = await getTenantRow(t.id);
+    expect(row.subscriptionEndedAt).toBeNull();
+    expect(await seatDue(t.id)).not.toBeNull();
+  });
+
+  it('M17: at termination, an invoiced past_due subscription with nothing overdue at the end is NOT queued for cancelling (Stripe\'s past_due isn\'t a debt)', async () => {
+    const { fakeStripe } = await import('./fakes/fake-stripe');
+    const customer = stripeState.addCustomer();
+    const charge = stripeState.addSub(customer, 'past_due', { created: daysFrom(NOW, -200) });
+    const invoiced = stripeState.addSub(customer, 'past_due', { collection_method: 'send_invoice', created: daysFrom(NOW, -10) });
+    stripeState.addInvoice(customer, invoiced, { due_date: Math.floor(NOW.getTime() / 1000) + 5 * 86400, created: Math.floor(NOW.getTime() / 1000) - 86400 });
+    const Sa = daysFrom(NOW, -31);
+    const t = await makeTenant({
+      stripeCustomerId: customer, stripeSubscriptionId: charge, subscriptionStatus: 'past_due', firstGoodAt: daysFrom(NOW, -200),
+      pastDueSince: daysFrom(NOW, -46), status: 'suspended', suspendedAt: Sa, suspensionReason: 'nonpayment',
+    });
+    await insertNotice(t.id, 'suspended', Sa, { sentAt: Sa, providerMessageId: 'msg_x' });
+    const retrieved = vi.spyOn(fakeStripe.subscriptions, 'retrieve');
+    const r = await runTenantLifecycle(t.id, NOW);
+    expect(r.terminated).toBe(true);
+    expect(stripeState.subs.get(charge)!.status).toBe('canceled');
+    expect(stripeState.subs.get(invoiced)!.status).toBe('past_due');
+    expect(retrieved.mock.calls.map((c) => c[0])).not.toContain(invoiced); // never entered a cancel section
+    retrieved.mockRestore();
+  });
+
+  it('M18: an invoiced subscription paid between the evaluation and its cancel section → reconciled (revived, marked due), not cancelled', async () => {
+    const customer = stripeState.addCustomer();
+    const sub = stripeState.addSub(customer, 'active', { collection_method: 'send_invoice', priceId: null });
+    const due = daysFrom(NOW, -46);
+    const inv = stripeState.addInvoice(customer, sub, { due_date: Math.floor(due.getTime() / 1000), created: Math.floor(due.getTime() / 1000) - 30 * 86400 });
+    const Sa = daysFrom(NOW, -31);
+    const t = await makeTenant({
+      stripeCustomerId: customer, stripeSubscriptionId: sub, subscriptionStatus: 'active', collectionMethod: 'send_invoice',
+      firstGoodAt: daysFrom(NOW, -200), pastDueSince: new Date(Math.floor(due.getTime() / 1000) * 1000),
+      status: 'suspended', suspendedAt: Sa, suspensionReason: 'nonpayment',
+    });
+    await insertNotice(t.id, 'suspended', Sa, { sentAt: Sa, providerMessageId: 'msg_x' });
+    let first = true; // the customer pays just before the cancel section re-reads Stripe
+    stripeState.hooks.set('subscriptions.retrieve', () => { if (first) { first = false; stripeState.invoices.get(inv)!.status = 'paid'; } });
+    const r = await runTenantLifecycle(t.id, NOW);
+    expect(r.terminated).toBe(true); // the evaluation terminated it (the invoice was overdue then)
+    expect(stripeState.calls).not.toContain('subscriptions.cancel');
+    expect(stripeState.subs.get(sub)!.status).toBe('active');
+    expect((await getTenantRow(t.id)).subscriptionEndedAt).toBeNull();
+    expect(await seatDue(t.id)).toBeInstanceOf(Date);
+  });
+});

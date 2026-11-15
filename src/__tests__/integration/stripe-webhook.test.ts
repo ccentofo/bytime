@@ -410,3 +410,208 @@ describe.skipIf(!cpReady)('Stripe webhook (§4.3)', () => {
     expect((await getTenantRow(tenant.id)).subscriptionEndedAt).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// feature-plan-per-user-billing.md §6.5, §6.9 — S11, S16, S23 (webhook half), S33 (webhook half), S38
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!cpReady)('Stripe webhook: per-user billing (§6.9)', () => {
+  let customer: string;
+  let tenant: TenantRow;
+
+  beforeEach(async () => {
+    stripeState.reset();
+    resendState.reset();
+    afterTasks.length = 0;
+    setNoticeTimingForTests({ sendTimeoutMs: 200, backoffBaseMs: 5, throttleMs: 0 });
+    await cleanupTestData();
+    await cleanupLifecycleTenants();
+    await createTestUser({ role: 'admin', isActive: true });
+    customer = stripeState.addCustomer();
+    tenant = await makeTenant({ stripeCustomerId: customer });
+  });
+  afterEach(async () => {
+    await cleanupLifecycleTenants();
+    await cleanupTestData();
+    const { controlDb } = await import('@/db/control-plane');
+    const { opsAlerts } = await import('@/db/control-plane/schema');
+    const { and, eq } = await import('drizzle-orm');
+    await controlDb.delete(opsAlerts).where(and(eq(opsAlerts.scope, 'global'), eq(opsAlerts.kind, 'stripe-event-unknown-customer')));
+  });
+
+  const seatDue = async (tenantId: string) => {
+    const { controlDb } = await import('@/db/control-plane');
+    const { tenantSeatBilling } = await import('@/db/control-plane/schema');
+    const { eq } = await import('drizzle-orm');
+    const [row] = await controlDb.select().from(tenantSeatBilling).where(eq(tenantSeatBilling.tenantId, tenantId));
+    return row?.syncDueAt ?? null;
+  };
+  const failedInvoice = (sub: string, created = new Date()) =>
+    event('invoice.payment_failed', { id: `in_${Math.random().toString(36).slice(2)}`, object: 'invoice', customer, subscription: sub, created: sec(created) });
+  const session = (type: string, sub: string | null, created = new Date()) =>
+    event(type, { id: `cs_${Math.random().toString(36).slice(2)}`, object: 'checkout.session', customer, subscription: sub, metadata: { slug: tenant.slug }, created: sec(created), customer_details: null });
+  const notices = async (kind: string) => (await noticesOf(tenant.id)).filter((n) => n.kind === kind);
+  const alerts = async (kind: string) => (await openAlertsOf(tenant.id)).filter((a) => a.kind === kind);
+
+  it('S16: invoice.payment_failed on a GOOD charge-automatically subscription → bank-payment-failed (anchor invoice.created) and an alert', async () => {
+    const s = stripeState.addSub(customer, 'active');
+    tenant = await setTenant(tenant.id, { stripeSubscriptionId: s, subscriptionStatus: 'active', firstGoodAt: daysFrom(new Date(), -40) });
+    const created = new Date(Date.now() - 3_600_000);
+    const e = failedInvoice(s, created);
+    expect((await post(e)).status).toBe(200);
+    const n = await notices('bank-payment-failed');
+    expect(n).toHaveLength(1);
+    expect(n[0].scheduledFor.getTime()).toBe(sec(created) * 1000);
+    expect((await alerts('payment-failed-subscription-active')).map((a) => a.dedupKey)).toEqual([(e.data.object as { id: string }).id]);
+    expect(await notices('payment-failed')).toEqual([]);
+  });
+
+  it('S16: on past_due → only the existing payment-failed', async () => {
+    const s = stripeState.addSub(customer, 'past_due');
+    tenant = await setTenant(tenant.id, { stripeSubscriptionId: s, subscriptionStatus: 'active', firstGoodAt: daysFrom(new Date(), -40) });
+    await post(failedInvoice(s));
+    expect(await notices('payment-failed')).toHaveLength(1);
+    expect(await notices('bank-payment-failed')).toEqual([]);
+    expect(await alerts('payment-failed-subscription-active')).toEqual([]);
+  });
+
+  it('S16 / S38: checkout.session.async_payment_failed with the subscription incomplete → exactly one bank-payment-failed (anchor session.created) and an alert; the invoice event adds none', async () => {
+    const s = stripeState.addSub(customer, 'incomplete');
+    const created = new Date(Date.now() - 7_200_000);
+    expect((await post(session('checkout.session.async_payment_failed', s, created))).status).toBe(200);
+    const n = await notices('bank-payment-failed');
+    expect(n).toHaveLength(1);
+    expect(n[0].scheduledFor.getTime()).toBe(sec(created) * 1000);
+    expect(await alerts('checkout-payment-failed')).toHaveLength(1);
+    await post(failedInvoice(s)); // its invoice's failure: the subscription isn't LIVE → nothing more
+    expect(await notices('bank-payment-failed')).toHaveLength(1);
+  });
+
+  it('S16: async_payment_failed with the subscription GOOD → the alert only (the invoice event sends the email)', async () => {
+    const s = stripeState.addSub(customer, 'active');
+    await post(session('checkout.session.async_payment_failed', s));
+    expect(await alerts('checkout-payment-failed')).toHaveLength(1);
+    expect(await notices('bank-payment-failed')).toEqual([]);
+  });
+
+  it('S38 (Q11): invoice.payment_failed on a GOOD send_invoice subscription → bank-payment-failed; the same invoice again → no second notice; with pastDueSince set → none', async () => {
+    const s = stripeState.addSub(customer, 'active', { collection_method: 'send_invoice' });
+    stripeState.addInvoice(customer, s, { due_date: sec(daysFrom(new Date(), 20)), created: sec(new Date()) });
+    tenant = await setTenant(tenant.id, { stripeSubscriptionId: s, subscriptionStatus: 'active', collectionMethod: 'send_invoice', firstGoodAt: daysFrom(new Date(), -40) });
+    const created = new Date(Date.now() - 600_000);
+    const e = failedInvoice(s, created);
+    await post(e);
+    await post({ ...e, id: `evt_${Math.random().toString(36).slice(2)}` }); // a second event for the same invoice
+    const n = await notices('bank-payment-failed');
+    expect(n).toHaveLength(1);
+    expect(n[0].scheduledFor.getTime()).toBe(sec(created) * 1000);
+
+    // pastDueSince set (an overdue invoice): payment-failed covers it, no bank-payment-failed.
+    const other = stripeState.addCustomer();
+    const s2 = stripeState.addSub(other, 'past_due', { collection_method: 'send_invoice' });
+    stripeState.addInvoice(other, s2, { due_date: sec(daysFrom(new Date(), -2)), created: sec(daysFrom(new Date(), -32)) });
+    const t2 = await makeTenant({ stripeCustomerId: other, stripeSubscriptionId: s2, subscriptionStatus: 'past_due', collectionMethod: 'send_invoice', firstGoodAt: daysFrom(new Date(), -40) });
+    await post(event('invoice.payment_failed', { id: 'in_t2', object: 'invoice', customer: other, subscription: s2, created: sec(new Date()) }));
+    const kindsT2 = (await noticesOf(t2.id)).map((x) => x.kind);
+    expect(kindsT2).toContain('payment-failed');
+    expect(kindsT2).not.toContain('bank-payment-failed');
+  });
+
+  it('S16: an event for a customer no workspace is linked to → stripe-event-unknown-customer (founder alert)', async () => {
+    const { controlDb } = await import('@/db/control-plane');
+    const { opsAlerts } = await import('@/db/control-plane/schema');
+    const { and, eq, isNull } = await import('drizzle-orm');
+    const res = await post(subEvent('customer.subscription.created', 'cus_unlinked_42', 'sub_x'));
+    expect(await res.json()).toMatchObject({ ignored: true });
+    const open = await controlDb.select().from(opsAlerts)
+      .where(and(eq(opsAlerts.scope, 'global'), eq(opsAlerts.kind, 'stripe-event-unknown-customer'), isNull(opsAlerts.resolvedAt)));
+    expect(open.map((a) => [a.dedupKey, (a.detail as { event: string }).event])).toEqual([['cus_unlinked_42', 'customer.subscription.created']]);
+  });
+
+  it('S16 / S33: checkout.session.completed, async_payment_succeeded and customer.subscription.created mark the seat sync due; customer.updated doesn\'t', async () => {
+    const s = stripeState.addSub(customer, 'active');
+    await post(session('checkout.session.completed', s));
+    expect(await seatDue(tenant.id)).not.toBeNull();
+
+    for (const make of [
+      () => session('checkout.session.async_payment_succeeded', s),
+      (t: TenantRow) => subEvent('customer.subscription.created', t.stripeCustomerId!, s),
+    ]) {
+      await cleanupLifecycleTenants();
+      customer = stripeState.addCustomer();
+      stripeState.setSub(s, { customer });
+      tenant = await makeTenant({ stripeCustomerId: customer });
+      expect((await post(make(tenant))).status).toBe(200);
+      expect(await seatDue(tenant.id)).not.toBeNull();
+    }
+
+    await cleanupLifecycleTenants();
+    customer = stripeState.addCustomer();
+    tenant = await makeTenant({ stripeCustomerId: customer });
+    await post(event('customer.updated', { id: customer, object: 'customer', email: 'pay@x.test' }));
+    expect(await seatDue(tenant.id)).toBeNull();
+  });
+
+  it('S11: Stripe past_due while the mirror says active → the seat sync is not-applicable, no update, drift raised; back to active via the webhook → marked due, drift resolved', async () => {
+    process.env.STRIPE_PRICE_STANDARD_MONTHLY = 'price_std_month';
+    const s = stripeState.addSub(customer, 'past_due', { priceId: 'price_std_month', quantity: 1 });
+    tenant = await setTenant(tenant.id, { stripeSubscriptionId: s, subscriptionStatus: 'active', firstGoodAt: daysFrom(new Date(), -40), plan: 'standard' });
+    const { syncSeatQuantity } = await import('@/lib/billing/seat-sync');
+    expect((await syncSeatQuantity(tenant.id, { runId: 'r', reason: 'daily' })).outcome).toBe('not-applicable');
+    expect(stripeState.updates).toEqual([]);
+    expect((await alerts('subscription-status-drift')).map((a) => a.dedupKey)).toEqual([s]);
+
+    stripeState.setSub(s, { status: 'active' });
+    await post(subEvent('customer.subscription.updated', customer, s));
+    expect(await alerts('subscription-status-drift')).toEqual([]);
+    expect(await seatDue(tenant.id)).toBeNull(); // GOOD → GOOD: no becameGood
+
+    // A real recovery: the mirror past_due, Stripe active → becameGood → marked due.
+    stripeState.setSub(s, { status: 'past_due' });
+    await post(subEvent('customer.subscription.updated', customer, s));
+    stripeState.setSub(s, { status: 'active' });
+    await post(subEvent('customer.subscription.updated', customer, s));
+    expect(await seatDue(tenant.id)).not.toBeNull();
+  });
+
+  it('M10: a revival (ended → not ended) with the mirror already GOOD reports becameGood and marks the seat sync due', async () => {
+    const s = stripeState.addSub(customer, 'active');
+    tenant = await setTenant(tenant.id, {
+      stripeSubscriptionId: s, subscriptionStatus: 'active', firstGoodAt: daysFrom(new Date(), -100),
+      subscriptionEndedAt: daysFrom(new Date(), -3), deletionScheduledFor: daysFrom(new Date(), 87),
+    });
+    await post(subEvent('customer.subscription.updated', customer, s));
+    expect((await getTenantRow(tenant.id)).subscriptionEndedAt).toBeNull();
+    expect(await seatDue(tenant.id)).toBeInstanceOf(Date);
+  });
+
+  it('M11: invoice.payment_failed for an ENDED tenant whose subscription is still LIVE → the founder alert only, no bank-payment-failed', async () => {
+    const s = stripeState.addSub(customer, 'past_due'); // DUNNING after the end: status only, pastDueSince stays null
+    tenant = await setTenant(tenant.id, {
+      stripeSubscriptionId: s, subscriptionStatus: 'past_due', firstGoodAt: daysFrom(new Date(), -100),
+      subscriptionEndedAt: daysFrom(new Date(), -3), deletionScheduledFor: daysFrom(new Date(), 87),
+    });
+    await post(failedInvoice(s));
+    const row = await getTenantRow(tenant.id);
+    expect(row.subscriptionEndedAt).not.toBeNull();
+    expect(row.pastDueSince).toBeNull();
+    expect(await notices('bank-payment-failed')).toEqual([]);
+    expect(await alerts('payment-failed-subscription-active')).toHaveLength(1);
+  });
+
+  it('M11b: the bank-payment-failed email is delivered with the Q6 subject', async () => {
+    const s = stripeState.addSub(customer, 'active');
+    tenant = await setTenant(tenant.id, { stripeSubscriptionId: s, subscriptionStatus: 'active', firstGoodAt: daysFrom(new Date(), -40) });
+    await post(failedInvoice(s));
+    for (const task of afterTasks.splice(0)) await task();
+    expect(resendState.delivered.map((c) => c.subject)).toEqual([`Payment not received for ${tenant.name}`]);
+  });
+
+  it('S23 (webhook half): a webhook for a deleting tenant writes no facts and marks nothing', async () => {
+    const s = stripeState.addSub(customer, 'active');
+    tenant = await setTenant(tenant.id, { status: 'deleting' });
+    await post(subEvent('customer.subscription.created', customer, s));
+    expect(await seatDue(tenant.id)).toBeNull();
+    expect((await getTenantRow(tenant.id)).stripeSubscriptionId).toBeNull();
+  });
+});

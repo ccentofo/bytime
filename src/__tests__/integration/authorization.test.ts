@@ -56,6 +56,11 @@ const tenantState = vi.hoisted(() => ({ requestSlug: 'test-tenant' }));
 vi.mock('@/lib/tenant/context', () => ({
   getTenantSlug: async () => tenantState.requestSlug,
 }));
+// feature-plan-per-user-billing.md §10.1: the seat-taking actions read the plan fresh from the control plane before
+// their transaction and mark the seat sync due after it. Top-level mocks (vitest hoists vi.mock to the file top), with
+// the plan this suite already uses, so its cap behaviour is unchanged and no fake tenant id reaches the control plane.
+vi.mock('@/server/internal/plan-source', () => ({ readPlanFresh: async () => 'enterprise' }));
+vi.mock('@/lib/billing/seat-sync', () => ({ markSeatSyncDue: vi.fn(async () => {}) }));
 
 // vitest 2.1.9 quirk (see dcaa-concurrency.test.ts): when two calls dynamically import() the same MOCKED module at the
 // same moment, the overlapping one receives the REAL module. getSessionUser lazily imports the tenant context, so in
@@ -242,7 +247,7 @@ describe('Authorization matrix (security-hardening blueprint §7b)', () => {
     await expectFailure(createUserWithPassword({ email: `new-${Date.now()}@bytime.dev`, fullName: 'New User', role: 'employee', password: 'TestPass123!', flsaExempt: false }), 'forbidden', /Admin role required/);
     await expectFailure(createApiKey({ name: 'test key' }), 'forbidden', /Admin role required/);
     await expectFailure(bulkImportEmployees([]), 'forbidden', /Admin role required/);
-    await expectFailure(startCheckout('starter'), 'forbidden', /Admin role required/);
+    await expectFailure(startCheckout('month'), 'forbidden', /Admin role required/);
     await expect(listChargeCodes()).rejects.toThrow(/Admin role required/);
   });
 

@@ -1,5 +1,5 @@
 import 'server-only';
-import { and, desc, eq, inArray, isNotNull, isNull, lt, ne } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, ne } from 'drizzle-orm';
 import { opsAlerts, tenantAuditEvents, tenantNotices, tenants } from '@/db/control-plane/schema';
 import { withLockedPool } from '@/db/control-plane/locked';
 import { resend, EMAIL_FROM } from '@/lib/email/client';
@@ -63,6 +63,11 @@ async function checkFounderExports(now: Date): Promise<void> {
   });
 }
 
+/** feature-plan-per-user-billing.md §6.6: one line per `seat-quantity-corrected` event (exported for tests). */
+export function correctionLines(rows: Array<{ slug: string; detail: string | null; createdAt: Date }>): string[] {
+  return rows.map((r) => `${esc(r.slug)} — ${esc(r.detail ?? '')}, ${esc(r.createdAt.toISOString())}`);
+}
+
 /** One line per overdue / never-run cron (exported for tests). */
 export function cronProblemLines(problems: CronProblem[]): string[] {
   return problems.map((p) => p.problem === 'never-ran'
@@ -87,7 +92,12 @@ export async function sendOpsDigest(results: TenantRunResult[], now: Date, incom
       .where(and(isNotNull(tenantNotices.forcedAt), isNull(tenantNotices.supersededAt), ne(tenants.status, 'deleted')));
     const exempt = await db.select({ slug: tenants.slug, name: tenants.name }).from(tenants)
       .where(and(eq(tenants.lifecycleExempt, true), ne(tenants.status, 'deleted')));
-    return { alerts, deleting, stalePending, forced, exempt };
+    // feature-plan-per-user-billing.md §6.6 (rule 2): seat quantities the sync corrected in the last 24 hours.
+    const corrections = await db.select({ slug: tenants.slug, detail: tenantAuditEvents.detail, createdAt: tenantAuditEvents.createdAt })
+      .from(tenantAuditEvents).innerJoin(tenants, eq(tenantAuditEvents.tenantId, tenants.id))
+      .where(and(eq(tenantAuditEvents.kind, 'seat-quantity-corrected'), gte(tenantAuditEvents.createdAt, new Date(now.getTime() - 24 * MS_PER_HOUR))))
+      .orderBy(desc(tenantAuditEvents.createdAt));
+    return { alerts, deleting, stalePending, forced, exempt, corrections };
   });
   const crons = cronProblems(await readCronRuns(), now);
   const waitlisted = await waitlistedSignups();
@@ -96,7 +106,8 @@ export async function sendOpsDigest(results: TenantRunResult[], now: Date, incom
   const ready = results.filter((r) => r.readyForDeletion);
   const blocked = results.filter((r) => r.blockedDeletion);
   const hasNews = data.alerts.length > 0 || ready.length > 0 || blocked.length > 0 || data.deleting.length > 0
-    || data.stalePending.length > 0 || incomplete || crons.length > 0 || waitlisted.length > 0 || signupDeletions.length > 0;
+    || data.stalePending.length > 0 || incomplete || crons.length > 0 || waitlisted.length > 0 || signupDeletions.length > 0
+    || data.corrections.length > 0;
 
   const to = process.env.OPS_ALERT_EMAIL;
   if (!to || !resend) {
@@ -123,6 +134,7 @@ export async function sendOpsDigest(results: TenantRunResult[], now: Date, incom
     `${esc(r.slug)} — deletion date ${esc(r.readyForDeletion!.deletionScheduledFor.toISOString())}${r.readyForDeletion!.overdue ? ' <strong>OVERDUE</strong>' : ''}`));
   section('Deletion blocked by payment activity', blocked.map((r) => `${esc(r.slug)}: ${esc(r.blockedDeletion)}`));
   section('Stuck in "deleting" (abandoned deletion run — resume tenant:delete)', data.deleting.map((d) => `${esc(d.slug)} since ${esc(d.updatedAt.toISOString())}`));
+  section('Seat quantities corrected (last 24 h)', correctionLines(data.corrections));
   section('Unresolved alerts', data.alerts.map(({ a, slug }) =>
     `${esc(slug ?? a.scope)} — <strong>${esc(a.kind)}</strong>${a.dedupKey ? ` (${esc(a.dedupKey)})` : ''} × ${a.occurrences}, last ${esc(a.lastSeenAt.toISOString())}${a.detail ? ` — ${esc(JSON.stringify(a.detail))}` : ''} [id ${esc(a.id)}]`));
   section('Notices pending more than 24 hours', data.stalePending.map((n) =>
