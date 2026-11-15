@@ -62,6 +62,13 @@ Not verified locally (by design): the real Upstash service. Staging step 12.14 c
 - **FR1–FR7** as listed in §4. The dev reported 7 of 7 reverts caught, and I re-verified FR1 with my own revert (T23's `İ` case fails).
 - **After the fix:** 2,629 unit tests pass; `tsc` is clean; the dev ran `signin-ip-limit`, `mfa-signin` and `account-security` against Postgres (20 tests passed); break-it 16 of 16.
 
+### CI fix (`2de8379`, test-only; 2026-11-15)
+- **What failed in CI:** a pre-existing, date-dependent test unrelated to this item: `charge-code-actions.test.ts`, "rejects a save for a future date". It saved `todayIndex + 1` in today's pay period. On a period's last day (2026-11-15 was one), that index is past the period, so the day-index check answered first. It would have failed on `main` that day too.
+- **Fix:** the test now saves tomorrow in tomorrow's own period. No product code changed.
+- **Verified:**
+  - the dev ran it on the real date, plus faked mid-period and end-of-month dates, with an original-code control;
+  - the lead ran it on 2026-11-15: 12/12 passed.
+
 ## 6. Checks run by Planning (2026-11-13; local memory mode; the preview browser plus `/tmp/url-check.sh`)
 Setup:
 - `npm run demo:local` applied migration 0019; `tenant_acme` has `login_attempts_no_raw_ip`;
