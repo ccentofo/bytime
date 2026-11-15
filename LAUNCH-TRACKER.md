@@ -5,7 +5,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 - Audit records: `*-AUDIT.md`.
 - Business decisions: `BUSINESS-DECISIONS.md` (kept by the business session).
 
-**Last updated:** 2026-11-13 (item 6 audit READY). Earlier on 2026-11-13: Excel cost report merged. Before that: 2026-11-11 (earlier entries dated 2026-11-12 were written on 2026-11-11; the dates are kept as recorded).
+**Last updated:** 2026-11-15 (Upstash merged; per-user billing next). Earlier on 2026-11-13: Excel cost report merged. Before that: 2026-11-11 (earlier entries dated 2026-11-12 were written on 2026-11-11; the dates are kept as recorded).
 
 ## How we work
 - **Scope is the product owner's.** Nothing is added, removed or changed in what the product does without the product owner's yes. The lead decides software design inside approved scope and brings every assumption or open question to the product owner.
@@ -39,12 +39,12 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 2 | UX-4c Part 2a: Setup checklist and Import (`feature-plan-ux-setup-import.md`) | **merged** (PR #24, `3babd0d`; audit `UX-4C2A-AUDIT.md` READY). Tag `stable-2026-11-11-ux-setup-import`. |
 | 3 | UX-4c Part 2b: Integrations, Landing, Terms/Privacy text (`feature-plan-ux-integrations-billing.md` v3.1) | **merged** (PR #25, `8ecd8c6`, 2026-11-11; audit `UX-4C2B-AUDIT.md` READY; CI green; product owner's browser checks passed). Tag `stable-2026-11-11-ux-integrations-landing`. |
 | 3b | **Database backups**: daily encrypted `pg_dump` of every tenant and the control plane to S3 us-east-1, 30-day lifecycle, write-only credentials, monitoring, restore drill (`BUSINESS-DECISIONS.md` §5) | **approved 2026-11-11** as its own blueprint; blueprint to write |
-| 3a | **Per-user billing** (new model, billing rules and Billing page, from `BUSINESS-DECISIONS.md` §1) | **approved 2026-11-11**; blueprint to write |
+| 3a | **Per-user billing** (new model, billing rules and Billing page, from `BUSINESS-DECISIONS.md` §1) | **approved 2026-11-11**; **next: blueprint to write** on branch `per-user-billing` (from `main` at `f958be9`) |
 | 4 | Launch hardening H1–H6 (`feature-plan-launch-hardening.md` FINAL v3.2) | **merged** (PR #26, `a80ad8b`, 2026-11-12; audit `LAUNCH-HARDENING-AUDIT.md` READY; CI green; product owner's browser checks passed, with the no-JavaScript check withdrawn). Tag `stable-2026-11-12-launch-hardening`. |
 | 4b | **Reminder email capacity**: the cron senders use Resend batch send | **merged** (PR #27 at `af2ac7d`, PR #28 with the checks-file fixes; `main` = `9427fba`, 2026-11-13). Audit `REMINDER-CAPACITY-AUDIT.md` READY; CI green; the product owner's integration run and checks passed. Tag `stable-2026-11-13-reminder-capacity`. |
 | 5 | Excel cost report: charge codes and Class | **merged** (PR #29, `1d44b35`, 2026-11-13; audit `EXCEL-COST-REPORT-AUDIT.md` READY, no HIGH or MEDIUM, 5 LOWs recorded; CI green; the product owner's checks passed). Tag `stable-2026-11-13-excel-cost-report`. |
 | 5b | **Large report responses**: stream the cost CSV, `/api/v1/costs`, `/periods` and `/timesheets/approved`; 25,000-row cap on the detailed cost Excel (`feature-plan-large-report-responses.md` FINAL v3.1) | **merged** (PR #30, `02059b0`, 2026-11-13; audit `LARGE-REPORT-RESPONSES-AUDIT.md` READY; CI green; checks run by the lead in the rehearsal). The product owner tags `stable-2026-11-13-large-report-responses`. **Still to prove at staging step 12.13:** the 4.5 MB exemption on Vercel and the cut-off behaviour. |
-| 6 | Distributed rate limiting (Upstash) | Built (`c3e3ad8`, fix round 1 `0315163`). **Audit `UPSTASH-RATE-LIMITING-AUDIT.md`: READY**, no HIGH or MEDIUM in the code. **Checks run by the lead**, with results in the audit §6. **Next: the product owner reviews the audit §6, pushes, opens the PR, waits for green CI, merges**; then the founder's Phase 8b (Upstash databases). |
+| 6 | Distributed rate limiting (Upstash): shared sign-up and sign-in limits (`feature-plan-upstash-rate-limiting.md` FINAL v3.3) | **merged** (PR #31, `f958be9`, 2026-11-15; audit `UPSTASH-RATE-LIMITING-AUDIT.md` READY; checks run by the lead; CI green after a test-only fix for a date-dependent test). The product owner tags `stable-2026-11-15-upstash-rate-limiting`. **Founder step still open:** PRODUCTION-DEPLOY Phase 8b (two Upstash databases); until then the limits stay per-instance. Staging step 12.14 proves the real path. |
     - F1: trim the URL like the token;
     - F2: the pre-gate check also returns `null` for an email over 255 characters or a NUL in the email or password, with no consume (a T23 case);
     - F3: the §12 diff is against `02059b0`;
@@ -130,6 +130,17 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 
 ## Lead handoff notes (for a fresh "CadenzPoint Planning" session)
 **In flight:**
+- **Checkpoint 2026-11-15 (end of the seventh Planning session).**
+  - **Done this session:** 5b merged (PR #30) and Upstash merged (PR #31, `main` = `f958be9`).
+  - **New working agreement (product owner, 2026-11-13):**
+    - the lead starts each fresh dev session itself (`start_session`, user_asked, fresh, `use_worktree: false`, title "CadenzPoint Development — <item>") and talks to it directly;
+    - the lead runs the checks file itself (preview config `app-dev` for real browser clicks; curl and scripts for content) and records the results with evidence in the audit;
+    - the product owner reviews the results, pushes, opens the PR and merges.
+  - **Next:** blueprint 3a, per-user billing, on branch `per-user-billing` (from `f958be9`, holding this checkpoint).
+    - Scope comes from `BUSINESS-DECISIONS.md` §1: plans, Stripe tiered prices, the quantity sync plus a daily reconcile, prorations, the 100-user cap message, ACH, promotion codes, send-invoice subscriptions with grace, the Billing page redesign, and the landing Pricing section.
+    - Same process: research, then two pre-mortem rounds plus confirmation passes until clean, then the product owner, then a fresh dev session, audit, checks run by the lead.
+  - **Then:** database backups (`BUSINESS-DECISIONS.md` §5).
+  - **Housekeeping:** the 5b and Upstash dev sessions can be archived.
 - **4b merged (2026-11-13):** PRs #27 and #28, `main` = `9427fba`. The product owner tags `stable-2026-11-13-reminder-capacity`. The 4b dev session can be archived. Lesson: checks files use short commands, blocks at the left margin, rehearsed by copying each block verbatim into its own fresh shell.
 - **Excel cost report hand-off:** branch `excel-cost-report` (from `9427fba`) has the blueprint and the checks draft committed. The product owner starts a fresh "CadenzPoint Development" session with the hand-off message (blueprint §13 plus `BLUEPRINT-STANDARD.md` §3: impact analysis first, then stop for the lead's review). The lead reviews the impact analysis, audits when the dev reports, and rehearses `EXCEL-COST-REPORT-BROWSER-CHECKS.md` against the finished branch (each block verbatim in its own shell) before the merge gate. **Before that rehearsal, rewrite the checks draft to the copy-paste standard** (its psql insert in D and the `curl … | python3 -c` in E are long one-liners with nested quotes: move them into a helper script written by a heredoc at the left margin).
 - **Excel cost report merged (2026-11-13):** PR #29, `main` = `1d44b35`. The product owner tags `stable-2026-11-13-excel-cost-report`. The Excel dev session can be archived. PRODUCTION-DEPLOY Phase 15 row updated. Checks lessons (in the lead's memory): a local production server needs `AUTH_TRUST_HOST=true`; never read `~/Downloads` from a checks step.

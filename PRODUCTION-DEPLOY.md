@@ -824,7 +824,7 @@ converted scopes.
 
 | Item | Why |
 |---|---|
-| **Distributed rate limiting** (e.g. Upstash Redis) | The current limiter is in memory and per serverless instance, so it barely protects login/signup on Vercel. |
+| ~~**Distributed rate limiting**~~ | **Done** (PR #31, 2026-11-15): sign-up and sign-in limits are shared through Upstash (Phase 8b creates the databases; staging step 12.14 checks them). Reports, API, export and cron stay per-instance by decision. |
 | **Long-term retention + backup policy** | DCAA expects ~3-year record retention; Neon's 7-day history (LB-D1) is for undoing mistakes, not retention. |
 | **Your own security posture** (NIST 800-171 / CMMC answer, SOC 2 roadmap) | Usually the deciding question from defense-contractor buyers. Also decide whether you'll store CUI; if so, commercial-region hosting may not be acceptable. |
 | **Terms of Service, Privacy Policy, DPA** reviewed by a lawyer | Required to sell. |
