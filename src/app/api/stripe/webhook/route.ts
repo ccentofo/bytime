@@ -9,8 +9,9 @@ import { reconcileInLock } from '@/lib/billing/reconcile';
 import { readCustomerSubscriptions } from '@/lib/billing/stripe-state';
 import { isLive } from '@/lib/tenant/lifecycle';
 import { raiseAlert, readTenant, recordAudit, updateTenantGuarded } from '@/lib/tenant/lifecycle-store';
-import { deliverNotice } from '@/lib/tenant/notices';
+import { deliverNotice, enqueueNotice } from '@/lib/tenant/notices';
 import { invalidateTenant } from '@/lib/tenant/registry';
+import { markSeatSyncDue } from '@/lib/billing/seat-sync';
 
 /**
  * Stripe webhook (feature-plan-terms-compliance-fixes.md §4.3). Never trusts event order or the event payload's
@@ -26,6 +27,16 @@ const SUBSCRIPTION_EVENTS = new Set([
   'invoice.payment_failed',
   'checkout.session.completed',
   'customer.deleted',
+]);
+
+/**
+ * Checkout events, resolved by the session's metadata slug (feature-plan-per-user-billing.md §6.9 adds the two ACH
+ * outcomes: a delayed payment method succeeds or fails after `checkout.session.completed`).
+ */
+const CHECKOUT_EVENTS = new Set([
+  'checkout.session.completed',
+  'checkout.session.async_payment_succeeded',
+  'checkout.session.async_payment_failed',
 ]);
 
 function idOf(ref: string | { id: string } | null | undefined): string | null {
@@ -45,7 +56,8 @@ function invoiceSubscriptionOf(inv: Stripe.Invoice): string | null {
   return idOf(parent?.subscription_details?.subscription ?? null);
 }
 
-type Outcome = { slug: string; noticeIds: string[] } | null;
+/** `markDue`: mark the seat sync due after the locked section (feature-plan-per-user-billing.md §6.5). */
+type Outcome = { slug: string; noticeIds: string[]; markDue: boolean } | null;
 
 // Stripe requires the RAW body for signature verification.
 // Do NOT call req.json() before verifying — it consumes and transforms the body.
@@ -69,13 +81,14 @@ export async function POST(req: NextRequest) {
   let invoiceSubscriptionId: string | null = null;
   const obj = event.data.object as unknown as Record<string, unknown>;
 
-  if (event.type === 'checkout.session.completed') {
+  if (CHECKOUT_EVENTS.has(event.type)) {
     const session = event.data.object as Stripe.Checkout.Session;
     customerId = idOf(session.customer);
     const slug = session.metadata?.slug;
     if (!slug || !customerId) return ignored();
     const [t] = await controlDb.select({ id: tenants.id }).from(tenants).where(eq(tenants.slug, slug)).limit(1);
     tenantId = t?.id ?? null;
+    if (!tenantId) return ignored(); // unknown slug: no customer link yet
   } else if (SUBSCRIPTION_EVENTS.has(event.type) || event.type === 'customer.updated') {
     if (event.type === 'invoice.paid' || event.type === 'invoice.payment_failed') {
       const inv = event.data.object as Stripe.Invoice;
@@ -88,6 +101,12 @@ export async function POST(req: NextRequest) {
     if (!customerId) return ignored();
     const [t] = await controlDb.select({ id: tenants.id }).from(tenants).where(eq(tenants.stripeCustomerId, customerId)).limit(1);
     tenantId = t?.id ?? null;
+    if (!tenantId && SUBSCRIPTION_EVENTS.has(event.type)) {
+      // §6.9: a subscription on a customer no workspace is linked to (a founder-made subscription on the wrong customer).
+      const unknownCustomer = customerId;
+      await withLockedPool((db) => raiseAlert(db, { tenantId: null, kind: 'stripe-event-unknown-customer', dedupKey: unknownCustomer, detail: { event: event.type } }, new Date()))
+        .catch((e) => console.error('[stripe webhook] alert failed:', e));
+    }
   } else {
     return ignored(); // charge.dispute.* and anything else: founder handles in Stripe
   }
@@ -114,7 +133,7 @@ export async function POST(req: NextRequest) {
         return null;
       }
 
-      if (event.type === 'checkout.session.completed') {
+      if (CHECKOUT_EVENTS.has(event.type)) {
         const session = event.data.object as Stripe.Checkout.Session;
         const extraPatch: Parameters<typeof updateTenantGuarded>[2] = {};
         const email = session.customer_details?.email ?? null;
@@ -134,7 +153,20 @@ export async function POST(req: NextRequest) {
           }
         }
         const r = await reconcileInLock(tx, row, now, { customerId: eventCustomer, extraPatch });
-        return { slug: row.slug, noticeIds: r.noticeIds };
+        const noticeIds = [...r.noticeIds];
+        if (event.type === 'checkout.session.async_payment_failed') {
+          await raiseAlert(tx, { tenantId: row.id, kind: 'checkout-payment-failed', dedupKey: session.id, detail: { subscription: idOf(session.subscription) } }, now);
+          // Only when the subscription never started (incomplete / incomplete_expired): a LIVE subscription's failure is
+          // covered by invoice.payment_failed, so one failure sends one email.
+          const sessionSub = idOf(session.subscription);
+          const snap = sessionSub ? r.subs.find((s) => s.id === sessionSub) : undefined;
+          if (!snap || !isLive(snap.status)) {
+            const id = await enqueueNotice(tx, row.id, 'bank-payment-failed', new Date(session.created * 1000));
+            if (id) noticeIds.push(id);
+          }
+        }
+        const markDue = event.type !== 'checkout.session.async_payment_failed' || r.becameGood;
+        return { slug: row.slug, noticeIds, markDue };
       }
 
       // Rule 3: checkout may have replaced the customer since this event was sent.
@@ -145,7 +177,7 @@ export async function POST(req: NextRequest) {
         if (email && email !== row.billingEmail) {
           await updateTenantGuarded(tx, row, { billingEmail: email }, now, inArray(tenants.status, ['active', 'suspended']));
         }
-        return { slug: row.slug, noticeIds: [] };
+        return { slug: row.slug, noticeIds: [], markDue: false };
       }
 
       const r = await reconcileInLock(tx, row, now, { knownCustomerDeleted: event.type === 'customer.deleted' });
@@ -157,7 +189,22 @@ export async function POST(req: NextRequest) {
           await raiseAlert(tx, { tenantId: row.id, kind: 'invoice-paid-non-live', dedupKey: invoiceId ?? '', detail: { subscription: invoiceSubscriptionId, status: paidSub?.status ?? 'missing' } }, now);
         }
       }
-      return { slug: row.slug, noticeIds: r.noticeIds };
+      const noticeIds = [...r.noticeIds];
+      if (event.type === 'invoice.payment_failed' && invoiceSubscriptionId) {
+        // §6.9 (Q6, Q11; Terms §4.7): a failed payment no grace notice covers (pastDueSince null after the reconcile,
+        // whatever Stripe's status) on a LIVE subscription. The triggers are exclusive with `payment-failed`, so one
+        // failure sends one email. An ended tenant gets the founder alert only (its Billing page offers no payment).
+        const inv = event.data.object as Stripe.Invoice;
+        const failedSub = r.subs.find((s) => s.id === invoiceSubscriptionId);
+        if (r.row.pastDueSince === null && failedSub && isLive(failedSub.status)) {
+          if (r.row.subscriptionEndedAt === null) {
+            const id = await enqueueNotice(tx, row.id, 'bank-payment-failed', new Date(inv.created * 1000));
+            if (id) noticeIds.push(id);
+          }
+          await raiseAlert(tx, { tenantId: row.id, kind: 'payment-failed-subscription-active', dedupKey: inv.id ?? '', detail: { subscription: invoiceSubscriptionId, status: failedSub.status } }, now);
+        }
+      }
+      return { slug: row.slug, noticeIds, markDue: event.type === 'customer.subscription.created' || r.becameGood };
     });
   } catch (err) {
     if (err instanceof TenantLockTimeoutError) {
@@ -174,6 +221,8 @@ export async function POST(req: NextRequest) {
 
   if (outcome) {
     invalidateTenant(outcome.slug);
+    // §6.5: after the locked section; never throws and is time-capped (≤ 3 s).
+    if (outcome.markDue) await markSeatSyncDue(tenantId);
     const ids = outcome.noticeIds;
     if (ids.length > 0) {
       after(async () => {

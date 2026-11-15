@@ -66,10 +66,17 @@ describe('expected messages reach the client verbatim in production mode', () =>
   it('"seat limit reached" (assertSeatsAvailable)', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     const executor = { select: () => ({ from: () => ({ where: async () => [{ value: 10 }] }) }) }; // trial: 10 seats, all used
-    const result = await userAction(() => assertSeatsAvailable(1, executor as never));
+    const result = await userAction(() => assertSeatsAvailable(1, executor as never, 'trial'));
     expect(result.ok).toBe(false);
     expect(!result.ok && result.code).toBe('validation');
     expect(!result.ok && result.error).toMatch(/plan allows 10 active users/);
+  });
+
+  it('the Standard cap message (feature-plan-per-user-billing.md §6.3) reaches the client verbatim', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const executor = { select: () => ({ from: () => ({ where: async () => [{ value: 100 }] }) }) }; // Standard: 100, all used
+    const result = await userAction(() => assertSeatsAvailable(1, executor as never, 'standard'));
+    expect(!result.ok && result.error).toBe('Your plan covers up to 100 users. Contact us at support@cadenzpoint.com to add more.');
   });
 
   it('"period locked" (assertEntryDatesEditable)', async () => {

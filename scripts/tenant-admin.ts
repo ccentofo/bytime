@@ -17,6 +17,10 @@
  *   audit-note <slug> --note "<text>" --yes        (append a founder note to the audit trail, e.g. RESTORE.md)
  *   reopen-import-window <slug> --days <1-30> --reason "<why>" --yes  (certified-outputs C1: let one workspace import a
  *                                                   missed period of timesheet history; lock/overlap guards still apply)
+ *   set-plan <slug> enterprise|standard --yes      (per-user billing §6.2: Enterprise = no user limit, never overwritten;
+ *                                                   `standard` only undoes enterprise)
+ *   ensure-customer <slug> --stripe-mode live|test --yes   (link the workspace's Stripe customer; prints cus_…)
+ *   seat-sync <slug> --stripe-mode live|test [--yes]       (one quantity sync; without --yes: planned calls only, no writes)
  *   waitlist list                                   (LB-D2: verified signups held back by the daily cap)
  *   waitlist provision <signup-id> --yes            (provision one, bypassing the cap; emails the set-password link)
  *
@@ -25,28 +29,31 @@
  *
  * Runs under Node's react-server condition (package.json) so server-only modules load.
  * Required env (.env.local then .env): CONTROL_PLANE_DATABASE_URL. `show` also reads the workspace's own database for
- * the import-window state when ENCRYPTION_KEY is set (otherwise it prints "unknown").
+ * the import-window state and the live active-user count when ENCRYPTION_KEY is set (otherwise it prints "unknown").
+ * The commands that call Stripe (`ensure-customer`, `seat-sync`) also need STRIPE_SECRET_KEY of the intended mode, and
+ * `seat-sync` needs ENCRYPTION_KEY (it counts users in the workspace database). They refuse unless --stripe-mode matches
+ * the key.
  */
 import dotenv from 'dotenv';
 dotenv.config({ path: ['.env.local', '.env'] });
 
-import { and, desc, eq, isNull, ne } from 'drizzle-orm';
-import { opsAlerts, tenantAuditEvents, tenantNotices, tenants } from '../src/db/control-plane/schema';
+import { and, desc, eq, isNull, ne, sql } from 'drizzle-orm';
+import { opsAlerts, tenantAuditEvents, tenantNotices, tenants, tenantSeatBilling } from '../src/db/control-plane/schema';
 import { withLockedPool } from '../src/db/control-plane/locked';
 import { getTenantAccess } from '../src/lib/tenant/lifecycle';
 import { toLifecycleFacts } from '../src/lib/tenant/registry';
 import type { TenantRow } from '../src/lib/tenant/lifecycle-store';
 import { deliverPendingNotices } from '../src/lib/tenant/notices';
 import {
-  AdminCommandError, applyAdminPlan, findForceableNotice, forceNoticeSent, plans, recordFounderExportDisposal,
-  recordFounderNote, resolveAlertById, type Planner,
+  AdminCommandError, applyAdminPlan, checkStripeMode, ensureCustomerCommand, findForceableNotice, forceNoticeSent, plans,
+  recordFounderExportDisposal, recordFounderNote, resolveAlertById, seatSyncCommand, setPlanPlanner, stripeKeyMode, type Planner,
 } from '../src/lib/tenant/admin-commands';
 import { printTargetBanner } from './lib/target';
 import { listWaitlist, provisionWaitlistedSignup, WaitlistError } from '../src/lib/tenant/waitlist';
 import { apexBaseUrl } from '../src/lib/tenant/host';
 import { SIGNUP_DAILY_WORKSPACE_CAP } from '../src/lib/tenant/lifecycle-config';
 import { getDbForUrl } from '../src/db';
-import { periodEvents, workspaceSettings } from '../src/db/schema';
+import { periodEvents, users, workspaceSettings } from '../src/db/schema';
 import { describeImportWindowState } from './lib/import-window-state';
 import { decrypt } from '../src/lib/encryption';
 
@@ -76,7 +83,8 @@ function printTenant(label: string, t: TenantRow) {
   if (t.suspensionReason === 'policy') {
     console.log(`  policy hold export:         ${t.policyExportAllowed ? 'ALLOWED by founder' : 'blocked (default)'}`);
   }
-  console.log(`  plan:                       ${t.plan}`);
+  console.log(`  plan:                       ${t.plan}${t.planInterval ? ` (${t.planInterval})` : ''}`);
+  console.log(`  collection_method:          ${t.collectionMethod ?? '(none)'}${t.subscriptionCancelAtPeriodEnd ? ' — cancels at period end' : ''}`);
   console.log(`  stripe customer:            ${t.stripeCustomerId ?? '(none)'}${t.stripeCustomerDeletedAt ? ` (deleted ${iso(t.stripeCustomerDeletedAt)})` : ''}`);
   console.log(`  subscription:               ${t.stripeSubscriptionId ?? '(none)'} ${t.subscriptionStatus ?? ''}`);
   console.log(`  current_period_end:         ${iso(t.currentPeriodEnd)}`);
@@ -106,6 +114,34 @@ async function printImportWindow(t: TenantRow) {
     closed = `unknown (tenant DB not reachable: ${err instanceof Error ? err.message : String(err)})`;
   }
   console.log(`  history import (tenant DB): ${closed}`);
+}
+
+/** Per-user billing §6.2: the seat row and the live active-user count (the quantity for hand-made subscriptions). */
+async function printSeats(t: TenantRow) {
+  const [seat] = await withLockedPool((db) => db.select().from(tenantSeatBilling).where(eq(tenantSeatBilling.tenantId, t.id)).limit(1));
+  if (seat) {
+    console.log(`  seat sync:                  quantity ${seat.stripeQuantity ?? '(unknown)'} on ${seat.stripeSubscriptionId ?? '(none)'}, billable ${seat.billableCount ?? '?'}, checked ${iso(seat.checkedAt)}`);
+    console.log(`                              due ${iso(seat.syncDueAt)} (mark ${seat.markSeq}), failures ${seat.failures}${seat.lastError ? ` — ${seat.lastError}` : ''}, next attempt ${iso(seat.nextAttemptAt)}`);
+  } else {
+    console.log('  seat sync:                  (no row yet)');
+  }
+  let live: string;
+  try {
+    if (!process.env.ENCRYPTION_KEY || !t.dbUrlEncrypted) throw new Error('ENCRYPTION_KEY not set or no database');
+    const db = getDbForUrl(decrypt(t.dbUrlEncrypted));
+    const [r] = await db.select({ n: sql<number>`count(*)::int` }).from(users).where(eq(users.isActive, true));
+    live = String(r.n);
+  } catch (err) {
+    live = `unknown (${err instanceof Error ? err.message : String(err)})`;
+  }
+  console.log(`  active users (live count):  ${live}`);
+}
+
+/** The Stripe-mode banner and guard (per-user billing §6.2) for commands that call Stripe. */
+function stripeModeOrExit(rest: string[]) {
+  const key = process.env.STRIPE_SECRET_KEY;
+  console.log(`Stripe mode (from STRIPE_SECRET_KEY): ${stripeKeyMode(key) ?? 'unknown'}`);
+  return checkStripeMode(flag(rest, '--stripe-mode'), key);
 }
 
 async function loadBySlug(slug: string): Promise<TenantRow> {
@@ -141,6 +177,7 @@ async function show(slug: string) {
   const t = await loadBySlug(slug);
   printTenant(`Tenant "${slug}"`, t);
   await printImportWindow(t);
+  await printSeats(t);
   await withLockedPool(async (db) => {
     const notices = await db.select().from(tenantNotices).where(eq(tenantNotices.tenantId, t.id)).orderBy(desc(tenantNotices.createdAt));
     console.log(`\nNotices (${notices.length}):`);
@@ -250,6 +287,35 @@ async function main() {
       const days = Number(flag(rest, '--days') ?? fail('reopen-import-window requires --days <1-30>.'));
       const reason = flag(rest, '--reason') ?? fail('reopen-import-window requires --reason "<why>".');
       await change(target, yes, plans.reopenImportWindow(days, reason));
+      break;
+    }
+    case 'set-plan':
+      await change(target, yes, setPlanPlanner(positional[0] ?? fail('set-plan needs enterprise|standard.')));
+      break;
+    case 'ensure-customer': {
+      const mode = stripeModeOrExit(rest);
+      const t = await loadBySlug(target);
+      console.log(`Would ensure a ${mode}-mode Stripe customer for ${t.slug} (current: ${t.stripeCustomerId ?? '(none)'}${t.stripeCustomerDeletedAt ? ', deleted' : ''}).`);
+      confirmOrExit(yes);
+      const customerId = await ensureCustomerCommand(t.id, mode, ACTOR);
+      console.log(`✓ Stripe customer (${mode} mode): ${customerId}`);
+      break;
+    }
+    case 'seat-sync': {
+      const mode = stripeModeOrExit(rest);
+      const t = await loadBySlug(target);
+      if (!yes) {
+        const r = await seatSyncCommand(t.id, { mode, dryRun: true, actor: ACTOR });
+        console.log(`Dry run (${mode} mode), nothing written: ${r.decision ?? r.outcome}${r.from !== undefined ? `, Stripe quantity ${r.from}` : ''}${r.billable !== undefined ? `, billable ${r.billable}` : ''}`);
+        for (const c of r.planned ?? []) console.log(`  would call ${c.label}: quantity ${c.quantity}, proration ${c.proration}`);
+        if ((r.planned ?? []).length === 0) console.log('  no Stripe update planned');
+        if (r.error) console.log(`  error: ${r.error}`);
+        console.log('\nPass --yes to run it.');
+        break;
+      }
+      const r = await seatSyncCommand(t.id, { mode, dryRun: false, actor: ACTOR });
+      console.log(`Seat sync (${mode} mode): ${r.outcome}${r.from !== undefined ? ` (Stripe ${r.from} → ${r.to})` : ''}${r.billable !== undefined ? `, billable ${r.billable}` : ''}${r.error ? ` — ${r.error}` : ''}${r.invoiceSent ? `; sent invoice ${r.invoiceSent}` : ''}`);
+      if (r.outcome === 'failed' || r.outcome === 'busy') process.exit(1);
       break;
     }
     case 'waitlist': {

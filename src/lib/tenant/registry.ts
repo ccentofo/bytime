@@ -39,6 +39,7 @@ export function toLifecycleFacts(row: TenantRow): LifecycleFacts {
     firstGoodAt: row.firstGoodAt,
     lifecycleExempt: row.lifecycleExempt,
     policyExportAllowed: row.policyExportAllowed,
+    collectionMethod: row.collectionMethod,
   };
 }
 

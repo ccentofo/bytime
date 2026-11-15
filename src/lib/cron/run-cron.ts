@@ -5,7 +5,7 @@ import { isProbe, rejectUnauthorizedCron } from '@/lib/cron-auth';
 import { CRON_SCHEDULES, recordCronStart, recordCronSuccess, type CronName } from './heartbeat';
 
 /**
- * Shared shell of the four cron routes (feature-plan-launch-blockers.md P6 §3, §6):
+ * Shared shell of the five cron routes (feature-plan-launch-blockers.md P6 §3, §6):
  *  1. auth (rejectUnauthorizedCron);
  *  2. `?probe=1` → 200 {"probe":"ok"} — no work, no monitor, no cron_runs write (smoke-tenancy.sh);
  *  3. heartbeat: cron_runs start, the work, cron_runs success (with the summary). A throw leaves last_succeeded_at

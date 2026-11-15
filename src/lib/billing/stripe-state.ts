@@ -1,7 +1,7 @@
 import 'server-only';
 import type Stripe from 'stripe';
 import { stripe } from './stripe';
-import { planForPriceId } from './plans';
+import { planForSubscription } from './plans';
 import type { StripeSubSnapshot } from './subscription-transitions';
 
 /**
@@ -16,16 +16,20 @@ function isResourceMissing(err: unknown): boolean {
 }
 
 function toSnapshot(s: Stripe.Subscription): StripeSubSnapshot {
-  // An unrecognized price (e.g. a missing STRIPE_PRICE_* env var) maps to 'trial'; never let that downgrade a paying
-  // customer's plan — null means "leave the plan as it is".
-  const mapped = planForPriceId(s.items?.data?.[0]?.price?.id ?? null);
+  // feature-plan-per-user-billing.md §6.2: 'standard' when SOME item is on a Standard price; anything else (a custom
+  // Enterprise price, a missing STRIPE_PRICE_STANDARD_* env value) is null = "leave the plan as it is", so a paying
+  // customer's plan is never downgraded. Tolerates any payload shape.
+  const facts = planForSubscription(s.items?.data ?? null);
   return {
     id: s.id,
     status: s.status,
     created: new Date(s.created * 1000),
     endedAt: s.ended_at ? new Date(s.ended_at * 1000) : null,
     currentPeriodEnd: s.current_period_end ? new Date(s.current_period_end * 1000) : null,
-    plan: mapped === 'trial' ? null : mapped,
+    plan: facts?.plan ?? null,
+    interval: facts?.interval ?? null,
+    cancelAtPeriodEnd: s.cancel_at_period_end === true,
+    collectionMethod: typeof s.collection_method === 'string' ? s.collection_method : null,
   };
 }
 
@@ -82,6 +86,23 @@ export interface OpenInvoiceState {
   processing: boolean;
   /** ACH microdeposit verification pending (counts as in flight only within its observation window). */
   microdeposit: boolean;
+  /** feature-plan-per-user-billing.md §6.2: null for a charge-automatically invoice. */
+  dueDate: Date | null;
+  hostedUrl: string | null;
+  attemptCount: number;
+}
+
+function toOpenInvoiceState(inv: Stripe.Invoice): OpenInvoiceState {
+  const pi = typeof inv.payment_intent === 'object' ? inv.payment_intent : null;
+  return {
+    invoiceId: inv.id,
+    subscriptionId: typeof inv.subscription === 'string' ? inv.subscription : inv.subscription?.id ?? null,
+    processing: pi?.status === 'processing',
+    microdeposit: pi?.status === 'requires_action' && pi.next_action?.type === 'verify_with_microdeposits',
+    dueDate: typeof inv.due_date === 'number' ? new Date(inv.due_date * 1000) : null,
+    hostedUrl: inv.hosted_invoice_url ?? null,
+    attemptCount: typeof inv.attempt_count === 'number' ? inv.attempt_count : 0,
+  };
 }
 
 /** The customer's open invoices with their payment state (paginated). `resource_missing` = empty only if deleted. */
@@ -94,15 +115,7 @@ export async function readOpenInvoices(customerId: string, knownDeleted: boolean
         customer: customerId, status: 'open', limit: 100, expand: ['data.payment_intent'],
         ...(startingAfter ? { starting_after: startingAfter } : {}),
       }, IN_LOCK);
-      for (const inv of page.data) {
-        const pi = typeof inv.payment_intent === 'object' ? inv.payment_intent : null;
-        out.push({
-          invoiceId: inv.id,
-          subscriptionId: typeof inv.subscription === 'string' ? inv.subscription : inv.subscription?.id ?? null,
-          processing: pi?.status === 'processing',
-          microdeposit: pi?.status === 'requires_action' && pi.next_action?.type === 'verify_with_microdeposits',
-        });
-      }
+      for (const inv of page.data) out.push(toOpenInvoiceState(inv));
       if (!page.has_more || page.data.length === 0) break;
       startingAfter = page.data[page.data.length - 1].id;
     }
@@ -112,6 +125,28 @@ export async function readOpenInvoices(customerId: string, knownDeleted: boolean
     return [];
   }
   return out;
+}
+
+/**
+ * feature-plan-per-user-billing.md §6.2 (webhook path): one subscription's open invoices in ONE call, with the payment
+ * intent expanded so "processing" is known (lead ruling B2). `resource_missing` = empty only for a confirmed-deleted
+ * customer; any other error throws (the event is retried).
+ */
+export async function listOpenInvoicesForSubscription(
+  subscriptionId: string,
+  customerId: string,
+  knownDeleted: boolean,
+): Promise<OpenInvoiceState[]> {
+  try {
+    const page = await stripe.invoices.list({
+      subscription: subscriptionId, status: 'open', limit: 100, expand: ['data.payment_intent'],
+    }, IN_LOCK);
+    return page.data.map(toOpenInvoiceState);
+  } catch (err) {
+    if (!isResourceMissing(err)) throw err;
+    if (!(await customerConfirmedDeleted(customerId, knownDeleted))) throw err;
+    return [];
+  }
 }
 
 /** Cancel a subscription; already-canceled / missing counts as success. */

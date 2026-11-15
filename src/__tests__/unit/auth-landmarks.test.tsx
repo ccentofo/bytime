@@ -38,8 +38,11 @@ import { act } from 'react';
 import { installDomStubs, mount, unmount, wait, type Mounted } from '../helpers/dom';
 
 h.billing = {
-  plan: 'starter', plans: [{ key: 'starter', label: 'Starter', seatLimit: 25, purchasable: true }],
-  subscriptionStatus: 'past_due', hasCustomer: true, canSubscribe: true, payUrl: null, suspensionReason: 'non_payment',
+  plan: 'standard', interval: 'month', access: 'billing_only', lifecycleExempt: false, subscriptionStatus: 'past_due',
+  cancelAtPeriodEnd: false, trialEnd: null, renewsOn: 'Dec 1, 2026', endedOn: null, trialDaysLeft: null, trialEnded: false,
+  seats: { active: 7, limit: 100 }, billedQuantity: 7, billedQuantityApplies: true, overdue: true, collectionMethod: 'charge_automatically',
+  ended: false, trialDateKnown: false, payUrl: null, openInvoiceCount: 1, hasCustomer: true, canSubscribe: false,
+  standardAvailable: { month: true, year: true }, suspensionReason: 'nonpayment',
 };
 
 beforeAll(installDomStubs);

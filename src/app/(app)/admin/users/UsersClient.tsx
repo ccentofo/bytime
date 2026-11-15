@@ -49,7 +49,7 @@ type Props = {
   /** feature-plan-approval-scope.md §5: the CLINs a new supervisor can be given to approve. */
   approvalClins?: ApprovalClinOption[];
   /** getSeatUsage: active users and the plan's limit (null = unlimited). */
-  seats?: { active: number; limit: number | null };
+  seats?: { active: number; limit: number | null; plan: 'trial' | 'standard' | 'enterprise' };
 };
 
 const ROLE_OPTIONS = [
@@ -211,7 +211,13 @@ export function UsersClient({ initialUsers, currentUserId, seats, approvalClins 
     }
   }
 
-  const freeSeats = seats && seats.limit !== null ? Math.max(0, seats.limit - seats.active) : null;
+  // feature-plan-per-user-billing.md §6.12 (Q8): on Standard every user above 5 costs money, so only the trial counts
+  // "free seats". Standard: "N active · up to 100"; Enterprise: "N active".
+  const freeSeats = seats && seats.plan === 'trial' && seats.limit !== null ? Math.max(0, seats.limit - seats.active) : null;
+  const seatSuffix = !seats ? ''
+    : seats.plan === 'standard' ? ' · up to 100'
+    : freeSeats !== null && seats.limit !== null ? ` · ${formatCount(freeSeats)} of ${formatCount(seats.limit)} seats free`
+    : '';
 
   function openCreate() {
     setEditingUser(null);
@@ -485,7 +491,7 @@ export function UsersClient({ initialUsers, currentUserId, seats, approvalClins 
           data={[{ value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }, { value: 'locked', label: 'Locked' }, { value: 'all', label: 'All' }]} />
         {seats && (
           <Text size="sm" c="dimmed" ml="auto" data-testid="seat-line">
-            {formatCount(seats.active)} active{freeSeats !== null && seats.limit !== null ? ` · ${formatCount(freeSeats)} of ${formatCount(seats.limit)} seats free` : ''}
+            {formatCount(seats.active)} active{seatSuffix}
           </Text>
         )}
       </Group>

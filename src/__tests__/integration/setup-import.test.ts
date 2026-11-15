@@ -40,6 +40,11 @@ vi.mock('@/lib/tenant/context', () => ({
   getTenantOrThrow: async () => ({ id: '00000000-0000-4000-8000-0000000000c3', slug: 'test-tenant', plan: 'enterprise', status: 'active', dbUrl: 'test-db' }),
   getTenantState: async () => ({ kind: 'full', tenant: { slug: 'test-tenant', dbUrl: 'test-db' } }),
 }));
+// feature-plan-per-user-billing.md §10.1: the seat-taking actions read the plan fresh from the control plane before
+// their transaction and mark the seat sync due after it. Top-level mocks (vitest hoists vi.mock to the file top), with
+// the plan this suite already uses, so its cap behaviour is unchanged and no fake tenant id reaches the control plane.
+vi.mock('@/server/internal/plan-source', () => ({ readPlanFresh: async () => 'enterprise' }));
+vi.mock('@/lib/billing/seat-sync', () => ({ markSeatSyncDue: vi.fn(async () => {}) }));
 vi.mock('next/headers', () => ({ headers: async () => new Headers({ host: 'test-tenant.localhost' }) }));
 const sessionState = vi.hoisted(() => ({ user: null as null | { id: string; role: string; email: string; fullName: string } }));
 vi.mock('@/auth', () => ({ auth: async () => (sessionState.user ? { user: { ...sessionState.user, tenantSlug: 'test-tenant' } } : null) }));

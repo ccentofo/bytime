@@ -4,14 +4,14 @@ import { controlDb } from '@/db/control-plane';
 import { cronRuns } from '@/db/control-plane/schema';
 
 /**
- * LB-D7 free cron heartbeat (feature-plan-launch-blockers.md P6 §3): each of the four crons records its start and its
+ * LB-D7 free cron heartbeat (feature-plan-launch-blockers.md P6 §3): each of the five crons records its start and its
  * success in `cron_runs`; the daily digest (always sent) lists any cron that is overdue by its own limit or has never
  * run. No paid Sentry cron monitors unless SENTRY_CRON_MONITORS=1 (src/lib/cron/run-cron.ts).
  */
 
 const HOUR = 3_600_000;
 
-export const CRON_NAMES = ['notice-delivery', 'tenant-lifecycle', 'submission-deadline', 'daily-reminder'] as const;
+export const CRON_NAMES = ['notice-delivery', 'tenant-lifecycle', 'submission-deadline', 'daily-reminder', 'seat-sync'] as const;
 export type CronName = (typeof CRON_NAMES)[number];
 
 /** Schedules (UTC) — must match vercel.json (a unit test checks). Used for the optional Sentry monitor config. */
@@ -20,6 +20,7 @@ export const CRON_SCHEDULES: Record<CronName, string> = {
   'tenant-lifecycle': '0 13 * * *',
   'submission-deadline': '0 20 * * *',
   'daily-reminder': '0 20 * * 1-5',
+  'seat-sync': '*/10 * * * *', // feature-plan-per-user-billing.md §6.5
 };
 
 /**
@@ -31,6 +32,7 @@ export const CRON_STALE_AFTER_MS: Record<CronName, number> = {
   'tenant-lifecycle': 26 * HOUR,
   'submission-deadline': 26 * HOUR,
   'daily-reminder': 74 * HOUR,
+  'seat-sync': 1 * HOUR,
 };
 
 export interface CronRunRow {

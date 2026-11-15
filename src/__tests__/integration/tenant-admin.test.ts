@@ -18,6 +18,7 @@ import { resendState } from './fakes/fake-resend';
 import { cleanupTestData, createTestUser } from './helpers';
 import {
   cpReady, allAlertsOf, auditOf, cleanupLifecycleTenants, daysFrom, getTenantRow, insertNotice, makeTenant, noticesOf,
+  openAlertsOf,
 } from './lifecycle-helpers';
 
 /** feature-plan-terms-compliance-fixes.md §5.6 / §7: founder commands — locked, version-guarded, audited. */
@@ -229,5 +230,87 @@ describe.skipIf(!cpReady)('tenant:admin commands (§5.6)', () => {
     const rows = await allAlertsOf(t.id);
     expect(rows).toHaveLength(1);
     expect(rows[0].occurrences).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// feature-plan-per-user-billing.md §6.2 — S12 (set-plan / Enterprise), S24 (ensure-customer, the Stripe-mode guard)
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!cpReady)('tenant:admin per-user billing commands (§6.2)', () => {
+  beforeEach(async () => {
+    stripeState.reset();
+    process.env.STRIPE_PRICE_STANDARD_MONTHLY = 'price_std_month';
+    process.env.STRIPE_PRICE_STANDARD_ANNUAL = 'price_std_year';
+    await cleanupLifecycleTenants();
+  });
+  afterEach(async () => {
+    await cleanupLifecycleTenants();
+    await cleanupTestData();
+  });
+
+  it('S12: a custom-price subscription is never updated (not-standard, unmanaged-price alert); set-plan enterprise → no cap, the alert resolves, a GOOD reconcile keeps enterprise; set-plan standard refused unless enterprise; audited', async () => {
+    const { setPlanPlanner, applyAdminPlan, AdminCommandError } = await import('@/lib/tenant/admin-commands');
+    const { syncSeatQuantity } = await import('@/lib/billing/seat-sync');
+    const { assertSeatsAvailable } = await import('@/server/internal/seats');
+    const at101 = { select: () => ({ from: () => ({ where: async () => [{ value: 100 }] }) }) };
+    const customer = stripeState.addCustomer();
+    const sub = stripeState.addSub(customer, 'active', { priceId: 'price_custom_enterprise', quantity: 150 });
+    const t = await makeTenant({ plan: 'standard', stripeCustomerId: customer, stripeSubscriptionId: sub, subscriptionStatus: 'active', firstGoodAt: daysFrom(new Date(), -30) });
+    await createTestUser({ isActive: true });
+
+    expect((await syncSeatQuantity(t.id, { runId: 'r1', reason: 'daily' })).outcome).toBe('not-standard');
+    expect(stripeState.updates).toEqual([]);
+    expect((await openAlertsOf(t.id)).map((a) => a.kind)).toContain('seat-sync-unmanaged-price');
+
+    expect(() => setPlanPlanner('standard')({ ...t } as never, {} as never, new Date())).toThrow(AdminCommandError);
+    await applyAdminPlan(t.id, setPlanPlanner('enterprise'), 'founder:test');
+    let row = await getTenantRow(t.id);
+    expect(row.plan).toBe('enterprise');
+    expect(row.planInterval).toBeNull();
+    expect((await openAlertsOf(t.id)).map((a) => a.kind)).not.toContain('seat-sync-unmanaged-price');
+    expect((await auditOf(t.id)).find((e) => e.kind === 'plan-set')!.detail).toBe('standard→enterprise');
+    await expect(assertSeatsAvailable(1, at101 as never, row.plan)).resolves.toBeUndefined(); // no cap at 101
+    await expect(assertSeatsAvailable(1, at101 as never, 'standard')).rejects.toThrow(/covers up to 100 users/);
+
+    expect((await syncSeatQuantity(t.id, { runId: 'r2', reason: 'daily' })).outcome).toBe('not-standard');
+    expect((await openAlertsOf(t.id)).map((a) => a.kind)).not.toContain('seat-sync-unmanaged-price'); // enterprise: no alert
+
+    // A GOOD reconcile (the webhook's path) on a Standard price keeps enterprise.
+    stripeState.setSub(sub, { priceId: 'price_std_year', interval: 'year' });
+    const { withTenantLock } = await import('@/db/control-plane/locked');
+    const { reconcileInLock } = await import('@/lib/billing/reconcile');
+    const { readTenant } = await import('@/lib/tenant/lifecycle-store');
+    const r = await withTenantLock(t.id, async (tx) => reconcileInLock(tx, (await readTenant(tx, t.id))!, new Date()));
+    expect(r.tracked?.plan).toBe('standard'); // Stripe says Standard…
+    row = await getTenantRow(t.id);
+    expect(row.plan).toBe('enterprise');
+    expect(row.planInterval).toBeNull();
+
+    await applyAdminPlan(t.id, setPlanPlanner('standard'), 'founder:test');
+    expect((await getTenantRow(t.id)).plan).toBe('standard');
+    expect((await auditOf(t.id)).map((e) => e.detail)).toContain('enterprise→standard');
+    expect(() => setPlanPlanner('pro')).toThrow(AdminCommandError);
+  });
+
+  it('S24: ensure-customer creates and links once; a second run prints the same id; audited with livemode; a mode mismatch is refused', async () => {
+    const { ensureCustomerCommand, checkStripeMode, AdminCommandError } = await import('@/lib/tenant/admin-commands');
+    const t = await makeTenant();
+    const first = await ensureCustomerCommand(t.id, 'test', 'founder:test');
+    expect(first).toMatch(/^cus_/);
+    expect((await getTenantRow(t.id)).stripeCustomerId).toBe(first);
+    expect(await ensureCustomerCommand(t.id, 'test', 'founder:test')).toBe(first);
+    expect(stripeState.createdCustomers).toBe(1);
+    const audits = (await auditOf(t.id)).filter((e) => e.kind === 'stripe-customer-ensured');
+    expect(audits.map((e) => e.detail)).toEqual([`customer=${first} livemode=false`, `customer=${first} livemode=false`]);
+
+    expect(checkStripeMode('test', 'sk_test_abc')).toBe('test');
+    expect(checkStripeMode('live', 'rk_live_abc')).toBe('live');
+    expect(() => checkStripeMode('live', 'sk_test_abc')).toThrow(AdminCommandError);
+    expect(() => checkStripeMode(undefined, 'sk_test_abc')).toThrow(/--stripe-mode/);
+    expect(() => checkStripeMode('test', 'nonsense')).toThrow(AdminCommandError);
+
+    const closed = await makeTenant({ status: 'deleting' });
+    await expect(ensureCustomerCommand(closed.id, 'test', 'founder:test')).rejects.toThrow(/closed/);
   });
 });

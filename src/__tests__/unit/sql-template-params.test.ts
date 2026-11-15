@@ -29,6 +29,7 @@ const ROOT = path.resolve(__dirname, '../../..');
 
 const ALLOWLIST: Array<{ file: string; expr: string; why: string }> = [
   { file: 'src/db/control-plane/locked.ts', expr: "'tenant:' + tenantId", why: 'advisory-lock key (a string for hashtext)' },
+  { file: 'src/db/control-plane/locked.ts', expr: "'seats:' + tenantId", why: 'advisory-lock key (a string for hashtext; the seat-sync lock, feature-plan-per-user-billing.md §6.4)' },
   { file: 'src/server/internal/periods.ts', expr: "'timesheet:' + userId", why: 'advisory-lock key (a string for hashtext)' },
   { file: 'src/lib/tenant/migrate-tenant.ts', expr: 'MIGRATION_LOCK_KEY', why: 'advisory-lock key (a number constant)' },
   { file: 'src/server/internal/import-window.ts', expr: 'IMPORT_WINDOW_LOCK', why: 'advisory-lock key (a string constant for hashtext; certified-outputs C1)' },

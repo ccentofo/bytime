@@ -71,6 +71,13 @@
       "when": 1792954123347,
       "tag": "0009_import_window",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794763715959,
+      "tag": "0010_per_user_billing",
+      "breakpoints": true
     }
   ]
 }

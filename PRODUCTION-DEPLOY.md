@@ -124,7 +124,8 @@ Use `--check` first to preview with no changes applied.
 **Lifecycle crons** (`feature-plan-terms-compliance-fixes.md` §4.4): `/api/cron/tenant-lifecycle`
 (daily) reconciles with Stripe, applies due state changes, and emails the founder digest;
 `/api/cron/notice-delivery` (every 10 minutes, needs Vercel **Pro**) delivers and retries the
-lifecycle notices. Both are in `vercel.json`. Set `OPS_ALERT_EMAIL` (6.4). The digest is **sent every
+lifecycle notices; `/api/cron/seat-sync` (every 10 minutes, `feature-plan-per-user-billing.md` §6.5) keeps each
+Standard subscription's Stripe quantity in step with the active users. All are in `vercel.json`. Set `OPS_ALERT_EMAIL` (6.4). The digest is **sent every
 day** (LB-D7, `feature-plan-launch-blockers.md` P6) — a short "all quiet" version when nothing needs action
 — and lists unresolved alerts, workspaces ready for deletion, stuck deletions, notices pending more than
 24 h, forced notices, the lifecycle-exempt (demo) list, and **any cron that is overdue or has never run**
@@ -326,7 +327,7 @@ values and production gets production values):
 | `EMAIL_FROM` | `CadenzPoint Staging <noreply@cadenzpoint.com>` | `CadenzPoint <noreply@cadenzpoint.com>` |
 | `STRIPE_SECRET_KEY` | **test** `sk_test_…` (Phase 9) | **live** `sk_live_…` (Phase 9) |
 | `STRIPE_WEBHOOK_SECRET` | test `whsec_…` | live `whsec_…` |
-| `STRIPE_PRICE_STARTER` / `_PRO` / `_ENTERPRISE` | test price IDs | live price IDs |
+| `STRIPE_PRICE_STANDARD_MONTHLY` / `STRIPE_PRICE_STANDARD_ANNUAL` | test price IDs (9.1) | live price IDs (9.1) |
 | `NEXT_PUBLIC_SENTRY_DSN` | Sentry DSN (Phase 10) | Sentry DSN |
 | `SENTRY_TRACES_SAMPLE_RATE` | `0.2` | `0.1` |
 | `NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE` | `0.2` (browser) | `0.1` (browser) |
@@ -426,22 +427,35 @@ Sign-in and signup limits are shared across Vercel instances through Upstash Red
 **Staging uses Stripe TEST mode; production uses LIVE mode.** Do 9.1–9.4 in test mode for
 staging, then again in live mode for production (dashboard toggle: **Test mode**).
 
-**9.1** **Product catalog → Add product**: create Starter, Pro, Enterprise with recurring
-monthly prices. Copy each **price ID** (`price_…`) into `STRIPE_PRICE_STARTER` / `_PRO` /
-`_ENTERPRISE`.
+**9.1** **Product catalog → Add product**: one product, **CadenzPoint Standard**, with two **graduated**
+(tiered) recurring prices, exactly as `BUSINESS-DECISIONS.md` §1:
+- **monthly:** users 1–5 flat $50.00 at $0 per unit; users 6 and up at $10.00 per unit;
+- **yearly:** users 1–5 flat $510.00 at $0 per unit; users 6 and up at $102.00 per unit.
+
+Copy the two **price IDs** (`price_…`) into `STRIPE_PRICE_STANDARD_MONTHLY` and `STRIPE_PRICE_STANDARD_ANNUAL`.
+Enterprise has no price here: the founder makes those subscriptions by hand (see "Invoiced and Enterprise
+subscriptions" below).
+- **Coupon:** 20% off, duration repeating, 24 months. Which prices it applies to ("applies to products/prices") is
+  the business side's call (the monthly price for sure; the annual one per their decision).
+- **Promotion code** `FOUNDING` on that coupon, max 10 redemptions.
+- **Settings → Payment methods:** turn on **ACH Direct Debit** (US bank account).
 
 **9.2** **Developers → Webhooks → Add endpoint**:
 - URL: `https://staging.cadenzpoint.com/api/stripe/webhook` (test) /
   `https://cadenzpoint.com/api/stripe/webhook` (live)
-- Events — select exactly these eight (the ones the app handles,
-  feature-plan-terms-compliance-fixes.md §4.3): `customer.subscription.created`,
+- Events — select exactly these ten (the ones the app handles,
+  feature-plan-terms-compliance-fixes.md §4.3 and feature-plan-per-user-billing.md §6.9): `customer.subscription.created`,
   `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`,
-  `invoice.payment_failed`, `checkout.session.completed`, `customer.updated`, `customer.deleted`
+  `invoice.payment_failed`, `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
+  `checkout.session.async_payment_failed`, `customer.updated`, `customer.deleted`
+- If the Dashboard offers an API version for the endpoint, choose `2025-02-24.acacia`. It isn't required: the
+  webhook never trusts the payload's state, and it reads invoice events in both shapes.
 - Copy the endpoint's **Signing secret** → `STRIPE_WEBHOOK_SECRET`.
 
 **9.3** **Settings → Billing → Customer portal** → enable it and allow: **payment method update**,
 **invoice history**, **cancel at end of billing period** (never "cancel immediately" — customers keep
-access until the period ends, Terms §17.2), and **plan switching** between your three prices. Save.
+access until the period ends, Terms §17.2). **Plan switching: off. Quantity changes: off** (the app manages the
+quantity; monthly↔annual switches are done by the founder, see the runbook below). Save.
 (The app's "Manage billing" button fails until this is saved.)
 
 **9.4** **Developers → API keys** → copy the **Secret key** → `STRIPE_SECRET_KEY`
@@ -451,8 +465,45 @@ access until the period ends, Terms §17.2), and **plan switching** between your
 retries fail, choose **leave the subscription past due** (never "cancel the subscription"). The app
 itself suspends at day 15 and terminates at day 45 after notice emails (Terms §4.7); if Stripe cancels
 first, customers would be cut off on Stripe's schedule, without the notices the Terms promise.
+- **Invoices sent to customers** (what happens after the due date): also **leave the subscription past due**.
+- For failed payments **and** for invoices sent to customers, set the **invoice** outcome to **leave the invoice as-is
+  (open)**, never "mark uncollectible".
+- Leave **subscription status resolution** at Stripe's default; the app doesn't depend on it (it reads invoiced
+  customers' invoices directly).
 
-✅ **Check:** each Vercel project has its Stripe secret, webhook secret, and three price IDs.
+✅ **Check:** each Vercel project has its Stripe secret, webhook secret, and two price IDs.
+
+**Invoiced and Enterprise subscriptions (runbook)** — env for these commands: the control-plane URL,
+`ENCRYPTION_KEY`, and the `STRIPE_SECRET_KEY` of the intended mode.
+1. For Enterprise only, **first**: `npm run tenant:admin -- set-plan <slug> enterprise --yes`.
+2. `npm run tenant:admin -- ensure-customer <slug> --stripe-mode live --yes` (on staging: `--stripe-mode test`) →
+   prints `cus_…`. In the Dashboard, set that customer's **email** to the person who pays invoices (Stripe can't send
+   invoices without one).
+3. In the Dashboard, create the subscription **on that customer**:
+   - the Standard price for per-user invoicing, with **quantity = the live active-user count** printed by
+     `npm run tenant:admin -- show <slug>` (needs `ENCRYPTION_KEY`); or a custom price for Enterprise;
+   - collection method **Send invoice**, net 30, for invoiced customers.
+4. `npm run tenant:admin -- show <slug>` shows the subscription as active within a minute.
+5. Don't edit the quantity of a Standard subscription by hand; the app manages it. A raise is billed until renewal.
+   A cut below the active count is raised back with proration, which charges the customer twice if your cut gave no
+   credit.
+6. Switching between monthly and annual on request: **only inside the last day before renewal.**
+   - First run `npm run tenant:admin -- seat-sync <slug> --stripe-mode live --yes` and check in `show` that the seat
+     row's quantity equals the live active count.
+   - Then, in the Dashboard, schedule the price change at the period end with that quantity.
+   - After the renewal, release the schedule (Dashboard → subscription → schedule → Release) and confirm in `show`
+     that the subscription has no schedule alert.
+   - Scheduling earlier freezes an older quantity into the next term; the app then raises
+     `seat-sync-schedule-attached`.
+7. When an Enterprise contract ends and the customer moves to self-serve Standard:
+   `npm run tenant:admin -- set-plan <slug> standard --yes`.
+8. To move a card or ACH customer to invoicing, switch the collection method only when no invoice is open. Otherwise
+   void the open invoice and re-issue it as a "send invoice" one with a due date (an open card invoice keeps being
+   chased from the original failure date). The **reverse** switch (invoicing to card) only once every invoice is paid
+   or voided: a card subscription follows Stripe's status, which can drop an unpaid invoice's dunning.
+9. For a terminated workspace, cancel the old subscription in the Dashboard **before** creating a new one; otherwise
+   the old active subscription stays tracked and the workspace stays ended (only `duplicate-live-subscriptions` shows
+   it).
 
 ---
 
@@ -538,16 +589,18 @@ DIAG_SECRET=<that value> npm run stress:isolation -- --base staging.cadenzpoint.
 ```
 3. Expect **✅ PASS, 0 cross-tenant leaks**. Then **delete `DIAG_SECRET`** from Vercel and redeploy.
 
-**12.8** Billing (test mode): as the stagetest admin open **Billing**, subscribe with card
-`4242 4242 4242 4242` (any future date, any CVC). Confirm Stripe → Webhooks shows successful
-deliveries and the app shows the plan as active. Open **Manage billing** (customer portal).
+**12.8** Billing (test mode): give stagetest **at least 5 active users** first (below 5 an added user is inside the
+flat tier: +1 with no proration). As the stagetest admin open **Billing**, choose **Standard, monthly** and pay with
+card `4242 4242 4242 4242` (any future date, any CVC); the checkout quantity equals the active users. Confirm Stripe →
+Webhooks shows successful deliveries and the app shows the plan as active. Add a user: within 10 minutes the
+subscription shows +1 and a pending proration. Open **Manage billing** (customer portal).
 
 **12.8b** Lifecycle rehearsal (test mode, on a throwaway workspace — never a demo workspace):
 1. `npm run tenant:admin -- end-trial stagetest2 --yes`, then trigger the lifecycle cron
    (`curl -H "Authorization: Bearer <STAGING_CRON_SECRET>" https://staging.cadenzpoint.com/api/cron/tenant-lifecycle`).
    Expect the workspace read-only and a "trial has ended" email stating the deletion date.
-2. Subscribe stagetest2 with card `4000 0000 0000 0341` (attaches, then fails on renewal) or use Stripe's
-   test clock to advance a subscription into `past_due`: expect the "payment failed" email with a suspension date.
+2. Subscribe stagetest2 with card `4000 0000 0000 0341` (attaches, then fails on renewal): expect the "payment
+   failed" email with a suspension date.
 3. `npm run tenant:admin -- show stagetest2` lists every notice as SENT with a provider id, and no unresolved alerts
    except the ones you caused.
 4. In the Stripe dashboard, cancel the subscription: expect read-only and the "subscription ended" email with a
@@ -556,6 +609,38 @@ deliveries and the app shows the plan as active. Open **Manage billing** (custom
    suspend. Note what statuses Stripe shows; record anything unexpected in feature-plan-terms-compliance-fixes.md §2.
 6. Deletion dry run: `npm run tenant:delete -- stagetest2` (no `--yes`): it must report the classification and
    "Not eligible" until the deletion date has passed.
+7. **Per-user billing** (`feature-plan-per-user-billing.md` §12), each on a throwaway workspace:
+   - **Annual:** subscribe to Standard, annual, then add users above 5 → an immediate invoice. Deactivate and
+     reactivate a user → no change and no invoice.
+   - **Renewal window** (no test clock: it moves Stripe's time, not the app's):
+     1. `npm run tenant:admin -- ensure-customer <slug> --stripe-mode test --yes`. In the Dashboard, attach test card
+        4242 to that customer as its default payment method.
+     2. In the Dashboard, create a Standard monthly subscription on that customer with a **billing cycle anchor about
+        12 hours ahead**, so its period end falls inside the real next 24 h. Quantity = the live count (`show`).
+     3. Deactivate a user → within 10 minutes the quantity drops with no proration. After the real renewal, the
+        renewal invoice bills the lower count.
+   - **ACH checkout:** choose the **Test Institution** in Financial Connections for instant verification (with manual
+     entry, verify with the microdeposit amounts 32 and 45). Record the subscription status while the payment is
+     processing. Use the failure account `000111111116` to see the "Payment not received" email.
+   - **Promotion code:** `FOUNDING` at checkout.
+   - **Send-invoice subscription,** made per the runbook above with `days_until_due: 1`: added users → the proration
+     invoice is **emailed**; left unpaid → within about a day of the due date, the "Invoice overdue" email, and the
+     Billing page's Pay button opens the overdue invoice; paid → the overdue state clears and the Payment tile
+     returns to Active.
+   - **Record these test-mode facts** in `feature-plan-per-user-billing.md` §15 and report them to Planning:
+     - whether a quantity change inside the flat tier creates a $0 invoice;
+     - whether a send-invoice proration invoice is draft or open right after the update;
+     - whether an overdue `auto_advance: false` proration invoice moves the subscription to `past_due`;
+     - whether quantity updates work on a `past_due` subscription;
+     - the subscription status while an ACH payment is processing;
+     - Checkout with quantity > 1;
+     - a quantity update while a subscription schedule is attached;
+     - a long seat-sync run (several Stripe calls in one locked section) isn't cut by Neon's pooler
+       (idle-in-transaction timeout);
+     - whether Stripe itself emails a send-invoice `subscription_update` invoice (record its `auto_advance`);
+     - a failed card on the hosted page of a not-yet-due send-invoice invoice: the subscription status, and **whether
+       `invoice.payment_failed` fires** (if it doesn't, tell Planning before launch);
+     - a schedule with `end_behavior: 'renew'` and no next phase: does it freeze the quantity at renewal?
 
 **12.9** Email: confirm the verification email arrived, and trigger a password reset to confirm it arrives too.
 
@@ -761,8 +846,8 @@ company or the first customer). Complete the verification email and password set
 Vercel project and redeploy (re-run 13.1). Re-check the console afterward.
 
 **13.5** Confirm crons are scheduled: production Vercel project → **Settings → Cron Jobs** shows
-the four jobs from `vercel.json` (daily-reminder, submission-deadline, tenant-lifecycle,
-notice-delivery every 10 minutes). (Crons only run on production deployments; the 10-minute schedule
+the five jobs from `vercel.json` (daily-reminder, submission-deadline, tenant-lifecycle,
+notice-delivery and seat-sync every 10 minutes). (Crons only run on production deployments; the 10-minute schedule
 and the 800-second lifecycle/export duration need the **Pro** plan — staging too.)
 
 **13.6** Run the smoke test against production:

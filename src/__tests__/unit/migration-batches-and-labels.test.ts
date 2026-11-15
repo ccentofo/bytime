@@ -155,11 +155,25 @@ describe('migrations as shipped', () => {
     expect(tenant).not.toMatch(/UPDATE "timesheet_entries"|UPDATE "period_events"/);
   });
 
-  it('the control-plane migration is drizzle-kit generated as 0009 (the newest journal entry) and adds tenants.import_window_until', () => {
+  it('control-plane 0009 adds tenants.import_window_until', () => {
+    const journal = JSON.parse(readFileSync(path.join(ROOT, 'drizzle/control-plane/meta/_journal.json'), 'utf8')) as { entries: Array<{ idx: number; tag: string; when: number }> };
+    const entry = journal.entries.find((e) => e.idx === 9)!;
+    expect(entry.tag).toBe('0009_import_window');
+    expect(readFileSync(path.join(ROOT, `drizzle/control-plane/${entry.tag}.sql`), 'utf8')).toContain('ADD COLUMN "import_window_until" timestamp with time zone');
+  });
+
+  it('the newest control-plane migration is drizzle-kit generated as 0010 (per-user billing §6.2): columns, the seat table, the legacy plan rewrite', () => {
     const journal = JSON.parse(readFileSync(path.join(ROOT, 'drizzle/control-plane/meta/_journal.json'), 'utf8')) as { entries: Array<{ idx: number; tag: string; when: number }> };
     const last = journal.entries[journal.entries.length - 1];
-    expect(last.idx).toBe(9);
+    expect(last.idx).toBe(10);
+    expect(last.tag).toBe('0010_per_user_billing');
     expect(last.when).toBe(Math.max(...journal.entries.map((e) => e.when)));
-    expect(readFileSync(path.join(ROOT, `drizzle/control-plane/${last.tag}.sql`), 'utf8')).toContain('ADD COLUMN "import_window_until" timestamp with time zone');
+    const sqlText = readFileSync(path.join(ROOT, `drizzle/control-plane/${last.tag}.sql`), 'utf8');
+    expect(sqlText).toContain('ALTER TABLE "tenants" ADD COLUMN "plan_interval" varchar(10)');
+    expect(sqlText).toContain('ALTER TABLE "tenants" ADD COLUMN "subscription_cancel_at_period_end" boolean DEFAULT false NOT NULL');
+    expect(sqlText).toContain('ALTER TABLE "tenants" ADD COLUMN "collection_method" varchar(30)');
+    expect(sqlText).toContain('CREATE TABLE "tenant_seat_billing"');
+    expect(sqlText).toMatch(/REFERENCES "public"\."tenants"\("id"\) ON DELETE cascade/);
+    expect(sqlText).toContain(`UPDATE "tenants" SET "plan" = 'standard' WHERE "plan" IN ('starter', 'pro');`);
   });
 });

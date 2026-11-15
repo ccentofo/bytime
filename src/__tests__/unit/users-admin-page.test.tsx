@@ -42,7 +42,8 @@ const PEOPLE = [
   u('j1', 'John Doe', { lock: { minutesRemaining: 11 } }),
   u('a1', 'Al Admin', { role: 'admin' }),
 ];
-const render = async (seats = { active: 4, limit: 10 }) => {
+type Seats = { active: number; limit: number | null; plan: 'trial' | 'standard' | 'enterprise' };
+const render = async (seats: Seats = { active: 4, limit: 10, plan: 'trial' }) => {
   m = await mount(<UsersClient initialUsers={PEOPLE as never} currentUserId="me" seats={seats} />);
   await wait(10);
 };
@@ -69,8 +70,31 @@ describe('the Users table', () => {
     expect(rowOf('John Doe').textContent).toContain('Off');
     expect(m!.container.querySelector('[data-testid="seat-line"]')!.textContent).toBe('4 active · 6 of 10 seats free');
     unmount(m);
-    await render({ active: 4, limit: null as never });
+    await render({ active: 4, limit: null, plan: 'enterprise' });
     expect(m!.container.querySelector('[data-testid="seat-line"]')!.textContent).toBe('4 active');
+  });
+});
+
+/** U11 (feature-plan-per-user-billing.md §6.12, Q8): on Standard each user above 5 costs money — no "free seats". */
+describe('U11: the seat line per plan', () => {
+  const drawerSeatUse = async () => {
+    await click(buttonByText('Add user'));
+    return dialogTitled('Add user')!.querySelector('[data-testid="seat-use"]');
+  };
+  it('Standard: "7 active · up to 100", and no seat line in the Add user drawer', async () => {
+    await render({ active: 7, limit: 100, plan: 'standard' });
+    expect(m!.container.querySelector('[data-testid="seat-line"]')!.textContent).toBe('7 active · up to 100');
+    expect(await drawerSeatUse()).toBeNull();
+  });
+  it('Enterprise: "7 active", and no drawer line', async () => {
+    await render({ active: 7, limit: null, plan: 'enterprise' });
+    expect(m!.container.querySelector('[data-testid="seat-line"]')!.textContent).toBe('7 active');
+    expect(await drawerSeatUse()).toBeNull();
+  });
+  it('Trial: unchanged ("7 active · 3 of 10 seats free", "Uses 1 of 3 free seats")', async () => {
+    await render({ active: 7, limit: 10, plan: 'trial' });
+    expect(m!.container.querySelector('[data-testid="seat-line"]')!.textContent).toBe('7 active · 3 of 10 seats free');
+    expect((await drawerSeatUse())!.textContent).toBe('Uses 1 of 3 free seats');
   });
 });
 
@@ -153,7 +177,7 @@ describe('Add user (US-8)', () => {
   });
 
   it('AS-15: Add user as a supervisor shows "CLINs they approve" and sends the chosen ids (an employee sends none)', async () => {
-    m = await mount(<UsersClient initialUsers={PEOPLE as never} currentUserId="me" seats={{ active: 4, limit: 10 }}
+    m = await mount(<UsersClient initialUsers={PEOPLE as never} currentUserId="me" seats={{ active: 4, limit: 10, plan: 'trial' }}
       approvalClins={[{ clinId: 'clin-1', clinNumber: '0001', clinDescription: null, contractId: 'k1', contractName: 'NAVAIR' }]} />);
     await wait(10);
     await click(buttonByText('Add user'));

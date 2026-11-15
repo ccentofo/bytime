@@ -23,6 +23,8 @@ import { SuspendedEmail } from '@/lib/email/templates/suspended';
 import { SubscriptionEndedEmail } from '@/lib/email/templates/subscription-ended';
 import { DeletionScheduledEmail } from '@/lib/email/templates/deletion-scheduled';
 import { PolicySuspendedEmail } from '@/lib/email/templates/policy-suspended';
+import { InvoiceOverdueEmail } from '@/lib/email/templates/invoice-overdue';
+import { BankPaymentFailedEmail } from '@/lib/email/templates/bank-payment-failed';
 
 /**
  * Lifecycle notice OUTBOX (feature-plan-terms-compliance-fixes.md §4.5, R14 proof of notice).
@@ -88,6 +90,13 @@ async function resolveRecipientsAndTimezone(row: TenantRow): Promise<{ to: strin
   return { to: [...emails], timeZone };
 }
 
+/** The suspension date a `payment-failed` notice states (feature-plan-per-user-billing.md §6.7). */
+export function statedSuspensionDate(anchor: Date, now: Date): Date {
+  const graceEnd = addDays(anchor, PAYMENT_GRACE_DAYS);
+  const earliest = addDays(now, SUSPENSION_NOTICE_DAYS);
+  return graceEnd.getTime() >= earliest.getTime() ? graceEnd : earliest;
+}
+
 /** Render a notice from the CURRENT facts (called once per generation, then frozen). */
 async function renderNotice(kind: string, anchor: Date, row: TenantRow, timeZone: string, now: Date): Promise<{ subject: string; html: string; stated: Record<string, string> }> {
   const fmt = (d: Date) => formatCalendarDate(calendarDayOf(d, timeZone), 'MMMM D, YYYY');
@@ -111,16 +120,26 @@ async function renderNotice(kind: string, anchor: Date, row: TenantRow, timeZone
       break;
     }
     case 'payment-failed': {
-      stated.suspensionDate = fmt(addDays(anchor, PAYMENT_GRACE_DAYS));
-      subject = `Payment failed for ${tenantName}`;
-      element = React.createElement(PaymentFailedEmail, { tenantName, suspensionDateFormatted: stated.suspensionDate, appUrl });
+      // feature-plan-per-user-billing.md §6.7: max(P + 15 days, now + SUSPENSION_NOTICE_DAYS), so a back-dated P (an
+      // invoice's due date) never states a date already in the past.
+      stated.suspensionDate = fmt(statedSuspensionDate(anchor, now));
+      if (row.collectionMethod === 'send_invoice') {
+        subject = `Invoice overdue for ${tenantName}`;
+        element = React.createElement(InvoiceOverdueEmail, { tenantName, suspensionDateFormatted: stated.suspensionDate, appUrl });
+      } else {
+        subject = `Payment failed for ${tenantName}`;
+        element = React.createElement(PaymentFailedEmail, { tenantName, suspensionDateFormatted: stated.suspensionDate, appUrl });
+      }
+      break;
+    }
+    case 'bank-payment-failed': {
+      subject = `Payment not received for ${tenantName}`;
+      element = React.createElement(BankPaymentFailedEmail, { tenantName, appUrl });
       break;
     }
     case 'suspension-warning': {
       // Never earlier than the real suspension: max(P + 15d, now + 3d).
-      const graceEnd = addDays(anchor, PAYMENT_GRACE_DAYS);
-      const earliest = addDays(now, SUSPENSION_NOTICE_DAYS);
-      stated.suspensionDate = fmt(graceEnd.getTime() >= earliest.getTime() ? graceEnd : earliest);
+      stated.suspensionDate = fmt(statedSuspensionDate(anchor, now));
       subject = `${tenantName} will be suspended on ${stated.suspensionDate}`;
       element = React.createElement(SuspensionWarningEmail, { tenantName, suspensionDateFormatted: stated.suspensionDate, appUrl });
       break;

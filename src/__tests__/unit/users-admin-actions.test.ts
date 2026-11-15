@@ -47,8 +47,13 @@ vi.mock('@/server/internal/login-attempts', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/server/internal/login-attempts')>();
   return { ...real, verifyCurrentPassword: (...a: Parameters<typeof real.verifyCurrentPassword>) => (reauth.override ? reauth.override() : real.verifyCurrentPassword(...a)) };
 });
-vi.mock('@/server/internal/seats', () => ({ assertSeatsAvailable: async () => {}, getSeatUsage: async () => ({ limit: null, currentActive: 1, planLabel: 'x' }) }));
+vi.mock('@/server/internal/seats', () => ({ assertSeatsAvailable: async () => {}, getSeatUsage: async () => ({ limit: null, currentActive: 1, plan: 'enterprise' }) }));
 vi.mock('@/server/internal/submission-notify', () => ({ notifyReroutedApprovals: async () => {} }));
+// feature-plan-per-user-billing.md §10.1: the seat-taking actions read the plan fresh and the tenant id before their
+// transaction, and mark the seat sync due after it (top-level mocks: vitest hoists vi.mock to the file top).
+vi.mock('@/lib/tenant/context', () => ({ getTenantOrThrow: async () => ({ id: 'test-tenant-id', plan: 'enterprise' }) }));
+vi.mock('@/server/internal/plan-source', () => ({ readPlanFresh: async () => 'enterprise' }));
+vi.mock('@/lib/billing/seat-sync', () => ({ markSeatSyncDue: vi.fn(async () => {}) }));
 
 import { readFileSync } from 'node:fs';
 import bcrypt from 'bcryptjs';

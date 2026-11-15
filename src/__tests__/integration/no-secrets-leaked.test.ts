@@ -31,6 +31,11 @@ vi.mock('@/lib/tenant/context', () => ({
     dbUrl: 'unused-in-this-test',
   }),
 }));
+// feature-plan-per-user-billing.md §10.1: the seat-taking actions read the plan fresh from the control plane before
+// their transaction and mark the seat sync due after it. Top-level mocks (vitest hoists vi.mock to the file top), with
+// the plan this suite already uses, so its cap behaviour is unchanged and no fake tenant id reaches the control plane.
+vi.mock('@/server/internal/plan-source', () => ({ readPlanFresh: async () => tenantState.plan }));
+vi.mock('@/lib/billing/seat-sync', () => ({ markSeatSyncDue: vi.fn(async () => {}) }));
 
 type FakeSessionUser = { id: string; role: string; email: string; fullName: string };
 

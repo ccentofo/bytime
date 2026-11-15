@@ -122,7 +122,7 @@ const ADMIN_READ_ONLY_ALLOWLIST: Record<string, Record<string, string>> = {
     getApprovalScopesView: 'feature-plan-approval-scope.md §4.2: reads the active approval scopes (with the S6 review flag) and CLIN membership; no write',
     getApprovalClinOptions: 'feature-plan-approval-scope.md §4.2: reads active CLINs on active contracts for the approval pickers; no write',
   },
-  'billing.ts': { getTenantBillingInfo: 'reads the control-plane billing fields; no write' },
+  'billing.ts': { getTenantBillingInfo: 'feature-plan-per-user-billing.md §6.10: reads the control-plane billing fields and seat row, the active-user count and time zone through the row URL, and the open invoices in Stripe; no write' },
   'charge-codes.ts': {
     listCostClasses: 'reads cost classes; no write',
     listChargeCodes: 'reads charge codes with joined labels; no write',

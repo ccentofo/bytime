@@ -49,3 +49,8 @@ export const LANDING_FEATURES: ReadonlyArray<{ title: string; blurb: string }> =
 
 export const LANDING_FOOTER_DISCLAIMER =
   'DCAA does not certify or endorse software. CadenzPoint is designed to support DCAA timekeeping requirements; compliance also depends on your organization\'s policies and how you use it.';
+
+/** feature-plan-per-user-billing.md §6.11 (Q7): the Pricing section. The prices themselves come from plan-copy.ts. */
+export const LANDING_PRICING_HEADING = 'Pricing';
+
+export const LANDING_PRICING_CARD_TITLES = { trial: 'Trial', standard: 'Standard', enterprise: 'Enterprise' } as const;

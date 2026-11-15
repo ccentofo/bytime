@@ -77,7 +77,7 @@ if [[ -n "$CRON_SECRET" ]]; then
   # Audit R12: only FAILED auth attempts are rate-limited (2/minute per IP), so one unauthenticated request here, then
   # every cron with the secret.
   check "cron probe WITHOUT secret is 401" "$(status "$APEX_URL/api/cron/daily-reminder?probe=1")" "401"
-  for CRON in notice-delivery tenant-lifecycle submission-deadline daily-reminder; do
+  for CRON in notice-delivery tenant-lifecycle submission-deadline daily-reminder seat-sync; do
     PROBE=$(curl -s -w $'\n%{http_code}' -H "x-cron-secret: $CRON_SECRET" "$APEX_URL/api/cron/$CRON?probe=1")
     check "cron $CRON probe WITH secret is 200" "${PROBE##*$'\n'}" "200"
     if [[ "${PROBE%$'\n'*}" == *'"probe":"ok"'* ]]; then

@@ -4,14 +4,18 @@ import type Stripe from 'stripe';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { getTenantForBilling } from '@/lib/tenant/context';
 import { stripe } from '@/lib/billing/stripe';
-import { PLANS, type PlanKey } from '@/lib/billing/plans';
+import { displayPlan, seatLimitFor, standardPriceIds, type BillingInterval, type PlanKey } from '@/lib/billing/plans';
+import { STANDARD_CAP_MESSAGE } from '@/lib/billing/plan-copy';
+import { choosePayInvoice } from '@/lib/billing/pay-url';
 import { ensureStripeCustomer } from '@/lib/billing/tenant-billing';
-import { getTenantAccess, isDunning, isLive } from '@/lib/tenant/lifecycle';
+import { getTenantAccess, isDunning, isGood, isLive, type TenantAccessMode } from '@/lib/tenant/lifecycle';
 import { toLifecycleFacts } from '@/lib/tenant/registry';
 import { tenantBaseUrl } from '@/lib/tenant/host';
 import { eq } from 'drizzle-orm';
 import { controlDb } from '@/db/control-plane';
-import { tenants } from '@/db/control-plane/schema';
+import { tenants, tenantSeatBilling } from '@/db/control-plane/schema';
+import { countActiveUsers } from '@/server/internal/seats';
+import { billingTenantReads, DEFAULT_TIME_ZONE } from '@/server/internal/billing-reads';
 import { ConflictError, UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
 
@@ -24,12 +28,15 @@ async function readTenantRow(slug: string) {
 /** A LIVE or `incomplete` subscription means a plan already exists or a payment is pending (§5.6). */
 const BLOCKS_NEW_CHECKOUT = (status: string | null) => status !== null && (isLive(status) || status === 'incomplete');
 
-export async function startCheckout(plan: PlanKey): Promise<ActionResult<{ url: string }>> {
+/**
+ * Checkout for Standard, monthly or annual (feature-plan-per-user-billing.md §6.8): the server sets the quantity to
+ * the active-user count; card and US bank account (ACH); promotion codes allowed. The guards come first, so an
+ * unauthenticated caller learns nothing about which arguments are valid.
+ */
+export async function startCheckout(interval: BillingInterval): Promise<ActionResult<{ url: string }>> {
   return userAction(async () => {
     await requireAdminFresh();
     const tenant = await getTenantForBilling(); // refuses deleting/deleted/provisioning
-    const priceId = PLANS[plan].priceId;
-    if (!priceId) throw new UserFacingError('That plan is not purchasable.');
 
     const row = await readTenantRow(tenant.slug);
     if (getTenantAccess(toLifecycleFacts(row), new Date()) === 'closed') {
@@ -38,6 +45,13 @@ export async function startCheckout(plan: PlanKey): Promise<ActionResult<{ url: 
     if (row.status === 'suspended' && row.suspensionReason === 'policy') {
       throw new UserFacingError('This workspace is suspended. Please contact support.');
     }
+    if (interval !== 'month' && interval !== 'year') throw new UserFacingError('Choose monthly or annual billing.');
+    const priceId = standardPriceIds()[interval];
+    if (!priceId) throw new UserFacingError('That plan is not available yet.');
+
+    // Through the row's own URL, so it works in billing_only (suspended for non-payment).
+    const activeUsers = await countActiveUsers(row);
+    if (activeUsers > 100) throw new UserFacingError(STANDARD_CAP_MESSAGE);
 
     const customerId = await ensureStripeCustomer(row.id);
 
@@ -48,10 +62,17 @@ export async function startCheckout(plan: PlanKey): Promise<ActionResult<{ url: 
     }
 
     const base = tenantBaseUrl(tenant.slug);
+    // A quantity that's stale by payment time is corrected by the seat-sync mark set on completion (F9).
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       customer: customerId,
-      line_items: [{ price: priceId, quantity: 1 }],
+      line_items: [{ price: priceId, quantity: Math.max(1, activeUsers) }],
+      payment_method_types: ['card', 'us_bank_account'],
+      payment_method_options: {
+        us_bank_account: { verification_method: 'automatic', financial_connections: { permissions: ['payment_method'] } },
+      },
+      allow_promotion_codes: true,
+      subscription_data: { metadata: { slug: tenant.slug, tenantId: row.id } },
       success_url: `${base}/settings/billing?status=success`,
       cancel_url: `${base}/settings/billing?status=cancelled`,
       metadata: { slug: tenant.slug },
@@ -78,64 +99,137 @@ export async function openBillingPortal(): Promise<ActionResult<{ url: string }>
 }
 
 /**
- * A plan as the billing UI sees it (feature-plan-launch-blockers.md P4 §8): computed server-side so Stripe price IDs —
- * and the env they come from — never reach a client bundle (a client value import of @/lib/billing/plans would read
- * process.env there, where it is empty, and wrongly disable Subscribe).
+ * Everything the Billing page shows, computed on the server (feature-plan-per-user-billing.md §6.10). Price ids and
+ * Stripe ids never reach the client. Works in `billing_only`: no tenant-DB accessor that refuses that mode.
  */
-export interface BillingPlan {
-  key: PlanKey;
-  label: string;
-  seatLimit: number | null;
-  /** A Stripe price is configured for this plan: Subscribe can be offered. */
-  purchasable: boolean;
-}
-
 export interface TenantBillingInfo {
-  plan: string;
-  /** Every plan, in display order (trial first). */
-  plans: BillingPlan[];
+  plan: PlanKey;
+  interval: BillingInterval | null;
+  access: TenantAccessMode;
+  lifecycleExempt: boolean;
   subscriptionStatus: string | null;
+  cancelAtPeriodEnd: boolean;
+  /** Preformatted in the workspace time zone ("Nov 15, 2026"). */
+  trialEnd: string | null;
+  renewsOn: string | null;
+  endedOn: string | null;
+  /** ceil((trialEndsAt − now) / day); null without a trial date. */
+  trialDaysLeft: number | null;
+  /** The trial end has passed (server clock). */
+  trialEnded: boolean;
+  seats: { active: number; limit: number | null } | null;
+  /** The seat row's Stripe quantity, or null. */
+  billedQuantity: number | null;
+  /** The seat row's subscription is the tenant's tracked subscription. */
+  billedQuantityApplies: boolean;
+  overdue: boolean;
+  collectionMethod: string | null;
+  ended: boolean;
+  trialDateKnown: boolean;
+  /** The Stripe-hosted page of the invoice to pay (pay-url.ts), or null. */
+  payUrl: string | null;
+  openInvoiceCount: number;
   /** A usable (not deleted) Stripe customer exists: Manage billing is available. */
   hasCustomer: boolean;
-  /** Nothing LIVE or incomplete: Subscribe is enabled for every purchasable plan, including the previous one. */
+  /** Nothing LIVE or incomplete, access not closed, not policy-suspended. */
   canSubscribe: boolean;
-  /** DUNNING / suspended for non-payment: the open invoice's Stripe-hosted payment page. */
-  payUrl: string | null;
+  standardAvailable: { month: boolean; year: boolean };
   suspensionReason: 'nonpayment' | 'policy' | null;
+}
+
+const TENANT_READS_TIMEOUT_MS = 3000;
+const INVOICE_LIST_TIMEOUT_MS = 5000;
+const DAY_MS = 86_400_000;
+
+/** The count and time zone, capped at 3 s together; the page renders without them (paying never depends on it). */
+async function readSeatsAndTimeZone(row: typeof tenants.$inferSelect): Promise<{ active: number | null; timeZone: string }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const work = Promise.all([billingTenantReads.countActiveUsers(row), billingTenantReads.readWorkspaceTimeZone(row)]);
+    work.catch(() => {}); // the losing branch of the race must never become an unhandled rejection
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('tenant reads timed out')), TENANT_READS_TIMEOUT_MS);
+    });
+    timeout.catch(() => {});
+    const [active, timeZone] = await Promise.race([work, timeout]);
+    return { active, timeZone };
+  } catch (err) {
+    console.error('[billing] could not read the user count / time zone:', err);
+    return { active: null, timeZone: DEFAULT_TIME_ZONE };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** The open invoices of the tracked subscription (uncollectible ones as a fallback: their hosted page still takes payment). */
+async function readPayableInvoices(subscriptionId: string, now: Date): Promise<{ payUrl: string | null; openInvoiceCount: number }> {
+  try {
+    const toCandidate = (i: Stripe.Invoice) => ({
+      created: i.created,
+      dueDate: typeof i.due_date === 'number' ? new Date(i.due_date * 1000) : null,
+      hostedUrl: i.hosted_invoice_url ?? null,
+    });
+    const open = await stripe.invoices.list({ subscription: subscriptionId, status: 'open', limit: 100 }, { timeout: INVOICE_LIST_TIMEOUT_MS });
+    let candidates = open.data.map(toCandidate);
+    if (candidates.length === 0) {
+      const uncollectible = await stripe.invoices.list({ subscription: subscriptionId, status: 'uncollectible', limit: 100 }, { timeout: INVOICE_LIST_TIMEOUT_MS });
+      candidates = uncollectible.data.map(toCandidate);
+    }
+    return { payUrl: choosePayInvoice(candidates, now)?.hostedUrl ?? null, openInvoiceCount: open.data.length };
+  } catch (err) {
+    console.error('[billing] could not load the open invoices:', err);
+    return { payUrl: null, openInvoiceCount: 0 };
+  }
 }
 
 export async function getTenantBillingInfo(): Promise<TenantBillingInfo> {
   await requireAdmin();
   const tenant = await getTenantForBilling();
   const row = await readTenantRow(tenant.slug);
+  const now = new Date();
   const hasCustomer = Boolean(row.stripeCustomerId) && !row.stripeCustomerDeletedAt;
+  const suspendedNonpayment = row.status === 'suspended' && row.suspensionReason === 'nonpayment';
+  const wantsInvoices = hasCustomer && Boolean(row.stripeSubscriptionId) && (
+    isGood(row.subscriptionStatus) || isDunning(row.subscriptionStatus) || row.subscriptionStatus === 'incomplete' || suspendedNonpayment
+  );
 
-  let payUrl: string | null = null;
-  const owes = isDunning(row.subscriptionStatus) || (row.status === 'suspended' && row.suspensionReason === 'nonpayment');
-  if (owes && hasCustomer && row.stripeSubscriptionId) {
-    try {
-      const sub = await stripe.subscriptions.retrieve(row.stripeSubscriptionId, { expand: ['latest_invoice'] }, { timeout: 5000 });
-      const inv = sub.latest_invoice as Stripe.Invoice | null;
-      if (inv && typeof inv === 'object' && inv.status === 'open') payUrl = inv.hosted_invoice_url ?? null;
-    } catch (err) {
-      console.error('[billing] could not load the open invoice:', err);
-    }
-  }
-
-  const plans = (Object.entries(PLANS) as [PlanKey, typeof PLANS[PlanKey]][]).map(([key, p]) => ({
-    key,
-    label: p.label,
-    seatLimit: p.seatLimit,
-    purchasable: Boolean(p.priceId),
-  }));
+  const [reads, invoices, seatRows] = await Promise.all([
+    readSeatsAndTimeZone(row),
+    wantsInvoices ? readPayableInvoices(row.stripeSubscriptionId!, now) : Promise.resolve({ payUrl: null, openInvoiceCount: 0 }),
+    controlDb.select().from(tenantSeatBilling).where(eq(tenantSeatBilling.tenantId, row.id)).limit(1)
+      .catch((err) => { console.error('[billing] could not read the seat row:', err); return []; }),
+  ]);
+  const seat = seatRows[0];
+  const fmt = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: reads.timeZone });
+  const date = (d: Date | null) => (d ? fmt.format(d) : null);
+  const access = getTenantAccess(toLifecycleFacts(row), now);
+  const ids = standardPriceIds();
+  const interval = row.planInterval === 'month' || row.planInterval === 'year' ? row.planInterval : null;
 
   return {
-    plan: row.plan ?? 'trial',
-    plans,
+    plan: displayPlan(row.plan ?? 'trial'),
+    interval,
+    access,
+    lifecycleExempt: row.lifecycleExempt,
     subscriptionStatus: row.subscriptionStatus ?? null,
+    cancelAtPeriodEnd: row.subscriptionCancelAtPeriodEnd,
+    trialEnd: date(row.trialEndsAt),
+    renewsOn: date(row.currentPeriodEnd),
+    endedOn: date(row.subscriptionEndedAt),
+    trialDaysLeft: row.trialEndsAt ? Math.ceil((row.trialEndsAt.getTime() - now.getTime()) / DAY_MS) : null,
+    trialEnded: row.trialEndsAt !== null && now.getTime() >= row.trialEndsAt.getTime(),
+    seats: reads.active === null ? null : { active: reads.active, limit: seatLimitFor(row.plan ?? 'trial') },
+    billedQuantity: seat?.stripeQuantity ?? null,
+    billedQuantityApplies: Boolean(seat?.stripeSubscriptionId) && seat?.stripeSubscriptionId === row.stripeSubscriptionId,
+    overdue: row.pastDueSince !== null,
+    collectionMethod: row.collectionMethod ?? null,
+    ended: row.subscriptionEndedAt !== null,
+    trialDateKnown: row.trialEndsAt !== null,
+    payUrl: invoices.payUrl,
+    openInvoiceCount: invoices.openInvoiceCount,
     hasCustomer,
-    canSubscribe: !BLOCKS_NEW_CHECKOUT(row.subscriptionStatus ?? null) && row.suspensionReason !== 'policy',
-    payUrl,
+    canSubscribe: !BLOCKS_NEW_CHECKOUT(row.subscriptionStatus ?? null) && access !== 'closed' && row.suspensionReason !== 'policy',
+    standardAvailable: { month: ids.month !== null, year: ids.year !== null },
     suspensionReason: (row.suspensionReason as TenantBillingInfo['suspensionReason']) ?? null,
   };
 }

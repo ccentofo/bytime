@@ -56,6 +56,11 @@ export interface LifecycleFacts {
   lifecycleExempt: boolean;
   /** F5: the founder allowed export for this policy-suspended workspace. */
   policyExportAllowed: boolean;
+  /**
+   * feature-plan-per-user-billing.md §6.2: the tracked subscription's collection method. Optional: absent means
+   * charge-automatically (existing facts literals keep compiling).
+   */
+  collectionMethod?: string | null;
 }
 
 export const GOOD = ['active', 'trialing'] as const;
@@ -151,7 +156,9 @@ export type NoticeKind =
   | 'subscription-ended'
   | 'deletion-notice'
   | 'deletion-final-reminder'
-  | 'policy-suspended';
+  | 'policy-suspended'
+  /** feature-plan-per-user-billing.md §6.9 (Q6, Q11): a payment failed while no grace notice covers it. */
+  | 'bank-payment-failed';
 
 /** What the cron needs to know about a notice row. `anchor` is the row's `scheduled_for`. */
 export interface NoticeState {
@@ -199,6 +206,8 @@ export function isNoticeSuperseded(kind: string, anchor: Date, f: LifecycleFacts
     case 'deletion-notice':
     case 'deletion-final-reminder':
       return !sameInstant(cycleAnchor(f), anchor) || f.deletionScheduledFor === null;
+    case 'bank-payment-failed':
+      return false; // it states a past fact; only deleting/deleted (above) supersede it
     default:
       return false;
   }
@@ -214,6 +223,8 @@ export interface ReconcileContext {
   currentPeriodEnd: Date | null;
   /** A `deletion-aborted` audit event was recorded since the tenant was last checked. */
   deletionAbortedSinceLastCheck: boolean;
+  /** feature-plan-per-user-billing.md §6.7: the mirror's collection method (absent = charge-automatically). */
+  collectionMethod?: string | null;
 }
 
 /** Whether the cron must read Stripe for this tenant before evaluating rules (a mirror may be stale). */
@@ -222,6 +233,9 @@ export function shouldReconcile(f: LifecycleFacts, ctx: ReconcileContext, now: D
   const tracked = f.stripeSubscriptionId !== null;
   if (!tracked) return !ctx.stripeCustomerDeleted; // customer set (not deleted) but nothing tracked yet
   if (isDunning(f.subscriptionStatus)) return true;
+  // feature-plan-per-user-billing.md §6.7: an invoiced subscription can be overdue while Stripe says active (no
+  // Stripe event fires at the due date), so a GOOD send_invoice mirror is reconciled every day.
+  if (ctx.collectionMethod === 'send_invoice' && isGood(f.subscriptionStatus)) return true;
   if (f.subscriptionStatus === 'incomplete') return true;
   if (f.status === 'suspended' && f.suspensionReason === 'nonpayment') return true;
   if (f.subscriptionEndedAt !== null && isLive(f.subscriptionStatus)) return true; // ended, Stripe not canceled
@@ -321,7 +335,10 @@ export function nextLifecycleActions(
 
   // --- Dunning: warning, then suspension (Terms §4.7: after notice) ---
   const P = f.pastDueSince;
-  if (f.status === 'active' && P !== null && f.subscriptionEndedAt === null && isDunning(f.subscriptionStatus)) {
+  // feature-plan-per-user-billing.md §6.2: an invoiced subscription runs on its due-date clock even while Stripe says
+  // active (an older overdue invoice behind a newer paid one).
+  if (f.status === 'active' && P !== null && f.subscriptionEndedAt === null
+      && (isDunning(f.subscriptionStatus) || f.collectionMethod === 'send_invoice')) {
     const suspendAt = addDays(P, PAYMENT_GRACE_DAYS);
     const warnAt = addDays(suspendAt, -SUSPENSION_NOTICE_DAYS);
     if (t >= warnAt.getTime()) actions.enqueue.push({ kind: 'suspension-warning', anchor: P });
