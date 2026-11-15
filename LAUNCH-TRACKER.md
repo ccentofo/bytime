@@ -5,7 +5,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 - Audit records: `*-AUDIT.md`.
 - Business decisions: `BUSINESS-DECISIONS.md` (kept by the business session).
 
-**Last updated:** 2026-11-15 (Upstash merged; per-user billing next). Earlier on 2026-11-13: Excel cost report merged. Before that: 2026-11-11 (earlier entries dated 2026-11-12 were written on 2026-11-11; the dates are kept as recorded).
+**Last updated:** 2026-11-15 (per-user billing blueprint FINAL v3.7, CLEAN; waiting on Q1–Q11). Earlier on 2026-11-15: Upstash merged. Earlier on 2026-11-13: Excel cost report merged. Before that: 2026-11-11 (earlier entries dated 2026-11-12 were written on 2026-11-11; the dates are kept as recorded).
 
 ## How we work
 - **Scope is the product owner's.** Nothing is added, removed or changed in what the product does without the product owner's yes. The lead decides software design inside approved scope and brings every assumption or open question to the product owner.
@@ -39,7 +39,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 2 | UX-4c Part 2a: Setup checklist and Import (`feature-plan-ux-setup-import.md`) | **merged** (PR #24, `3babd0d`; audit `UX-4C2A-AUDIT.md` READY). Tag `stable-2026-11-11-ux-setup-import`. |
 | 3 | UX-4c Part 2b: Integrations, Landing, Terms/Privacy text (`feature-plan-ux-integrations-billing.md` v3.1) | **merged** (PR #25, `8ecd8c6`, 2026-11-11; audit `UX-4C2B-AUDIT.md` READY; CI green; product owner's browser checks passed). Tag `stable-2026-11-11-ux-integrations-landing`. |
 | 3b | **Database backups**: daily encrypted `pg_dump` of every tenant and the control plane to S3 us-east-1, 30-day lifecycle, write-only credentials, monitoring, restore drill (`BUSINESS-DECISIONS.md` §5) | **approved 2026-11-11** as its own blueprint; blueprint to write |
-| 3a | **Per-user billing** (new model, billing rules and Billing page, from `BUSINESS-DECISIONS.md` §1) | **approved 2026-11-11**; **next: blueprint to write** on branch `per-user-billing` (from `main` at `f958be9`) |
+| 3a | **Per-user billing** (new model, billing rules and Billing page, from `BUSINESS-DECISIONS.md` §1) | **Blueprint FINAL v3.7, pre-mortem CLEAN** (`feature-plan-per-user-billing.md`, 2026-11-15; branch `per-user-billing` from `f958be9`, not pushed). **Waiting on the product owner's answers to Q1–Q11** (§2), then the checks file and a fresh dev session. |
 | 4 | Launch hardening H1–H6 (`feature-plan-launch-hardening.md` FINAL v3.2) | **merged** (PR #26, `a80ad8b`, 2026-11-12; audit `LAUNCH-HARDENING-AUDIT.md` READY; CI green; product owner's browser checks passed, with the no-JavaScript check withdrawn). Tag `stable-2026-11-12-launch-hardening`. |
 | 4b | **Reminder email capacity**: the cron senders use Resend batch send | **merged** (PR #27 at `af2ac7d`, PR #28 with the checks-file fixes; `main` = `9427fba`, 2026-11-13). Audit `REMINDER-CAPACITY-AUDIT.md` READY; CI green; the product owner's integration run and checks passed. Tag `stable-2026-11-13-reminder-capacity`. |
 | 5 | Excel cost report: charge codes and Class | **merged** (PR #29, `1d44b35`, 2026-11-13; audit `EXCEL-COST-REPORT-AUDIT.md` READY, no HIGH or MEDIUM, 5 LOWs recorded; CI green; the product owner's checks passed). Tag `stable-2026-11-13-excel-cost-report`. |
@@ -130,6 +130,23 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 
 ## Lead handoff notes (for a fresh "CadenzPoint Planning" session)
 **In flight:**
+- **Blueprint 3a written (eighth Planning session, 2026-11-15):** `feature-plan-per-user-billing.md` **FINAL v3.7, pre-mortem CLEAN**, on `per-user-billing` (lead commits, not pushed).
+  - **Review history:** round 1 (3 HIGH, 11 MEDIUM); round 2 (10 MEDIUM); then confirmation passes 1–6 (5, 1, 4, 2 HIGH + 1, 1, 1 MEDIUM); pass 7 clean. The log is in §15.
+  - **Key design:**
+    - quantity **held mid-term, dropped in the last 24 h before renewal** (stateless; no double charge on re-add; Q1);
+    - batched every 10 min by a new `seat-sync` cron with a daily check;
+    - **invoiced (send_invoice) grace follows the invoices' due dates**, not Stripe's status (explicit pseudo-code in §6.2);
+    - founder commands `set-plan`, `ensure-customer` and `seat-sync` (Stripe-mode guard);
+    - new notice `bank-payment-failed` (Terms §4.7);
+    - Billing page tiles per the approved mockup; landing Pricing; Users seat line.
+  - **Waiting on the product owner:** Q1–Q11 (§2), each with a recommendation.
+  - **After acceptance:**
+    1. write `PER-USER-BILLING-BROWSER-CHECKS.md`;
+    2. start "CadenzPoint Development — Per-user billing" (fresh, `use_worktree: false`) with the §14 hand-off;
+    3. review the impact analysis;
+    4. audit;
+    5. run the checks.
+  - **Then:** database backups (3b).
 - **Checkpoint 2026-11-15 (end of the seventh Planning session).**
   - **Done this session:** 5b merged (PR #30) and Upstash merged (PR #31, `main` = `f958be9`).
   - **New working agreement (product owner, 2026-11-13):**
