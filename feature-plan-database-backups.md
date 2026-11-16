@@ -1,9 +1,10 @@
 # Database backups (build queue 3b)
 
-> **Status:** **DRAFT v3**, 2026-11-15, lead architect.
+> **Status:** **DRAFT v3.1**, 2026-11-15, lead architect.
 > - Round 1 (2 HIGH, about 16 MEDIUM) is fixed in v2.
 > - Round 2 (2 HIGH, about 17 MEDIUM) is fixed in v3. The disaster relink is redesigned as a narrow `rebuild-database` command (§15).
-> - Confirmation pass pending.
+> - Confirmation pass 1 (8 MEDIUM) is fixed in v3.1.
+> - Confirmation pass 2 pending.
 >
 > **Branch:** `database-backups`, from `main` at `c416049` (after per-user billing, PR #32). The §3 references were checked there.
 >
@@ -61,7 +62,7 @@ Disaster-recovery backups that survive losing a Neon project, or the whole Neon 
 | Q1 | **Keeping the "30 days" promise (Terms §9.3).** An S3 lifecycle rule makes an object *eligible* for deletion after N days, rounded up to midnight UTC. AWS removes it asynchronously ("days or even weeks later") and doesn't recommend lifecycle alone for deadline-bound deletion. | **A 25-day lifecycle rule** (eligible within 26 days), **plus a daily old-objects check** by a separate **list-only** AWS identity. It sees names, sizes and dates, no content. The digest raises an alert when the oldest object is **over 27 days** old, and the founder deletes it by hand the same day. Worst case: about 27 days plus one daily sample plus same-day deletion, which stays at or under 30 days. This tightens §5's "can't read" to "can't read content"; your call. Alternative: a weekly manual check (worst case about 34 days). Either way the business side may want §9.3 to allow for the provider's lag. | §6.6 |
 | Q2 | **Staging backups.** | **None.** One rehearsal against a test bucket (§12.3). | §6.8 |
 | Q3 | **Drill frequency and where it's recorded.** §5 says monthly and "record the result in a runbook". The backups only live 25 days (Q1). | **Every 3 weeks**, reminded 21 days after the last PASS. Each drill restores a random tenant **and** the control plane. Alternate drills use the S3-only path (no control-plane lookup), the disaster path. Results are recorded in a control-plane table the digest reads, and the runbook points there. **The drill puts real customer data on the founder's laptop briefly**, in databases it drops at the end. Require FileVault. | §6.7, §6.9 |
-| Q4 | **Disaster rebuild (an exception to LB-D6).** When a tenant's Neon project is lost, restoring within 1 business day needs a way to point the workspace at a rebuilt database. A backup can be up to 24 h old, so entries made since are lost. LB-D6 required written consent before *overwriting* time records in an in-place restore. Here nothing is overwritten (the original is gone), but entries are lost. | **Add `tenant:admin rebuild-database`, used only when a project is lost:** <br>1. **Try Neon recovery first.** Neon keeps a deleted project recoverable for 7 days (`neon.ts:198`). Rebuild only if recovery isn't possible within **4 business hours**. <br>2. **A notice, not consent:** waiting for consent would block the 1-day restore. The notice (template in `RESTORE.md`) names the backup time and the lost window. <br>3. **If the old project ever comes back,** it's tracked and must be deleted or reconciled; an open alert stays until then. | §6.10 |
+| Q4 | **Disaster rebuild (an exception to LB-D6).** When a tenant's Neon project is lost, restoring within 1 business day needs a way to point the workspace at a rebuilt database. A backup can be up to 24 h old, so entries made since are lost. LB-D6 required written consent before *overwriting* time records in an in-place restore. Here nothing is overwritten (the original is gone), but entries are lost. | **Add `tenant:admin rebuild-database`, used only when a project is lost:** <br>1. **Try Neon recovery first.** Neon keeps a deleted project recoverable for 7 days (`neon.ts:198`). Rebuild only if recovery isn't possible within **4 business hours**. <br>2. **A notice, not consent:** waiting for consent would block the 1-day restore. The notice (template in `RESTORE.md`) names the backup time and the lost window. <br>3. **Never rebuild while the original project still exists** (an outage, not a loss): wait for Neon. Otherwise the workspace's history splits in two.<br>4. **If the old project comes back after a rebuild** (Neon recovery completing late), an automatic 8-day watch raises an alert until it's reconciled and deleted. | §6.10 |
 | Q5 | **Alerting on one missed run.** §5's 36 h rule only fires after two missed runs (backups 06:17 UTC, digest 13:00). | **Also alert when there's no successful control-plane backup in 26 h** at digest time. Add a **catch-up run at 18:17 UTC** that exits immediately if today's control-plane backup already succeeded, so one dropped run doesn't cost a day of RPO. | §6.4, §6.7 |
 
 Design choices stated for the record (engineering's call within §5):
@@ -78,20 +79,20 @@ Design choices stated for the record (engineering's call within §5):
 - **One Neon project per tenant:** `createNeonDatabase(slug)` (`src/lib/tenant/neon.ts:47-…`) creates the project with `pg_version: 16`, `history_retention_seconds` and the region (`:63-74`), and returns `{ dbUrl, neonProjectId }`.
 - **Neon helpers:**
   - `findNeonProjectIdByName` (`:285-297`) returns the first name match;
-  - `deleteNeonProjectVerified` (`:200-236`) checks that the tenant's endpoint host belongs to the project, and that the project isn't the control plane's (`:224-226`), then deletes the whole project;
+  - `deleteNeonProjectVerified` (`:200-236`) checks that the tenant's endpoint host belongs to the project, and that the project isn't the control plane's (`:219-224`), then deletes the whole project;
   - `neonProjectExists` (`:238`);
   - `directNeonHost` (`:187`);
   - a deleted project is recoverable for 7 days (`:198`).
 - **Control plane:** Postgres 16 per `PRODUCTION-DEPLOY.md:272`, not enforced in code.
 - **Stored URLs** use the pooled host; `toDirectConnectionUrl` (`migrate-tenant.ts:18-30`).
 - **`migrateTenantDatabase(url)`** (`:33-…`) runs `./drizzle` from the current checkout; `getPendingMigrationCount` is exported.
-- **Encryption:** tenant URLs are AES-256-GCM. `encryption.ts:20-23` derives any non-hex key in non-production, so a wrong or dev key is **not detected**. Writes must prove the key (§6.10).
+- **Encryption:** tenant URLs are AES-256-GCM. `encryption.ts:29-30` derives any non-hex key in non-production, so a wrong or dev key is **not detected**. Writes must prove the key (§6.10).
 - **Statuses** (`schema.ts:4-10`): `provisioning`, `active`, `suspended`, `deleting`, `deleted`. A crashed provisioning leaves `provisioning` with no URL (`provision.ts:44,68-74`).
 - **`tenant:delete`:**
   - classifies by `neon_project_id` (`delete-tenant.ts:99-100`);
-  - refuses when another workspace shares the URL (`:216-226`, and on a decrypt failure `:220-224`), or when the project is missing (`:236-245`);
-  - deletes by `neon_project_id` (`:325-327`);
-  - the deletion receipt lists founder exports (`:361-380`).
+  - refuses when another workspace shares the URL (`:216-226`, and on a decrypt failure `:225-229`), or when the project is missing (`:236-245`);
+  - deletes by `neon_project_id` (`:327-329`);
+  - the deletion receipt lists founder exports (`:362-383`).
 - **`isLoopbackUrl`** (`src/lib/tenant/loopback.ts:9`). **`dropDatabaseVerified`** (`neon.ts:264`) checks names before dropping.
 - **Founder scripts:**
   - call `dotenv.config({ path: ['.env.local', '.env'] })` (`tenant-admin.ts:37-42`, `migrate-all.ts:28-29`, `tenant-export.ts:14-15`); the developer's `.env` holds the **local** control-plane URL, and `.env.local` holds a dev `ENCRYPTION_KEY`;
@@ -274,7 +275,9 @@ Index `(tenant_id, status, finished_at DESC)`.
 | `destination` | text (host/db, no credentials) |
 | `destroy_by` | timestamptz |
 | `closed_at` | timestamptz null |
-| `closed_reason` | `'destroyed'` \| `'relinked'` \| `'drill-dropped'` |
+| `closed_reason` | `'destroyed'` \| `'drill-dropped'` |
+
+FKs: `backup_drills.tenant_id` and `restore_copies.tenant_id` reference `tenants.id` **ON DELETE CASCADE** (production tombstones and never deletes tenant rows, so this only affects tests, `lifecycle-helpers.ts:71-80`).
 
 The tests mark their rows with `run_id`/`actor` starting `test-`, and clean them by that marker (§11).
 
@@ -303,7 +306,7 @@ The script is added to `ops-retention-scripts.test.ts:254` with that exception.
 **Order (a barrier):**
 1. All tenant targets: `provisioning`, `active` or `suspended` with a non-null URL, by slug, run with the concurrency limit.
 2. One retry round for failed tenants (new keys).
-3. **Only when every tenant target and retry has settled:** the control plane.
+3. **When every tenant target and retry has settled, or at the latest T + 75 min** (job start + 75 min, whichever comes first): the control plane. A tenant still running at T + 75 continues, and the summary notes "control plane started before <slugs> finished". A control-plane dump missing a few tenant rows beats none.
 4. One retry of the control plane if it failed.
 
 So the control-plane dump contains this run's tenant rows. The status is re-read before each tenant starts; one now `deleting`/`deleted` is `skipped`.
@@ -313,9 +316,9 @@ So the control-plane dump contains this run's tenant rows. The status is re-read
 - `BackupStore = { putStream(key, body, opts), putSmall(key, bytes, opts) }`, with S3 via lib-storage;
 - tests inject a fake store and a filter (`test-lc-*` tenants only).
 
-**Per target (`backupOne`):**
+**Per target (`backupOne`), with a 30-minute wall-clock deadline.** When the deadline passes: kill both children, destroy the body, abort the upload, record `failed` with `deadline`. Child URLs (control plane and tenants alike, all via `toDirectConnectionUrl`) carry `connect_timeout=30&keepalives=1&keepalives_idle=30&keepalives_interval=10&keepalives_count=3`, so a half-open TCP connection fails fast.
 1. **URL:**
-   - decrypt, `toDirectConnectionUrl`;
+   - decrypt (tenants) or take the secret (control plane), then `toDirectConnectionUrl`, for both;
    - take the password with `decodeURIComponent(new URL().password)` and remove it from the URL;
    - in Actions, print `::add-mask::` for the password and host;
    - children get only `{ PATH, HOME, LANG, PGPASSWORD }`; sslmode and options stay in the URL query.
@@ -354,7 +357,7 @@ on:
     inputs:
       only: { description: 'Optional: control-plane or one slug', required: false }
 permissions: { contents: read }
-concurrency: { group: "db-backup-${{ inputs.only && 'only' || 'all' }}", cancel-in-progress: false }
+concurrency: { group: "db-backup-${{ inputs.only && format('only-{0}', inputs.only) || 'all' }}", cancel-in-progress: false }
 jobs:
   backup:
     if: github.ref == 'refs/heads/main'
@@ -436,7 +439,7 @@ jobs:
 ### 6.7 Monitoring (lifecycle route and digest)
 **`BACKUPS_EXPECTED`:**
 - `1` (production): the alert sync runs;
-- `0` (staging): the sync **doesn't run**, and the digest prints "Backup monitoring is off on this deployment (BACKUPS_EXPECTED=0)";
+- `0` (staging): the sync **doesn't run**, and the digest prints "Backup monitoring is off on this deployment (BACKUPS_EXPECTED=0)". When `APP_ROOT_DOMAIN` is the production domain (`cadenzpoint.com`), that line also counts in `hasNews`, so a mistaken `0` in production isn't buried under "all quiet";
 - anything else, when `NODE_ENV === 'production'`: the sync doesn't run, and the digest prints "**Backup monitoring is not configured (BACKUPS_EXPECTED)**", counted in `hasNews`;
 - non-production local: silent.
 
@@ -453,17 +456,17 @@ jobs:
 |---|---|---|
 | missed run (Q5) | no control-plane `ok` in 26 h | `backup-missed-run` (global) |
 | stale tenant | the tenant has a non-null URL, was created over 36 h ago, and its newest `ok` is missing or older than 36 h | `backup-stale` (tenant) |
-| stale control plane | the newest `ok` is older than 36 h, **and** missed-run isn't open | `backup-stale` (global / `control-plane`) |
 | failed | the target's newest row is `failed` | `backup-failed` (tenant, or global / `control-plane`) |
 | drill overdue (Q3) | `max(first ok, last PASS)` + 21 days < now; never before the first `ok` | `backup-drill-overdue` (global) |
 | drill failed | the newest drill row isn't PASS on both targets (`NO-ELIGIBLE-TENANT` counts as PASS for the tenant half) | `backup-drill-failed` (global) |
 | old objects (Q1) | `oldest_object_at < now − 27 d`, or no audit row in 30 h | `backup-old-objects` (global) |
-| restore copy overdue | an open `restore_copies` row past `destroy_by` | `restore-copy-overdue` (tenant, or global / copy id) |
+| restore copy overdue | an open `restore_copies` row past `destroy_by` | `restore-copy-overdue` (**global** / copy id) |
+| rebuilt old project back | an open `rebuild-old-project-watch` whose project exists again (§6.10) | `rebuild-old-project-pending` (global / project id) |
 
 - **Wiring:** a step in `tenant-lifecycle/route.ts`, after `runLifecycleCron` and before signup maintenance:
   - `try { await syncBackupAlerts(now) } catch { best-effort raise global backup-check-failed; log }`;
   - each successful sync **resolves** `backup-check-failed`;
-  - backup alerts of tenants no longer `provisioning`/`active`/`suspended` are resolved.
+  - `backup-stale` and `backup-failed` for tenants no longer `provisioning`/`active`/`suspended` are resolved. The global copy and rebuild kinds are never auto-resolved by status.
 - **Digest section "Backups"** (try/catch):
   - one summary line ("N of M targets backed up in 26 h; newest control-plane backup <time>");
   - the OFF / not-configured line;
@@ -491,12 +494,14 @@ It prints which mode it's in, and the banner (`printTargetBanner()`, or "no cont
 - `BACKUP_AGE_KEY_FILE` (outside synced folders, on disk only while in use);
 - `BACKUP_PG_RESTORE_BIN` (absolute, `16.`); `BACKUP_AGE_BIN`.
 
-**Seams:** `restoreOne(input, deps: { reader: BackupReader, controlPlane: Db | null, bins, clock })`, where `BackupReader = { list(prefix), get(key) }`. Tests call it in-process.
+**Seams:** `verifyBackup(input, deps)` (steps 2–4) and `applyBackup(verified, destination, deps)` (steps 5–7), composed as `restoreOne`. `deps = { reader: BackupReader, controlPlane: Db | null, bins, clock }`, where `BackupReader = { list(prefix), get(key) }`. Tests and `rebuild-database` call them in-process.
 
 **Modes:**
 - `--target control-plane|<tenant uuid>|<slug, needs env> (--key K | --latest) --into <scratch url> [--expect-sha256 H] [--yes]`.
 - `--drill --into-server <local server url> [--s3-only] [--yes]`:
-  - restores a random tenant with an `ok` row in the last 36 h, picked from the control plane (or, with `--s3-only`, a random tenant prefix from the list), **and** the control plane;
+  - requires `--control-plane env` (`none` refuses, since the result must be recorded);
+  - restores a random tenant with an `ok` row in the last 36 h, picked from the control plane (or, with `--s3-only`, a random tenant prefix **holding an object from the last 36 h**, found by listing), **and** the control plane;
+  - inserts a `restore_copies` row for each drill database at creation, and closes it `drill-dropped` when it's dropped. A crashed drill therefore leaves a tracked copy, which the next drill's sweep closes after dropping;
   - each goes into a fresh `cp_drill_<rand8>` database it creates and **drops in `finally`** (kill pg_restore first, then `DROP DATABASE … WITH (FORCE)`, name checked by regex);
   - SIGINT/SIGTERM handlers do the same;
   - at start it sweeps leftover `cp_drill_%` databases;
@@ -506,6 +511,7 @@ It prints which mode it's in, and the banner (`printTargetBanner()`, or "no cont
 **One restore:**
 1. **Scratch guard:**
    - `--into` must be loopback unless `--allow-remote-scratch`; it's converted with `toDirectConnectionUrl`;
+   - a missing **loopback** database is created (`CREATE DATABASE`);
    - the database must have no user tables;
    - print the plan and stop without `--yes`.
 2. **Key choice and ownership:**
@@ -525,51 +531,73 @@ It prints which mode it's in, and the banner (`printTargetBanner()`, or "no cont
 8. **Copies (not drills):**
    - in `env` mode, insert a `restore_copies` row with `destroy_by = min(sidecar.startedAt + BACKUP_RETENTION_DAYS, tenant.deletedAt + 30 d)`;
    - in `none` mode, print the destroy-by date and the command to register the copy later (`tenant:admin register-restore-copy …`), and instruct the founder to do so;
+   - `--no-copy-record` (only with `--target control-plane`, for runbook B, where the restored database becomes the live control plane) skips the copy record;
    - `tenant:admin restore-copy-destroyed <copy id> --yes` closes it;
-   - the deletion receipt (`delete-tenant.ts:361-380`) lists the tenant's open copies.
+   - the deletion receipt (`delete-tenant.ts:362-383`) lists the tenant's open copies.
 
 **Drill recording:** once the drill has actually started (after `--yes`), insert a `backup_drills` row in `finally` with both results, the mode, keys, duration and `--list-old` count. Drills alternate `--s3-only` (the runbook says so; the reminder text names the next mode).
 
 **Exit:** 0 only on PASS.
 
 ### 6.10 Disaster rebuild (Q4): `tenant:admin rebuild-database <slug>`
-**Inputs:** `--key <backup key> | --latest`, `--expect-sha256 <from run log>` (required unless the control-plane row exists), `[--old-project-still-exists] [--yes]`.
+**Inputs:** `--key <backup key> | --latest`, `--expect-sha256 <from run log>` (required unless the control-plane row exists), `[--allow-checkout-mismatch] [--yes]`. There is **no** option to rebuild while the old project exists (Q4).
 
-**Environment:** production `CONTROL_PLANE_DATABASE_URL`, `ENCRYPTION_KEY` (**64 hex**), `NEON_API_KEY`, `NEON_REGION_ID`, the restore AWS identity, `BACKUP_AGE_KEY_FILE`, `BACKUP_PG_RESTORE_BIN`. Run from a checkout of `main` at the deployed commit (it migrates with `./drizzle`); it checks `git rev-parse HEAD` against `origin/main` and warns if they differ.
+**Environment:** production `CONTROL_PLANE_DATABASE_URL`, `ENCRYPTION_KEY` (**64 hex**), **`NEON_API_KEY` (required at start; the command refuses without it, so the local-dev fallback in `neon.ts:49-54` can't happen)**, `NEON_REGION_ID`, the restore AWS identity, `BACKUP_AGE_KEY_FILE`, `BACKUP_PG_RESTORE_BIN`.
 
-**Steps** (it refuses unless every check holds):
-1. **Key proof:**
-   - the tenant is `active` or `suspended`;
-   - `decrypt(current db_url_encrypted)` must succeed, proving `ENCRYPTION_KEY` (invariant 10). For a lost project the URL still decrypts.
-2. **Old project:** `neonProjectExists(old id)` must be **false** (404) unless `--old-project-still-exists` is given. Q4 says: try Neon's recover first. When the flag is given, the command records the old id and raises a `rebuild-old-project-pending` alert (tenant, dedup old id), resolved only by `tenant:admin old-project-deleted <slug> <id> --yes`.
-3. **Backup ownership and integrity:** `restoreOne` checks as in §6.9 steps 2–4 for **this tenant's** prefix and sidecar.
-4. **Create** a **new** Neon project: `createNeonDatabase(slug, { projectNameSuffix: '-r' + yyyymmdd })`. That's version 16, policy history retention, `NEON_REGION_ID`, and `tenantDatabaseName(slug)`, a project of its own by construction.
-5. **Restore** into its direct URL (§6.9 steps 5–6) and require PASS.
+It must run from a checkout of the deployed commit, because it migrates with `./drizzle`. It runs `git fetch` and refuses unless `HEAD == origin/main`, or `--allow-checkout-mismatch` is given.
+
+**Steps** (it refuses unless every check holds; the plan is printed, and nothing is created without `--yes`):
+1. **Facts and key proof:**
+   - the tenant is `active` or `suspended`, access mode isn't `closed`, and `deletion_scheduled_for` is null or in the future (a stale control plane never resurrects a deleted workspace, F31);
+   - its `neon_project_id` is non-null;
+   - `decrypt(current db_url_encrypted)` succeeds (invariant 10);
+   - keep `oldUrlEncrypted` and `oldProjectId` for step 8.
+2. **Old project gone:** `neonProjectExists(oldProjectId)` must be **false** (404). Otherwise refuse: "the original project still exists; recover or wait for Neon (Q4). A rebuild would split the workspace's history."
+3. **Backup:** `verifyBackup()` (§6.9 steps 2–4: this tenant's prefix, sidecar `tenantId`/`target`/`runId`, SHA-256 against the row or `--expect-sha256`).
+4. **Create** a new project: `createNeonDatabase(slug, { projectNameSuffix: '-r' + yyyymmdd })` (version 16, policy retention, `NEON_REGION_ID`, `tenantDatabaseName(slug)`).
+   - Refuse if it returns a null `neonProjectId` or a loopback URL.
+   - **Immediately**, before any restore, raise the global alert `rebuild-orphan-project` (dedup = new project id, detail slug) and print the id.
+   - SIGINT/SIGTERM handlers print the id again.
+5. **Restore:** `applyBackup()` into the new project's direct URL. The §6.9 loopback guard is bypassed **only** for the URL step 4 just returned. Require PASS.
 6. **Migrate** with `migrateTenantDatabase(newUrl)`, then require `getPendingMigrationCount(newUrl) === 0`.
 7. **Guards:**
-   - the new endpoint host belongs to the new project and isn't the control plane's (mirror `neon.ts:224-226`);
-   - no other non-deleted tenant has the new `neon_project_id`, or a URL whose `directNeonHost` equals it;
-   - a decrypt failure on any other row refuses, as `delete-tenant.ts:220-224` does.
-8. **On `--yes`** (before it, print the plan and stop):
-   - under the tenant lock with the version guard, write `db_url_encrypted = encrypt(pooled url)` and `neon_project_id = new id`;
-   - audit `database-rebuilt` (detail: old and new project, backup key, sha256, backup time);
-   - close nothing in `restore_copies` (none was created; the restore went straight into the live project);
-   - print "the app switches within 60 s (registry cache)" and the **customer notice reminder**.
-9. **Failure after step 4:** the new project stays (it isn't linked). The command prints its id and a `tenant:admin` hint, and raises `rebuild-orphan-project` (tenant, dedup new id) until it's deleted by hand.
+   - the new endpoint host belongs to the new project and isn't the control plane's (mirror `neon.ts:219-224`);
+   - no other non-deleted tenant has the new `neon_project_id`, or a URL with the same `directNeonHost`;
+   - any decrypt failure on another row refuses (as `delete-tenant.ts:225-229`).
+8. **Link** (`--yes`): in **one** `withTenantLock` transaction:
+   - re-read the row and require `status ∈ {active, suspended}` and `db_url_encrypted == oldUrlEncrypted` and `neon_project_id == oldProjectId` (byte equality). This catches a concurrent rebuild or deletion; on mismatch refuse, and the orphan alert stays;
+   - write `db_url_encrypted = encrypt(pooled url)` and `neon_project_id = new id`;
+   - resolve `rebuild-orphan-project` for this id;
+   - raise the global `rebuild-old-project-watch` (dedup = oldProjectId, detail slug and rebuild time);
+   - audit `database-rebuilt` (detail: old and new project, backup key, sha256, backup time).
+
+   After the transaction, print:
+   - "the app switches within 60 s (registry cache)";
+   - the **customer notice reminder**. It names the backup time, the lost window, and that **changes made since the backup are undone** (user deactivations, role changes, password and two-step resets, integration token changes), so the admin should review them.
+
+**Old-project watch (automatic):** `syncBackupAlerts` (§6.7) checks `neonProjectExists(id)` for each open `rebuild-old-project-watch`. It needs `NEON_API_KEY`, which Vercel production already has.
+- If the project **exists**, raise `rebuild-old-project-pending` (global, dedup id): "the original project came back; reconcile and delete it". It's resolved by `tenant:admin old-project-deleted <id> --yes`, which **verifies a 404** first, so a founder deletion (`deleteNeonProjectVerified`-style) must come first.
+- If the project is still 404 after 8 days (beyond Neon's 7-day recovery), the watch resolves itself.
+
+**Alert scope:** `rebuild-orphan-project`, `rebuild-old-project-watch`, `rebuild-old-project-pending` and `restore-copy-overdue` are **global**. They're never resolved by tenant deletion (`delete-tenant.ts:342-344` resolves tenant-scoped alerts only) or by the §6.7 "no longer active" rule.
+
+**`tenant:delete`** (dry run and apply) lists the tenant's open `restore_copies` and open rebuild alerts naming its slug, and **refuses to apply** until they're closed. Closing them is a founder action, so the deletion SLA has a clear next step.
 
 **The runbook (`RESTORE.md`, new "Disaster" section):**
 - **A. Tenant project lost:**
-  1. Try Neon recovery (7 days).
-  2. Suspend the workspace if the old project is still reachable (`tenant:admin suspend`), so nothing writes to it.
-  3. `rebuild-database`.
-  4. Smoke test.
-  5. Unsuspend.
-  6. Send the notice.
+  1. Try Neon recovery (7 days); open a support ticket.
+  2. Only if the project is confirmed gone (404) and not recoverable within 4 business hours (Q4), run `rebuild-database`.
+  3. Smoke test.
+  4. Send the notice.
+  5. No suspension is used: a lost project receives no writes, and `tenant:admin suspend` is a policy hold that emails customers.
 - **B. Control plane lost** (with or without the tenants):
   1. Pause crons: rotate `CRON_SECRET` in Vercel and redeploy.
-  2. Restore the control plane from S3 with `db:restore --target control-plane --latest --control-plane none --expect-sha256 …` into a new Neon project.
-  3. Update `CONTROL_PLANE_DATABASE_URL` in Vercel production (**and redeploy**), in the GitHub `production` and `production-backups` environments, and in your shell.
-  4. Reconcile the window. Workspaces created since the backup have no row: list Stripe customers and subscriptions created in the window and handle them by hand. Re-check payment state (`tenant:admin show`) before crons run.
+  2. Restore the control plane: `db:restore -- --control-plane none --target control-plane --latest --expect-sha256 <from the run log> --into <new control-plane direct url> --allow-remote-scratch --no-copy-record --yes`, into a new Neon project. `--no-copy-record` is allowed only with `--target control-plane`, because the restored database becomes live.
+  3. Update `CONTROL_PLANE_DATABASE_URL` in Vercel production (**redeploy**), in the GitHub `production` and `production-backups` environments, and in your shell.
+  4. Reconcile the window since the backup:
+     - workspaces **deleted** in the window: from `tenant:delete` receipts and Neon's deleted-projects list, re-run `tenant:delete` so they're re-tombstoned; never recover or rebuild them;
+     - workspaces **created** in the window have no row: handle their Stripe customers and subscriptions by hand;
+     - re-check payment state before crons run.
   5. Rebuild lost tenants (A).
   6. Restore the old `CRON_SECRET` and redeploy.
   7. Send the notices.
@@ -600,8 +628,8 @@ The table in §6.7 is the state table: raised while true, resolved the first syn
 | Step | Outcome on failure |
 |---|---|
 | 1–3 (before creating anything) | refuse, nothing created |
-| 4 created, 5–7 fail | the new project stays unlinked; `rebuild-orphan-project` alert; workspace unchanged |
-| 8 written | done; `rebuild-old-project-pending` if the old project still exists |
+| 4 created (alert raised at once), then 5–8 fail, interrupt, or the step 8 compare mismatches | the new project stays unlinked; the global `rebuild-orphan-project` alert stays; workspace unchanged |
+| 8 written | done; orphan alert resolved; `rebuild-old-project-watch` for 8 days |
 
 ## 8. Failure modes
 | # | Failure | Behaviour |
@@ -632,7 +660,11 @@ The table in §6.7 is the state table: raised while true, resolved the first syn
 | F24 | `begin` connection drops | §6.2 step 2 (no hang). |
 | F25 | Wrong tenant's backup in a restore or rebuild | Key prefix plus sidecar `tenantId` refuse (invariant 9). |
 | F26 | Two tenants in one Neon project | Rebuild always creates a project per tenant, and guard 7 refuses a shared project id or host. |
-| F27 | Old project comes back after a rebuild | `rebuild-old-project-pending` until deleted (Q4). |
+| F27 | Old project comes back after a rebuild | The automatic watch raises `rebuild-old-project-pending` until it's reconciled and deleted (verified 404). |
+| F31 | Stale restored control plane shows a deleted workspace as live | Runbook B.4 re-tombstones it. `rebuild-database` refuses closed workspaces or past deletion dates. |
+| F32 | One tenant hangs (half-open TCP, a stalled PUT) | A per-target 30-minute deadline kills both children, destroys the body and aborts. TCP keepalives on the child URLs. The control plane starts by T+75 min regardless (§6.2). |
+| F33 | Restore copies or rebuild projects of a later-deleted workspace | Global alerts survive deletion; `tenant:delete` refuses until they're closed. |
+| F34 | Two rebuilds run at once, or a deletion lands during a rebuild | The step 8 compare against the step 1 values refuses; the orphan alert stays. |
 | F28 | Control plane restored stale | Runbook B: crons paused, redeploy, Stripe reconcile. |
 | F29 | Migration lock during a dump | `--lock-wait-timeout=60s` fails the target, and the barrier retries. The runbook: no deploys at 06:17 or 18:17 UTC. |
 | F30 | The environment auto-created unprotected | §12 order (create and gate before merge), the job-level `if`, `job_workflow_ref`. |
@@ -641,7 +673,7 @@ The table in §6.7 is the state table: raised while true, resolved the first syn
 - **GitHub Actions:** minutes per run, about 2 runs a day (the catch-up usually exits in seconds); 120-minute timeout.
 - **Neon:** CU-hours ≈ dump time + 5 min per tenant per day; transfer ≈ uncompressed size per day.
 - **S3:** under $5/month.
-- **Runner memory:** about 128 MiB.
+- **Runner memory:** lib-storage buffers about (queueSize + 1) × 64 MiB per upload, about 576 MiB at concurrency 3 (the runner has 7 GB).
 - **Vercel:** isolated reads in the daily cron.
 
 ## 10. Blast radius
@@ -657,7 +689,8 @@ The table in §6.7 is the state table: raised while true, resolved the first syn
 | `src/lib/tenant/backup-status.ts` | **new** |
 | `src/app/api/cron/tenant-lifecycle/route.ts` | the isolated backup step |
 | `src/lib/tenant/ops-digest.ts` | Backups section |
-| `src/lib/tenant/delete-tenant.ts` | the receipt lists open restore copies |
+| `src/lib/tenant/delete-tenant.ts` | the receipt lists open restore copies; dry run and apply list open copies and rebuild alerts, and apply refuses until they're closed |
+| `src/__tests__/integration/lifecycle-helpers.ts` | cleanup tolerates the new cascading FKs (no change needed beyond a check) |
 | `.github/workflows/db-backup.yml` | **new** |
 | `.github/workflows/ci.yml` | integration job on `ubuntu-24.04`; installs `postgresql-client-16`; sets `REQUIRE_PG16_TOOLS=1`, `BACKUP_PG_DUMP_BIN` and `BACKUP_PG_RESTORE_BIN` to `/usr/lib/postgresql/16/bin/…` |
 | `package.json` | scripts `db:backup`, `db:backup-audit`, `db:restore`; devDependencies |
@@ -684,7 +717,7 @@ The table in §6.7 is the state table: raised while true, resolved the first syn
 **Unit:**
 - **U1:** keys (format, UTC, random suffix, the sidecar key).
 - **U2:** `redact`; password split and decode; minimal child env.
-- **U3:** `backupFindings`: every §6.7 row, plus new tenant, null-URL provisioning, a tenant leaving active, missed-run suppressing stale control plane, the drill anchor, and `NO-ELIGIBLE-TENANT`.
+- **U3:** `backupFindings`: every §6.7 row, plus new tenant, null-URL provisioning, a tenant leaving active (stale and failed resolved, global copy and rebuild kinds kept), the drill anchor, and `NO-ELIGIBLE-TENANT`.
 - **U4:** end gate: the body ends only after both `(0,null)`; any failure destroys it.
 - **U5:** recipient file; `--only`; empty env and non-hex key refused.
 - **U6:** static checks:
@@ -697,12 +730,14 @@ The table in §6.7 is the state table: raised while true, resolved the first syn
 - **U11:** key ownership: `restoreOne` refuses another tenant's prefix, a sidecar with a different `tenantId`/`target`/`runId`, and a missing `--expect-sha256` when no row exists.
 
 **Integration** (fake store and reader, fake age, filters):
-- **S1:** two `test-lc-*` tenants (one `suspended`) plus the control plane:
+- **S1:** two `test-lc-*` tenants (one `suspended`) plus the control plane. pg_dump is faked here; row counts come from the snapshot query, which is real:
   - `ok` rows, sidecars, SHA-256 equal to the stored bytes, exact counts;
   - a `deleting` tenant skipped;
   - `BACKUP` lines;
   - **the control plane starts only after all tenant work** (the store records order), and its row counts include this run's tenant rows.
 - **S2:** fake pg_dump exits 1 mid-stream → `failed`; **the store never saw end-of-stream**; exit 1.
+- **S2b:** a fake pg_dump that hangs → killed at the (test-shortened) per-target deadline → `failed` with `deadline`.
+- **S1b:** with one tenant hung past the (test-shortened) T + 75 deadline, the control plane still runs, and the summary names the unfinished slug.
 - **S3:** fake age exits 1 → the same.
 - **S4:** the store rejects 412 → `key-exists-or-retried`; the barrier retry with a new key → `ok`.
 - **S5:** row insert fails → summary failed; the `row-failed` line.
@@ -721,7 +756,17 @@ The table in §6.7 is the state table: raised while true, resolved the first syn
   - a shared project id or host;
   - no `--yes`.
 
-  On success it writes the URL and project id and audits. A failure after create raises `rebuild-orphan-project`; `--old-project-still-exists` raises `rebuild-old-project-pending`.
+  Also refused:
+  - a closed workspace or a past deletion date;
+  - a null old project id;
+  - the old project still existing (no flag exists);
+  - a missing `NEON_API_KEY`;
+  - a null new project id or a loopback new URL;
+  - a step 8 compare mismatch (a concurrent rebuild or deletion), where the orphan alert stays.
+
+  `rebuild-orphan-project` is raised **before** the restore: a simulated kill after create leaves it open. On success it writes the URL and project id, resolves the orphan alert, raises the watch, and audits.
+- **S11b:** the old-project watch: the fake Neon reports the project existing → `rebuild-old-project-pending`; still 404 after 8 days → the watch resolves; `old-project-deleted` refuses while the project exists.
+- **S16:** a tenant with an open copy past `destroy_by` is deleted → `restore-copy-overdue` (global) **stays open**, and `tenant:delete` refuses to apply while copies or rebuild alerts are open.
 - **S12:** a wrong `ENCRYPTION_KEY` → tenants `failed`, the control plane `ok`.
 - **S13:** `db:backup-audit` with a fake reader → a correct `backup_audits` row.
 - **S14:** `restore_copies`: `destroy_by` = min(backup + 30, deletion + 30); overdue alert; `restore-copy-destroyed` closes it; the deletion receipt lists open copies.
@@ -761,8 +806,8 @@ The table in §6.7 is the state table: raised while true, resolved the first syn
 **12.3 Staging rehearsal (once):**
 1. A test bucket and test key.
 2. `db:backup -- --only <staging slug>` with your profile.
-3. `db:restore -- --control-plane none --target <uuid> --latest --expect-sha256 <from the output> --into postgres://bytime:bytime_dev@localhost:5432/rehearsal --yes` → PASS.
-4. Rehearse `rebuild-database` on a staging throwaway workspace whose project you delete first.
+3. `db:restore -- --control-plane none --target <uuid> --latest --expect-sha256 <from the output> --into postgres://bytime:bytime_dev@localhost:5432/rehearsal --yes` → PASS (the loopback database is created if missing).
+4. Rehearse `rebuild-database` on a staging throwaway workspace whose project you delete first (wait until the API returns 404).
 5. Delete the test bucket.
 
 ## 13. Verification
@@ -843,3 +888,31 @@ The table in §6.7 is the state table: raised while true, resolved the first syn
   - CI binary paths;
   - founder-step URLs and redeploys;
   - FileVault.
+
+**Confirmation pass 1** (one fresh reviewer, on v3): 8 MEDIUM, 16 LOW; no HIGH. Fixed in v3.1:
+- **MEDIUM fixes:**
+  - copy and rebuild alerts made global, so they survive deletion, and `tenant:delete` refuses while they're open;
+  - the orphan alert raised right after project creation;
+  - an automatic 8-day watch on the old project;
+  - **no rebuild while the original project exists** (the flag removed; stated in Q4);
+  - the suspend step removed from runbook A (it's a policy hold that emails customers);
+  - a per-target 30-minute deadline, TCP keepalives, and the control plane starting by T + 75 min;
+  - the step 8 compare against the step 1 values;
+  - runbook B reconciles deletions in the window, and rebuild refuses closed workspaces or past deletion dates.
+- **LOW fixes:**
+  - `NEON_API_KEY` required, with null-id and loopback refusals;
+  - `verifyBackup` / `applyBackup` split;
+  - `--no-copy-record` for the control-plane relink;
+  - drill copies tracked and closed `drill-dropped`;
+  - the unreachable stale control-plane row removed;
+  - per-slug concurrency groups;
+  - production-domain `0` counted in `hasNews`;
+  - the notice names what a rebuild undoes;
+  - `git fetch` with refusal on mismatch;
+  - the memory figure corrected;
+  - the control-plane URL goes direct;
+  - FK specs;
+  - S1 fake versus real stated;
+  - drill-mode edge cases;
+  - loopback database auto-create;
+  - citations.
