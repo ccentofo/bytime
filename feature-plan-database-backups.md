@@ -1,9 +1,9 @@
 # Database backups (build queue 3b)
 
-> **Status:** **DRAFT v4**, 2026-11-15, lead architect.
+> **Status:** **FINAL v4.1**, 2026-11-15, lead architect. **Pre-mortem CLEAN** (the confirmation pass on v4 found no HIGH or MEDIUM; its 18 LOWs are written in §16). Waiting on the product owner's answers to Q1–Q4.
 > - **Scope split (product owner, 2026-11-15):** this blueprint covers backups, monitoring, restore into a scratch database, the drill and retention. The disaster tooling (rebuilding a lost workspace database, the control-plane disaster runbook, re-tombstoning) moves to its own item, **3c**. The v3.2 design is the starting point for 3c (commit `95d8bfe`).
 > - Rounds 1–2 and confirmation passes 1–3 are logged in §15. Pass 3 found MEDIUMs only in the 3c tooling.
-> - A confirmation pass on this trimmed version is pending.
+> - The confirmation pass on v4: **CLEAN**.
 >
 > **Branch:** `database-backups`, from `main` at `c416049` (after per-user billing, PR #32). The §3 references were checked there.
 >
@@ -60,8 +60,8 @@ Disaster-recovery backups that survive losing a Neon project, or the whole Neon 
 |---|---|---|---|
 | Q1 | **Keeping the "30 days" promise (Terms §9.3).** An S3 lifecycle rule makes an object *eligible* for deletion after N days, rounded up to midnight UTC. AWS removes it asynchronously ("days or even weeks later") and doesn't recommend lifecycle alone for deadline-bound deletion. | **A 25-day lifecycle rule** (eligible within 26 days), **plus a daily old-objects check** by a separate **list-only** AWS identity. It sees names, sizes and dates, no content. The digest raises an alert when the oldest object is **over 27 days** old, and the founder deletes it by hand the same day. Worst case: about 27 days plus one daily sample plus same-day deletion, which stays at or under 30 days. This tightens §5's "can't read" to "can't read content"; your call. Alternative: a weekly manual check (worst case about 34 days). Either way the business side may want §9.3 to allow for the provider's lag. | §6.6 |
 | Q2 | **Staging backups.** | **None.** One rehearsal against a test bucket (§12.3). | §6.8 |
-| Q3 | **Drill frequency and where it's recorded.** §5 says monthly and "record the result in a runbook". The backups only live 25 days (Q1). | **Every 3 weeks**, reminded 21 days after the last PASS. Each drill restores a random tenant **and** the control plane. Alternate drills use the S3-only path (no control-plane lookup), the disaster path. Results are recorded in a control-plane table the digest reads, and the runbook points there. **The drill puts real customer data on the founder's laptop briefly**, in databases it drops at the end. Require FileVault. | §6.7, §6.9 |
-| Q4 | **Alerting on one missed run.** §5's 36 h rule only fires after two missed runs (backups 06:17 UTC, digest 13:00). | **Also alert when there's no successful control-plane backup in 26 h** at digest time. Add a **catch-up run at 18:17 UTC** that exits immediately if today's control-plane backup already succeeded, so one dropped run doesn't cost a day of RPO. | §6.4, §6.7 |
+| Q3 | **Drill frequency and where it's recorded.** §5 says monthly and "record the result in a runbook". The backups only live 25 days (Q1). | **Every 3 weeks**, reminded 21 days after the last PASS. Each drill restores a random tenant **and** the control plane into local databases it creates and drops. Alternate drills pick the backup by listing S3 alone (`--s3-only`), as you would in a disaster, though integrity is still checked against the control plane. The full no-control-plane disaster path is rehearsed at staging (§12.3). Results are recorded in a control-plane table the digest reads, and the runbook points there. **The drill puts real customer data on your laptop briefly**, so require FileVault. | §6.7, §6.9 |
+| Q4 | **Alerting on one missed run.** §5's 36 h rule only fires after two missed runs (backups 06:17 UTC, digest 13:00). | **Also alert when there's no successful control-plane backup in 26 h** at digest time. So one dropped morning run alerts at 13:00, and the alert clears at the next digest after a success. **Add an 18:17 UTC catch-up run:** it re-runs a full backup if the morning one didn't succeed, or else only the workspaces whose backup failed that day. | §6.4, §6.7 |
 
 Design choices stated for the record (engineering's call within §5):
 - **Runner:** GitHub Actions, scheduled.
@@ -84,7 +84,7 @@ Design choices stated for the record (engineering's call within §5):
 - **Control plane:** Postgres 16 per `PRODUCTION-DEPLOY.md:272`, not enforced in code.
 - **Stored URLs** use the pooled host; `toDirectConnectionUrl` (`migrate-tenant.ts:18-30`).
 - **`migrateTenantDatabase(url)`** (`:33-…`) runs `./drizzle` from the current checkout; `getPendingMigrationCount` is exported.
-- **Encryption:** tenant URLs are AES-256-GCM. `encryption.ts:29-30` derives any non-hex key in non-production, so a wrong or dev key is **not detected**. Writes must prove the key (§6.10).
+- **Encryption:** tenant URLs are AES-256-GCM. `encryption.ts:29-30` derives any non-hex key in non-production, so a wrong or dev key is **not detected**. (Item 3c's writes will need to prove the key.)
 - **Statuses** (`schema.ts:4-10`): `provisioning`, `active`, `suspended`, `deleting`, `deleted`. A crashed provisioning leaves `provisioning` with no URL (`provision.ts:44,68-74`).
 - **`tenant:delete`:**
   - classifies by `neon_project_id` (`delete-tenant.ts:99-100`);
@@ -472,7 +472,7 @@ jobs:
   - the "Backup status could not be read: <redacted>" line, which counts in `hasNews`;
   - all `esc()`d;
   - findings aren't repeated; they appear under "Unresolved alerts".
-- **Timing:** checked at 13:00 UTC. One dropped 06:17 run is covered by the 18:17 catch-up. Two drops show as missed-run at the next digest.
+- **Timing:** checked at 13:00 UTC. One dropped 06:17 run raises `backup-missed-run` at 13:00 (about 30 h since the previous success); the 18:17 catch-up then backs up, and the alert resolves at the next day's digest.
 
 ### 6.8 Staging and local (Q2)
 - **Staging:** `BACKUPS_EXPECTED=0`; no backup workflow (the environment is gated to `main`, production only). A one-off rehearsal (§12.3).
@@ -577,7 +577,7 @@ The table in §6.7 is the state table: raised while true, resolved the first syn
 ## 8. Failure modes
 | # | Failure | Behaviour |
 |---|---|---|
-| F1 | One scheduled run dropped | The 18:17 catch-up runs the backup (Q4). If both drop: `backup-missed-run` at the next digest. |
+| F1 | One scheduled run dropped | `backup-missed-run` at 13:00; the 18:17 catch-up runs the full backup; the alert resolves at the next digest (Q4). |
 | F2 | Control plane unreachable from the runner | Fatal, exit 1; GitHub's email; missed-run alert. |
 | F3 | A tenant unreachable | Retry after 5 s, then the barrier retry; `backup-failed`. The runbook: re-run with `only=<slug>` (its own concurrency group, so it doesn't replace a pending scheduled run). |
 | F4 | pg_dump fails mid-stream | The end gate destroys the body, so no object completes. |
@@ -876,3 +876,46 @@ v4 keeps restore into loopback scratch databases, restore copies and the deletio
 - the control-plane retry is timed from the job's start;
 - the catch-up retries tenants that failed that day;
 - drill copies get a 1-day `destroy_by`.
+
+**Confirmation pass 4** (one fresh reviewer, on v4): **no HIGH, no MEDIUM: CLEAN.** 18 LOWs, written in §16. The Q3 and Q4 texts, §6.7 timing and F1 were corrected in v4.1 to match the design.
+
+## 16. LOW items from the final confirmation pass (the dev implements; the audit verifies)
+1. **`JOB_STARTED_AT`:** the workflow's first step writes `JOB_STARTED_AT=$(date -u +%s)` to `$GITHUB_ENV`. It's fatal if missing when `GITHUB_ACTIONS=true`; otherwise the script's start time is used. Covered by U5 and U6.
+2. **The restore plan** printed before `--yes` shows the chosen key, its run id, its `LastModified` and its size.
+   - "Newest" for `--latest` means S3 `LastModified`.
+   - The `BACKUP` line includes the slug, so a disaster restore can map uuid to customer without a control plane.
+3. **The restore identity** is an IAM Identity Center permission set: run `aws sso login --profile restore` first, which works with the SDK's default chain. Proven at §12.3.
+4. **"Can't" checks after §12 step 7:**
+   - with the writer role: Get, Delete and a duplicate PUT without If-None-Match are all denied;
+   - with the auditor: Get is denied;
+   - with the admin role: deleting a scratch object under `v1/test/` succeeds (the Q1 manual-deletion path).
+5. **Bucket policy and auditor:**
+   - the policy also denies `s3:PutBucketVersioning` and `s3:PutBucketObjectLockConfiguration` except to the admin pattern;
+   - the auditor also gets `s3:ListBucketMultipartUploads` and `s3:GetBucketVersioning`, and records versioning status and uploads older than 2 days in `backup_audits` (two columns);
+   - `backup-old-objects` also fires on versioning enabled or stale uploads.
+6. **The no-deploy window** is 06:00–08:30 and 18:00–20:30 UTC (PRODUCTION-DEPLOY). Separately, the lead notes for a later item that migrations set no `lock_timeout`.
+7. **Restore temp directories** use the prefix `cp-restore-`. Every `db:restore` start sweeps and reports leftovers, and the runbook says so.
+8. **`--s3-only` drills** pick only prefixes whose uuid exists in `tenants`. Otherwise the drill row is written with `tenant_id` null and the prefix in `detail`, so the record is never lost to an FK error.
+9. **The control plane** runs outside the tenant concurrency pool. S1b fills every slot with hung tenants.
+10. **The printed `register-restore-copy` command** includes an explicit `CONTROL_PLANE_DATABASE_URL=<production>` prefix and a banner reminder. TENANT-DELETION notes the 7-day deletion commitment next to the copy refusal.
+11. **`db:backup-audit`** shares the masking and banner helper, is in the U2 tests and has the same `ops-retention-scripts` exception.
+12. **§12.3** uses the production recipient (no override exists) and lists its full environment: `BACKUP_PG_DUMP_BIN`, plus exported staging `CONTROL_PLANE_DATABASE_URL` and `ENCRYPTION_KEY`.
+13. **Small consistency points:**
+    - `BACKUP_AGE_BIN` has a default (not fatal);
+    - `--list-old` needs no `--control-plane` and exits 0 when it succeeds;
+    - the `--into` guard refuses the `postgres`, `template0` and `template1` databases.
+14. **A `restore_copies` state table** is added to §7:
+    - states: open, overdue, closed-destroyed, closed-drill-dropped;
+    - events: register, drill create, drill drop, sweep, `restore-copy-destroyed`, tenant deletion.
+
+    §7.1 also gains rows for: the T+75 start, the control-plane retry and its 35-minute rule, the per-target deadline, and the catch-up's no-work exit.
+15. **Extra tests** (each must fail without its change):
+    - the 35-minute retry rule;
+    - `::add-mask::` printed before any banner output;
+    - the drill sweep closing a crashed drill's copy;
+    - a `NO-ELIGIBLE-TENANT` drill;
+    - `register-restore-copy`;
+    - the digest's "blocked by <n> open restore copies" line.
+16. **The digest's "blocked by" query** runs inside the Backups section's try/catch, and is listed in §10.1.
+17. **`restore-copy-overdue` detail** carries the slug, target, destination and `destroy_by`, so the digest line names the workspace.
+18. **Stated limitation (into the 3c brief):** the catch-up doesn't re-dump the control plane, so its newest backup can lack the `ok` rows of tenants re-run that evening. A restore of those needs `--expect-sha256`.

@@ -38,7 +38,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
 | 1 | Hotfix: table column order leaks between pages (`feature-plan-hotfix-table-state.md`) | **merged** (PR #23) |
 | 2 | UX-4c Part 2a: Setup checklist and Import (`feature-plan-ux-setup-import.md`) | **merged** (PR #24, `3babd0d`; audit `UX-4C2A-AUDIT.md` READY). Tag `stable-2026-11-11-ux-setup-import`. |
 | 3 | UX-4c Part 2b: Integrations, Landing, Terms/Privacy text (`feature-plan-ux-integrations-billing.md` v3.1) | **merged** (PR #25, `8ecd8c6`, 2026-11-11; audit `UX-4C2B-AUDIT.md` READY; CI green; product owner's browser checks passed). Tag `stable-2026-11-11-ux-integrations-landing`. |
-| 3b | **Database backups**: daily encrypted `pg_dump` of every tenant and the control plane to S3 us-east-1, lifecycle retention, write-only credentials, monitoring, restore into a scratch database, restore drill (`BUSINESS-DECISIONS.md` §5) | **Blueprint in review** (`feature-plan-database-backups.md` v4, branch `database-backups` from `c416049`). Scope split 2026-11-15: the disaster tooling moved to 3c. |
+| 3b | **Database backups**: daily encrypted `pg_dump` of every tenant and the control plane to S3 us-east-1, lifecycle retention, write-only credentials, monitoring, restore into a scratch database, restore drill (`BUSINESS-DECISIONS.md` §5) | **Blueprint FINAL v4.1, pre-mortem CLEAN** (`feature-plan-database-backups.md`, branch `database-backups` from `c416049`, not pushed). **Waiting on the product owner's answers to Q1–Q4.** Scope split 2026-11-15: the disaster tooling moved to 3c. |
 | 3c | **Disaster rebuild tooling**: rebuild a lost workspace database into a fresh Neon project and relink it; control-plane disaster runbook; re-tombstone workspaces deleted in a lost window (`BUSINESS-DECISIONS.md` §5 "restore within 1 business day") | **New (product owner, 2026-11-15).** Its own blueprint, after 3b; required before the first paying customer. Starting design: 3b v3.2 (commit `95d8bfe`) §6.10, with the open findings in the handoff notes. |
 | 3a | **Per-user billing** (new model, billing rules and Billing page, from `BUSINESS-DECISIONS.md` §1) | **merged** (PR #32, `c416049`, 2026-11-15; audit `PER-USER-BILLING-AUDIT.md` READY at `77c103a`; checks run by the lead). Tag `stable-2026-11-15-per-user-billing`. **Still to do:** the founder's Stripe setup (PRODUCTION-DEPLOY Phase 9, rewritten) and staging 12.8/12.8b, which prove the Stripe-only behaviour. |
 | 4 | Launch hardening H1–H6 (`feature-plan-launch-hardening.md` FINAL v3.2) | **merged** (PR #26, `a80ad8b`, 2026-11-12; audit `LAUNCH-HARDENING-AUDIT.md` READY; CI green; product owner's browser checks passed, with the no-JavaScript check withdrawn). Tag `stable-2026-11-12-launch-hardening`. |
@@ -137,7 +137,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
   - **Review history:**
     - rounds 1–2 (2 HIGH each), then confirmation passes 1–3 (8, 4 and 6 MEDIUM);
     - from v3 on, every MEDIUM was in the disaster tooling, hence the split;
-    - a confirmation pass on v4 is next, then the product owner (Q1–Q4).
+    - the confirmation pass on v4 is **CLEAN** (FINAL v4.1); waiting on the product owner (Q1–Q4).
   - **3c brief (open findings to design for):**
     - runbook B must disable Vercel cron jobs (rotating `CRON_SECRET` doesn't pause them);
     - a disaster deploy path, since `deploy-prod` migrates every tenant first;
@@ -149,7 +149,8 @@ The single source of truth for **where we are**, kept by the lead architect (ses
     - re-check that the old project is gone before linking;
     - orphan projects when the create response is lost;
     - reconcile coordination with customers;
-    - notices sent in the lost window.
+    - notices sent in the lost window;
+    - the catch-up doesn't re-dump the control plane (3b §16 item 18).
 - **Per-user billing merged (2026-11-15):** PR #32, `main` = `c416049`, tag `stable-2026-11-15-per-user-billing` (on origin). The 3a dev session can be archived. **Next: blueprint 3b, database backups**, on branch `database-backups` (from `c416049`, holding this note). Scope is in `BUSINESS-DECISIONS.md` §5. Same process: research, two pre-mortem rounds plus confirmation passes, then the product owner, then a fresh dev session, audit, and checks run by the lead.
 - **Blueprint 3a written (eighth Planning session, 2026-11-15):** `feature-plan-per-user-billing.md` **FINAL v3.7, pre-mortem CLEAN**, on `per-user-billing` (lead commits, not pushed).
   - **Review history:** round 1 (3 HIGH, 11 MEDIUM); round 2 (10 MEDIUM); then confirmation passes 1–6 (5, 1, 4, 2 HIGH + 1, 1, 1 MEDIUM); pass 7 clean. The log is in §15.
