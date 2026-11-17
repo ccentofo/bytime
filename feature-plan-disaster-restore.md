@@ -352,7 +352,7 @@ jobs:
 **On the override path the project exists by definition**, so the table below isn't used there. Instead:
 - **`3D000` is checked first** → `database-missing` (below);
 - then a successful login, or any other server response after authentication → **answers** (refuse `reachable`);
-- first, `GET /projects/{neon_project_id}/endpoints` (a failed call → `proof-failed`):
+- otherwise, `GET /projects/{neon_project_id}/endpoints` (a failed call → `proof-failed`):
   - **the URL's host is listed:** `28P01` → **credentials problem** (refuse; proof `refused:credentials`: the data is intact, and a rebuild would lose hours). A proxy error that isn't `28xxx`, or a socket error or timeout → **unreachable**;
   - **the URL's host isn't listed:** run proof (d)'s candidate check. If a live candidate serves it → refuse `reachable` (a stale id). Otherwise the compute endpoint is gone from a live project → **unreachable** (`endpoint-gone`), whatever the error;
 - **`3D000` (database does not exist)** inside a live project → refuse `database-missing`: "use RESTORE.md's point-in-time restore, which loses nothing".
