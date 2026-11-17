@@ -159,7 +159,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
     - the confirmation pass on v4 is **CLEAN** (FINAL v4.1);
     - **on hold 2026-11-16:** the product owner's constraints (nothing manual, no data on their machines, scale). Waiting on the business session's answers to `BACKUPS-QUESTIONS-FOR-BUSINESS.md`. Expect a redesign: KMS keys, automated cloud drills into temporary Neon databases, no laptop restores, a one-button cloud disaster workflow (3c).
   - **3c-2 brief (from 3c rounds 1–2, 2026-11-17):**
-    - the control plane's gone-proof needs a known project for the positive control (the restore-test project id), and a reachability rule (an auth error counts as reachable; check what Neon returns for a deleted endpoint);
+    - the control plane's gone-proof needs a known project for the positive control (the restore-test project id), and a reachability rule. **Neon's proxy answers unknown or deleted endpoints with `28P01`** (verified 2026-11-17), so only a successful login counts as reachable; reuse 3c's `classifyEndpoint` (3c §6.4.1);
     - the marker parameter needs GetParameter and SecureString/Overwrite;
     - re-tombstoning must not skip `tenant:delete`'s Stripe safeguards (prefer listing plus a `tenant:delete --project-proven-gone` path), must not need a manual repoint to undo, and needs a mass-incident brake;
     - rebuilds made after the last control-plane backup are re-applied from 3c's `LINKED` log lines;
