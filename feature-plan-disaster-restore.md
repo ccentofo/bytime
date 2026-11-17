@@ -442,9 +442,9 @@ The app's key must be an **organisation** key. `PRODUCTION-DEPLOY.md` 5.5 is rew
 7. In the Neon console, on each rebuilt project's access settings, set `neon-ops@` to **Viewer** (Q1's residual).
 8. **A lost workspace that was due for deletion** (the button records its proof and refuses `deletion-due`): deploys skip it. `tenant:delete` refuses on a missing project today; the proven-gone deletion path is in 3c-2. Until then, it stays skipped and listed.
 9. **If GitHub is down (Q2):** in AWS CloudShell as `corey-admin`, run the command printed here (`aws ecs run-task … --started-by cloudshell-<date>` with the same overrides). The start emails you.
+10. **A workspace that can't be rebuilt** (`no-backup`): its proof keeps it skippable by deploys until it's rebuilt or reachable again. Contact the lead. 3b's daily `backup-failed`/`backup-stale` alerts for it continue meanwhile; that's expected.
 11. **The button says "a disaster task is already running"** and nothing is running from your side: in CloudShell, `aws ecs list-tasks --cluster cadenzpoint-backup --family cadenzpoint-backup-disaster` and `aws ecs stop-task` it. It's logged and emailed.
 12. **A rebuilt or recovered workspace that drops out again** (deploys fail on it once its proof is superseded): press with the override again. The new observation lets deploys skip it while you wait.
-10. **A workspace that can't be rebuilt** (`no-backup`): its proof keeps it skippable by deploys until it's rebuilt or reachable again. Contact the lead. 3b's daily `backup-failed`/`backup-stale` alerts for it continue meanwhile; that's expected.
 
 ## 7. State machines
 ### 7.1 One workspace
