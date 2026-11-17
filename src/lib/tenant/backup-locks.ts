@@ -7,3 +7,5 @@ export const BACKUP_LOCK_KEY = 728_402_201;
 export const AUDIT_LOCK_KEY = 728_402_202;
 export const RESTORE_TEST_LOCK_KEY = 728_402_203;
 export const MIGRATE_RUN_LOCK_KEY = 728_402_204;
+/** feature-plan-disaster-restore.md §6.4 "Start": one disaster task at a time (waited for up to 3 minutes). */
+export const DISASTER_LOCK_KEY = 728_402_205;

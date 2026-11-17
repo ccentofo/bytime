@@ -92,9 +92,9 @@ describe('U6: the protection documents equal expected-policies.ts (the audit\'s 
   it('both rule patterns', () => {
     for (const [, r] of ofType(stack, 'AWS::Events::Rule')) {
       const name = r.Properties.Name as string;
-      expect(JSON.stringify(normalize(r.Properties.EventPattern)), name).toBe(JSON.stringify(normalize(exp.rulePatterns[name])));
+      expect(JSON.stringify(normalize(resolve(r.Properties.EventPattern))), name).toBe(JSON.stringify(normalize(exp.rulePatterns[name])));
     }
-    expect(ofType(stack, 'AWS::Events::Rule').map(([, r]) => r.Properties.Name).sort()).toEqual([NAMES.protectionsRule, NAMES.rolesRule].sort());
+    expect(ofType(stack, 'AWS::Events::Rule').map(([, r]) => r.Properties.Name).sort()).toEqual([NAMES.protectionsRule, NAMES.rolesRule, NAMES.disasterStartedRule, NAMES.disasterRunTaskRule].sort());
   });
 });
 
@@ -109,11 +109,11 @@ describe('U6: the backup can only add; the audit can only look', () => {
     }
   });
 
-  it('the key policy: Decrypt/ReEncrypt denied except the restore role; window < 30 denied; PutKeyPolicy except CfnExecRole', () => {
+  it('the key policy: Decrypt/ReEncrypt denied except the restore roles (restore test, disaster); window < 30 denied; PutKeyPolicy except CfnExecRole', () => {
     const st = resolve((stack.Resources.BackupKey.Properties.KeyPolicy as Node).Statement) as Statement[];
-    const d = st.find((s) => s.Sid === 'DenyDecryptExceptRestoreTest')!;
+    const d = st.find((s) => s.Sid === 'DenyDecryptExceptRestoreRoles')!;
     expect(d).toMatchObject({ Effect: 'Deny', Action: ['kms:Decrypt', 'kms:ReEncrypt*'] });
-    expect((d.Condition as Node).ArnNotEquals).toEqual({ 'aws:PrincipalArn': `arn:aws:iam::${ACCT}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-task` });
+    expect((d.Condition as Node).ArnNotEquals).toEqual({ 'aws:PrincipalArn': [`arn:aws:iam::${ACCT}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-task`, `arn:aws:iam::${ACCT}:role/cadenzpoint-backup/cadenzpoint-backup-disaster-task`] });
     expect(st.find((s) => s.Sid === 'DenyShortDeletionWindow')!.Condition).toEqual({ NumericLessThan: { 'kms:ScheduleKeyDeletionPendingWindowInDays': '30' } });
     const p = st.find((s) => s.Sid === 'DenyKeyPolicyChangesExceptDeploy')!;
     expect((p.Condition as Node).ArnNotEquals).toEqual({ 'aws:PrincipalArn': `arn:aws:iam::${ACCT}:role/cadenzpoint-bootstrap/cadenzpoint-backup-cfn` });
@@ -124,7 +124,7 @@ describe('U6: the backup can only add; the audit can only look', () => {
     const deny = (sid: string) => st.find((s) => s.Sid === sid && s.Effect === 'Deny' && s.Principal === '*');
     expect(deny('DenyVersioningAndObjectLock')!.Action).toEqual(['s3:PutBucketVersioning', 's3:PutBucketObjectLockConfiguration']);
     expect(deny('DenyDeletes')!.Action).toBe('s3:DeleteObject*');
-    expect(deny('DenyReadsExceptRestoreTest')!.Condition).toEqual({ ArnNotEquals: { 'aws:PrincipalArn': `arn:aws:iam::${ACCT}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-task` } });
+    expect(deny('DenyReadsExceptRestoreRoles')!.Condition).toEqual({ ArnNotEquals: { 'aws:PrincipalArn': [`arn:aws:iam::${ACCT}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-task`, `arn:aws:iam::${ACCT}:role/cadenzpoint-backup/cadenzpoint-backup-disaster-task`] } });
     expect(deny('DenyPutWithoutIfNoneMatch')!.Condition).toEqual({ Null: { 's3:if-none-match': 'true' }, Bool: { 's3:ObjectCreationOperation': 'true' } });
     expect(deny('DenyPolicyAndLifecycleChangesExceptDeploy')!.Condition).toEqual({ ArnNotEquals: { 'aws:PrincipalArn': `arn:aws:iam::${ACCT}:role/cadenzpoint-bootstrap/cadenzpoint-backup-cfn` } });
     expect(deny('DenyInsecureTransport')).toBeTruthy();
@@ -165,7 +165,7 @@ describe('U6: the backup can only add; the audit can only look', () => {
 describe('U6: schedules, tasks, alerting', () => {
   const schedules = ofType(stack, 'AWS::Scheduler::Schedule');
   it('every schedule pins a revision (Ref to the task definition), UTC, FlexibleTimeWindow OFF, a retry policy, the DLQ, created last', () => {
-    expect(schedules.length).toBe(5);
+    expect(schedules.length).toBe(6);
     const others = Object.entries(stack.Resources).filter(([, r]) => r.Type !== 'AWS::Scheduler::Schedule').map(([k]) => k).sort();
     for (const [name, s] of schedules) {
       const p = s.Properties;
@@ -335,11 +335,11 @@ describe('U6: the Dockerfile and the bundle inputs', () => {
     inputs = Object.keys(r.metafile!.inputs);
   }, 120_000);
 
-  it('every non-node_modules input of the esbuild bundle matches the deploy list; the src/ inputs are only the three named modules', () => {
+  it('every non-node_modules input of the esbuild bundle matches the deploy list; the src/ inputs are only the five named modules (3c adds db-name, lifecycle-config)', () => {
     const own = inputs.filter((i) => !i.startsWith('node_modules/'));
     expect(own.length).toBeGreaterThan(10);
     expect(own.filter((i) => !listed(i))).toEqual([]);
-    expect(own.filter((i) => i.startsWith('src/')).sort()).toEqual(['src/lib/encryption.ts', 'src/lib/tenant/backup-locks.ts', 'src/lib/tenant/direct-url.ts']);
+    expect(own.filter((i) => i.startsWith('src/')).sort()).toEqual(['src/lib/encryption.ts', 'src/lib/tenant/backup-locks.ts', 'src/lib/tenant/db-name.ts', 'src/lib/tenant/direct-url.ts', 'src/lib/tenant/lifecycle-config.ts']);
     for (const f of ['tsconfig.backup.json', '.npmrc', 'ops/aws/pgdg-ACCC4CF8.asc', 'Dockerfile.backup', 'ops/aws/backup-stack.yml', '.github/workflows/backup-deploy.yml']) expect(listed(f), f).toBe(true);
     expect(listed('ops/aws/bootstrap.yml')).toBe(false);
     expect(listed('package.json')).toBe(false);

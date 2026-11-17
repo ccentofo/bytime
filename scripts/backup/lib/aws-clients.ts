@@ -4,7 +4,8 @@
  */
 import { S3Client, GetBucketVersioningCommand, ListMultipartUploadsCommand, GetBucketPolicyCommand, GetBucketLifecycleConfigurationCommand } from '@aws-sdk/client-s3';
 import { KMSClient, DescribeKeyCommand, GetKeyPolicyCommand, DecryptCommand, ReEncryptCommand } from '@aws-sdk/client-kms';
-import { SNSClient, ListSubscriptionsByTopicCommand, GetSubscriptionAttributesCommand, GetTopicAttributesCommand } from '@aws-sdk/client-sns';
+import { SNSClient, ListSubscriptionsByTopicCommand, GetSubscriptionAttributesCommand, GetTopicAttributesCommand, PublishCommand } from '@aws-sdk/client-sns';
+import { ECSClient, ListTasksCommand, DescribeTasksCommand } from '@aws-sdk/client-ecs';
 import { EventBridgeClient, DescribeRuleCommand, ListTargetsByRuleCommand } from '@aws-sdk/client-eventbridge';
 import { CloudTrailClient, GetTrailStatusCommand } from '@aws-sdk/client-cloudtrail';
 import { CloudWatchClient, DescribeAlarmsCommand } from '@aws-sdk/client-cloudwatch';
@@ -185,5 +186,72 @@ export function realKeyProbeClient(region: string, keyArn: string): KeyProbeClie
     reEncrypt: async (blob, context) => {
       await kms.send(new ReEncryptCommand({ CiphertextBlob: blob, SourceEncryptionContext: context, DestinationKeyId: keyArn, DestinationEncryptionContext: context, SourceKeyId: keyArn }));
     },
+  };
+}
+
+// ---- the disaster task (feature-plan-disaster-restore.md §6.4 "Who started it", "Start", "End") ---------------------
+
+export interface EcsTaskInfo {
+  taskArn: string;
+  startedBy: string | null;
+  createdAt: Date | null;
+}
+
+/** The task's view of ECS: itself (from the container metadata endpoint) and the running tasks of its family. */
+export interface DisasterEcs {
+  self(): Promise<EcsTaskInfo>;
+  /** Running tasks of the disaster family, with createdAt (DescribeTasks). */
+  running(): Promise<EcsTaskInfo[]>;
+}
+
+export function realDisasterEcs(o: { region: string; metadataUri: string; family: string; fetchImpl?: typeof fetch }): DisasterEcs {
+  const ecs = new ECSClient({ region: o.region, ...TIMEOUT });
+  const doFetch = o.fetchImpl ?? fetch;
+  let meta: { cluster: string; taskArn: string } | null = null;
+  const metadata = async () => {
+    if (meta) return meta;
+    const res = await doFetch(`${o.metadataUri}/task`, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) throw new Error(`task metadata: HTTP ${res.status}`);
+    const j = (await res.json()) as { Cluster?: string; TaskARN?: string };
+    if (!j.Cluster || !j.TaskARN) throw new Error('task metadata: no Cluster/TaskARN');
+    meta = { cluster: j.Cluster, taskArn: j.TaskARN };
+    return meta;
+  };
+  const describe = async (cluster: string, arns: string[]): Promise<EcsTaskInfo[]> => {
+    const out: EcsTaskInfo[] = [];
+    for (let i = 0; i < arns.length; i += 100) {
+      const r = await ecs.send(new DescribeTasksCommand({ cluster, tasks: arns.slice(i, i + 100) }));
+      for (const t of r.tasks ?? []) out.push({ taskArn: t.taskArn ?? '', startedBy: t.startedBy ?? null, createdAt: t.createdAt ?? null });
+    }
+    return out;
+  };
+  return {
+    async self() {
+      const m = await metadata();
+      const [t] = await describe(m.cluster, [m.taskArn]);
+      if (!t) throw new Error('DescribeTasks returned no task for this task');
+      return t;
+    },
+    async running() {
+      const m = await metadata();
+      const arns: string[] = [];
+      let nextToken: string | undefined;
+      do {
+        const r = await ecs.send(new ListTasksCommand({ cluster: m.cluster, family: o.family, desiredStatus: 'RUNNING', nextToken }));
+        arns.push(...(r.taskArns ?? []));
+        nextToken = r.nextToken;
+      } while (nextToken);
+      return arns.length ? describe(m.cluster, arns) : [];
+    },
+  };
+}
+
+/** The founder's email: one message to the alert topic (private). */
+export type Publisher = (subject: string, message: string) => Promise<void>;
+
+export function realPublisher(o: { region: string; topicArn: string }): Publisher {
+  const sns = new SNSClient({ region: o.region, ...TIMEOUT });
+  return async (subject, message) => {
+    await sns.send(new PublishCommand({ TopicArn: o.topicArn, Subject: subject.slice(0, 99), Message: message.slice(0, 200_000) }));
   };
 }

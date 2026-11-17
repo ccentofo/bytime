@@ -1,0 +1,51 @@
+# The Disaster restore button (feature-plan-disaster-restore.md §6.1; RESTORE.md runbook A). Founder-only: the job runs
+# in the `aws-disaster` environment (required reviewer: the founder; main only; admin bypass off), and only that
+# environment's OIDC token can assume the button role, which may start only the disaster task family.
+#
+# The repository is public: run logs are readable by anyone logged in. So the inputs are NEVER put in `env:` or a step's
+# `${{ }}`; disaster-button.sh reads them from the event file and masks every target before it prints anything.
+# To cancel a press, cancel the run: its last step stops the task.
+name: Disaster restore
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'workspace (rebuild and switch) or rehearse (prove the path; no switch)'
+        type: choice
+        options: [workspace, rehearse]
+        required: true
+      targets:
+        description: 'Workspace ids (uuid), comma-separated, or all-lost (workspace only)'
+        type: string
+        required: true
+      override:
+        description: 'unreachable-4h: workspace, original unreachable for 4+ hours; canary: rehearse only (first rehearsal)'
+        type: choice
+        options: ['none', 'unreachable-4h', 'canary']
+        default: 'none'
+      confirm:
+        description: 'Type the mode again (with the override: workspace unreachable-4h)'
+        type: string
+        required: true
+
+permissions: { contents: read }
+
+concurrency: { group: disaster-restore, cancel-in-progress: false, queue: max }   # a second press waits; never dropped
+
+jobs:
+  run:
+    if: github.ref == 'refs/heads/main' && vars.AWS_BACKUPS_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    environment: aws-disaster
+    timeout-minutes: 360
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with: { role-to-assume: '${{ secrets.AWS_DISASTER_ROLE_ARN }}', aws-region: us-east-1, role-duration-seconds: 21600, mask-aws-account-id: true }
+      - id: run
+        run: exec bash scripts/backup/disaster-button.sh
+      - if: cancelled()
+        run: bash scripts/backup/disaster-button.sh --stop

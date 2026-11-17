@@ -80,3 +80,48 @@ describe('U5: environment checks in ECS', () => {
     expect(c.lines[0]).toMatch(/^usage: /);
   });
 });
+
+describe('3c: the disaster command (feature-plan-disaster-restore.md §6.3, §6.4 "argv")', () => {
+  const A = '0a1b2c3d-1111-4222-8333-444455556666';
+  const env = {
+    ...ECS, CONTROL_PLANE_DATABASE_URL: 'postgresql://u:p@ep-x-pooler.us-east-1.aws.neon.tech/cp', ENCRYPTION_KEY: KEY, NEON_API_KEY: 'k', NEON_ORG_ID: 'org-1',
+    RESTORE_TEST_PROJECT_ID: 'prj-rt', CONTROL_PLANE_PROJECT_ID: 'prj-cp', BACKUP_BUCKET: 'b', BACKUP_KMS_KEY_ARN: ARN, BACKUP_DECRYPT_KEY_ARNS: ARN,
+    ALERT_TOPIC_ARN: 't', BACKUP_LOG_GROUP: '/cadenzpoint/backup/backup', NEON_REGION_ID: 'aws-us-east-1', AWS_REGION: 'us-east-1',
+    BACKUP_PG_RESTORE_BIN: '/usr/lib/postgresql/16/bin/pg_restore', DISASTER_DEADLINE_MINUTES: '330',
+  };
+
+  it('is refused outside ECS like every other command', async () => {
+    const c = capture();
+    expect(await main(['disaster', 'workspace', '--targets', A], { CONTROL_PLANE_DATABASE_URL: 'postgresql://u:p@localhost/x' }, { log: c.log, checksOnly: true })).toBe(1);
+    expect(c.lines).toEqual([OUTSIDE_ECS_REFUSAL]);
+  });
+
+  it('an unknown flag exits 2 before any environment check (version skew: "image older than the button")', async () => {
+    const c = capture();
+    expect(await main(['disaster', 'workspace', '--targets', A, '--from-the-future', 'x'], ECS, { log: c.log, checksOnly: true })).toBe(2);
+    expect(c.lines[0]).toMatch(/^refused: unknown flag/);
+    expect(await main(['disaster', 'workspace', '--targets', 'acme'], env, { log: () => {}, checksOnly: true })).toBe(1);
+  });
+
+  it('its required values; a set-but-invalid NEON_HISTORY_RETENTION_SECONDS is fatal at the start; the region must be us-east-1', async () => {
+    expect(await main(['disaster', 'rehearse', '--targets', 'auto'], env, { log: () => {}, runVersion: pg16, checksOnly: true })).toBe(0);
+    for (const k of ['NEON_API_KEY', 'NEON_ORG_ID', 'RESTORE_TEST_PROJECT_ID', 'CONTROL_PLANE_PROJECT_ID', 'ALERT_TOPIC_ARN', 'BACKUP_LOG_GROUP', 'NEON_REGION_ID', 'ENCRYPTION_KEY', 'BACKUP_PG_RESTORE_BIN']) {
+      expect(await main(['disaster', 'rehearse', '--targets', 'auto'], { ...env, [k]: '' }, { log: () => {}, runVersion: pg16, checksOnly: true }), k).toBe(1);
+    }
+    expect(await main(['disaster', 'rehearse', '--targets', 'auto'], { ...env, NEON_REGION_ID: 'aws-eu-central-1' }, { log: () => {}, runVersion: pg16, checksOnly: true })).toBe(1);
+    vi.stubEnv('NEON_HISTORY_RETENTION_SECONDS', '7d');
+    try {
+      const c = capture();
+      expect(await main(['disaster', 'rehearse', '--targets', 'auto'], env, { log: c.log, runVersion: pg16, checksOnly: true })).toBe(1);
+      expect(c.lines[0]).toContain('NEON_HISTORY_RETENTION_SECONDS');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('main.ts never passes the test-only hostMap (impact analysis §4, D10)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../../../scripts/backup/main.ts', import.meta.url), 'utf8');
+    expect(src).not.toMatch(/hostMap/);
+  });
+});
