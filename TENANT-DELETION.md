@@ -139,6 +139,10 @@ Confirmed against Neon's own documentation (fetched 2026-10-21):
   projects). Restoring lost data from that history — into a copy, never rewinding the live database — is in
   [`RESTORE.md`](RESTORE.md).
 
+**Backups in S3** (feature-plan-database-backups.md §6.8): a deleted workspace is no longer backed up once it reaches
+`deleting`, and its earlier backups in the backup AWS account expire automatically within 30 days (the S3 rule at 25
+days, an alert at 29). Nothing to do.
+
 `BACKUP_RETENTION_DAYS = 30` in `src/lib/tenant/lifecycle-config.ts` (D11) matches the longest
 window on any currently-published Neon plan (Scale's 30-day history window). **If CadenzPoint ends
 up on a negotiated enterprise plan with a longer PITR/history window than 30 days, D11 needs to be

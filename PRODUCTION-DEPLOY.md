@@ -341,6 +341,7 @@ values and production gets production values):
 | `KV_REST_API_URL` / `KV_REST_API_TOKEN` (or `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`) | **set by the Upstash integration** (Phase 8b) for the staging database; don't type them | set by the integration for the production database |
 | `SENTRY_ORG` / `SENTRY_PROJECT` / `SENTRY_AUTH_TOKEN` | *optional* — enables source-map upload for readable stack traces | same |
 | `CSP_MODE` | `report-only` | `report-only` (flip to `enforce` in Phase 13) |
+| `BACKUPS_EXPECTED` | `0` (no staging backups; Phase 13b step 9 sets `1` for one day) | leave unset until Phase 13b step 12, then `1`. Unset, the digest says "Backup monitoring is not configured" every day; `0` quiets that to an "off" line, which still counts as news |
 
 **Do NOT set** in either project: `DIAG_SECRET` (only temporarily, Phase 12), `DATABASE_URL`,
 `DEV_TENANT_ADMIN_DATABASE_URL`, `TEST_DATABASE_URL*`. Leave `QBO_*` / `GUSTO_*` unset until those
@@ -859,6 +860,94 @@ and the 800-second lifecycle/export duration need the **Pro** plan — staging t
 
 ---
 
+## Phase 13b — Backups (AWS) (you + the lead; feature-plan-database-backups.md §12)
+
+Daily encrypted backups of every workspace and the control plane, in a separate AWS account, with weekly automatic
+restore tests. Everything runs in AWS us-east-1; nothing runs on your machine, and you never download a backup.
+[`FOUNDER-ACCOUNTS-SETUP.md`](FOUNDER-ACCOUNTS-SETUP.md) Parts 4–6 have every click; this is the checklist, **in
+this order**. Steps 6–11 are also the **staging rehearsal**, a production-readiness gate.
+
+1. **AWS account** (FOUNDER-ACCOUNTS-SETUP Part 4): the *advanced* sign-up; two hardware keys on root; the **Paid**
+   plan; a backup card; alternate contacts; your admin login (security key, no access keys).
+2. **Neon** (Part 5): create `cadenzpoint-restore-tests` — **us-east-1, Postgres 16, history window 0** — and copy
+   its **direct** connection string (no `-pooler`). The restore test refuses anything else.
+3. **GitHub, before the bootstrap stack exists:** create the environment `aws-backups` (Selected branches → `main`;
+   required reviewer → you; "Prevent self-review" **off**; "Allow administrators to bypass" **off**), add the
+   environment secret `BACKUP_ALERT_EMAIL`, and send the lead the output of:
+   - `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-backups` (a `required_reviewers` rule
+     naming you, `"can_admins_bypass": false`, `"custom_branch_policies": true`);
+   - `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-backups/deployment-branch-policies`
+     (exactly one policy: `main`, type `branch`).
+
+   **3b may merge only after this check.** With `AWS_BACKUPS_ENABLED` unset, the deploy workflow does nothing.
+4. **Bootstrap stack:** AWS console (your admin login, us-east-1) → CloudFormation → Create stack → upload
+   `ops/aws/bootstrap.yml` → acknowledge IAM → Submit. Copy its four outputs into `aws-backups` **environment
+   secrets**: `AWS_DEPLOY_ROLE_ARN`, `AWS_CFN_EXEC_ROLE_ARN`, `AWS_BACKUP_REPOSITORY_URI`, `AWS_ARTIFACTS_BUCKET`.
+5. **Deploy the app with this item's migration** (`0011_database_backups`) to staging and production (Phases 12.1
+   and 13.1). The backup tasks refuse to run against a control plane without their tables.
+6. **SSM parameters, staging values first** (AWS console → Systems Manager → Parameter Store, type
+   **SecureString**, from your password manager — Vercel doesn't reveal sensitive values):
+   `/cadenzpoint/backup/control-plane-url` = **staging's** `CONTROL_PLANE_DATABASE_URL`;
+   `/cadenzpoint/backup/encryption-key` = **staging's** `ENCRYPTION_KEY`;
+   `/cadenzpoint/backup/restore-test-url` = the Neon string from step 2.
+7. **First deploy:** set the repository variable `AWS_BACKUPS_ENABLED` = `true`, then Actions → "Backup system
+   deploy" → Run workflow → **Review deployments → Approve and deploy**. Both jobs green.
+8. **Confirm the alert email** from AWS within 48 hours (missed it: SNS → the subscription → Request confirmation).
+9. **First runs, against staging** (ECS → cluster `cadenzpoint-backup` → Run new task; the lead gives the clicks):
+   `backup`, then `audit`; **wait at least 30 minutes after the backup task stops**, then `restore-test`. Expect in
+   staging's control plane: `ok` rows with `region = us-east-1`; an audit row with `Enabled`,
+   `alert_email_confirmed = true`, `protection_drift` and `errors` empty; a `pass` restore-test run; three
+   `backup_permission_checks` rows with `ok = true`. Set staging's `BACKUPS_EXPECTED=1` for a day, check the digest's
+   Backups section, then set it back to `0`. The next day, check the 18:17 catch-up's log shows `--if-missing-today`.
+10. **"Can't" checks** (Tuesday–Sunday, 15:00–17:00 UTC, no job runs then), in AWS CloudShell, commands from the lead:
+    `head-object` on a backup → 403; `kms decrypt` of the stored data key → AccessDeniedException;
+    `schedule-key-deletion --pending-window-in-days 7` → AccessDeniedException (if it ever succeeds:
+    `cancel-key-deletion`, then `enable-key`, and stop); `disable-key` then `enable-key` at once → an immediate alert
+    email; `put-bucket-versioning … Enabled` → AccessDenied and an immediate email; `set-alarm-state` on
+    `cadenzpoint-backup-dlq` → an alarm email.
+11. **Switch to production** (15:00–17:00 UTC): replace the first two SSM parameters with **production's** values.
+    Staging's rehearsal backups expire on their own.
+12. **Vercel:** once production's first `backup` and `audit` tasks have stopped with exit code 0 (ECS console) and
+    the backup log shows a `BACKUP … control-plane …` line, set production `BACKUPS_EXPECTED=1` and redeploy.
+
+**Runbook**
+
+- **`ENCRYPTION_KEY` or the control-plane password changes:** update the matching SSM parameter (step 6 names) as
+  part of the same change. The restore-test URL too, if that project's password changes. Forgetting it alerts at the
+  next backup (`backup-failed` / `backup-missed-run`).
+- **A backup-system deploy that comes with a backup-table migration:** approve it in GitHub **only after**
+  `deploy-prod` has applied the migration.
+- **`deploy-prod` waits "for the backup run to finish" and then refuses:** a backup was running and the deploy has
+  migrations. Nothing was changed; re-run `deploy-prod` later (backups run at 06:17 and 18:17 UTC). App-only deploys
+  never wait.
+- **Bootstrap changes** (rare) are applied in the console, with the lead: CloudFormation → `cadenzpoint-backup-bootstrap`
+  → Update → upload the new `ops/aws/bootstrap.yml`. The deploy workflow never touches it.
+- **Deploy stopped with "The first create failed and rolled back":** CloudFormation → delete the stack
+  `cadenzpoint-backup` (it holds nothing), then re-run the workflow.
+- **Re-create the backup stack** (the bucket and key were retained from a deleted stack): don't create a new one.
+  With the lead, import the retained bucket and key into a new `cadenzpoint-backup` stack with a CloudFormation
+  import change set, then re-run the workflow.
+- **Stack stuck in ROLLBACK_FAILED:** CloudFormation → the stack → Events: find the resource that failed to roll
+  back; with the lead, fix it (or "Continue update rollback" skipping it), then re-run the workflow.
+- **Stack stuck in DELETE_FAILED:** stop and contact the lead; the bucket and key are retained by design and must not
+  be removed by hand.
+- **The approval request expired** (artifacts are kept 7 days): Actions → "Backup system deploy" → Run workflow on
+  `main` (not "Re-run"). A rejected deploy is asked again on the next push that touches the backup code.
+
+**When the digest shows a backup alert**
+
+| Alert | What to do |
+|---|---|
+| `backup-missed-run`, `backup-failed`, `backup-stale` | A workspace or the control plane wasn't backed up. The 18:17 catch-up retries failures; if it persists, send the lead the alert detail (stage and label only, never data). |
+| `backup-key-state`, `backup-protection-drift`, `backup-bucket-drift`, `backup-alert-email` | A protection changed. If you didn't change it, treat it as an incident; tell the lead at once. |
+| `restore-test-failed`, `restore-test-missed`, `restore-test-coverage` | A backup didn't restore, or the weekly test isn't running. Send the lead the detail. |
+| `backup-run-slow`, `restore-test-slow`, `backup-target-slow` | Growth: the lead raises the concurrency or task size (a stack parameter change you approve). |
+| `backup-permission-drift` | A role can do something it must not. Treat as an incident; tell the lead. |
+| `backup-old-objects` | See RESTORE.md, "Backups beyond Neon". |
+| `restore-test-leftover`, `backup-audit-missed`, `backup-audit-error`, `backup-region`, `backup-check-failed` | Send the lead the detail. |
+
+---
+
 ## Phase 14 — Operating it (ongoing)
 
 **Every future release**
@@ -881,9 +970,11 @@ cause, then re-run just that tenant locally with the production values in your s
 `npm run db:migrate:all -- --tenant <slug>`, then re-run the deploy.
 
 **Daily:** the ops digest arrives. **No digest by 15:00 UTC → the lifecycle cron is down; investigate.**
+Its **Backups** section shows how many workspaces were backed up in the last 26 h, the newest control-plane backup
+and the last weekly restore test; backup problems appear under "Unresolved alerts" (`backup-*`, `restore-test-*`).
+What each one means and what to do: Phase 13b, "When the digest shows a backup alert".
 
-**Monthly:** the restore drill in [`RESTORE.md`](RESTORE.md) (throwaway workspace, branch restore, row
-counts match), and confirm Sentry and email are still delivering. **Yearly:** rotate `VERCEL_TOKEN` before
+**Monthly:** confirm Sentry and email are still delivering. **Yearly:** rotate `VERCEL_TOKEN` before
 it expires.
 
 ### Release notes
@@ -910,7 +1001,7 @@ converted scopes.
 | Item | Why |
 |---|---|
 | ~~**Distributed rate limiting**~~ | **Done** (PR #31, 2026-11-15): sign-up and sign-in limits are shared through Upstash (Phase 8b creates the databases; staging step 12.14 checks them). Reports, API, export and cron stay per-instance by decision. |
-| **Long-term retention + backup policy** | DCAA expects ~3-year record retention; Neon's 7-day history (LB-D1) is for undoing mistakes, not retention. |
+| **Backups beyond Neon** (BUSINESS-DECISIONS.md §5) | Built (item 3b): daily encrypted backups in AWS us-east-1 with weekly automatic restore tests. Switched on in Phase 13b, before the first paying customer. Rebuilding a lost workspace from them is item 3c (also required before the first paying customer). Retention: decided in BUSINESS-DECISIONS.md §5 (no new period; customers' DCAA retention is theirs, Terms §5.4). |
 | **Your own security posture** (NIST 800-171 / CMMC answer, SOC 2 roadmap) | Usually the deciding question from defense-contractor buyers. Also decide whether you'll store CUI; if so, commercial-region hosting may not be acceptable. |
 | **Terms of Service, Privacy Policy, DPA** reviewed by a lawyer | Required to sell. |
 | **Trademark clearance** for "CadenzPoint" | Before marketing spend. |
