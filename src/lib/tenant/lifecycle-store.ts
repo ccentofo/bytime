@@ -1,5 +1,5 @@
 import 'server-only';
-import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, isNull, like, or, sql, type SQL } from 'drizzle-orm';
 import { tenants, opsAlerts, tenantAuditEvents } from '@/db/control-plane/schema';
 import { LifecycleVersionConflictError, type ControlTx } from '@/db/control-plane/locked';
 
@@ -102,6 +102,27 @@ export async function resolveAlertsOfKind(
   await db.update(opsAlerts)
     .set({ resolvedAt: now, resolutionNote: note })
     .where(and(eq(opsAlerts.scope, tenantId), eq(opsAlerts.kind, kind), isNull(opsAlerts.resolvedAt)));
+}
+
+/**
+ * Resolve every open alert whose kind starts with one of `prefixes`, in any scope (feature-plan-database-backups.md §6.9:
+ * when backup monitoring isn't running, every `backup-*` / `restore-test-*` alert is resolved so nothing lingers). Tests
+ * pass `tenantIds` to limit tenant-scoped resolutions to their own tenants (global ones are backup kinds only).
+ */
+export async function resolveAlertsByKindPrefix(
+  db: Pick<ControlTx, 'update'>,
+  prefixes: string[],
+  now: Date,
+  opts: { note?: string; tenantIds?: string[] } = {},
+): Promise<void> {
+  if (prefixes.length === 0) return;
+  const kinds = or(...prefixes.map((p) => like(opsAlerts.kind, `${p.replace(/[%_\\]/g, (c) => `\\${c}`)}%`)));
+  const scope = opts.tenantIds
+    ? or(eq(opsAlerts.scope, 'global'), opts.tenantIds.length ? inArray(opsAlerts.scope, opts.tenantIds) : sql`false`)
+    : undefined;
+  await db.update(opsAlerts)
+    .set({ resolvedAt: now, resolutionNote: opts.note ?? 'condition cleared' })
+    .where(and(kinds, isNull(opsAlerts.resolvedAt), scope));
 }
 
 /** Append an audit event (founder and system actions that change a tenant's lifecycle). */

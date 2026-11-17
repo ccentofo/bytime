@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   opened: true,
   sentryMessages: [] as string[],
   waitlisted: [] as Array<{ id: string; slug: string; email: string; waitlistedAt: Date }>,
+  backups: { lines: [] as string[], news: false },
 }));
 
 vi.mock('server-only', () => ({}));
@@ -40,6 +41,9 @@ vi.mock('@/lib/cron/heartbeat', async (importOriginal) => ({
   readCronRuns: async () => h.cronRows,
 }));
 
+// feature-plan-database-backups.md §6.9 (U9): the Backups section's content comes from backupDigest (backup-status.test.ts).
+vi.mock('@/lib/tenant/backup-status', () => ({ backupDigest: async () => h.backups }));
+
 import { sendOpsDigest } from '@/lib/tenant/ops-digest';
 import { raiseAlertWithEmail } from '@/lib/tenant/ops-alert-email';
 import { CRON_NAMES } from '@/lib/cron/heartbeat';
@@ -54,11 +58,31 @@ beforeEach(() => {
   h.opened = true;
   h.sentryMessages = [];
   h.waitlisted = [];
+  h.backups = { lines: [], news: false };
   process.env.OPS_ALERT_EMAIL = 'ops@example.com';
 });
 afterEach(() => { delete process.env.OPS_ALERT_EMAIL; });
 
 describe('daily digest', () => {
+  it('U9: the Backups section: escaped, once; summary lines alone are not news; a news line (could not be read) is', async () => {
+    h.backups = { lines: ['3 of 3 workspaces backed up in the last 26 h. Newest control-plane backup: <2026-10-21>.', 'Last restore test 2026-10-20: pass, control plane + 1 workspaces.'], news: false };
+    await sendOpsDigest([], NOW, false);
+    const html = h.sends[0].html;
+    expect(h.sends[0].subject).toContain('(all quiet)');
+    expect(html.match(/<h3>Backups<\/h3>/g)).toHaveLength(1);
+    expect(html).toContain('Newest control-plane backup: &lt;2026-10-21&gt;.');
+    expect(html).toContain('<li>Last restore test 2026-10-20: pass, control plane + 1 workspaces.</li>');
+    h.sends = [];
+    h.backups = { lines: ['Backup status could not be read.'], news: true };
+    await sendOpsDigest([], NOW, false);
+    expect(h.sends[0].subject).not.toContain('all quiet');
+    expect(h.sends[0].html).toContain('Backup status could not be read.');
+    h.sends = [];
+    h.backups = { lines: [], news: false };
+    await sendOpsDigest([], NOW, false);
+    expect(h.sends[0].html).not.toContain('Backups');
+  });
+
   it('is sent even with no news — a short "all quiet" version', async () => {
     expect(await sendOpsDigest([], NOW, false)).toBe('sent');
     expect(h.sends).toHaveLength(1);
