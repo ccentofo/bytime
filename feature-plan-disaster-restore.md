@@ -1,9 +1,9 @@
 # Disaster restore button: one workspace (build queue 3c)
 
-> **Status:** **DRAFT v3.4**, 2026-11-17, lead architect.
+> **Status:** **DRAFT v3.5**, 2026-11-17, lead architect.
 > - **Split (product owner, 2026-11-17):** this item is the **one-workspace** button. The control-plane rebuild, its reconcile and the whole-account runbook moved to **3c-2** (brief in `LAUNCH-TRACKER.md`).
 > - **Outage override accepted (2026-11-17)** (§6.4 step 2).
-> - Rounds 1–2 and confirmation passes 1–4 are fixed here (§15). Confirmation pass 5 is next.
+> - Rounds 1–2 and confirmation passes 1–5 are fixed here (§15). Confirmation pass 6 is next.
 >
 > **Branch:** `disaster-restore-button`, from `main` at `8af3b2c`.
 >
@@ -101,7 +101,7 @@ A founder-only **button** (a GitHub Actions workflow behind the `aws-disaster` e
    - **project-scoped:** can't create projects;
    - **personal:** the user's role. An organisation **Editor** can't delete projects but can create, edit or delete any project's branches, endpoints, databases and roles, and get connection strings. A **Viewer** can create its own projects (whoever creates a project becomes its Admin) and read every project's metadata and endpoints, but can't get other projects' connection strings or change them. **Unconfirmed:** whether a Viewer may call `GET /projects?recoverable=true`; the rehearsal proves it (Q1).
 6. **Rate limits:** 700 requests/minute, 40/s burst per route; 429 beyond (…/api/key-concepts).
-8. **Neon's proxy and unknown endpoints (verified live 2026-11-17):** `*.us-east-1.aws.neon.tech` is wildcard DNS, so any endpoint name resolves to Neon's proxy. Connecting to a never-existing endpoint returns `28P01 password authentication failed` (anti-enumeration), with both postgres.js and psql. A deleted endpoint is expected to answer the same way; the rehearsal checks it (§6.5).
+9. **Neon's proxy and unknown endpoints (verified live 2026-11-17, on direct and `-pooler` hosts):** `*.us-east-1.aws.neon.tech` is wildcard DNS, so any endpoint name resolves to Neon's proxy. Connecting to a never-existing endpoint returns `28P01 password authentication failed` (anti-enumeration), with both postgres.js and psql. A deleted endpoint is expected to answer the same way; the rehearsal checks it (§6.5).
 7. **Restore:** with `--no-owner`, the restoring Neon role owns everything. `neon_superuser` isn't a Postgres superuser. Event triggers are allowed for `neon_superuser`. Use unpooled connections (…/import/migrate-from-postgres). 3b already restores this way.
 
 ### 4.2 GitHub Actions
@@ -130,7 +130,11 @@ A founder-only **button** (a GitHub Actions workflow behind the `aws-disaster` e
      - (c) the id is absent from the recoverable list (with `org_id`, paginated to the end, **polled 6 × 10 s**, since the list may lag);
      - (d) **the tenant's own address isn't served by a live project**, decided by `classifyEndpoint` (§6.4.1):
        - a **successful** login with the stored credentials → refuse `reachable`;
-       - otherwise (an authentication error, a proxy error, or a socket error) it counts as "doesn't answer" **only if** no existing organisation project serves that endpoint. The projects whose name matches `cadenzpoint-<slug>` (exact, from the paginated list) are checked with `GET /projects/{id}/endpoints` against the URL's direct host. A match means a stale `neon_project_id` → refuse `reachable`.
+       - otherwise (an authentication error, a proxy error, or a socket error) it counts as "doesn't answer" **only if** no existing organisation project serves that endpoint. **The candidates** are projects named exactly `cadenzpoint-<slug>`, or starting `cadenzpoint-r-<tenant id first 8>-` (the button's own rebuilds), found with the list's `search` and `org_id`. Each is checked with `GET /projects/{id}/endpoints` against the URL's direct host:
+         - a match means a stale `neon_project_id` → refuse `reachable`;
+         - **any endpoints call that isn't 200, or a list with `unavailable_project_ids`, → unproven** (never "not served").
+
+         The candidate rule is a parameter, so 3c-2 can pass the control plane's name. Runbook A notes: **don't rename tenant projects in the Neon console.**
 
        Neon's proxy answers an unknown or deleted endpoint with `28P01` "password authentication failed", not a network error (verified live, §4.1.8). So an authentication error alone proves nothing either way.
    - **Or unreachable for 4 hours** (the override):
@@ -165,7 +169,7 @@ While some workspaces are lost, `deploy-prod` would fail on them (`tenant-migrat
 - **`--skip-lost`** skips a tenant only when all of these hold. Each skip prints "skipped (proven lost, awaiting rebuild)" **with the tenant's uuid, never its slug**: the deploy log is public. D5 and the §3.7 run assert that no slug appears on a skipped row. (Pre-existing, noted for the product owner: deploy-prod's table already prints every slug publicly. That's tracked separately, not changed here.)
   1. its newest **decisive** `proof` row (`gone`, `unreachable-4h`, `observed-unreachable`, `reachable-again`, or `refused:original-exists|reachable|recoverable`; a transient `refused:proof-failed` or `network-unproven` doesn't supersede) says `gone`, `unreachable-4h` or `observed-unreachable` (any age);
   2. no `linked` row is newer, and no 3b `ok` backup finished after it;
-  3. **this deploy's `pendingCount` for it throws, with any error.** That's the first call, which connects and queries; `migrateOneTenant` catches it at `tenant-migration.ts:42-63`. A failure in `migrate()` itself is never skipped. A Neon proxy error for a deleted endpoint isn't a socket error. A tenant that connects is migrated normally, but only when the run holds the migrate lock. **A tenant excluded from step 0 that reconnects in the pass is reported "reachable again; re-run the deploy" instead of being migrated without the lock**, keeping 3b's rule that migrations and backups never overlap. Either way its proof stops counting: **every `migrate-all` run** (with or without the flag, not `--check`) appends a superseding `proof` row `reachable-again` (`run_id` = `migrate-<timestamp>`) for each tenant with a live proof that connected.
+  3. **this deploy's `pendingCount` for it throws, with any error.** That's the first call, which connects and queries; `migrateOneTenant` catches it at `tenant-migration.ts:42-63`. A failure in `migrate()` itself is never skipped. A Neon proxy error for a deleted endpoint isn't a socket error. A tenant that connects is migrated normally, but only when the run holds the migrate lock. **A tenant excluded from step 0 that reconnects in the pass is reported "reachable again; re-run the deploy" and counts as FAILED (exit 1, so Vercel doesn't deploy) instead of being migrated without the lock**, keeping 3b's rule that migrations and backups never overlap. Either way its proof stops counting: **every `migrate-all` run** (with or without the flag, not `--check`) appends a superseding `proof` row `reachable-again` (`run_id` = `migrate-<timestamp>`) for each tenant with a live proof that connected.
 - **Reading `disaster_actions` tolerates a missing table** (42P01 counts as "no proofs"), so the deploy that merges this item, which runs before the migration creating it, doesn't fail. Tested like `backup-locks.test.ts:198`.
 - `listTenants` gains the tenant `id`. The workflow calls `npm run db:migrate:all -- --skip-lost` (the `--`, or npm swallows the flag); D5 and the §3.7 run assert that the flag reaches argv.
 
@@ -214,7 +218,7 @@ jobs:
 3. **Start:** `aws ecs run-task` with:
    - `--started-by gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT`;
    - the disaster family and Fargate, with the subnets and security group from the stack outputs and `assignPublicIp=ENABLED`;
-   - `containerOverrides` `[{ name: "backup", command: ["disaster", MODE, "--targets", TARGETS, "--override", OVERRIDE, "--run-id", "gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"] }]` (the container's name from the task definition).
+   - `containerOverrides` `[{ name: "disaster", command: ["disaster", MODE, "--targets", TARGETS, "--override", OVERRIDE, "--run-id", "gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"] }]` (the container's name from the task definition).
 
    Capture `tasks[0].taskArn` and `failures` only.
 4. **`--stop`:** `list-tasks --started-by gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT` (retried 3 times, 10 s apart, since a just-started task may not be listed yet), then `stop-task` each, with output to `/dev/null`.
@@ -229,10 +233,10 @@ jobs:
 | Resource | Notes |
 |---|---|
 | **`DisasterButtonRole`** (`/cadenzpoint-backup/cadenzpoint-backup-disaster-button`) | **Trust:** GitHub OIDC, `StringEquals` `aud`, and `sub = repo:ccentofo/bytime:environment:aws-disaster`. **Policy:** `ecs:RunTask` on `task-definition/cadenzpoint-backup-disaster:*` with `ecs:cluster` = the backup cluster; `ecs:ListTasks` on `*` with `ArnEquals ecs:cluster` (its resource type is container-instance, §4.3.4); `ecs:DescribeTasks` and `ecs:StopTask` on `task/cadenzpoint-backup/*`; `iam:PassRole` on the two disaster roles with `iam:PassedToService = ecs-tasks.amazonaws.com` (that's what stops a `taskRoleArn` override); `ecs:TagResource` (`ecs:CreateAction = RunTask`); `cloudformation:DescribeStacks` on the main stack. **`MaxSessionDuration: 21600`** (the workflow asks for 6 h; the default is 1 h). **Stated:** a role that may run the disaster family may run it with any command or environment (§4.3.1), and Describe/Stop also reach the backup tasks in that cluster, so the role equals the disaster task's powers plus stopping backup tasks. It's reachable only through the approved environment. |
-| **Task definition `disaster`** | The same image; `Command ["disaster"]`; 2 vCPU / 4 GiB; `StopTimeout: 120`; log group `/cadenzpoint/backup/disaster`, retention 365 days (ids only, invariant 6). |
+| **Task definition `disaster`** | The same image; **container name `disaster`** (the button's and the schedule's overrides use it; D7 asserts both); `Command ["disaster"]`; 2 vCPU / 4 GiB; `StopTimeout: 120`; log group `/cadenzpoint/backup/disaster`, retention 365 days (ids only, invariant 6). |
 | **Disaster execution role** | ECR pull; logs; `ssm:GetParameters` on control-plane-url, encryption-key, neon-api-key, neon-org-id, restore-test-project-id and control-plane-project-id. |
 | **Disaster task role** (`…/cadenzpoint-backup-disaster-task`) | `s3:GetObject`, `s3:ListBucket` (`v1/*`); `kms:Decrypt` (`purpose` condition); `logs:FilterLogEvents` on the backup task's log group; `ecs:ListTasks` (`*` + `ecs:cluster`) and `ecs:DescribeTasks` (`task/cadenzpoint-backup/*`) for the in-task single-run check; `sns:Publish` on the alert topic. **No SSM write.** |
-| **Schedule `cadenzpoint-backup-disaster-rehearse`** (the name fits `CfnExecRole`'s `schedule/default/cadenzpoint-backup-*`, `bootstrap.yml:265`) | `cron(17 15 1 * ? *)` UTC (the 1st at 15:17, when no backup job runs); `Input` command `["disaster", "rehearse", "--targets", "auto"]`, with the run id generated by the task. `auto` = a random workspace that is live, not due for deletion, and has an `ok` backup in the last 36 h. The Scheduler role gains `ecs:RunTask` on the disaster family **and `iam:PassRole` on the disaster execution and task roles**, as 3b's role lists its passed roles. |
+| **Schedule `cadenzpoint-backup-disaster-rehearse`** (the name fits `CfnExecRole`'s `schedule/default/cadenzpoint-backup-*`, `bootstrap.yml:265`) | `cron(17 15 1 * ? *)` UTC (the 1st at 15:17, when no backup job runs); `Input` command `["disaster", "rehearse", "--targets", "auto"]`, with the run id generated by the task. `auto` = a random workspace that is live, not due for deletion, and has an `ok` backup in the last 36 h. **None eligible → the rehearsal fails** "no eligible workspace", and the alert is raised. The Scheduler role gains `ecs:RunTask` on the disaster family **and `iam:PassRole` on the disaster execution and task roles**, as 3b's role lists its passed roles. |
 | **Policy updates** | The bucket's GetObject deny and the key's Decrypt/ReEncrypt deny gain the disaster task role. `expected-policies.ts`, `ALL_ROLES`, `rulePatterns` and the audit role's `InspectRules` include the new roles and rules. |
 | **Alerting additions** | **(1) `cadenzpoint-backup-disaster-started`:** the ECS **Task State Change** event (`source aws.ecs`; `detail.taskDefinitionArn` prefix `arn:aws:ecs:us-east-1:<acct>:task-definition/cadenzpoint-backup-disaster:`; `detail.lastStatus` `PROVISIONING` **or `STOPPED`**). It emails both the start and the finish of every run, whatever the start path, without CloudTrail. **(2) `cadenzpoint-backup-disaster-runtask`:** CloudTrail `RunTask` matching the family **or** its ARN (`$or` of two prefixes on `requestParameters.taskDefinition`), so the email names the caller. **(3) The protections rule** gains `PutParameter`, `DeleteParameter` and `DeleteParameters` **by event name only**, with no `requestParameters` filter, which would stop the rule's other events from matching. The account writes no parameters in normal operation, so this costs only expected emails. D7 asserts the protections pattern has no `requestParameters` key. |
 | **Outputs** | `DisasterButtonRoleArn`; the cluster, subnets and security group. |
@@ -275,9 +279,9 @@ jobs:
    - **Recoverable** → refuse `recoverable`: "recover it in the Neon console, nothing is lost".
    - **Network first:** before any unreachable result counts (the override path, (d) above, or recording `observed-unreachable`), the task proves its own network. One other live workspace, or failing that the control plane (both Neon us-east-1), must connect. Otherwise refuse `network-unproven`, and record nothing as evidence.
    - **200, with the override typed:**
-     1. classify the endpoint (`classifyEndpoint`, §6.4.1), two tries 60 s apart;
-     2. **answers** or **credentials problem** → refuse `reachable`;
-     3. **unreachable** (or **doesn't answer**) on both tries → look for evidence at least 4 hours old:
+     1. classify with the override rules of §6.4.1, two tries 60 s apart;
+     2. **answers**, **credentials problem** or `url-project-mismatch` → refuse;
+     3. **unreachable** on both tries → look for evidence at least 4 hours old:
         - an earlier `proof` row `observed-unreachable` for this tenant **with the same `old_project_id`**, from 4 to 48 hours ago, with **no 3b `ok` row and no `reachable-again` since it**;
         - **or** 3b's rows for it within the last 26 hours are all `failed` with label `connection-refused` or `timeout`, the oldest at least 4 h ago, and no `ok` since.
 
@@ -310,7 +314,8 @@ jobs:
    - the new endpoint belongs to the new project and isn't the control plane's;
    - no other non-deleted tenant has this project id or direct host;
    - a decrypt failure on another row refuses.
-8. **Switch** (one transaction):
+8. **In override mode, re-check first:** run the override classification again. If it **answers** now, abort, clean up (step 10), and report "reachable now".
+   **Switch** (one transaction):
    - `SET LOCAL lock_timeout = '5s'`; `pg_advisory_xact_lock(hashtext('tenant:' || id))` (pinned to `locked.ts:63` by D4);
    - `UPDATE tenants SET db_url_encrypted = encrypt(pooled URL), neon_project_id = new, lifecycle_version = lifecycle_version + 1 WHERE id = … AND status IN ('provisioning','active','suspended') AND db_url_encrypted = oldUrlEncrypted AND neon_project_id = oldProjectId AND (deletion_scheduled_for IS NULL OR deletion_scheduled_for > now())`;
    - a lock timeout is retried up to 3 times, 10 s apart (a webhook may hold the tenant lock briefly);
@@ -320,7 +325,7 @@ jobs:
      - append the `linked` row;
      - raise the global `rebuild-original-watch` (dedup = old project id; detail: tenant id, slug, backup time, watch start). All raw-SQL alert raises use `ON CONFLICT` on `ops_alerts_open_unique`, as `raiseAlert` does;
      - **with the override,** also raise `rebuild-original-returned` at once (detail includes the tenant id, which `tenant:delete` matches on): the original exists by definition, so the founder is told to settle it with the customer and delete it.
-   - **After the commit:** write `LINKED <tenant id> <old project> <new project> <backup key> <sha256>` to the disaster log group. 3c-2 uses it to re-apply rebuilds after a control-plane loss.
+   - **Just before the commit,** write `SWITCHING <tenant id> <old project> <new project> <backup key> <sha256>`; **after it,** `LINKED …` with the same fields, both to the disaster log group. 3c-2 re-applies rebuilds from these lines after a control-plane loss, confirming each against Neon (the brief says so). A `SWITCHING` without a `LINKED` (a kill at the commit, or a commit healed later by the leftover check) is still recoverable that way.
 9. **The app** uses the new database within 60 s (`registry.ts:65`; pools are keyed by URL).
 10. **Cleanup on any failure, before or instead of a commit:**
     - **first, wait for any in-flight switch call to settle** (the SIGTERM and deadline paths await it; `StopTimeout` is 120 s);
@@ -336,14 +341,22 @@ jobs:
 - the run row set `pass` or `fail`;
 - deadline 330 min and SIGTERM run step 10's rules for in-flight workspaces.
 
-### 6.4.1 `classifyEndpoint(url, tenantSlug)` (used by (d) and the override)
+### 6.4.1 `classifyEndpoint(url, candidates)` (used by (d) and the override)
+**On the override path the project exists by definition**, so the table below isn't used there. Instead:
+- a successful login → **answers**;
+- **any `28P01` → credentials problem** (refuse `reachable`);
+- only a proxy error that isn't `28xxx`, or a socket error or timeout, → **unreachable**;
+- also, `GET /projects/{neon_project_id}/endpoints` must list the URL's direct host. If it doesn't, refuse `url-project-mismatch`.
+
+The table is for proof (d), where the project 404s:
 | Connection result | Endpoint served by a live org project? | Class |
 |---|---|---|
 | login succeeds | — | **answers** |
-| `28P01` (auth) | yes (the URL host's endpoint is listed by a live project) | **credentials problem**: refuse `reachable` (not a disaster the button handles; contact the lead) |
+| `28P01` (auth) | yes (the URL host's endpoint is listed by a live candidate project) | **served**: refuse `reachable` (a stale project id) |
 | `28P01` (auth) | no | **doesn't answer** (Neon's response for an unknown or deleted endpoint) |
-| a proxy error that isn't `28xxx` (e.g. "Couldn't connect to compute node", "endpoint … not found/disabled") or a socket error/timeout | yes | **unreachable** (the override's case: the project exists, its compute doesn't serve) |
+| a proxy error that isn't `28xxx` (e.g. "Couldn't connect to compute node", "endpoint … not found/disabled") or a socket error/timeout | yes | **served** (refuse `reachable`; a live project holds that endpoint) |
 | the same | no | **doesn't answer** |
+| any endpoints lookup fails, or the list is partial | — | **unproven** |
 
 3b's `labelFor` (`summarize-error.ts:61`) gains Neon's proxy wording ("Couldn't connect to compute node", "endpoint is disabled", "endpoint not found") as `connection-refused`, so 3b's failed backups qualify as override evidence. A local test server (D1) answers the Postgres startup with a `28P01` error, as Neon does, plus each proxy error.
 
@@ -360,7 +373,7 @@ Mode `workspace` for one id (or `auto`), with these differences:
 - **step 10 always runs:**
   1. delete the project, verify the 404;
   2. check it appears in the recoverable list (polled up to 6 × 10 s, since the list may lag), proving deletions are visible to the key;
-  3. run **`classifyEndpoint` on the deleted project's endpoint and require "doesn't answer"**. Otherwise the rehearsal fails: the real proof would misjudge a lost workspace;
+  3. run **`classifyEndpoint` on the deleted project's endpoint, retrying for up to 5 minutes** (a compute or proxy route may linger), and require "doesn't answer". Record the class and the delay. Otherwise the rehearsal fails: the real proof would misjudge a lost workspace;
   4. append `rehearsed-deleted`.
 
 The email reports the result and timings. A failed scheduled rehearsal raises `disaster-rehearse-failed` (§6.8).
@@ -430,7 +443,9 @@ The app's key must be an **organisation** key. `PRODUCTION-DEPLOY.md` 5.5 is rew
 | start | facts fail | failed `facts` | none |
 | start | deletion date passed | proof recorded, then failed `deletion-due` | the proof's real status (detail `deletion-due`) |
 | start | 200, no override | failed `original-exists` | `proof` refused |
-| start | 200, override, reachable or auth error | failed `reachable` | `proof` refused |
+| start | 404, but the URL logs in or a candidate project serves its endpoint (proof d) | failed `reachable` | `proof` refused |
+| start | 200, override: login succeeds, any `28P01`, or the URL's host isn't the project's endpoint | failed `reachable` / `url-project-mismatch` | `proof` refused |
+| proven (override) | the re-check before the switch logs in | failed `reachable-now` | cleanup |
 | start | 200, override, unreachable, no 4 h evidence | failed `observed` | `proof observed-unreachable` |
 | start | 200, override, unreachable, evidence ≥ 4 h | proven | `proof unreachable-4h` |
 | start | unproven | failed `proof-failed` | `proof` refused |
@@ -518,7 +533,7 @@ The app's key must be an **organisation** key. `PRODUCTION-DEPLOY.md` 5.5 is rew
 Plus 3b's fakes (S3, KMS, SNS, a `LogReader`), a fake ECS list, a scratch control plane, and the in-process `parseNeonHost` override (with a test that the real guard refuses local URLs).
 
 **Unit:**
-- **D1:** `classifyEndpoint`'s table with a local server answering the startup with `28P01` and with each proxy error, and the proof table (including (d): a 404 project whose tenant URL still **logs in** → `reachable`; a `28P01` with no live project serving the endpoint → doesn't answer (gone); a `28P01` where a `cadenzpoint-<slug>` project serves it → `reachable`; the control falls back to the control plane's project or a live workspace's when the restore-test project is gone):
+- **D1:** `classifyEndpoint`'s table with a local server answering the startup with `28P01` and with each proxy error; **an endpoints lookup failure or a partial list → unproven**; **a rebuilt-named project (`cadenzpoint-r-…`) serving the endpoint → served**; **the override: any `28P01` → refused**, and a URL host not among the project's endpoints → `url-project-mismatch`; and the proof table (including (d): a 404 project whose tenant URL still **logs in** → `reachable`; a `28P01` with no live project serving the endpoint → doesn't answer (gone); a `28P01` where a `cadenzpoint-<slug>` project serves it → `reachable`; the control falls back to the control plane's project or a live workspace's when the restore-test project is gone):
   - gone;
   - recoverable;
   - unproven: the control fails, no `org_id` (an empty list), a partial list, 401/403/5xx;
@@ -541,6 +556,7 @@ Plus 3b's fakes (S3, KMS, SNS, a `LogReader`), a fake ECS list, a scratch contro
   - linked since → not skipped;
   - a proof of any age → skipped (no expiry);
   - **no slug on a skipped row** (uuid only);
+  - a skipped tenant reconnecting in the pass → FAILED, exit 1, with `reachable-again` written;
   - **the flag reaches argv** through `npm run db:migrate:all -- --skip-lost`;
   - a 3b `ok` row finished after the proof → not skipped;
   - reachable, then `migrate()` fails → FAILED (the skip applies only when `pendingCount` throws);
@@ -593,19 +609,20 @@ Plus 3b's fakes (S3, KMS, SNS, a `LogReader`), a fake ECS list, a scratch contro
    - invite it as **Viewer**; sign in once (security key); create its personal key.
 3. **AWS Parameter Store:** `/cadenzpoint/backup/neon-api-key`, `/cadenzpoint/backup/neon-org-id`, `/cadenzpoint/backup/restore-test-project-id`, `/cadenzpoint/backup/control-plane-project-id` (all SecureString).
 4. **Push early** once the CI and Dockerfile commit exists (§4 of the standard). Merge; deploy-prod; approve the backup-system deploy. Copy `DisasterButtonRoleArn` into the `aws-disaster` secret.
-5. **Canary, then rehearse, the same day:** with your own Neon account, create a project `cadenzpoint-recoverable-canary` and delete it. Then Actions → **Disaster restore** → `rehearse`, a demo workspace's id, override `canary`, confirm `rehearse` → approve.
+5. **A rehearsal workspace in production** (before launch there may be none with backups): `npm run provision:tenant` a workspace `rehearsal`, `tenant:admin set-exempt rehearsal --yes`, and wait for its first `ok` backup. It stays as the rehearsals' target.
+6. **Canary, then rehearse, the same day:** with your own Neon account, create a project `cadenzpoint-recoverable-canary` and delete it. Then Actions → **Disaster restore** → `rehearse`, the `rehearsal` workspace's id, override `canary`, confirm `rehearse` → approve.
    - **Expect:**
      - the start email;
      - "rehearsal passed": the proof against the live original, the canary seen, the project deleted and visible as recoverable;
      - no change to the workspace.
    - **If the canary isn't seen:** switch `neon-ops@` to Editor and rehearse again (Q1's fallback).
-6. **From then on,** the monthly schedule rehearses automatically; a failure appears in the digest.
+7. **From then on,** the monthly schedule rehearses automatically; a failure appears in the digest.
 
 ## 13. Verification
 1. `npx tsc --noEmit`, lint, `npm run test`, `npm run test:tz`, `npm run db:safety`, integration (the memory command plus the pg 16 tools).
 2. **§3.7:** every changed `run:` block run verbatim with stubs; the exact-COPY build check; **the early push**.
 3. **The lead's checks file** (local): `disaster-button.sh` through a `bash -e` wrapper (validation, silence, `--stop`); `migrate-all --skip-lost` on a scratch control plane; the digest's disaster line; the `tenant:delete` refusal.
-4. **Real AWS and Neon:** §12 step 5 with the founder, then the first monthly run.
+4. **Real AWS and Neon:** §12 step 6 with the founder, then the first monthly run.
 
 ## 14. Hand-off rules
 As 3b §14, plus `BLUEPRINT-STANDARD.md` §3.7 and the early CI push.
@@ -712,3 +729,16 @@ As 3b §14, plus `BLUEPRINT-STANDARD.md` §3.7 and the early CI push.
   - the button after its 340-minute wait;
   - the failed-rehearsal cleanup test.
 - **The 3c-2 brief in the tracker is updated** (no "auth error = reachable").
+
+**Confirmation pass 5** (one fresh reviewer on v3.4): **1 MEDIUM, 7 LOW; no HIGH.** Fixed in v3.5:
+- **MEDIUM: on the override path, a password error on a rebuilt workspace was classed "doesn't answer".** The override now refuses on any `28P01`, and checks that the URL's host is the project's endpoint.
+- **LOWs:**
+  - the candidates include `cadenzpoint-r-<id8>-` rebuilds, and any endpoints-lookup failure → unproven; "don't rename" in the runbook;
+  - the rehearsal's deleted-endpoint check retries for 5 minutes;
+  - a re-check right before an override switch;
+  - a reconnecting skipped tenant fails the deploy (exit 1);
+  - `auto` with none eligible fails, and a production `rehearsal` workspace is added to setup;
+  - §7.1 rows for proof (d) and the override;
+  - the container name `disaster`;
+  - §4.1 numbering;
+  - a `SWITCHING` line before the commit, for 3c-2.

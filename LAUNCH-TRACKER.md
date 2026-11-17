@@ -162,7 +162,7 @@ The single source of truth for **where we are**, kept by the lead architect (ses
     - the control plane's gone-proof needs a known project for the positive control (the restore-test project id), and a reachability rule. **Neon's proxy answers unknown or deleted endpoints with `28P01`** (verified 2026-11-17), so only a successful login counts as reachable; reuse 3c's `classifyEndpoint` (3c §6.4.1);
     - the marker parameter needs GetParameter and SecureString/Overwrite;
     - re-tombstoning must not skip `tenant:delete`'s Stripe safeguards (prefer listing plus a `tenant:delete --project-proven-gone` path), must not need a manual repoint to undo, and needs a mass-incident brake;
-    - rebuilds made after the last control-plane backup are re-applied from 3c's `LINKED` log lines;
+    - rebuilds made after the last control-plane backup are re-applied from 3c's `SWITCHING`/`LINKED` log lines, **each confirmed against Neon** (a `SWITCHING` without a `LINKED` may or may not have committed);
     - BACKUP-line import: unknown tenant ids are listed, not inserted (FK); the partial unique `s3_key`; NOT NULL columns; `region` null;
     - window projects: filter by `created_at`, staging exclusions, provisioning races, no duplicate rows, and **don't delete a window customer's data without the product owner's decision**;
     - every unreachable class must be skippable by deploys, or have an end state (permanently lost workspaces: a product-owner question);
