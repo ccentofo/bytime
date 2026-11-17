@@ -147,6 +147,36 @@ describe.skipIf(!SERVER_URL)('backup command', () => {
     expect(d.bucket.completedStreams).toEqual([]);
   });
 
+  // 3b-fix (DISASTER-RESTORE-AUDIT.md F-3b): a target deadline or a stop that fires while dumpOnce is still on its
+  // version query rejected `pipelineDone` with no handler: an unhandled rejection, which the image's crash handler turns
+  // into FATAL and exit 1 for the whole run. The target must simply fail, and nothing may reject unhandled.
+  for (const [name, mode] of [['a target deadline', 'deadline'], ['a stop (SIGTERM)', 'stopped']] as const) {
+    it(`S2c: ${name} during the version query → that target failed \`${mode}\`, no unhandled rejection`, async () => {
+      const pending: Array<(e: Error) => void> = [];
+      // The tenant's connection hangs on its first query until the client is ended; every other connection is real.
+      const connectTarget = ((url: string, opts: postgres.Options<Record<string, postgres.PostgresType>>) => {
+        if (!url.includes(`/${t1.name}`)) return postgres(url, opts);
+        const fake = (() => new Promise((_resolve, reject) => { pending.push(reject); })) as unknown as postgres.Sql;
+        Object.assign(fake, { end: async () => { for (const r of pending.splice(0)) r(Object.assign(new Error('write CONNECTION_ENDED'), { code: 'CONNECTION_ENDED' })); } });
+        return fake;
+      }) as unknown as BackupDeps['connectTarget'];
+      const stop = new AbortController();
+      const d = deps({ options: { only: 'test-lc-a' }, connectTarget, stopSignal: mode === 'stopped' ? stop.signal : undefined, targetDeadlineMs: mode === 'deadline' ? 300 : 60_000 });
+      const uncaught = trackUncaught();
+      try {
+        if (mode === 'stopped') setTimeout(() => stop.abort('stopped'), 300);
+        expect((await runBackup(d)).exitCode).toBe(1);
+        await sleep(100); // unhandledRejection fires after the microtask queue drains
+        const rows = await rowsOf(d.runId);
+        expect(rows.length).toBeGreaterThanOrEqual(1);
+        expect(rows.every((x) => x.status === 'failed' && x.error === mode)).toBe(true);
+        expect(uncaught.count()).toBe(0);
+      } finally {
+        uncaught.stop();
+      }
+    });
+  }
+
   it('S3: the keyring fails (KMS denied) → every target failed; exit 1', async () => {
     class DeniedKeyring extends KeyringNode {
       async _onEncrypt(): Promise<never> { throw kmsDenied(); }
