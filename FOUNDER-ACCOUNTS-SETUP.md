@@ -273,7 +273,7 @@ The final checklist will be `PRODUCTION-DEPLOY.md`, Phase "Backups (AWS)". The f
 5. **Switch it on and deploy:** in GitHub → **Settings → Secrets and variables → Actions → Variables → New repository variable**: `AWS_BACKUPS_ENABLED` = `true`. Then **Actions → Backup system deploy → Run workflow**. GitHub emails you; on the run, **Review deployments** → `aws-backups` → **Approve and deploy**.
 6. **Confirm the alert email.** AWS sends "AWS Notification - Subscription Confirmation" to `infra@`; click **Confirm subscription** within 48 hours. If you miss it: AWS console → **SNS → Subscriptions** → the pending one → **Request confirmation**. (The daily digest will remind you if it's still unconfirmed.)
 7. **First runs and the "can't" checks:** together with me, in the AWS console and AWS CloudShell (a terminal in your browser that runs inside AWS), so nothing runs on your Mac. A few checks deliberately trigger alert emails; that's expected and proves the alarms work.
-8. **Switch to production:** edit the first two parameters to **production's** values. From the next scheduled run, production is backed up.
+8. **Switch to production:** between 15:00 and 17:00 UTC (11am–1pm Eastern; no backup job runs then), edit the first two parameters to **production's** values. From the next scheduled run, production is backed up.
 9. **Vercel:** once I confirm production's first backup and audit have run, add `BACKUPS_EXPECTED=1` to production (staging stays `0`), then redeploy.
 
 ## Part 7. After setup: what you'll see, and what you never do
