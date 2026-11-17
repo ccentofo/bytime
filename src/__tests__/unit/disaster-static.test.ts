@@ -259,3 +259,26 @@ describe('runbook A support (RESTORE.md A.3, A.9)', () => {
     expect(parseDisasterArgs(['workspace', '--targets', '0a1b2c3d-1111-4222-8333-444455556666', '--override', 'none', '--run-id', 'cloudshell-20261117T204036'])).toMatchObject({ ok: true });
   });
 });
+
+describe('fix round 1: runbook and setup lines (FR13, FR15)', () => {
+  it('RESTORE.md: "deploys with Skip lost workspaces ticked", the every-release line, and every result the code can report', () => {
+    const r = read('RESTORE.md');
+    expect((r.match(/\*\*Skip lost workspaces\*\* ticked/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(r).toContain('tick **Skip lost workspaces** on Deploy to\n    Production each time');
+    for (const result of ['linked', 'original-exists', 'recoverable', 'observed', 'reachable', 'not-lost', 'reachable-now', 'original-back', 'network-unproven',
+      'credentials', 'database-missing', 'deletion-due', 'no-backup', 'retryable', 'changed-meanwhile', 'not-started', 'not-finished', 'proof-failed', 'facts',
+      'restore-failed', 'create', 'guard', 'error', 'cleanup-failed']) expect(r, result).toContain(`\`${result}\``);
+  });
+  it('PRODUCTION-DEPLOY.md: Phase 14 tells every release to tick Skip lost workspaces; both setups have the same-organisation check', () => {
+    const p = read('PRODUCTION-DEPLOY.md');
+    expect(p).toContain('tick **Skip lost workspaces** on every release');
+    expect(p).toContain('**Same organisation check:**');
+    expect(read('FOUNDER-ACCOUNTS-SETUP.md')).toContain('**Same organisation check:**');
+  });
+  it('every result string the workspace and rehearse modes produce is in the runbook\'s list', () => {
+    const r = read('RESTORE.md');
+    const code = read('scripts/backup/disaster-workspace.ts') + read('scripts/backup/disaster-rehearse.ts');
+    const produced = new Set([...code.matchAll(/out\('([a-z-]+)'/g), ...code.matchAll(/result: '([a-z-]+)'/g)].map((m) => m[1]));
+    for (const p of produced) if (p !== 'rehearsed') expect(r, p).toContain(`\`${p}\``);
+  });
+});

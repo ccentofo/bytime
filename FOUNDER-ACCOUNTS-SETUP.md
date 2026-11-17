@@ -291,6 +291,7 @@ The checklist is `PRODUCTION-DEPLOY.md`, Phase 13c. About 30 minutes, plus waiti
    3. Accept the invitation from the alias's email, sign in once as it, and protect the login with your security key.
    4. As `neon-ops@`: **Account settings → API keys → Create** (a personal key). Copy it once; it goes straight into AWS in step 3.
    5. Note the **organisation id** (Organization settings → General) and two **project ids** (each project → Settings → General): `cadenzpoint-restore-tests`, and production's control plane.
+   6. **Same organisation check:** with the organisation switcher (top left) on that organisation, open **Projects**: `cadenzpoint-restore-tests`, production's control plane and every `cadenzpoint-<workspace>` project must all be listed there. If any is in another organisation, stop and tell me.
 3. **Parameter Store** (AWS, `corey-admin`, us-east-1; Tier Standard, Type **SecureString**, KMS default):
    - `/cadenzpoint/backup/neon-api-key`: the key from 2.4;
    - `/cadenzpoint/backup/neon-org-id`: the organisation id;

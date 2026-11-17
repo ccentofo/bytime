@@ -116,11 +116,11 @@ emailed (start, finish and caller) and logged. The button does **not** migrate: 
    next daily check after the 404. The watch closes after its 30 days.
 7. In the Neon console, on each rebuilt project (the email names it), set `neon-ops@` to **Viewer** (Settings → access).
    If the console won't lower it, tell the lead: `neon-ops@` then stays Admin on that one project (Q1's residual).
-8. **A lost workspace that was due for deletion** (the press records its proof and refuses `deletion-due`): deploys
-   skip it. `tenant:delete` refuses on a missing project today; the proven-gone deletion path is item 3c-2. Until then
+8. **A lost workspace that was due for deletion** (the press records its proof and refuses `deletion-due`): deploys with
+   **Skip lost workspaces** ticked skip it. `tenant:delete` refuses on a missing project today; the proven-gone deletion path is item 3c-2. Until then
    it stays skipped and listed.
 8a. **The press says "credentials problem"** (the workspace's database password was reset, or similar): the data is
-   intact. Deploys can skip it meanwhile. Contact the lead; refreshing a workspace's credentials is a separate decision
+   intact. Deploys with **Skip lost workspaces** ticked skip it meanwhile. Contact the lead; refreshing a workspace's credentials is a separate decision
    (a repoint under LB-D6).
 9. **If GitHub is down (Q2):** AWS CloudShell, signed in as `corey-admin` (security key), us-east-1. Replace `<ids>`
    (comma-separated workspace ids) and run, as one command:
@@ -131,25 +131,39 @@ emailed (start, finish and caller) and logged. The button does **not** migrate: 
 
    The start is emailed, like a press; the results are emailed and appear in the digest. With the override, use
    `\"unreachable-4h\"` in place of `\"none\"`.
-10. **A workspace that can't be rebuilt** (`no-backup`): its proof keeps it skippable by deploys until it's rebuilt or
-    reachable again. Contact the lead. 3b's daily `backup-failed`/`backup-stale` alerts for it continue meanwhile; that's
+10. **A workspace that can't be rebuilt** (`no-backup`): its proof keeps it skippable by deploys (with **Skip lost
+    workspaces** ticked) until it's rebuilt or reachable again. Contact the lead. 3b's daily `backup-failed`/`backup-stale` alerts for it continue meanwhile; that's
     expected.
 11. **The button says "a disaster task is already running":** on the 1st of the month around 15:17 UTC, that's the
     monthly rehearsal: wait a few minutes. Otherwise, if nothing is running from your side: in CloudShell,
     `aws ecs list-tasks --cluster cadenzpoint-backup --family cadenzpoint-backup-disaster`, then
     `aws ecs stop-task --cluster cadenzpoint-backup --task <arn>`. It's logged and emailed.
 12. **A rebuilt or recovered workspace that drops out again** (deploys fail on it once its proof is superseded): press
-    with the override again. The new observation lets deploys skip it while you wait.
+    with the override again. The new observation lets deploys (with **Skip lost workspaces** ticked) skip it while you
+    wait.
+13. **Every release while a workspace is skipped or awaiting a rebuild:** tick **Skip lost workspaces** on Deploy to
+    Production each time. Without it, the deploy fails on that workspace (and Vercel doesn't deploy).
 
 **Don't rename tenant projects in the Neon console:** the button's address check finds a workspace's projects by name
 (`cadenzpoint-<slug>`, and its rebuilds `cadenzpoint-r-<id>-…`).
 
-**Results the email can report, per workspace:** `linked` (rebuilt and switched); `original-exists` (press with the
-override if it's been unreachable for hours); `recoverable` (step 1); `observed` (press again after the time given);
-`reachable` / `not-lost` (nothing to rebuild); `credentials` (8a); `database-missing` (see "In-place restore" above;
-needs the customer's written consent); `deletion-due` (8); `no-backup` (10); `retryable` (press again);
-`restore-failed`, `create`, `guard` or `proof-failed` (contact the lead); `changed-meanwhile` (press again);
-`not-started` / `not-finished` (press again).
+**Results the email can report, per workspace:**
+- `linked`: rebuilt and switched (steps 4–7).
+- `original-exists`: press with the override if it's been unreachable for hours (step 2).
+- `recoverable`: recover it in Neon (step 1).
+- `observed`: press again with the override after the time given (step 2).
+- `reachable` / `not-lost`: the original answers; nothing to rebuild.
+- `reachable-now`: an override press whose original answered (or couldn't be checked) just before the switch; nothing
+  switched. Check status.neon.tech; press again with the override if it drops out again.
+- `original-back`: the original came back just before the switch; nothing switched. Check it in the Neon console.
+- `network-unproven`: the task couldn't reach any database at all (its own network); press again later.
+- `credentials`: step 8a. `database-missing`: see "In-place restore" above (needs the customer's written consent).
+- `deletion-due`: step 8. `no-backup`: step 10.
+- `retryable`, `changed-meanwhile`, `not-started`, `not-finished`: press again.
+- `proof-failed`: a Neon lookup failed or a check couldn't complete; press again once, and contact the lead if it repeats.
+- `facts`: the workspace id isn't a live workspace with a database (check the id; contact the lead).
+- `restore-failed`, `create`, `guard`, `error`: contact the lead with the email.
+- `cleanup-failed` (rehearsal): contact the lead; a project may be left in Neon (the digest's leftover check lists it).
 
 **The monthly rehearsal** (the 1st, 15:17 UTC, automatic) does all of this for the `rehearsal` workspace without the
 switch, then deletes its copy. A failure appears in the digest as `disaster-rehearse-failed`: tell the lead.

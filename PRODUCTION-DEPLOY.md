@@ -978,6 +978,10 @@ A founder-only button that rebuilds a lost workspace from its newest verified ba
 2. **Neon (Q1):** add the alias `neon-ops@cadenzpoint.com`; invite it to the organisation as **Viewer** (or **Member**
    if Viewer isn't offered: step 0); sign in once as it (security key) and create its **personal** API key (Account
    settings → API keys). Note the organisation id (Organization settings → General).
+   **Same organisation check:** the `cadenzpoint-restore-tests` project, production's control-plane project and every
+   workspace project must be in the organisation whose id goes into `/cadenzpoint/backup/neon-org-id` (Neon → the
+   organisation switcher at the top left → that organisation → **Projects**: all of them listed there). If any sits in
+   another organisation, stop and tell the lead.
 3. **AWS Parameter Store** (SecureString each): `/cadenzpoint/backup/neon-api-key` (the step 2 key),
    `/cadenzpoint/backup/neon-org-id`, `/cadenzpoint/backup/restore-test-project-id` (the `cadenzpoint-restore-tests`
    project's id) and `/cadenzpoint/backup/control-plane-project-id` (production's control-plane project id).
@@ -1021,7 +1025,8 @@ A founder-only button that rebuilds a lost workspace from its newest verified ba
 **Every future release**
 1. Merge to `main` via PR (CI green, including `db:safety`).
 2. Deploy to **staging** (Phase 12.1) and spot-check.
-3. Deploy to **production** (Phase 13.1) and approve.
+3. Deploy to **production** (Phase 13.1) and approve. **While any workspace is skipped or awaiting a rebuild**
+   (RESTORE.md runbook A), tick **Skip lost workspaces** on every release.
 
 **Rollback (code):** Vercel → production project → **Deployments** → pick the last good one →
 **Instant Rollback**. Because migrations are backward-compatible (expand/contract), the older code
