@@ -17,8 +17,6 @@
  */
 import postgres from 'postgres';
 import { DISASTER_LOCK_KEY } from '../../src/lib/tenant/backup-locks';
-import { tenantDatabaseName } from '../../src/lib/tenant/db-name';
-import { tenantDbHistoryRetentionSeconds } from '../../src/lib/tenant/lifecycle-config';
 import { acquireLock, type Connect, type HeldLock, type LockTiming } from './lib/locks';
 import { controlPlaneClient } from './lib/sql';
 import { summaryOf } from './lib/summarize-error';
@@ -30,6 +28,7 @@ import type { KeyringFactory } from './lib/crypto';
 import type { SpawnFn } from './lib/child';
 import type { HostMap } from './lib/host-map';
 import { MINUTE } from './lib/util';
+import { runWorkspace } from './disaster-workspace';
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const RUN_ID_RE = /^[A-Za-z0-9_/-]{1,80}$/;
@@ -139,6 +138,8 @@ export interface DisasterDeps {
   lockTiming?: LockTiming;
   lockConnect?: Connect;
   concurrency?: number;
+  /** Tests only: shorter polls and gaps (the 10-second recoverable polls, the 60-second override gap, retries). */
+  timing?: Partial<{ recoverablePolls: number; recoverablePollMs: number; overrideGapMs: number; lockRetryMs: number; cleanupRetryMs: number; cleanupLockTimeout: string; cleanupBudgetMs: number }>;
   /** Tests only, in-process: fake Neon hosts → the local server (impact analysis §4, D10). main.ts never sets it. */
   hostMap?: HostMap;
   /** Tests only: seams for the termination and concurrency cases (R9). */
@@ -152,10 +153,7 @@ export interface DisasterHooks {
   afterCommit?: (tenantId: string) => Promise<void>;
 }
 
-/** The rebuild's creation settings (the app's rules, bundled: db-name.ts and lifecycle-config.ts). */
-export function rebuildSettings(slug: string): { databaseName: string; historyRetentionSeconds: number } {
-  return { databaseName: tenantDatabaseName(slug), historyRetentionSeconds: tenantDbHistoryRetentionSeconds() };
-}
+export { rebuildSettings } from './disaster-settings';
 
 export interface WorkspaceResult {
   tenantId: string;
@@ -193,7 +191,7 @@ export interface RunContext {
 export type ModeRunner = (ctx: RunContext) => Promise<RunOutcome>;
 
 const notBuilt: ModeRunner = async (ctx) => ({ pass: false, results: [], email: [`mode ${ctx.args.mode} is not in this image yet`] });
-export const MODES: Record<DisasterMode, ModeRunner> = { workspace: notBuilt, rehearse: notBuilt };
+export const MODES: Record<DisasterMode, ModeRunner> = { workspace: runWorkspace, rehearse: notBuilt };
 
 export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promise<{ exitCode: number; outcome: RunOutcome | null }> {
   const now = deps.now ?? (() => new Date());
