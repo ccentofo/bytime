@@ -1,6 +1,6 @@
 # Database backups (build queue 3b)
 
-> **Status:** **DRAFT v5.4**, 2026-11-16, lead architect. A redesign to the revised `BUSINESS-DECISIONS.md` §5 (2026-11-16). Rounds 1 and 2 and confirmation passes 1 and 2 are fixed here (§15). Confirmation pass 3 is next.
+> **Status:** **DRAFT v5.5**, 2026-11-16, lead architect. A redesign to the revised `BUSINESS-DECISIONS.md` §5 (2026-11-16). Rounds 1 and 2 and confirmation passes 1–3 are fixed here (§15). Confirmation pass 4 is next.
 >
 > **What changed from v4.1** (`78222b4`):
 > - The jobs run **in the backup AWS account** (scheduled container tasks in us-east-1), not on GitHub's runners.
@@ -222,11 +222,12 @@ Disaster-recovery backups that survive losing a Neon project or the whole Neon a
    - **0 is allowed** and disables instant restore and time travel for the project;
    - expired history is removed automatically, and history is billed at $0.20/GB-month;
    - with 0, dropped test databases aren't kept (Neon API spec, `history_retention_seconds` minimum 0; neon.com/docs/introduction/history-window).
-3. **Plans:**
+3. **Hostnames:** `ep-<name>[-pooler][.c-<n>].<region>.aws.neon.tech`. Some AWS regions add a **cell label** such as `c-2` ("connection strings in some AWS regions may include a cell identifier (for example, `c-2`)", neon.com/docs/reference/glossary). One shared parser, `parseNeonHost(host)` in `scripts/backup/lib/neon-host.ts`, uses `^ep-[a-z0-9-]+?(?<pooler>-pooler)?(?:\.c-\d+)?\.(?<region>[a-z0-9-]+)\.aws\.neon\.tech$`. Both the restore-test guard and the `region` column use it (U5/U11 accept `…c-2.us-east-1…`; refuse `…us-east-2…`, `…c-2.us-east-2…` and `-pooler`).
+4. **Plans:**
    - Launch allows 100 projects, Scale 1,000 (soft);
    - storage is unlimited on paid plans, while Free allows 1 GB per project;
    - **new projects default to Postgres 18**, so the restore-test project must be set to 16 by hand (neon.com/docs/introduction/plans; Neon changelog 2026-06-05).
-4. **Backups are read-only** (as v4.1 §4.4):
+5. **Backups are read-only** (as v4.1 §4.4):
    - pg_dump and pg_restore 16 match the 16 servers; pg_restore 17 emits `SET transaction_timeout`, which 16 rejects;
    - `--snapshot` with `pg_export_snapshot()`;
    - `--lock-wait-timeout`;
@@ -239,7 +240,7 @@ Disaster-recovery backups that survive losing a Neon project or the whole Neon a
 3. **Only the restore-test role (and 3c's disaster role) can read or decrypt backups through any normal path.**
    - The bucket and key policies deny everyone else a plain download, decrypt or re-encrypt, the founder's admin login included. So nothing lands anywhere by accident.
    - **Stated honestly:** an account administrator (the founder's admin login, or root) can always get access on purpose. For example, they could change a policy, run the restore-test task with a different command, or deploy a stack with the deploy roles. Those are deliberate acts with a hardware-key login, and CloudTrail records them.
-   - **Changes to the protections themselves** email immediately, whoever makes them (§6.1 Alerting rule list): the key, the bucket policy, the lifecycle rule, versioning, the audit trail and the alerting. The audit also re-checks the policies daily (§6.6).
+   - **Changes to the protections themselves** email immediately, whoever makes them (§6.1 Alerting): the key, the bucket policy, the lifecycle rule, versioning, the audit trail, the backup roles' policies, and the alerting itself (rules, targets, subscription, alarm). The audit re-checks all of them daily (§6.6), so even a change that silences the email shows up in the next digest.
    - A task started by hand isn't alerted. CloudTrail records it.
 4. **No long-lived access keys anywhere.** Tasks use roles; GitHub uses OIDC; the founder signs in with a hardware key.
 5. **Versioning stays off.** The bucket policy denies `s3:PutBucketVersioning` to every principal. An attempt to change that policy alerts immediately.
@@ -278,7 +279,7 @@ Two CloudFormation templates in YAML.
 | **CloudTrail** (here, so no deploy can touch it) | One multi-region trail of **all** management events, read and write (the first copy is free, §4.5). It's required for the alert rules, and keeps every key use beyond the 90-day event history. Its log bucket gets a CloudFormation-generated name (a failed or retried create can't collide), `DeletionPolicy: Retain`, expiry 365 days, and a bucket policy for `cloudtrail.amazonaws.com` with `aws:SourceArn` = the trail ARN. The trail `DependsOn` that policy. The logs hold no customer data. |
 | Outputs | `DeployRoleArn`, `CfnExecRoleArn`, `RepositoryUri`, `ArtifactsBucket` |
 
-**`backup-stack.yml`**, stack `cadenzpoint-backup`, deployed by the workflow (§6.2). Parameters: `ImageUri` (`…@sha256:<digest>`), `AlertEmail`, `MonthlyBudgetUsd` (default 10), `BackupConcurrency` (3), `BackupTargetDeadlineMinutes` (30), `RestoreTestConcurrency` (2), `RestoreTestTargetDeadlineMinutes` (120), `BackupTaskCpu`/`BackupTaskMemory` (2048/4096). Engineering changes them in the template's defaults; the next approved deploy applies them.
+**`backup-stack.yml`**, stack `cadenzpoint-backup`, deployed by the workflow (§6.2). Parameters: `ImageUri` (`…@sha256:<digest>`), `AlertEmail`, `MonthlyBudgetUsd` (default 10), `BackupConcurrency` (3), `BackupTargetDeadlineMinutes` (30), `RestoreTestConcurrency` (2), `RestoreTestTargetDeadlineMinutes` (120), `BackupTaskCpu`/`BackupTaskMemory` (2048/4096), `RestoreTestTaskCpu`/`RestoreTestTaskMemory` (2048/4096). Engineering changes them in the template's defaults; the next approved deploy applies them.
 
 **Principal ARNs in policies** are built as strings with `Fn::Sub`, path included, for example `arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-task`. Role *grants* go in the roles' IAM policies; the key and bucket policies only *deny*, using `ArnNotEquals aws:PrincipalArn`. That avoids a CloudFormation dependency cycle (key ↔ role), and KMS's check that every principal named in a key policy exists. `aws:PrincipalArn` is the role ARN for an assumed-role session (§4).
 
@@ -291,10 +292,10 @@ Two CloudFormation templates in YAML.
 | **ECS cluster** `cadenzpoint-backup` | Fargate only; Container Insights off. |
 | **Task definitions** | One per command family: `backup`, `audit`, `restore-test`. The same image with a different `Command`. `backup` and `restore-test`: 2 vCPU / 4 GiB; `audit`: 0.5 vCPU / 1 GiB. Linux/X86_64; ephemeral storage default (streaming, no temp files). `initProcessEnabled: true`. Log driver `awslogs` to its own log group (retention 30 days). `StopTimeout: 120`. |
 | **Execution roles** (one per family) | ECR pull (`ecr:GetAuthorizationToken` on `*`; `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer` on the repo); write logs; `ssm:GetParameters` **only on the parameters that family needs**: `backup` → control-plane URL and encryption key; `restore-test` → control-plane URL and restore-test URL; `audit` → control-plane URL and restore-test URL. |
-| **Task roles** (`/cadenzpoint-backup/`) | **Trust:** `ecs-tasks.amazonaws.com` with `aws:SourceAccount` = this account and `ArnLike aws:SourceArn arn:aws:ecs:us-east-1:<acct>:*`. **backup:** `s3:PutObject` on `BUCKET/v1/*`, `s3:AbortMultipartUpload`, `kms:GenerateDataKey` (key, with `kms:EncryptionContext:purpose = cadenzpoint-backup`). **restore-test:** `s3:GetObject` on `BUCKET/v1/*`, `s3:ListBucket` with `s3:prefix` `v1/*`, `kms:Decrypt` (key, with the condition). **audit:** `s3:ListBucket` with `s3:prefix` `v1/*`, `s3:ListBucketMultipartUploads`, `s3:GetBucketVersioning`, `s3:GetBucketPolicy`, `s3:GetLifecycleConfiguration`, `kms:DescribeKey`, `kms:GetKeyPolicy`, `events:DescribeRule` on the alert rule, `sns:ListSubscriptionsByTopic` on the topic. |
+| **Task roles** (`/cadenzpoint-backup/`) | **Trust:** `ecs-tasks.amazonaws.com` with `aws:SourceAccount` = this account and `ArnLike aws:SourceArn arn:aws:ecs:us-east-1:<acct>:*`. **backup:** `s3:PutObject` on `BUCKET/v1/*`, `s3:AbortMultipartUpload`, `kms:GenerateDataKey` (key, with `kms:EncryptionContext:purpose = cadenzpoint-backup`). **restore-test:** `s3:GetObject` on `BUCKET/v1/*`, `s3:ListBucket` with `s3:prefix` `v1/*`, `kms:Decrypt` (key, with the condition). **audit:** `s3:ListBucket` with `s3:prefix` `v1/*`, `s3:ListBucketMultipartUploads`, `s3:GetBucketVersioning`, `s3:GetBucketPolicy`, `s3:GetLifecycleConfiguration`, `kms:DescribeKey`, `kms:GetKeyPolicy`, `events:DescribeRule` and `events:ListTargetsByRule` on the two rules, `sns:ListSubscriptionsByTopic` on the topic, `sns:GetSubscriptionAttributes`, `cloudtrail:GetTrailStatus` on the trail, `cloudwatch:DescribeAlarms` on the DLQ alarm. |
 | **Schedules** (`AWS::Scheduler::Schedule`) | `backup-daily` `cron(17 6 * * ? *)`; `backup-catchup` `cron(17 18 * * ? *)`; `audit-daily` `cron(17 11 * * ? *)`; `restore-test-weekly` `cron(17 8 ? * MON *)`; `restore-test-catchup` `cron(17 8 ? * TUE-SUN *)`. `ScheduleExpressionTimezone: UTC`; `FlexibleTimeWindow: { Mode: OFF }`. Each targets ECS `RunTask` (Fargate, platform `LATEST`, the subnets, public IP enabled) with the task definition **pinned by revision ARN**. The two catch-ups use `Target.Input` `{"containerOverrides":[{"name":"<family>","command":["backup","--if-missing-today"]}]}` and `["restore-test","--if-missed"]`. `RetryPolicy`: `MaximumRetryAttempts: 10`, `MaximumEventAgeInSeconds: 3600`. `DeadLetterConfig` → SQS `cadenzpoint-backup-scheduler-dlq` (retention 2 days). One Scheduler execution role, trusted by `scheduler.amazonaws.com` with `aws:SourceAccount`: `ecs:RunTask` on the three task families' `family:*` ARNs (the schedules still pin revisions; this way an image-only deploy doesn't rewrite the role, and doesn't send a protections email); `iam:PassRole` on their execution and task roles with `iam:PassedToService = ecs-tasks.amazonaws.com`; `ecs:TagResource` with `ecs:CreateAction = RunTask`; `sqs:SendMessage` on the DLQ. |
 | **SSM parameters** | **Not created by the stack** (CloudFormation can't create SecureString parameters, §4.7). Fixed names: `/cadenzpoint/backup/control-plane-url`, `/cadenzpoint/backup/encryption-key`, `/cadenzpoint/backup/restore-test-url`. The founder creates them once (§12). |
-| **Alerting (immediate email)** | An SNS topic `cadenzpoint-backup-alerts` with an email subscription to `AlertEmail`. The topic policy lets `events.amazonaws.com` and `cloudwatch.amazonaws.com` publish, each with `aws:SourceAccount`. **One EventBridge rule** `cadenzpoint-backup-protections` on the default bus, matching CloudTrail write events (default `ENABLED` state) **from any caller**, with no caller exclusions (an exclusion can silently miss callers whose events lack the field). Event names: KMS `ScheduleKeyDeletion`, `DisableKey`, `PutKeyPolicy`, `CreateGrant`; CloudTrail `StopLogging`, `DeleteTrail`, `UpdateTrail`, `PutEventSelectors`; S3 `PutBucketPolicy`, `DeleteBucketPolicy`, `PutBucketLifecycle`, `DeleteBucketLifecycle`, `PutBucketVersioning`; EventBridge `DisableRule`, `DeleteRule`, `RemoveTargets`; SNS `Unsubscribe`, `DeleteTopic`, `SetTopicAttributes`; IAM `UpdateAssumeRolePolicy`, `PutRolePolicy`, `DeleteRolePolicy`, `AttachRolePolicy`, `DetachRolePolicy` where `requestParameters.roleName` has the prefix `cadenzpoint-backup-` (every backup role's name starts with it; a prefix match on a field these events always carry). IAM events are delivered in us-east-1. An input transformer puts the event name, the caller's ARN and the time in the email. **A deploy that changes one of these also emails, which is expected.** The first deploy sends a few (before the subscription is confirmed, they're dropped). **Plus** a CloudWatch alarm on the DLQ (`ApproximateNumberOfMessagesVisible > 0`) to the topic. |
+| **Alerting (immediate email)** | An SNS topic `cadenzpoint-backup-alerts` with an email subscription to `AlertEmail` (no filter policy). The topic policy lets `events.amazonaws.com` and `cloudwatch.amazonaws.com` publish, each with `aws:SourceAccount`. **Two EventBridge rules** on the default bus, matching CloudTrail write events (default `ENABLED` state) **from any caller**, with no caller condition (an exclusion can silently miss callers whose events lack the field). **`cadenzpoint-backup-protections`**, matched by `eventName` alone: KMS `ScheduleKeyDeletion`, `DisableKey`, `PutKeyPolicy`, `CreateGrant`; CloudTrail `StopLogging`, `DeleteTrail`, `UpdateTrail`, `PutEventSelectors`; S3 `PutBucketPolicy`, `DeleteBucketPolicy`, `PutBucketLifecycle`, `DeleteBucketLifecycle`, `PutBucketVersioning`; EventBridge `DisableRule`, `DeleteRule`, `PutRule`, `PutTargets`, `RemoveTargets`; SNS `Unsubscribe`, `Subscribe`, `DeleteTopic`, `SetTopicAttributes`, `SetSubscriptionAttributes`; CloudWatch `DeleteAlarms`, `DisableAlarmActions`. **`cadenzpoint-backup-roles`**, a separate rule so its extra condition can't stop the others matching: IAM `UpdateAssumeRolePolicy`, `PutRolePolicy`, `DeleteRolePolicy`, `AttachRolePolicy`, `DetachRolePolicy`, with `requestParameters.roleName` prefix `cadenzpoint-backup-` (every backup role's name starts with it; these events always carry the field). IAM events are delivered in us-east-1. An input transformer puts the event name, the caller's ARN and the time in each email. **A deploy that changes one of these also emails, which is expected.** The first deploy sends a few, dropped until the subscription is confirmed. **Plus** a CloudWatch alarm `cadenzpoint-backup-dlq` on the DLQ (`ApproximateNumberOfMessagesVisible > 0`, `TreatMissingData: notBreaching`) to the topic. |
 | **Budget** | `AWS::Budgets::Budget`, monthly cost `MonthlyBudgetUsd`; alerts at 80% actual and 100% forecast, to `AlertEmail`. |
 
 ### 6.2 Image and deploy (`Dockerfile.backup`, `.github/workflows/backup-deploy.yml`)
@@ -316,7 +317,8 @@ name: Backup system deploy
 on:
   push:
     branches: [main]
-    paths: ['ops/aws/backup-stack.yml', 'src/lib/tenant/backup-bundle-hash.ts', 'Dockerfile.backup', '.github/workflows/backup-deploy.yml']
+    paths: ['ops/aws/backup-stack.yml', 'scripts/backup/**', 'src/lib/encryption.ts', 'src/lib/tenant/direct-url.ts',
+            'src/lib/tenant/backup-locks.ts', 'Dockerfile.backup', '.github/workflows/backup-deploy.yml']
   workflow_dispatch: {}
 permissions: { contents: read }
 concurrency: { group: backup-deploy, cancel-in-progress: false }
@@ -354,14 +356,14 @@ jobs:
           ALERT_EMAIL: ${{ secrets.BACKUP_ALERT_EMAIL }}
           CFN_EXEC_ROLE_ARN: ${{ secrets.AWS_CFN_EXEC_ROLE_ARN }}
 ```
-**When a deploy is requested: only when the image or the stack would actually change.**
-- **`src/lib/tenant/backup-bundle-hash.ts`** exports `BACKUP_BUNDLE_SHA256`, the SHA-256 of the esbuild output (`backup.cjs`). esbuild's output is deterministic for the same inputs, lockfile and version, and `esbuild` is pinned. A CI test (U6) rebuilds the bundle and **fails if the hash differs from the committed constant**; if output ever varied, CI would go red loudly rather than drift silently.
-- **The running image records its own hash** in every `database_backups` row. The app compares it with its constant: `backup-image-stale` fires when a deploy is waiting or failed, which also catches GitHub's `paths` filter skipping a very large merge (it reads only the first 300 changed files).
-- **`ops/aws/bootstrap.yml` isn't in the filter.** A bootstrap change is rare, and is applied by the founder in the console (CloudFormation → the bootstrap stack → Update → upload), with the lead's instructions.
-- So any change that alters the shipped code must regenerate the file in the same commit, and that triggers a deploy request. That covers a `src/` module it imports, a dependency bump that reaches the bundle, or the backup SQL.
-- **Everything else, including app-only `package.json` changes and control-plane migrations of other tables, triggers nothing.** Approval requests stay rare after launch (Q1).
-- **The backup code imports as little of `src/` as possible:** `src/lib/encryption.ts`, `src/lib/tenant/direct-url.ts` and `src/lib/tenant/backup-locks.ts`. It queries the control-plane tables with explicit column lists in plain SQL in `scripts/backup/lib/`, so a migration on other columns can't break the image.
-- **A migration that changes the backup tables** also changes that SQL, so a deploy is requested. Runbook: **approve it only after `deploy-prod` has applied the migration**. The tasks' start check refuses to run against missing tables either way.
+**When a deploy is requested: only when the backup code or the stack changes.**
+- **The filter lists the backup code's own files:** `scripts/backup/**` (the backup-wait helper lives there too, as `scripts/backup/lib/backup-wait.ts`), the three `src/` modules it imports (`src/lib/encryption.ts`, `src/lib/tenant/direct-url.ts`, `src/lib/tenant/backup-locks.ts`), the main template, the Dockerfile and the workflow.
+- **U6 keeps the list complete:** it builds the bundle with esbuild's `--metafile` and fails if any input outside `node_modules` isn't matched by a filter entry. A new import can't slip past.
+- **App-only changes, `package.json`/lockfile bumps and other migrations trigger nothing,** so approval requests stay rare (Q1). Stated plainly: a dependency update reaches the image with the next backup-code change, not on its own.
+- **The backup code queries its tables with explicit column lists in plain SQL** (`scripts/backup/lib/`), so a migration on other columns can't break the image.
+- **A migration that changes the backup tables** comes with a backup-code change (the SQL), so a deploy is requested. Runbook: **approve it only after `deploy-prod` has applied the migration**. The tasks' start check refuses to run against missing tables either way.
+- **`ops/aws/bootstrap.yml` isn't in the filter.** A bootstrap change is rare, and the founder applies it in the console (CloudFormation → the bootstrap stack → Update → upload), with the lead's instructions.
+- **The builder stage copies exactly those inputs** (plus `package.json`, `package-lock.json` and a dedicated `tsconfig.backup.json` passed to esbuild with `--tsconfig`), so the build doesn't depend on files that happen to be present.
 
 **Public logs.** The repo is public, and GitHub prints each step's inputs. So the account-identifying values (the role ARNs, the repository URI, the artifacts bucket and the alert email) are **`aws-backups` environment secrets**, which GitHub masks. Environment secrets are available on free plans for public repos. The only repository **variable** is `AWS_BACKUPS_ENABLED`, a non-sensitive switch the job `if` reads.
 
@@ -403,7 +405,6 @@ Five tables. Append-only except where noted. Tests mark rows with a `run_id` sta
 | `server_version`, `pg_dump_version` | varchar null |
 | `region` | varchar(40) null (from the direct host, e.g. `us-east-1`; `unknown` if the host doesn't match Neon's pattern) |
 | `target_deadline_ms` | int (the per-target deadline this run used) |
-| `bundle_sha256` | char(64) (the image's bundle hash, §6.2) |
 | `error` | text null (an **error summary**, §6.4) |
 | `started_at`, `finished_at` | timestamptz |
 
@@ -437,6 +438,7 @@ Index `(tenant_id, status, finished_at DESC)`; index `(run_id)`.
 | `finished_at` | timestamptz null |
 | `status` | `'running'` \| `'pass'` \| `'fail'` |
 | `planned` | int |
+| `swept_test_dbs` | int (abandoned `rt_…` databases this run dropped at start) |
 | `deadline_ms` | int |
 | `target_deadline_ms` | int (the per-target deadline this run used) |
 | `detail` | text null (slugs and stages only; `abandoned` for a run closed by the next one) |
@@ -497,29 +499,29 @@ No dotenv is loaded in the container. **Outside ECS** (no `ECS_CONTAINER_METADAT
 
 **Run id:** `ecs-<YYYYMMDDTHHMMSSZ>-<rand6>`.
 
-**Each row records** the target's `region` (parsed from its direct host), the run's `target_deadline_ms`, and the image's `bundle_sha256`, for the §6.9 region, slow-target and stale-image findings.
+**Each row records** the target's `region` (parsed from its direct host by `parseNeonHost`, §4.8) and the run's `target_deadline_ms`, for the §6.9 region and slow-target findings.
 
 **One run at a time:**
 - At start, take `pg_try_advisory_lock(BACKUP_LOCK_KEY)` on a dedicated **direct** control-plane connection (`toDirectConnectionUrl`; pooled connections can't hold session locks), held for the whole run.
 - If it isn't granted, log "another backup run is active" and exit 0. The catch-up then can't overlap a slow morning run.
-- If that connection drops, the run continues; the unique keys make overlap harmless.
+- If that connection drops, the run reconnects and re-takes the lock. If it can't, it **starts no new targets** (those in flight finish) and records the rest `failed` (`lock-lost`). Otherwise `migrate-all` could miss the running dump.
 - **All three lock connections** use `toDirectConnectionUrl` (U5). A session lock on the pooled host can be taken and released on different server connections.
 - **The lock keys** are `BACKUP_LOCK_KEY = 728_402_201`, `AUDIT_LOCK_KEY = 728_402_202`, `RESTORE_TEST_LOCK_KEY = 728_402_203` and `MIGRATE_RUN_LOCK_KEY = 728_402_204`. They're distinct from `MIGRATION_LOCK_KEY = 728_402_113` (`src/lib/tenant/migrate-tenant.ts:10`) and defined once in `scripts/backup/lib/locks.ts` (U5 asserts they're distinct).
 
 **Run deadline:** 6 hours. Then everything still running is killed and recorded `failed` (`run-deadline`), and the process exits 1. ECS has no runtime limit of its own (§4.2).
 
-**Migrations and backups never overlap (`scripts/migrate-all.ts`, `scripts/lib/backup-wait.ts`).**
+**Migrations and backups never overlap (`scripts/migrate-all.ts`, `scripts/backup/lib/backup-wait.ts`).**
 - **Why:** a migration's `ALTER TABLE` queues behind pg_dump's ACCESS SHARE locks, and every app query on that table then queues behind the `ALTER`. On the control plane, that's every request. Migrations set no `lock_timeout`.
-- **Two locks, always taken in the same order** (migration first, then backup), so they can't deadlock. Both live on the control plane's **direct** host.
+- **Two locks, and each side takes its own and then checks the other's.** Neither ever blocks waiting for the other's lock (the checks are reads of `pg_locks`, and the waits are polling loops), so there's no deadlock, and they can't both miss each other. Both live on the control plane's **direct** host.
   - `MIGRATE_RUN_LOCK_KEY = 728_402_204`: `migrate-all` holds it for its whole run (not in `--check`).
   - `BACKUP_LOCK_KEY`: the backup run holds it.
 - **`migrate-all`:**
   1. Take `MIGRATE_RUN_LOCK_KEY` (waiting if another migrate-all holds it).
-  2. Check whether `BACKUP_LOCK_KEY` is held **through `pg_locks`** (`locktype = 'advisory'`, the key's `classid`/`objid`, `granted`), not by taking it, so a backup starting in that instant isn't turned away.
+  2. Check whether `BACKUP_LOCK_KEY` is held **through `pg_locks`** (`locktype = 'advisory'`, `database` = the current database's oid, the key's `classid`/`objid`, `objsubid = 1`, `granted`), not by taking it, so a backup starting in that instant isn't turned away.
   3. If a backup is running, release `MIGRATE_RUN_LOCK_KEY`, print "Waiting for the backup run to finish…", and retry every 60 s for up to 30 minutes. Then exit 1 with "A backup run is still active. Re-run deploy-prod later; nothing was changed."
   4. Otherwise migrate, then release.
 - **The backup run,** after taking `BACKUP_LOCK_KEY` and before its first dump, waits while `MIGRATE_RUN_LOCK_KEY` is held (checked through `pg_locks`, every 60 s, up to 60 minutes). After that it proceeds, and logs and records the wait. A migration still running after an hour is far outside normal; `--lock-wait-timeout` then protects the dump side.
-- **The helper** `waitForLock(sql, key, { sleep, now, maxMs })` and `isAdvisoryLockHeld(sql, key)` live in `scripts/lib/backup-wait.ts`, with seams for tests (S21). The lock constants live in `src/lib/tenant/backup-locks.ts`, imported by both sides.
+- **The helper** `waitForLock(sql, key, { sleep, now, maxMs })` and `isAdvisoryLockHeld(sql, key)` live in `scripts/backup/lib/backup-wait.ts`, with seams for tests (S21). The lock constants live in `src/lib/tenant/backup-locks.ts`, imported by both sides.
 - This replaces the clock-based "no deploys at 06:00–08:30" rule, which didn't grow with run length. **No deploy windows remain.**
 
 **Encryption (replaces `age`):** per §6.5. `pgDump.stdout` → `encryptStream` → the hashing `PassThrough` (SHA-256 and bytes; `{ end: false }`) → upload. The gate is unchanged: the hashing stream ends only after pg_dump closes with `(0, null)` **and** the encrypt stream has emitted `end` without error. Any failure: kill pg_dump, destroy the encrypt stream, `hashing.destroy(err)`, `upload.abort()`.
@@ -548,7 +550,7 @@ That summary is what goes into `database_backups.error`, `restore_test_results.d
 - **The AWS Encryption SDK for JavaScript** (`@aws-crypto/client-node` 5.x), with a **KMS keyring** naming `BACKUP_KMS_KEY_ARN` only.
 - **Algorithm suite:** the committing, **unsigned** suite `ALG_AES256_GCM_IV12_TAG16_HKDF_SHA512_COMMIT_KEY`. The commitment policy is `REQUIRE_ENCRYPT_REQUIRE_DECRYPT`. Unsigned, so decryption streams through `decryptUnsignedMessageStream`, which refuses signed messages (§4.3).
 - **Frame length:** 64 KiB. `buildClient({ commitmentPolicy: REQUIRE_ENCRYPT_REQUIRE_DECRYPT, maxEncryptedDataKeys: 1 })`.
-- **Decryption uses a strict KMS keyring** naming the key ARN, never a discovery keyring.
+- **Decryption uses a strict KMS keyring** naming the key ARN, never a discovery keyring. **The key is never replaced:** U6 fails if `BackupKey` sets a property whose change forces replacement beyond the reviewed set, and the runbook says a key change means a new key *added* while the old one is kept for 25 days. The restore test's keyring takes `BACKUP_DECRYPT_KEY_ARNS` (comma-separated, default the current key) for that case.
 - **Encryption context** (authenticated, and sent to KMS):
   - `purpose: cadenzpoint-backup`, which the task roles' IAM conditions require;
   - `cp`: the control-plane id above;
@@ -576,7 +578,10 @@ That summary is what goes into `database_backups.error`, `restore_test_results.d
    - `GetBucketPolicy` must exist, and its statements, **normalised** (sorted keys and arrays), must equal the expected statements rendered with this account's id and ARNs;
    - `GetLifecycleConfiguration` must hold the 25-day rule;
    - `GetKeyPolicy` must equal its expected statements, normalised the same way;
-   - `DescribeRule` on `cadenzpoint-backup-protections` must be `ENABLED`.
+   - both rules: `DescribeRule` must be `ENABLED` with the expected `EventPattern`, and `ListTargetsByRule` must show exactly the alert topic;
+   - the trail: `GetTrailStatus.IsLogging` must be true;
+   - the email subscription must have no `FilterPolicy` (`GetSubscriptionAttributes`);
+   - the DLQ alarm must exist with actions enabled (`DescribeAlarms`).
 
    **The expected documents have one source:** `scripts/backup/lib/expected-policies.ts` renders them from the account id and the fixed names. U6 checks they equal the template's statements, with `Fn::Sub` substituted. Normalisation sorts keys and arrays, turns a one-item array into its scalar, and stringifies booleans and numbers. **Any** difference (missing, extra or changed) goes into `protection_drift` as the `Sid`s that differ. This catches a policy silently replaced, removed or widened by any path, including a future template change.
 6. **Leftover test databases**, only if `pg_try_advisory_lock(RESTORE_TEST_LOCK_KEY)` is granted (so no restore test is running). The lock is held for the whole sweep, then released. If it isn't granted, `leftover_test_dbs = null` (skipped).
@@ -589,6 +594,8 @@ That summary is what goes into `database_backups.error`, `restore_test_results.d
 ### 6.7 The restore-test command (`restore-test`, weekly, Mondays 08:17 UTC)
 **Catch-up:** `restore-test --if-missed` (Tuesday to Sunday, 08:17 UTC) exits 0 at once if a run that **completed** has started since the latest Monday 00:00 UTC. **Completed** means: `planned` is set, and either `status = pass`, or `status = fail` with a result row for every planned target and none of them `FAIL:stopped` or `FAIL:not-reached`. Guard-failure, lock-held and abandoned rows are never completed. A completed failure is already alerted. Otherwise it runs normally. So a lost, stopped, cut or locked-out Monday run is retried the next day. **Every run row gets `finished_at` when it ends**, the lock-held and guard-failure rows included.
 
+**Audit environment** (§6.6): `CONTROL_PLANE_DATABASE_URL`, `RESTORE_TEST_DATABASE_URL` (SSM), `BACKUP_BUCKET`, `BACKUP_KMS_KEY_ARN`, `ALERT_TOPIC_ARN`, `ALERT_RULE_NAMES`, `TRAIL_NAME`, `DLQ_ALARM_NAME`, `AWS_REGION`.
+
 **Environment:** `CONTROL_PLANE_DATABASE_URL`, `RESTORE_TEST_DATABASE_URL` (both from SSM), `BACKUP_BUCKET`, `BACKUP_KMS_KEY_ARN`, `AWS_REGION`, `BACKUP_PG_RESTORE_BIN` (16.x), `RESTORE_TEST_CONCURRENCY` (default 2), `RESTORE_TEST_DEADLINE_HOURS` (default 6), `RESTORE_TEST_TARGET_DEADLINE_MINUTES` (default 120).
 
 1. **Guards:**
@@ -596,7 +603,7 @@ That summary is what goes into `database_backups.error`, `restore_test_results.d
    - run the start checks;
    - the restore-test URL's host must differ from the control plane's, compared **after `toDirectConnectionUrl` on both**; and the restore-test URL must not contain `-pooler` (pg_restore needs a direct connection);
    - its database must have **no user tables**, so a production URL pasted by mistake is refused;
-   - **its host must be in Neon us-east-1** (`^ep-[a-z0-9-]+\.us-east-1\.aws\.neon\.tech$`) and its `server_version_num` in 160000–169999. Neon's default region is us-east-2 and its default version 18 (§4.8), so a project made with the defaults is refused instead of silently holding customer copies outside us-east-1.
+   - **its host must be in Neon us-east-1** (by `parseNeonHost`, §4.8: region `us-east-1`, direct, cell label allowed) and its `server_version_num` in 160000–169999. Neon's default region is us-east-2 and its default version 18 (§4.8), so a project made with the defaults is refused instead of silently holding customer copies outside us-east-1.
 
    A guard failure inserts a run row `fail` with `finished_at` set and the reason in `detail`, then exits 1. (Tests pass a host-guard override as an in-process parameter only, never an environment variable, because CI's servers share `localhost`.)
 2. **Close abandoned runs:** any earlier `running` row is set to `fail`, `finished_at = now()`, `detail = 'abandoned'`.
@@ -650,7 +657,7 @@ That summary is what goes into `database_backups.error`, `restore_test_results.d
 - anything else in production: "not configured", counted as news;
 - local development: silent.
 
-When the sync doesn't run (`0` or not configured), the step resolves `backup-check-failed`, so a stale one doesn't linger.
+When the sync doesn't run (`0` or not configured), the step resolves **every** backup alert kind (`backup-*`, `restore-test-*`), so nothing lingers from a period when monitoring was on.
 
 **Module `src/lib/tenant/backup-status.ts`** (server-only):
 - `readBackupFacts(now, filter?)`;
@@ -673,13 +680,12 @@ It runs as an isolated step in `tenant-lifecycle/route.ts`, after `runLifecycleC
 | protection drift | latest audit `protection_drift` not null | `backup-protection-drift` (global; detail lists what's missing) |
 | audit check failed | latest audit `errors` not null | `backup-audit-error` (global) |
 | restore test missed | no finished run in 8 days, anchored to the first control-plane `ok` (no alert before that + 8 days) | `restore-test-missed` (global) |
-| restore test failed | the latest **finished** run is `fail`, **or** the latest run is `running` and started over 12 h ago | `restore-test-failed` (global; detail lists failed targets by slug and stage) |
-| slow restore test | the latest finished run took more than 70% of its `deadline_ms` | `restore-test-slow` (global) |
+| restore test failed | the latest **completed** run (§6.7's definition; ordered by `finished_at`) is `fail`, **or** a guard failure is the most recent finished row, **or** the latest run is `running` and started over 12 h ago (lock-held rows are ignored: the catch-up retries them) | `restore-test-failed` (global; detail lists failed targets by slug and stage) |
+| slow restore test | the latest **completed** run took more than 70% of its `deadline_ms` | `restore-test-slow` (global) |
 | slow target | a workspace's newest `ok` backup took over half of that row's `target_deadline_ms`, or its latest restore result **from the last 14 days** took over half of its run's `target_deadline_ms` | `backup-target-slow` (tenant; remedy: raise that deadline or the task CPU, stack parameters §6.1). The backup half clears on the next daily run; the restore half within 14 days. |
-| test databases left behind | latest audit `leftover_test_dbs > 0` | `restore-test-leftover` (global) |
+| test databases left behind, or a crashed test | latest audit `leftover_test_dbs > 0`, **or** a run in the last 7 days has `swept_test_dbs > 0`, **or** a run in the last 7 days was closed `abandoned` | `restore-test-leftover` (global; clears after 7 clean days) |
 | permission drift | per role: the latest `backup_permission_checks.ok` is false, or no row in 8 days after the role's first | `backup-permission-drift` (global, dedup = role; detail names the probe) |
 | database region | any target's newest row has `region` other than `us-east-1` | `backup-region` (tenant, or global / `control-plane`) |
-| image behind the code | the latest control-plane `ok` row's `bundle_sha256` differs from the app's `BACKUP_BUNDLE_SHA256` constant (§6.2), meaning a backup deploy is waiting for approval or failed | `backup-image-stale` (global) |
 | coverage (§5's rule itself) | an eligible workspace whose first `ok` is over 13 weeks old, with no PASS in 13 weeks | `restore-test-coverage` (tenant) |
 
 - **The state table is this table:** raised while true, resolved the first sync it's false. Tenant findings for workspaces no longer `provisioning`/`active`/`suspended` are resolved.
@@ -834,7 +840,7 @@ The §6.9 table: raised while true, resolved the first sync it's false.
 | F33 | A protection silently removed (a policy replaced by a template change, a rule disabled) | Changes email at once, whoever makes them; the daily audit compares the bucket policy, lifecycle, key policy and alert rule with what's expected (`backup-protection-drift`). |
 | F34 | A Monday restore test lost (couldn't start, retired, crashed, lock held) | The daily catch-up (Tue–Sun 08:17) runs it the next day. The 12-week cycle leaves a week of slack inside §5's 13. |
 | F35 | A backup older than 29 days | `backup-old-objects`. Nothing can delete it (by design); AWS removes expired objects asynchronously and bills nothing after expiry. If one stays over 30 days, open an AWS support case (RESTORE.md). |
-| F32 | The image falls behind the code | The committed bundle hash triggers a deploy request whenever the shipped code changes (U6); the rows record the running image's hash and `backup-image-stale` fires until it matches. The backup code queries its tables with explicit columns. |
+| F32 | The image falls behind the code | The path filter lists every bundle input outside `node_modules`, enforced by the U6 metafile test. A deploy waiting for approval simply waits; the founder gets GitHub's email. Dependency updates ride with the next backup-code change. |
 
 ## 9. Platform limits
 - **ECS Fargate:** no runtime limit (the 6-hour run deadline is ours). 2 vCPU / 4 GiB. Streaming, so dumps never touch disk. lib-storage buffers about (queueSize + 1) × 64 MiB per upload: about 576 MiB at concurrency 3, inside 4 GiB.
@@ -871,8 +877,7 @@ The §6.9 table: raised while true, resolved the first sync it's false.
 | `src/lib/tenant/backup-status.ts` | **new** |
 | `src/lib/tenant/backup-locks.ts` | **new**: the four lock constants (§6.4) |
 | `src/lib/tenant/direct-url.ts` | **new**: `toDirectConnectionUrl` moved here unchanged; `migrate-tenant.ts` re-exports it, so app-side migration edits don't change the backup bundle |
-| `src/lib/tenant/backup-bundle-hash.ts` | **new**: `BACKUP_BUNDLE_SHA256`, the committed bundle hash (§6.2) |
-| `scripts/migrate-all.ts`, `scripts/lib/backup-wait.ts` (**new**) | the ordered-lock wait (§6.4); `MIGRATIONS.md` notes it |
+| `scripts/migrate-all.ts`, `scripts/backup/lib/backup-wait.ts` (**new**) | the ordered-lock wait (§6.4); `MIGRATIONS.md` notes it |
 | `src/app/api/cron/tenant-lifecycle/route.ts` | the isolated backup step |
 | `src/lib/tenant/ops-digest.ts` | the Backups section |
 | `src/app/privacy/page.tsx`, `src/__tests__/unit/legal-pages.test.tsx` | the §6.11 sentence |
@@ -910,10 +915,10 @@ The §6.9 table: raised while true, resolved the first sync it's false.
   - coverage at 13 weeks;
   - the slow thresholds;
   - `alert_email_confirmed` false and null;
-  - `backup-region` for a non-us-east-1 row; `backup-image-stale` on a hash mismatch, cleared on a match;
+  - `backup-region` for a non-us-east-1 row;
   - `backup-target-slow` from `target_deadline_ms`, with the restore half ignoring results older than 14 days.
 - **U4:** the end gate: the body ends only after pg_dump `(0,null)` **and** the encrypt `end`; any failure destroys it.
-- **U5:** environment checks (empty values, a non-hex key, a wrong pg_dump/pg_restore version); the lock keys are distinct from each other and from `MIGRATION_LOCK_KEY`; every lock connection is built with `toDirectConnectionUrl`; missing tables → fatal with the message; outside ECS, everything but `backup --dry-run` and `--self-check` is refused; `--self-check` uses the image's default tool paths when the `*_BIN` variables are unset; `<cp>` is derived from the direct host.
+- **U5:** environment checks (empty values, a non-hex key, a wrong pg_dump/pg_restore version); the lock keys are distinct from each other and from `MIGRATION_LOCK_KEY`; every lock connection is built with `toDirectConnectionUrl` (a connection-factory seam fed a `-pooler` URL must receive the direct host); missing tables → fatal with the message; outside ECS, everything but `backup --dry-run` and `--self-check` is refused; `--self-check` uses the image's default tool paths when the `*_BIN` variables are unset; `<cp>` is derived from the direct host.
 - **U6:** static checks on the templates, the Dockerfile and the workflow:
   - **the backup task role has no `s3:GetObject`, `s3:DeleteObject*`, `kms:Decrypt` or `kms:ReEncrypt*`;** the audit role has none of those either;
   - the key policy denies Decrypt and ReEncrypt to all but the restore role, denies a deletion window under 30, and denies `PutKeyPolicy` to all but `CfnExecRole`;
@@ -923,11 +928,11 @@ The §6.9 table: raised while true, resolved the first sync it's false.
   - `RetainExceptOnCreate` on the backup bucket and key; the trail and its bucket (`Retain`, generated name) in `bootstrap.yml`;
   - no NAT gateway; no Container Insights;
   - every schedule pins a revision, uses UTC, `FlexibleTimeWindow: OFF`, a retry policy and the DLQ; both catch-ups have their `containerOverrides` input;
-  - the protections rule lists exactly the §6.1 event names and has **no caller condition**; the topic policy allows events and cloudwatch;
+  - the two rules list exactly the §6.1 event names, with **no caller condition**, and only the roles rule has the `roleName` prefix. **Sample CloudTrail events run through a small pattern matcher** (KMS `DisableKey` and S3 `PutBucketPolicy` match the protections rule; IAM `PutRolePolicy` on `cadenzpoint-backup-x` matches the roles rule; on `other-role` it matches nothing). The topic policy allows events and cloudwatch; the DLQ alarm has its fixed name and `notBreaching`;
   - `DeployRole` names the exact stack ARN and the exact legacy `sub` (`StringEquals`); the bootstrap roles have fixed names and sit outside `/cadenzpoint-backup/`; the `CfnExecRole` ARN in the main stack's denies equals the bootstrap's name and path; the execution roles have the ECR pull actions; the audit role has the drift Get/Describe actions; `CfnExecRole` has `iam:CreateServiceLinkedRole` for ECS; the task-role trusts have the account and region conditions; the trail is in `bootstrap.yml`, not the main stack;
   - the workflow: SHAs pinned; the `build` job has no `id-token` and no environment; the `deploy` job has `id-token` and `environment: aws-backups`; both have the job `if` (main and `vars.AWS_BACKUPS_ENABLED == 'true'`); the ARNs, URI, bucket and email come from `secrets.*`, never `vars.*`; `persist-credentials: false`; `mask-aws-account-id: true`; no `npm` in the deploy job; no `inputs.*` in `run:`;
   - the Dockerfile builder runs `npm ci --ignore-scripts`;
-  - **the committed `BACKUP_BUNDLE_SHA256` equals a fresh bundle's hash**, and the bundle's `src/` inputs are only the three named modules; the Dockerfile runs `npm run backup:bundle`;
+  - **every non-`node_modules` input in the esbuild metafile matches a `paths` entry**, and the `src/` inputs are only the three named modules; the Dockerfile runs `npm run backup:bundle` and copies `tsconfig.backup.json`;
   - no `!` short-form tags in the templates; `backup-stack.yml` parses;
   - no `src/` import of `@aws-sdk/*` or `@aws-crypto/*`.
 - **U7:** restore-test target choice:
@@ -942,7 +947,7 @@ The §6.9 table: raised while true, resolved the first sync it's false.
 - **U8:** count comparison: a missing table, an extra table, a differing count; key order ignored; string versus number counts.
 - **U9:** the digest Backups section: both summary lines, the `0` line, not-configured, silent in development, no duplication, `esc()`, "could not be read" in `hasNews`.
 - **U10:** the route order with `vi.doMock`: the backup step runs between lifecycle and signup maintenance; a throwing step still lets the digest run and raises `backup-check-failed`; with `BACKUPS_EXPECTED=0` the step resolves `backup-check-failed`.
-- **U11:** the restore-test URL guards: same host refused (also when one URL is pooled and the other direct); a `us-east-2` host refused; a Postgres 18 server refused; `-pooler` refused; a database with user tables refused; the drop regex refuses `postgres`, `template1`, `rt_2026111608` (short) and tenant-like names.
+- **U11:** the restore-test URL guards: same host refused (also when one URL is pooled and the other direct); a `us-east-2` host refused; a `c-2.us-east-1` host **accepted**; a `c-2.us-east-2` host refused; a Postgres 18 server refused; `-pooler` refused; a database with user tables refused; the drop regex refuses `postgres`, `template1`, `rt_2026111608` (short) and tenant-like names.
 - **U12:** the header check: a mismatched context destroys the stream **and pg_restore is never spawned** (the spawn seam records no call).
 
 **Integration** (fake store and reader; raw AES keyring; real Postgres):
@@ -989,14 +994,14 @@ The §6.9 table: raised while true, resolved the first sync it's false.
   - `backupFindings` raises `backup-permission-drift` for a false row and for a role with no row in 8 days.
 - **S17:** an earlier `running` run row is closed `fail`/`abandoned` by the next run, and `restore-test-failed` then follows the latest run.
 - **S19:** `--if-missed` re-runs after a Monday run that was stopped, cut by the deadline, locked out or guard-failed, and exits after a completed pass or a completed fail. Plus the remaining §7.2/§7.3 transitions, each with its row: `FAIL:list`, `FAIL:create-db` (fake), `FAIL:download` (reader error mid-stream), `FAIL:sidecar`, `FAIL:deadline` and `FAIL:not-reached` (shortened deadlines), a guard-failure run row, a failed drop logged, the step-3 sweep, the lock retried then `lock held`, and `--if-missed` exiting when a run finished since Monday.
-- **S20:** the audit's drift check: a missing bucket-policy `Sid`, a missing key-policy `Sid`, **a statement with its `Sid` kept but its `ArnNotEquals` exemption widened**, a disabled rule, and a missing lifecycle rule each recorded in `protection_drift`; all equal → null; scalar versus one-item array → equal.
+- **S20:** the audit's drift check: a changed rule pattern, an extra rule target, a trail not logging, a subscription with a filter policy, a missing DLQ alarm; a missing bucket-policy `Sid`, a missing key-policy `Sid`, **a statement with its `Sid` kept but its `ArnNotEquals` exemption widened**, a disabled rule, and a missing lifecycle rule each recorded in `protection_drift`; all equal → null; scalar versus one-item array → equal.
 - **S21:** the ordered locks, with the lock held on a second connection: `migrate-all` waits, then exits 1 after the (shortened) limit with nothing applied; `--check` never waits; with `MIGRATE_RUN_LOCK_KEY` held, a backup waits and then proceeds, recording the wait; `isAdvisoryLockHeld` reads `pg_locks` without taking the lock; both helpers connect through `toDirectConnectionUrl`.
 - **S18:** backup tables missing (a schema without the migration) → every command exits 1 with "run deploy-prod first".
 
 **Template proof beyond U6:** `cfn-lint` in CI (§10.1). Real AWS behaviour is proven at §12 steps 8–12.
 
 ## 12. Founder steps (PRODUCTION-DEPLOY, new Phase "Backups (AWS)"), **in this order**
-`FOUNDER-ACCOUNTS-SETUP.md` has every click. This is the checklist. Steps 6–10 are also the **staging rehearsal**, a production-readiness gate.
+`FOUNDER-ACCOUNTS-SETUP.md` has every click. This is the checklist. Steps 6–11 are also the **staging rehearsal**, a production-readiness gate.
 1. **AWS account:** create it with the advanced sign-up; register two hardware keys on root; the Paid plan; a backup card; alternate contacts; your admin login (security key, no access keys).
 2. **Neon:** create `cadenzpoint-restore-tests` (us-east-1, **Postgres 16**, history window 0), and copy its **direct** connection string.
 3. **GitHub, before the bootstrap stack exists:**
@@ -1022,7 +1027,7 @@ The §6.9 table: raised while true, resolved the first sync it's false.
    - in ECS → cluster `cadenzpoint-backup` → **Run new task**, run the `backup` task family, then `audit`. **Wait at least 30 minutes after the backup task stops** (the restore test ignores newer objects), then run `restore-test`. The runbook gives the exact clicks.
    - **Expect** in **staging's** control plane: `ok` rows with `region = us-east-1`, an audit row with `Enabled`, `alert_email_confirmed = true`, `protection_drift` null and `errors` null, a `pass` restore-test run, and three `backup_permission_checks` rows with `ok = true`.
    - Set staging's `BACKUPS_EXPECTED=1` for a day and check the digest shows the Backups section, then set it back to `0`.
-   - **The next day,** check the 18:17 catch-up's log line shows `--if-missing-today` (proving the schedule's command override), and Tuesday's 08:17 restore-test catch-up exits at once ("a run finished since Monday").
+   - **The next day,** check the 18:17 catch-up's log line shows `--if-missing-today` (proving the schedule's command override), and, if the hand-run restore test happened since Monday 00:00 UTC, the next 08:17 restore-test catch-up exits at once ("a completed run since Monday").
 10. **"Can't" checks**, Tuesday to Sunday between 15:00 and 17:00 UTC (no job runs then), in **AWS CloudShell** as `corey-admin`. Paste the commands the lead gives you:
     - `aws s3api head-object` on a backup key → expect **"(403) … Forbidden"**. HeadObject transfers no data, so nothing is downloaded even if the deny were missing.
     - `aws kms decrypt` of the stored data key (from the latest `backup_permission_checks` row) → expect **AccessDeniedException**.
@@ -1031,7 +1036,7 @@ The §6.9 table: raised while true, resolved the first sync it's false.
     - `aws s3api put-bucket-versioning … Status=Enabled` → expect **AccessDenied** and an **immediate alert email**. CloudTrail records denied calls too; if no email arrives, the lead investigates before go-live.
     - `aws cloudwatch set-alarm-state --alarm-name cadenzpoint-backup-dlq --state-value ALARM --state-reason test` → expect an alarm email.
 11. **Switch to production:** replace the first two SSM parameters with **production's** values. The next scheduled runs back up production into its own `<cp>` prefix. Staging's rehearsal backups expire on their own.
-12. **Vercel:** set `BACKUPS_EXPECTED=1` in production (staging stays `0`) **only after** production has a control-plane `ok` backup and an audit row (the lead confirms), then redeploy. The anchors in §6.9 also prevent a go-live burst of alerts.
+12. **Vercel:** set `BACKUPS_EXPECTED=1` in production (staging stays `0`) **only after** production's first backup and audit have run: confirm in the ECS console that both tasks stopped with exit code 0, and that the backup's log shows a `BACKUP … control-plane …` line. Then redeploy. The anchors in §6.9 also prevent a go-live burst of alerts.
 
 ## 13. Verification
 1. `npx tsc --noEmit`, `npm run lint`, `npm run test`, `npm run test:tz`, `npm run db:safety`.
@@ -1150,7 +1155,7 @@ The §6.9 table: raised while true, resolved the first sync it's false.
 **Confirmation pass 2** (one fresh reviewer on v5.3): **4 MEDIUM, 10 LOW; no HIGH.** Fixed in v5.4:
 - **MEDIUM: the restore-test project's region and version weren't enforced** (Neon defaults to us-east-2 and Postgres 18). The guard now requires a us-east-1 Neon host and Postgres 16. Every backup row records its database's region, and `backup-region` alerts on any workspace outside us-east-1.
 - **MEDIUM: the monthly manual drill in `RESTORE.md` conflicts with constraint 1.** Raised as **Q4** (recommend retiring it).
-- **MEDIUM: the `migrate-all` wait had no test.** It's now a seamed helper (`scripts/lib/backup-wait.ts`) with S21. It's also redesigned as **two ordered locks**: migrate-all holds `MIGRATE_RUN_LOCK_KEY` and checks the backup lock through `pg_locks`, and the backup waits for a running migration. That closes the race where a backup started mid-migration.
+- **MEDIUM: the `migrate-all` wait had no test.** It's now a seamed helper (`scripts/backup/lib/backup-wait.ts`) with S21. It's also redesigned as **two ordered locks**: migrate-all holds `MIGRATE_RUN_LOCK_KEY` and checks the backup lock through `pg_locks`, and the backup waits for a running migration. That closes the race where a backup started mid-migration.
 - **MEDIUM: `backup-target-slow` couldn't be computed or cleared.** `target_deadline_ms` is stored on rows and runs, and the restore half only looks at results from the last 14 days.
 - **LOWs:**
   - the Dockerfile runs the hashed `npm run backup:bundle`;
@@ -1166,6 +1171,25 @@ The §6.9 table: raised while true, resolved the first sync it's false.
   - the founder guide synced (the SSM exception, re-copying the Neon string, step order);
   - source-scan tests added to the blast radius;
   - **the `tenant-admin show` addition is dropped** (not required by §5, and it read production backup facts on the founder's Mac).
+
+**Confirmation pass 3** (one fresh reviewer on v5.4): **3 MEDIUM, 10 LOW; no HIGH.** Fixed in v5.5, by simplifying where a fix had grown the design:
+- **MEDIUM: Neon cell hostnames** (`…c-2.us-east-1…`) would fail the region guard and the `region` parse. One shared `parseNeonHost` handles them, with accept and refuse tests.
+- **MEDIUM: the bundle hash couldn't match inside Docker** (a different tsconfig context), so `backup-image-stale` would never clear. **Removed:** the hash trigger, the constant, the column and the finding. Deploys trigger on the backup code's own files, kept complete by the U6 metafile test. The builder copies exact inputs and a dedicated tsconfig.
+- **MEDIUM: the alert path could be silenced unseen.** The event list now covers rule, target, subscription and alarm changes. The IAM events are a separate rule, so the `roleName` condition can't block the others. The daily drift check compares rule patterns and targets, trail logging, the subscription's filter policy and the DLQ alarm. U6 runs sample events through a matcher.
+- **LOWs:**
+  - lock re-take, or no new targets;
+  - `pg_locks` filtered by database and `objsubid`, and the no-deadlock argument restated;
+  - crashed tests stay visible (`swept_test_dbs`, abandoned runs in 7 days);
+  - "latest completed run" ordered by `finished_at`;
+  - all backup alerts resolved when monitoring is off;
+  - the key is never replaced, and decrypt accepts retained keys;
+  - go-live confirmed from the ECS console;
+  - lock-connection tests with `-pooler` URLs;
+  - the DLQ alarm named, `notBreaching`;
+  - restore-test task size parameters;
+  - the audit environment listed;
+  - the step 9 catch-up note;
+  - step ranges.
 
 ## 16. LOW items carried (the dev implements; the audit verifies)
 1. The restore test's backup choice uses S3 `LastModified`; the `BACKUP` line carries the slug.
