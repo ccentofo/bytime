@@ -332,5 +332,9 @@ export async function resolveAlertById(alertId: string, note: string, actor: str
   const [alert] = await withLockedPool((db) => db.select().from(opsAlerts).where(eq(opsAlerts.id, alertId)).limit(1));
   if (!alert) throw new AdminCommandError(`No alert ${alertId}.`);
   if (alert.resolvedAt) throw new AdminCommandError('Already resolved.');
+  // feature-plan-disaster-restore.md §6.8: the disaster checks close only on the facts (a watch can't be ended by hand).
+  if (alert.kind.startsWith('rebuild-') || alert.kind.startsWith('disaster-')) {
+    throw new AdminCommandError(`${alert.kind} closes only when its condition clears (feature-plan-disaster-restore.md §6.8); it can't be resolved by hand.`);
+  }
   await withLockedPool((db) => db.update(opsAlerts).set({ resolvedAt: new Date(), resolutionNote: `${note} (${actor})` }).where(eq(opsAlerts.id, alertId)));
 }

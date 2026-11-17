@@ -5,6 +5,8 @@ vi.mock('@/lib/billing/stripe', async () => (await import('./fakes/fake-stripe')
 vi.mock('@/lib/email/client', async () => (await import('./fakes/fake-resend')).clientModule);
 
 import { controlDb } from '@/db/control-plane';
+import { opsAlerts } from '@/db/control-plane/schema';
+import { eq } from 'drizzle-orm';
 import { encrypt } from '@/lib/encryption';
 import { deleteTenant, type DeleteTenantOptions } from '@/lib/tenant/delete-tenant';
 import { getTenantAccess } from '@/lib/tenant/lifecycle';
@@ -69,6 +71,36 @@ describe.skipIf(!isLocal)('deleteTenant (§5.3) — throwaway local databases on
   });
   afterAll(async () => {
     for (const name of created) await admin((sql) => sql.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`));
+  });
+
+  describe('R8 (feature-plan-disaster-restore.md §6.8): a copy of the data may still exist in Neon', () => {
+    for (const kind of ['rebuild-original-returned', 'rebuild-orphan-project']) {
+      it(`refuses while an open ${kind} names the tenant (inside step 3's lock), and proceeds once it resolves (the founder deleted the copy: 404)`, async () => {
+        const t = await eligibleTenant();
+        const [alert] = await controlDb.insert(opsAlerts).values({ scope: 'global', tenantId: null, kind, dedupKey: `prj-copy-${t.id.slice(0, 8)}`, detail: { tenantId: t.id, slug: t.slug }, firstSeenAt: new Date(), lastSeenAt: new Date() }).returning({ id: opsAlerts.id });
+        try {
+          const r = await run(t.slug);
+          expect(r.outcome).toBe('refused');
+          if (r.outcome === 'refused') expect(r.reason).toContain(kind);
+          expect(await dbExists(db.name)).toBe(true);
+          expect((await getTenantRow(t.id)).status).toBe('active');
+          await controlDb.update(opsAlerts).set({ resolvedAt: new Date(), resolutionNote: 'test: 404' }).where(eq(opsAlerts.id, alert.id));
+          expect((await run(t.slug)).outcome).toBe('deleted');
+        } finally {
+          await controlDb.delete(opsAlerts).where(eq(opsAlerts.id, alert.id));
+        }
+      });
+    }
+
+    it('an alert naming ANOTHER tenant doesn\'t block', async () => {
+      const t = await eligibleTenant();
+      const [alert] = await controlDb.insert(opsAlerts).values({ scope: 'global', tenantId: null, kind: 'rebuild-original-returned', dedupKey: `prj-other-${t.id.slice(0, 8)}`, detail: { tenantId: '00000000-0000-4000-8000-000000000000' }, firstSeenAt: new Date(), lastSeenAt: new Date() }).returning({ id: opsAlerts.id });
+      try {
+        expect((await run(t.slug)).outcome).toBe('deleted');
+      } finally {
+        await controlDb.delete(opsAlerts).where(eq(opsAlerts.id, alert.id));
+      }
+    });
   });
 
   it('dry run reports the classification and changes nothing', async () => {

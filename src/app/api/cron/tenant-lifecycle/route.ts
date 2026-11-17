@@ -7,6 +7,7 @@ import { runLifecycleCron } from '@/lib/tenant/lifecycle-runner';
 import { sendOpsDigest } from '@/lib/tenant/ops-digest';
 import { runSignupMaintenance } from '@/lib/signup/maintenance';
 import { runBackupMonitoring } from '@/lib/tenant/backup-status';
+import { runDisasterMonitoring } from '@/lib/tenant/disaster-status';
 
 /**
  * Daily tenant lifecycle cron (feature-plan-terms-compliance-fixes.md §4.4): reconcile, apply due transitions,
@@ -25,6 +26,9 @@ async function runLifecycle(): Promise<Record<string, unknown>> {
   // feature-plan-database-backups.md §6.9: the backup alert sync, isolated (a throw raises backup-check-failed, never
   // stops the run), after the lifecycle loop and before signup maintenance and the digest.
   const backups = await runBackupMonitoring(new Date());
+  // feature-plan-disaster-restore.md §6.8: the disaster checks, their own isolated step (a throw raises
+  // rebuild-watch-check-failed, never stops the run), before the digest that prints them.
+  const disaster = await runDisasterMonitoring(new Date());
   // feature-plan-launch-blockers.md P5: signup cleanup + Neon quota BEFORE the digest, even when the tenant loop
   // stopped early (never throws; each step is isolated).
   const signupMaintenance = await runSignupMaintenance(new Date());
@@ -45,6 +49,7 @@ async function runLifecycle(): Promise<Record<string, unknown>> {
     noticesSent: results.reduce((n, r) => n + r.noticesSent, 0),
     exempt: exempt.map((t) => t.slug), // F1: always listed, never hidden
     backups,
+    disaster,
     signupMaintenance,
     digest,
   };
