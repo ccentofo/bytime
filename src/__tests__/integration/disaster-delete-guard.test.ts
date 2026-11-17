@@ -12,6 +12,11 @@ import postgres from 'postgres';
 const hook: { beforeRead: null | (() => Promise<void>); onCall: number; calls: number } = { beforeRead: null, onCall: 1, calls: 0 };
 vi.mock('@/lib/billing/stripe', async () => (await import('./fakes/fake-stripe')).stripeModule);
 vi.mock('@/lib/email/client', async () => (await import('./fakes/fake-resend')).clientModule);
+const reconcileCalls = { n: 0 };
+vi.mock('@/lib/billing/reconcile', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('@/lib/billing/reconcile')>();
+  return { ...orig, reconcileInLock: async (...a: Parameters<typeof orig.reconcileInLock>) => { reconcileCalls.n++; return orig.reconcileInLock(...a); } };
+});
 vi.mock('@/lib/tenant/lifecycle-store', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/tenant/lifecycle-store')>();
   return {
@@ -85,10 +90,13 @@ describe.skipIf(!(cpReady && loopback(CP_URL)))('R8: a disaster switch between t
         hook.beforeRead = async () => {
           await controlDb.update(tenants).set(change === 'url' ? { dbUrlEncrypted: encrypt(`${url}?rebuilt=1`) } : { neonProjectId: 'prj-rebuilt' }).where(eq(tenants.id, t.id));
         };
+        reconcileCalls.n = 0;
         const r = await deleteTenant({ slug: t.slug, apply: true, actor: 'test', log: () => {} });
         expect(r.outcome).toBe('refused');
         if (r.outcome === 'refused') expect(r.reason).toContain('database changed since this run started');
         expect(await admin(async (s2) => (await s2`SELECT 1 FROM pg_database WHERE datname = ${name}`).length)).toBe(1);
+        // Section 1 refuses before the reconcile runs; section 2 only after it.
+        expect(reconcileCalls.n).toBe(section === 1 ? 0 : 1);
       });
     }
   }
