@@ -163,7 +163,7 @@ GitHub needs an app-based 2FA first, then accepts keys.
 - **Never rename or delete your GitHub account or the `bytime` repo without telling me first.** AWS trusts deploys from exactly `ccentofo/bytime`. If that name were freed and someone else registered it, they could look like you to AWS.
 
 ### 3.3 Later (Part 6)
-The `aws-backups` environment and four variables. Not now.
+The `aws-backups` environment, five environment secrets and one switch variable. Not now.
 
 ---
 
@@ -252,7 +252,7 @@ The final checklist will be `PRODUCTION-DEPLOY.md`, Phase "Backups (AWS)". The f
    2. **Required reviewers:** add yourself. **Leave "Prevent self-review" unchecked**, or you could never approve your own deploys.
    3. Uncheck **Allow administrators to bypass configured protection rules**. **Save protection rules**.
    4. **Deployment branches → Selected branches and tags → Add deployment branch or tag rule** → Branch, `main` → **Add rule**.
-   5. Add the variable `BACKUP_ALERT_EMAIL` = `infra@cadenzpoint.com` (**Settings → Secrets and variables → Actions → Variables → New repository variable**).
+   5. On the same environment page, under **Environment secrets**, click **Add secret**: name `BACKUP_ALERT_EMAIL`, value `infra@cadenzpoint.com`. (Secrets, not variables, because the repo is public and GitHub hides secrets in its logs.)
    6. **Check it:** run these two commands in Terminal and send me the output; I confirm the approval rule, the bypass setting and the branch rule:
       - `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-backups`
       - `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-backups/deployment-branch-policies`
@@ -261,25 +261,26 @@ The final checklist will be `PRODUCTION-DEPLOY.md`, Phase "Backups (AWS)". The f
    2. **Choose an existing template → Upload a template file → Choose File** → `ops/aws/bootstrap.yml` from the repo → **Next**.
    3. **Stack name:** `cadenzpoint-backup-bootstrap` → **Next** → **Next**.
    4. Check the IAM acknowledgment ("I acknowledge that this template may create IAM resources", possibly mentioning custom names) → **Submit**.
-   5. Wait for `CREATE_COMPLETE`. On the **Outputs** tab, copy the four values into GitHub variables: `AWS_CFN_EXEC_ROLE_ARN`, `AWS_BACKUP_REPOSITORY_URI` and `AWS_ARTIFACTS_BUCKET` first, then **`AWS_DEPLOY_ROLE_ARN` last**. That one switches the deploy workflow on.
+   5. Wait for `CREATE_COMPLETE`. On the **Outputs** tab, copy the four values into **`aws-backups` environment secrets** (Settings → Environments → `aws-backups` → Environment secrets → Add secret): `AWS_DEPLOY_ROLE_ARN`, `AWS_CFN_EXEC_ROLE_ARN`, `AWS_BACKUP_REPOSITORY_URI`, `AWS_ARTIFACTS_BUCKET`.
 3. **Paste three values** in **Systems Manager → Parameter Store → Create parameter**, each **Tier: Standard**, **Type: SecureString**, KMS key left at the default (`alias/aws/ssm`). **Staging's values first:**
    - `/cadenzpoint/backup/control-plane-url`: **staging's** control-plane URL;
    - `/cadenzpoint/backup/encryption-key`: **staging's** `ENCRYPTION_KEY`;
    - `/cadenzpoint/backup/restore-test-url`: the Neon string from Part 5.
 
    Take them from your password manager, where PRODUCTION-DEPLOY Phase 4 keeps them. Vercel won't show sensitive values again.
-4. **First deploy:** in GitHub → **Actions → Backup system deploy → Run workflow**. GitHub emails you; on the run, **Review deployments** → `aws-backups` → **Approve and deploy**.
-5. **Confirm the alert email.** AWS sends "AWS Notification - Subscription Confirmation" to `infra@`; click **Confirm subscription** within 48 hours. If you miss it: AWS console → **SNS → Subscriptions** → the pending one → **Request confirmation**. (The daily digest will remind you if it's still unconfirmed.)
-6. **First runs and the "can't" checks:** together with me, in the AWS console and AWS CloudShell (a terminal in your browser that runs inside AWS), so nothing runs on your Mac. A few checks deliberately trigger alert emails; that's expected and proves the alarms work.
-7. **Switch to production:** edit the first two parameters to **production's** values. From the next scheduled run, production is backed up.
-8. **Vercel:** once I confirm production's first backup and audit have run, add `BACKUPS_EXPECTED=1` to production (staging stays `0`), then redeploy.
+4. **Make sure the app's latest database changes are live** on staging and production (`deploy-prod`, and staging's deploy), so the backup tables exist.
+5. **Switch it on and deploy:** in GitHub → **Settings → Secrets and variables → Actions → Variables → New repository variable**: `AWS_BACKUPS_ENABLED` = `true`. Then **Actions → Backup system deploy → Run workflow**. GitHub emails you; on the run, **Review deployments** → `aws-backups` → **Approve and deploy**.
+6. **Confirm the alert email.** AWS sends "AWS Notification - Subscription Confirmation" to `infra@`; click **Confirm subscription** within 48 hours. If you miss it: AWS console → **SNS → Subscriptions** → the pending one → **Request confirmation**. (The daily digest will remind you if it's still unconfirmed.)
+7. **First runs and the "can't" checks:** together with me, in the AWS console and AWS CloudShell (a terminal in your browser that runs inside AWS), so nothing runs on your Mac. A few checks deliberately trigger alert emails; that's expected and proves the alarms work.
+8. **Switch to production:** edit the first two parameters to **production's** values. From the next scheduled run, production is backed up.
+9. **Vercel:** once I confirm production's first backup and audit have run, add `BACKUPS_EXPECTED=1` to production (staging stays `0`), then redeploy.
 
 ## Part 7. After setup: what you'll see, and what you never do
 **You'll see:**
 - a "Backups" section in the daily digest, with the newest backup and the last restore test;
 - alerts there if anything is wrong;
 - an immediate AWS email if anyone tries to delete or disable the backup key, or changes the backup rules, the audit trail or the alerts (a backup-system deploy that changes them also emails; that's expected);
-- a GitHub approval email when the backup code changes (approve it once the change is merged).
+- a GitHub approval email when the backup code itself changes, which is rare. If that change came with a database update, run `deploy-prod` first, then approve.
 
 **You never:**
 - download a backup or a customer export;

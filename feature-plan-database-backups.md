@@ -1,6 +1,6 @@
 # Database backups (build queue 3b)
 
-> **Status:** **DRAFT v5.2**, 2026-11-16, lead architect. A redesign to the revised `BUSINESS-DECISIONS.md` §5 (2026-11-16). Rounds 1 and 2 (two reviewers each) are fixed here (§15). A confirmation pass is next.
+> **Status:** **DRAFT v5.3**, 2026-11-16, lead architect. A redesign to the revised `BUSINESS-DECISIONS.md` §5 (2026-11-16). Rounds 1 and 2 and confirmation pass 1 are fixed here (§15). Confirmation pass 2 is next.
 >
 > **What changed from v4.1** (`78222b4`):
 > - The jobs run **in the backup AWS account** (scheduled container tasks in us-east-1), not on GitHub's runners.
@@ -61,7 +61,7 @@ Disaster-recovery backups that survive losing a Neon project or the whole Neon a
 
 **One-time founder actions this design needs.** These are flagged, not decided; `FOUNDER-ACCOUNTS-SETUP.md` gives each step in full. Everything else is created by code.
 1. **AWS account** for backups only, using the advanced sign-up: root login with two hardware keys; the Paid plan; a backup card; an admin login for yourself (no access keys).
-2. **GitHub:** create the `aws-backups` environment with yourself as required reviewer (Q1), and verify it with one `curl` command, **before** the bootstrap stack exists. Then set five variables.
+2. **GitHub:** create the `aws-backups` environment with yourself as required reviewer (Q1), and verify it with two `curl` commands, **before** the bootstrap stack exists. Then add five environment secrets and, last, one switch variable.
 3. **Create the bootstrap stack once:** upload `ops/aws/bootstrap.yml` in the AWS console and click Submit.
 4. **Create one Neon project once**, `cadenzpoint-restore-tests`: us-east-1, Postgres 16, history window 0.
 5. **Paste three values into AWS Parameter Store:** staging's control-plane URL and `ENCRYPTION_KEY` (for the rehearsal), and the restore-test project's URL. After the rehearsal passes, replace the first two with production's. You redo this only if one of them ever changes.
@@ -78,7 +78,7 @@ Disaster-recovery backups that survive losing a Neon project or the whole Neon a
 **Design choices stated for the record** (engineering's call within §5):
 - **Restore tests use one dedicated Neon project**, not a new project per test. Creating projects would need a Neon API key in AWS that could also delete every customer's project. With one project, the test only ever holds that project's connection, and it can't touch production.
 - **Missed-run alert after 26 hours, and an 18:17 catch-up run.** §5's 36-hour rule alone only fires after two missed days.
-- **Restore-test coverage alert:** if any workspace goes 14 weeks without a passing test, the digest says so. That checks §5's 13-week rule, with one week of slack.
+- **Restore-test coverage alert:** if any workspace goes 13 weeks without a passing test (§5's rule itself), the digest says so. The schedule targets 12 weeks, so normally this never fires.
 - **Demo workspaces are backed up and tested** like any other.
 
 ## 3. Verified current state (`main` at `c416049`)
@@ -162,7 +162,7 @@ Disaster-recovery backups that survive losing a Neon project or the whole Neon a
 4. **KMS keyring permissions:**
    - encrypt needs `kms:GenerateDataKey` on the generator key; decrypt needs `kms:Decrypt`;
    - decryption should use a keyring **naming the key ARN** (strict, not discovery) (…/use-kms-keyring.html);
-   - the SDK passes the encryption context to `GenerateDataKey`/`Decrypt` (source: kms-keyring helpers.ts), so `kms:EncryptionContext:purpose` conditions apply. That's confirmed from source, not the guide; **§12 step 10 proves it in AWS**.
+   - the SDK passes the encryption context to `GenerateDataKey`/`Decrypt` (source: kms-keyring helpers.ts), so `kms:EncryptionContext:purpose` conditions apply. That's confirmed from source, not the guide; **§12 step 9's successful backup and restore prove it in AWS**.
 5. **S3 SSE-KMS isn't used for the encryption,** because SSE-KMS multipart uploads need `kms:Decrypt` on UploadPart (…/AmazonS3/latest/userguide/mpuoverview.html). That would break "the backup job can only encrypt". So encryption is client-side, and the bucket keeps SSE-S3 underneath.
 6. **Lifecycle expiry:**
    - expiry = creation + N days, **rounded up to the next midnight UTC**;
@@ -196,7 +196,7 @@ Disaster-recovery backups that survive losing a Neon project or the whole Neon a
 1. **OIDC subject:**
    - with an environment, `sub = repo:OWNER/REPO:environment:NAME`;
    - **repositories created, renamed or transferred after 2026-07-15 use an immutable format**, `repo:OWNER@OWNER-ID/REPO@REPO-ID:…`. Older repos keep the old format unless they opt in (…/actions/reference/security/oidc).
-   - The trust policy accepts **both** forms for `environment:aws-backups` (`StringLike`). The first deploy shows the actual claim in CloudTrail.
+   - `ccentofo/bytime` was created 2026-05-27, so it uses the name-based form. The trust policy is `StringEquals` on exactly `repo:ccentofo/bytime:environment:aws-backups` (§6.1). A repo re-created under that name after 2026-07-15 would get the immutable form and couldn't match.
 2. **The AWS OIDC provider needs no thumbprint** for GitHub (a trusted CA). `ThumbprintList` is optional in CloudFormation (…/id_roles_providers_create_oidc_verify-thumbprint.html, …/aws-resource-iam-oidcprovider.html). Audience `sts.amazonaws.com`.
 3. **Environments:**
    - "Running a workflow that references an environment that does not exist will create an environment … [without] protection rules";
@@ -270,7 +270,7 @@ Two CloudFormation templates in YAML.
 |---|---|
 | `AWS::IAM::OIDCProvider` | `token.actions.githubusercontent.com`, audience `sts.amazonaws.com`, no thumbprint (§4.6.2). |
 | `DeployRole` (fixed name `cadenzpoint-backup-deploy`, path `/cadenzpoint-bootstrap/`) | **Trust:** GitHub OIDC only, `StringEquals` `aud = sts.amazonaws.com` and `sub = repo:ccentofo/bytime:environment:aws-backups`. The repo was created 2026-05-27, before the immutable-subject change, so it uses the name-based form (§4.6.1). The residual risk is that someone re-registers the account name after a rename; the founder guide says never to rename or delete the account or repo without the lead (§3.2 there). The environment allows only `main` and needs the founder's approval. **Policy:** `ecr:GetAuthorizationToken` (`*`); push/describe images in the one repo; `s3:PutObject`/`GetObject` on the artifacts bucket; `cloudformation:ValidateTemplate` (`*`); create/update/describe/`ContinueUpdateRollback` on **exactly** `arn:aws:cloudformation:us-east-1:<acct>:stack/cadenzpoint-backup/*` and its change sets; `iam:PassRole` on `CfnExecRole` only. Max session 1 h. |
-| `CfnExecRole` (fixed name `cadenzpoint-backup-cfn`, path `/cadenzpoint-bootstrap/`; the main stack's policies build its ARN from the same constants, U6) | **Trust:** `cloudformation.amazonaws.com` only. **Policy:** the main stack's resource types (S3 bucket and policy, KMS key and alias, EC2 VPC/subnets/IGW/routes/security group, ECS cluster and task definitions, Scheduler schedules, SQS, SNS, EventBridge rules, CloudWatch logs and alarm, Budgets); `kms:ScheduleKeyDeletion` (create rollback); IAM create/update/delete/tag on roles **under `/cadenzpoint-backup/` only**; `iam:PassRole` on those roles (to `ecs-tasks.amazonaws.com` and `scheduler.amazonaws.com`); `iam:CreateServiceLinkedRole` with `iam:AWSServiceName = ecs.amazonaws.com` (a fresh account has no ECS service-linked role). It can't touch the bootstrap roles. **Honest scope:** a deploy can change which `/cadenzpoint-backup/` role reads backups. That's why deploys need the founder's approval (Q1). |
+| `CfnExecRole` (fixed name `cadenzpoint-backup-cfn`, path `/cadenzpoint-bootstrap/`; the main stack's policies build its ARN from the same constants, U6) | **Trust:** `cloudformation.amazonaws.com` only. **Policy:** the main stack's resource types (S3 bucket and policy, KMS key and alias, EC2 VPC/subnets/IGW/routes/security group, ECS cluster and task definitions, Scheduler schedules, SQS, SNS, EventBridge rules, CloudWatch logs and alarm, Budgets); `kms:CreateKey`, `kms:PutKeyPolicy` (KMS's lockout check requires the creating principal to keep it; it's also the one principal the key policy's `PutKeyPolicy` deny exempts), `kms:ScheduleKeyDeletion` (create rollback); IAM create/update/delete/tag on roles **under `/cadenzpoint-backup/` only**; `iam:PassRole` on those roles (to `ecs-tasks.amazonaws.com` and `scheduler.amazonaws.com`); `iam:CreateServiceLinkedRole` with `iam:AWSServiceName = ecs.amazonaws.com` (a fresh account has no ECS service-linked role). It can't touch the bootstrap roles. **Honest scope:** a deploy can change which `/cadenzpoint-backup/` role reads backups. That's why deploys need the founder's approval (Q1). |
 | `AWS::ECR::Repository` `cadenzpoint-backup` | Immutable tags; scan on push; a lifecycle rule that keeps the last 20 images. |
 | Artifacts bucket (CloudFormation-generated name) | For `cloudformation deploy --s3-bucket` (templates over 51,200 bytes need one). Block Public Access; expiry 30 days. No customer data. |
 | **CloudTrail** (here, so no deploy can touch it) | One multi-region trail of **all** management events, read and write (the first copy is free, §4.5). It's required for the alert rules, and keeps every key use beyond the 90-day event history. Its log bucket gets a CloudFormation-generated name (a failed or retried create can't collide), `DeletionPolicy: Retain`, expiry 365 days, and a bucket policy for `cloudtrail.amazonaws.com` with `aws:SourceArn` = the trail ARN. The trail `DependsOn` that policy. The logs hold no customer data. |
@@ -292,7 +292,7 @@ Two CloudFormation templates in YAML.
 | **Task roles** (`/cadenzpoint-backup/`) | **Trust:** `ecs-tasks.amazonaws.com` with `aws:SourceAccount` = this account and `ArnLike aws:SourceArn arn:aws:ecs:us-east-1:<acct>:*`. **backup:** `s3:PutObject` on `BUCKET/v1/*`, `s3:AbortMultipartUpload`, `kms:GenerateDataKey` (key, with `kms:EncryptionContext:purpose = cadenzpoint-backup`). **restore-test:** `s3:GetObject` on `BUCKET/v1/*`, `s3:ListBucket` with `s3:prefix` `v1/*`, `kms:Decrypt` (key, with the condition). **audit:** `s3:ListBucket` with `s3:prefix` `v1/*`, `s3:ListBucketMultipartUploads`, `s3:GetBucketVersioning`, `s3:GetBucketPolicy`, `s3:GetLifecycleConfiguration`, `kms:DescribeKey`, `kms:GetKeyPolicy`, `events:DescribeRule` on the alert rule, `sns:ListSubscriptionsByTopic` on the topic. |
 | **Schedules** (`AWS::Scheduler::Schedule`) | `backup-daily` `cron(17 6 * * ? *)`; `backup-catchup` `cron(17 18 * * ? *)`; `audit-daily` `cron(17 11 * * ? *)`; `restore-test-weekly` `cron(17 8 ? * MON *)`; `restore-test-catchup` `cron(17 8 ? * TUE-SUN *)`. `ScheduleExpressionTimezone: UTC`; `FlexibleTimeWindow: { Mode: OFF }`. Each targets ECS `RunTask` (Fargate, platform `LATEST`, the subnets, public IP enabled) with the task definition **pinned by revision ARN**. The two catch-ups use `Target.Input` `{"containerOverrides":[{"name":"<family>","command":["backup","--if-missing-today"]}]}` and `["restore-test","--if-missed"]`. `RetryPolicy`: `MaximumRetryAttempts: 10`, `MaximumEventAgeInSeconds: 3600`. `DeadLetterConfig` → SQS `cadenzpoint-backup-scheduler-dlq` (retention 2 days). One Scheduler execution role, trusted by `scheduler.amazonaws.com` with `aws:SourceAccount`: `ecs:RunTask` on the three revision ARNs; `iam:PassRole` on their execution and task roles with `iam:PassedToService = ecs-tasks.amazonaws.com`; `ecs:TagResource` with `ecs:CreateAction = RunTask`; `sqs:SendMessage` on the DLQ. |
 | **SSM parameters** | **Not created by the stack** (CloudFormation can't create SecureString parameters, §4.7). Fixed names: `/cadenzpoint/backup/control-plane-url`, `/cadenzpoint/backup/encryption-key`, `/cadenzpoint/backup/restore-test-url`. The founder creates them once (§12). |
-| **Alerting (immediate email)** | An SNS topic `cadenzpoint-backup-alerts` with an email subscription to `AlertEmail`. The topic policy lets `events.amazonaws.com` and `cloudwatch.amazonaws.com` publish, each with `aws:SourceAccount`. **One EventBridge rule** `cadenzpoint-backup-protections` on the default bus, matching CloudTrail write events (default `ENABLED` state) **from any caller**, with no caller exclusions (an exclusion can silently miss callers whose events lack the field). Event names: KMS `ScheduleKeyDeletion`, `DisableKey`, `PutKeyPolicy`, `CreateGrant`; CloudTrail `StopLogging`, `DeleteTrail`, `UpdateTrail`, `PutEventSelectors`; S3 `PutBucketPolicy`, `DeleteBucketPolicy`, `PutBucketLifecycle`, `DeleteBucketLifecycle`, `PutBucketVersioning`; EventBridge `DisableRule`, `DeleteRule`, `RemoveTargets`; SNS `Unsubscribe`, `DeleteTopic`, `SetTopicAttributes`. An input transformer puts the event name, the caller's ARN and the time in the email. **A deploy that changes one of these also emails, which is expected.** The first deploy sends a few (before the subscription is confirmed, they're dropped). **Plus** a CloudWatch alarm on the DLQ (`ApproximateNumberOfMessagesVisible > 0`) to the topic. |
+| **Alerting (immediate email)** | An SNS topic `cadenzpoint-backup-alerts` with an email subscription to `AlertEmail`. The topic policy lets `events.amazonaws.com` and `cloudwatch.amazonaws.com` publish, each with `aws:SourceAccount`. **One EventBridge rule** `cadenzpoint-backup-protections` on the default bus, matching CloudTrail write events (default `ENABLED` state) **from any caller**, with no caller exclusions (an exclusion can silently miss callers whose events lack the field). Event names: KMS `ScheduleKeyDeletion`, `DisableKey`, `PutKeyPolicy`, `CreateGrant`; CloudTrail `StopLogging`, `DeleteTrail`, `UpdateTrail`, `PutEventSelectors`; S3 `PutBucketPolicy`, `DeleteBucketPolicy`, `PutBucketLifecycle`, `DeleteBucketLifecycle`, `PutBucketVersioning`; EventBridge `DisableRule`, `DeleteRule`, `RemoveTargets`; SNS `Unsubscribe`, `DeleteTopic`, `SetTopicAttributes`; IAM `UpdateAssumeRolePolicy`, `PutRolePolicy`, `DeleteRolePolicy`, `AttachRolePolicy`, `DetachRolePolicy` where `requestParameters.roleName` has the prefix `cadenzpoint-backup-` (every backup role's name starts with it; a prefix match on a field these events always carry). IAM events are delivered in us-east-1. An input transformer puts the event name, the caller's ARN and the time in the email. **A deploy that changes one of these also emails, which is expected.** The first deploy sends a few (before the subscription is confirmed, they're dropped). **Plus** a CloudWatch alarm on the DLQ (`ApproximateNumberOfMessagesVisible > 0`) to the topic. |
 | **Budget** | `AWS::Budgets::Budget`, monthly cost `MonthlyBudgetUsd`; alerts at 80% actual and 100% forecast, to `AlertEmail`. |
 
 ### 6.2 Image and deploy (`Dockerfile.backup`, `.github/workflows/backup-deploy.yml`)
@@ -314,16 +314,13 @@ name: Backup system deploy
 on:
   push:
     branches: [main]
-    paths: ['ops/aws/**', 'scripts/backup/**', 'Dockerfile.backup', 'package.json', 'package-lock.json',
-            '.github/workflows/backup-deploy.yml', 'drizzle/control-plane/**',
-            # every src/ file the bundle imports, listed one by one (U6 keeps this list complete):
-            'src/lib/encryption.ts', 'src/lib/tenant/migrate-tenant.ts', '…']
+    paths: ['ops/aws/**', 'scripts/backup/bundle.sha256', 'Dockerfile.backup', '.github/workflows/backup-deploy.yml']
   workflow_dispatch: {}
 permissions: { contents: read }
 concurrency: { group: backup-deploy, cancel-in-progress: false }
 jobs:
   build:                                # no id-token, no environment, no secrets
-    if: github.ref == 'refs/heads/main' && vars.AWS_DEPLOY_ROLE_ARN != ''
+    if: github.ref == 'refs/heads/main' && vars.AWS_BACKUPS_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -335,7 +332,7 @@ jobs:
         with: { name: image, path: image.tar, retention-days: 7 }   # an approval can come days later; past 7, "Re-run all jobs"
   deploy:
     needs: build
-    if: github.ref == 'refs/heads/main' && vars.AWS_DEPLOY_ROLE_ARN != ''
+    if: github.ref == 'refs/heads/main' && vars.AWS_BACKUPS_ENABLED == 'true'
     runs-on: ubuntu-24.04
     environment: aws-backups            # Selected branches: main; required reviewer: the founder (Q1)
     timeout-minutes: 30
@@ -346,19 +343,23 @@ jobs:
       - uses: actions/download-artifact@<sha>
         with: { name: image }
       - uses: aws-actions/configure-aws-credentials@<sha>
-        with: { role-to-assume: '${{ vars.AWS_DEPLOY_ROLE_ARN }}', aws-region: us-east-1, role-duration-seconds: 3600, mask-aws-account-id: true }
+        with: { role-to-assume: '${{ secrets.AWS_DEPLOY_ROLE_ARN }}', aws-region: us-east-1, role-duration-seconds: 3600, mask-aws-account-id: true }
       - uses: aws-actions/amazon-ecr-login@<sha>
       - run: scripts/backup/deploy.sh   # no npm, no node; bash + docker + aws cli only
         env:
-          REPOSITORY_URI: ${{ vars.AWS_BACKUP_REPOSITORY_URI }}
-          ARTIFACTS_BUCKET: ${{ vars.AWS_ARTIFACTS_BUCKET }}
-          ALERT_EMAIL: ${{ vars.BACKUP_ALERT_EMAIL }}
-          CFN_EXEC_ROLE_ARN: ${{ vars.AWS_CFN_EXEC_ROLE_ARN }}
+          REPOSITORY_URI: ${{ secrets.AWS_BACKUP_REPOSITORY_URI }}   # environment secrets: masked in the public logs
+          ARTIFACTS_BUCKET: ${{ secrets.AWS_ARTIFACTS_BUCKET }}
+          ALERT_EMAIL: ${{ secrets.BACKUP_ALERT_EMAIL }}
+          CFN_EXEC_ROLE_ARN: ${{ secrets.AWS_CFN_EXEC_ROLE_ARN }}
 ```
-**The path filter lists every `src/` file the bundle imports.** An image that falls behind the code is a silent failure, so:
-- **U6 builds the bundle with `--metafile`** and fails CI if any input under `src/` isn't matched by a filter entry. A new import can't slip past.
-- **The backup code imports as little of `src/` as possible:** `src/lib/encryption.ts` and `toDirectConnectionUrl` from `src/lib/tenant/migrate-tenant.ts`. The control-plane tables are queried with explicit column lists in plain SQL in `scripts/backup/lib/`, not through the app's Drizzle schema. A later migration on other columns then can't break the image.
-- `drizzle/control-plane/**` is in the filter, so a migration touching backup tables also triggers a deploy request.
+**When a deploy is requested: only when the image or the stack would actually change.**
+- **`scripts/backup/bundle.sha256`** holds the SHA-256 of the esbuild output (`backup.cjs`; esbuild's output is deterministic for the same inputs and version). A CI test (U6) rebuilds the bundle and **fails if the hash differs from the committed file**.
+- So any change that alters the shipped code must regenerate the file in the same commit, and that triggers a deploy request. That covers a `src/` module it imports, a dependency bump that reaches the bundle, or the backup SQL.
+- **Everything else, including app-only `package.json` changes and control-plane migrations of other tables, triggers nothing.** Approval requests stay rare after launch (Q1).
+- **The backup code imports as little of `src/` as possible:** `src/lib/encryption.ts`, `toDirectConnectionUrl` from `src/lib/tenant/migrate-tenant.ts`, and `src/lib/tenant/backup-locks.ts`. It queries the control-plane tables with explicit column lists in plain SQL in `scripts/backup/lib/`, so a migration on other columns can't break the image.
+- **A migration that changes the backup tables** also changes that SQL, so a deploy is requested. Runbook: **approve it only after `deploy-prod` has applied the migration**. The tasks' start check refuses to run against missing tables either way.
+
+**Public logs.** The repo is public, and GitHub prints each step's inputs. So the account-identifying values (the role ARNs, the repository URI, the artifacts bucket and the alert email) are **`aws-backups` environment secrets**, which GitHub masks. Environment secrets are available on free plans for public repos. The only repository **variable** is `AWS_BACKUPS_ENABLED`, a non-sensitive switch the job `if` reads.
 
 **`deploy.sh`** (`set -euo pipefail`; prints no account ids, ARNs or the email; `::add-mask::` for the email):
 1. **Stack state** (`describe-stacks`; a "does not exist" error is caught and means a new stack; nothing else is swallowed under `set -e`):
@@ -373,7 +374,7 @@ jobs:
 5. **Report:** print "deployed <short sha>" and the stack status only.
 
 Further rules:
-- **The job-level `if` on `vars.AWS_DEPLOY_ROLE_ARN`** means nothing runs, and no approval is requested, until the founder has set the variable after creating the bootstrap stack (§12).
+- **The job-level `if` on `vars.AWS_BACKUPS_ENABLED == 'true'`** means nothing runs, and no approval is requested, until the founder sets it as the last setup step before the first deploy (§12).
 - **Environment `aws-backups` must exist and be gated before the bootstrap stack exists** (§12 step 3), and that's verified (§12). Otherwise GitHub creates it unprotected on first use (§4.6.3). The real gate is the environment's branch rule plus the required reviewer.
 - **The image runs only in AWS.** The build compiles code; it never connects to a database and holds no secrets.
 - Actions are pinned by SHA. `@aws-sdk/*` and `@aws-crypto/*` are imported only under `scripts/backup/` (U6).
@@ -478,9 +479,9 @@ Only the differences are listed here.
 - `CONTROL_PLANE_DATABASE_URL` and `ENCRYPTION_KEY`, from SSM. The key must be 64 hex characters.
 - `BACKUP_BUCKET`, `BACKUP_KMS_KEY_ARN`, `AWS_REGION` (= `us-east-1`).
 - `BACKUP_PG_DUMP_BIN` (`/usr/lib/postgresql/16/bin/pg_dump`; `--version` must start with `pg_dump (PostgreSQL) 16.`).
-- `BACKUP_CONCURRENCY` (default 3).
+- `BACKUP_CONCURRENCY` (default 3); `BACKUP_TARGET_DEADLINE_MINUTES` (default 30).
 
-No dotenv is loaded in the container. **Outside ECS** (no `ECS_CONTAINER_METADATA_URI_V4`), the commands refuse everything except `backup --dry-run`, so a production `.env` on a laptop can never start a dump (constraint 2). Tests call the cores in-process through the seams.
+No dotenv is loaded in the container. **Outside ECS** (no `ECS_CONTAINER_METADATA_URI_V4`), the commands refuse everything except `backup --dry-run` and `--self-check` (which loads modules and checks tool versions, nothing else), so a production `.env` on a laptop can never start a dump (constraint 2). Tests call the cores in-process through the seams.
 
 **Start checks:**
 - the five tables exist (else fatal: "backup tables missing: run deploy-prod first");
@@ -496,6 +497,15 @@ No dotenv is loaded in the container. **Outside ECS** (no `ECS_CONTAINER_METADAT
 - **The lock keys** are `BACKUP_LOCK_KEY = 728_402_201`, `AUDIT_LOCK_KEY = 728_402_202` and `RESTORE_TEST_LOCK_KEY = 728_402_203`. They're distinct from `MIGRATION_LOCK_KEY = 728_402_113` (`src/lib/tenant/migrate-tenant.ts:10`) and defined once in `scripts/backup/lib/locks.ts` (U5 asserts they're distinct).
 
 **Run deadline:** 6 hours. Then everything still running is killed and recorded `failed` (`run-deadline`), and the process exits 1. ECS has no runtime limit of its own (§4.2).
+
+**Migrations wait for a backup run (`scripts/migrate-all.ts`).**
+- **Why:** a migration's `ALTER TABLE` queues behind pg_dump's ACCESS SHARE locks, and every app query on that table then queues behind the `ALTER`. On the control plane, that's every request. Migrations set no `lock_timeout`.
+- **What changes:** before applying anything (not in `--check`), `migrate-all` runs `pg_try_advisory_lock(BACKUP_LOCK_KEY)` on the control plane's direct host and releases it at once.
+  - If a backup run holds it, it prints "Waiting for the backup run to finish…" and retries every 60 s for up to 30 minutes.
+  - Then it exits 1 with "A backup run is still active. Re-run deploy-prod later; nothing was changed."
+- **It doesn't hold the lock while migrating.** That would make a backup starting meanwhile exit as "another run active" and miss a day. The remaining race (a backup starting during a migration) is F22's: `--lock-wait-timeout` fails that target, and the retry round or the catch-up re-runs it.
+- **Shared constants:** the lock constants move to `src/lib/tenant/backup-locks.ts`, imported by both `scripts/backup/` and `migrate-all`.
+- This replaces the clock-based "no deploys at 06:00–08:30" rule, which didn't grow with run length.
 
 **Encryption (replaces `age`):** per §6.5. `pgDump.stdout` → `encryptStream` → the hashing `PassThrough` (SHA-256 and bytes; `{ end: false }`) → upload. The gate is unchanged: the hashing stream ends only after pg_dump closes with `(0, null)` **and** the encrypt stream has emitted `end` without error. Any failure: kill pg_dump, destroy the encrypt stream, `hashing.destroy(err)`, `upload.abort()`.
 
@@ -525,7 +535,7 @@ That summary is what goes into `database_backups.error`, `restore_test_results.d
 - **Frame length:** 64 KiB. `buildClient({ commitmentPolicy: REQUIRE_ENCRYPT_REQUIRE_DECRYPT, maxEncryptedDataKeys: 1 })`.
 - **Decryption uses a strict KMS keyring** naming the key ARN, never a discovery keyring.
 - **Encryption context** (authenticated, and sent to KMS):
-  - `purpose: cadenzpoint-backup`, which the key policy requires;
+  - `purpose: cadenzpoint-backup`, which the task roles' IAM conditions require;
   - `cp`: the control-plane id above;
   - `kind`: `dump` or `manifest`;
   - `target`: `tenant` or `control-plane`;
@@ -548,9 +558,9 @@ That summary is what goes into `database_backups.error`, `restore_test_results.d
 4. `DescribeKey` → `kms_key_state`.
 5. `ListSubscriptionsByTopic` → `alert_email_confirmed`: true if an `email` subscription exists whose ARN isn't `PendingConfirmation`.
 5b. **Protection drift:**
-   - `GetBucketPolicy` must exist and contain every expected statement `Sid`;
+   - `GetBucketPolicy` must exist, and its statements, **normalised** (sorted keys and arrays), must equal the expected statements rendered with this account's id and ARNs;
    - `GetLifecycleConfiguration` must hold the 25-day rule;
-   - `GetKeyPolicy` must contain every expected `Sid`;
+   - `GetKeyPolicy` must equal its expected statements, normalised the same way;
    - `DescribeRule` on `cadenzpoint-backup-protections` must be `ENABLED`.
 
    Any difference goes in `protection_drift` (the names of what's missing). This catches a policy silently replaced or removed by any path, including a future template change.
@@ -562,9 +572,9 @@ That summary is what goes into `database_backups.error`, `restore_test_results.d
 8. **Each check is isolated.** One that fails writes `error` into its column (or null) and its summary into `errors`, and the row is still inserted.
 
 ### 6.7 The restore-test command (`restore-test`, weekly, Mondays 08:17 UTC)
-**Catch-up:** `restore-test --if-missed` (Tuesday to Sunday, 08:17 UTC) exits 0 at once if any run has `finished_at` after the latest Monday 00:00 UTC (pass or fail; a failure is already alerted). Otherwise it runs normally. A lost Monday (a task that couldn't start, a retirement, a crash) is retried the next day.
+**Catch-up:** `restore-test --if-missed` (Tuesday to Sunday, 08:17 UTC) exits 0 at once if a run that **completed** has started since the latest Monday 00:00 UTC. Completed means `pass`, or `fail` with every planned target reached (no `FAIL:stopped`, `FAIL:not-reached`, and not `lock held`); such a failure is already alerted. Otherwise it runs normally. So a lost, stopped, cut or locked-out Monday run is retried the next day. **Every run row gets `finished_at` when it ends**, the lock-held and guard-failure rows included.
 
-**Environment:** `CONTROL_PLANE_DATABASE_URL`, `RESTORE_TEST_DATABASE_URL` (both from SSM), `BACKUP_BUCKET`, `BACKUP_KMS_KEY_ARN`, `AWS_REGION`, `BACKUP_PG_RESTORE_BIN` (16.x), `RESTORE_TEST_CONCURRENCY` (default 2), `RESTORE_TEST_DEADLINE_HOURS` (default 6).
+**Environment:** `CONTROL_PLANE_DATABASE_URL`, `RESTORE_TEST_DATABASE_URL` (both from SSM), `BACKUP_BUCKET`, `BACKUP_KMS_KEY_ARN`, `AWS_REGION`, `BACKUP_PG_RESTORE_BIN` (16.x), `RESTORE_TEST_CONCURRENCY` (default 2), `RESTORE_TEST_DEADLINE_HOURS` (default 6), `RESTORE_TEST_TARGET_DEADLINE_MINUTES` (default 120).
 
 1. **Guards:**
    - take `RESTORE_TEST_LOCK_KEY`, retrying every 30 s for up to 10 minutes. The only other holder is the audit's short sweep. If it's still held, insert a run row `fail` with `detail = 'lock held'` and exit 1, so a skipped run is visible and the catch-up retries;
@@ -586,7 +596,7 @@ That summary is what goes into `database_backups.error`, `restore_test_results.d
    This meets §5's rule ("every one is restore-tested at least once every 13 weeks") **with a week of slack**. The cycle is 12 weeks, a workspace becomes overdue at 11, and a lost Monday is retried by the daily catch-up. A new workspace's due date is recent, so new signups can't push older customers out. A workspace that keeps failing keeps an old due date, so it's retested every week. Once it's 11 weeks overdue it **adds** to N rather than taking someone else's slot.
 6. **Test the targets** with `RESTORE_TEST_CONCURRENCY` workers. Each worker uses its own database; at most `RESTORE_TEST_CONCURRENCY` databases exist at once, far below Neon's 500. Each target has a 2-hour deadline.
    1. **Pick the backup by listing**, as 3c will in a disaster:
-      - consider objects under `v1/<target>/<id>/` ending `.dump.enc` that have a sidecar and are **at least 30 minutes old**, newest first (a backup still finishing can't be picked);
+      - consider objects under `v1/<cp>/<target>/<id>/` (`<cp>` from this task's own control-plane URL) ending `.dump.enc` that have a sidecar and are **at least 30 minutes old**, newest first (a backup still finishing can't be picked);
       - take the first whose `database_backups` row (by `s3_key`) exists and is `ok`;
       - if newer sidecar-backed objects were skipped for lacking a row, note that in `detail`. It isn't a failure: a backup that failed after uploading leaves exactly that.
       - No candidate at all: `FAIL:list`. Candidates but none with an `ok` row: `FAIL:no-row`.
@@ -639,7 +649,7 @@ It runs as an isolated step in `tenant-lifecycle/route.ts`, after `runLifecycleC
 | stale workspace | a URL, created over 36 h ago, newest `ok` missing or older than 36 h; **anchored** to the first control-plane `ok` + 36 h | `backup-stale` (tenant) |
 | failed backup | the target's newest row is `failed` | `backup-failed` (tenant, or global / `control-plane`) |
 | slow backup run | the latest run that backed up the control plane spanned more than 70% of the 6-hour deadline (from its rows' first `started_at` to last `finished_at`) | `backup-run-slow` (global) |
-| audit missed | no `backup_audits` row in 30 h; **anchored** to the first audit row | `backup-audit-missed` (global) |
+| audit missed | no `backup_audits` row in 26 h; **anchored** to the first audit row | `backup-audit-missed` (global) |
 | old backups | latest audit `objects_over_29_days > 0` | `backup-old-objects` (global) |
 | bucket drift | latest audit: versioning not `''`, or `stale_uploads > 0` | `backup-bucket-drift` (global) |
 | key not enabled | latest audit `kms_key_state` isn't `Enabled` | `backup-key-state` (global) |
@@ -649,7 +659,7 @@ It runs as an isolated step in `tenant-lifecycle/route.ts`, after `runLifecycleC
 | restore test missed | no finished run in 8 days, anchored to the first control-plane `ok` (no alert before that + 8 days) | `restore-test-missed` (global) |
 | restore test failed | the latest **finished** run is `fail`, **or** the latest run is `running` and started over 12 h ago | `restore-test-failed` (global; detail lists failed targets by slug and stage) |
 | slow restore test | the latest finished run took more than 70% of its `deadline_ms` | `restore-test-slow` (global) |
-| slow target | a workspace's newest `ok` backup took over 15 min (half its 30-min deadline), or its latest restore result over 1 h (half of 2 h) | `backup-target-slow` (tenant) |
+| slow target | a workspace's newest `ok` backup took over half of `BACKUP_TARGET_DEADLINE_MINUTES`, or its latest restore result over half of `RESTORE_TEST_TARGET_DEADLINE_MINUTES` (the run records the deadlines it used) | `backup-target-slow` (tenant; remedy: raise that deadline or the task's CPU, a stack parameter) |
 | test databases left behind | latest audit `leftover_test_dbs > 0` | `restore-test-leftover` (global) |
 | permission drift | per role: the latest `backup_permission_checks.ok` is false, or no row in 8 days after the role's first | `backup-permission-drift` (global, dedup = role; detail names the probe) |
 | coverage (§5's rule itself) | an eligible workspace whose first `ok` is over 13 weeks old, with no PASS in 13 weeks | `restore-test-coverage` (tenant) |
@@ -792,12 +802,12 @@ The §6.9 table: raised while true, resolved the first sync it's false.
 | F19 | Old objects (AWS's deletion is late) | `backup-old-objects` at 29 days, a safety net. Within the 30-day promise in all normal cases (§4.3.6). |
 | F20 | Monitoring misconfigured | Off / not-configured lines; `backup-check-failed` (resolved when the sync is off). |
 | F21 | The alert email isn't confirmed, or the subscription is lost | The audit records it daily and the digest alerts (`backup-alert-email`). Fix: in SNS, **Request confirmation** within 48 h; after that, re-create the subscription in the console. The §12 checklist proves delivery with a test alarm. |
-| F22 | Migration lock during a dump | `--lock-wait-timeout=60s` fails the target, and the retry round retries. No deploys 06:00–08:30 and 18:00–20:30 UTC. |
+| F22 | Migration and dump overlap | `migrate-all` waits while a backup run holds its lock (§6.4), so a migration never queues behind a dump. A backup that starts during a migration: `--lock-wait-timeout=60s` fails that target, and the retry round or the catch-up re-runs it. |
 | F23 | AWS account suspended for an unpaid bill | Every task stops; alerts at 13:00. Mitigations: the Paid plan, a backup card, the budget alert. |
 | F24 | A wrong workspace's backup restored | The encryption context's `id` and `key` must match, checked before pg_restore starts. |
-| F25 | The environment auto-created unprotected | §12 order: the environment is created, gated and **verified** before the bootstrap stack exists (a merge gate). The job-level `if` on `vars.AWS_DEPLOY_ROLE_ARN` means no run reaches the environment until the founder sets it. |
+| F25 | The environment auto-created unprotected | §12 order: the environment is created, gated and **verified** before the bootstrap stack exists (a merge gate). The job-level `if` on `vars.AWS_BACKUPS_ENABLED` means no run reaches the environment until the founder sets it. |
 | F26 | Deploy fails halfway | An update rolls back to the previous stack, and the old task definitions keep running. A failed **first** create ends in `ROLLBACK_COMPLETE` with nothing retained (`RetainExceptOnCreate`); `deploy.sh` says to delete the empty stack in the console and re-run. |
-| F27 | AWS retires a running task for maintenance (§4.2.3) | SIGTERM: targets recorded `failed`/`FAIL:stopped` within `StopTimeout`. The catch-up re-runs a backup that evening; a restore test is caught by `restore-test-failed` and runs next week. |
+| F27 | AWS retires a running task for maintenance (§4.2.3) | SIGTERM: targets recorded `failed`/`FAIL:stopped` within `StopTimeout`. The backup catch-up re-runs it that evening; the restore-test catch-up re-runs a stopped test the next day (§6.7). |
 | F28 | Re-running a deploy for the same commit | `deploy.sh` reuses the existing image tag's digest instead of pushing again (immutable tags). |
 | F29 | A compromised npm package in the build | It runs only in the `build` job (no OIDC, no environment, no secrets) and inside Docker's builder stage with `--ignore-scripts`. It can't reach AWS. A malicious change to the *bundled code* would still ship on the founder's approval, which is the normal code-review risk. |
 | F30 | Customer values in error text | `summarizeError` keeps only stage, exit code, SQLSTATE, table name and allow-listed messages (§6.4). |
@@ -812,7 +822,7 @@ The §6.9 table: raised while true, resolved the first sync it's false.
 - **Scale:**
   - one run backs up E workspaces at `BACKUP_CONCURRENCY` at a time;
   - when `backup-run-slow` appears, raise `BACKUP_CONCURRENCY` (and the task size); beyond that, a second schedule taking half the workspaces (`--shard 1/2`, a later change, not built now);
-  - restore tests grow with `ceil(E/13)` per week, run `RESTORE_TEST_CONCURRENCY` at a time. At about 7 minutes per workspace, 2 workers and 6 hours cover about 100 per run (E ≈ 1,300); `restore-test-slow` warns before that limit.
+  - restore tests grow with `ceil(E/12)` per week, run `RESTORE_TEST_CONCURRENCY` at a time. At about 7 minutes per workspace, 2 workers and 6 hours cover about 100 per run (E ≈ 1,300); `restore-test-slow` warns before that limit.
 - **Neon:**
   - backups use transfer of about the uncompressed size per day per project (500 GB/project/month on Launch/Scale);
   - the restore-test project: storage only while a test runs; compute about the restore time once a week. Its compute size sets restore speed (raise it when `restore-test-slow` appears);
@@ -840,6 +850,8 @@ The §6.9 table: raised while true, resolved the first sync it's false.
 | `.github/workflows/backup-deploy.yml` | **new** |
 | `.github/workflows/ci.yml` | the integration job on `ubuntu-24.04` installs `postgresql-client-16`, sets `REQUIRE_PG16_TOOLS=1` plus `BACKUP_PG_DUMP_BIN`/`BACKUP_PG_RESTORE_BIN`, and creates an empty `bytime_rt_test` database (the restore-test target); a new step runs `cfn-lint ops/aws/*.yml`; a new step builds the image and runs `--self-check` |
 | `src/lib/tenant/backup-status.ts` | **new** |
+| `src/lib/tenant/backup-locks.ts` | **new**: the three lock constants (§6.4) |
+| `scripts/migrate-all.ts` | waits for a running backup before migrating (§6.4); `MIGRATIONS.md` notes it |
 | `src/app/api/cron/tenant-lifecycle/route.ts` | the isolated backup step |
 | `src/lib/tenant/ops-digest.ts` | the Backups section |
 | `scripts/tenant-admin.ts`, `src/lib/tenant/admin-commands.ts` | `show` lists the newest backup and the latest restore-test result for the workspace |
@@ -852,7 +864,7 @@ The §6.9 table: raised while true, resolved the first sync it's false.
 | `PRODUCTION-DEPLOY.md` | new Phase "Backups (AWS)" (§12); Phase 15 row; Operations (what the digest shows); env table `BACKUPS_EXPECTED`; the no-deploy windows; "if `ENCRYPTION_KEY` or the control-plane URL changes, update SSM" |
 
 ### 10.2 Checked, unchanged
-- app request paths; `migrate-all.ts`; `deploy-prod.yml`;
+- app request paths; `deploy-prod.yml` (its `db:migrate:all` step gains the wait through `migrate-all.ts`);
 - `checkFounderExports`, `tenant-export.ts`, `delete-tenant.ts` founder exports (3d);
 - the business drafts' Terms §9.3 / Privacy §7 (the business side applies §3 (B)).
 
@@ -875,7 +887,7 @@ The §6.9 table: raised while true, resolved the first sync it's false.
   - the restore-test anchor (no alert in the first 8 days);
   - the latest-run rule: an old `running` row followed by a newer `pass` → no alert;
   - the 12-hour rule on the latest run;
-  - coverage at 14 weeks;
+  - coverage at 13 weeks;
   - the slow thresholds;
   - `alert_email_confirmed` false and null.
 - **U4:** the end gate: the body ends only after pg_dump `(0,null)` **and** the encrypt `end`; any failure destroys it.
@@ -891,9 +903,9 @@ The §6.9 table: raised while true, resolved the first sync it's false.
   - every schedule pins a revision, uses UTC, `FlexibleTimeWindow: OFF`, a retry policy and the DLQ; both catch-ups have their `containerOverrides` input;
   - the protections rule lists exactly the §6.1 event names and has **no caller condition**; the topic policy allows events and cloudwatch;
   - `DeployRole` names the exact stack ARN and the exact legacy `sub` (`StringEquals`); the bootstrap roles have fixed names and sit outside `/cadenzpoint-backup/`; the `CfnExecRole` ARN in the main stack's denies equals the bootstrap's name and path; the execution roles have the ECR pull actions; the audit role has the drift Get/Describe actions; `CfnExecRole` has `iam:CreateServiceLinkedRole` for ECS; the task-role trusts have the account and region conditions; the trail is in `bootstrap.yml`, not the main stack;
-  - the workflow: SHAs pinned; the `build` job has no `id-token` and no environment; the `deploy` job has `id-token` and `environment: aws-backups`; both have the job `if` (main and `vars.AWS_DEPLOY_ROLE_ARN`); `persist-credentials: false`; `mask-aws-account-id: true`; no `npm` in the deploy job; no `inputs.*` in `run:`;
+  - the workflow: SHAs pinned; the `build` job has no `id-token` and no environment; the `deploy` job has `id-token` and `environment: aws-backups`; both have the job `if` (main and `vars.AWS_BACKUPS_ENABLED == 'true'`); the ARNs, URI, bucket and email come from `secrets.*`, never `vars.*`; `persist-credentials: false`; `mask-aws-account-id: true`; no `npm` in the deploy job; no `inputs.*` in `run:`;
   - the Dockerfile builder runs `npm ci --ignore-scripts`;
-  - **every `src/` input in the esbuild metafile matches a `paths` entry;**
+  - **the committed `scripts/backup/bundle.sha256` equals a fresh bundle's hash** (and the bundle's `src/` inputs are only the three named modules);
   - no `!` short-form tags in the templates; `backup-stack.yml` parses;
   - no `src/` import of `@aws-sdk/*` or `@aws-crypto/*`.
 - **U7:** restore-test target choice:
@@ -966,15 +978,14 @@ The §6.9 table: raised while true, resolved the first sync it's false.
 2. **Neon:** create `cadenzpoint-restore-tests` (us-east-1, **Postgres 16**, history window 0), and copy its **direct** connection string.
 3. **GitHub, before the bootstrap stack exists:**
    - create environment `aws-backups`: Selected branches → `main`; required reviewer → you; **"Prevent self-review" off**; **"Allow administrators to bypass" off**;
-   - add the variable `BACKUP_ALERT_EMAIL`;
+   - add the environment secret `BACKUP_ALERT_EMAIL` (in the environment's page, **Environment secrets → Add secret**);
    - **verify** with two commands, and send the output to the lead:
      - `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-backups` must show a `required_reviewers` rule naming you, `"can_admins_bypass": false` and `"custom_branch_policies": true`;
      - `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-backups/deployment-branch-policies` must list exactly one policy: `main`, type `branch`.
-   - **This item may merge only after this check** (the merge gate). With `AWS_DEPLOY_ROLE_ARN` unset, the deploy workflow does nothing, so merging before AWS exists is safe.
+   - **This item may merge only after this check** (the merge gate). With `AWS_BACKUPS_ENABLED` unset, the deploy workflow does nothing, so merging before AWS exists is safe.
 4. **Bootstrap stack:**
    - in the AWS console (as `corey-admin`, us-east-1): CloudFormation → Create stack → upload `ops/aws/bootstrap.yml` → acknowledge IAM → Submit;
-   - copy the four outputs into the GitHub variables `AWS_DEPLOY_ROLE_ARN`, `AWS_CFN_EXEC_ROLE_ARN`, `AWS_BACKUP_REPOSITORY_URI` and `AWS_ARTIFACTS_BUCKET`;
-   - **set `AWS_DEPLOY_ROLE_ARN` last**: setting it arms the deploy workflow.
+   - copy the four outputs into **`aws-backups` environment secrets**: `AWS_DEPLOY_ROLE_ARN`, `AWS_CFN_EXEC_ROLE_ARN`, `AWS_BACKUP_REPOSITORY_URI` and `AWS_ARTIFACTS_BUCKET`.
 5. **Make sure the app is deployed with this item's migration** (`deploy-prod`), and staging too.
 6. **SSM, staging values first (the rehearsal):**
    - `/cadenzpoint/backup/control-plane-url` = **staging's** control-plane URL;
@@ -982,10 +993,10 @@ The §6.9 table: raised while true, resolved the first sync it's false.
    - `/cadenzpoint/backup/restore-test-url` = the Neon string from step 2.
 
    Take the values from the password manager (PRODUCTION-DEPLOY Phase 4); Vercel doesn't reveal sensitive values.
-7. **First deploy:** Actions → "Backup system deploy" → Run workflow. Approve it (**Review deployments → Approve and deploy**). Expect both jobs green.
+7. **First deploy:** set the repository variable `AWS_BACKUPS_ENABLED` = `true` (this arms the workflow), then Actions → "Backup system deploy" → Run workflow. Approve it (**Review deployments → Approve and deploy**). Expect both jobs green.
 8. **Confirm the alert email** from AWS (within 48 hours; if missed, use SNS → the subscription → **Request confirmation**).
 9. **First runs (against staging):**
-   - in ECS → cluster `cadenzpoint-backup` → **Run new task**, run the `backup` task family, then `audit`, then `restore-test` (the runbook gives the exact clicks).
+   - in ECS → cluster `cadenzpoint-backup` → **Run new task**, run the `backup` task family, then `audit`. **Wait at least 30 minutes after the backup task stops** (the restore test ignores newer objects), then run `restore-test`. The runbook gives the exact clicks.
    - **Expect** in **staging's** control plane: `ok` rows, an audit row with `Enabled` and `alert_email_confirmed = true`, a `pass` restore-test run, and three `backup_permission_checks` rows with `ok = true`.
    - Set staging's `BACKUPS_EXPECTED=1` for a day and check the digest shows the Backups section, then set it back to `0`.
    - **The next day,** check the 18:17 catch-up's log line shows `--if-missing-today` (proving the schedule's command override), and Tuesday's 08:17 restore-test catch-up exits at once ("a run finished since Monday").
@@ -1014,7 +1025,7 @@ The §6.9 table: raised while true, resolved the first sync it's false.
    - `--dry-run`;
    - the digest's Backups section through a local production server with `BACKUPS_EXPECTED` set to `1`, `0`, then unset;
    - the Privacy page sentence.
-7. **Real AWS:** §12 steps 7–11, run with the founder once the accounts exist. 3b can be built, reviewed and merged before then (the §12 step 3 merge gate). It does nothing until the variables exist, and reports nothing until `BACKUPS_EXPECTED=1`.
+7. **Real AWS:** §12 steps 7–11, run with the founder once the accounts exist. 3b can be built, reviewed and merged before then (the §12 step 3 merge gate). The deploy workflow does nothing until `AWS_BACKUPS_ENABLED` is set. **Until go-live, the production digest shows "Backup monitoring is not configured" every day** (§6.9), a deliberate reminder; set `BACKUPS_EXPECTED=0` in production to quiet it until go-live if preferred. That shows the "off" line, which also counts as news on the production domain.
 
 ## 14. Hand-off rules (in addition to `BLUEPRINT-STANDARD.md` §3)
 - Impact analysis first; stop for the lead's review.
@@ -1097,10 +1108,26 @@ The §6.9 table: raised while true, resolved the first sync it's false.
   - `esbuild` a direct devDependency;
   - the `cfn-lint` install note.
 
+**Confirmation pass 1** (one fresh reviewer on v5.2): **1 MEDIUM, 10 LOW; no HIGH.** Fixed in v5.3:
+- **MEDIUM: a migration during a long dump could freeze a workspace, or the app (control plane).** `migrate-all` now waits while a backup run holds its lock (up to 30 minutes, then refuses without changing anything). The lock constants are shared in `src/lib/tenant/backup-locks.ts`. The clock-based no-deploy window is retired. **Scope note for the product owner:** this touches `scripts/migrate-all.ts`, which v5.2 left unchanged. It changes no product behaviour (deploys may wait).
+- **LOWs:**
+  - the restore-test listing prefix includes `<cp>`;
+  - the restore-test catch-up retries stopped, cut or locked-out runs, and every run row gets `finished_at`;
+  - contradictions fixed (`StringEquals`, 13-week coverage, `ceil(E/12)`, `--self-check` allowed outside ECS);
+  - step 9 waits 30 minutes before the restore test;
+  - **deploy requests only when the bundle hash or the stack changes** (`bundle.sha256`, checked in CI);
+  - account-identifying values moved to environment secrets, with an `AWS_BACKUPS_ENABLED` switch variable;
+  - audit-missed at 26 h;
+  - the drift check compares normalised statements;
+  - IAM role-policy and trust changes on `cadenzpoint-backup-*` roles alert;
+  - per-target deadlines as settings, with the right remedy;
+  - wording fixes (§13.7, §4.3.4, §6.5);
+  - `CfnExecRole` gets `kms:PutKeyPolicy`.
+
 ## 16. LOW items carried (the dev implements; the audit verifies)
 1. The restore test's backup choice uses S3 `LastModified`; the `BACKUP` line carries the slug.
 2. The control plane runs outside the tenant concurrency pool; S1b fills every slot with hung tenants.
-3. The no-deploy windows are 06:00–08:30 and 18:00–20:30 UTC (plus Mondays 08:17 to about 14:00 for restore tests). Separately, migrations set no `lock_timeout` (a later item).
+3. Migrations wait for a running backup (§6.4). Restore tests touch only the restore-test project, so they need no window. Separately, migrations set no `lock_timeout` (a later item).
 4. Stated limitation (into the 3c brief): the catch-up doesn't re-dump the control plane, so its newest backup can lack the `ok` rows of tenants re-run that evening. 3c restores those with the `BACKUP` line's SHA-256.
 5. The SSM parameter names are fixed in the task definitions; the runbook's "update SSM when a value changes" applies to all three.
 6. **Stated risk:** the tasks hold the production control-plane owner URL (the same one Vercel holds), so a compromised task could change control-plane rows. A narrower Postgres role (SELECT on `tenants`, INSERT/UPDATE on the five tables) is a later hardening item, not built now.
