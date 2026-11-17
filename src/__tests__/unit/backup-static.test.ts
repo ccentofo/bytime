@@ -407,7 +407,7 @@ esac
 
   it('false for a re-run of a commit older than the last deployed one; false when nothing changed', () => {
     const older = commit('older backup change', 'scripts/backup/lib/z.ts');
-    const newer = commit('newer', 'docs/b.md');
+    const newer = commit('newer backup change', 'scripts/backup/lib/w.ts');
     expect(run('push', older, deployedAt(newer))).toBe('changed=false');
     expect(run('push', newer, deployedAt(newer))).toBe('changed=false');
   });

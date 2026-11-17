@@ -108,14 +108,12 @@ export async function encryptBuffer(factory: KeyringFactory, context: Encryption
 
 /**
  * A streaming decryptor that refuses signed messages. Listen for `MessageHeader` before reading.
- * It always carries a no-op `error` listener: the SDK's internal pipeline callback re-emits "Premature close" on the
- * returned stream after a destroy (decrypt_stream.js), which would otherwise be an uncaught exception. Callers add their
- * own listener with `on`, never `once`.
+ * Callers MUST keep an `error` listener for the stream's whole life (`on`, never `once`): after a destroy, the SDK's
+ * internal pipeline callback re-emits "Premature close" on the returned stream (decrypt_stream.js), which would otherwise
+ * be an uncaught exception.
  */
 export function makeDecryptStream(factory: KeyringFactory): Duplex {
-  const stream = client.decryptUnsignedMessageStream(factory.decrypt()) as unknown as Duplex;
-  stream.on('error', () => {});
-  return stream;
+  return client.decryptUnsignedMessageStream(factory.decrypt()) as unknown as Duplex;
 }
 
 export class ContextMismatchError extends Error {

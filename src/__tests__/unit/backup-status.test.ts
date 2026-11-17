@@ -168,6 +168,14 @@ describe('U3: backupFindings', () => {
     const f = healthy();
     f.restoreRuns = [run({ id: 'l', status: 'fail', planned: null, detail: 'lock held', startedAt: ago(H), finishedAt: ago(H), resultCount: 0 }), run()];
     expect(kinds(f)).toEqual([]);
+    // A stuck run (running for 13 h) still alerts when a later lock-held row (locked out by it) is the newest row.
+    const g = healthy();
+    g.restoreRuns = [
+      run({ id: 'l2', status: 'fail', planned: null, detail: 'lock held', startedAt: ago(H), finishedAt: ago(H), resultCount: 0 }),
+      run({ id: 'stuck', status: 'running', planned: 2, resultCount: 0, startedAt: ago(13 * H), finishedAt: null }),
+      run(),
+    ];
+    expect(kinds(g)).toContain('restore-test-failed');
   });
 
   it('coverage exactly at 13 weeks; the slow thresholds at 70% / half; alert email null is not an alert', () => {
