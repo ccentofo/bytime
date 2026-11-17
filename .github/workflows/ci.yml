@@ -151,7 +151,8 @@ jobs:
       - name: cfn-lint
         run: |
           python3 -m pip install --user cfn-lint==1.60.1
-          python3 -m cfnlint ops/aws/*.yml
+          # The package has no __main__ (python3 -m cfnlint fails): run the installed entry point.
+          "$(python3 -m site --user-base)/bin/cfn-lint" ops/aws/*.yml
 
       - name: Build the backup image and run its self-check
         run: |
