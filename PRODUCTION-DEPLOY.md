@@ -968,8 +968,8 @@ A founder-only button that rebuilds a lost workspace from its newest verified ba
    - this repository was created before **15 July 2026** and hasn't been renamed or transferred since (GitHub then
      uses the subject format both backup roles trust). If it was, stop and tell the lead;
    - whether Neon → **Organization → Members → Invite** offers the **Viewer** role. If it doesn't (an organisation
-     still on Neon's older roles), step 2 invites `neon-ops@` as **Member** for now (Q-D1, decided 2026-11-17), and you
-     lower it to Viewer once Neon offers it. Tell the lead which role you used.
+     still on Neon's older roles), step 2 invites `neon-ops@` as **Member** for now (Q-D1, decided 2026-11-17): write
+     the date in the setup notes, and lower it to Viewer as soon as Neon offers that role.
 1. **GitHub:** create the environment `aws-disaster` (Selected branches → `main`; required reviewer → you; "Prevent
    self-review" **off**; "Allow administrators to bypass" **off**). Send the lead the output of
    `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-disaster` and

@@ -281,7 +281,7 @@ The checklist is `PRODUCTION-DEPLOY.md`, Phase 13c. About 30 minutes, plus waiti
 
 0. **Two checks first:**
    1. This repository was created before **15 July 2026** and hasn't been renamed or transferred since. (GitHub signs newer repositories' tokens in a different format, which the AWS roles wouldn't accept.) If it was, stop and tell me.
-   2. Whether Neon → **Organization → Members → Invite** offers the **Viewer** role. (Neon is moving organisations to its new roles gradually; an organisation still on the older ones has no Viewer.) If it doesn't, use **Member** in step 2.2 for now, and lower `neon-ops@` to Viewer once Neon offers it (your decision of 2026-11-17). Tell me which role you used.
+   2. Whether Neon → **Organization → Members → Invite** offers the **Viewer** role. (Neon is moving organisations to its new roles gradually; an organisation still on the older ones has no Viewer.) If it doesn't, invite `neon-ops@` as **Member** in step 2.2 for now, write the date in the setup notes, and lower it to Viewer as soon as Neon offers that role (your decision of 2026-11-17).
 1. **GitHub environment** `aws-disaster`, exactly like `aws-backups` in Part 6 step 1 (required reviewer: you; "Prevent self-review" unchecked; bypass unchecked; branch rule `main`). No secrets yet. Send me the output of:
    - `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-disaster`
    - `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-disaster/deployment-branch-policies`
