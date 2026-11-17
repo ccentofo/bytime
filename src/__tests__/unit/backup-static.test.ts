@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { readFileSync, readdirSync, statSync, mkdtempSync, mkdirSync, writeFileSync, copyFileSync, chmodSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parse } from 'yaml';
@@ -315,6 +316,13 @@ describe('U6: the Dockerfile and the bundle inputs', () => {
     expect(read('.dockerignore').split('\n').map((l) => l.trim())).not.toContain('.npmrc');
     expect(docker.match(/^FROM .*$/gm)!.every((l) => /@sha256:[0-9a-f]{64}/.test(l))).toBe(true);
     expect(docker).toMatch(/postgresql-client-16/);
+    // The PGDG key is vendored: no download (no curl), apt retries on every update/install.
+    expect(docker).not.toMatch(/\bcurl\b/);
+    expect(docker).toMatch(/^COPY ops\/aws\/pgdg-ACCC4CF8\.asc \/usr\/share\/postgresql-common\/pgdg\/apt\.postgresql\.org\.asc$/m);
+    const aptCalls = docker.match(/apt-get (?:-o \S+ )?(?:update|install)\b/g)!;
+    expect(aptCalls.length).toBe(4);
+    expect(aptCalls.every((c) => c.includes('-o Acquire::Retries=5'))).toBe(true);
+    expect(docker).toMatch(/\[signed-by=\/usr\/share\/postgresql-common\/pgdg\/apt\.postgresql\.org\.asc\]/);
     expect(docker).toMatch(/USER node/);
     expect(read('package.json')).toContain('"backup:bundle": "node scripts/backup/bundle.mjs"');
   });
@@ -332,9 +340,45 @@ describe('U6: the Dockerfile and the bundle inputs', () => {
     expect(own.length).toBeGreaterThan(10);
     expect(own.filter((i) => !listed(i))).toEqual([]);
     expect(own.filter((i) => i.startsWith('src/')).sort()).toEqual(['src/lib/encryption.ts', 'src/lib/tenant/backup-locks.ts', 'src/lib/tenant/direct-url.ts']);
-    for (const f of ['tsconfig.backup.json', '.npmrc', 'Dockerfile.backup', 'ops/aws/backup-stack.yml', '.github/workflows/backup-deploy.yml']) expect(listed(f), f).toBe(true);
+    for (const f of ['tsconfig.backup.json', '.npmrc', 'ops/aws/pgdg-ACCC4CF8.asc', 'Dockerfile.backup', 'ops/aws/backup-stack.yml', '.github/workflows/backup-deploy.yml']) expect(listed(f), f).toBe(true);
     expect(listed('ops/aws/bootstrap.yml')).toBe(false);
     expect(listed('package.json')).toBe(false);
+  });
+});
+
+/** The OpenPGP v4 fingerprint of an armored key's primary key: SHA-1 over 0x99, the 2-byte length, the key packet body. */
+function primaryFingerprint(armored: string): string {
+  const lines = armored.split(/\r?\n/);
+  const start = lines.findIndex((l) => l.startsWith('-----BEGIN PGP PUBLIC KEY BLOCK-----'));
+  const end = lines.findIndex((l) => l.startsWith('-----END PGP PUBLIC KEY BLOCK-----'));
+  let i = start + 1;
+  while (i < end && lines[i].trim() !== '') i++; // armor headers end at the blank line
+  const buf = Buffer.from(lines.slice(i + 1, end).filter((l) => !l.startsWith('=')).join(''), 'base64');
+  const ctb = buf[0];
+  if (!(ctb & 0x80)) throw new Error('not an OpenPGP packet');
+  let tag: number; let len: number; let off: number;
+  if (ctb & 0x40) {
+    tag = ctb & 0x3f;
+    const o = buf[1];
+    if (o < 192) { len = o; off = 2; } else if (o < 224) { len = ((o - 192) << 8) + buf[2] + 192; off = 3; } else if (o === 255) { len = buf.readUInt32BE(2); off = 6; } else throw new Error('partial length');
+  } else {
+    tag = (ctb >> 2) & 0x0f;
+    const lt = ctb & 3;
+    if (lt === 0) { len = buf[1]; off = 2; } else if (lt === 1) { len = buf.readUInt16BE(1); off = 3; } else if (lt === 2) { len = buf.readUInt32BE(1); off = 5; } else throw new Error('indeterminate length');
+  }
+  if (tag !== 6) throw new Error(`first packet is tag ${tag}, not a public key`);
+  const body = buf.subarray(off, off + len);
+  if (body[0] !== 4) throw new Error('not a v4 key');
+  const hex = createHash('sha1').update(Buffer.from([0x99, len >> 8, len & 0xff])).update(body).digest('hex').toUpperCase();
+  return hex.match(/.{4}/g)!.join(' ');
+}
+
+describe('U6: the vendored PGDG signing key', () => {
+  it('ops/aws/pgdg-ACCC4CF8.asc is the PostgreSQL apt key (fingerprint B97B…4CF8): a swapped file fails CI', () => {
+    const key = read('ops/aws/pgdg-ACCC4CF8.asc');
+    expect(primaryFingerprint(key)).toBe('B97B 0AFC AA1A 47F0 44F2 44A0 7FCC 7D46 ACCC 4CF8');
+    expect(createHash('sha256').update(key).digest('hex')).toBe('0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76');
+    expect(read('.dockerignore').split('\n').map((l) => l.trim())).not.toContain('ops/aws/pgdg-ACCC4CF8.asc');
   });
 });
 
@@ -393,7 +437,7 @@ esac
 
   it('true for a change to each deploy-list entry; false for an unrelated file', () => {
     const base = commits.base;
-    const samples = ['scripts/backup/lib/x.ts', 'src/lib/encryption.ts', 'src/lib/tenant/direct-url.ts', 'src/lib/tenant/backup-locks.ts', 'ops/aws/backup-stack.yml', 'Dockerfile.backup', '.dockerignore', 'tsconfig.backup.json', '.npmrc', '.github/workflows/backup-deploy.yml'];
+    const samples = ['scripts/backup/lib/x.ts', 'src/lib/encryption.ts', 'src/lib/tenant/direct-url.ts', 'src/lib/tenant/backup-locks.ts', 'ops/aws/backup-stack.yml', 'Dockerfile.backup', '.dockerignore', 'tsconfig.backup.json', '.npmrc', 'ops/aws/pgdg-ACCC4CF8.asc', '.github/workflows/backup-deploy.yml'];
     let prev = base;
     for (const f of samples) {
       const c = commit(`touch ${f}`, f);

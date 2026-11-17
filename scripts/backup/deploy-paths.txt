@@ -6,6 +6,7 @@ src/lib/encryption.ts
 src/lib/tenant/direct-url.ts
 src/lib/tenant/backup-locks.ts
 ops/aws/backup-stack.yml
+ops/aws/pgdg-ACCC4CF8.asc
 Dockerfile.backup
 .dockerignore
 tsconfig.backup.json
