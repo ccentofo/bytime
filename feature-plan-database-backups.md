@@ -1,6 +1,6 @@
 # Database backups (build queue 3b)
 
-> **Status:** **FINAL v5.8**, 2026-11-16, lead architect. A redesign to the revised `BUSINESS-DECISIONS.md` §5 (2026-11-16). **Pre-mortem CLEAN:** confirmation pass 6 found no HIGH or MEDIUM, and its 10 LOWs are written in (§15). Waiting on the product owner's answers to Q1–Q4.
+> **Status:** **FINAL v5.8**, 2026-11-16, lead architect. A redesign to the revised `BUSINESS-DECISIONS.md` §5 (2026-11-16). **Pre-mortem CLEAN:** confirmation pass 6 found no HIGH or MEDIUM, and its 10 LOWs are written in (§15). **Accepted by the product owner 2026-11-16: Q1–Q4 as recommended**, including the `migrate-all` wait (§6.4).
 >
 > **What changed from v4.1** (`78222b4`):
 > - The jobs run **in the backup AWS account** (scheduled container tasks in us-east-1), not on GitHub's runners.
@@ -908,7 +908,7 @@ The §6.9 table: raised while true, resolved the first sync it's false.
 | `package.json` | scripts `backup:local`, `backup:bundle` (the esbuild command, also used by U6 for the metafile); `esbuild` becomes a pinned direct devDependency (today it's only transitive); dependencies `@aws-sdk/client-s3`, `@aws-sdk/lib-storage`, `@aws-sdk/client-kms`, `@aws-crypto/client-node` (bundled into the image only); devDependency `yaml` |
 | `.env.example` | `BACKUPS_EXPECTED` |
 | Tests | the source-scan tests that will also read `scripts/backup/**` (`sql-template-params`, `route-moves`, `user-rules-lock`, `admin-change-log-writer`, `dated-rates-d1`): allow-list entries as needed, no rule weakened; `signup-ops.test.tsx:171-189` (mock `backup-status`, the order); `ops-digest-alerts.test.ts` (stub the new queries; the all-quiet text); `tenant-notices.test.ts:272`, `seat-sync.test.ts:308` (`BACKUPS_EXPECTED` unset, so no section) |
-| `RESTORE.md` | a "Backups beyond Neon" section: what runs, where results show, that a lost project or account is item 3c's button (until 3c, contact the lead), and the 29-day remedy (F35). **Per Q4,** the "Monthly restore drill" section is removed (if the founder accepts) |
+| `RESTORE.md` | a "Backups beyond Neon" section: what runs, where results show, that a lost project or account is item 3c's button (until 3c, contact the lead), and the 29-day remedy (F35). **Per Q4 (accepted),** the "Monthly restore drill" section is removed, and §3.4's reference with it |
 | `TENANT-DELETION.md` | the S3 paragraph (§6.8) |
 | `PRODUCTION-DEPLOY.md` | new Phase "Backups (AWS)" (§12); Phase 15 row; Operations (what the digest shows); env table `BACKUPS_EXPECTED`; "if `ENCRYPTION_KEY` or the control-plane URL changes, update SSM"; "approve a backup deploy that comes with a backup-table migration only after `deploy-prod`"; bootstrap updates in the console; the deploy-state runbook lines |
 
