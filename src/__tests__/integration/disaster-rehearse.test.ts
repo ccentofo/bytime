@@ -121,9 +121,11 @@ describe.skipIf(!CAN_RUN)('R6: rehearse', () => {
 
     it('M67: a canary that answers 200 → fails before any project is created', async () => {
       const t = take();
-      const canary = w.neon.addProject({ name: 'cadenzpoint-recoverable-canary', deleted: true });
+      w.neon.addProject({ name: 'cadenzpoint-recoverable-canary', deleted: true });
+      // Every canary answers 200 here (an earlier test may have left one too: the name lookup may pick either).
+      const canaries = () => new Set([...w.neon.projects.values()].filter((p) => p.name === 'cadenzpoint-recoverable-canary').map((p) => p.id));
       const base = api();
-      const neon: NeonApi = { ...base, async getProject(id) { return id === canary.id ? { found: true, project: { id, name: 'cadenzpoint-recoverable-canary' } } : base.getProject(id); } };
+      const neon: NeonApi = { ...base, async getProject(id) { return canaries().has(id) ? { found: true, project: { id, name: 'cadenzpoint-recoverable-canary' } } : base.getProject(id); } };
       const r = await rehearse([t.id], { neon }, 'canary');
       expect(r.exitCode).toBe(1);
       expect(r.outcome!.results[0].detail).toContain('the canary answers 200');
