@@ -122,6 +122,8 @@ describe.skipIf(!CAN_RUN)('3c fix round 1: the restore task', () => {
   it('M30: an observation of a DIFFERENT original (old_project_id) is never evidence', async () => {
     const t = take();
     endpointGone(t);
+    // No ok backup since (else the observation wouldn't count for that reason instead).
+    await w.cpSql`UPDATE database_backups SET finished_at = now() - interval '20 hours', started_at = now() - interval '20 hours' WHERE tenant_id = ${t.id} AND status = 'ok'`;
     await w.cpSql`INSERT INTO disaster_actions (run_id, tenant_id, kind, status, old_project_id, at) VALUES ('gh-o-1', ${t.id}, 'proof', 'observed-unreachable', 'prj-some-other-original', now() - interval '5 hours')`;
     const r = await press(w, { targets: [t.id], override: 'unreachable-4h' });
     expect(r.outcome!.results[0].result).toBe('observed');

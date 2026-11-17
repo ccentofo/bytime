@@ -264,7 +264,7 @@ describe('fix round 1: runbook and setup lines (FR13, FR15)', () => {
   it('RESTORE.md: "deploys with Skip lost workspaces ticked", the every-release line, and every result the code can report', () => {
     const r = read('RESTORE.md');
     expect((r.match(/\*\*Skip lost workspaces\*\* ticked/g) ?? []).length).toBeGreaterThanOrEqual(3);
-    expect(r).toContain('tick **Skip lost workspaces** on Deploy to\n    Production each time');
+    expect(r).toContain('13. **Every release while a workspace is skipped or awaiting a rebuild:** tick **Skip lost workspaces** on Deploy to\n    Production each time');
     for (const result of ['linked', 'original-exists', 'recoverable', 'observed', 'reachable', 'not-lost', 'reachable-now', 'original-back', 'network-unproven',
       'credentials', 'database-missing', 'deletion-due', 'no-backup', 'retryable', 'changed-meanwhile', 'not-started', 'not-finished', 'proof-failed', 'facts',
       'restore-failed', 'create', 'guard', 'error', 'cleanup-failed']) expect(r, result).toContain(`\`${result}\``);
