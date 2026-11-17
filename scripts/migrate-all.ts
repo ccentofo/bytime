@@ -19,6 +19,10 @@
  * Required env (loaded from .env.local then .env, mirroring scripts/seed-demo.ts):
  *   CONTROL_PLANE_DATABASE_URL, ENCRYPTION_KEY (must match the running app's key)
  *
+ * Backups (feature-plan-database-backups.md §6.4): when anything is pending, the run takes MIGRATE_RUN_LOCK_KEY and waits
+ * (up to 30 min) while a backup run holds its lock, then refuses with nothing changed. --check never waits. The run logic
+ * lives in scripts/lib/migrate-all-run.ts; this file is the CLI.
+ *
  * Exit codes:
  *   Normal mode: 0 if every database is migrated/current (or skipped: a `deleting` tenant whose
  *                database is confirmed deleted), 1 if any tenant (or the control plane) failed.
@@ -37,7 +41,8 @@ import { migrateTenantDatabase, getPendingMigrationCount } from '../src/lib/tena
 import { classifyDatabase } from '../src/lib/tenant/delete-tenant';
 import { databaseExists, neonProjectExists } from '../src/lib/tenant/neon';
 import { printTargetBanner } from './lib/target';
-import { MIGRATABLE_TENANT_STATUSES, isTenantDatabaseConfirmedAbsent, migrateOneTenant, type TenantOutcome } from './lib/tenant-migration';
+import { MIGRATABLE_TENANT_STATUSES, isTenantDatabaseConfirmedAbsent } from './lib/tenant-migration';
+import { runMigrateAll } from './lib/migrate-all-run';
 
 const CONTROL_PLANE_MIGRATIONS_FOLDER = './drizzle/control-plane';
 const TENANT_MIGRATIONS_FOLDER = './drizzle';
@@ -91,49 +96,6 @@ async function withConnectionRetry<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-async function runWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let next = 0;
-  async function worker() {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i]);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
-
-type TenantResult = {
-  slug: string;
-  status: string;
-  outcome: TenantOutcome;
-  detail: string;
-  durationMs: number;
-};
-
-function printTable(rows: TenantResult[]) {
-  const header = ['slug', 'status', 'result', 'duration'];
-  const widths = [
-    Math.max(header[0].length, ...rows.map((r) => r.slug.length)),
-    Math.max(header[1].length, ...rows.map((r) => r.status.length)),
-    Math.max(header[2].length, ...rows.map((r) => `${r.outcome}${r.detail ? `: ${r.detail}` : ''}`.length)),
-    Math.max(header[3].length, ...rows.map((r) => `${r.durationMs}ms`.length)),
-  ];
-  const line = (cols: string[]) => cols.map((c, i) => c.padEnd(widths[i])).join('  |  ');
-  console.log('\n' + line(header));
-  console.log(line(widths.map((w) => '-'.repeat(w))));
-  for (const r of rows) {
-    const result = `${r.outcome}${r.detail ? `: ${r.detail}` : ''}`;
-    console.log(line([r.slug, r.status, result, `${r.durationMs}ms`]));
-  }
-  console.log('');
-}
-
 async function main() {
   printTargetBanner();
   const { check, concurrency, tenant: onlySlug } = parseArgs(process.argv.slice(2));
@@ -147,96 +109,41 @@ async function main() {
     );
   }
 
-  // ---- Control plane -------------------------------------------------------
-  console.log(check ? 'Checking control plane…' : 'Migrating control plane…');
-  let controlPending = 0;
-  try {
-    if (check) {
-      controlPending = await withConnectionRetry(() =>
-        getPendingMigrationCount(controlUrl!, CONTROL_PLANE_MIGRATIONS_FOLDER));
-      console.log(controlPending === 0
-        ? '✓ control plane is current'
-        : `• control plane has ${controlPending} pending migration(s)`);
-    } else {
-      controlPending = await withConnectionRetry(() =>
-        getPendingMigrationCount(controlUrl!, CONTROL_PLANE_MIGRATIONS_FOLDER));
-      await withConnectionRetry(() =>
-        migrateTenantDatabase(controlUrl!, { migrationsFolder: CONTROL_PLANE_MIGRATIONS_FOLDER }));
-      console.log(controlPending > 0 ? '✓ control plane migrated' : '✓ control plane already up-to-date');
+  const listTenants = async () => {
+    const controlSql = postgres(controlUrl!, { max: 1 });
+    try {
+      return await drizzle(controlSql)
+        .select({ slug: tenants.slug, status: tenants.status, dbUrlEncrypted: tenants.dbUrlEncrypted, neonProjectId: tenants.neonProjectId })
+        .from(tenants)
+        .where(inArray(tenants.status, [...MIGRATABLE_TENANT_STATUSES]));
+    } finally {
+      await controlSql.end();
     }
-  } catch (err) {
-    fail(`control plane ${check ? 'check' : 'migration'} failed: ${redact(String((err as Error)?.message ?? err))}`);
-  }
-
-  // ---- Tenants ---------------------------------------------------------------
-  const controlSql = postgres(controlUrl!, { max: 1 });
-  const controlDrizzle = drizzle(controlSql);
-  let tenantRows: Array<{ slug: string; status: string; dbUrlEncrypted: string | null; neonProjectId: string | null }>;
-  try {
-    const where = inArray(tenants.status, [...MIGRATABLE_TENANT_STATUSES]);
-    tenantRows = await controlDrizzle
-      .select({ slug: tenants.slug, status: tenants.status, dbUrlEncrypted: tenants.dbUrlEncrypted, neonProjectId: tenants.neonProjectId })
-      .from(tenants)
-      .where(where);
-  } finally {
-    await controlSql.end();
-  }
-
-  if (onlySlug) {
-    tenantRows = tenantRows.filter((t) => t.slug === onlySlug);
-    if (tenantRows.length === 0) {
-      fail(`No tenant with slug "${onlySlug}" in status (${MIGRATABLE_TENANT_STATUSES.join(', ')}).`);
-    }
-  }
-
-  console.log(`\n${check ? 'Checking' : 'Migrating'} ${tenantRows.length} tenant(s)…`);
-
-  let anyTenantFailed = false;
-  let anyTenantPending = false;
-
-  const deps = {
-    pendingCount: (url: string) => withConnectionRetry(() => getPendingMigrationCount(url, TENANT_MIGRATIONS_FOLDER)),
-    migrate: (url: string) => withConnectionRetry(() => migrateTenantDatabase(url, { migrationsFolder: TENANT_MIGRATIONS_FOLDER })),
-    confirmedAbsent: (t: { slug: string; status: string; neonProjectId: string | null }, url: string) =>
-      isTenantDatabaseConfirmedAbsent(t, url, {
-        classify: (u, row) => classifyDatabase(u, row, { dropSharedDatabase: true }), // existence check only — never drops
-        neonProjectExists,
-        databaseExists,
-        hasNeonKey: Boolean(process.env.NEON_API_KEY),
-      }),
-    redact,
   };
 
-  const results = await runWithConcurrency(tenantRows, concurrency, async (t): Promise<TenantResult> => {
-    const startedAt = Date.now();
-    let url: string;
-    try {
-      // T7: dbUrlEncrypted is only null for a tombstoned ('deleted') tenant — MIGRATABLE_TENANT_STATUSES
-      // never includes 'deleted', so every row reaching here still has one.
-      url = decrypt(t.dbUrlEncrypted!);
-    } catch (err) {
-      anyTenantFailed = true;
-      return { slug: t.slug, status: t.status, outcome: 'FAILED', detail: redact(String((err as Error)?.message ?? err)), durationMs: Date.now() - startedAt };
-    }
-    const { outcome, detail } = await migrateOneTenant(t, url, check, deps);
-    if (outcome === 'FAILED') anyTenantFailed = true;
-    if (outcome === 'pending') anyTenantPending = true;
-    return { slug: t.slug, status: t.status, outcome, detail, durationMs: Date.now() - startedAt };
+  const code = await runMigrateAll({ check, concurrency, onlySlug }, {
+    controlUrl: controlUrl!,
+    log: (l) => console.log(l),
+    error: (l) => console.error(l),
+    redact,
+    controlPending: () => withConnectionRetry(() => getPendingMigrationCount(controlUrl!, CONTROL_PLANE_MIGRATIONS_FOLDER)),
+    migrateControl: () => withConnectionRetry(() => migrateTenantDatabase(controlUrl!, { migrationsFolder: CONTROL_PLANE_MIGRATIONS_FOLDER })),
+    listTenants,
+    decryptUrl: decrypt,
+    tenant: {
+      pendingCount: (url: string) => withConnectionRetry(() => getPendingMigrationCount(url, TENANT_MIGRATIONS_FOLDER)),
+      migrate: (url: string) => withConnectionRetry(() => migrateTenantDatabase(url, { migrationsFolder: TENANT_MIGRATIONS_FOLDER })),
+      confirmedAbsent: (t: { slug: string; status: string; neonProjectId: string | null }, url: string) =>
+        isTenantDatabaseConfirmedAbsent(t, url, {
+          classify: (u, row) => classifyDatabase(u, row, { dropSharedDatabase: true }), // existence check only — never drops
+          neonProjectExists,
+          databaseExists,
+          hasNeonKey: Boolean(process.env.NEON_API_KEY),
+        }),
+      redact,
+    },
   });
-
-  printTable(results);
-
-  if (check) {
-    if (anyTenantFailed) process.exit(1);
-    process.exit(controlPending > 0 || anyTenantPending ? 2 : 0);
-  }
-
-  if (anyTenantFailed) {
-    console.error(`✗ ${results.filter((r) => r.outcome === 'FAILED').length} tenant(s) failed to migrate.`);
-    process.exit(1);
-  }
-  console.log('✓ All databases migrated successfully.');
-  process.exit(0);
+  process.exit(code);
 }
 
 main().catch((err) => {
