@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { encrypt } from '@/lib/encryption';
 import { CAN_RUN, createWorld, press, makeGone, tenantRow, actions, type World, type WorldTenant } from './disaster-harness';
 import { neonApi, NeonApiError, type NeonApi } from '../../../scripts/backup/lib/neon-api';
 import { DUMP_SUFFIX, sidecarKeyFor, targetPrefix } from '../../../scripts/backup/lib/keys';
@@ -85,13 +86,14 @@ describe.skipIf(!CAN_RUN)('3c fix round 1: the restore task', () => {
   it('FR11: a schema note whose connections hang (a server closing during startup) is skipped with a log line; the run and the email still complete', async () => {
     const t = take();
     makeGone(w, t);
-    const others = w.tenants.filter((x) => x.id !== t.id);
-    const saved = others.map((o) => [o.host, w.neon.hostMap[o.host]] as const);
+    // Fix round 2: after the commit EVERY mapped host closes (not only the original tenants' hosts): a tenant rebuilt
+    // earlier in this file sits on a new host, and liveTenants' uuid order would otherwise decide what the note sees.
+    const saved = Object.entries(w.neon.hostMap);
     const t0 = Date.now();
     try {
       const r = await press(w, { targets: [t.id] }, {
         timing: { recoverablePolls: 2, recoverablePollMs: 5, overrideGapMs: 5, lockRetryMs: 20, cleanupRetryMs: 20, schemaNoteTimeoutSeconds: 1 },
-        hooks: { afterCommit: async () => { for (const o of others) mapHost(o.host, { host: closer.host, port: closer.port }); } },
+        hooks: { afterCommit: async () => { for (const h of Object.keys(w.neon.hostMap)) w.neon.hostMap[h] = { host: closer.host, port: closer.port }; } },
       });
       expect(r.exitCode, r.logs.join('\n')).toBe(0);
       expect(r.outcome!.results[0].detail).toBe('no other workspace was reachable: run Deploy to Production now to be safe');
@@ -99,7 +101,7 @@ describe.skipIf(!CAN_RUN)('3c fix round 1: the restore task', () => {
       expect(r.emails).toHaveLength(1);
       expect(Date.now() - t0).toBeLessThan(30_000);
     } finally {
-      for (const [h, m] of saved) mapHost(h, m);
+      for (const [h, m] of saved) w.neon.hostMap[h] = m;
     }
   }, 60_000);
 
@@ -145,19 +147,30 @@ describe.skipIf(!CAN_RUN)('3c fix round 1: the restore task', () => {
   }, 60_000);
 
   it('M18/M19: network first: no other database answers (every workspace and the control plane) → network-unproven, on the gone path and on the override path', async () => {
-    const proxyTarget = { host: w.proxy.host, port: w.proxy.port };
-    const deadMap: Record<string, { host: string; port: number }> = { ...w.neon.hostMap, localhost: proxyTarget, '127.0.0.1': proxyTarget };
-    for (const o of w.tenants) { deadMap[o.host] = proxyTarget; deadMap[poolerOf(o.host)] = proxyTarget; }
-    const g = take();
-    makeGone(w, g);
-    const r1 = await press(w, { targets: [g.id] }, { hostMap: deadMap });
-    expect(r1.outcome!.results[0].result).toBe('network-unproven');
-    expect((await actions(w, g.id)).map((a) => a.status)).toEqual(['refused:network-unproven']);
-    const o = take();
-    endpointGone(o);
-    const r2 = await press(w, { targets: [o.id], override: 'unreachable-4h' }, { hostMap: deadMap });
-    expect(r2.outcome!.results[0].result).toBe('network-unproven');
-    expect((await actions(w, o.id)).map((a) => a.status)).toEqual(['refused:network-unproven']); // no observation recorded
+    // Fix round 2: the dead network is a connector that refuses everything (test-only seam), so it can't depend on which
+    // rows the control plane holds. The guard below proves it: a live workspace that WOULD connect (a fresh fake host on
+    // the local server, sorted first by id: the shape of a tenant rebuilt earlier in this file) is present throughout.
+    const foreignHost = fakeHost();
+    mapHost(foreignHost, local());
+    const srv = new URL(process.env.CONTROL_PLANE_DATABASE_URL!);
+    const FOREIGN = '00000000-0000-4000-8000-0000000000aa';
+    await w.cpSql`INSERT INTO tenants (id, slug, name, status, db_url_encrypted, neon_project_id) VALUES
+      (${FOREIGN}, 'test-dr-fr-foreign', 'F', 'active', ${encrypt(`postgres://${srv.username}:${srv.password}@${poolerOf(foreignHost)}${new URL(w.original.url).pathname}`)}, 'prj-foreign')`;
+    const refuseAll = async () => ({ cls: 'socket' as const, code: 'ECONNREFUSED' });
+    try {
+      const g = take();
+      makeGone(w, g);
+      const r1 = await press(w, { targets: [g.id] }, { connector: refuseAll });
+      expect(r1.outcome!.results[0].result).toBe('network-unproven');
+      expect((await actions(w, g.id)).map((a) => a.status)).toEqual(['refused:network-unproven']);
+      const o = take();
+      endpointGone(o);
+      const r2 = await press(w, { targets: [o.id], override: 'unreachable-4h' }, { connector: refuseAll });
+      expect(r2.outcome!.results[0].result).toBe('network-unproven');
+      expect((await actions(w, o.id)).map((a) => a.status)).toEqual(['refused:network-unproven']); // no observation recorded
+    } finally {
+      await w.cpSql`UPDATE tenants SET status = 'deleted', db_url_encrypted = NULL WHERE id = ${FOREIGN}`;
+    }
   }, 60_000);
 
   it('M31/M32: the gone re-check refuses a recoverable original, a served address, and an unproven address check', async () => {

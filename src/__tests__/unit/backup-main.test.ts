@@ -119,9 +119,14 @@ describe('3c: the disaster command (feature-plan-disaster-restore.md §6.3, §6.
     }
   });
 
-  it('main.ts never passes the test-only hostMap (impact analysis §4, D10)', async () => {
+  it('main.ts never passes the test-only hostMap or connector (impact analysis §4, D10; fix round 2)', async () => {
     const { readFileSync } = await import('node:fs');
     const src = readFileSync(new URL('../../../scripts/backup/main.ts', import.meta.url), 'utf8');
     expect(src).not.toMatch(/hostMap/);
+    expect(src).not.toMatch(/\bconnector\b/); // fix round 2: the test-only connection seam, likewise
+    // Neither seam is ever read from the environment.
+    for (const f of ['scripts/backup/disaster.ts', 'scripts/backup/disaster-workspace.ts', 'scripts/backup/disaster-steps.ts']) {
+      expect(readFileSync(new URL(`../../../${f}`, import.meta.url), 'utf8'), f).not.toMatch(/env\.(HOST_MAP|CONNECTOR)|process\.env\.[A-Z_]*(HOST|CONNECT)/);
+    }
   });
 });

@@ -37,8 +37,15 @@ describe.skipIf(!cpReady)('the daily disaster sync (real SQL)', () => {
   const act = (o: Partial<typeof disasterActions.$inferInsert>) => controlDb.insert(disasterActions).values({ runId: `${PREFIX}r`, kind: 'proof', status: 'gone', at: new Date(), ...o } as typeof disasterActions.$inferInsert);
   const open = async (kind: string) => (await controlDb.select({ dedupKey: opsAlerts.dedupKey, detail: opsAlerts.detail }).from(opsAlerts)
     .where(and(eq(opsAlerts.kind, kind), gte(opsAlerts.firstSeenAt, start)))).filter(Boolean);
-  const openUnresolved = async (kind: string) => (await controlDb.select({ dedupKey: opsAlerts.dedupKey, resolvedAt: opsAlerts.resolvedAt }).from(opsAlerts)
-    .where(and(eq(opsAlerts.kind, kind), gte(opsAlerts.firstSeenAt, start)))).filter((x) => x.resolvedAt === null).map((x) => x.dedupKey);
+  /**
+   * Open alerts of a kind that this file's rows produce (fix round 2: never another suite's or session's alert on the
+   * shared control plane): keyed by one of its tenants or projects, or the global '' key for the kinds it raises on purpose.
+   */
+  const openUnresolved = async (kind: string) => (await controlDb.select({ dedupKey: opsAlerts.dedupKey, resolvedAt: opsAlerts.resolvedAt, detail: opsAlerts.detail }).from(opsAlerts)
+    .where(and(eq(opsAlerts.kind, kind), gte(opsAlerts.firstSeenAt, start)))).filter((x) => x.resolvedAt === null)
+    .filter((x) => x.dedupKey === '' || [a?.id, b?.id].includes(x.dedupKey) || OWN_KEYS.includes(x.dedupKey))
+    .filter((x) => kind !== 'disaster-run-stuck' || JSON.stringify(x.detail ?? {}).includes(PREFIX))
+    .map((x) => x.dedupKey);
 
   /** Alert ids open or closed before this file started: never deleted. */
   let preexisting = new Set<string>();

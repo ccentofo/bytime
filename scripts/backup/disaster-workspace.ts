@@ -30,7 +30,7 @@ export function stepEnv(ctx: RunContext, projectKind: StepEnv['projectKind']): S
   return {
     args: ctx.args, deps: ctx.deps, cp: ctx.cp, cpId: controlPlaneId(ctx.deps.controlPlaneUrl),
     cpDirectHost: directHost(new URL(toDirectConnectionUrl(ctx.deps.controlPlaneUrl)).hostname),
-    neon: ctx.deps.neon, connect: pgConnector({ hostMap: ctx.deps.hostMap }), now: ctx.now, sleep: ctx.sleep, log: ctx.log,
+    neon: ctx.deps.neon, connect: ctx.deps.connector ?? pgConnector({ hostMap: ctx.deps.hostMap }), now: ctx.now, sleep: ctx.sleep, log: ctx.log,
     signal: ctx.signal, projectKind, timing: { ...DEFAULT_TIMING, ...ctx.deps.timing },
   };
 }

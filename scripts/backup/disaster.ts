@@ -141,6 +141,12 @@ export interface DisasterDeps {
   concurrency?: number;
   /** Tests only: shorter polls and gaps (the 10-second recoverable polls, the 60-second override gap, retries). */
   timing?: Partial<{ recoverablePolls: number; recoverablePollMs: number; overrideGapMs: number; lockRetryMs: number; cleanupRetryMs: number; cleanupLockTimeout: string; cleanupBudgetMs: number; deletedEndpointWaitMs: number; deletedEndpointPollMs: number; schemaNoteTimeoutSeconds: number }>;
+  /**
+   * Tests only: replaces every connection probe (network-first, proof (d), the override classifier, the rehearsal's
+   * deleted-endpoint check) so a test's "dead network" can't depend on which rows its control plane holds (fix round 2).
+   * Never read from the environment; main.ts never sets it (a static test asserts both, like `hostMap`).
+   */
+  connector?: import('./lib/classify-endpoint').Connector;
   /** Tests only, in-process: fake Neon hosts → the local server (impact analysis §4, D10). main.ts never sets it. */
   hostMap?: HostMap;
   /** Tests only: seams for the termination and concurrency cases (R9). */
