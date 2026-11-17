@@ -18,6 +18,7 @@ export const MIGRATABLE_TENANT_STATUSES = ['active', 'suspended', 'provisioning'
 export type TenantOutcome = 'migrated' | 'up-to-date' | 'pending' | 'current' | 'skipped' | 'FAILED';
 
 export interface TenantToMigrate {
+  id: string;
   slug: string;
   status: string;
   neonProjectId: string | null;
@@ -32,6 +33,12 @@ export interface TenantMigrationDeps {
    */
   confirmedAbsent(tenant: TenantToMigrate, url: string): Promise<AbsenceCheck>;
   redact(message: string): string;
+  /**
+   * feature-plan-disaster-restore.md §6.0 (`--skip-lost`): called only when the FIRST call, `pendingCount`, throws (any
+   * error). A result replaces the outcome (`skipped`, or `FAILED` when the skip couldn't be recorded); null falls through
+   * to the normal handling. A failure in `migrate()` itself never reaches it.
+   */
+  onCountFailed?(tenant: TenantToMigrate, err: unknown): Promise<{ outcome: TenantOutcome; detail: string } | null>;
 }
 
 export async function migrateOneTenant(
@@ -41,11 +48,17 @@ export async function migrateOneTenant(
   deps: TenantMigrationDeps,
 ): Promise<{ outcome: TenantOutcome; detail: string }> {
   try {
-    if (check) {
-      const pending = await deps.pendingCount(url);
-      return { outcome: pending > 0 ? 'pending' : 'current', detail: pending > 0 ? `${pending} migration(s)` : '' };
+    let pendingBefore: number;
+    try {
+      pendingBefore = await deps.pendingCount(url);
+    } catch (countErr) {
+      const skip = deps.onCountFailed ? await deps.onCountFailed(tenant, countErr) : null;
+      if (skip) return skip;
+      throw countErr;
     }
-    const pendingBefore = await deps.pendingCount(url);
+    if (check) {
+      return { outcome: pendingBefore > 0 ? 'pending' : 'current', detail: pendingBefore > 0 ? `${pendingBefore} migration(s)` : '' };
+    }
     await deps.migrate(url);
     return { outcome: pendingBefore > 0 ? 'migrated' : 'up-to-date', detail: '' };
   } catch (err) {

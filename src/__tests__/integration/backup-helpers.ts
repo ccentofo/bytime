@@ -16,9 +16,10 @@ export function adminUrl(): string {
   return withDatabase(SERVER_URL, 'postgres');
 }
 
-const SCRATCH_RE = /^bkt_(cp|t)_[a-z0-9]{8}$/;
+/** `bkt_dr_*`: the disaster suites' fake-Neon project databases (feature-plan-disaster-restore.md §11). */
+const SCRATCH_RE = /^bkt_(cp|t|dr)_[a-z0-9]{8}$/;
 
-export async function createScratchDb(kind: 'cp' | 't', opts: { migrateControlPlane?: boolean; tenantSchema?: boolean } = {}): Promise<{ name: string; url: string }> {
+export async function createScratchDb(kind: 'cp' | 't' | 'dr', opts: { migrateControlPlane?: boolean; tenantSchema?: boolean } = {}): Promise<{ name: string; url: string }> {
   const name = `bkt_${kind}_${randomToken(8)}`;
   const admin = postgres(adminUrl(), { max: 1 });
   try {
@@ -56,7 +57,17 @@ export async function dropScratchDb(name: string): Promise<void> {
   if (!SCRATCH_RE.test(name)) throw new Error(`refusing to drop ${name}`);
   const admin = postgres(adminUrl(), { max: 1, onnotice: () => {} });
   try {
-    await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+    // 42501 "permission denied to terminate process": an autovacuum worker (superuser-owned) on a freshly migrated
+    // database; it finishes within seconds, so retry briefly.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+        break;
+      } catch (e) {
+        if ((e as { code?: string }).code !== '42501' || attempt >= 10) throw e;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
   } finally {
     await admin.end({ timeout: 5 });
   }
