@@ -6,10 +6,18 @@
 import { Readable } from 'node:stream';
 import { randomBytes } from 'node:crypto';
 import type { BackupReader, BackupStore, ListedObject } from '../../../scripts/backup/lib/store';
-import { rawAesKeyringFactory } from '../../../scripts/backup/lib/crypto';
+import { encryptBuffer, encryptionContext, rawAesKeyringFactory } from '../../../scripts/backup/lib/crypto';
 
 export const TEST_AES_KEY = Buffer.alloc(32, 7);
 export const testKeyring = () => rawAesKeyringFactory(TEST_AES_KEY);
+
+/**
+ * The SDK's RAW AES keyring (tests only; production uses the KMS keyring) wraps the very first data key of a process so
+ * that it can't be unwrapped ("unencryptedDataKey has not been set" on decrypt); every later message is fine. Found while
+ * building S10 (deterministic: 1 of 200, always the first). The KMS keyring path doesn't have it (U12 "the KMS keyring
+ * decrypts its first message", with a fake KMS client). So every suite using these fakes burns that first wrap here.
+ */
+await encryptBuffer(testKeyring(), encryptionContext({ cp: 'prime', kind: 'dump', target: 'tenant', id: 'prime', key: 'prime' }), Buffer.from('prime'));
 
 export const s3Denied = () => Object.assign(new Error('Access Denied'), { name: 'AccessDenied', $metadata: { httpStatusCode: 403 } });
 export const headForbidden = () => Object.assign(new Error('Forbidden'), { name: 'Forbidden', $metadata: { httpStatusCode: 403 } });

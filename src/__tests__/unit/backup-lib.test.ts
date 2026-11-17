@@ -376,6 +376,35 @@ describe('U12: the header check gates pg_restore', () => {
     expect(calls).toEqual([process.execPath]);
   });
 
+  it('the KMS keyring (strict, key ARN; a fake in-process KMS client, no AWS) decrypts its FIRST message and passes the context to KMS', async () => {
+    const { createCipheriv, createDecipheriv, randomBytes } = await import('node:crypto');
+    const { buildClient, CommitmentPolicy, KmsKeyringNode } = await import('@aws-crypto/client-node');
+    const ARN = 'arn:aws:kms:us-east-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab';
+    const master = randomBytes(32);
+    const aad = (c: Record<string, string>) => Buffer.from(JSON.stringify(Object.entries(c).sort()));
+    const seen: Array<Record<string, string>> = [];
+    const kms = {
+      generateDataKey: async ({ NumberOfBytes, EncryptionContext }: { NumberOfBytes: number; EncryptionContext: Record<string, string> }) => {
+        seen.push(EncryptionContext);
+        const pt = randomBytes(NumberOfBytes); const iv = randomBytes(12); const c = createCipheriv('aes-256-gcm', master, iv); c.setAAD(aad(EncryptionContext));
+        const ct = Buffer.concat([c.update(pt), c.final()]);
+        return { KeyId: ARN, Plaintext: pt, CiphertextBlob: Buffer.concat([iv, c.getAuthTag(), ct]) };
+      },
+      encrypt: async () => { throw new Error('unused'); },
+      decrypt: async ({ CiphertextBlob, EncryptionContext }: { CiphertextBlob: Uint8Array; EncryptionContext: Record<string, string> }) => {
+        const b = Buffer.from(CiphertextBlob); const d = createDecipheriv('aes-256-gcm', master, b.subarray(0, 12)); d.setAAD(aad(EncryptionContext)); d.setAuthTag(b.subarray(12, 28));
+        return { KeyId: ARN, Plaintext: Buffer.concat([d.update(b.subarray(28)), d.final()]) };
+      },
+    };
+    const clientProvider = () => kms as never;
+    const factory = { encrypt: () => new KmsKeyringNode({ generatorKeyId: ARN, clientProvider }), decrypt: () => new KmsKeyringNode({ keyIds: [ARN], clientProvider }) };
+    const ctx = encryptionContext({ cp: 'c', kind: 'dump', target: 'tenant', id: 't', key: 'k' });
+    const { ciphertext } = await encryptBuffer(factory, ctx, Buffer.alloc(1500, 4));
+    expect((await decryptBuffer(factory, ciphertext, ctx)).length).toBe(1500);
+    expect(seen[0]).toEqual(ctx);
+    expect(buildClient(CommitmentPolicy.REQUIRE_ENCRYPT_REQUIRE_DECRYPT)).toBeTruthy();
+  });
+
   it('the sidecar decrypt requires the exact context', async () => {
     const ctx = encryptionContext({ cp: 'c', kind: 'manifest', target: 'tenant', id: 't', key: 'k' });
     const { ciphertext } = await encryptBuffer(testKeyring(), ctx, Buffer.from('{"v":1}'));
