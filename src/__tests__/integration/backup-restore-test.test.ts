@@ -292,6 +292,8 @@ describe.skipIf(!SERVER_URL || !PG_DUMP || !PG_RESTORE)('restore test', () => {
         ['guard failed', { status: 'fail', planned: null, detail: 'guard: pooled host' }, true],
         ['completed pass', { status: 'pass', planned: 1, results: ['PASS'] }, false],
         ['completed fail', { status: 'fail', planned: 1, results: ['FAIL:pg_restore'] }, false],
+        ['fail with fewer results than planned (FR10)', { status: 'fail', planned: 2, results: ['FAIL:pg_restore'] }, true],
+        ['abandoned after every result (FR3)', { status: 'fail', planned: 1, results: ['PASS'], detail: 'abandoned' }, true],
       ];
       for (const [name, prior, reruns] of cases) {
         await cpSql`DELETE FROM restore_test_runs`;

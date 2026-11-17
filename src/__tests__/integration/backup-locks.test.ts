@@ -204,6 +204,42 @@ describe.skipIf(!SERVER_URL)('S21: the ordered locks', () => {
       expect(migrated.length).toBe(3);
     });
 
+    it('FR6: a deleting tenant whose database is confirmed gone doesn\'t force the handshake; counts are reused (one per tenant)', async () => {
+      const backup = (await acquireLock(cp.url, BACKUP_LOCK_KEY))!;
+      try {
+        const { d, logs } = deps({ pending: 0, waitMaxMs: 60_000 });
+        d.listTenants = async () => [...rows, { slug: 'test-lc-gone', status: 'deleting', dbUrlEncrypted: 'postgres://fake/gone', neonProjectId: 'p' }];
+        const count = vi.fn(async (url: string) => { if (url.endsWith('/gone')) throw Object.assign(new Error('does not exist'), { code: '3D000' }); return 0; });
+        d.tenant.pendingCount = count;
+        d.tenant.confirmedAbsent = vi.fn(async () => ({ absent: true as const }));
+        const connect = vi.fn(() => { throw new Error('the lock must not be touched'); });
+        d.lock = { ...d.lock, connect };
+        const t0 = Date.now();
+        expect(await runMigrateAll({ check: false, concurrency: 2 }, d)).toBe(0);
+        expect(Date.now() - t0).toBeLessThan(3_000);
+        expect(connect).not.toHaveBeenCalled();
+        expect(logs).not.toContain('Waiting for the backup run to finish…');
+        // 3 live tenants counted once each (reused), the gone one twice (step 0, then its own migration attempt).
+        expect(count.mock.calls.filter((c) => !String(c[0]).endsWith('/gone')).length).toBe(3);
+      } finally {
+        await backup.release();
+      }
+    });
+
+    it('FR6: an unconfirmed failing count still runs the handshake', async () => {
+      const backup = (await acquireLock(cp.url, BACKUP_LOCK_KEY))!;
+      try {
+        const { d, logs } = deps({ pending: 0 });
+        d.listTenants = async () => [...rows, { slug: 'test-lc-gone', status: 'deleting', dbUrlEncrypted: 'postgres://fake/gone', neonProjectId: 'p' }];
+        d.tenant.pendingCount = vi.fn(async (url: string) => { if (url.endsWith('/gone')) throw new Error('ECONNREFUSED'); return 0; });
+        d.tenant.confirmedAbsent = vi.fn(async () => ({ absent: false as const }));
+        expect(await runMigrateAll({ check: false, concurrency: 2 }, d)).toBe(1);
+        expect(logs).toContain('Waiting for the backup run to finish…');
+      } finally {
+        await backup.release();
+      }
+    });
+
     it('lock loss mid-run → stops before the next database, exit 1, no uncaught exception', async () => {
       const t = trackUncaught();
       try {

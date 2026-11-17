@@ -898,22 +898,28 @@ this order**. Steps 6–11 are also the **staging rehearsal**, a production-read
    staging's control plane: `ok` rows with `region = us-east-1`; an audit row with `Enabled`,
    `alert_email_confirmed = true`, `protection_drift` and `errors` empty; a `pass` restore-test run; three
    `backup_permission_checks` rows with `ok = true`. Set staging's `BACKUPS_EXPECTED=1` for a day, check the digest's
-   Backups section, then set it back to `0`. The next day, check the 18:17 catch-up's log shows `--if-missing-today`.
+   Backups section, then set it back to `0`. The next day, check the 18:17 catch-up's log shows `--if-missing-today`, and,
+   if the hand-run restore test happened since Monday 00:00 UTC, that the next 08:17 restore-test catch-up exits at once
+   ("a completed restore test ran since Monday").
 10. **"Can't" checks** (Tuesday–Sunday, 15:00–17:00 UTC, no job runs then), in AWS CloudShell, commands from the lead:
-    `head-object` on a backup → 403; `kms decrypt` of the stored data key → AccessDeniedException;
+    `head-object` on a backup → 403 (HeadObject transfers no data, so nothing is downloaded even if the deny were
+    missing); `kms decrypt` of the stored data key → AccessDeniedException;
     `schedule-key-deletion --pending-window-in-days 7` → AccessDeniedException (if it ever succeeds:
     `cancel-key-deletion`, then `enable-key`, and stop); `disable-key` then `enable-key` at once → an immediate alert
-    email; `put-bucket-versioning … Enabled` → AccessDenied and an immediate email; `set-alarm-state` on
+    email; `put-bucket-versioning … Enabled` → AccessDenied and an immediate email (CloudTrail records denied calls too; if no
+    email arrives, the lead investigates before go-live); `set-alarm-state` on
     `cadenzpoint-backup-dlq` → an alarm email.
-11. **Switch to production** (15:00–17:00 UTC): replace the first two SSM parameters with **production's** values.
-    Staging's rehearsal backups expire on their own.
+11. **Switch to production** (15:00–17:00 UTC, when no task runs, so none starts between the two edits): replace the
+    first two SSM parameters with **production's** values. The next scheduled runs back up production into its own
+    `<cp>` prefix. Staging's rehearsal backups expire on their own.
 12. **Vercel:** once production's first `backup` and `audit` tasks have stopped with exit code 0 (ECS console) and
-    the backup log shows a `BACKUP … control-plane …` line, set production `BACKUPS_EXPECTED=1` and redeploy.
+    the backup log shows a `BACKUP … control-plane …` line, set production `BACKUPS_EXPECTED=1` and redeploy. The alerts'
+    anchors (no missed-run or stale alert before the first control-plane backup) prevent a go-live burst of alerts.
 
 **Runbook**
 
-- **`ENCRYPTION_KEY` or the control-plane password changes:** update the matching SSM parameter (step 6 names) as
-  part of the same change. The restore-test URL too, if that project's password changes. Forgetting it alerts at the
+- **`ENCRYPTION_KEY` or the control-plane URL (or password) changes:** update the matching SSM parameter (step 6 names) as
+  part of the same change. The restore-test URL too, if that project's URL (or password) changes. Forgetting it alerts at the
   next backup (`backup-failed` / `backup-missed-run`).
 - **A backup-system deploy that comes with a backup-table migration:** approve it in GitHub **only after**
   `deploy-prod` has applied the migration.
@@ -941,7 +947,7 @@ this order**. Steps 6–11 are also the **staging rehearsal**, a production-read
 | `backup-missed-run`, `backup-failed`, `backup-stale` | A workspace or the control plane wasn't backed up. The 18:17 catch-up retries failures; if it persists, send the lead the alert detail (stage and label only, never data). |
 | `backup-key-state`, `backup-protection-drift`, `backup-bucket-drift`, `backup-alert-email` | A protection changed. If you didn't change it, treat it as an incident; tell the lead at once. |
 | `restore-test-failed`, `restore-test-missed`, `restore-test-coverage` | A backup didn't restore, or the weekly test isn't running. Send the lead the detail. |
-| `backup-run-slow`, `restore-test-slow`, `backup-target-slow` | Growth: the lead raises the concurrency or task size (a stack parameter change you approve). |
+| `backup-run-slow`, `restore-test-slow`, `backup-target-slow` | Growth: the lead changes the concurrency, deadline or task size value in `ops/aws/backup-stack.yml`; it applies on the next backup-system deploy you approve. |
 | `backup-permission-drift` | A role can do something it must not. Treat as an incident; tell the lead. |
 | `backup-old-objects` | See RESTORE.md, "Backups beyond Neon". |
 | `restore-test-leftover`, `backup-audit-missed`, `backup-audit-error`, `backup-region`, `backup-check-failed` | Send the lead the detail. |

@@ -97,8 +97,8 @@ interface ResultRow {
 
 type Sql = postgres.Sql;
 
-/** A run that "completed" (§6.7): planned set, and pass, or fail with every planned result and none stopped/not reached. */
-export const COMPLETED_RUN_SQL = `r.planned IS NOT NULL AND (r.status = 'pass' OR (r.status = 'fail'
+/** A run that "completed" (§6.7): planned set, not abandoned, and pass, or fail with every planned result and none stopped/not reached. */
+export const COMPLETED_RUN_SQL = `r.planned IS NOT NULL AND r.detail IS DISTINCT FROM 'abandoned' AND (r.status = 'pass' OR (r.status = 'fail'
   AND (SELECT count(*) FROM restore_test_results x WHERE x.test_run_id = r.id) = r.planned
   AND NOT EXISTS (SELECT 1 FROM restore_test_results x WHERE x.test_run_id = r.id AND x.result IN ('FAIL:stopped', 'FAIL:not-reached'))))`;
 

@@ -164,6 +164,66 @@ describe('U3: backupFindings', () => {
     expect(kinds(f)).toEqual([]);
   });
 
+  it('FR2: the permission-drift detail names the role and the probes not refused, never the stored data key', () => {
+    const f = healthy();
+    f.permission.set('backup', { latestOk: false, latestAt: ago(H), latestDetail: { head_own_object: 'denied', delete_object: 'ALLOWED', kms_decrypt: 'error:InternalError', kms_reencrypt: 'skipped', edk: 'AQIDAHh…secret', edk_context: { cp: 'abc', id: 'tenant-uuid', key: 'v1/abc/tenant/x' } }, firstAt: ago(30 * D) });
+    const finding = backupFindings(f, NOW).find((x) => x.kind === 'backup-permission-drift')!;
+    expect(finding.detail).toEqual({ role: 'backup', probes: { delete_object: 'ALLOWED', kms_decrypt: 'error:InternalError' } });
+    expect(JSON.stringify(finding.detail)).not.toMatch(/edk|secret|tenant-uuid|v1\//);
+  });
+
+  it('FR3: an abandoned run is never completed, even with every planned result', () => {
+    const f = healthy();
+    f.restoreRuns = [run({ id: 'ab', status: 'fail', detail: 'abandoned', planned: 2, resultCount: 2, startedAt: ago(2 * D), finishedAt: ago(D) })];
+    expect(kinds(f)).toContain('restore-test-missed');
+    expect(kinds(f)).not.toContain('restore-test-failed');
+  });
+
+  it('FR10: a fail run with fewer results than planned (none stopped) is not completed', () => {
+    const f = healthy();
+    f.restoreRuns = [run({ id: 'short', status: 'fail', planned: 3, resultCount: 2, stoppedOrNotReached: false, detail: 'x: FAIL:pg_restore', startedAt: ago(2 * D), finishedAt: ago(D) })];
+    expect(kinds(f)).toContain('restore-test-missed');
+    expect(kinds(f)).not.toContain('restore-test-failed');
+  });
+
+  it('FR10: the anchors (stale at first control-plane ok + 36 h; audit-missed needs a first audit)', () => {
+    const f = healthy();
+    f.firstOk.set(null, ago(35 * H));
+    f.latestOk.set(null, row({ finishedAt: ago(35 * H) }));
+    f.latestOk.delete('t-1');
+    expect(kinds(f)).not.toContain('backup-stale');
+    f.firstOk.set(null, ago(37 * H));
+    expect(kinds(f)).toContain('backup-stale');
+    const g = healthy();
+    g.firstAuditAt = null;
+    g.latestAudit = null;
+    expect(kinds(g)).not.toContain('backup-audit-missed');
+  });
+
+  it('FR10: just under each threshold → nothing (26 h, 36 h, 12 h audit, 8 days, 12 h running)', () => {
+    const M = 60_000;
+    const a = healthy(); a.latestOk.set(null, row({ finishedAt: ago(26 * H - M) }));
+    expect(kinds(a)).not.toContain('backup-missed-run');
+    const b = healthy(); b.latestOk.set('t-1', row({ tenantId: 't-1', finishedAt: ago(36 * H - M) }));
+    expect(kinds(b)).not.toContain('backup-stale');
+    const c = healthy(); c.latestAudit!.runAt = ago(12 * H - M);
+    expect(kinds(c)).not.toContain('backup-audit-missed');
+    const d = healthy(); d.restoreRuns = [run({ startedAt: ago(8 * D), finishedAt: ago(8 * D - M) })];
+    expect(kinds(d)).not.toContain('restore-test-missed');
+    const e = healthy(); e.restoreRuns = [run({ id: 'r2', status: 'running', planned: 2, resultCount: 0, startedAt: ago(12 * H - M), finishedAt: null }), run()];
+    expect(kinds(e)).not.toContain('restore-test-failed');
+  });
+
+  it('FR10: coverage needs an eligible workspace (an ok backup in the last 36 h)', () => {
+    const f = healthy();
+    f.firstOk.set('t-1', ago(14 * W));
+    f.lastPass.delete('t-1');
+    f.latestOk.set('t-1', row({ tenantId: 't-1', finishedAt: ago(37 * H) }));
+    expect(kinds(f)).not.toContain('restore-test-coverage');
+    f.latestOk.set('t-1', row({ tenantId: 't-1', finishedAt: ago(35 * H) }));
+    expect(kinds(f)).toContain('restore-test-coverage');
+  });
+
   it('lock-held rows are ignored by the failed rule', () => {
     const f = healthy();
     f.restoreRuns = [run({ id: 'l', status: 'fail', planned: null, detail: 'lock held', startedAt: ago(H), finishedAt: ago(H), resultCount: 0 }), run()];

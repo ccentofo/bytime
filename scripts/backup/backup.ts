@@ -99,6 +99,8 @@ export interface BackupDeps {
     dumpCommand?: (t: TargetRef, args: string[]) => { bin: string; args: string[] };
     /** Tests: the row insert (S5). */
     insertRow?: typeof insertBackupRow;
+    /** Tests: the per-target status re-read (FR5). */
+    readStatus?: typeof tenantStatus;
   };
 }
 
@@ -418,7 +420,20 @@ export async function runBackup(deps: BackupDeps): Promise<{ exitCode: number; o
         await waitForMigration(t.slug);
         if (runAbort.signal.aborted) return notReached(ref0, stopReason());
         if (noNewTargets) return notReached(ref0, 'lock-lost');
-        const status = await tenantStatus(cp, t.id);
+        let status: string | null;
+        try {
+          status = await (deps.hooks?.readStatus ?? tenantStatus)(cp, t.id);
+        } catch (e) {
+          // A transient control-plane error must not reject the pool: this target fails, the others continue.
+          const summary = summaryOf('status-read', e);
+          log(`${t.slug}: failed: ${summary}`);
+          await insertBackupRow(cp, {
+            tenantId: t.id, target: 'tenant', runId: deps.runId, status: 'failed', s3Key: null, bytes: null, sha256: null, rowCounts: null,
+            serverVersion: null, pgDumpVersion: deps.pgDumpVersion, region: null, targetDeadlineMs: cfg.targetDeadlineMs, error: summary,
+            startedAt: now(), finishedAt: now(),
+          }).catch(() => {});
+          return record({ ...ref0, status: 'failed', error: summary });
+        }
         if (status === 'deleting' || status === 'deleted' || status === null) {
           log(`${t.slug}: skipped (${status ?? 'gone'})`);
           return record({ ...ref0, status: 'skipped' });

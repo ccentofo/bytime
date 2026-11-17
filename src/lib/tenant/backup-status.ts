@@ -92,12 +92,27 @@ export interface BackupFacts {
 
 /** A run that "completed" (§6.7): planned set, and pass, or fail with every planned result and none stopped/not reached. */
 export function isCompleted(r: RestoreRunFact): boolean {
-  if (r.planned === null || r.finishedAt === null) return false;
+  if (r.planned === null || r.finishedAt === null || r.detail === 'abandoned') return false;
   if (r.status === 'pass') return true;
   return r.status === 'fail' && r.resultCount === r.planned && !r.stoppedOrNotReached;
 }
 const isLockHeld = (r: RestoreRunFact) => r.detail === 'lock held';
 const isGuardFailure = (r: RestoreRunFact) => r.planned === null && r.status === 'fail' && (r.detail ?? '').startsWith('guard:');
+
+/**
+ * The probes that weren't refused, for an alert detail: probe name → result only. Never the stored `edk` / `edk_context`
+ * (the digest prints details; §6.9: slugs, stages, counts and times only).
+ */
+export function failedProbes(detail: unknown): Record<string, string> {
+  if (!detail || typeof detail !== 'object') return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(detail as Record<string, unknown>)) {
+    if (k.startsWith('edk')) continue;
+    if (v === 'denied' || v === 'skipped') continue;
+    out[k] = typeof v === 'string' && /^(ALLOWED|error:[A-Za-z0-9_.-]{1,60})$/.test(v) ? v : 'unexpected';
+  }
+  return out;
+}
 
 /** The pure findings (§6.9's table), checked at the cron's `now`. */
 export function backupFindings(f: BackupFacts, now: Date): Finding[] {
@@ -171,7 +186,7 @@ export function backupFindings(f: BackupFacts, now: Date): Finding[] {
     const backupSlow = ok && ok.finishedAt.getTime() - ok.startedAt.getTime() > ok.targetDeadlineMs / 2;
     const res = f.latestResult.get(w.id);
     const restoreSlow = res && res.durationMs > res.targetDeadlineMs / 2;
-    if (backupSlow || restoreSlow) add('backup-target-slow', w.id, { slug: w.slug, backup: Boolean(backupSlow), restore: Boolean(restoreSlow) });
+    if (backupSlow || restoreSlow) add('backup-target-slow', w.id, { slug: w.slug, backup: Boolean(backupSlow), restore: Boolean(restoreSlow), remedy: 'raise the deadline or task size in ops/aws/backup-stack.yml' });
   }
   // leftovers / crashed tests
   const recent = runs.filter((r) => t - r.startedAt.getTime() <= 7 * DAY || (r.finishedAt && t - r.finishedAt.getTime() <= 7 * DAY));
@@ -184,7 +199,7 @@ export function backupFindings(f: BackupFacts, now: Date): Finding[] {
   for (const role of ROLES) {
     const p = f.permission.get(role);
     if (!p) continue;
-    if (!p.latestOk) add('backup-permission-drift', null, { role, probes: p.latestDetail }, role);
+    if (!p.latestOk) add('backup-permission-drift', null, { role, probes: failedProbes(p.latestDetail) }, role);
     else if (t - p.latestAt.getTime() > 8 * DAY) add('backup-permission-drift', null, { role, lastChecked: p.latestAt.toISOString() }, role);
   }
   // region

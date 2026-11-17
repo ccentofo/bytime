@@ -64,13 +64,23 @@ export function labelFor(err: unknown, stderr?: string): ErrorLabel {
   return 'other';
 }
 
-/** `COPY <schema.table>` → the identifier. Lower-case snake identifiers only (ours); `COPY failed …` is not a table. */
+/**
+ * The table of a failed COPY, from the two forms Postgres tools write at the start of a line, and nowhere else (a
+ * customer value such as `"COPY johnsmith …"` inside a quoted message is never taken):
+ *  - `CONTEXT:  COPY <table>, line N…` (the server's context line, as pg_restore prints it);
+ *  - `Command was: COPY <table> (…) TO stdout;` (pg_dump's detail line).
+ * Lower-case snake identifiers only (ours).
+ */
 export function copyTableName(err: unknown, stderr?: string): string | null {
   const t = text(err, stderr);
-  const re = /\bCOPY\s+([a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)?)(?=[\s,(;]|$)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(t)) !== null) {
-    if (!['failed', 'to', 'from'].includes(m[1])) return m[1];
+  const ident = '([a-z_][a-z0-9_]*(?:\\.[a-z_][a-z0-9_]*)?)';
+  const forms = [
+    new RegExp(`^(?:[a-z_]+:\\s+)?(?:detail:\\s+)?CONTEXT:\\s+COPY ${ident},`, 'm'),
+    new RegExp(`^(?:[a-z_]+:\\s+)?(?:detail:\\s+)?Command was: COPY ${ident} `, 'm'),
+  ];
+  for (const re of forms) {
+    const m = re.exec(t);
+    if (m) return m[1];
   }
   return null;
 }

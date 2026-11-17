@@ -84,6 +84,14 @@ describe('U2: summarizeError keeps no customer value, host or user name', () => 
     expect(summarizeError('count', Object.assign(new Error('terminating connection'), { name: 'PostgresError', code: '57P01' }))).toBe('count sqlstate=57P01 label=connection-refused');
   });
 
+  it('FR4: a COPY inside a quoted customer value is never taken as the table', () => {
+    const stderr = 'pg_restore: error: could not execute query: ERROR:  invalid input syntax for type integer: "COPY johnsmith TO x"\nCONTEXT:  COPY timesheet_entries, line 3: "COPY johnsmith"';
+    expect(copyTableName(undefined, stderr)).toBe('timesheet_entries');
+    expect(copyTableName(undefined, 'ERROR:  invalid input syntax for type integer: "COPY johnsmith TO x"')).toBeNull();
+    expect(summarizeError('pg_restore', { exitCode: 1 }, 'ERROR: value "COPY johnsmith, x"')).not.toContain('johnsmith');
+    expect(copyTableName(undefined, 'pg_dump: detail: Command was: COPY public.users (id, email) TO stdout;')).toBe('public.users');
+  });
+
   it('exit code, signal, labels and the COPY table', () => {
     expect(summarizeError('dump', { exitCode: null, signal: 'SIGKILL' })).toBe('dump signal=SIGKILL label=killed');
     expect(labelFor(Object.assign(new Error('User is not authorized to perform kms:Decrypt'), { name: 'AccessDeniedException' }))).toBe('access-denied');
@@ -167,6 +175,14 @@ describe('U7: restore-test target choice', () => {
     expect(targetCount(25, 0)).toBe(3);
     expect(targetCount(25, 5)).toBe(5);
     expect(chooseTargets([], NOW)).toEqual([]);
+  });
+
+  it('FR10: the N OLDEST due dates are chosen; overdue counts from 11 weeks (not 12)', () => {
+    const list = ws(24, (i) => i * 0.25); // distinct due dates, 0 to 5.75 weeks ago
+    const chosen = chooseTargets(list, NOW, () => 0.5);
+    expect(chosen.map((c) => c.slug)).toEqual(['s23', 's22']);
+    const twelve = [...ws(10, () => 1), ...ws(2, () => 11.5).map((w, i) => ({ ...w, tenantId: `o${i}`, slug: `o${i}` }))];
+    expect(chooseTargets(twelve, NOW, () => 0.5).length).toBe(2); // ceil(12/12) = 1, but 2 are over 11 weeks
   });
 
   it('targets come back in due-date order; ties random', () => {
@@ -317,6 +333,9 @@ describe('U4: the dump end gate', () => {
     expect(bucket.completedStreams).toEqual([]);
     expect(bucket.objects.size).toBe(0);
     expect(bucket.abortedStreams).toEqual(['k1']);
+    // FR10: the upload body itself is destroyed with the error (defence in depth beyond abort()).
+    await new Promise((r) => setImmediate(r));
+    expect(bucket.failedStreams).toContain('k1');
   });
 
   it('an encrypt-stream failure (keyring throws) → rejected before the body ends', async () => {
@@ -403,6 +422,21 @@ describe('U12: the header check gates pg_restore', () => {
     expect((await decryptBuffer(factory, ciphertext, ctx)).length).toBe(1500);
     expect(seen[0]).toEqual(ctx);
     expect(buildClient(CommitmentPolicy.REQUIRE_ENCRYPT_REQUIRE_DECRYPT)).toBeTruthy();
+  });
+
+  it('FR10: the exact key set: an extra context key is refused (FAIL:context, no spawn)', async () => {
+    const bucket = new FakeBucket();
+    const ctx = encryptionContext({ cp: 'c', kind: 'dump', target: 'tenant', id: 't', key: 'v1/c/tenant/t/k' });
+    const { ciphertext } = await encryptBuffer(testKeyring(), { ...ctx, extra: 'x' }, Buffer.alloc(5000, 3));
+    bucket.objects.set('obj', { bytes: ciphertext, lastModified: new Date() });
+    const calls: string[] = [];
+    const spawn: SpawnFn = (cmd, args, opts) => { calls.push(cmd); return nodeSpawn(cmd, args, opts); };
+    await expect(restoreObject({
+      reader: bucket, key: 'obj', expectedContext: ctx, expectedSha256: createHash('sha256').update(ciphertext).digest('hex'),
+      factory: testKeyring(), spawn, bin: process.execPath, args: ['-e', 'process.stdin.resume()'], env: {}, signal: new AbortController().signal,
+    })).rejects.toMatchObject({ summary: 'context' });
+    expect(calls).toEqual([]);
+    expect(contextMatches({ ...ctx, extra: 'x' }, ctx)).toBe(false);
   });
 
   it('the sidecar decrypt requires the exact context', async () => {

@@ -8,6 +8,10 @@
 # - The protection documents (bucket, key and topic policies, both rules' patterns, every role's trust and policy) must
 #   equal scripts/backup/lib/expected-policies.ts, which the daily audit compares with what AWS returns (U6 checks).
 # - Schedules depend on every other resource, so a failed first create rolls back before any task can run.
+# - The tuning values (concurrency, per-target deadlines, task CPU/memory, the monthly budget) are CONSTANTS here, not
+#   parameters: `cloudformation deploy` keeps a parameter's previous value unless it is passed, so a changed default would
+#   never reach the live stack. Change the value in this file; the next approved deploy applies it. The only parameters
+#   are ImageUri and AlertEmail, and deploy.sh passes both on every deploy (U6 asserts exactly these two).
 AWSTemplateFormatVersion: '2010-09-09'
 Description: CadenzPoint backups - bucket, KMS key, container tasks, schedules, alerting, budget
 
@@ -20,33 +24,6 @@ Parameters:
     Type: String
     NoEcho: true
     Description: The founder's alert email (from the aws-backups environment secret)
-  MonthlyBudgetUsd:
-    Type: Number
-    Default: 10
-  BackupConcurrency:
-    Type: Number
-    Default: 3
-  BackupTargetDeadlineMinutes:
-    Type: Number
-    Default: 30
-  RestoreTestConcurrency:
-    Type: Number
-    Default: 2
-  RestoreTestTargetDeadlineMinutes:
-    Type: Number
-    Default: 120
-  BackupTaskCpu:
-    Type: String
-    Default: '2048'
-  BackupTaskMemory:
-    Type: String
-    Default: '4096'
-  RestoreTestTaskCpu:
-    Type: String
-    Default: '2048'
-  RestoreTestTaskMemory:
-    Type: String
-    Default: '4096'
 
 Resources:
   # ---- the key and the bucket ------------------------------------------------------------------------------------
@@ -718,10 +695,8 @@ Resources:
     Type: AWS::ECS::TaskDefinition
     Properties:
       Family: cadenzpoint-backup-backup
-      Cpu:
-        Ref: BackupTaskCpu
-      Memory:
-        Ref: BackupTaskMemory
+      Cpu: '2048'
+      Memory: '4096'
       NetworkMode: awsvpc
       RequiresCompatibilities:
         - FARGATE
@@ -754,11 +729,9 @@ Resources:
             - Name: BACKUP_PG_DUMP_BIN
               Value: /usr/lib/postgresql/16/bin/pg_dump
             - Name: BACKUP_CONCURRENCY
-              Value:
-                Ref: BackupConcurrency
+              Value: '3'
             - Name: BACKUP_TARGET_DEADLINE_MINUTES
-              Value:
-                Ref: BackupTargetDeadlineMinutes
+              Value: '30'
           Secrets:
             - Name: CONTROL_PLANE_DATABASE_URL
               ValueFrom:
@@ -778,10 +751,8 @@ Resources:
     Type: AWS::ECS::TaskDefinition
     Properties:
       Family: cadenzpoint-backup-restore-test
-      Cpu:
-        Ref: RestoreTestTaskCpu
-      Memory:
-        Ref: RestoreTestTaskMemory
+      Cpu: '2048'
+      Memory: '4096'
       NetworkMode: awsvpc
       RequiresCompatibilities:
         - FARGATE
@@ -817,13 +788,11 @@ Resources:
             - Name: BACKUP_PG_RESTORE_BIN
               Value: /usr/lib/postgresql/16/bin/pg_restore
             - Name: RESTORE_TEST_CONCURRENCY
-              Value:
-                Ref: RestoreTestConcurrency
+              Value: '2'
             - Name: RESTORE_TEST_DEADLINE_HOURS
               Value: '6'
             - Name: RESTORE_TEST_TARGET_DEADLINE_MINUTES
-              Value:
-                Ref: RestoreTestTargetDeadlineMinutes
+              Value: '120'
           Secrets:
             - Name: CONTROL_PLANE_DATABASE_URL
               ValueFrom:
@@ -1066,8 +1035,7 @@ Resources:
         BudgetType: COST
         TimeUnit: MONTHLY
         BudgetLimit:
-          Amount:
-            Ref: MonthlyBudgetUsd
+          Amount: 10
           Unit: USD
         CostTypes:
           IncludeCredit: false

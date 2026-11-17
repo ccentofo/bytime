@@ -5,6 +5,11 @@ import { and, eq, gte, inArray, isNull, like } from 'drizzle-orm';
  * feature-plan-database-backups.md §11 S9: syncBackupAlerts(now, filter) with BACKUPS_EXPECTED=1 raises every §6.9
  * finding and resolves it; `0` syncs nothing and resolves. Uses the app's control plane (G2 allows S9/U9/U10), with
  * `test-lc-*` tenants and `test-s9-` run ids only, and cleans up after itself.
+ *
+ * FR11 (documented, not scoped): GLOBAL backup alerts have no tenant to filter by, so the sync here resolves every open
+ * global backup alert, and the cleanup deletes global backup alerts first seen after this file started. This suite runs
+ * only against a developer or CI control plane, which never holds real backup alerts (production's live in Neon and
+ * are never reachable from tests: no test reads a remote database).
  */
 import { controlDb } from '@/db/control-plane';
 import { backupAudits, backupPermissionChecks, databaseBackups, opsAlerts, restoreTestResults, restoreTestRuns } from '@/db/control-plane/schema';
@@ -17,6 +22,7 @@ const PREFIX = 'test-s9-';
 
 describe.skipIf(!cpReady)('S9: the backup alert sync', () => {
   const start = new Date();
+  const extraScope = { id: '' };
   let a: TenantRow;
   let b: TenantRow;
   const now = () => new Date();
@@ -50,7 +56,7 @@ describe.skipIf(!cpReady)('S9: the backup alert sync', () => {
   const filter = () => ({ tenantIds: [a.id, b.id], runIdPrefix: PREFIX });
   const openKinds = async () => (await controlDb.select({ kind: opsAlerts.kind, scope: opsAlerts.scope, dedupKey: opsAlerts.dedupKey }).from(opsAlerts)
     .where(and(isNull(opsAlerts.resolvedAt), inArray(opsAlerts.kind, [...FINDING_KINDS]), gte(opsAlerts.lastSeenAt, start))))
-    .filter((x) => x.scope === 'global' || x.scope === a.id || x.scope === b.id);
+    .filter((x) => x.scope === 'global' || x.scope === a.id || x.scope === b.id || x.scope === extraScope.id);
 
   it('raises every finding from a bad state', async () => {
     vi.stubEnv('BACKUPS_EXPECTED', '1');
@@ -116,5 +122,65 @@ describe.skipIf(!cpReady)('S9: the backup alert sync', () => {
     vi.stubEnv('BACKUPS_EXPECTED', '0');
     expect(await syncBackupAlerts(now(), filter())).toEqual({ synced: false, findings: 0 });
     expect(await openKinds()).toEqual([]);
+  });
+
+  describe('FR10: the facts read through the database', () => {
+    let c: TenantRow;
+    beforeAll(async () => {
+      c = await makeTenant({ slug: `test-lc-s9c-${Date.now() % 100000}`, status: 'active' });
+      extraScope.id = c.id;
+      await setTenant(c.id, { createdAt: ago(60 * D) });
+    });
+
+    const restoreAt = async (testedAgo: number, durationMs: number) => {
+      const [run] = await controlDb.insert(restoreTestRuns).values({ runId: `${PREFIX}win-${testedAgo}`, startedAt: ago(testedAgo + H), finishedAt: ago(testedAgo), status: 'pass', planned: 2, deadlineMs: 6 * H, targetDeadlineMs: 2 * H }).returning();
+      await controlDb.insert(restoreTestResults).values([
+        { testRunId: run.id, runId: run.runId, target: 'control-plane', result: 'PASS', durationMs: 1000, testedAt: ago(testedAgo) },
+        { testRunId: run.id, runId: run.runId, target: 'tenant', tenantId: c.id, result: 'PASS', durationMs, testedAt: ago(testedAgo) },
+      ]);
+      return run.id;
+    };
+
+    it('the restore half of backup-target-slow looks back 14 days only', async () => {
+      vi.stubEnv('BACKUPS_EXPECTED', '1');
+      await backup({ runId: `${PREFIX}c-ok`, tenantId: c.id, startedAt: ago(H + 60_000), finishedAt: ago(H) });
+      const old = await restoreAt(15 * D, 61 * 60_000);
+      await syncBackupAlerts(now(), { tenantIds: [c.id], runIdPrefix: PREFIX });
+      expect((await openKinds()).filter((x) => x.scope === c.id).map((x) => x.kind)).not.toContain('backup-target-slow');
+      await controlDb.delete(restoreTestRuns).where(eq(restoreTestRuns.id, old));
+      await restoreAt(13 * D, 61 * 60_000);
+      await syncBackupAlerts(now(), { tenantIds: [c.id], runIdPrefix: PREFIX });
+      expect((await openKinds()).filter((x) => x.scope === c.id).map((x) => x.kind)).toContain('backup-target-slow');
+    });
+
+    it('alerts of a workspace that is no longer live are resolved ("workspace no longer live")', async () => {
+      vi.stubEnv('BACKUPS_EXPECTED', '1');
+      expect((await openKinds()).some((x) => x.scope === c.id)).toBe(true);
+      await setTenant(c.id, { status: 'deleting' });
+      await syncBackupAlerts(now(), { tenantIds: [c.id], runIdPrefix: PREFIX });
+      expect((await openKinds()).some((x) => x.scope === c.id)).toBe(false);
+      const [resolved] = await controlDb.select({ note: opsAlerts.resolutionNote }).from(opsAlerts).where(and(eq(opsAlerts.scope, c.id), eq(opsAlerts.kind, 'backup-target-slow')));
+      expect(resolved.note).toBe('workspace no longer live');
+      await setTenant(c.id, { status: 'active' });
+    });
+
+    it('the digest: 26 h freshness, and the "last restore test" line from completed runs only', async () => {
+      vi.stubEnv('BACKUPS_EXPECTED', '1');
+      // Only this file's rows can make the lines deterministic: the digest reads everything, so assert relative facts.
+      await backup({ runId: `${PREFIX}c-fresh`, tenantId: c.id, startedAt: ago(27 * H + 60_000), finishedAt: ago(27 * H) });
+      await controlDb.delete(databaseBackups).where(and(eq(databaseBackups.tenantId, c.id), eq(databaseBackups.runId, `${PREFIX}c-ok`)));
+      const before = (await backupDigest(now(), { BACKUPS_EXPECTED: '1' })).lines[0];
+      await backup({ runId: `${PREFIX}c-fresh2`, tenantId: c.id, startedAt: ago(25 * H + 60_000), finishedAt: ago(25 * H) });
+      const after = (await backupDigest(now(), { BACKUPS_EXPECTED: '1' })).lines[0];
+      const fresh = (l: string) => Number(/^(\d+) of/.exec(l)![1]);
+      expect(fresh(after)).toBe(fresh(before) + 1);
+      // A newer running run and a newer guard failure don't replace the last completed run in the line.
+      await controlDb.insert(restoreTestRuns).values([
+        { runId: `${PREFIX}rt-running`, startedAt: ago(10 * 60_000), status: 'running', planned: 3, deadlineMs: 6 * H, targetDeadlineMs: 2 * H },
+        { runId: `${PREFIX}rt-guard2`, startedAt: ago(5 * 60_000), finishedAt: ago(5 * 60_000), status: 'fail', deadlineMs: 6 * H, targetDeadlineMs: 2 * H, detail: 'guard: pooled host' },
+      ]);
+      const line = (await backupDigest(now(), { BACKUPS_EXPECTED: '1' })).lines[1];
+      expect(line).toMatch(/: pass, control plane \+ 1 workspaces\.$/);
+    });
   });
 });

@@ -82,18 +82,33 @@ function printTable(log: (l: string) => void, rows: TenantResult[]) {
   log('');
 }
 
-/** Step 0: true when anything is pending or any count can't be read. */
-async function anythingPending(deps: MigrateAllDeps, controlPending: number, rows: MigrateTenantRow[]): Promise<boolean> {
-  if (controlPending > 0) return true;
-  for (const t of rows) {
+/**
+ * Step 0: true when anything is pending or any count can't be read (fail towards waiting). Counts run with the run's
+ * concurrency and are kept in `counts` (by URL) so the migration pass reuses them instead of counting twice. A
+ * `deleting` tenant whose database is CONFIRMED gone (the existing absence check) is not pending: its count can't be
+ * read, and an app-only deploy must not wait on it.
+ */
+async function anythingPending(deps: MigrateAllDeps, controlPending: number, rows: MigrateTenantRow[], concurrency: number, counts: Map<string, number>): Promise<boolean> {
+  let pending = controlPending > 0;
+  await runWithConcurrency(rows, concurrency, async (t) => {
+    if (!t.dbUrlEncrypted) return;
+    let url: string;
     try {
-      if (!t.dbUrlEncrypted) continue;
-      if ((await deps.tenant.pendingCount(deps.decryptUrl(t.dbUrlEncrypted))) > 0) return true;
+      url = deps.decryptUrl(t.dbUrlEncrypted);
     } catch {
-      return true; // fail towards waiting
+      pending = true;
+      return;
     }
-  }
-  return false;
+    try {
+      const n = await deps.tenant.pendingCount(url);
+      counts.set(url, n);
+      if (n > 0) pending = true;
+    } catch {
+      if (t.status === 'deleting' && (await deps.tenant.confirmedAbsent(t, url)).absent) return;
+      pending = true;
+    }
+  });
+  return pending;
 }
 
 /**
@@ -110,7 +125,14 @@ async function takeMigrateLock(deps: MigrateAllDeps): Promise<HeldLock | null> {
     for (;;) {
       const lock = await acquireLock(deps.controlUrl, MIGRATE_RUN_LOCK_KEY, { wait: true, timing: o.timing, connect: o.connect });
       if (!lock) throw new Error('MIGRATE_RUN lock not granted');
-      if (!(await isAdvisoryLockHeld(probe, BACKUP_LOCK_KEY))) return lock;
+      let backupRunning: boolean;
+      try {
+        backupRunning = await isAdvisoryLockHeld(probe, BACKUP_LOCK_KEY);
+      } catch (err) {
+        await lock.release(); // never leak MIGRATE_RUN when the check fails
+        throw err;
+      }
+      if (!backupRunning) return lock;
       await lock.release();
       const remaining = maxMs - (now() - start);
       if (remaining <= 0) return null;
@@ -160,9 +182,10 @@ export async function runMigrateAll(opts: MigrateAllOptions, deps: MigrateAllDep
 
   let lock: HeldLock | null = null;
   let lockLost = false;
+  const counts = new Map<string, number>();
   if (!check) {
     const scope = tenantRows ? (onlySlug ? tenantRows.filter((t) => t.slug === onlySlug) : tenantRows) : [];
-    if (earlyListFailed || (await anythingPending(deps, controlPending, scope))) {
+    if (earlyListFailed || (await anythingPending(deps, controlPending, scope, concurrency, counts))) {
       try {
         lock = await takeMigrateLock(deps);
       } catch (err) {
@@ -203,6 +226,15 @@ export async function runMigrateAll(opts: MigrateAllOptions, deps: MigrateAllDep
       }
     }
     const tenantRowsToRun = rows;
+    // Reuse step 0's counts (each once): the migration pass doesn't count a tenant twice.
+    const tenantDeps = {
+      ...deps.tenant,
+      pendingCount: async (url: string) => {
+        const n = counts.get(url);
+        if (n !== undefined) { counts.delete(url); return n; }
+        return deps.tenant.pendingCount(url);
+      },
+    };
 
     // ---- Tenants -------------------------------------------------------------
     deps.log(`\n${check ? 'Checking' : 'Migrating'} ${tenantRowsToRun.length} tenant(s)…`);
@@ -222,7 +254,7 @@ export async function runMigrateAll(opts: MigrateAllOptions, deps: MigrateAllDep
         anyTenantFailed = true;
         return { slug: t.slug, status: t.status, outcome: 'FAILED', detail: deps.redact(String((err as Error)?.message ?? err)), durationMs: Date.now() - startedAt };
       }
-      const { outcome, detail } = await migrateOneTenant(t, url, check, deps.tenant);
+      const { outcome, detail } = await migrateOneTenant(t, url, check, tenantDeps);
       if (outcome === 'FAILED') anyTenantFailed = true;
       if (outcome === 'pending') anyTenantPending = true;
       return { slug: t.slug, status: t.status, outcome, detail, durationMs: Date.now() - startedAt };

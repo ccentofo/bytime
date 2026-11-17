@@ -131,14 +131,16 @@ export async function acquireLock(url: string, key: number, opts: AcquireOptions
     onLost(cb) { if (lost) cb(); else listeners.push(cb); },
     async release() {
       if (releasing) return;
+      // Set first: a close during the unlock query must not fire lock-lost (and start a re-take nobody releases).
+      releasing = true;
       if (hb.timer) clearInterval(hb.timer);
-      if (!lost && !closed) {
+      const usable = !lost && !closed;
+      if (usable) {
         try {
           await withTimeout(Promise.resolve(reserved`SELECT pg_advisory_unlock(${key})`), 5_000, () => new Error('unlock timeout'));
         } catch { /* the session ends below, which releases the lock anyway */ }
       }
-      releasing = true;
-      if (!lost && !closed) reserved.release();
+      if (usable && !closed) reserved.release();
       await sql.end({ timeout: 5 }).catch(() => {});
     },
   };

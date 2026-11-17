@@ -89,6 +89,10 @@ export async function restoreObject(input: RestoreObjectInput): Promise<void> {
   if (body && !failure) {
     body.on('error', (e: Error) => fail('download', e));
     body.pipe(hashing);
+  } else if (body) {
+    // A stop or deadline fired while GetObject was pending: never leave the late body's socket open.
+    body.on('error', () => {});
+    body.destroy();
   }
 
   try {

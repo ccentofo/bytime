@@ -291,6 +291,27 @@ describe.skipIf(!SERVER_URL)('backup command', () => {
     expect((await rowsOf(full.runId)).some((x) => x.target === 'control-plane')).toBe(true);
   }, 30_000);
 
+  it('FR5: a status re-read that throws fails only that target (`status-read`); the others continue', async () => {
+    const { tenantStatus } = await import('../../../scripts/backup/lib/sql');
+    const d = deps();
+    d.hooks = { ...d.hooks, readStatus: async (sql, id) => { if (id === ids.b) throw Object.assign(new Error('connection terminated'), { name: 'PostgresError', code: '57P01' }); return tenantStatus(sql, id); } };
+    expect((await runBackup(d)).exitCode).toBe(1);
+    const rows = await rowsOf(d.runId);
+    const b = rows.filter((x) => x.tenant_id === ids.b);
+    expect(b.map((x) => x.error)).toEqual(['status-read sqlstate=57P01 label=connection-refused', 'status-read sqlstate=57P01 label=connection-refused']);
+    expect(rows.find((x) => x.tenant_id === ids.a)?.status).toBe('ok');
+    expect(rows.find((x) => x.target === 'control-plane')?.status).toBe('ok');
+  });
+
+  it('FR10: the status is re-read per target: a workspace set to `deleting` during the run is skipped', async () => {
+    const d = deps({ concurrency: 1 });
+    d.hooks = { ...d.hooks, afterCounts: async (t) => { if (t.tenantId === ids.a) await cpSql`UPDATE tenants SET status = 'deleting' WHERE id = ${ids.b}`; } };
+    expect((await runBackup(d)).exitCode).toBe(0);
+    const rows = await rowsOf(d.runId);
+    expect(rows.some((x) => x.tenant_id === ids.b)).toBe(false);
+    expect(d.lines).toContain('test-lc-b: skipped (deleting)');
+  });
+
   it('S18: backup tables missing → exits with "run deploy-prod first"', async () => {
     const bare = await createScratchDb('cp');
     try {

@@ -52,6 +52,19 @@ describe('U6: templates parse, long-form only', () => {
   });
 });
 
+describe('U6: parameters (FR1)', () => {
+  it('the main stack declares exactly ImageUri and AlertEmail, and deploy.sh passes both on every deploy; tuning values are constants', () => {
+    expect(Object.keys(stack.Parameters).sort()).toEqual(['AlertEmail', 'ImageUri']);
+    const deploy = read('scripts/backup/deploy.sh');
+    expect(deploy).toMatch(/--parameter-overrides "ImageUri=\$REPOSITORY_URI@\$digest" "AlertEmail=\$ALERT_EMAIL"/);
+    const env = (logical: string) => Object.fromEntries(((stack.Resources[logical].Properties.ContainerDefinitions as Node[])[0].Environment as Array<{ Name: string; Value: unknown }>).map((e) => [e.Name, e.Value]));
+    expect(env('BackupTaskDefinition')).toMatchObject({ BACKUP_CONCURRENCY: '3', BACKUP_TARGET_DEADLINE_MINUTES: '30' });
+    expect(env('RestoreTestTaskDefinition')).toMatchObject({ RESTORE_TEST_CONCURRENCY: '2', RESTORE_TEST_TARGET_DEADLINE_MINUTES: '120' });
+    expect(stack.Resources.BackupTaskDefinition.Properties).toMatchObject({ Cpu: '2048', Memory: '4096' });
+    expect(((stack.Resources.MonthlyBudget.Properties.Budget as Node).BudgetLimit as Node).Amount).toBe(10);
+  });
+});
+
 describe('U6: the protection documents equal expected-policies.ts (the audit\'s single source)', () => {
   it('bucket, key and topic policies', () => {
     const bp = ofType(stack, 'AWS::S3::BucketPolicy')[0][1];
@@ -239,6 +252,8 @@ describe('U6: the bootstrap stack', () => {
   it('CfnExecRole: manages /cadenzpoint-backup/ roles only; the ECS service-linked role; its ARN is the one the main stack exempts', () => {
     const st = resolve(((boot.Resources.CfnExecRole.Properties.Policies as Node[])[0].PolicyDocument as Node).Statement) as Statement[];
     expect(st.find((s) => s.Sid === 'BackupRolesOnly')!.Resource).toBe(`arn:aws:iam::${ACCT}:role/cadenzpoint-backup/*`);
+    const keyActs = st.find((s) => s.Sid === 'ManageTheBackupKey')!.Action as string[];
+    expect(keyActs).toEqual(expect.arrayContaining(['kms:PutKeyPolicy', 'kms:ScheduleKeyDeletion'])); // FR10: KMS's lockout check needs PutKeyPolicy
     expect(st.find((s) => s.Sid === 'EcsServiceLinkedRole')).toMatchObject({ Action: 'iam:CreateServiceLinkedRole', Condition: { StringEquals: { 'iam:AWSServiceName': 'ecs.amazonaws.com' } } });
     expect(JSON.stringify(st)).not.toMatch(/cadenzpoint-bootstrap/);
     expect(exp.cfnExecRoleArn).toBe(`arn:aws:iam::${ACCT}:role${NAMES.bootstrapPath}${NAMES.cfnExecRole}`);
