@@ -281,7 +281,7 @@ The final checklist will be `PRODUCTION-DEPLOY.md`, Phase "Backups (AWS)". The f
 - a "Backups" section in the daily digest, with the newest backup and the last restore test;
 - alerts there if anything is wrong;
 - an immediate AWS email if anyone tries to delete or disable the backup key, or changes the backup rules, the audit trail or the alerts (a backup-system deploy that changes them also emails; that's expected);
-- a GitHub approval email when the backup code itself changes, which is rare. If that change came with a database update, run `deploy-prod` first, then approve.
+- a GitHub approval email when the backup code itself changes, which is rare. If that change came with a database update, run `deploy-prod` first, then approve. If you reject one, GitHub asks again on later pushes until a deploy succeeds; that's deliberate, so the backup system never falls behind its code.
 
 **One event-driven exception:** if production's `ENCRYPTION_KEY` or the control-plane database password changes, update the matching AWS Parameter Store value the same day (the runbook for that change says so; the next backup alerts if it's missed).
 
