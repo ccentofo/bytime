@@ -9,4 +9,5 @@ ops/aws/backup-stack.yml
 Dockerfile.backup
 .dockerignore
 tsconfig.backup.json
+.npmrc
 .github/workflows/backup-deploy.yml

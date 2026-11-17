@@ -311,6 +311,8 @@ describe('U6: the Dockerfile and the bundle inputs', () => {
     expect(docker).not.toMatch(/--omit[= ]dev|--production\b|NODE_ENV=production/);
     expect(docker).toMatch(/RUN npm run backup:bundle/);
     expect(docker).toMatch(/COPY tsconfig\.backup\.json/);
+    expect(docker).toMatch(/^COPY package\.json package-lock\.json \.npmrc \.\/$/m); // the repo's npm settings (legacy-peer-deps)
+    expect(read('.dockerignore').split('\n').map((l) => l.trim())).not.toContain('.npmrc');
     expect(docker.match(/^FROM .*$/gm)!.every((l) => /@sha256:[0-9a-f]{64}/.test(l))).toBe(true);
     expect(docker).toMatch(/postgresql-client-16/);
     expect(docker).toMatch(/USER node/);
@@ -330,7 +332,7 @@ describe('U6: the Dockerfile and the bundle inputs', () => {
     expect(own.length).toBeGreaterThan(10);
     expect(own.filter((i) => !listed(i))).toEqual([]);
     expect(own.filter((i) => i.startsWith('src/')).sort()).toEqual(['src/lib/encryption.ts', 'src/lib/tenant/backup-locks.ts', 'src/lib/tenant/direct-url.ts']);
-    for (const f of ['tsconfig.backup.json', 'Dockerfile.backup', 'ops/aws/backup-stack.yml', '.github/workflows/backup-deploy.yml']) expect(listed(f), f).toBe(true);
+    for (const f of ['tsconfig.backup.json', '.npmrc', 'Dockerfile.backup', 'ops/aws/backup-stack.yml', '.github/workflows/backup-deploy.yml']) expect(listed(f), f).toBe(true);
     expect(listed('ops/aws/bootstrap.yml')).toBe(false);
     expect(listed('package.json')).toBe(false);
   });
@@ -391,7 +393,7 @@ esac
 
   it('true for a change to each deploy-list entry; false for an unrelated file', () => {
     const base = commits.base;
-    const samples = ['scripts/backup/lib/x.ts', 'src/lib/encryption.ts', 'src/lib/tenant/direct-url.ts', 'src/lib/tenant/backup-locks.ts', 'ops/aws/backup-stack.yml', 'Dockerfile.backup', '.dockerignore', 'tsconfig.backup.json', '.github/workflows/backup-deploy.yml'];
+    const samples = ['scripts/backup/lib/x.ts', 'src/lib/encryption.ts', 'src/lib/tenant/direct-url.ts', 'src/lib/tenant/backup-locks.ts', 'ops/aws/backup-stack.yml', 'Dockerfile.backup', '.dockerignore', 'tsconfig.backup.json', '.npmrc', '.github/workflows/backup-deploy.yml'];
     let prev = base;
     for (const f of samples) {
       const c = commit(`touch ${f}`, f);
