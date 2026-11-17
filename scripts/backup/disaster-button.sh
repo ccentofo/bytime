@@ -53,6 +53,11 @@ if [ "$#" -gt 0 ]; then fail "unknown argument"; fi
 
 # ---- 1. read and mask ------------------------------------------------------------------------------------------------
 : "${GITHUB_EVENT_PATH:?}"
+# A newline or carriage return in any input (possible through the API or gh, not the form) would defeat both the masking
+# and the validation, so it is refused before anything is printed, and the message prints no value (fix round 1, FR6).
+if jq -e '[(.inputs // {})[] | strings | test("[\\r\\n]")] | any' "$GITHUB_EVENT_PATH" >/dev/null; then
+  fail "inputs must be a single line"
+fi
 MODE=$(jq -r '.inputs.mode // ""' "$GITHUB_EVENT_PATH")
 TARGETS=$(jq -r '.inputs.targets // ""' "$GITHUB_EVENT_PATH")
 OVERRIDE=$(jq -r '.inputs.override // "none"' "$GITHUB_EVENT_PATH")

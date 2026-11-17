@@ -265,3 +265,21 @@ describe('D2: parseDisasterArgs (the one argv grammar)', () => {
     expect(taskRunId(now)).toBe('task-20261201T151700Z');
   });
 });
+
+describe('fix round 1: FR6 multi-line inputs', () => {
+  for (const [name, inputs] of [
+    ['a newline in targets (the reproduced input)', ok({ targets: `${A}\nSECOND-LINE-SECRET` })],
+    ['a carriage return in targets', ok({ targets: `${A}\rSECOND-LINE-SECRET` })],
+    ['a trailing newline in confirm', ok({ confirm: 'workspace\n' })],
+    ['a newline in mode', ok({ mode: 'workspace\nSECOND-LINE-SECRET' })],
+  ] as const) {
+    it(`${name} → "refused: inputs must be a single line" before anything is printed; no AWS call`, () => {
+      const r = runStep(inputs);
+      expect(r.status).toBe(1);
+      expect(r.out.trim()).toBe('refused: inputs must be a single line');
+      expect(r.out).not.toContain('SECOND-LINE-SECRET');
+      expect(r.out).not.toContain(A);
+      expect(r.aws).toEqual([]);
+    });
+  }
+});
