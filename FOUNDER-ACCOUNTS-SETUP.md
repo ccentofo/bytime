@@ -279,15 +279,15 @@ The final checklist will be `PRODUCTION-DEPLOY.md`, Phase "Backups (AWS)". The f
 ## Part 6b. The Disaster restore button (after 3c is built; we do this together)
 The checklist is `PRODUCTION-DEPLOY.md`, Phase 13c. About 30 minutes, plus waiting for the `rehearsal` workspace's first backup.
 
-0. **Two checks first.** If either fails, stop and tell me:
-   1. This repository was created before **15 July 2026** and hasn't been renamed or transferred since. (GitHub signs newer repositories' tokens in a different format, which the AWS roles wouldn't accept.)
-   2. In Neon → **Organization → Members → Invite**, the role list offers **Viewer**. (Neon is moving organisations to its new roles gradually; an organisation still on the older ones has no Viewer.)
+0. **Two checks first:**
+   1. This repository was created before **15 July 2026** and hasn't been renamed or transferred since. (GitHub signs newer repositories' tokens in a different format, which the AWS roles wouldn't accept.) If it was, stop and tell me.
+   2. Whether Neon → **Organization → Members → Invite** offers the **Viewer** role. (Neon is moving organisations to its new roles gradually; an organisation still on the older ones has no Viewer.) If it doesn't, use **Member** in step 2.2 for now, and lower `neon-ops@` to Viewer once Neon offers it (your decision of 2026-11-17). Tell me which role you used.
 1. **GitHub environment** `aws-disaster`, exactly like `aws-backups` in Part 6 step 1 (required reviewer: you; "Prevent self-review" unchecked; bypass unchecked; branch rule `main`). No secrets yet. Send me the output of:
    - `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-disaster`
    - `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-disaster/deployment-branch-policies`
 2. **Neon: the `neon-ops@` member (Q1).**
    1. Google Admin: add the alias `neon-ops@cadenzpoint.com` to your user (Part 2.4).
-   2. Neon → **Organization → Members → Invite** → `neon-ops@cadenzpoint.com`, role **Viewer**.
+   2. Neon → **Organization → Members → Invite** → `neon-ops@cadenzpoint.com`, role **Viewer** (or **Member** if Viewer isn't offered: step 0.2).
    3. Accept the invitation from the alias's email, sign in once as it, and protect the login with your security key.
    4. As `neon-ops@`: **Account settings → API keys → Create** (a personal key). Copy it once; it goes straight into AWS in step 3.
    5. Note the **organisation id** (Organization settings → General) and two **project ids** (each project → Settings → General): `cadenzpoint-restore-tests`, and production's control plane.

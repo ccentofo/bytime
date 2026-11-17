@@ -964,19 +964,20 @@ A founder-only button that rebuilds a lost workspace from its newest verified ba
 (RESTORE.md runbook A). Do this after Phase 13b is live. Every click is in
 [`FOUNDER-ACCOUNTS-SETUP.md`](FOUNDER-ACCOUNTS-SETUP.md) Part 6b; this is the checklist, **in this order**.
 
-0. **Check two things first (each a stop-and-tell-the-lead if it fails):**
+0. **Check two things first:**
    - this repository was created before **15 July 2026** and hasn't been renamed or transferred since (GitHub then
-     uses the subject format both backup roles trust);
-   - Neon → **Organization → Members → Invite** offers the **Viewer** role. If it doesn't (an organisation still on
-     Neon's older roles), stop and tell the lead: the key in step 2 depends on it.
+     uses the subject format both backup roles trust). If it was, stop and tell the lead;
+   - whether Neon → **Organization → Members → Invite** offers the **Viewer** role. If it doesn't (an organisation
+     still on Neon's older roles), step 2 invites `neon-ops@` as **Member** for now (Q-D1, decided 2026-11-17), and you
+     lower it to Viewer once Neon offers it. Tell the lead which role you used.
 1. **GitHub:** create the environment `aws-disaster` (Selected branches → `main`; required reviewer → you; "Prevent
    self-review" **off**; "Allow administrators to bypass" **off**). Send the lead the output of
    `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-disaster` and
    `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-disaster/deployment-branch-policies`
    (as for `aws-backups`).
-2. **Neon (Q1):** add the alias `neon-ops@cadenzpoint.com`; invite it to the organisation as **Viewer**; sign in once
-   as it (security key) and create its **personal** API key (Account settings → API keys). Note the organisation id
-   (Organization settings → General).
+2. **Neon (Q1):** add the alias `neon-ops@cadenzpoint.com`; invite it to the organisation as **Viewer** (or **Member**
+   if Viewer isn't offered: step 0); sign in once as it (security key) and create its **personal** API key (Account
+   settings → API keys). Note the organisation id (Organization settings → General).
 3. **AWS Parameter Store** (SecureString each): `/cadenzpoint/backup/neon-api-key` (the step 2 key),
    `/cadenzpoint/backup/neon-org-id`, `/cadenzpoint/backup/restore-test-project-id` (the `cadenzpoint-restore-tests`
    project's id) and `/cadenzpoint/backup/control-plane-project-id` (production's control-plane project id).
