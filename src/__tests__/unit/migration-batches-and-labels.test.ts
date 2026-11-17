@@ -162,12 +162,10 @@ describe('migrations as shipped', () => {
     expect(readFileSync(path.join(ROOT, `drizzle/control-plane/${entry.tag}.sql`), 'utf8')).toContain('ADD COLUMN "import_window_until" timestamp with time zone');
   });
 
-  it('the newest control-plane migration is drizzle-kit generated as 0010 (per-user billing §6.2): columns, the seat table, the legacy plan rewrite', () => {
+  it('control-plane 0010 is drizzle-kit generated (per-user billing §6.2): columns, the seat table, the legacy plan rewrite', () => {
     const journal = JSON.parse(readFileSync(path.join(ROOT, 'drizzle/control-plane/meta/_journal.json'), 'utf8')) as { entries: Array<{ idx: number; tag: string; when: number }> };
-    const last = journal.entries[journal.entries.length - 1];
-    expect(last.idx).toBe(10);
+    const last = journal.entries.find((e) => e.idx === 10)!;
     expect(last.tag).toBe('0010_per_user_billing');
-    expect(last.when).toBe(Math.max(...journal.entries.map((e) => e.when)));
     const sqlText = readFileSync(path.join(ROOT, `drizzle/control-plane/${last.tag}.sql`), 'utf8');
     expect(sqlText).toContain('ALTER TABLE "tenants" ADD COLUMN "plan_interval" varchar(10)');
     expect(sqlText).toContain('ALTER TABLE "tenants" ADD COLUMN "subscription_cancel_at_period_end" boolean DEFAULT false NOT NULL');
@@ -175,5 +173,21 @@ describe('migrations as shipped', () => {
     expect(sqlText).toContain('CREATE TABLE "tenant_seat_billing"');
     expect(sqlText).toMatch(/REFERENCES "public"\."tenants"\("id"\) ON DELETE cascade/);
     expect(sqlText).toContain(`UPDATE "tenants" SET "plan" = 'standard' WHERE "plan" IN ('starter', 'pro');`);
+  });
+
+  it('the newest control-plane migration is drizzle-kit generated as 0011 (database backups §6.3): the five tables, cascades, the unique s3_key', () => {
+    const journal = JSON.parse(readFileSync(path.join(ROOT, 'drizzle/control-plane/meta/_journal.json'), 'utf8')) as { entries: Array<{ idx: number; tag: string; when: number }> };
+    const last = journal.entries[journal.entries.length - 1];
+    expect(last.idx).toBe(11);
+    expect(last.tag).toBe('0011_database_backups');
+    expect(last.when).toBe(Math.max(...journal.entries.map((e) => e.when)));
+    const sqlText = readFileSync(path.join(ROOT, `drizzle/control-plane/${last.tag}.sql`), 'utf8');
+    for (const t of ['database_backups', 'backup_audits', 'restore_test_runs', 'restore_test_results', 'backup_permission_checks']) {
+      expect(sqlText).toContain(`CREATE TABLE "${t}"`);
+    }
+    expect(sqlText).toContain('CREATE UNIQUE INDEX "database_backups_s3_key_unique" ON "database_backups" USING btree ("s3_key") WHERE "database_backups"."s3_key" IS NOT NULL');
+    expect(sqlText).toContain('"swept_test_dbs" integer DEFAULT 0 NOT NULL');
+    expect(sqlText).toMatch(/"backup_id"\) REFERENCES "public"\."database_backups"\("id"\) ON DELETE set null/);
+    expect(sqlText).not.toMatch(/ALTER TABLE "tenants"|DROP |UPDATE "/);
   });
 });

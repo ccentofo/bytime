@@ -78,6 +78,13 @@
       "when": 1794763715959,
       "tag": "0010_per_user_billing",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794884584695,
+      "tag": "0011_database_backups",
+      "breakpoints": true
     }
   ]
 }

@@ -172,6 +172,15 @@ npm run db:migrate:all -- --tenant <slug>
 (`npm run db:migrate:all -- --concurrency 5` to change it). Raise it for a large tenant count if your
 Postgres provider can take the connection burst; lower it if you're hitting connection limits.
 
+**Backups (feature-plan-database-backups.md §6.4).** A migration's `ALTER TABLE` would queue behind a running
+`pg_dump`, and every app query on that table behind the `ALTER`. So when anything is pending, `db:migrate:all` takes
+the migration run lock (`MIGRATE_RUN_LOCK_KEY`, on the control plane's direct host) and checks whether a backup run
+holds its lock. If one does, it prints "Waiting for the backup run to finish…", retries every minute for up to 30
+minutes, and then exits 1 with "A backup run is still active. Re-run deploy-prod later; nothing was changed." The
+backup, in turn, defers each database while a migration runs. `--check` never waits, and a deploy with nothing pending
+(app-only) skips the handshake entirely. Backups start at 06:17 and 18:17 UTC; a deploy *with migrations* is quickest
+outside those runs.
+
 ### Safety net: concurrent migration protection
 
 Both the rollout script and tenant provisioning (`src/lib/tenant/provision.ts`, for brand-new

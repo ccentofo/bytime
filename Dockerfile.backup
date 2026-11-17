@@ -1,0 +1,37 @@
+# syntax=docker/dockerfile:1
+# The backup image (feature-plan-database-backups.md §6.2): one bundle, three commands (backup, audit, restore-test).
+# It runs only in AWS (ECS Fargate, us-east-1). The build compiles code; it never connects to a database and holds no
+# secrets. No npm code runs on the GitHub runner: npm runs only here, in the builder stage, with --ignore-scripts.
+
+# ---- builder: exactly the bundle's inputs (U6 keeps scripts/backup/deploy-paths.txt equal to them) -------------------
+FROM node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS builder
+WORKDIR /build
+# .npmrc carries the repo's npm settings (legacy-peer-deps, fetch retries; no secrets): without it npm ci fails ERESOLVE.
+COPY package.json package-lock.json .npmrc ./
+# Dev dependencies are needed (esbuild, the AWS SDK packages); npm ci installs them by default (U6 checks nothing omits them).
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY tsconfig.backup.json ./
+COPY scripts/backup/ scripts/backup/
+COPY src/lib/encryption.ts src/lib/encryption.ts
+COPY src/lib/tenant/direct-url.ts src/lib/tenant/direct-url.ts
+COPY src/lib/tenant/backup-locks.ts src/lib/tenant/backup-locks.ts
+RUN npm run backup:bundle
+
+# ---- runtime: node + PostgreSQL 16 client tools (PGDG) + the bundle only ------------------------------------------
+FROM node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
+# The PGDG apt signing key is vendored (ops/aws/pgdg-ACCC4CF8.asc, fingerprint
+# B97B 0AFC AA1A 47F0 44F2 44A0 7FCC 7D46 ACCC 4CF8, checked by U6): nothing is downloaded at build time.
+COPY ops/aws/pgdg-ACCC4CF8.asc /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+RUN set -eux; \
+    apt-get -o Acquire::Retries=5 update; \
+    apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates; \
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list; \
+    apt-get -o Acquire::Retries=5 update; \
+    apt-get -o Acquire::Retries=5 install -y --no-install-recommends postgresql-client-16; \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=builder /build/build/backup/backup.cjs /app/backup.cjs
+USER node
+# Build-time smoke test: every module loads and pg_dump / pg_restore are 16.x (default paths, no environment).
+RUN ["node", "/app/backup.cjs", "--self-check"]
+ENTRYPOINT ["node", "/app/backup.cjs"]

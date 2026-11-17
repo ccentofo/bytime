@@ -174,12 +174,15 @@ describe('Neon project quota (LB-D2: alert at 80)', () => {
     vi.doMock('@/lib/tenant/lifecycle-runner', () => ({ runLifecycleCron: async () => ({ results: [], candidates: 3, incomplete: true }) }));
     vi.doMock('@/lib/signup/maintenance', () => ({ runSignupMaintenance: async () => { h.order.push('maintenance'); return {}; } }));
     vi.doMock('@/lib/tenant/ops-digest', () => ({ sendOpsDigest: async () => { h.order.push('digest'); return 'sent'; } }));
+    vi.doMock('@/lib/tenant/backup-status', () => ({ runBackupMonitoring: async () => { h.order.push('backup'); return { synced: false, findings: 0 }; } }));
     vi.doMock('@/db/control-plane/locked', () => ({ withLockedPool: async () => [] }));
     const { GET } = await import('@/app/api/cron/tenant-lifecycle/route');
     const { NextRequest } = await import('next/server');
     const body = await (await GET(new NextRequest('https://cadenzpoint.com/api/cron/tenant-lifecycle'))).json();
     expect(body.incomplete).toBe(true);
-    expect(h.order).toEqual(['maintenance', 'digest']);
+    // feature-plan-database-backups.md §6.9 (U10): the backup step runs between the lifecycle loop and signup maintenance.
+    expect(h.order).toEqual(['backup', 'maintenance', 'digest']);
+    vi.doUnmock('@/lib/tenant/backup-status');
     vi.doUnmock('@/lib/cron/run-cron');
     vi.doUnmock('@/lib/tenant/lifecycle-runner');
     vi.doUnmock('@/lib/signup/maintenance');

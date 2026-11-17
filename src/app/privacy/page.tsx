@@ -40,8 +40,8 @@ export default function PrivacyPage() {
           Timesheet entries and their revision history are kept for as long as your organization subscribes. They
           are never overwritten or deleted during the subscription. When a free trial ends without a subscription,
           or a subscription ends, the workspace becomes read-only for 90 days so administrators can export their
-          data. It is then permanently deleted, after at least 14 days&apos; email notice. Deleted data may remain in
-          backups for up to 30 days. Signup records are deleted 7 days after signup if the email address is never
+          data. It is then permanently deleted, after at least 14 days&apos; email notice. Backups expire automatically
+          within 30 days of being made and are then permanently deleted by our storage provider. Signup records are deleted 7 days after signup if the email address is never
           verified, and otherwise 30 days after the workspace is set up or the signup is abandoned.
         </Text>
 

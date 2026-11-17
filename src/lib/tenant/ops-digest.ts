@@ -9,6 +9,7 @@ import { raiseAlert, resolveAlert } from './lifecycle-store';
 import type { TenantRunResult } from './lifecycle-runner';
 import { cronProblems, readCronRuns, type CronProblem } from '@/lib/cron/heartbeat';
 import { signupsDueForDeletion, waitlistedSignups } from '@/lib/signup/maintenance';
+import { backupDigest } from './backup-status';
 
 /**
  * Founder digest (feature-plan-terms-compliance-fixes.md §4.4, D4): sent to OPS_ALERT_EMAIL by the daily lifecycle
@@ -102,12 +103,14 @@ export async function sendOpsDigest(results: TenantRunResult[], now: Date, incom
   const crons = cronProblems(await readCronRuns(), now);
   const waitlisted = await waitlistedSignups();
   const signupDeletions = await signupsDueForDeletion(now);
+  // feature-plan-database-backups.md §6.9: the Backups section (backupDigest never throws; "could not be read" is news).
+  const backups = await backupDigest(now);
 
   const ready = results.filter((r) => r.readyForDeletion);
   const blocked = results.filter((r) => r.blockedDeletion);
   const hasNews = data.alerts.length > 0 || ready.length > 0 || blocked.length > 0 || data.deleting.length > 0
     || data.stalePending.length > 0 || incomplete || crons.length > 0 || waitlisted.length > 0 || signupDeletions.length > 0
-    || data.corrections.length > 0;
+    || data.corrections.length > 0 || backups.news;
 
   const to = process.env.OPS_ALERT_EMAIL;
   if (!to || !resend) {
@@ -135,6 +138,7 @@ export async function sendOpsDigest(results: TenantRunResult[], now: Date, incom
   section('Deletion blocked by payment activity', blocked.map((r) => `${esc(r.slug)}: ${esc(r.blockedDeletion)}`));
   section('Stuck in "deleting" (abandoned deletion run — resume tenant:delete)', data.deleting.map((d) => `${esc(d.slug)} since ${esc(d.updatedAt.toISOString())}`));
   section('Seat quantities corrected (last 24 h)', correctionLines(data.corrections));
+  section('Backups', backups.lines.map((l) => esc(l)));
   section('Unresolved alerts', data.alerts.map(({ a, slug }) =>
     `${esc(slug ?? a.scope)} — <strong>${esc(a.kind)}</strong>${a.dedupKey ? ` (${esc(a.dedupKey)})` : ''} × ${a.occurrences}, last ${esc(a.lastSeenAt.toISOString())}${a.detail ? ` — ${esc(JSON.stringify(a.detail))}` : ''} [id ${esc(a.id)}]`));
   section('Notices pending more than 24 hours', data.stalePending.map((n) =>

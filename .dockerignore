@@ -1,0 +1,11 @@
+# The backup image's build context (Dockerfile.backup). The Dockerfile copies only the bundle's inputs by name; these
+# exclusions keep secrets and bulk out of the context entirely (feature-plan-database-backups.md §10.1).
+.env*
+**/.env*
+node_modules
+**/node_modules
+.git
+test-data/
+.next
+build
+coverage

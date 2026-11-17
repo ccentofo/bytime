@@ -3,31 +3,16 @@ import path from 'node:path';
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
+import { toDirectConnectionUrl } from './direct-url';
 
 // Constant advisory-lock key shared by every migration path (rollout + provisioning), so a
 // deploy's bulk rollout and a signup provisioning that same tenant can never run migrate()
 // concurrently against the same database. Drizzle's migrator itself takes no lock.
 const MIGRATION_LOCK_KEY = 728_402_113;
 
-/**
- * Stored tenant/control-plane URLs use Neon's POOLED host (`ep-…-pooler.…`) because that's right for
- * the serverless app. But that pooler is PgBouncer in transaction mode, where a session-level
- * advisory lock is NOT held across statements — the migration lock below would silently stop
- * protecting anything. So migrations always connect to the DIRECT host (same name without
- * `-pooler`). Non-Neon URLs (local Postgres, CI) have no `-pooler` label and pass through unchanged.
- */
-export function toDirectConnectionUrl(url: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return url;
-  }
-  const [firstLabel, ...rest] = parsed.hostname.split('.');
-  if (!firstLabel.endsWith('-pooler')) return url;
-  parsed.hostname = [firstLabel.slice(0, -'-pooler'.length), ...rest].join('.');
-  return parsed.toString();
-}
+// toDirectConnectionUrl lives in ./direct-url (no imports, so the backup image can bundle it); re-exported here for the
+// existing callers. Migrations always connect to the DIRECT host: session advisory locks don't hold on Neon's pooler.
+export { toDirectConnectionUrl };
 
 /** Migrate one tenant DB to the latest schema under a session advisory lock, so a deploy
  *  rollout and a signup provisioning the same DB can never run migrate() concurrently. */

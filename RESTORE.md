@@ -67,15 +67,25 @@ way (`MIGRATIONS.md`). Never re-run a broken migration, never edit a migration t
 rewind a tenant database to undo one. The deploy pipeline stops before new code goes live if any tenant fails to
 migrate, and the running code keeps working against the expanded schema (expand/contract).
 
-## Monthly restore drill
+## Backups beyond Neon (feature-plan-database-backups.md)
 
-On a **named throwaway workspace** in staging (e.g. `restore-drill`) — never a demo workspace (acme, globex, initech)
-and never a customer's:
+Neon's 7-day history covers mistakes. Losing a Neon project or the whole Neon account is covered by a separate daily
+backup in AWS us-east-1 (BUSINESS-DECISIONS.md §5). Everything runs on its own; nothing runs on your machine.
 
-1. Record row counts: `SELECT count(*) FROM timesheet_entries;` (and `users`, `contracts`) and note the UTC time T.
-2. Make a change (enter or delete a few hours), wait a few minutes.
-3. Branch the project at T (step 2 of the default path), connect read-only, and confirm the counts match step 1.
-4. Delete the branch. Note the date and result in your ops log.
+- **What runs:** in the backup AWS account, scheduled container tasks: `backup` daily at 06:17 UTC (every workspace,
+  then the control plane; catch-up at 18:17), `audit` daily at 11:17 UTC, and `restore-test` weekly on Mondays at
+  08:17 UTC (catch-up the other days). Backups are encrypted with a KMS key and expire automatically after 25 days.
+- **Where results show:** the daily ops digest's **Backups** section ("N of M workspaces backed up…", "Last restore
+  test …") and its alerts (`backup-*`, `restore-test-*`) under "Unresolved alerts". A change to the backup protections
+  (the key, the bucket policy, the lifecycle rule, the alerting) emails you at once, straight from AWS.
+- **The weekly restore test** restores the control plane and the workspaces due for a test into temporary databases
+  in the dedicated `cadenzpoint-restore-tests` Neon project, checks every table's row count, then deletes them.
+  Every workspace is tested at least once every 13 weeks. This replaces the old monthly manual drill.
+- **A lost workspace project or the whole account:** restoring from these backups into a new Neon project is item
+  **3c** (a founder-pressed button, still to be built). Until 3c exists, contact the lead; don't improvise.
+- **`backup-old-objects` (a backup older than 29 days):** nothing can delete backups by hand, by design. AWS removes
+  expired objects asynchronously and stops billing for them at expiry. If the alert persists past day 30, open an AWS
+  support case (Lifecycle expiration delayed) with the bucket name and the object key from the audit.
 
 ## Not in this runbook
 

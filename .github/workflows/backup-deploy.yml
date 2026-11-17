@@ -1,0 +1,57 @@
+# Backup system deploy (feature-plan-database-backups.md §6.2). Only the `deploy` job can reach AWS (OIDC), and only
+# after the founder approves it in the `aws-backups` environment (main only; required reviewer). Nothing runs, and no
+# approval is requested, until the repository variable AWS_BACKUPS_ENABLED is `true` (the last founder setup step).
+# A deploy is requested only when the backup code or the stack changed since the last successful deploy (changed.sh).
+name: Backup system deploy
+
+on:
+  push:
+    branches: [main]                 # no `paths:` (GitHub's filter reads only the first 300 changed files)
+  workflow_dispatch: {}
+
+permissions: { contents: read }
+
+concurrency: { group: backup-deploy, cancel-in-progress: false, queue: max }   # never drop a pending run
+
+jobs:
+  build:                                # no id-token, no environment, no secrets
+    permissions: { contents: read, deployments: read }   # deployments:read so changed.sh can find the last successful deploy
+    if: github.ref == 'refs/heads/main' && vars.AWS_BACKUPS_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs: { changed: '${{ steps.changed.outputs.changed }}' }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false, fetch-depth: 0 }
+      - id: changed                     # full diff, no file limit; workflow_dispatch always counts as changed
+        run: scripts/backup/changed.sh "${{ github.event_name }}" "${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        env: { GH_TOKEN: '${{ github.token }}' }
+      - if: steps.changed.outputs.changed == 'true'
+        run: docker build -f Dockerfile.backup -t backup:${{ github.sha }} . && docker save backup:${{ github.sha }} -o image.tar
+      - if: steps.changed.outputs.changed == 'true'
+        run: docker run --rm backup:${{ github.sha }} --self-check
+      - if: steps.changed.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: image, path: image.tar, retention-days: 7 }   # an approval can come days later; past 7 days, use "Run workflow" on main (not a re-run)
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' && vars.AWS_BACKUPS_ENABLED == 'true' && needs.build.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    environment: aws-backups            # Selected branches: main; required reviewer: the founder (Q1)
+    timeout-minutes: 30
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: image }
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with: { role-to-assume: '${{ secrets.AWS_DEPLOY_ROLE_ARN }}', aws-region: us-east-1, role-duration-seconds: 3600, mask-aws-account-id: true }
+      - uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+      - run: scripts/backup/deploy.sh   # no npm, no node; bash + docker + aws cli only
+        env:
+          REPOSITORY_URI: ${{ secrets.AWS_BACKUP_REPOSITORY_URI }}   # environment secrets: masked in the public logs
+          ARTIFACTS_BUCKET: ${{ secrets.AWS_ARTIFACTS_BUCKET }}
+          ALERT_EMAIL: ${{ secrets.BACKUP_ALERT_EMAIL }}
+          CFN_EXEC_ROLE_ARN: ${{ secrets.AWS_CFN_EXEC_ROLE_ARN }}

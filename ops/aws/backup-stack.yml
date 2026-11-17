@@ -1,0 +1,1399 @@
+# CadenzPoint backup account: main stack `cadenzpoint-backup` (feature-plan-database-backups.md §6.1), deployed by
+# .github/workflows/backup-deploy.yml through scripts/backup/deploy.sh after the founder approves (environment
+# aws-backups, Q1), with the bootstrap stack's CfnExecRole. One backup stack per account, so physical names are fixed.
+#
+# - Long-form intrinsic functions only (U6 parses this file with a plain YAML parser).
+# - Role grants are in the roles' own policies; the key and bucket policies only DENY, by `aws:PrincipalArn`, with the
+#   ARNs built as strings (no dependency cycle, and no KMS principal-exists check).
+# - The protection documents (bucket, key and topic policies, both rules' patterns, every role's trust and policy) must
+#   equal scripts/backup/lib/expected-policies.ts, which the daily audit compares with what AWS returns (U6 checks).
+# - Schedules depend on every other resource, so a failed first create rolls back before any task can run.
+# - The tuning values (concurrency, per-target deadlines, task CPU/memory, the monthly budget) are CONSTANTS here, not
+#   parameters: `cloudformation deploy` keeps a parameter's previous value unless it is passed, so a changed default would
+#   never reach the live stack. Change the value in this file; the next approved deploy applies it. The only parameters
+#   are ImageUri and AlertEmail, and deploy.sh passes both on every deploy (U6 asserts exactly these two).
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CadenzPoint backups - bucket, KMS key, container tasks, schedules, alerting, budget
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: The backup image by digest (<repository uri>@sha256:<digest>)
+    AllowedPattern: '^[0-9]{12}\.dkr\.ecr\.us-east-1\.amazonaws\.com/cadenzpoint-backup@sha256:[0-9a-f]{64}$'
+  AlertEmail:
+    Type: String
+    NoEcho: true
+    Description: The founder's alert email (from the aws-backups environment secret)
+
+Resources:
+  # ---- the key and the bucket ------------------------------------------------------------------------------------
+  BackupKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: CadenzPoint backups (client-side encryption, AWS Encryption SDK)
+      KeySpec: SYMMETRIC_DEFAULT
+      KeyUsage: ENCRYPT_DECRYPT
+      EnableKeyRotation: true
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AccountRootAdministers
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: '*'
+          - Sid: DenyDecryptExceptRestoreTest
+            Effect: Deny
+            Principal:
+              AWS: '*'
+            Action:
+              - kms:Decrypt
+              - kms:ReEncrypt*
+            Resource: '*'
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-task
+          - Sid: DenyShortDeletionWindow
+            Effect: Deny
+            Principal:
+              AWS: '*'
+            Action: kms:ScheduleKeyDeletion
+            Resource: '*'
+            Condition:
+              NumericLessThan:
+                kms:ScheduleKeyDeletionPendingWindowInDays: '30'
+          - Sid: DenyKeyPolicyChangesExceptDeploy
+            Effect: Deny
+            Principal:
+              AWS: '*'
+            Action: kms:PutKeyPolicy
+            Resource: '*'
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-bootstrap/cadenzpoint-backup-cfn
+
+  BackupKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/cadenzpoint-backup
+      TargetKeyId:
+        Ref: BackupKey
+
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName:
+        Fn::Sub: cadenzpoint-backups-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-v1
+            Status: Enabled
+            Prefix: v1/
+            ExpirationInDays: 25
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+
+  BackupBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: BackupBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}
+              - Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+          - Sid: DenyPutWithoutIfNoneMatch
+            Effect: Deny
+            Principal: '*'
+            Action: s3:PutObject
+            Resource:
+              Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}/*
+            Condition:
+              'Null':
+                s3:if-none-match: 'true'
+              Bool:
+                s3:ObjectCreationOperation: 'true'
+          - Sid: DenyVersioningAndObjectLock
+            Effect: Deny
+            Principal: '*'
+            Action:
+              - s3:PutBucketVersioning
+              - s3:PutBucketObjectLockConfiguration
+            Resource:
+              Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}
+          - Sid: DenyDeletes
+            Effect: Deny
+            Principal: '*'
+            Action: s3:DeleteObject*
+            Resource:
+              Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}/*
+          - Sid: DenyReadsExceptRestoreTest
+            Effect: Deny
+            Principal: '*'
+            Action: s3:GetObject*
+            Resource:
+              Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}/*
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-task
+          - Sid: DenyPolicyAndLifecycleChangesExceptDeploy
+            Effect: Deny
+            Principal: '*'
+            Action:
+              - s3:PutBucketPolicy
+              - s3:DeleteBucketPolicy
+              - s3:PutLifecycleConfiguration
+            Resource:
+              Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-bootstrap/cadenzpoint-backup-cfn
+
+  # ---- network: public subnets, no NAT gateway ---------------------------------------------------------------------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: Vpc
+      InternetGatewayId:
+        Ref: InternetGateway
+
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: Vpc
+      CidrBlock: 10.42.0.0/24
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: ''
+
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: Vpc
+      CidrBlock: 10.42.1.0/24
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: ''
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: Vpc
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId:
+        Ref: PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: InternetGateway
+
+  SubnetARoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: SubnetA
+      RouteTableId:
+        Ref: PublicRouteTable
+
+  SubnetBRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: SubnetB
+      RouteTableId:
+        Ref: PublicRouteTable
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: CadenzPoint backup tasks - egress to HTTPS and Postgres only, no ingress
+      VpcId:
+        Ref: Vpc
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: AWS APIs and ECR
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 0.0.0.0/0
+          Description: Neon Postgres
+
+  # ---- containers --------------------------------------------------------------------------------------------------
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: cadenzpoint-backup
+      CapacityProviders:
+        - FARGATE
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+
+  BackupLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /cadenzpoint/backup/backup
+      RetentionInDays: 30
+
+  AuditLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /cadenzpoint/backup/audit
+      RetentionInDays: 30
+
+  RestoreTestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /cadenzpoint/backup/restore-test
+      RetentionInDays: 30
+
+  # ---- roles (path /cadenzpoint-backup/; every name starts cadenzpoint-backup-) -------------------------------------
+  BackupTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cadenzpoint-backup-backup-task
+      Path: /cadenzpoint-backup/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustEcsTasks
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
+              ArnLike:
+                aws:SourceArn:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:*
+      Policies:
+        - PolicyName: cadenzpoint-backup-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PutBackups
+                Effect: Allow
+                Action: s3:PutObject
+                Resource:
+                  Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}/v1/*
+              - Sid: AbortUploads
+                Effect: Allow
+                Action: s3:AbortMultipartUpload
+                Resource:
+                  Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}/v1/*
+              - Sid: GenerateDataKeys
+                Effect: Allow
+                Action: kms:GenerateDataKey
+                Resource:
+                  Fn::GetAtt: [BackupKey, Arn]
+                Condition:
+                  StringEquals:
+                    kms:EncryptionContext:purpose: cadenzpoint-backup
+
+  RestoreTestTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cadenzpoint-backup-restore-test-task
+      Path: /cadenzpoint-backup/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustEcsTasks
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
+              ArnLike:
+                aws:SourceArn:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:*
+      Policies:
+        - PolicyName: cadenzpoint-backup-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadBackups
+                Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}/v1/*
+              - Sid: ListBackups
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource:
+                  Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}
+                Condition:
+                  StringLike:
+                    s3:prefix: v1/*
+              - Sid: DecryptBackups
+                Effect: Allow
+                Action: kms:Decrypt
+                Resource:
+                  Fn::GetAtt: [BackupKey, Arn]
+                Condition:
+                  StringEquals:
+                    kms:EncryptionContext:purpose: cadenzpoint-backup
+
+  AuditTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cadenzpoint-backup-audit-task
+      Path: /cadenzpoint-backup/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustEcsTasks
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
+              ArnLike:
+                aws:SourceArn:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:*
+      Policies:
+        - PolicyName: cadenzpoint-backup-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ListBackups
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource:
+                  Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}
+                Condition:
+                  StringLike:
+                    s3:prefix: v1/*
+              - Sid: InspectBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketPolicy
+                  - s3:GetBucketVersioning
+                  - s3:GetLifecycleConfiguration
+                  - s3:ListBucketMultipartUploads
+                Resource:
+                  Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}
+              - Sid: InspectKey
+                Effect: Allow
+                Action:
+                  - kms:DescribeKey
+                  - kms:GetKeyPolicy
+                Resource:
+                  Fn::GetAtt: [BackupKey, Arn]
+              - Sid: InspectRules
+                Effect: Allow
+                Action:
+                  - events:DescribeRule
+                  - events:ListTargetsByRule
+                Resource:
+                  - Fn::Sub: arn:aws:events:us-east-1:${AWS::AccountId}:rule/cadenzpoint-backup-protections
+                  - Fn::Sub: arn:aws:events:us-east-1:${AWS::AccountId}:rule/cadenzpoint-backup-roles
+              - Sid: InspectTopic
+                Effect: Allow
+                Action:
+                  - sns:GetTopicAttributes
+                  - sns:ListSubscriptionsByTopic
+                Resource:
+                  Fn::Sub: arn:aws:sns:us-east-1:${AWS::AccountId}:cadenzpoint-backup-alerts
+              - Sid: InspectSubscriptions
+                Effect: Allow
+                Action: sns:GetSubscriptionAttributes
+                Resource:
+                  Fn::Sub: arn:aws:sns:us-east-1:${AWS::AccountId}:cadenzpoint-backup-alerts:*
+              - Sid: InspectTrail
+                Effect: Allow
+                Action: cloudtrail:GetTrailStatus
+                Resource:
+                  Fn::Sub: arn:aws:cloudtrail:us-east-1:${AWS::AccountId}:trail/cadenzpoint-account-trail
+              - Sid: InspectAlarm
+                Effect: Allow
+                Action: cloudwatch:DescribeAlarms
+                Resource:
+                  Fn::Sub: arn:aws:cloudwatch:us-east-1:${AWS::AccountId}:alarm:cadenzpoint-backup-dlq
+              - Sid: InspectRoles
+                Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListRolePolicies
+                Resource:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/*
+
+  BackupExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cadenzpoint-backup-backup-exec
+      Path: /cadenzpoint-backup/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustEcsTasks
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
+              ArnLike:
+                aws:SourceArn:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:*
+      Policies:
+        - PolicyName: cadenzpoint-backup-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PullAuth
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: PullImage
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource:
+                  Fn::Sub: arn:aws:ecr:us-east-1:${AWS::AccountId}:repository/cadenzpoint-backup
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  Fn::Sub: arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/cadenzpoint/backup/backup:*
+              - Sid: ReadParameters
+                Effect: Allow
+                Action: ssm:GetParameters
+                Resource:
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-url
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/encryption-key
+
+  AuditExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cadenzpoint-backup-audit-exec
+      Path: /cadenzpoint-backup/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustEcsTasks
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
+              ArnLike:
+                aws:SourceArn:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:*
+      Policies:
+        - PolicyName: cadenzpoint-backup-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PullAuth
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: PullImage
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource:
+                  Fn::Sub: arn:aws:ecr:us-east-1:${AWS::AccountId}:repository/cadenzpoint-backup
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  Fn::Sub: arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/cadenzpoint/backup/audit:*
+              - Sid: ReadParameters
+                Effect: Allow
+                Action: ssm:GetParameters
+                Resource:
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-url
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/restore-test-url
+
+  RestoreTestExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cadenzpoint-backup-restore-test-exec
+      Path: /cadenzpoint-backup/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustEcsTasks
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
+              ArnLike:
+                aws:SourceArn:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:*
+      Policies:
+        - PolicyName: cadenzpoint-backup-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PullAuth
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: PullImage
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource:
+                  Fn::Sub: arn:aws:ecr:us-east-1:${AWS::AccountId}:repository/cadenzpoint-backup
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  Fn::Sub: arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/cadenzpoint/backup/restore-test:*
+              - Sid: ReadParameters
+                Effect: Allow
+                Action: ssm:GetParameters
+                Resource:
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-url
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/restore-test-url
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cadenzpoint-backup-scheduler
+      Path: /cadenzpoint-backup/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustScheduler
+            Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
+      Policies:
+        - PolicyName: cadenzpoint-backup-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: RunTasks
+                Effect: Allow
+                Action: ecs:RunTask
+                Resource:
+                  - Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-backup:*
+                  - Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-audit:*
+                  - Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-restore-test:*
+              - Sid: PassTaskRoles
+                Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-backup-task
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-audit-task
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-task
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-backup-exec
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-audit-exec
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-exec
+                Condition:
+                  StringLike:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
+              - Sid: TagTasks
+                Effect: Allow
+                Action: ecs:TagResource
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    ecs:CreateAction: RunTask
+              - Sid: SendToDeadLetterQueue
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource:
+                  Fn::Sub: arn:aws:sqs:us-east-1:${AWS::AccountId}:cadenzpoint-backup-scheduler-dlq
+
+  # ---- task definitions (one image, a different command each) -------------------------------------------------------
+  BackupTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: cadenzpoint-backup-backup
+      Cpu: '2048'
+      Memory: '4096'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
+      ExecutionRoleArn:
+        Fn::GetAtt: [BackupExecRole, Arn]
+      TaskRoleArn:
+        Fn::GetAtt: [BackupTaskRole, Arn]
+      ContainerDefinitions:
+        - Name: backup
+          Image:
+            Ref: ImageUri
+          Essential: true
+          Command:
+            - backup
+          StopTimeout: 120
+          LinuxParameters:
+            InitProcessEnabled: true
+          Environment:
+            - Name: AWS_REGION
+              Value: us-east-1
+            - Name: BACKUP_BUCKET
+              Value:
+                Ref: BackupBucket
+            - Name: BACKUP_KMS_KEY_ARN
+              Value:
+                Fn::GetAtt: [BackupKey, Arn]
+            - Name: BACKUP_PG_DUMP_BIN
+              Value: /usr/lib/postgresql/16/bin/pg_dump
+            - Name: BACKUP_CONCURRENCY
+              Value: '3'
+            - Name: BACKUP_TARGET_DEADLINE_MINUTES
+              Value: '30'
+          Secrets:
+            - Name: CONTROL_PLANE_DATABASE_URL
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-url
+            - Name: ENCRYPTION_KEY
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/encryption-key
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Ref: BackupLogGroup
+              awslogs-region: us-east-1
+              awslogs-stream-prefix: backup
+
+  RestoreTestTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: cadenzpoint-backup-restore-test
+      Cpu: '2048'
+      Memory: '4096'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
+      ExecutionRoleArn:
+        Fn::GetAtt: [RestoreTestExecRole, Arn]
+      TaskRoleArn:
+        Fn::GetAtt: [RestoreTestTaskRole, Arn]
+      ContainerDefinitions:
+        - Name: restore-test
+          Image:
+            Ref: ImageUri
+          Essential: true
+          Command:
+            - restore-test
+          StopTimeout: 120
+          LinuxParameters:
+            InitProcessEnabled: true
+          Environment:
+            - Name: AWS_REGION
+              Value: us-east-1
+            - Name: BACKUP_BUCKET
+              Value:
+                Ref: BackupBucket
+            - Name: BACKUP_KMS_KEY_ARN
+              Value:
+                Fn::GetAtt: [BackupKey, Arn]
+            - Name: BACKUP_DECRYPT_KEY_ARNS
+              Value:
+                Fn::GetAtt: [BackupKey, Arn]
+            - Name: BACKUP_PG_RESTORE_BIN
+              Value: /usr/lib/postgresql/16/bin/pg_restore
+            - Name: RESTORE_TEST_CONCURRENCY
+              Value: '2'
+            - Name: RESTORE_TEST_DEADLINE_HOURS
+              Value: '6'
+            - Name: RESTORE_TEST_TARGET_DEADLINE_MINUTES
+              Value: '120'
+          Secrets:
+            - Name: CONTROL_PLANE_DATABASE_URL
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-url
+            - Name: RESTORE_TEST_DATABASE_URL
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/restore-test-url
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Ref: RestoreTestLogGroup
+              awslogs-region: us-east-1
+              awslogs-stream-prefix: restore-test
+
+  AuditTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: cadenzpoint-backup-audit
+      Cpu: '512'
+      Memory: '1024'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
+      ExecutionRoleArn:
+        Fn::GetAtt: [AuditExecRole, Arn]
+      TaskRoleArn:
+        Fn::GetAtt: [AuditTaskRole, Arn]
+      ContainerDefinitions:
+        - Name: audit
+          Image:
+            Ref: ImageUri
+          Essential: true
+          Command:
+            - audit
+          StopTimeout: 120
+          LinuxParameters:
+            InitProcessEnabled: true
+          Environment:
+            - Name: AWS_REGION
+              Value: us-east-1
+            - Name: BACKUP_BUCKET
+              Value:
+                Ref: BackupBucket
+            - Name: BACKUP_KMS_KEY_ARN
+              Value:
+                Fn::GetAtt: [BackupKey, Arn]
+            - Name: ALERT_TOPIC_ARN
+              Value:
+                Ref: AlertTopic
+            - Name: ALERT_RULE_NAMES
+              Value: cadenzpoint-backup-protections,cadenzpoint-backup-roles
+            - Name: TRAIL_NAME
+              Value: cadenzpoint-account-trail
+            - Name: DLQ_ALARM_NAME
+              Value: cadenzpoint-backup-dlq
+          Secrets:
+            - Name: CONTROL_PLANE_DATABASE_URL
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-url
+            - Name: RESTORE_TEST_DATABASE_URL
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/restore-test-url
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Ref: AuditLogGroup
+              awslogs-region: us-east-1
+              awslogs-stream-prefix: audit
+
+  # ---- alerting: immediate email, straight from AWS -----------------------------------------------------------------
+  SchedulerDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: cadenzpoint-backup-scheduler-dlq
+      MessageRetentionPeriod: 172800
+      SqsManagedSseEnabled: true
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: cadenzpoint-backup-alerts
+
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn:
+        Ref: AlertTopic
+      Protocol: email
+      Endpoint:
+        Ref: AlertEmail
+
+  AlertTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - Ref: AlertTopic
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowEventBridgePublish
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource:
+              Fn::Sub: arn:aws:sns:us-east-1:${AWS::AccountId}:cadenzpoint-backup-alerts
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
+          - Sid: AllowCloudWatchPublish
+            Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action: sns:Publish
+            Resource:
+              Fn::Sub: arn:aws:sns:us-east-1:${AWS::AccountId}:cadenzpoint-backup-alerts
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
+
+  ProtectionsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: cadenzpoint-backup-protections
+      Description: Any change to the backup protections, from any caller, emails the founder at once
+      State: ENABLED
+      EventPattern:
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventName:
+            - ScheduleKeyDeletion
+            - DisableKey
+            - PutKeyPolicy
+            - CreateGrant
+            - StopLogging
+            - DeleteTrail
+            - UpdateTrail
+            - PutEventSelectors
+            - PutBucketPolicy
+            - DeleteBucketPolicy
+            - PutBucketLifecycle
+            - DeleteBucketLifecycle
+            - PutBucketVersioning
+            - DisableRule
+            - DeleteRule
+            - PutRule
+            - PutTargets
+            - RemoveTargets
+            - Unsubscribe
+            - Subscribe
+            - DeleteTopic
+            - SetTopicAttributes
+            - SetSubscriptionAttributes
+            - DeleteAlarms
+            - DisableAlarmActions
+            - PutMetricAlarm
+            - DeleteQueue
+            - SetQueueAttributes
+      Targets:
+        - Id: alert-topic
+          Arn:
+            Ref: AlertTopic
+          InputTransformer:
+            InputPathsMap:
+              event: $.detail.eventName
+              caller: $.detail.userIdentity.arn
+              time: $.time
+              bucket: $.detail.requestParameters.bucketName
+              key: $.detail.requestParameters.keyId
+              name: $.detail.requestParameters.name
+              topic: $.detail.requestParameters.topicArn
+              queue: $.detail.requestParameters.queueUrl
+            InputTemplate: '"CadenzPoint backup protection changed: <event> by <caller> at <time>. Resource: bucket <bucket>, key <key>, rule/trail <name>, topic <topic>, queue <queue>. If you did not make this change, investigate now."'
+
+  RolesRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: cadenzpoint-backup-roles
+      Description: Any change to a backup role's trust or policies emails the founder at once
+      State: ENABLED
+      EventPattern:
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventName:
+            - UpdateAssumeRolePolicy
+            - PutRolePolicy
+            - DeleteRolePolicy
+            - AttachRolePolicy
+            - DetachRolePolicy
+          requestParameters:
+            roleName:
+              - prefix: cadenzpoint-backup-
+      Targets:
+        - Id: alert-topic
+          Arn:
+            Ref: AlertTopic
+          InputTransformer:
+            InputPathsMap:
+              event: $.detail.eventName
+              caller: $.detail.userIdentity.arn
+              time: $.time
+              role: $.detail.requestParameters.roleName
+            InputTemplate: '"CadenzPoint backup role changed: <event> on <role> by <caller> at <time>. If you did not make this change, investigate now."'
+
+  DlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: cadenzpoint-backup-dlq
+      AlarmDescription: A scheduled backup task could not be started (EventBridge Scheduler dead-letter queue)
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value:
+            Fn::GetAtt: [SchedulerDeadLetterQueue, QueueName]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      ActionsEnabled: true
+      AlarmActions:
+        - Ref: AlertTopic
+
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: cadenzpoint-backup-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: 10
+          Unit: USD
+        CostTypes:
+          IncludeCredit: false
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address:
+                Ref: AlertEmail
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address:
+                Ref: AlertEmail
+
+  # ---- schedules (UTC; each pins its task definition revision; created last) -------------------------------------
+  BackupDailySchedule:
+    Type: AWS::Scheduler::Schedule
+    DependsOn:
+      - BackupKey
+      - BackupKeyAlias
+      - BackupBucket
+      - BackupBucketPolicy
+      - Vpc
+      - InternetGateway
+      - GatewayAttachment
+      - PublicRouteTable
+      - DefaultRoute
+      - SubnetARoutes
+      - SubnetBRoutes
+      - BackupLogGroup
+      - AuditLogGroup
+      - RestoreTestLogGroup
+      - BackupTaskRole
+      - RestoreTestTaskRole
+      - AuditTaskRole
+      - BackupExecRole
+      - AuditExecRole
+      - RestoreTestExecRole
+      - RestoreTestTaskDefinition
+      - AuditTaskDefinition
+      - AlertTopic
+      - AlertSubscription
+      - AlertTopicPolicy
+      - ProtectionsRule
+      - RolesRule
+      - DlqAlarm
+      - MonthlyBudget
+    Properties:
+      Name: cadenzpoint-backup-daily
+      ScheduleExpression: 'cron(17 6 * * ? *)'
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      State: ENABLED
+      Target:
+        Arn:
+          Fn::GetAtt: [Cluster, Arn]
+        RoleArn:
+          Fn::GetAtt: [SchedulerRole, Arn]
+        RetryPolicy:
+          MaximumRetryAttempts: 10
+          MaximumEventAgeInSeconds: 3600
+        DeadLetterConfig:
+          Arn:
+            Fn::GetAtt: [SchedulerDeadLetterQueue, Arn]
+        EcsParameters:
+          TaskDefinitionArn:
+            Ref: BackupTaskDefinition
+          LaunchType: FARGATE
+          PlatformVersion: LATEST
+          TaskCount: 1
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              AssignPublicIp: ENABLED
+              Subnets:
+                - Ref: SubnetA
+                - Ref: SubnetB
+              SecurityGroups:
+                - Ref: TaskSecurityGroup
+
+  BackupCatchupSchedule:
+    Type: AWS::Scheduler::Schedule
+    DependsOn:
+      - BackupKey
+      - BackupKeyAlias
+      - BackupBucket
+      - BackupBucketPolicy
+      - Vpc
+      - InternetGateway
+      - GatewayAttachment
+      - PublicRouteTable
+      - DefaultRoute
+      - SubnetARoutes
+      - SubnetBRoutes
+      - BackupLogGroup
+      - AuditLogGroup
+      - RestoreTestLogGroup
+      - BackupTaskRole
+      - RestoreTestTaskRole
+      - AuditTaskRole
+      - BackupExecRole
+      - AuditExecRole
+      - RestoreTestExecRole
+      - RestoreTestTaskDefinition
+      - AuditTaskDefinition
+      - AlertTopic
+      - AlertSubscription
+      - AlertTopicPolicy
+      - ProtectionsRule
+      - RolesRule
+      - DlqAlarm
+      - MonthlyBudget
+    Properties:
+      Name: cadenzpoint-backup-catchup
+      ScheduleExpression: 'cron(17 18 * * ? *)'
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      State: ENABLED
+      Target:
+        Arn:
+          Fn::GetAtt: [Cluster, Arn]
+        RoleArn:
+          Fn::GetAtt: [SchedulerRole, Arn]
+        Input: '{"containerOverrides":[{"name":"backup","command":["backup", "--if-missing-today"]}]}'
+        RetryPolicy:
+          MaximumRetryAttempts: 10
+          MaximumEventAgeInSeconds: 3600
+        DeadLetterConfig:
+          Arn:
+            Fn::GetAtt: [SchedulerDeadLetterQueue, Arn]
+        EcsParameters:
+          TaskDefinitionArn:
+            Ref: BackupTaskDefinition
+          LaunchType: FARGATE
+          PlatformVersion: LATEST
+          TaskCount: 1
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              AssignPublicIp: ENABLED
+              Subnets:
+                - Ref: SubnetA
+                - Ref: SubnetB
+              SecurityGroups:
+                - Ref: TaskSecurityGroup
+
+  AuditDailySchedule:
+    Type: AWS::Scheduler::Schedule
+    DependsOn:
+      - BackupKey
+      - BackupKeyAlias
+      - BackupBucket
+      - BackupBucketPolicy
+      - Vpc
+      - InternetGateway
+      - GatewayAttachment
+      - PublicRouteTable
+      - DefaultRoute
+      - SubnetARoutes
+      - SubnetBRoutes
+      - BackupLogGroup
+      - AuditLogGroup
+      - RestoreTestLogGroup
+      - BackupTaskRole
+      - RestoreTestTaskRole
+      - AuditTaskRole
+      - BackupExecRole
+      - AuditExecRole
+      - RestoreTestExecRole
+      - BackupTaskDefinition
+      - RestoreTestTaskDefinition
+      - AlertTopic
+      - AlertSubscription
+      - AlertTopicPolicy
+      - ProtectionsRule
+      - RolesRule
+      - DlqAlarm
+      - MonthlyBudget
+    Properties:
+      Name: cadenzpoint-backup-audit-daily
+      ScheduleExpression: 'cron(17 11 * * ? *)'
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      State: ENABLED
+      Target:
+        Arn:
+          Fn::GetAtt: [Cluster, Arn]
+        RoleArn:
+          Fn::GetAtt: [SchedulerRole, Arn]
+        RetryPolicy:
+          MaximumRetryAttempts: 10
+          MaximumEventAgeInSeconds: 3600
+        DeadLetterConfig:
+          Arn:
+            Fn::GetAtt: [SchedulerDeadLetterQueue, Arn]
+        EcsParameters:
+          TaskDefinitionArn:
+            Ref: AuditTaskDefinition
+          LaunchType: FARGATE
+          PlatformVersion: LATEST
+          TaskCount: 1
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              AssignPublicIp: ENABLED
+              Subnets:
+                - Ref: SubnetA
+                - Ref: SubnetB
+              SecurityGroups:
+                - Ref: TaskSecurityGroup
+
+  RestoreTestWeeklySchedule:
+    Type: AWS::Scheduler::Schedule
+    DependsOn:
+      - BackupKey
+      - BackupKeyAlias
+      - BackupBucket
+      - BackupBucketPolicy
+      - Vpc
+      - InternetGateway
+      - GatewayAttachment
+      - PublicRouteTable
+      - DefaultRoute
+      - SubnetARoutes
+      - SubnetBRoutes
+      - BackupLogGroup
+      - AuditLogGroup
+      - RestoreTestLogGroup
+      - BackupTaskRole
+      - RestoreTestTaskRole
+      - AuditTaskRole
+      - BackupExecRole
+      - AuditExecRole
+      - RestoreTestExecRole
+      - BackupTaskDefinition
+      - AuditTaskDefinition
+      - AlertTopic
+      - AlertSubscription
+      - AlertTopicPolicy
+      - ProtectionsRule
+      - RolesRule
+      - DlqAlarm
+      - MonthlyBudget
+    Properties:
+      Name: cadenzpoint-backup-restore-test-weekly
+      ScheduleExpression: 'cron(17 8 ? * MON *)'
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      State: ENABLED
+      Target:
+        Arn:
+          Fn::GetAtt: [Cluster, Arn]
+        RoleArn:
+          Fn::GetAtt: [SchedulerRole, Arn]
+        RetryPolicy:
+          MaximumRetryAttempts: 10
+          MaximumEventAgeInSeconds: 3600
+        DeadLetterConfig:
+          Arn:
+            Fn::GetAtt: [SchedulerDeadLetterQueue, Arn]
+        EcsParameters:
+          TaskDefinitionArn:
+            Ref: RestoreTestTaskDefinition
+          LaunchType: FARGATE
+          PlatformVersion: LATEST
+          TaskCount: 1
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              AssignPublicIp: ENABLED
+              Subnets:
+                - Ref: SubnetA
+                - Ref: SubnetB
+              SecurityGroups:
+                - Ref: TaskSecurityGroup
+
+  RestoreTestCatchupSchedule:
+    Type: AWS::Scheduler::Schedule
+    DependsOn:
+      - BackupKey
+      - BackupKeyAlias
+      - BackupBucket
+      - BackupBucketPolicy
+      - Vpc
+      - InternetGateway
+      - GatewayAttachment
+      - PublicRouteTable
+      - DefaultRoute
+      - SubnetARoutes
+      - SubnetBRoutes
+      - BackupLogGroup
+      - AuditLogGroup
+      - RestoreTestLogGroup
+      - BackupTaskRole
+      - RestoreTestTaskRole
+      - AuditTaskRole
+      - BackupExecRole
+      - AuditExecRole
+      - RestoreTestExecRole
+      - BackupTaskDefinition
+      - AuditTaskDefinition
+      - AlertTopic
+      - AlertSubscription
+      - AlertTopicPolicy
+      - ProtectionsRule
+      - RolesRule
+      - DlqAlarm
+      - MonthlyBudget
+    Properties:
+      Name: cadenzpoint-backup-restore-test-catchup
+      ScheduleExpression: 'cron(17 8 ? * SUN,TUE-SAT *)'
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      State: ENABLED
+      Target:
+        Arn:
+          Fn::GetAtt: [Cluster, Arn]
+        RoleArn:
+          Fn::GetAtt: [SchedulerRole, Arn]
+        Input: '{"containerOverrides":[{"name":"restore-test","command":["restore-test", "--if-missed"]}]}'
+        RetryPolicy:
+          MaximumRetryAttempts: 10
+          MaximumEventAgeInSeconds: 3600
+        DeadLetterConfig:
+          Arn:
+            Fn::GetAtt: [SchedulerDeadLetterQueue, Arn]
+        EcsParameters:
+          TaskDefinitionArn:
+            Ref: RestoreTestTaskDefinition
+          LaunchType: FARGATE
+          PlatformVersion: LATEST
+          TaskCount: 1
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              AssignPublicIp: ENABLED
+              Subnets:
+                - Ref: SubnetA
+                - Ref: SubnetB
+              SecurityGroups:
+                - Ref: TaskSecurityGroup
+
+Outputs:
+  BackupBucket:
+    Value:
+      Ref: BackupBucket
+  BackupKeyArn:
+    Value:
+      Fn::GetAtt: [BackupKey, Arn]
+  ClusterName:
+    Value:
+      Ref: Cluster

@@ -35,6 +35,8 @@
     "demo:local": "bash scripts/setup-local-demo.sh",
     "stress:isolation": "tsx scripts/stress-isolation.ts",
     "provision:tenant": "node --conditions=react-server --import tsx scripts/provision-tenant.ts",
+    "backup:local": "node --conditions=react-server --import tsx scripts/backup/local.ts",
+    "backup:bundle": "node scripts/backup/bundle.mjs",
     "pretest": "node scripts/patch-mantine-react-table.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -75,6 +77,15 @@
     "stripe": "^17.0.0"
   },
   "devDependencies": {
+    "@aws-crypto/client-node": "5.0.2",
+    "@aws-sdk/client-cloudtrail": "3.1170.0",
+    "@aws-sdk/client-cloudwatch": "3.1170.0",
+    "@aws-sdk/client-eventbridge": "3.1170.0",
+    "@aws-sdk/client-iam": "3.1170.0",
+    "@aws-sdk/client-kms": "3.1170.0",
+    "@aws-sdk/client-s3": "3.1170.0",
+    "@aws-sdk/client-sns": "3.1170.0",
+    "@aws-sdk/lib-storage": "3.1170.0",
     "@testing-library/dom": "10.4.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
@@ -88,12 +99,14 @@
     "axe-core": "4.12.1",
     "dotenv": "^17.4.2",
     "drizzle-kit": "^0.31.10",
+    "esbuild": "0.25.12",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "eslint-plugin-jsx-a11y": "6.10.2",
     "jsdom": "^29.1.1",
     "tsx": "^4.22.3",
     "typescript": "^5",
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "yaml": "2.9.1"
   }
 }
