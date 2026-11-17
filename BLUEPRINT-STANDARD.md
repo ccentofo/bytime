@@ -25,6 +25,12 @@ before merge**: not after.
 
 ## 2. What every blueprint must contain
 
+**For anything that adds or changes CI, a Dockerfile or a deploy workflow, the blueprint also says:**
+- how each step is run locally (§3.7);
+- that builds **download nothing unpinned** at build time: keys and artifacts are committed and checked by
+  fingerprint or hash, and package managers get retries (`apt-get -o Acquire::Retries=5`; npm reads `.npmrc`).
+
+
 | Section | Required content |
 |---|---|
 | **Verified current state** | What exists today, with file:line references. No assumptions. |
@@ -52,6 +58,16 @@ before merge**: not after.
    tables, and the failure-modes section, and list anything not covered.
 6. **Report honestly.** Never claim a check passed that wasn't run; name every command that couldn't
    run and why.
+7. **CI and build steps run exactly as written, before the report** (3b lesson, 2026-11-17: four CI
+   failures after the push, all in steps nobody had run as written).
+   - **Copy every new or changed `run:` block** of a workflow into a fresh shell and run it verbatim. Don't run
+     an equivalent command: the dev's own `cfn-lint` worked, CI's `python3 -m cfnlint` didn't. The dev report
+     lists each block with its result.
+   - **Dockerfiles without Docker:** a script copies **exactly the files the Dockerfile `COPY`s** into an empty
+     temp folder and runs the builder's commands there (`npm ci …`, the bundle). The build then sees only what the
+     image sees: a missing `.npmrc` broke 3b's image this way.
+   - **A step that truly can't run locally** (a runner-only tool, an image's OS packages) is named in the impact
+     analysis, so the lead can ask the product owner for an early CI run (§4).
 
 ## 4. Definition of done (before merge)
 
@@ -60,4 +76,7 @@ before merge**: not after.
 - On the product owner's machine: `TZ=America/New_York npm run test:integration` (with the isolation
   databases), `npm run build` (Turbopack), and `npm run demo:local` re-run when data or migrations
   changed.
+- **When the item adds or changes CI or a Dockerfile:** the product owner pushes the branch once **as soon as the
+  CI commit exists**, before the audit, so CI's first run happens early. The lead reads the result and routes
+  fixes through the dev. The final merge gate still needs a green run on the last commit.
 - Production readiness additionally requires the end-to-end staging rehearsal (PRODUCTION-DEPLOY.md).
