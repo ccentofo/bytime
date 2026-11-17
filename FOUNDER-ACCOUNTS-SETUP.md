@@ -225,7 +225,9 @@ The `aws-backups` environment and four variables. Not now.
 In the top-right region menu, choose **US East (N. Virginia) us-east-1** whenever you're in the console. Everything for CadenzPoint lives there.
 
 ### 4.8 What you can't do in this account, by design
-Once the backup system is deployed, even your admin login is **refused** if it tries to download a backup or decrypt one. Only the automated restore test, and 3c's disaster button, can. That's constraint 2 enforced by AWS itself.
+Once the backup system is deployed, your admin login is **refused** if it tries to download, decrypt or re-encrypt a backup. Only the automated restore test, and 3c's disaster button, can. Nothing can reach your Mac by accident.
+
+Stated honestly: an administrator can always change the rules on purpose (a policy, or a task's command). The system makes sure you'd know: any such change made outside a reviewed deploy **emails you immediately**, and AWS's audit trail keeps a record.
 
 ---
 
@@ -242,39 +244,39 @@ Once the backup system is deployed, even your admin login is **refused** if it t
 ---
 
 ## Part 6. Turning the backup system on (after 3b is built; we do this together)
-I'll give you a short checklist at that time (`PRODUCTION-DEPLOY.md`, Phase "Backups (AWS)"). Its shape:
+The final checklist will be `PRODUCTION-DEPLOY.md`, Phase "Backups (AWS)". The first runs use **staging**, as a rehearsal; production comes after they pass.
 
-1. **GitHub environment first** (until it's locked to `main` with your approval, nothing else should exist in AWS that GitHub can use):
+1. **GitHub environment first.** Until it's locked to `main` behind your approval, nothing should exist in AWS that GitHub can use.
    1. Repo → **Settings → Environments → New environment** → `aws-backups` → **Configure environment**.
    2. **Required reviewers:** add yourself. **Leave "Prevent self-review" unchecked**, or you could never approve your own deploys.
    3. Uncheck **Allow administrators to bypass configured protection rules**. **Save protection rules**.
    4. **Deployment branches → Selected branches and tags → Add deployment branch or tag rule** → Branch, `main` → **Add rule**.
+   5. Add the variable `BACKUP_ALERT_EMAIL` = `infra@cadenzpoint.com` (**Settings → Secrets and variables → Actions → Variables → New repository variable**).
+   6. **Check it:** run `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-backups` and send me the output. I confirm the approval rule and the branch rule are there.
 2. **Create the bootstrap stack** (AWS, signed in as `corey-admin`, region us-east-1):
    1. **CloudFormation → Stacks → Create stack → With new resources (standard)**.
    2. **Choose an existing template → Upload a template file → Choose File** → `ops/aws/bootstrap.yml` from the repo → **Next**.
    3. **Stack name:** `cadenzpoint-backup-bootstrap` → **Next** → **Next**.
    4. Check the IAM acknowledgment ("I acknowledge that this template may create IAM resources", possibly mentioning custom names) → **Submit**.
-   5. Wait for `CREATE_COMPLETE`, then copy the **Outputs** tab's three values.
-3. **Paste three secrets** in **Systems Manager → Parameter Store → Create parameter**, each **Tier: Standard**, **Type: SecureString**, KMS key left at the default (`alias/aws/ssm`):
-   - `/cadenzpoint/backup/control-plane-url`: the production control-plane URL (the same value Vercel has);
-   - `/cadenzpoint/backup/encryption-key`: the production `ENCRYPTION_KEY` (the same value Vercel has);
+   5. Wait for `CREATE_COMPLETE`. On the **Outputs** tab, copy the four values into GitHub variables: `AWS_CFN_EXEC_ROLE_ARN`, `AWS_BACKUP_REPOSITORY_URI` and `AWS_ARTIFACTS_BUCKET` first, then **`AWS_DEPLOY_ROLE_ARN` last**. That one switches the deploy workflow on.
+3. **Paste three values** in **Systems Manager → Parameter Store → Create parameter**, each **Tier: Standard**, **Type: SecureString**, KMS key left at the default (`alias/aws/ssm`). **Staging's values first:**
+   - `/cadenzpoint/backup/control-plane-url`: **staging's** control-plane URL;
+   - `/cadenzpoint/backup/encryption-key`: **staging's** `ENCRYPTION_KEY`;
    - `/cadenzpoint/backup/restore-test-url`: the Neon string from Part 5.
 
-   You copy these from Vercel's settings page to AWS's; they never need to be saved on your Mac. If either production value ever changes in Vercel, update it here too.
-4. **GitHub variables:** Repo → **Settings → Secrets and variables → Actions → Variables → New repository variable**, four times:
-   - `AWS_DEPLOY_ROLE_ARN`, `AWS_CFN_EXEC_ROLE_ARN` and `AWS_BACKUP_REPOSITORY_URI`, from the bootstrap stack's Outputs;
-   - `BACKUP_ALERT_EMAIL` = `infra@cadenzpoint.com`.
-5. **Merge 3b; approve the deploy.** GitHub emails you. On the run, **Review deployments** → `aws-backups` → **Approve and deploy**.
-6. **Confirm the alert email.** AWS sends "AWS Notification - Subscription Confirmation" to `infra@` → **Confirm subscription**. It must be done within 48 hours, or AWS drops it and we redeploy.
-7. **First runs and the "can't" checks:** together with me. AWS's built-in browser terminal (CloudShell) does it, so nothing runs on your Mac.
-8. **Vercel:** add `BACKUPS_EXPECTED=1` to production and `0` to staging, then redeploy both.
+   Take them from your password manager, where PRODUCTION-DEPLOY Phase 4 keeps them. Vercel won't show sensitive values again.
+4. **First deploy:** in GitHub → **Actions → Backup system deploy → Run workflow**. GitHub emails you; on the run, **Review deployments** → `aws-backups` → **Approve and deploy**.
+5. **Confirm the alert email.** AWS sends "AWS Notification - Subscription Confirmation" to `infra@`; click **Confirm subscription** within 48 hours. If you miss it: AWS console → **SNS → Subscriptions** → the pending one → **Request confirmation**. (The daily digest will remind you if it's still unconfirmed.)
+6. **First runs and the "can't" checks:** together with me, in the AWS console and AWS CloudShell (a terminal in your browser that runs inside AWS), so nothing runs on your Mac. Each run you start by hand sends you an alert email ("a task was started by hand"); that's expected and shows the alarms work.
+7. **Switch to production:** edit the first two parameters to **production's** values. From the next scheduled run, production is backed up.
+8. **Vercel:** add `BACKUPS_EXPECTED=1` to production (staging stays `0`), then redeploy.
 
 ## Part 7. After setup: what you'll see, and what you never do
 **You'll see:**
 - a "Backups" section in the daily digest, with the newest backup and the last restore test;
 - alerts there if anything is wrong;
-- an immediate AWS email if anyone tries to delete or disable the backup key;
-- a GitHub approval email when the backup code changes.
+- an immediate AWS email if anyone tries to delete or disable the backup key, changes the backup rules outside a reviewed deploy, or starts a backup task by hand;
+- a GitHub approval email when the backup code changes (approve it once the change is merged).
 
 **You never:**
 - download a backup or a customer export;
