@@ -122,3 +122,69 @@ export function fakeDumpArgs(o: { bytes?: number; code?: number; hang?: boolean;
       : `const b = Buffer.from(${JSON.stringify(randomBytes(16).toString('hex'))}.repeat(${Math.ceil(n / 32)})).subarray(0, ${n}); process.stdout.write(b, () => process.exit(${o.code ?? 0}));`;
   return ['-e', script];
 }
+
+import type { AuditClients } from '../../../scripts/backup/lib/aws-clients';
+import type { KeyProbeClient } from '../../../scripts/backup/lib/probes';
+import { expectedDocuments, NAMES, ALL_ROLES } from '../../../scripts/backup/lib/expected-policies';
+
+export const TEST_ACCOUNT = '111122223333';
+export const TEST_KEY_ARN = `arn:aws:kms:us-east-1:${TEST_ACCOUNT}:key/1234abcd-12ab-34cd-56ef-1234567890ab`;
+
+/** AuditClients reporting a perfectly protected stack (rendered from expected-policies.ts); tests mutate the state. */
+export function fakeAuditClients() {
+  const exp = expectedDocuments({ accountId: TEST_ACCOUNT, keyArn: TEST_KEY_ARN });
+  const doc = (s: unknown) => JSON.stringify({ Version: '2012-10-17', Statement: s });
+  const state = {
+    versioning: '',
+    uploads: [] as Array<{ key: string; initiated: Date }>,
+    bucketPolicy: doc(exp.bucketPolicy) as string | null,
+    lifecycle: [{ id: NAMES.lifecycleRule, status: 'Enabled', prefix: 'v1/', expirationDays: 25, abortDays: 1, other: false }] as Array<{ id: string | null; status: string | null; prefix: string | null; expirationDays: number | null; abortDays: number | null; other: boolean }> | null,
+    keyState: 'Enabled',
+    keyPolicy: doc(exp.keyPolicy) as string | null,
+    subscriptions: [{ arn: `${exp.topicArn}:0000-sub`, protocol: 'email' }],
+    filterPolicy: null as string | null,
+    topicPolicy: doc(exp.topicPolicy) as string | null,
+    rules: Object.fromEntries(Object.entries(exp.rulePatterns).map(([n, p]) => [n, { state: 'ENABLED', eventPattern: JSON.stringify(p) as string | null }])) as Record<string, { state: string; eventPattern: string | null } | null>,
+    targets: Object.fromEntries(Object.keys(exp.rulePatterns).map((n) => [n, [exp.topicArn]])) as Record<string, string[]>,
+    logging: true,
+    alarm: { actionsEnabled: true, alarmActions: [exp.topicArn], metricName: 'ApproximateNumberOfMessagesVisible', namespace: 'AWS/SQS', threshold: 0, comparison: 'GreaterThanThreshold', treatMissingData: 'notBreaching', dimensions: { QueueName: NAMES.dlq } } as AuditClientsAlarm | null,
+    roles: Object.fromEntries(ALL_ROLES.map((r) => [r, { trust: doc(exp.roles[r].trust) as string | null, policies: { [NAMES.inlinePolicy]: doc(exp.roles[r].policy) } as Record<string, string>, attached: [] as string[] }])),
+    throwOn: new Set<string>(),
+  };
+  const guard = (k: string) => { if (state.throwOn.has(k)) throw Object.assign(new Error('Service Unavailable'), { name: 'ServiceUnavailable', $metadata: { httpStatusCode: 503 } }); };
+  const clients: AuditClients = {
+    bucket: {
+      versioning: async () => { guard('versioning'); return state.versioning; },
+      multipartUploads: async () => { guard('uploads'); return state.uploads; },
+      policy: async () => { guard('bucket-policy'); return state.bucketPolicy; },
+      lifecycle: async () => { guard('lifecycle'); return state.lifecycle; },
+    },
+    key: { state: async () => { guard('key-state'); return state.keyState; }, policy: async () => { guard('key-policy'); return state.keyPolicy; } },
+    topic: {
+      subscriptions: async () => { guard('subscriptions'); return state.subscriptions; },
+      filterPolicy: async () => state.filterPolicy,
+      policy: async () => state.topicPolicy,
+    },
+    rules: { describe: async (n) => state.rules[n] ?? null, targets: async (n) => state.targets[n] ?? [] },
+    trail: { isLogging: async () => state.logging },
+    alarm: { describe: async () => state.alarm },
+    iam: {
+      trust: async (r) => state.roles[r]?.trust ?? null,
+      inlinePolicyNames: async (r) => Object.keys(state.roles[r]?.policies ?? {}),
+      inlinePolicy: async (r, n) => state.roles[r]?.policies[n] ?? null,
+      attachedPolicies: async (r) => state.roles[r]?.attached ?? [],
+    },
+  };
+  return { clients, state, exp, doc };
+}
+type AuditClientsAlarm = NonNullable<Awaited<ReturnType<AuditClients['alarm']['describe']>>>;
+
+/** A KMS probe client that refuses everything (the expected state). */
+export function deniedKeyClient(): KeyProbeClient & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    decrypt: async () => { calls.push('decrypt'); throw kmsDenied(); },
+    reEncrypt: async () => { calls.push('reEncrypt'); throw kmsDenied(); },
+  };
+}
