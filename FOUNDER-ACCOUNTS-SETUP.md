@@ -16,7 +16,8 @@
 
 **You never download customer data in any of this.** After setup, you only:
 - read the daily digest;
-- approve a backup-system deploy when the code changes;
+- approve a backup-system deploy when its code changes (rare);
+- update one AWS setting if production's `ENCRYPTION_KEY` or control-plane database password ever changes (part of that change's checklist);
 - press 3c's disaster button if Neon ever loses a database.
 
 ## Order of operations
@@ -262,13 +263,13 @@ The final checklist will be `PRODUCTION-DEPLOY.md`, Phase "Backups (AWS)". The f
    3. **Stack name:** `cadenzpoint-backup-bootstrap` → **Next** → **Next**.
    4. Check the IAM acknowledgment ("I acknowledge that this template may create IAM resources", possibly mentioning custom names) → **Submit**.
    5. Wait for `CREATE_COMPLETE`. On the **Outputs** tab, copy the four values into **`aws-backups` environment secrets** (Settings → Environments → `aws-backups` → Environment secrets → Add secret): `AWS_DEPLOY_ROLE_ARN`, `AWS_CFN_EXEC_ROLE_ARN`, `AWS_BACKUP_REPOSITORY_URI`, `AWS_ARTIFACTS_BUCKET`.
-3. **Paste three values** in **Systems Manager → Parameter Store → Create parameter**, each **Tier: Standard**, **Type: SecureString**, KMS key left at the default (`alias/aws/ssm`). **Staging's values first:**
+3. **Make sure the app's latest database changes are live** on staging and production (`deploy-prod`, and staging's deploy), so the backup tables exist.
+4. **Paste three values** in **Systems Manager → Parameter Store → Create parameter**, each **Tier: Standard**, **Type: SecureString**, KMS key left at the default (`alias/aws/ssm`). **Staging's values first:**
    - `/cadenzpoint/backup/control-plane-url`: **staging's** control-plane URL;
    - `/cadenzpoint/backup/encryption-key`: **staging's** `ENCRYPTION_KEY`;
-   - `/cadenzpoint/backup/restore-test-url`: the Neon string from Part 5.
+   - `/cadenzpoint/backup/restore-test-url`: the Neon string from Part 5. Re-copy it now from Neon → **Connect** (pooling off), since your clipboard has moved on.
 
-   Take them from your password manager, where PRODUCTION-DEPLOY Phase 4 keeps them. Vercel won't show sensitive values again.
-4. **Make sure the app's latest database changes are live** on staging and production (`deploy-prod`, and staging's deploy), so the backup tables exist.
+   Take the first two from your password manager, where PRODUCTION-DEPLOY Phase 4 keeps them. Vercel won't show sensitive values again.
 5. **Switch it on and deploy:** in GitHub → **Settings → Secrets and variables → Actions → Variables → New repository variable**: `AWS_BACKUPS_ENABLED` = `true`. Then **Actions → Backup system deploy → Run workflow**. GitHub emails you; on the run, **Review deployments** → `aws-backups` → **Approve and deploy**.
 6. **Confirm the alert email.** AWS sends "AWS Notification - Subscription Confirmation" to `infra@`; click **Confirm subscription** within 48 hours. If you miss it: AWS console → **SNS → Subscriptions** → the pending one → **Request confirmation**. (The daily digest will remind you if it's still unconfirmed.)
 7. **First runs and the "can't" checks:** together with me, in the AWS console and AWS CloudShell (a terminal in your browser that runs inside AWS), so nothing runs on your Mac. A few checks deliberately trigger alert emails; that's expected and proves the alarms work.
@@ -281,6 +282,8 @@ The final checklist will be `PRODUCTION-DEPLOY.md`, Phase "Backups (AWS)". The f
 - alerts there if anything is wrong;
 - an immediate AWS email if anyone tries to delete or disable the backup key, or changes the backup rules, the audit trail or the alerts (a backup-system deploy that changes them also emails; that's expected);
 - a GitHub approval email when the backup code itself changes, which is rare. If that change came with a database update, run `deploy-prod` first, then approve.
+
+**One event-driven exception:** if production's `ENCRYPTION_KEY` or the control-plane database password changes, update the matching AWS Parameter Store value the same day (the runbook for that change says so; the next backup alerts if it's missed).
 
 **You never:**
 - download a backup or a customer export;
