@@ -297,14 +297,24 @@ export async function observeNeon(f: DisasterFacts, now: Date, neon: NeonFetch |
 const NEON_KINDS = new Set<DisasterAlertKind>(['rebuild-orphan-project', 'rebuild-original-returned', 'rebuild-original-recoverable']);
 const FACT_KINDS = new Set<DisasterAlertKind>(['workspace-needs-deploy', 'disaster-run-stuck', 'disaster-rehearse-failed']);
 
-export async function syncDisasterAlerts(now: Date, o: { neon?: NeonFetch | null; env?: Record<string, string | undefined> } = {}): Promise<{ synced: boolean; findings: number }> {
+export async function syncDisasterAlerts(now: Date, o: {
+  neon?: NeonFetch | null;
+  env?: Record<string, string | undefined>;
+  /** Tests only: called inside the sync's transaction right after the healed `linked` rows are inserted (FR12). */
+  afterHealedInsert?: () => Promise<void>;
+  /** Tests only: called after the facts are read and before anything is written (a row changing in between). */
+  beforeWrite?: () => Promise<void>;
+} = {}): Promise<{ synced: boolean; findings: number }> {
   const env = o.env ?? process.env;
   if (backupsExpected(env) !== 'on') return { synced: false, findings: 0 };
   const facts = await readDisasterFacts(now);
   const neonFetch = o.neon !== undefined ? o.neon : env.NEON_API_KEY ? appNeonFetch(env.NEON_API_KEY) : null;
   const view = await observeNeon(facts, now, neonFetch, env.CONTROL_PLANE_PROJECT_ID);
   const res = disasterFindings(facts, view, now);
-  await withLockedPool(async (db) => {
+  await o.beforeWrite?.();
+  // One transaction (fix round 1, FR12): a failure part-way leaves nothing half-written (a healed `linked` row without its
+  // watch, or a stuck run closed without its alert); the next daily run finds the same facts again.
+  await withLockedPool((pool) => pool.transaction(async (db) => {
     const tx = db as unknown as ControlTx;
     for (const id of res.closeRuns) {
       await db.update(disasterRuns).set({ status: 'fail', finishedAt: now, summary: sql`coalesce(${disasterRuns.summary}, '{}'::jsonb) || '{"detail":"abandoned"}'::jsonb` })
@@ -315,6 +325,7 @@ export async function syncDisasterAlerts(now: Date, o: { neon?: NeonFetch | null
     }
     for (const p of res.healed) {
       await db.insert(disasterActions).values({ runId: `digest-${now.toISOString().slice(0, 10)}`, tenantId: p.tenantId, kind: 'rebuild', status: 'linked', projectName: p.name, newProjectId: p.id, oldProjectId: p.oldProjectId, detail: 'healed by the leftover check: the tenant row references it', at: now });
+      await o.afterHealedInsert?.();
       if (p.oldProjectId) {
         await raiseAlert(tx, { tenantId: null, kind: 'rebuild-original-watch', dedupKey: p.oldProjectId, detail: { tenantId: p.tenantId, slug: p.slug, oldProjectId: p.oldProjectId, newProjectId: p.id, watchStartedAt: now.toISOString(), healed: true } }, now);
       }
@@ -330,7 +341,7 @@ export async function syncDisasterAlerts(now: Date, o: { neon?: NeonFetch | null
       if (NEON_KINDS.has(kind) && view.failed) continue; // unknown today: leave it open
       await resolveAlert(tx, { tenantId: null, kind, dedupKey: a.dedupKey }, now, 'condition cleared');
     }
-  });
+  }));
   return { synced: true, findings: res.raise.length };
 }
 

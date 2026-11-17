@@ -139,3 +139,19 @@ describe('D6: separation from 3b', () => {
     }
   });
 });
+
+describe('fix round 1 (D6 additions)', () => {
+  it('M32: the 6-hour leftover boundary: 5 h 54 min → nothing; 6 h 06 min → raised', () => {
+    const v = view({ exists: new Map([['prj-n', true]]) });
+    expect(disasterFindings(facts({ projects: [group({ latestAt: ago(5.9 * H) })] }), v, NOW).raise).toEqual([]);
+    expect(kinds(disasterFindings(facts({ projects: [group({ latestAt: ago(6.1 * H) })] }), v, NOW))).toEqual(['rebuild-orphan-project']);
+  });
+
+  it('M58: the gate: BACKUPS_EXPECTED unset in production ("not configured") or 0 → the sync never runs', async () => {
+    const { syncDisasterAlerts } = await import('@/lib/tenant/disaster-status');
+    const neon = async () => { throw new Error('Neon must not be called'); };
+    expect(await syncDisasterAlerts(NOW, { neon, env: { NODE_ENV: 'production' } })).toEqual({ synced: false, findings: 0 });
+    expect(await syncDisasterAlerts(NOW, { neon, env: { BACKUPS_EXPECTED: '0' } })).toEqual({ synced: false, findings: 0 });
+    expect(await syncDisasterAlerts(NOW, { neon, env: {} })).toEqual({ synced: false, findings: 0 });
+  });
+});
