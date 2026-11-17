@@ -1,9 +1,9 @@
 # Disaster restore button: one workspace (build queue 3c)
 
-> **Status:** **DRAFT v3.8**, 2026-11-17, lead architect.
+> **Status:** **DRAFT v3.9**, 2026-11-17, lead architect.
 > - **Split (product owner, 2026-11-17):** this item is the **one-workspace** button. The control-plane rebuild, its reconcile and the whole-account runbook moved to **3c-2** (brief in `LAUNCH-TRACKER.md`).
 > - **Outage override accepted (2026-11-17)** (§6.4 step 2).
-> - Rounds 1–2 and confirmation passes 1–8 are fixed here (§15). Confirmation pass 9 is next.
+> - Rounds 1–2 and confirmation passes 1–9 are fixed here (§15). Confirmation pass 10 is next.
 >
 > **Branch:** `disaster-restore-button`, from `main` at `8af3b2c`.
 >
@@ -140,7 +140,7 @@ A founder-only **button** (a GitHub Actions workflow behind the `aws-disaster` e
 
        Neon's proxy answers an unknown or deleted endpoint with `28P01` "password authentication failed", not a network error (verified live, §4.1.7). So an authentication error alone proves nothing either way.
    - **Or unreachable for 4 hours** (the override):
-     - the project answers 200, but its database refuses connections now, with a connection error (not an authentication error);
+     - the project answers 200, but §6.4.1's override classifier says **unreachable**: a connection or proxy error on a listed endpoint, or any error once the URL's endpoint is gone from the live project. A `28P01` on a listed endpoint is a credentials problem, not unreachable;
      - **and** the same was observed at least 4 hours earlier, either by this button's own earlier observation (§6.4 step 2) or by 3b's failed backup rows (connection labels) with no `ok` since;
      - **and** the founder typed the override.
 
@@ -285,7 +285,7 @@ jobs:
    - **Network first:** before any unreachable result counts (the override path, (d) above, or recording `observed-unreachable`), the task proves its own network. One other live workspace, or failing that the control plane (both Neon us-east-1), must connect. Otherwise refuse `network-unproven`, and record nothing as evidence.
    - **200, with the override typed:**
      1. classify with the override rules of §6.4.1, two tries 60 s apart;
-     2. **answers**, **credentials problem** or `url-project-mismatch` → refuse;
+     2. **answers**, **credentials problem**, `database-missing`, a candidate serving the endpoint, or a lookup failure → refuse, with §6.4.1's proof statuses;
      3. **unreachable** on both tries → look for evidence at least 4 hours old:
         - an earlier `proof` row `observed-unreachable` for this tenant **with the same `old_project_id`**, from 4 to 48 hours ago, with **no 3b `ok` row and no `reachable-again` since it**;
         - **or** 3b's rows for it within the last 26 hours include **at least two `failed` rows at stage `connect`** (the database refused or timed out before any dump started) with label `connection-refused` or `timeout`, the oldest at least 4 h ago, and **no `ok` row since the oldest**. Rows failing at any other stage (`upload`, `sidecar`, `encrypt`, `row`, a run abort) prove nothing about reachability and don't count.
@@ -310,7 +310,7 @@ jobs:
    - `POST /projects` with `org_id`, pg 16, us-east-1, `tenantDatabaseName(slug)` and `tenantDbHistoryRetentionSeconds()`. The task definition sets `NEON_HISTORY_RETENTION_SECONDS` to the app's production value (a stack constant), so rebuilt projects get the same retention. 423 and 429 are retried with backoff; the operations are awaited;
    - record `created` with the id;
    - a create error with no id → list by that exact name (with `org_id`). Found → adopt (`created`), then clean up.
-   - The email gives Neon's HTTP status and error code (not the message).
+   - The email gives Neon's HTTP status and error code (not the message). **Every `neon-api.ts` error carries only the HTTP status and Neon's code**, never a response body (which can name projects).
 6. **Restore** into the new project's direct URL:
    - the host must be a us-east-1 Neon host via `parseNeonHost` (tests override it in-process), and not the control plane's;
    - `pg_restore --no-owner --no-acl --exit-on-error --single-transaction`;
@@ -320,7 +320,7 @@ jobs:
    - no other non-deleted tenant has this project id or direct host;
    - a decrypt failure on another row refuses.
 8. **In gone mode, re-check first:** `GET /projects/{oldProjectId}` must still be 404, and proof (d) must still say "doesn't answer". Otherwise abort, clean up, and report "the original is back" (proof `proof-failed`).
-   **In override mode, re-check first:** run the override classification again. **Anything other than "unreachable"** (answers, any `28P01`, `url-project-mismatch`, 404, a lookup failure) aborts: clean up (step 10), append the proof: `refused:reachable` if it answers, `refused:database-missing` on `3D000`, `proof-failed` for a 404 or a lookup failure. Report "reachable now, or unproven".
+   **In override mode, re-check first:** rerun §6.4.1's override classifier. **Abort only if the result isn't `unreachable`** (endpoint-gone counts as unreachable). Clean up (step 10) and append the matching proof: answers → `refused:reachable`; credentials → `refused:credentials`; `3D000` → `refused:database-missing`; a 404 or a lookup failure → `proof-failed`. Report "reachable now, or unproven".
    **Switch** (one transaction):
    - `SET LOCAL lock_timeout = '5s'`; `pg_advisory_xact_lock(hashtext('tenant:' || id))` (pinned to `locked.ts:63` by D4);
    - `UPDATE tenants SET db_url_encrypted = encrypt(pooled URL), neon_project_id = new, lifecycle_version = lifecycle_version + 1 WHERE id = … AND status IN ('provisioning','active','suspended') AND db_url_encrypted = oldUrlEncrypted AND neon_project_id = oldProjectId AND (deletion_scheduled_for IS NULL OR deletion_scheduled_for > now())`;
@@ -350,7 +350,8 @@ jobs:
 
 ### 6.4.1 `classifyEndpoint(url, candidates)` (used by (d) and the override)
 **On the override path the project exists by definition**, so the table below isn't used there. Instead:
-- a successful login, or any server response after authentication → **answers** (refuse `reachable`);
+- **`3D000` is checked first** → `database-missing` (below);
+- then a successful login, or any other server response after authentication → **answers** (refuse `reachable`);
 - first, `GET /projects/{neon_project_id}/endpoints` (a failed call → `proof-failed`):
   - **the URL's host is listed:** `28P01` → **credentials problem** (refuse; proof `refused:credentials`: the data is intact, and a rebuild would lose hours). A proxy error that isn't `28xxx`, or a socket error or timeout → **unreachable**;
   - **the URL's host isn't listed:** run proof (d)'s candidate check. If a live candidate serves it → refuse `reachable` (a stale id). Otherwise the compute endpoint is gone from a live project → **unreachable** (`endpoint-gone`), whatever the error;
@@ -420,7 +421,7 @@ The app's key must be an **organisation** key. `PRODUCTION-DEPLOY.md` 5.5 is rew
 |---|---|---|
 | leftover project | a project whose latest action is `intended`/`created`/`failed` for over 6 h **and that no tenant row references** (one that is referenced is healed to `linked`) | `rebuild-orphan-project` (global / project id or name; detail includes `tenant_id` and slug): "delete it in the Neon console". **Resolved** when the daily check finds no project by that id or name; the check then appends `gone-confirmed`, so it isn't re-checked. **If a tenant row references a `failed` project** (a commit that landed while cleanup couldn't prove it), the check appends `linked` and raises the watch instead. |
 | skipped workspace reachable | a tenant **in a migratable status with a URL** whose newest `skip` row (status `skipped`) is newer than its newest `migrated` row, **and** that has a 3b `ok` backup finished after that skip. It's reachable again, but the code deployed while it was skipped may be ahead of its schema. | `skipped-workspace-reachable` (global / tenant id; detail: slug): "run Deploy to Production (normal) now". **Resolved when a `migrated` row newer than the skip exists** (any successful migration of it), **or when the tenant is no longer migratable** (deleted). |
-| disaster run stuck | a run `running` for over 6 h | `disaster-run-stuck` (global). **The digest first raises the alert for any row `running` over 6 h, then closes `running` rows older than 332 minutes as `fail` (`abandoned`)**: past the task's 330-minute deadline it is certainly dead. So the alert shows once, and resolves the next day. |
+| disaster run stuck | a run `running` for over 345 minutes | `disaster-run-stuck` (global). **One threshold, 345 minutes** (past the task's 330-minute deadline, its 335-minute hard exit and ECS's stop): the digest raises the alert for a row `running` that long, and closes it as `fail` (`abandoned`) in the same run. The task's own final update doesn't overwrite a row that's already closed. So the alert shows once, and resolves the next day. |
 | rehearsal failed | the newest `rehearse` run (scheduled or by hand) is `fail`, or no rehearsal has passed in 40 days, **anchored to the first control-plane `ok` backup** (3b's anchor), so a rehearsal that never even records a row still alerts | `disaster-rehearse-failed` (global); **resolved** when the newest rehearsal passes |
 | original returned | an open watch's project answers 200 (or raised at the switch for an override) | `rebuild-original-returned` (global / old project id): "the original exists. Don't open it: ask the customer whether their re-entered hours are complete, then delete it in the Neon console (runbook A.6)". **Resolved on 404 alone.** |
 | original recoverable | a watched original answers 404, **is** in the org key's recoverable list, and **was never reported `returned`** (so it wasn't deliberately deleted by the founder after returning) | `rebuild-original-recoverable` (global / old project id): "the original can still be recovered in Neon until about <first seen in the list + 7 days>. Recovering it won't switch the workspace back (the button refuses to switch to a live original). It would become a 'returned' copy, for you and the customer to settle (runbook A.6)". Resolved when it leaves the list, or returns. |
@@ -434,7 +435,7 @@ The app's key must be an **organisation** key. `PRODUCTION-DEPLOY.md` 5.5 is rew
 - **The override's original** exists at the switch, so "returned" is raised then (above) and stays until it 404s. **`tenant:delete` refuses while any open `rebuild-original-returned` names the tenant.** So a workspace can't be deleted while a copy of its data still exists in Neon, and the copy is deleted first.
 
 ### 6.9 Runbook A (`RESTORE.md`, "Disaster: workspaces")
-1. **Neon console:** if the project is listed as deleted and recoverable, recover it there. Nothing is lost; stop. (If Neon's recovery itself fails, contact Neon support. After its 7-day window the button proceeds normally.)
+1. **Neon console:** if the project is listed as deleted and recoverable, recover it there. Nothing is lost; stop. (If Neon's recovery itself fails, contact Neon support and the lead. Until it's recovered, or its 7-day window passes and the button can proceed, deploys fail on this workspace.)
 2. **Unreachable but not deleted** (check status.neon.tech): **as soon as the outage looks long, press with the override** (step 3). If 3b's backups have already failed to connect twice over 4 hours or more, that press rebuilds at once, and the email names that evidence. Otherwise it only records the observation, starts the 4-hour clock, and tells you when to press again. Wait for Neon meanwhile.
 3. Find the workspace id (in the digest's alerts or `tenant:admin show <slug>`). Actions → **Disaster restore** → `workspace`, the id(s) or `all-lost`, override if needed, confirm `workspace` → approve. **To cancel, cancel the run**: its last step stops the task.
 4. **Right away:** run **Deploy to Production**. (If the digest ever says `skipped-workspace-reachable`, a skipped workspace came back by itself: run Deploy to Production, normal.) Tick `skip_lost_workspaces` if other workspaces are still lost. This applies migrations, and any database rules added since the backup, as soon as possible. The workspace is live at the backup's schema from the switch (within 60 s) until this deploy finishes.
@@ -460,6 +461,7 @@ The app's key must be an **organisation** key. `PRODUCTION-DEPLOY.md` 5.5 is rew
 | start | 200, override: endpoint listed, `28P01` | failed `credentials` | `proof refused:credentials` (skippable) |
 | start | 200, override: endpoint listed and a proxy/socket error, or endpoint not listed and no candidate serves it | unreachable → the evidence rules | as below |
 | start | 200, override: `3D000` (database missing) | failed `database-missing` | proof `refused:database-missing`; the message points to point-in-time restore |
+| created (gone) | the re-check: no longer 404, or proof (d) answers or is unproven | cleanup | proof `proof-failed`; "the original is back" |
 | created (override) | the re-check before the switch isn't "unreachable" | failed `reachable-now` | cleanup; proof `refused:reachable`/`proof-failed` |
 | start | 200, override, unreachable, no 4 h evidence | failed `observed` | `proof observed-unreachable` |
 | start | 200, override, unreachable, evidence ≥ 4 h | proven | `proof unreachable-4h` |
@@ -585,9 +587,10 @@ Plus 3b's fakes (S3, KMS, SNS) and a new fake `LogReader`, a fake ECS list, a sc
   - network-first on the proof (d) path;
   - the `SWITCHING` line written before the commit;
   - the leftover check healing a referenced `failed` project to `linked`;
-  - older `running` runs closed as abandoned (by the next run, and by the digest after 332 minutes);
+  - older `running` runs closed as abandoned (by the next run, and by the digest after 345 minutes);
   - `auto` with no eligible workspace fails;
-  - the override re-check's outcomes;
+  - the override re-check's outcomes (credentials on a listed endpoint → `refused:credentials`; endpoint-gone → proceeds; `3D000` → `refused:database-missing`; 404 → `proof-failed`);
+  - the gone path's re-check abort ("the original is back");
   - `3D000` → `database-missing`;
   - `skipped-workspace-reachable` raised, and resolved by any later migration of the workspace: skip → rebuild (`linked`) → deploy → resolved; skip → 3b `ok` → deploy → resolved;
   - not-reached workspaces reported "not started";
@@ -611,12 +614,12 @@ Plus 3b's fakes (S3, KMS, SNS) and a new fake `LogReader`, a fake ECS list, a sc
   - the audit, `linked`, the watch and the `LINKED` line recorded;
   - the old database untouched; no migrations run;
   - the email has the backup time and the A.7 line;
-  - **the task's stdout (the 365-day log group) contains no slug** (invariant 6).
+  - **the task's stdout (the 365-day log group) contains no slug** (invariant 6), also on R2's failure paths, including a fake Neon 4xx whose body names the project.
 - **R2:** every §7.1 failure row leaves the row unchanged, with the task deleting what it created (404 in the fake); a failed delete → `failed` and the leftover finding.
 - **R3:** `changed-meanwhile`.
 - **R4:** `all-lost` picks exactly the gone tenants (never via the override); a tenant whose project 404s but whose URL still connects is **not** picked.
 - **R5b:** `workspace` started by the schedule (startedBy not `gh-`/`cloudshell-`) → refused; `rehearse` from the schedule → runs.
-- **R5:** the override: (also) **3b failures at stage `upload` or `row` → not evidence**; a single connect-stage failure → not enough; two connect-stage failures spanning 4 h with no `ok` → evidence; **a rebuilt workspace that then flaps:** evidence from before its `linked` row is ignored; **observed, then reachable (a 3b `ok`), then unreachable:** the old observation is ignored; no other workspace reachable → `network-unproven`. And: a first press records `observed-unreachable` and refuses; a press 4+ hours later (fake clock) proceeds; with 3b failure rows, a first press proceeds; an auth error with the endpoint still served → refused; Neon's proxy messages labelled `connection-refused` count as evidence.
+- **R5:** the override: (also) **endpoint-gone end to end**: the fake answers `28P01` and the host isn't among the project's endpoints, no candidate serves it; the first press records `observed-unreachable`, and a press 4+ h later (fake clock) switches, the re-check before the switch included; **3b failures at stage `upload` or `row` → not evidence**; a single connect-stage failure → not enough; two connect-stage failures spanning 4 h with no `ok` → evidence; **a rebuilt workspace that then flaps:** evidence from before its `linked` row is ignored; **observed, then reachable (a 3b `ok`), then unreachable:** the old observation is ignored; no other workspace reachable → `network-unproven`. And: a first press records `observed-unreachable` and refuses; a press 4+ hours later (fake clock) proceeds; with 3b failure rows, a first press proceeds; an auth error with the endpoint still served → refused; Neon's proxy messages labelled `connection-refused` count as evidence.
 - **R6:** `rehearse` (also: **a rehearsal that fails mid-restore still deletes its project**; the deleted endpoint classified "doesn't answer"):
   - no switch; the project deleted;
   - the recoverable-list and canary checks;
@@ -817,3 +820,12 @@ As 3b §14, plus `BLUEPRINT-STANDARD.md` §3.7 and the early CI push.
   - D5 and invariant alignment;
   - the runbook note for the monthly rehearsal time.
 - **Noted for the product owner:** refreshing a workspace's credentials or compute endpoint within the same project (a no-loss repoint) would need its own LB-D6 decision. It's out of scope here.
+
+**Confirmation pass 9** (one fresh reviewer on v3.8): **1 MEDIUM (stale text), 5 LOW; no HIGH.** Fixed in v3.9:
+- **the override passages (invariant 2, step 2.2, step 8) now follow §6.4.1:** endpoint-gone is unreachable, and the re-check aborts only on a non-unreachable result, with mapped proof statuses; an end-to-end endpoint-gone test.
+- **LOWs:**
+  - the gone-path re-check row and test;
+  - one 345-minute stuck threshold, with no overwrite of a closed row;
+  - runbook A.1's deploy note for a failed Neon recovery;
+  - `3D000` checked first on the override path;
+  - Neon errors carry no body, and no-slug stdout is asserted on failure paths.
