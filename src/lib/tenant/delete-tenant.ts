@@ -163,10 +163,6 @@ async function paymentActivity(
 }
 
 /**
- * Abort of a run that had set `deleting`: reconcile + transition table, put the status back, audit, alert — and
- * COMMIT. The audit and alert are always written: a GOOD transition may already have restored the status itself.
- */
-/**
  * feature-plan-disaster-restore.md §6.8 and §10, checked inside step 3's tenant lock (the disaster switch takes the same
  * lock): refuse while a copy of this workspace's data may still exist in Neon (an open `rebuild-original-returned` or
  * `rebuild-orphan-project` naming it), and refuse if the database changed since step 1 (a switch between
@@ -184,6 +180,10 @@ async function disasterGuard(tx: Parameters<Parameters<typeof withTenantLock>[1]
   }
 }
 
+/**
+ * Abort of a run that had set `deleting`: reconcile + transition table, put the status back, audit, alert — and
+ * COMMIT. The audit and alert are always written: a GOOD transition may already have restored the status itself.
+ */
 async function restore(tenantId: string, reason: string, actor: string): Promise<void> {
   const now = new Date();
   await withTenantLock(tenantId, async (tx) => {

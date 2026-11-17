@@ -220,3 +220,20 @@ describe('D5: deploy-prod.yml passes --skip-lost only when the boolean is true',
     });
   }
 });
+
+describe('fix round 1 (D5 additions)', () => {
+  it('M01: the skippable proof statuses, pinned literally (refused:database-missing among them)', () => {
+    expect([...SKIPPABLE_PROOFS]).toEqual(['gone', 'unreachable-4h', 'observed-unreachable', 'refused:credentials', 'refused:database-missing']);
+    expect([...DECISIVE_PROOFS]).toEqual([...SKIPPABLE_PROOFS, 'reachable-again', 'refused:reachable']);
+  });
+
+  it('M20: without the flag nothing is skippable: --check prints the FAILED row by slug; a normal run counts it as pending and runs the handshake', async () => {
+    const chk = setup({ facts: { [T(1)]: facts({ proof: proof('gone') }) }, lost: { 'postgres://fake/lost': true } });
+    expect(await runMigrateAll({ check: true, concurrency: 1 }, chk.d)).toBe(1);
+    expect(chk.logs.find((l) => l.includes('test-dr-lost'))).toContain('FAILED');
+    expect(chk.logs.join('\n')).not.toContain(T(1));
+    const run = setup({ facts: { [T(1)]: facts({ proof: proof('gone') }) }, lost: { 'postgres://fake/lost': true } });
+    expect(await runMigrateAll({ check: false, concurrency: 1 }, run.d)).toBe(1);
+    expect(run.logs.some((l) => l.startsWith('✗ could not take the migration run lock'))).toBe(true); // the handshake ran
+  });
+});

@@ -8,7 +8,8 @@ import postgres from 'postgres';
  * locked read (the real switch takes the same tenant lock, so it can only land before it). Throwaway local databases.
  */
 
-const hook: { beforeRead: null | (() => Promise<void>) } = { beforeRead: null };
+/** Runs `fn` right before the `onCall`-th readTenant (1 = step 3's reconcile section, 2 = its set-deleting section). */
+const hook: { beforeRead: null | (() => Promise<void>); onCall: number; calls: number } = { beforeRead: null, onCall: 1, calls: 0 };
 vi.mock('@/lib/billing/stripe', async () => (await import('./fakes/fake-stripe')).stripeModule);
 vi.mock('@/lib/email/client', async () => (await import('./fakes/fake-resend')).clientModule);
 vi.mock('@/lib/tenant/lifecycle-store', async (importOriginal) => {
@@ -16,8 +17,9 @@ vi.mock('@/lib/tenant/lifecycle-store', async (importOriginal) => {
   return {
     ...orig,
     readTenant: async (...a: Parameters<typeof orig.readTenant>) => {
+      hook.calls++;
       const h = hook.beforeRead;
-      if (h) { hook.beforeRead = null; await h(); }
+      if (h && hook.calls === hook.onCall) { hook.beforeRead = null; await h(); }
       return orig.readTenant(...a);
     },
   };
@@ -38,7 +40,7 @@ const admin = async <T,>(fn: (sql: postgres.Sql) => Promise<T>) => { const s = p
 
 describe.skipIf(!(cpReady && loopback(CP_URL)))('R8: a disaster switch between tenant:delete\'s steps 2 and 3', () => {
   beforeEach(async () => { stripeState.reset(); await cleanupLifecycleTenants(); });
-  afterEach(async () => { hook.beforeRead = null; await cleanupLifecycleTenants(); });
+  afterEach(async () => { hook.beforeRead = null; hook.onCall = 1; hook.calls = 0; await cleanupLifecycleTenants(); });
   afterAll(async () => { for (const n of created) await admin((s) => s.unsafe(`DROP DATABASE IF EXISTS ${n} WITH (FORCE)`)); });
 
   it('is refused inside step 3\'s lock: nothing deleted, the workspace still active', async () => {
@@ -61,4 +63,33 @@ describe.skipIf(!(cpReady && loopback(CP_URL)))('R8: a disaster switch between t
     expect(await admin(async (s) => (await s`SELECT 1 FROM pg_database WHERE datname = ${name}`).length)).toBe(1);
     expect((await getTenantRow(t.id)).status).toBe('active');
   });
+
+  // Fix round 1, FR4 (M53, M54, M65): each locked section's guard alone, and a URL-only or a project-id-only change.
+  async function eligible() {
+    const name = `cadenzpoint_deltest_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    await admin((s2) => s2.unsafe(`CREATE DATABASE ${name}`));
+    created.push(name);
+    const u = new URL(CP_URL);
+    u.pathname = `/${name}`;
+    const NOW = new Date();
+    const t = await makeTenant({ trialEndsAt: daysFrom(NOW, -120), deletionScheduledFor: daysFrom(NOW, -1), dbUrlEncrypted: encrypt(u.toString()), neonProjectId: null });
+    const row = await getTenantRow(t.id);
+    await insertNotice(t.id, 'deletion-notice', row.trialEndsAt!, { sentAt: daysFrom(row.deletionScheduledFor!, -20), providerMessageId: 'msg_dn' });
+    return { t, url: u.toString(), name };
+  }
+  for (const section of [1, 2]) {
+    for (const change of ['url', 'project'] as const) {
+      it(`section ${section} alone refuses a ${change === 'url' ? 'URL-only' : 'project-id-only'} change`, async () => {
+        const { t, url, name } = await eligible();
+        hook.onCall = section;
+        hook.beforeRead = async () => {
+          await controlDb.update(tenants).set(change === 'url' ? { dbUrlEncrypted: encrypt(`${url}?rebuilt=1`) } : { neonProjectId: 'prj-rebuilt' }).where(eq(tenants.id, t.id));
+        };
+        const r = await deleteTenant({ slug: t.slug, apply: true, actor: 'test', log: () => {} });
+        expect(r.outcome).toBe('refused');
+        if (r.outcome === 'refused') expect(r.reason).toContain('database changed since this run started');
+        expect(await admin(async (s2) => (await s2`SELECT 1 FROM pg_database WHERE datname = ${name}`).length)).toBe(1);
+      });
+    }
+  }
 });

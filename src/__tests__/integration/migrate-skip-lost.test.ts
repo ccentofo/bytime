@@ -86,6 +86,23 @@ describe.skipIf(!SERVER_URL)('R7: migrate-all --skip-lost against real databases
     expect((await sql`SELECT count(*)::int AS n FROM disaster_actions`)[0].n).toBe(before);
   }, 240_000);
 
+  it('M10: a 3b `ok` backup that finished after the proof ends it (the facts reader\'s backup SQL, for real): not skipped, FAILED by slug', async () => {
+    const LOST2 = '33333333-3333-4333-8333-333333333333';
+    await sql`INSERT INTO tenants (id, slug, name, status, db_url_encrypted, neon_project_id) VALUES
+      (${LOST2}, 'test-dr-lost2', 'Lost Two', 'active', ${encrypt(`postgres://neondb_owner:pw@127.0.0.1:${proxy.port}/tenant_x2`)}, 'p-lost2')`;
+    try {
+      await sql`INSERT INTO disaster_actions (run_id, tenant_id, kind, status, old_project_id, at) VALUES ('gh-9-1', ${LOST2}, 'proof', 'gone', 'p-lost2', now() - interval '2 days')`;
+      await sql`INSERT INTO database_backups (tenant_id, target, run_id, status, target_deadline_ms, started_at, finished_at)
+        VALUES (${LOST2}, 'tenant', 'test-m10', 'ok', 1800000, now() - interval '1 day', now() - interval '1 day')`;
+      const r = await run(cp.url, ['--check', '--skip-lost']);
+      expect(r.status, r.stdout + r.stderr).toBe(1);
+      expect(r.stdout).toMatch(/test-dr-lost2\s+\|\s+active\s+\|\s+FAILED/);
+      expect(r.stdout).toMatch(new RegExp(`${LOST}\\s+\\|\\s+active\\s+\\|\\s+skipped`)); // the other proof still holds
+    } finally {
+      await sql`UPDATE tenants SET status = 'deleted', db_url_encrypted = NULL WHERE id = ${LOST2}`;
+    }
+  }, 240_000);
+
   it('the lost tenant comes back: migrated under the lock (something pending), reachable-again and migrated rows written', async () => {
     // Point it at a real (empty) database: it now connects and has every migration pending, so the run takes the lock.
     const back = await createScratchDb('t');
