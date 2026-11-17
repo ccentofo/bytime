@@ -7,7 +7,7 @@
 ## Verdict: **READY** at `da49414`
 **Merge-gate items for the product owner:**
 - CI must pass on the push.
-- `backup.ts` is on the backup deploy list, so the merge asks for one **Backup system** deploy approval. It's harmless while the AWS stack doesn't exist yet: the deploy is gated until Phase 13b.
+- `backup.ts` is on the backup deploy list, but `backup-deploy.yml` runs only once the repository variable `AWS_BACKUPS_ENABLED` is `true` (the founder's last setup step). Until then the merge requests no deploy approval; afterwards, a change like this one asks for one **Backup system** approval.
 
 ## The defect
 In `scripts/backup/backup.ts` `dumpOnce`, a target deadline or a stop that fired during the version query rejected the `pipelineDone` deferred before anything awaited it. In the image, `installCrashHandler` turns an unhandled rejection into FATAL and **exit 1 for the whole backup run**, not just that target.
