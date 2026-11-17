@@ -29,6 +29,7 @@ import type { SpawnFn } from './lib/child';
 import type { HostMap } from './lib/host-map';
 import { MINUTE } from './lib/util';
 import { runWorkspace } from './disaster-workspace';
+import { runRehearse } from './disaster-rehearse';
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const RUN_ID_RE = /^[A-Za-z0-9_/-]{1,80}$/;
@@ -139,7 +140,7 @@ export interface DisasterDeps {
   lockConnect?: Connect;
   concurrency?: number;
   /** Tests only: shorter polls and gaps (the 10-second recoverable polls, the 60-second override gap, retries). */
-  timing?: Partial<{ recoverablePolls: number; recoverablePollMs: number; overrideGapMs: number; lockRetryMs: number; cleanupRetryMs: number; cleanupLockTimeout: string; cleanupBudgetMs: number }>;
+  timing?: Partial<{ recoverablePolls: number; recoverablePollMs: number; overrideGapMs: number; lockRetryMs: number; cleanupRetryMs: number; cleanupLockTimeout: string; cleanupBudgetMs: number; deletedEndpointWaitMs: number; deletedEndpointPollMs: number }>;
   /** Tests only, in-process: fake Neon hosts → the local server (impact analysis §4, D10). main.ts never sets it. */
   hostMap?: HostMap;
   /** Tests only: seams for the termination and concurrency cases (R9). */
@@ -190,8 +191,7 @@ export interface RunContext {
 /** The modes (filled in by feature-plan-disaster-restore.md §6.4 and §6.5). */
 export type ModeRunner = (ctx: RunContext) => Promise<RunOutcome>;
 
-const notBuilt: ModeRunner = async (ctx) => ({ pass: false, results: [], email: [`mode ${ctx.args.mode} is not in this image yet`] });
-export const MODES: Record<DisasterMode, ModeRunner> = { workspace: runWorkspace, rehearse: notBuilt };
+export const MODES: Record<DisasterMode, ModeRunner> = { workspace: runWorkspace, rehearse: runRehearse };
 
 export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promise<{ exitCode: number; outcome: RunOutcome | null }> {
   const now = deps.now ?? (() => new Date());

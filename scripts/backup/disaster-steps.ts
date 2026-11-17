@@ -45,7 +45,7 @@ export interface StepEnv {
   /** `rebuild` (workspace) or `rehearse`: the kind of the project rows. */
   projectKind: 'rebuild' | 'rehearse';
   /** Seams for the 60-second gaps and the 10-second polls (tests shorten them). */
-  timing: { recoverablePolls: number; recoverablePollMs: number; overrideGapMs: number; lockRetryMs: number; cleanupRetryMs: number; cleanupLockTimeout: string; cleanupBudgetMs?: number };
+  timing: { recoverablePolls: number; recoverablePollMs: number; overrideGapMs: number; lockRetryMs: number; cleanupRetryMs: number; cleanupLockTimeout: string; cleanupBudgetMs?: number; deletedEndpointWaitMs?: number; deletedEndpointPollMs?: number };
 }
 
 export class Aborted extends Error {
