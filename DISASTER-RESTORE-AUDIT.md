@@ -6,14 +6,25 @@
 - 9 dev commits, C1–C8b, auditors at `3e0685b`;
 - C8c (`11667dd`), docs only, read by the lead.
 
-## Verdict: **NOT READY, fix round 1 required**
+## Verdict: **READY** at `b788701` (after fix round 1)
+Round 1 (`11667dd`) was NOT READY (§4): 1 MEDIUM code defect, 3 MEDIUM test gaps, about 11 LOWs. Fix round 1 (FR1–FR16) is verified in §6. The lead's gates, integration alone, break-it (10/10) and checks (§7) all pass.
+
+**Merge-gate items for the product owner:**
+- **Push the fix round** (`b788701` plus the lead's commits) and get one green CI run. The early push (`d7cab1f`) passed:
+  - the backup image build and in-image self-check;
+  - CI's cfn-lint block as written;
+  - lint/build/unit (bash 5);
+  - the migration check.
+
+  Its one integration failure was the M67 test's order dependence, fixed in `b788701` (§6.1).
+- `PRODUCTION-DEPLOY.md` Phase 13c (AWS, Neon and GitHub, with the founder) stays a production-readiness step, not a merge requirement.
+
+No scope items for the product owner. **Q-A1 is decided** (F-3b gets its own branch, 3b-fix).
+
+## Round 1 verdict (kept for the record): NOT READY, fix round 1 required
 - **Severity:** no HIGH; 1 MEDIUM code defect, 3 MEDIUM test gaps, about 11 LOW code and doc defects, and further test gaps.
 - **No unsafe path:** no path proves a live workspace gone, deletes a project a tenant points at, or puts a target id or slug in the public log through the button's form.
-- **Fix round:** none of the findings changes what the product does, so the fix round (§5) goes to the dev directly, inside the approved blueprint.
-
-**For the product owner:**
-- **Early push:** it didn't happen. CI hasn't yet run on this branch (the image build, CI's cfn-lint block as written, bash 5).
-- **Q-A1, a 3b defect found by the dev:** the decision is where to fix it (§4, F-3b).
+- **Fix round:** none of the findings changes what the product does, so the fix round (§5) went to the dev directly, inside the approved blueprint.
 
 ## 1. Scope check
 - **Every changed file** (71) is in the blueprint's blast radius (§10) or D13, or is explained:
@@ -154,6 +165,58 @@ Then:
 
 **Not in this round:** F-3b, until the product owner decides where it goes (Q-A1).
 
+## 6. Verification after fix round 1 (`b788701`)
+**Commits:** `e1da0bd`, `e9dc703`, `93492af`, `0849d9f`, `2d5fbd1`, `14c71bf`, `1ccc1c7`, `b788701` (the lead's `d7cab1f` sits between them). They touch only the files the fix round names, plus their tests, and add no new behaviour.
+
+**Code read by the lead:**
+- **FR1:** `overrideProof = proof.status === 'unreachable-4h'` picks the re-check and the `returned` flag; the typed override no longer does.
+- **FR5:** `throwIfAborted` sits right before `switchWorkspace`.
+- **FR6:** a `jq` test refuses any input containing `\r` or `\n` before anything prints.
+- **FR7:** a lock timeout returns `lock-timeout` only after `attempt > 3`.
+- **FR8:** the healed row and line carry `backup_key`, `backup_started_at` and the SHA-256.
+- **FR9:** a failed lookup → `proof-failed`, and the email's "No workspace…" line appears only with no results.
+- **FR10:** the operation wait checks the signal on each poll, and its abortable pause throws with the project id for cleanup.
+- **FR11:** `pgQuery`, a shared hard-deadline helper; the note makes at most 2 answers from at most 4 tries. The dev's FR11 test found that tries weren't capped (about 39 × 3 s).
+- **FR12:** the sync runs in `pool.transaction`, and `withLockedPool`'s comment is corrected.
+- **FR13, FR15:** docs, with a static test.
+- **FR14:** the test's own rows only.
+- **FR16:** the comment is moved.
+- **Extra, accepted:** a project that still answers after DELETE records an explicit `failed` detail.
+
+**The dev's checks:** 42 of 42 new revert checks caught; the original 33 still caught on the fixed code.
+
+**Lead gates:**
+
+| Gate | Result |
+|---|---|
+| `npx tsc --noEmit` | ✅ exit 0 |
+| `eslint . --ignore-pattern '.claude/**'` | ✅ 0 errors (39 pre-existing warnings) |
+| `npm run test` | ✅ 258 files; 3,075 passed, 1 skipped |
+| `npm run db:safety` | ✅ |
+| Integration, **run alone**, with the memory-noted environment and the pg 16 tools, at 17:40–17:50 Eastern | ✅ 105 files passed, 2 skipped; **976 passed, 0 failed**; no scratch databases left |
+
+**Lead break-it** (`/tmp/dr-breakit/run.py`, uncommitted; one exact-text edit per case, run its test, expect FAIL, restore): **10 of 10 caught, tree clean, no leftover databases.**
+1. the re-check following the typed override (FR1);
+2. the positive control without the in-list rule;
+3. the switch without URL byte equality;
+4. cleanup deleting a project the tenant points at;
+5. a newer 3b `ok` no longer ending a proof;
+6. `28xxx` no longer classed as auth;
+7. a skipped workspace printed by slug;
+8. a Neon-failure day resolving Neon alerts (FR2);
+9. `tenant:delete` ignoring an open orphan alert;
+10. the button accepting a multi-line input (FR6).
+
+The integration cases loaded the control-plane environment, so a setup failure can't pass as a catch.
+
+### 6.1 CI on the early push (`d7cab1f`, run 44191551685)
+- **Lint, Build & Unit Tests:** ✅, including the D2 button tests under bash 5.
+- **Backup templates and image:** ✅. That's the first Docker build of the image with the disaster code, its in-image self-check, and CI's cfn-lint block run as written.
+- **Migration Sync Check:** ✅.
+- **Integration Tests:** ❌ one test, `disaster-rehearse.test.ts:128` (M67, `expected +0 to be 1`). It depended on test order: an earlier test's canary could be picked. The test fix is `b788701`, the commit after the push; the lead's solo run on `b788701` passed. **A green run on the final commit is still the merge gate.**
+
+**Residual LOW (dev control plane only, accepted):** the integration suite's syncs leave resolved `rebuild-watch-check-failed` rows on the developer's local control plane, the same class as 3b's S9 note. Production and CI are unaffected.
+
 ## 7. Checks run by the lead (`DISASTER-RESTORE-BROWSER-CHECKS.md`, at `11667dd`, 2026-11-17)
 **Method:** every bash block was extracted verbatim from the file by a script (31 blocks), and each ran in a fresh `zsh -i -s`. There's no app server: 3c has no screens. Throwaway workspace `dr1117170416`.
 
@@ -181,6 +244,8 @@ Then:
 
 **An earlier attempt at E.3 was spoiled while the auditors ran.** `disaster-monitoring.test.ts`'s sync resolved the test alert 4 s before the delete, so the delete went through. That's FR14; the run above was alone.
 
+**Re-run after fix round 1 (`b788701`):** all 32 blocks verbatim in fresh shells, every **Expect** met. The added check B.4 (FR6): `refused: inputs must be a single line`, target shown 0 times, aws calls 0. Throwaway workspace `dr1117175151`, cleaned (0 databases, 0 rows, 0 test alerts left).
+
 **Not covered locally:**
-- the image build, CI's cfn-lint block and bash 5 (CI);
+- the image build, CI's cfn-lint block and bash 5 (CI; all passed on the early push);
 - every AWS, Neon and GitHub step: the button's first press, the rehearsal, the emails and the console steps (`PRODUCTION-DEPLOY.md` Phase 13c, with the founder).

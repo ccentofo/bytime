@@ -1,6 +1,6 @@
 # Disaster restore button (3c): checks
 
-> **Status: RUN by Planning on 2026-11-17 against `11667dd`:** every block rehearsed verbatim in a fresh zsh, all as expected (results in `DISASTER-RESTORE-AUDIT.md` §7). It's re-run after the fix round. Results go into `DISASTER-RESTORE-AUDIT.md`, with outputs. The product owner reviews those (the 2026-11-13 decision).
+> **Status: RUN by Planning on 2026-11-17, first against `11667dd`, then again against `b788701` after fix round 1** (B.4 added for FR6). Every block was rehearsed verbatim in a fresh zsh, all as expected (results in `DISASTER-RESTORE-AUDIT.md` §7). Results go into `DISASTER-RESTORE-AUDIT.md`, with outputs. The product owner reviews those (the 2026-11-13 decision).
 
 Everything here runs **locally, with no AWS, no Neon, no GitHub and no Docker**. The parts that need them come later with the founder: the button's first press, the rehearsal, the emails and the console steps (`PRODUCTION-DEPLOY.md` Phase 13c). CI's `backup-checks` job proves the image build after the push.
 
@@ -80,7 +80,7 @@ case "${1:-}" in
     cp_sql "INSERT INTO disaster_actions (run_id, tenant_id, kind, status, at)
       VALUES ('test-drchk-migrated', '$(tid)', 'skip', 'migrated', clock_timestamp());" && echo "skip row: migrated now" ;;
   button) # button <id|text> <confirm>: run the button script as GitHub does, with a stand-in aws that logs its calls
-    T="${2:?targets}"; [ "$T" = id ] && T=$(tid)
+    T="${2:?targets}"; [ "$T" = id ] && T=$(tid); [ "$T" = id-newline ] && T="$(tid)"$'\n'"leakcheck-slug"
     mkdir -p /tmp/dr-stub; rm -f /tmp/dr-aws.log
     printf '#!/bin/bash\necho "$*" >> /tmp/dr-aws.log\ncase "$*" in *list-tasks*) echo 1 ;; esac\n' > /tmp/dr-stub/aws
     chmod +x /tmp/dr-stub/aws
@@ -88,7 +88,7 @@ case "${1:-}" in
     GITHUB_RUN_ID=1 GITHUB_RUN_ATTEMPT=1 GITHUB_EVENT_PATH=/tmp/dr-event.json PATH="/tmp/dr-stub:$PATH" \
       bash scripts/backup/disaster-button.sh | grep -v '^::add-mask::' > /tmp/dr-button.out
     cat /tmp/dr-button.out
-    echo "target shown in the visible log: $(grep -c -- "$T" /tmp/dr-button.out) time(s)"
+    echo "target shown in the visible log: $(grep -c -e "$(tid)" -e leakcheck-slug /tmp/dr-button.out) time(s)"
     echo "aws calls: $(cat /tmp/dr-aws.log 2>/dev/null | wc -l | tr -d ' ')"; cat /tmp/dr-aws.log 2>/dev/null ;;
   sync)   $TSX /tmp/dr-sync.mts sync 2>&1 | grep -E '^sync:'; alerts ;;
   digest) $TSX /tmp/dr-sync.mts digest 2>&1 | grep -E '^digest:' ;;
@@ -157,6 +157,16 @@ bash /tmp/dr-check.sh button id workspace
 - `refused: a disaster task is already running (RESTORE.md runbook A.11)`;
 - `target shown in the visible log: 0 time(s)`;
 - `aws calls: 1`, which is `ecs list-tasks … --family cadenzpoint-backup-disaster --desired-status RUNNING …`.
+
+### B.4 An input with a line break (possible through GitHub's API, not the form)
+The targets are the workspace id, a line break, then `leakcheck-slug`.
+```bash
+bash /tmp/dr-check.sh button id-newline workspace
+```
+**Expect:**
+- `refused: inputs must be a single line`;
+- `target shown in the visible log: 0 time(s)` (neither the id nor `leakcheck-slug`);
+- `aws calls: 0`.
 
 ## C. The disaster deploy path (`--skip-lost`)
 Each step runs the deploy's migrate command for the throwaway workspace only, then lists its disaster rows.
