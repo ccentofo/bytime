@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, timestamp, pgEnum, unique, boolean, integer, bigint, jsonb, uniqueIndex, index, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, text, timestamp, pgEnum, unique, boolean, integer, bigint, jsonb, uniqueIndex, index, primaryKey, char } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 export const tenantStatusEnum = pgEnum('tenant_status', [
@@ -218,3 +218,102 @@ export const tenantSeatBilling = pgTable('tenant_seat_billing', {
   lastError: text('last_error'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * feature-plan-database-backups.md §6.3: the backup system's records, written by the backup image's tasks (plain SQL with
+ * explicit column lists, scripts/backup/lib/sql.ts) and read by the daily digest (src/lib/tenant/backup-status.ts).
+ * Append-only except `restore_test_runs` (finished_at / status / detail / planned set once). Every table has `run_id`;
+ * tests mark their rows with a run id starting `test-`. ON DELETE CASCADE: tests delete tenant rows (production
+ * tombstones and never deletes).
+ */
+export const databaseBackups = pgTable('database_backups', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id').references(() => tenants.id, { onDelete: 'cascade' }), // null = the control plane
+  target: varchar('target', { length: 20 }).notNull(), // 'tenant' | 'control-plane'
+  runId: varchar('run_id', { length: 80 }).notNull(),
+  status: varchar('status', { length: 10 }).notNull(), // 'ok' | 'failed'
+  s3Key: text('s3_key'),
+  bytes: bigint('bytes', { mode: 'number' }),
+  sha256: char('sha256', { length: 64 }), // of the stored, encrypted object
+  rowCounts: jsonb('row_counts'), // { "<schema>.<table>": number }
+  serverVersion: varchar('server_version', { length: 40 }),
+  pgDumpVersion: varchar('pg_dump_version', { length: 80 }),
+  region: varchar('region', { length: 40 }), // parsed from the direct host; 'unknown' when it isn't a Neon host
+  targetDeadlineMs: integer('target_deadline_ms').notNull(),
+  error: text('error'), // an error summary (stage, codes, labels only: never a message line)
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+  finishedAt: timestamp('finished_at', { withTimezone: true }).notNull(),
+}, (table) => [
+  index('database_backups_tenant_status_idx').on(table.tenantId, table.status, table.finishedAt.desc()),
+  index('database_backups_run_idx').on(table.runId),
+  uniqueIndex('database_backups_s3_key_unique').on(table.s3Key).where(sql`${table.s3Key} IS NOT NULL`),
+]);
+
+/** §6.3 / §6.6: one row per daily audit run. */
+export const backupAudits = pgTable('backup_audits', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  runId: varchar('run_id', { length: 80 }).notNull(),
+  runAt: timestamp('run_at', { withTimezone: true }).notNull(),
+  oldestObjectAt: timestamp('oldest_object_at', { withTimezone: true }),
+  oldestKey: text('oldest_key'),
+  objectsOver29Days: integer('objects_over_29_days'),
+  totalObjects: integer('total_objects'),
+  totalBytes: bigint('total_bytes', { mode: 'number' }),
+  versioningStatus: varchar('versioning_status', { length: 20 }), // '' = never enabled
+  staleUploads: integer('stale_uploads'),
+  kmsKeyState: varchar('kms_key_state', { length: 40 }),
+  alertEmailConfirmed: boolean('alert_email_confirmed'), // null = the check failed
+  protectionDrift: text('protection_drift'), // null = everything present and equal
+  leftoverTestDbs: integer('leftover_test_dbs'), // null = sweep skipped (a restore test held the lock)
+  stuckTestDbs: integer('stuck_test_dbs'),
+  errors: text('errors'),
+}, (table) => [
+  index('backup_audits_run_at_idx').on(table.runAt),
+]);
+
+/** §6.3 / §6.7: one row per restore-test run. Not append-only: finished_at, status, planned and detail are set once. */
+export const restoreTestRuns = pgTable('restore_test_runs', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  runId: varchar('run_id', { length: 80 }).notNull(),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+  status: varchar('status', { length: 10 }).notNull(), // 'running' | 'pass' | 'fail'
+  planned: integer('planned'),
+  sweptTestDbs: integer('swept_test_dbs').notNull().default(0),
+  deadlineMs: integer('deadline_ms').notNull(),
+  targetDeadlineMs: integer('target_deadline_ms').notNull(),
+  detail: text('detail'),
+}, (table) => [
+  index('restore_test_runs_started_idx').on(table.startedAt),
+]);
+
+/** §6.3 / §6.7: one row per target tested. */
+export const restoreTestResults = pgTable('restore_test_results', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  testRunId: uuid('test_run_id').notNull().references(() => restoreTestRuns.id, { onDelete: 'cascade' }),
+  runId: varchar('run_id', { length: 80 }).notNull(),
+  target: varchar('target', { length: 20 }).notNull(),
+  tenantId: uuid('tenant_id').references(() => tenants.id, { onDelete: 'cascade' }),
+  backupId: uuid('backup_id').references(() => databaseBackups.id, { onDelete: 'set null' }),
+  s3Key: text('s3_key'),
+  backupStartedAt: timestamp('backup_started_at', { withTimezone: true }),
+  result: varchar('result', { length: 40 }).notNull(), // PASS | MISMATCH | FAIL:<stage>
+  detail: text('detail'),
+  durationMs: integer('duration_ms').notNull(),
+  testedAt: timestamp('tested_at', { withTimezone: true }).notNull(),
+}, (table) => [
+  index('restore_test_results_tenant_idx').on(table.tenantId, table.result, table.testedAt.desc()),
+  index('restore_test_results_run_idx').on(table.testRunId),
+]);
+
+/** §6.3 / §6.13: one row per permission-probe set (each task probes what its role must NOT be able to do). */
+export const backupPermissionChecks = pgTable('backup_permission_checks', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  runId: varchar('run_id', { length: 80 }).notNull(),
+  role: varchar('role', { length: 20 }).notNull(), // 'backup' | 'audit' | 'restore-test'
+  checkedAt: timestamp('checked_at', { withTimezone: true }).notNull(),
+  ok: boolean('ok').notNull(),
+  detail: jsonb('detail').notNull(),
+}, (table) => [
+  index('backup_permission_checks_role_idx').on(table.role, table.checkedAt),
+]);
