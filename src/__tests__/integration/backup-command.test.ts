@@ -378,8 +378,11 @@ describe.skipIf(!SERVER_URL)('backup command', () => {
         const run = runBackup(d);
         await waitUntil(async () => (await lockHolderPid(cp.url, BACKUP_LOCK_KEY)) !== null, 5_000);
         await sleep(300);
-        await terminate(cp.url, (await lockHolderPid(cp.url, BACKUP_LOCK_KEY))!);
+        // The migration holds its lock BEFORE the backup's lock session is terminated (deterministic: the re-take, 1 s
+        // later, always finds it held; opening it after the terminate raced the re-take on a slow runner, 3b-fix).
         migration = await acquireLock(cp.url, MIGRATE_RUN_LOCK_KEY);
+        expect(migration).not.toBeNull();
+        await terminate(cp.url, (await lockHolderPid(cp.url, BACKUP_LOCK_KEY))!);
         const r = await run;
         expect(r.exitCode).toBe(1);
         expect(d.lines).toContain('a migration started while the lock was lost; aborting in-flight dumps');
