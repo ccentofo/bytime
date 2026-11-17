@@ -1,9 +1,9 @@
 # Disaster restore button: one workspace (build queue 3c)
 
-> **Status:** **DRAFT v3.2**, 2026-11-17, lead architect.
+> **Status:** **DRAFT v3.3**, 2026-11-17, lead architect.
 > - **Split (product owner, 2026-11-17):** this item is the **one-workspace** button. The control-plane rebuild, its reconcile and the whole-account runbook moved to **3c-2** (brief in `LAUNCH-TRACKER.md`).
 > - **Outage override accepted (2026-11-17)** (§6.4 step 2).
-> - Rounds 1–2 and confirmation passes 1–2 are fixed here (§15). Confirmation pass 3 is next.
+> - Rounds 1–2 and confirmation passes 1–3 are fixed here (§15). Confirmation pass 4 is next.
 >
 > **Branch:** `disaster-restore-button`, from `main` at `8af3b2c`.
 >
@@ -60,8 +60,8 @@ A founder-only **button** (a GitHub Actions workflow behind the `aws-disaster` e
 **One-time founder setup** (Phase 13b; every click in `FOUNDER-ACCOUNTS-SETUP.md`):
 1. **GitHub:** the `aws-disaster` environment (you as required reviewer, `main` only, admin bypass off), verified by `curl`; one secret, `AWS_DISASTER_ROLE_ARN`.
 2. **Neon (Q1):** the Viewer member and its key.
-3. **Just before the first rehearsal (the same day):** create a project named `cadenzpoint-recoverable-canary` with your own account, then delete it. The first rehearsal must see it in the Viewer's recoverable list, or it fails.
-4. **AWS Parameter Store:** `/cadenzpoint/backup/neon-api-key`, `/cadenzpoint/backup/neon-org-id`, `/cadenzpoint/backup/restore-test-project-id` (the positive control's known project).
+3. **Just before the first rehearsal (the same day):** create a project named `cadenzpoint-recoverable-canary` with your own account, then delete it. The first rehearsal **with override `canary`** must see it in the Viewer's recoverable list, or it fails. The monthly schedule doesn't check the canary.
+4. **AWS Parameter Store:** `/cadenzpoint/backup/neon-api-key`, `/cadenzpoint/backup/neon-org-id`, `/cadenzpoint/backup/restore-test-project-id` and `/cadenzpoint/backup/control-plane-project-id` (the positive control's known projects; 3c-2 uses the second too).
 5. **The first rehearsal** (§12).
 
 **Founder duties in a disaster:**
@@ -125,8 +125,9 @@ A founder-only **button** (a GitHub Actions workflow behind the `aws-disaster` e
 2. **A switch needs proof:**
    - **Gone:**
      - (a) `GET /projects/{id}` → 404;
-     - (b) a **positive control**: the same key and `org_id` return 200 for the restore-test project (`RESTORE_TEST_PROJECT_ID`) **and** list the organisation's projects with no `unavailable_project_ids`;
-     - (c) the id is absent from the recoverable list (with `org_id`, paginated to the end).
+     - (b) a **positive control**: the same key and `org_id` list the organisation's projects with no `unavailable_project_ids`, **and** return 200 for one known project. That's the first that answers of: the restore-test project (`RESTORE_TEST_PROJECT_ID`), the control plane's project (`CONTROL_PLANE_PROJECT_ID`), or any other live workspace's project;
+     - (c) the id is absent from the recoverable list (with `org_id`, paginated to the end);
+     - (d) **the tenant's own URL doesn't answer:** connecting to its direct host fails with a connection error. A successful connection or an authentication error means something still serves that address (a stale `neon_project_id`), so refuse `reachable`.
    - **Or unreachable for 4 hours** (the override):
      - the project answers 200, but its database refuses connections now, with a connection error (not an authentication error);
      - **and** the same was observed at least 4 hours earlier, either by this button's own earlier observation (§6.4 step 2) or by 3b's failed backup rows (connection labels) with no `ok` since;
@@ -142,7 +143,7 @@ A founder-only **button** (a GitHub Actions workflow behind the `aws-disaster` e
    - the SHA-256 equals the control-plane row's, or the backup task's `BACKUP` log line;
    - the sidecar matches;
    - every count matches.
-5. **Every project the task creates is tracked before it exists.** The task deletes it again on any failure **before the switch commits**. A project that the tenant row points to is **never** deleted (re-read before every delete).
+5. **Every project the task creates is tracked before it exists.** On a failure before the switch commits, the task deletes it **only after a locked re-read proves the tenant row doesn't point to it**. If that can't be proven, it's kept and reported (the leftover finding). A project the tenant row points to is **never** deleted.
 6. **Customer data stays in Neon us-east-1 and AWS us-east-1.** No customer name appears in public logs or in the disaster log group (ids only). The founder isn't asked to view customer data.
 7. **Only the founder can start it, and every start is known:**
    - the `aws-disaster` environment and its OIDC trust;
@@ -156,10 +157,11 @@ While some workspaces are lost, `deploy-prod` would fail on them (`tenant-migrat
 - **`deploy-prod.yml`:**
   - gains the `workflow_dispatch` boolean input `skip_lost_workspaces` (default false). The step sets `SKIP_LOST: ${{ inputs.skip_lost_workspaces == true }}` and passes `--skip-lost` only when `[ "$SKIP_LOST" = true ]`, to both `db:migrate:all` and `db:migrate:check`;
   - **pins** `actions/checkout` and `actions/setup-node` by SHA, and the Vercel CLI by exact version (§2's rule).
-- **`--skip-lost`** skips a tenant only when all of these hold. Each skip prints "skipped (proven lost, awaiting rebuild)".
-  1. its newest `disaster_actions` row of kind `proof` says `gone` or `unreachable-4h` (any age);
+- **`--skip-lost`** skips a tenant only when all of these hold. Each skip prints "skipped (proven lost, awaiting rebuild)" **with the tenant's uuid, never its slug**: the deploy log is public. D5 and the §3.7 run assert that no slug appears on a skipped row. (Pre-existing, noted for the product owner: deploy-prod's table already prints every slug publicly. That's tracked separately, not changed here.)
+  1. its newest **decisive** `proof` row (`gone`, `unreachable-4h`, `observed-unreachable`, `reachable-again`, or `refused:original-exists|reachable|recoverable`; a transient `refused:proof-failed` or `network-unproven` doesn't supersede) says `gone`, `unreachable-4h` or `observed-unreachable` (any age);
   2. no `linked` row is newer, and no 3b `ok` backup finished after it;
-  3. **this deploy's `pendingCount` for it throws, with any error.** That's the first call, which connects and queries; `migrateOneTenant` catches it at `tenant-migration.ts:42-63`. A failure in `migrate()` itself is never skipped. A Neon proxy error for a deleted endpoint isn't a socket error. A tenant that connects is migrated normally, and its proof stops counting: **every `migrate-all` run** (with or without the flag, not `--check`) appends a superseding `proof` row `reachable-again` (`run_id` = `migrate-<timestamp>`) for each tenant with a live proof that connected.
+  3. **this deploy's `pendingCount` for it throws, with any error.** That's the first call, which connects and queries; `migrateOneTenant` catches it at `tenant-migration.ts:42-63`. A failure in `migrate()` itself is never skipped. A Neon proxy error for a deleted endpoint isn't a socket error. A tenant that connects is migrated normally, but only when the run holds the migrate lock. **A tenant excluded from step 0 that reconnects in the pass is reported "reachable again; re-run the deploy" instead of being migrated without the lock**, keeping 3b's rule that migrations and backups never overlap. Either way its proof stops counting: **every `migrate-all` run** (with or without the flag, not `--check`) appends a superseding `proof` row `reachable-again` (`run_id` = `migrate-<timestamp>`) for each tenant with a live proof that connected.
+- **Reading `disaster_actions` tolerates a missing table** (42P01 counts as "no proofs"), so the deploy that merges this item, which runs before the migration creating it, doesn't fail. Tested like `backup-locks.test.ts:198`.
 - `listTenants` gains the tenant `id`. The workflow calls `npm run db:migrate:all -- --skip-lost` (the `--`, or npm swallows the flag); D5 and the §3.7 run assert that the flag reaches argv.
 
   Any other unreachable tenant fails the deploy, as today.
@@ -207,7 +209,7 @@ jobs:
 3. **Start:** `aws ecs run-task` with:
    - `--started-by gh-$GITHUB_RUN_ID`;
    - the disaster family and Fargate, with the subnets and security group from the stack outputs and `assignPublicIp=ENABLED`;
-   - `containerOverrides` `command: ["disaster", MODE, "--targets", TARGETS, "--override", OVERRIDE, "--run-id", "gh-$GITHUB_RUN_ID"]`.
+   - `containerOverrides` `[{ name: "backup", command: ["disaster", MODE, "--targets", TARGETS, "--override", OVERRIDE, "--run-id", "gh-$GITHUB_RUN_ID"] }]` (the container's name from the task definition).
 
    Capture `tasks[0].taskArn` and `failures` only.
 4. **`--stop`:** `list-tasks --started-by gh-$GITHUB_RUN_ID` (retried 3 times, 10 s apart, since a just-started task may not be listed yet), then `stop-task` each, with output to `/dev/null`.
@@ -222,9 +224,9 @@ jobs:
 |---|---|
 | **`DisasterButtonRole`** (`/cadenzpoint-backup/cadenzpoint-backup-disaster-button`) | **Trust:** GitHub OIDC, `StringEquals` `aud`, and `sub = repo:ccentofo/bytime:environment:aws-disaster`. **Policy:** `ecs:RunTask` on `task-definition/cadenzpoint-backup-disaster:*` with `ecs:cluster` = the backup cluster; `ecs:ListTasks` on `*` with `ArnEquals ecs:cluster` (its resource type is container-instance, §4.3.4); `ecs:DescribeTasks` and `ecs:StopTask` on `task/cadenzpoint-backup/*`; `iam:PassRole` on the two disaster roles with `iam:PassedToService = ecs-tasks.amazonaws.com` (that's what stops a `taskRoleArn` override); `ecs:TagResource` (`ecs:CreateAction = RunTask`); `cloudformation:DescribeStacks` on the main stack. **`MaxSessionDuration: 21600`** (the workflow asks for 6 h; the default is 1 h). **Stated:** a role that may run the disaster family may run it with any command or environment (§4.3.1), and Describe/Stop also reach the backup tasks in that cluster, so the role equals the disaster task's powers plus stopping backup tasks. It's reachable only through the approved environment. |
 | **Task definition `disaster`** | The same image; `Command ["disaster"]`; 2 vCPU / 4 GiB; `StopTimeout: 120`; log group `/cadenzpoint/backup/disaster`, retention 365 days (ids only, invariant 6). |
-| **Disaster execution role** | ECR pull; logs; `ssm:GetParameters` on control-plane-url, encryption-key, neon-api-key, neon-org-id and restore-test-project-id. |
+| **Disaster execution role** | ECR pull; logs; `ssm:GetParameters` on control-plane-url, encryption-key, neon-api-key, neon-org-id, restore-test-project-id and control-plane-project-id. |
 | **Disaster task role** (`…/cadenzpoint-backup-disaster-task`) | `s3:GetObject`, `s3:ListBucket` (`v1/*`); `kms:Decrypt` (`purpose` condition); `logs:FilterLogEvents` on the backup task's log group; `ecs:ListTasks` (`*` + `ecs:cluster`) and `ecs:DescribeTasks` (`task/cadenzpoint-backup/*`) for the in-task single-run check; `sns:Publish` on the alert topic. **No SSM write.** |
-| **Schedule `cadenzpoint-backup-disaster-rehearse`** (the name fits `CfnExecRole`'s `schedule/default/cadenzpoint-backup-*`, `bootstrap.yml:265`) | `cron(17 15 1 * ? *)` UTC (the 1st at 15:17, when no backup job runs); `Input` command `["disaster", "rehearse", "--targets", "auto"]`, with the run id generated by the task. `auto` = a random workspace with an `ok` backup in the last 36 h. The Scheduler role gains `ecs:RunTask` on the disaster family **and `iam:PassRole` on the disaster execution and task roles**, as 3b's role lists its passed roles. |
+| **Schedule `cadenzpoint-backup-disaster-rehearse`** (the name fits `CfnExecRole`'s `schedule/default/cadenzpoint-backup-*`, `bootstrap.yml:265`) | `cron(17 15 1 * ? *)` UTC (the 1st at 15:17, when no backup job runs); `Input` command `["disaster", "rehearse", "--targets", "auto"]`, with the run id generated by the task. `auto` = a random workspace that is live, not due for deletion, and has an `ok` backup in the last 36 h. The Scheduler role gains `ecs:RunTask` on the disaster family **and `iam:PassRole` on the disaster execution and task roles**, as 3b's role lists its passed roles. |
 | **Policy updates** | The bucket's GetObject deny and the key's Decrypt/ReEncrypt deny gain the disaster task role. `expected-policies.ts`, `ALL_ROLES`, `rulePatterns` and the audit role's `InspectRules` include the new roles and rules. |
 | **Alerting additions** | **(1) `cadenzpoint-backup-disaster-started`:** the ECS **Task State Change** event (`source aws.ecs`; `detail.taskDefinitionArn` prefix `arn:aws:ecs:us-east-1:<acct>:task-definition/cadenzpoint-backup-disaster:`; `detail.lastStatus` `PROVISIONING` **or `STOPPED`**). It emails both the start and the finish of every run, whatever the start path, without CloudTrail. **(2) `cadenzpoint-backup-disaster-runtask`:** CloudTrail `RunTask` matching the family **or** its ARN (`$or` of two prefixes on `requestParameters.taskDefinition`), so the email names the caller. **(3) The protections rule** gains `PutParameter`, `DeleteParameter` and `DeleteParameters` **by event name only**, with no `requestParameters` filter, which would stop the rule's other events from matching. The account writes no parameters in normal operation, so this costs only expected emails. D7 asserts the protections pattern has no `requestParameters` key. |
 | **Outputs** | `DisasterButtonRoleArn`; the cluster, subnets and security group. |
@@ -238,10 +240,10 @@ jobs:
 
 ### 6.4 Mode `workspace` (`scripts/backup/disaster.ts`)
 **Environment:**
-- from SSM: `CONTROL_PLANE_DATABASE_URL`, `ENCRYPTION_KEY`, `NEON_API_KEY`, `NEON_ORG_ID`, `RESTORE_TEST_PROJECT_ID`;
+- from SSM: `CONTROL_PLANE_DATABASE_URL`, `ENCRYPTION_KEY`, `NEON_API_KEY`, `NEON_ORG_ID`, `RESTORE_TEST_PROJECT_ID`, `CONTROL_PLANE_PROJECT_ID`;
 - constants: `NEON_REGION_ID=aws-us-east-1`, `BACKUP_BUCKET`, `BACKUP_KMS_KEY_ARN`, `BACKUP_DECRYPT_KEY_ARNS`, `ALERT_TOPIC_ARN`, `BACKUP_PG_RESTORE_BIN`, `BACKUP_LOG_GROUP`, `DISASTER_LOG_GROUP`, `AWS_REGION`, `DISASTER_DEADLINE_MINUTES=330`.
 
-**argv:** one parser (`parseDisasterArgs`) shared by the task and D2's tests: `workspace` takes ids or `all-lost` and override `none`/`unreachable-4h`; `rehearse` takes one id or `auto`, and override `none`/`canary`. `--run-id` is optional; the task generates `task-<timestamp>` when it's absent. An unknown flag → exit 2.
+**argv:** one parser (`parseDisasterArgs`) shared by the task and D2's tests: `workspace` takes ids or `all-lost` and override `none`/`unreachable-4h`; `rehearse` takes one id or `auto`, and override `none`/`canary`. `--run-id` is optional; the task generates `task-<timestamp>` when it's absent. An unknown flag → exit 2. **Exit code 2 is reserved for that**; every other failure exits 1.
 
 **Who started it:** the task reads its own `startedBy` (DescribeTasks on its ARN). **`workspace` is refused unless it starts with `gh-` or `cloudshell-`.** So the monthly schedule, or a schedule edited in a deploy, can only rehearse.
 
@@ -259,12 +261,13 @@ jobs:
    - status `active`/`suspended`, or `provisioning` with a URL;
    - `neon_project_id` non-null;
    - `decrypt(db_url_encrypted)` succeeds;
-   - **`deletion_scheduled_for` null or in the future.** If it has passed, the workspace isn't rebuilt. **Step 2's proof still runs and is recorded** (status `gone` with detail `deletion-due`), so `--skip-lost` can skip it and deploys aren't blocked. Then refuse `deletion-due` (runbook A.8).
+   - **`deletion_scheduled_for` null or in the future.** If it has passed, the workspace isn't rebuilt. **Step 2's proof still runs and is recorded** (its real status, with detail `deletion-due`), so a proven-lost one can be skipped by deploys. Then refuse `deletion-due` (runbook A.8).
 
    Keep `oldUrlEncrypted` and `oldProjectId`.
 2. **Proof** (invariant 2). The result is appended as a `disaster_actions` row of kind `proof`, status `gone`/`unreachable-4h`/`refused:<reason>`. That row is what `--skip-lost` reads.
    - **Gone** → continue.
    - **Recoverable** → refuse `recoverable`: "recover it in the Neon console, nothing is lost".
+   - **Network first:** before any unreachable result counts (the override path, (d) above, or recording `observed-unreachable`), the task proves its own network. One other live workspace, or failing that the control plane (both Neon us-east-1), must connect. Otherwise refuse `network-unproven`, and record nothing as evidence.
    - **200, with the override typed:**
      1. connect to the database (direct host, `connect_timeout=15`, two tries 60 s apart);
      2. an authentication error or a successful connection → refuse `reachable`;
@@ -274,7 +277,7 @@ jobs:
 
         **Either kind counts only if it's newer than the tenant's latest `linked` row** (or `database-rebuilt` audit), so evidence about an earlier original never justifies switching away from a rebuilt one.
 
-        **The task's network must be fine:** at least one of the step-3 "other workspaces" must have connected. Otherwise refuse `network-unproven`.
+
 
         Found → continue. The original stays and is watched, and the email names the evidence used. Not found → append `observed-unreachable` and refuse: "observed unreachable now; press again with the override after <now + 4 h>".
    - **200 without the override** → refuse `original-exists`: "if it has been unreachable for hours, press with the override".
@@ -285,10 +288,11 @@ jobs:
    - the context's `cp` must be the current control plane's;
    - **only an integrity failure moves to an older candidate:** a context or `cp` mismatch, a decryption or authentication failure, a SHA or sidecar mismatch, or a count mismatch. The failed project is deleted (step 10), and the next candidate gets a fresh project;
    - **an infrastructure failure** (labels `connection-refused`, `timeout`, `s3-error`, `kms-error`, `killed`, a Neon 5xx, 423 or 429 after backoff) **retries the same candidate once** in a fresh project. If that fails too, the workspace stops **without switching** (status `retryable`; the email says "press again"). A transient fault never pushes a workspace onto an older backup, which couldn't be undone once linked.
+   - **Anything unclassified** (label `other`, such as a restore that fails the same way every time) stops the workspace **without switching and without falling back** (status `restore-failed`; the email says to contact the lead).
 5. **Create** (`neon-api.ts`):
    - name `cadenzpoint-r-<tenant id, first 8>-<yyyymmddhhmmss>-<try>` (at most 40 characters, unique);
    - insert the intent row first (`disaster_actions` kind `rebuild`, the name, `intended`);
-   - `POST /projects` with `org_id`, pg 16, us-east-1, `tenantDatabaseName(slug)` and `tenantDbHistoryRetentionSeconds()`. 423 and 429 are retried with backoff; the operations are awaited;
+   - `POST /projects` with `org_id`, pg 16, us-east-1, `tenantDatabaseName(slug)` and `tenantDbHistoryRetentionSeconds()`. The task definition sets `NEON_HISTORY_RETENTION_SECONDS` to the app's production value (a stack constant), so rebuilt projects get the same retention. 423 and 429 are retried with backoff; the operations are awaited;
    - record `created` with the id;
    - a create error with no id → list by that exact name (with `org_id`). Found → adopt (`created`), then clean up.
    - The email gives Neon's HTTP status and error code (not the message).
@@ -307,15 +311,15 @@ jobs:
    - in the same transaction:
      - audit `database-rebuilt` (actor `disaster:<run id>`; old and new project, backup key, backup `started_at`, SHA-256, override used or not);
      - append the `linked` row;
-     - raise the global `rebuild-original-watch` (dedup = old project id; detail: tenant id, slug, backup time, watch start);
-     - **with the override,** also raise `rebuild-original-returned` at once: the original exists by definition, so the founder is told to settle it with the customer and delete it.
+     - raise the global `rebuild-original-watch` (dedup = old project id; detail: tenant id, slug, backup time, watch start). All raw-SQL alert raises use `ON CONFLICT` on `ops_alerts_open_unique`, as `raiseAlert` does;
+     - **with the override,** also raise `rebuild-original-returned` at once (detail includes the tenant id, which `tenant:delete` matches on): the original exists by definition, so the founder is told to settle it with the customer and delete it.
    - **After the commit:** write `LINKED <tenant id> <old project> <new project> <backup key> <sha256>` to the disaster log group. 3c-2 uses it to re-apply rebuilds after a control-plane loss.
 9. **The app** uses the new database within 60 s (`registry.ts:65`; pools are keyed by URL).
 10. **Cleanup on any failure, before or instead of a commit:**
     - **first, wait for any in-flight switch call to settle** (the SIGTERM and deadline paths await it; `StopTimeout` is 120 s);
     - **then re-read the tenant row inside a transaction that takes the same tenant advisory lock** (`pg_advisory_xact_lock(hashtext('tenant:' || id))`, `lock_timeout = '30s'`), so a commit still in progress is waited for, not missed;
     - **if `neon_project_id` equals the new id** (a commit whose acknowledgement was lost), record `linked`, write the `LINKED` line, and **don't delete**;
-    - **a lock timeout or any read error → never delete:** retry the locked re-read every 30 s while the run deadline allows. If it still fails, append `failed`, and the leftover finding handles it;
+    - **a lock timeout or any read error → never delete:** retry the locked re-read every 30 s **within the time left** (the run's deadline, or the 120 s stop window after SIGTERM). If it still fails, append `failed` on exit, and the leftover finding handles it;
     - otherwise delete the new project (the task is its Admin; 423 and 429 retried with backoff), verify the 404, and append `deleted`;
     - a failed delete appends `failed`, and the leftover finding picks it up;
     - **`linked` is terminal:** no later step, deadline or SIGTERM deletes a linked project.
@@ -363,7 +367,7 @@ The email reports the result and timings. A failed scheduled rehearsal raises `d
 |---|---|
 | `id` | uuid PK |
 | `run_id` | varchar(80) |
-| `tenant_id` | uuid null FK → `tenants.id` |
+| `tenant_id` | uuid null FK → `tenants.id` ON DELETE CASCADE (tests delete tenant rows; production tombstones) |
 | `kind` | `proof` \| `rebuild` \| `rehearse` |
 | `status` | `proof`: `gone` \| `unreachable-4h` \| `observed-unreachable` \| `reachable-again` \| `rehearse-ok` \| `refused:<reason>`; `rebuild`/`rehearse`: `intended` \| `created` \| `linked` \| `deleted` \| `failed` \| `rehearsed-deleted` \| `gone-confirmed`. A run's **result** per workspace (`changed-meanwhile`, `retryable`, `no-backup`, …) is in `disaster_runs.summary` and the email, not in this column. |
 | `project_name`, `new_project_id`, `old_project_id` | varchar null (`proof` rows store `old_project_id` = the original they observed) |
@@ -371,7 +375,8 @@ The email reports the result and timings. A failed scheduled rehearsal raises `d
 | `detail` | text null (summary) |
 | `at` | timestamptz |
 
-### 6.8 Monitoring (3b's `backup-status.ts`, digest; Neon checks use the app's `NEON_API_KEY` with `org_id`, 10 s timeouts)
+### 6.8 Monitoring (3b's `backup-status.ts`, digest; Neon checks use the app's `NEON_API_KEY`, 10 s timeouts)
+The app's key is an **organisation** key (`PRODUCTION-DEPLOY.md:286`), so its organisation is inferred and its lists cover every project; no app `NEON_ORG_ID` is needed. A test asserts the checks pass no `org_id` and fail loudly on a 401/403.
 | Finding | Condition | Alert (scope / dedup) |
 |---|---|---|
 | leftover project | a project whose latest action is `intended`/`created`/`failed` for over 6 h **and that no tenant row references** | `rebuild-orphan-project` (global / project id or name; detail includes `tenant_id` and slug): "delete it in the Neon console". **Resolved** when the daily check finds no project by that id or name; the check then appends `gone-confirmed`, so it isn't re-checked. |
@@ -404,7 +409,7 @@ The email reports the result and timings. A failed scheduled rehearsal raises `d
 | State | Event | Next | Side effects |
 |---|---|---|---|
 | start | facts fail | failed `facts` | none |
-| start | deletion date passed | proof recorded, then failed `deletion-due` | `proof gone` (detail `deletion-due`) |
+| start | deletion date passed | proof recorded, then failed `deletion-due` | the proof's real status (detail `deletion-due`) |
 | start | 200, no override | failed `original-exists` | `proof` refused |
 | start | 200, override, reachable or auth error | failed `reachable` | `proof` refused |
 | start | 200, override, unreachable, no 4 h evidence | failed `observed` | `proof observed-unreachable` |
@@ -472,7 +477,7 @@ The email reports the result and timings. A failed scheduled rehearsal raises `d
 | migration + `src/db/control-plane/schema.ts` | `disaster_runs`, `disaster_actions` |
 | `src/lib/tenant/backup-status.ts`, `ops-digest.ts` | §6.8 |
 | `src/lib/tenant/delete-tenant.ts`, `scripts/delete-tenant.ts` | the refusal, checked **inside step 3's tenant lock**; and inside that lock, require `db_url_encrypted` and `neon_project_id` to equal step 1's values. A switch between classification and deletion then refuses instead of deleting the old original and orphaning the rebuilt project. |
-| `scripts/migrate-all.ts`, `scripts/lib/migrate-all-run.ts`, `.github/workflows/deploy-prod.yml` | `--skip-lost`, the step 0 exclusion, the input, the pins |
+| `scripts/migrate-all.ts`, `scripts/lib/migrate-all-run.ts`, `scripts/lib/tenant-migration.ts` (the skip hook in `migrateOneTenant`'s catch), `.github/workflows/deploy-prod.yml` | `--skip-lost`, the step 0 exclusion, `reachable-again`, the input, the pins |
 | `RESTORE.md`, `PRODUCTION-DEPLOY.md` Phase 13b, `FOUNDER-ACCOUNTS-SETUP.md` | runbook A, template A, the CloudShell command, the setup |
 | Tests | §11; `backup-static` (U6) extended |
 
@@ -489,13 +494,13 @@ The email reports the result and timings. A failed scheduled rehearsal raises `d
 Plus 3b's fakes (S3, KMS, SNS, a `LogReader`), a fake ECS list, a scratch control plane, and the in-process `parseNeonHost` override (with a test that the real guard refuses local URLs).
 
 **Unit:**
-- **D1:** the proof table:
+- **D1:** the proof table (including (d): a 404 project whose tenant URL still connects, or answers with an auth error → `reachable`; the control falls back to the control plane's project or a live workspace's when the restore-test project is gone):
   - gone;
   - recoverable;
   - unproven: the control fails, no `org_id` (an empty list), a partial list, 401/403/5xx;
   - 200 with and without the override;
   - the override's evidence rules: an earlier observation 4–48 h ago; 3b failures with connection labels at least 4 h old and no `ok` since; an auth error → reachable.
-- **D2:** `disaster-button.sh`, run **as GitHub runs it** (through a `bash -e` wrapper), with a stub `aws` and an event file:
+- **D2:** `disaster-button.sh`, run **as GitHub runs it** (through a `bash -e` wrapper; the script is written for bash 3.2 as well as 5, and D2 runs under both where available), with a stub `aws` and an event file:
   - validation: ids, the strict uuid, `all-lost`, `rehearse` rules, override rules, confirm, a leading `-`;
   - **no target text anywhere in the output**;
   - the running-task refusal;
@@ -515,7 +520,7 @@ Plus 3b's fakes (S3, KMS, SNS, a `LogReader`), a fake ECS list, a scratch contro
   - reachable, then `migrate()` fails → FAILED (the skip applies only when `pendingCount` throws);
   - step 0 excludes skipped tenants;
   - the `deploy-prod.yml` boolean (`false` never passes the flag).
-- **D6:** §6.8: leftover resolved by 404 with `gone-confirmed` appended; stuck at 6 h; rehearsal failed and its 40-day anchor; the watch's 30-day minimum and the override variant; not in `FINDING_KINDS`; excluded from monitoring off; the digest line.
+- **D6:** §6.8 (also: `rebuild-original-recoverable`, including its suppression after `returned`; `rebuild-watch-check-failed`): leftover resolved by 404 with `gone-confirmed` appended; stuck at 6 h; rehearsal failed and its 40-day anchor; the watch's 30-day minimum and the override variant; not in `FINDING_KINDS`; excluded from monitoring off; the digest line.
 - **D7:** U6 additions:
   - the roles' trusts and grants; the button role's `MaxSessionDuration` ≥ the workflow's `role-duration-seconds`; every new resource name and ARN matches a `CfnExecRole` pattern in `bootstrap.yml`; the Scheduler role's PassRole covers every role its schedules use; the schedule's command is `rehearse` and parses through the real argv parser;
   - the ECS resource types (`ListTasks` `*` plus `ecs:cluster`);
@@ -536,7 +541,7 @@ Plus 3b's fakes (S3, KMS, SNS, a `LogReader`), a fake ECS list, a scratch contro
   - the email has the backup time and the A.7 line.
 - **R2:** every §7.1 failure row leaves the row unchanged, with the task deleting what it created (404 in the fake); a failed delete → `failed` and the leftover finding.
 - **R3:** `changed-meanwhile`.
-- **R4:** `all-lost` picks exactly the gone tenants (never via the override).
+- **R4:** `all-lost` picks exactly the gone tenants (never via the override); a tenant whose project 404s but whose URL still connects is **not** picked.
 - **R5b:** `workspace` started by the schedule (startedBy not `gh-`/`cloudshell-`) → refused; `rehearse` from the schedule → runs.
 - **R5:** the override: (also) **a rebuilt workspace that then flaps:** evidence from before its `linked` row is ignored; **observed, then reachable (a 3b `ok`), then unreachable:** the old observation is ignored; no other workspace reachable → `network-unproven`. And: a first press records `observed-unreachable` and refuses; a press 4+ hours later (fake clock) proceeds; with 3b failure rows, a first press proceeds; an auth error refuses.
 - **R6:** `rehearse`:
@@ -545,7 +550,7 @@ Plus 3b's fakes (S3, KMS, SNS, a `LogReader`), a fake ECS list, a scratch contro
   - the SQLSTATE recorded;
   - the row unchanged;
   - `auto` picks a workspace with a recent `ok`.
-- **R7:** `migrate-all --skip-lost` and `--check` against real databases.
+- **R7:** `migrate-all --skip-lost` and `--check` against real databases; **every non-check run writes `reachable-again`**, after which the override evidence ignores the older observation; the deletion-due proof is skipped; a missing `disaster_actions` table → no proofs, no failure.
 - **R8:** `tenant:delete` refuses while a returned or leftover alert names the tenant, and proceeds after the 404; **a switch committed between its steps 2 and 3 → refused**.
 - **R9:** concurrency and termination:
   - a second run exits (the lock and oldest-wins);
@@ -560,7 +565,7 @@ Plus 3b's fakes (S3, KMS, SNS, a `LogReader`), a fake ECS list, a scratch contro
 2. **Neon (Q1):**
    - add the alias `neon-ops@cadenzpoint.com`;
    - invite it as **Viewer**; sign in once (security key); create its personal key.
-3. **AWS Parameter Store:** `/cadenzpoint/backup/neon-api-key`, `/cadenzpoint/backup/neon-org-id`, `/cadenzpoint/backup/restore-test-project-id` (all SecureString).
+3. **AWS Parameter Store:** `/cadenzpoint/backup/neon-api-key`, `/cadenzpoint/backup/neon-org-id`, `/cadenzpoint/backup/restore-test-project-id`, `/cadenzpoint/backup/control-plane-project-id` (all SecureString).
 4. **Push early** once the CI and Dockerfile commit exists (§4 of the standard). Merge; deploy-prod; approve the backup-system deploy. Copy `DisasterButtonRoleArn` into the `aws-disaster` secret.
 5. **Canary, then rehearse, the same day:** with your own Neon account, create a project `cadenzpoint-recoverable-canary` and delete it. Then Actions → **Disaster restore** → `rehearse`, a demo workspace's id, override `canary`, confirm `rehearse` → approve.
    - **Expect:**
@@ -642,3 +647,20 @@ As 3b §14, plus `BLUEPRINT-STANDARD.md` §3.7 and the early CI push.
   - the locked re-read is retried;
   - the recoverable list is polled;
   - the runbook note on 3b alerts for unrebuilt workspaces.
+
+**Confirmation pass 3** (one fresh reviewer on v3.2): **3 MEDIUM, 11 LOW; no HIGH.** Fixed in v3.3:
+- **"gone" also requires the tenant's own URL not to answer** (a stale project id can't trigger a switch);
+- **skips print uuids, not slugs** (public deploy logs);
+- **the positive control falls back** to the control plane's project or a live workspace's (a new SSM parameter, `control-plane-project-id`).
+- **LOWs:**
+  - the missing-table tolerance on the merge deploy;
+  - only decisive proofs supersede, and `observed-unreachable` is skippable;
+  - the network check before any unreachable result is used or recorded;
+  - the deletion-due proof keeps its real status, and `auto` skips ineligible workspaces;
+  - unclassified restore failures stop without fallback;
+  - a reconnecting skipped tenant isn't migrated without the lock;
+  - the app's organisation key stated;
+  - test additions; blast-radius items (`tenant-migration.ts`, CASCADE, the container name, exit 2, the alert detail, ON CONFLICT, the history setting);
+  - cleanup wording within the stop window, and invariant 5 reworded;
+  - canary wording.
+- **Noted for the product owner (pre-existing, outside 3c):** deploy-prod's public log prints every workspace slug.
