@@ -6,11 +6,11 @@
 - 9 dev commits, C1–C8b, auditors at `3e0685b`;
 - C8c (`11667dd`), docs only, read by the lead.
 
-## Verdict: **READY** at `b788701` (after fix round 1)
+## Verdict: **READY** at `40b807e` (after fix rounds 1 and 2)
 Round 1 (`11667dd`) was NOT READY (§4): 1 MEDIUM code defect, 3 MEDIUM test gaps, about 11 LOWs. Fix round 1 (FR1–FR16) is verified in §6. The lead's gates, integration alone, break-it (10/10) and checks (§7) all pass.
 
 **Merge-gate items for the product owner:**
-- **Push the fix round** (`b788701` plus the lead's commits) and get one green CI run. The early push (`d7cab1f`) passed:
+- **Push fix round 2** (`40b807e` plus the lead's commits) and get one green CI run (push and PR). The early push (`d7cab1f`) passed:
   - the backup image build and in-image self-check;
   - CI's cfn-lint block as written;
   - lint/build/unit (bash 5);
@@ -214,6 +214,24 @@ The integration cases loaded the control-plane environment, so a setup failure c
 - **Backup templates and image:** ✅. That's the first Docker build of the image with the disaster code, its in-image self-check, and CI's cfn-lint block run as written.
 - **Migration Sync Check:** ✅.
 - **Integration Tests:** ❌ one test, `disaster-rehearse.test.ts:128` (M67, `expected +0 to be 1`). It depended on test order: an earlier test's canary could be picked. The test fix is `b788701`, the commit after the push; the lead's solo run on `b788701` passed. **A green run on the final commit is still the merge gate.**
+
+### 6.2 CI on `7c06714`, and fix round 2 (`40b807e`, test-only)
+- **The runs:**
+  - **Push run** 44194375025: the integration job failed at `backup-command.test.ts:354`. That's 3b's S21/S23, a timing race in the test, also on `main`: the migration lock was opened after the backup's lock session was cut, so a slow runner could re-take first. It's fixed on the 3b-fix branch (`380c499`), not here.
+  - **PR run** 44194383730: the integration job failed at `disaster-fixround.test.ts:154` (M18/M19, `restore-failed` instead of `network-unproven`).
+  - Every other job was green in both runs.
+- **Cause (the dev's diagnosis, which corrects the lead's first reading):** each 3c test world has its own scratch control plane. Earlier tests in the file had rebuilt workspaces onto new fake hosts that the test's "dead" map didn't cover. `networkProven` walks live tenants in uuid order, so a rebuilt one connected first. The dev reproduced it deterministically, with CI's exact message.
+- **Fix:**
+  - **A test-only `DisasterDeps.connector` seam:** never read from the environment, and never set by `main.ts`, which `backup-main` asserts. M18/M19 use a refuse-all connector and keep the connectable foreign workspace as a guard.
+  - **FR11:** every mapped host closes after the commit.
+  - **`disaster-monitoring`:** it counts only its own keys.
+  - **No production behaviour changes.** The only production-file edit is the seam's `??` fallback.
+- **The lead's verification at `40b807e`:**
+  - tsc clean, lint 0 errors, unit 3,076 passed;
+  - the fix-round file passed 3 runs in a row (14 of 14 each);
+  - break-it: network-first always "proven" → caught, and the seam ignored → caught;
+  - the earlier 10 break-it cases: 10 of 10 caught, tree clean;
+  - **integration alone: 105 files, 976 passed, 0 failed** (finished 18:38 Eastern); no scratch databases left.
 
 **Residual LOW (dev control plane only, accepted):** the integration suite's syncs leave resolved `rebuild-watch-check-failed` rows on the developer's local control plane, the same class as 3b's S9 note. Production and CI are unaffected.
 
