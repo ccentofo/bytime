@@ -283,8 +283,11 @@ the maximum your plan allows. (DCAA expects ~3-year record retention; long-term 
 separate pre-sale task.)
 
 **5.5** (Once, not per environment) Create the **API key** used to provision tenants:
-Neon **Account/Organization settings → API keys → Create**. Save it as `NEON_API_KEY`.
-Also note the region id from 5.1 (`aws-us-east-1`) as `NEON_REGION_ID`.
+Neon **Organization settings → API keys → Create** (an **Organization** API key, not one made under your account
+settings: the daily disaster checks need the organisation's full project list, feature-plan-disaster-restore.md §6.8).
+Save it as `NEON_API_KEY`. If your current key was made under account settings, replace it.
+Also note the region id from 5.1 (`aws-us-east-1`) as `NEON_REGION_ID`, and each control plane's **project id**
+(Neon → the control-plane project → Settings → General) as `CONTROL_PLANE_PROJECT_ID` (staging's and production's).
 
 > Staging and production can share one Neon API key, but their **control-plane databases must be
 > separate** (5.1 done twice). Tenant projects created by staging signups will also appear in your
@@ -323,6 +326,7 @@ values and production gets production values):
 | `NEXT_PUBLIC_APP_ROOT_DOMAIN` | `staging.cadenzpoint.com` | `cadenzpoint.com` |
 | `NEON_API_KEY` | from 5.5 | from 5.5 |
 | `NEON_REGION_ID` | `aws-us-east-1` | `aws-us-east-1` |
+| `CONTROL_PLANE_PROJECT_ID` | staging control plane's Neon project id (5.5) | production control plane's Neon project id (5.5): the daily disaster checks use it to prove the key sees the organisation; until it's set, `rebuild-watch-check-failed` appears daily where `BACKUPS_EXPECTED=1` |
 | `RESEND_API_KEY` | staging key (Phase 8) | prod key (Phase 8) |
 | `EMAIL_FROM` | `CadenzPoint Staging <noreply@cadenzpoint.com>` | `CadenzPoint <noreply@cadenzpoint.com>` |
 | `STRIPE_SECRET_KEY` | **test** `sk_test_…` (Phase 9) | **live** `sk_live_…` (Phase 9) |
@@ -951,6 +955,63 @@ this order**. Steps 6–11 are also the **staging rehearsal**, a production-read
 | `backup-permission-drift` | A role can do something it must not. Treat as an incident; tell the lead. |
 | `backup-old-objects` | See RESTORE.md, "Backups beyond Neon". |
 | `restore-test-leftover`, `backup-audit-missed`, `backup-audit-error`, `backup-region`, `backup-check-failed` | Send the lead the detail. |
+
+---
+
+## Phase 13c — The Disaster restore button (you + the lead; feature-plan-disaster-restore.md §12)
+
+A founder-only button that rebuilds a lost workspace from its newest verified backup into a new Neon project
+(RESTORE.md runbook A). Do this after Phase 13b is live. Every click is in
+[`FOUNDER-ACCOUNTS-SETUP.md`](FOUNDER-ACCOUNTS-SETUP.md) Part 6b; this is the checklist, **in this order**.
+
+0. **Check two things first (each a stop-and-tell-the-lead if it fails):**
+   - this repository was created before **15 July 2026** and hasn't been renamed or transferred since (GitHub then
+     uses the subject format both backup roles trust);
+   - Neon → **Organization → Members → Invite** offers the **Viewer** role. If it doesn't (an organisation still on
+     Neon's older roles), stop and tell the lead: the key in step 2 depends on it.
+1. **GitHub:** create the environment `aws-disaster` (Selected branches → `main`; required reviewer → you; "Prevent
+   self-review" **off**; "Allow administrators to bypass" **off**). Send the lead the output of
+   `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-disaster` and
+   `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-disaster/deployment-branch-policies`
+   (as for `aws-backups`).
+2. **Neon (Q1):** add the alias `neon-ops@cadenzpoint.com`; invite it to the organisation as **Viewer**; sign in once
+   as it (security key) and create its **personal** API key (Account settings → API keys). Note the organisation id
+   (Organization settings → General).
+3. **AWS Parameter Store** (SecureString each): `/cadenzpoint/backup/neon-api-key` (the step 2 key),
+   `/cadenzpoint/backup/neon-org-id`, `/cadenzpoint/backup/restore-test-project-id` (the `cadenzpoint-restore-tests`
+   project's id) and `/cadenzpoint/backup/control-plane-project-id` (production's control-plane project id).
+   **Vercel production:** `CONTROL_PLANE_PROJECT_ID`, and make sure `NEON_API_KEY` is an **Organization** key (5.5).
+4. **The early push** (the lead asks for it when the CI commit exists), then merge; run Deploy to Production; approve
+   the pending **Backup system deploy**. Copy the stack output `DisasterButtonRoleArn` (CloudFormation →
+   `cadenzpoint-backup` → Outputs) into the `aws-disaster` environment secret `AWS_DISASTER_ROLE_ARN`.
+5. **A `rehearsal` workspace in production** (before launch there may be none with backups):
+   `npm run provision:tenant` a workspace with the slug `rehearsal`, then
+   `npm run tenant:admin -- set-exempt rehearsal on --reason "disaster rehearsal target" --yes`, and wait for its first `ok` backup (the next 06:17 UTC run).
+   It stays as the rehearsals' target.
+6. **Canary, then rehearse, the same day:** with **your own** Neon login, create a project named
+   `cadenzpoint-recoverable-canary` and delete it. Then Actions → **Disaster restore** → mode `rehearse`, targets =
+   the `rehearsal` workspace's id, override `canary`, confirm `rehearse` → approve.
+   - **Expect:** the start email (from AWS); "Disaster rehearsal passed" (the proof against the live original, the
+     canary seen, the copy deleted and visible as recoverable); no change to the workspace.
+   - **If the canary isn't seen:** in Neon, switch `neon-ops@` to **Editor** and rehearse again (Q1's fallback); tell
+     the lead.
+7. **From then on** the monthly schedule (the 1st, 15:17 UTC) rehearses automatically; a failure appears in the
+   digest as `disaster-rehearse-failed`.
+
+**When the digest shows a disaster alert**
+
+| Alert | What to do |
+|---|---|
+| `rebuild-original-watch` | Informational: a rebuilt workspace's original is being watched (at least 30 days). Closes by itself. |
+| `rebuild-original-returned` | The original exists again. Don't open it: RESTORE.md A.6 (ask the customer, then delete it in the Neon console). |
+| `rebuild-original-recoverable` | The original can still be recovered in Neon until the date shown. Recovering it won't switch the workspace back. Tell the lead. |
+| `rebuild-orphan-project` | A project the button created wasn't cleaned up: delete it in the Neon console (the alert names it). Resolves after the 404. |
+| `workspace-needs-deploy` | Run Deploy to Production (normal) now. |
+| `disaster-run-stuck` | A disaster task ran past its deadline; it was closed as abandoned. Check RESTORE.md A.11; tell the lead. |
+| `disaster-rehearse-failed` | The rehearsal failed, or none passed in 40 days: tell the lead (the key or the pipeline may not work). |
+| `rebuild-watch-check-failed` | A Neon check failed, or the app's key can't see the organisation: check 5.5 and `CONTROL_PLANE_PROJECT_ID`; otherwise it retries tomorrow. |
+
+`tenant:admin resolve-alert` refuses the `rebuild-*` and `disaster-*` kinds: they close on the facts.
 
 ---
 

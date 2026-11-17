@@ -245,3 +245,17 @@ describe('D7: deploy-prod.yml pins', () => {
     expect(docker).toContain('COPY src/lib/tenant/lifecycle-config.ts src/lib/tenant/lifecycle-config.ts');
   });
 });
+
+describe('runbook A support (RESTORE.md A.3, A.9)', () => {
+  it('`tenant:admin show` prints the workspace id (the button takes ids, not slugs)', () => {
+    expect(read('scripts/tenant-admin.ts')).toMatch(/console\.log\(`  id: +\$\{t\.id\}`\)/);
+  });
+  it('the CloudShell command starts the disaster family with a cloudshell- startedBy and a run id the task accepts', () => {
+    const restore = read('RESTORE.md');
+    const cmd = /```bash\n\s*(STAMP=[^\n]+)\n/.exec(restore)![1];
+    expect(cmd).toContain('--task-definition cadenzpoint-backup-disaster');
+    expect(cmd).toContain('--started-by "cloudshell-$STAMP"');
+    expect(cmd).toContain('\\"--run-id\\",\\"cloudshell-$STAMP\\"');
+    expect(parseDisasterArgs(['workspace', '--targets', '0a1b2c3d-1111-4222-8333-444455556666', '--override', 'none', '--run-id', 'cloudshell-20261117T204036'])).toMatchObject({ ok: true });
+  });
+});

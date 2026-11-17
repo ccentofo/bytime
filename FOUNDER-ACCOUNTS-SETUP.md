@@ -276,6 +276,34 @@ The final checklist will be `PRODUCTION-DEPLOY.md`, Phase "Backups (AWS)". The f
 8. **Switch to production:** between 15:00 and 17:00 UTC (10am–noon Eastern in winter, 11am–1pm in summer; no backup job runs then), edit the first two parameters to **production's** values. From the next scheduled run, production is backed up.
 9. **Vercel:** once I confirm production's first backup and audit have run, add `BACKUPS_EXPECTED=1` to production (staging stays `0`), then redeploy.
 
+## Part 6b. The Disaster restore button (after 3c is built; we do this together)
+The checklist is `PRODUCTION-DEPLOY.md`, Phase 13c. About 30 minutes, plus waiting for the `rehearsal` workspace's first backup.
+
+0. **Two checks first.** If either fails, stop and tell me:
+   1. This repository was created before **15 July 2026** and hasn't been renamed or transferred since. (GitHub signs newer repositories' tokens in a different format, which the AWS roles wouldn't accept.)
+   2. In Neon → **Organization → Members → Invite**, the role list offers **Viewer**. (Neon is moving organisations to its new roles gradually; an organisation still on the older ones has no Viewer.)
+1. **GitHub environment** `aws-disaster`, exactly like `aws-backups` in Part 6 step 1 (required reviewer: you; "Prevent self-review" unchecked; bypass unchecked; branch rule `main`). No secrets yet. Send me the output of:
+   - `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-disaster`
+   - `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-disaster/deployment-branch-policies`
+2. **Neon: the `neon-ops@` member (Q1).**
+   1. Google Admin: add the alias `neon-ops@cadenzpoint.com` to your user (Part 2.4).
+   2. Neon → **Organization → Members → Invite** → `neon-ops@cadenzpoint.com`, role **Viewer**.
+   3. Accept the invitation from the alias's email, sign in once as it, and protect the login with your security key.
+   4. As `neon-ops@`: **Account settings → API keys → Create** (a personal key). Copy it once; it goes straight into AWS in step 3.
+   5. Note the **organisation id** (Organization settings → General) and two **project ids** (each project → Settings → General): `cadenzpoint-restore-tests`, and production's control plane.
+3. **Parameter Store** (AWS, `corey-admin`, us-east-1; Tier Standard, Type **SecureString**, KMS default):
+   - `/cadenzpoint/backup/neon-api-key`: the key from 2.4;
+   - `/cadenzpoint/backup/neon-org-id`: the organisation id;
+   - `/cadenzpoint/backup/restore-test-project-id`: `cadenzpoint-restore-tests`' project id;
+   - `/cadenzpoint/backup/control-plane-project-id`: production's control-plane project id.
+
+   **Vercel (production):** add `CONTROL_PLANE_PROJECT_ID` = production's control-plane project id. Make sure `NEON_API_KEY` there is an **Organization** key (Neon → Organization settings → API keys); if yours was made under account settings, create an Organization key and replace it.
+4. **After the merge and the approved Backup system deploy:** CloudFormation → `cadenzpoint-backup` → **Outputs** → copy `DisasterButtonRoleArn` into the `aws-disaster` **environment secret** `AWS_DISASTER_ROLE_ARN`.
+5. **The `rehearsal` workspace** (PRODUCTION-DEPLOY 13c step 5): provisioned once, exempt from the trial lifecycle, and kept as the rehearsals' target.
+6. **Canary, then the first rehearsal, the same day** (PRODUCTION-DEPLOY 13c step 6). Expect two emails from AWS (start and finish) and the "Disaster rehearsal passed" email.
+
+**In a disaster, your jobs are:** press and approve; run **Deploy to Production** when the email says; lower `neon-ops@` to **Viewer** on each rebuilt project (the email names it); email customers from template A (RESTORE.md, runbook A). If the console won't lower `neon-ops@` on a rebuilt project, tell me: it then stays Admin on that one project.
+
 ## Part 7. After setup: what you'll see, and what you never do
 **You'll see:**
 - a "Backups" section in the daily digest, with the newest backup and the last restore test;
