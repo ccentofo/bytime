@@ -46,6 +46,16 @@ describe.skipIf(!CAN_RUN)('R9: concurrency and termination', () => {
     expect(await actions(w, t.id)).toEqual([]);
   });
 
+  it('M59: the lock is waited for: released within the wait → the run proceeds', async () => {
+    const t = take();
+    makeGone(w, t);
+    const held = (await acquireLock(w.cp.url, DISASTER_LOCK_KEY, { timing: FAST_LOCK }))!;
+    setTimeout(() => { void held.release(); }, 300);
+    const r = await press(w, { targets: [t.id] }, { lockWaitMs: 5_000, lockRetryMs: 100 });
+    expect(r.exitCode, r.logs.join('\n')).toBe(0);
+    expect(r.outcome!.results[0].result).toBe('linked');
+  }, 30_000);
+
   it('SIGTERM mid-restore → cleanup: the project is deleted after the locked re-read, the row unchanged', async () => {
     const t = take();
     makeGone(w, t);

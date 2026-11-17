@@ -69,7 +69,8 @@ export interface NeonApi {
   /** Every page; `unavailable` non-empty = the list is incomplete (unproven). */
   listProjects(o?: { search?: string; recoverable?: boolean }): Promise<{ projects: NeonProject[]; unavailable: string[] }>;
   listEndpoints(projectId: string): Promise<NeonEndpoint[]>;
-  createProject(o: { name: string; databaseName: string; historyRetentionSeconds: number; regionId: string }): Promise<CreatedProject>;
+  /** `signal`: the operation wait stops at once on a stop or deadline (the error carries the created id, for cleanup). */
+  createProject(o: { name: string; databaseName: string; historyRetentionSeconds: number; regionId: string }, signal?: AbortSignal): Promise<CreatedProject>;
   /** Returns once Neon has accepted the delete (200), or the project was already gone (404). */
   deleteProject(id: string): Promise<void>;
   /** Polls GET until 404 (true) or the tries run out (false). */
@@ -158,18 +159,29 @@ export function neonApi(o: NeonApiOptions): NeonApi {
     return { projects, unavailable: [...unavailable] };
   }
 
-  async function waitOperations(projectId: string, ops: Operation[]) {
+  /** A sleep that ends early when `signal` aborts. */
+  const pause = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve) => {
+    if (!signal) { void sleep(ms).then(resolve); return; }
+    if (signal.aborted) { resolve(); return; }
+    const onAbort = () => resolve();
+    signal.addEventListener('abort', onAbort, { once: true });
+    void sleep(ms).then(() => { signal.removeEventListener('abort', onAbort); resolve(); });
+  });
+
+  async function waitOperations(projectId: string, ops: Operation[], signal?: AbortSignal) {
     const deadline = Date.now() + opTimeout;
     for (const op of ops) {
       if (TERMINAL_OK.has(op.status)) continue;
       for (;;) {
+        // Fix round 1, FR10: a stop or deadline returns at once, so cleanup runs inside ECS's 120 s stop window.
+        if (signal?.aborted) throw new NeonApiError('operation', 0, 'stopped');
         const r = await call('operation', 'GET', `/projects/${encodeURIComponent(projectId)}/operations/${encodeURIComponent(op.id)}`);
         if (r.status !== 200 || !r.json) fail('operation', r);
         const status = String((r.json!.operation as { status?: string } | undefined)?.status ?? '');
         if (TERMINAL_OK.has(status)) break;
         if (TERMINAL_FAIL.has(status)) throw new NeonApiError('operation', 500, `operation-${status}`);
         if (Date.now() > deadline) throw new NeonApiError('operation', 0, 'operation-timeout');
-        await sleep(pollMs);
+        await pause(pollMs, signal);
       }
     }
   }
@@ -187,7 +199,7 @@ export function neonApi(o: NeonApiOptions): NeonApi {
       if (r.status !== 200 || !r.json || !Array.isArray(r.json.endpoints)) fail('list-endpoints', r);
       return (r.json!.endpoints as Array<Record<string, unknown>>).map((e) => ({ id: String(e.id), host: String(e.host ?? '') }));
     },
-    async createProject(c) {
+    async createProject(c, signal) {
       const r = await call('create-project', 'POST', '/projects', {
         project: {
           name: c.name, org_id: o.orgId, pg_version: 16, region_id: c.regionId,
@@ -203,7 +215,7 @@ export function neonApi(o: NeonApiOptions): NeonApi {
         throw Object.assign(new NeonApiError('create-project', r.status, 'no-connection-uri'), { projectId });
       }
       try {
-        await waitOperations(projectId, (r.json?.operations as Operation[] | undefined) ?? []);
+        await waitOperations(projectId, (r.json?.operations as Operation[] | undefined) ?? [], signal);
       } catch (e) {
         throw Object.assign(e as Error, { projectId });
       }

@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { CAN_RUN, createWorld, press, tenantRow, actions, fakeEcs, type World, type WorldTenant } from './disaster-harness';
+import { neonApi, type NeonApi } from '../../../scripts/backup/lib/neon-api';
+import { poolerOf } from '../helpers/fake-neon';
 
 /**
  * feature-plan-disaster-restore.md §11 R6 (and R5b's schedule half): mode `rehearse` end to end. No switch; the copy
@@ -15,7 +17,7 @@ describe.skipIf(!CAN_RUN)('R6: rehearse', () => {
   const rehearse = (targets: string[] | 'auto', over: Parameters<typeof press>[2] = {}, override: 'none' | 'canary' = 'none') =>
     press(w, { mode: 'rehearse', targets, override }, { ecs: fakeEcs({ startedBy: 'chronos-schedule/cadenzpoint-backup-disaster-rehearse' }), ...over });
 
-  beforeAll(async () => { w = await createWorld(8, 'test-dr-rh'); }, 180_000);
+  beforeAll(async () => { w = await createWorld(14, 'test-dr-rh'); }, 180_000);
   afterAll(async () => { await w?.close(); });
 
   it('a rehearsal from the schedule runs: the full proof against the live original (rehearse-ok), a restore with exact counts, NO switch, the copy deleted and seen recoverable, its endpoint "doesn\'t answer" with the SQLSTATE recorded', async () => {
@@ -80,4 +82,77 @@ describe.skipIf(!CAN_RUN)('R6: rehearse', () => {
     const [run] = await w.cpSql`SELECT status FROM disaster_runs WHERE run_id = ${none.args.runId}`;
     expect(run.status).toBe('fail');
   }, 60_000);
+
+  describe('fix round 1 (FR4: M66, M67, M68, M86)', () => {
+    const api = (): NeonApi => neonApi({ apiKey: w.neon.apiKey, orgId: w.neon.orgId, baseUrl: w.neon.url, sleep: async () => {}, operationPollMs: 1 });
+    const fast = { recoverablePolls: 2, recoverablePollMs: 5, overrideGapMs: 5, lockRetryMs: 20, cleanupRetryMs: 20, deletedEndpointWaitMs: 50, deletedEndpointPollMs: 10 };
+
+    it('M66: the deleted copy\'s endpoint served by a live project → the rehearsal fails (the real proof would misjudge)', async () => {
+      const t = take();
+      const base = api();
+      const neon: NeonApi = {
+        ...base,
+        async deleteProject(id) {
+          const host = w.neon.projects.get(id)!.endpoints[0].host;
+          await base.deleteProject(id);
+          w.neon.addProject({ name: `cadenzpoint-${t.slug}`, host, mapTo: { host: w.proxy.host, port: w.proxy.port } });
+          w.neon.hostMap[poolerOf(host)] = { host: w.proxy.host, port: w.proxy.port };
+        },
+      };
+      const r = await rehearse([t.id], { neon, timing: fast });
+      expect(r.exitCode).toBe(1);
+      expect(r.outcome!.results[0].detail).toContain('still classifies "served"');
+      expect((await actions(w, t.id)).at(-1)).toMatchObject({ kind: 'rehearse', status: 'failed' });
+    }, 60_000);
+
+    it('M66: an unproven deleted-endpoint check (a partial candidate list) → the rehearsal fails', async () => {
+      const t = take();
+      const base = api();
+      let deleted = false;
+      const neon: NeonApi = {
+        ...base,
+        async deleteProject(id) { await base.deleteProject(id); deleted = true; },
+        async listProjects(q = {}) { const l = await base.listProjects(q); return deleted && q.search ? { ...l, unavailable: ['prj-slow'] } : l; },
+      };
+      const r = await rehearse([t.id], { neon, timing: fast });
+      expect(r.exitCode).toBe(1);
+      expect(r.outcome!.results[0].detail).toContain('still classifies "unproven"');
+    }, 60_000);
+
+    it('M67: a canary that answers 200 → fails before any project is created', async () => {
+      const t = take();
+      const canary = w.neon.addProject({ name: 'cadenzpoint-recoverable-canary', deleted: true });
+      const base = api();
+      const neon: NeonApi = { ...base, async getProject(id) { return id === canary.id ? { found: true, project: { id, name: 'cadenzpoint-recoverable-canary' } } : base.getProject(id); } };
+      const r = await rehearse([t.id], { neon }, 'canary');
+      expect(r.exitCode).toBe(1);
+      expect(r.outcome!.results[0].detail).toContain('the canary answers 200');
+      expect(createdFor(t)).toEqual([]);
+    });
+
+    it('M68: the deleted copy missing from the recoverable list → the rehearsal fails', async () => {
+      const t = take();
+      const base = api();
+      const neon: NeonApi = {
+        ...base,
+        async listProjects(q = {}) {
+          const l = await base.listProjects(q);
+          return q.recoverable ? { ...l, projects: l.projects.filter((p) => !p.name.startsWith(`cadenzpoint-r-${t.id.slice(0, 8)}-`)) } : l;
+        },
+      };
+      const r = await rehearse([t.id], { neon, timing: fast });
+      expect(r.exitCode).toBe(1);
+      expect(r.outcome!.results[0].detail).toContain("didn't appear in this key's recoverable list");
+    }, 60_000);
+
+    it('M86: the positive control is never skipped: a complete list that doesn\'t contain any known project → fails before any project is created', async () => {
+      const t = take();
+      const base = api();
+      const neon: NeonApi = { ...base, async listProjects(q = {}) { return !q.search && !q.recoverable ? { projects: [], unavailable: [] } : base.listProjects(q); } };
+      const r = await rehearse([t.id], { neon });
+      expect(r.exitCode).toBe(1);
+      expect(r.outcome!.results[0].detail).toContain('the positive control failed');
+      expect(createdFor(t)).toEqual([]);
+    });
+  });
 });

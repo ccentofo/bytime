@@ -469,5 +469,8 @@ describe.skipIf(!CAN_RUN)('R4: all-lost', () => {
     expect(res).toEqual({ [g1.id]: 'linked', [g2.id]: 'linked', [reachable.id]: 'not-lost' });
     for (const t of [live1, live2]) expect(await actions(w, t.id)).toEqual([]);
     expect(r.logs).toContain('all-lost: 3 workspace(s) whose project is missing, of 5 live');
+    // M51: ONE shared positive control for all of them: a single full (unfiltered, non-recoverable) list walk.
+    const fullListStarts = w.neon.requests.filter((q) => q.method === 'GET' && q.path.startsWith('/projects?') && !/[?&](search|recoverable|cursor)=/.test(q.path));
+    expect(fullListStarts).toHaveLength(1);
   }, 120_000);
 });

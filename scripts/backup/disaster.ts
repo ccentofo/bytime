@@ -140,7 +140,7 @@ export interface DisasterDeps {
   lockConnect?: Connect;
   concurrency?: number;
   /** Tests only: shorter polls and gaps (the 10-second recoverable polls, the 60-second override gap, retries). */
-  timing?: Partial<{ recoverablePolls: number; recoverablePollMs: number; overrideGapMs: number; lockRetryMs: number; cleanupRetryMs: number; cleanupLockTimeout: string; cleanupBudgetMs: number; deletedEndpointWaitMs: number; deletedEndpointPollMs: number }>;
+  timing?: Partial<{ recoverablePolls: number; recoverablePollMs: number; overrideGapMs: number; lockRetryMs: number; cleanupRetryMs: number; cleanupLockTimeout: string; cleanupBudgetMs: number; deletedEndpointWaitMs: number; deletedEndpointPollMs: number; schemaNoteTimeoutSeconds: number }>;
   /** Tests only, in-process: fake Neon hosts → the local server (impact analysis §4, D10). main.ts never sets it. */
   hostMap?: HostMap;
   /** Tests only: seams for the termination and concurrency cases (R9). */

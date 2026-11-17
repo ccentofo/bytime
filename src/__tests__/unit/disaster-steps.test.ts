@@ -119,3 +119,36 @@ describe('D8: network first', () => {
     expect(await networkProven(env({ 'postgres://a': 'ok' }, tenants), 'a')).toBe(false); // never the workspace itself
   });
 });
+
+describe('fix round 1: the switch, the lock keys, the defaults', () => {
+  it('FR7 (M84): a switch lock timeout is retried up to 3 times (4 attempts), then lock-timeout; success on the 4th attempt links', async () => {
+    process.env.ENCRYPTION_KEY ??= '0'.repeat(63) + '1';
+    const { switchWorkspace } = await import('../../../scripts/backup/disaster-steps');
+    const make = (failures: number) => {
+      let calls = 0;
+      const env = {
+        cp: { begin: async () => { calls++; if (calls <= failures) throw Object.assign(new Error('lock timeout'), { code: '55P03' }); } },
+        sleep: async () => {}, log: () => {}, now: () => new Date(), args: { runId: 'gh-1-1' }, deps: {}, timing: { lockRetryMs: 1 },
+      } as unknown as StepEnv;
+      return { env, calls: () => calls };
+    };
+    const input = { t: { id: 't1', slug: 's' }, oldUrlEncrypted: 'x', oldProjectId: 'p-old', built: { projectId: 'p-new', name: 'n', connectionUri: 'postgres://u:p@h/d', pooledUri: 'postgres://u:p@h/d', counts: {}, backupStartedAt: null }, backupKey: 'k', sha256: 's', override: false } as never;
+    const four = make(4);
+    expect(await switchWorkspace(four.env, input)).toBe('lock-timeout');
+    expect(four.calls()).toBe(4);
+    const three = make(3);
+    expect(await switchWorkspace(three.env, input)).toBe('linked');
+    expect(three.calls()).toBe(4);
+  });
+
+  it('M58: DISASTER_LOCK_KEY differs from every other advisory lock key; M59: the lock wait default is 3 minutes', async () => {
+    const keys = await import('@/lib/tenant/backup-locks');
+    const all = Object.entries(keys).filter(([, v]) => typeof v === 'number').map(([, v]) => v as number);
+    all.push(728_402_113); // MIGRATION_LOCK_KEY (src/lib/tenant/migrate-tenant.ts)
+    expect(new Set(all).size).toBe(all.length);
+    expect(keys.DISASTER_LOCK_KEY).toBe(728_402_205);
+    const { DISASTER_DEFAULTS } = await import('../../../scripts/backup/disaster');
+    expect(DISASTER_DEFAULTS.lockWaitMs).toBe(3 * 60_000);
+    expect(DISASTER_DEFAULTS.deadlineMs).toBe(330 * 60_000);
+  });
+});

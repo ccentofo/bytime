@@ -16,7 +16,7 @@ import { parseNeonHost } from './lib/neon-host';
 import { connectUrl } from './lib/host-map';
 import { createdIdOf, directHost, NeonApiError, type NeonApi } from './lib/neon-api';
 import {
-  candidateServes, classifyGoneEndpoint, classifyOverride, tenantCandidateRule, type Connector, type OverrideClass,
+  candidateServes, classifyGoneEndpoint, classifyOverride, pgQuery, tenantCandidateRule, type Connector, type OverrideClass,
 } from './lib/classify-endpoint';
 import {
   appendAction, ChangedMeanwhile, evidenceFacts, liveTenants, lockedProjectId, okBackupRows, otherTenants, raiseGlobalAlert,
@@ -45,7 +45,7 @@ export interface StepEnv {
   /** `rebuild` (workspace) or `rehearse`: the kind of the project rows. */
   projectKind: 'rebuild' | 'rehearse';
   /** Seams for the 60-second gaps and the 10-second polls (tests shorten them). */
-  timing: { recoverablePolls: number; recoverablePollMs: number; overrideGapMs: number; lockRetryMs: number; cleanupRetryMs: number; cleanupLockTimeout: string; cleanupBudgetMs?: number; deletedEndpointWaitMs?: number; deletedEndpointPollMs?: number };
+  timing: { recoverablePolls: number; recoverablePollMs: number; overrideGapMs: number; lockRetryMs: number; cleanupRetryMs: number; cleanupLockTimeout: string; cleanupBudgetMs?: number; deletedEndpointWaitMs?: number; deletedEndpointPollMs?: number; schemaNoteTimeoutSeconds?: number };
 }
 
 export class Aborted extends Error {
@@ -333,7 +333,7 @@ export async function buildOnce(env: StepEnv, t: TenantFacts, cand: Candidate, t
   let created;
   try {
     throwIfAborted(signal);
-    created = await env.neon.createProject({ name, databaseName: settings.databaseName, historyRetentionSeconds: settings.historyRetentionSeconds, regionId: env.deps.regionId });
+    created = await env.neon.createProject({ name, databaseName: settings.databaseName, historyRetentionSeconds: settings.historyRetentionSeconds, regionId: env.deps.regionId }, signal);
   } catch (e) {
     let id = createdIdOf(e);
     if (!id && !(e instanceof Aborted)) {
@@ -469,8 +469,9 @@ export async function switchWorkspace(env: StepEnv, s: SwitchInput): Promise<'li
       return 'linked';
     } catch (e) {
       if (e instanceof ChangedMeanwhile) return 'changed-meanwhile';
-      if ((e as { code?: string })?.code === LOCK_TIMEOUT_SQLSTATE && attempt <= 3) {
-        if (attempt === 3) return 'lock-timeout';
+      // A lock timeout is retried up to 3 times (4 attempts in total), 10 s apart (§6.4 step 8; fix round 1, FR7).
+      if ((e as { code?: string })?.code === LOCK_TIMEOUT_SQLSTATE) {
+        if (attempt > 3) return 'lock-timeout';
         await env.sleep(env.timing.lockRetryMs);
         continue;
       }
@@ -488,7 +489,11 @@ export type CleanupOutcome = 'deleted' | 'failed' | 'linked';
  * tenant lock. Pointing at it → `linked` (a commit whose acknowledgement was lost), never deleted. A lock timeout or read
  * error → retried within `budgetMs`, then kept (`failed`; the leftover finding handles it).
  */
-export async function cleanupProject(env: StepEnv, t: TenantFacts, p: { id: string | null; name: string }, o: { switchInFlight?: Promise<unknown>; budgetMs: number; lockedReRead: boolean; oldProjectId?: string | null }): Promise<CleanupOutcome> {
+export async function cleanupProject(env: StepEnv, t: TenantFacts, p: { id: string | null; name: string }, o: {
+  switchInFlight?: Promise<unknown>; budgetMs: number; lockedReRead: boolean; oldProjectId?: string | null;
+  /** The backup the project was restored from: a healed `linked` row and LINKED line carry the same fields (FR8). */
+  backup?: { key: string; sha256: string; startedAt: Date | null };
+}): Promise<CleanupOutcome> {
   const kind = env.projectKind;
   if (o.switchInFlight) await o.switchInFlight.catch(() => {});
   if (!p.id) return 'failed';
@@ -512,13 +517,16 @@ export async function cleanupProject(env: StepEnv, t: TenantFacts, p: { id: stri
     return 'failed';
   }
   if (pointsAtIt) {
-    await record(env, t.id, 'rebuild', 'linked', { projectName: p.name, newProjectId: p.id, oldProjectId: o.oldProjectId ?? null, detail: 'healed: the switch committed' }).catch(() => {});
-    env.log(`LINKED ${t.id} ${o.oldProjectId ?? '-'} ${p.id} (healed by the re-read)`);
+    await record(env, t.id, 'rebuild', 'linked', { projectName: p.name, newProjectId: p.id, oldProjectId: o.oldProjectId ?? null, backupKey: o.backup?.key ?? null, backupStartedAt: o.backup?.startedAt ?? null, detail: 'healed: the switch committed' }).catch(() => {});
+    env.log(`LINKED ${t.id} ${o.oldProjectId ?? '-'} ${p.id} ${o.backup?.key ?? '-'} ${o.backup?.sha256 ?? '-'} (healed by the re-read)`);
     return 'linked';
   }
   try {
     await env.neon.deleteProject(p.id);
-    if (!(await env.neon.verifyGone(p.id))) throw new Error('still answers after delete');
+    if (!(await env.neon.verifyGone(p.id))) {
+      await record(env, t.id, kind, 'failed', { projectName: p.name, newProjectId: p.id, oldProjectId: o.oldProjectId ?? null, detail: 'delete: the project still answers after DELETE (kept; the leftover check lists it)' }).catch(() => {});
+      return 'failed';
+    }
     await record(env, t.id, kind, 'deleted', { projectName: p.name, newProjectId: p.id, oldProjectId: o.oldProjectId ?? null });
     return 'deleted';
   } catch (e) {
@@ -529,28 +537,29 @@ export async function cleanupProject(env: StepEnv, t: TenantFacts, p: { id: stri
 
 // ---- the schema note (§6.4 step 3) --------------------------------------------------------------------------------
 
+/** The applied-migration count, through pgQuery's hard deadline (FR11: the postgres.js reconnect loop can't hang it). */
 async function migrationCount(env: StepEnv, url: string): Promise<number | null> {
-  const db = postgresLib(clientUrl(connectUrl(toDirectConnectionUrl(url), env.deps.hostMap)), { max: 1, connect_timeout: 15, onnotice: () => {} });
-  try {
-    const [r] = await db<Array<{ n: number }>>`SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations`;
-    return r.n;
-  } catch {
-    return null;
-  } finally {
-    await db.end({ timeout: 2 }).catch(() => {});
-  }
+  const r = await pgQuery(toDirectConnectionUrl(url), async (db) => {
+    const [row] = await db<Array<{ n: number }>>`SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations`;
+    return row.n;
+  }, { hostMap: env.deps.hostMap, connectTimeoutSeconds: env.timing.schemaNoteTimeoutSeconds ?? 15 });
+  return r.ok ? r.value : null;
 }
 
 /** "the app is N migrations ahead of this backup", from up to two other reachable live workspaces. */
 export async function schemaNote(env: StepEnv, t: TenantFacts, restoredUrl: string): Promise<string> {
   const restored = await migrationCount(env, restoredUrl);
   const others: number[] = [];
+  let tried = 0;
   for (const o of await liveTenants(env.cp).catch(() => [] as TenantFacts[])) {
-    if (o.id === t.id || !o.dbUrlEncrypted || others.length >= 2) continue;
+    // At most 2 answers from at most 4 tries: a dead neighbourhood can't stretch the note (each try has a hard deadline).
+    if (o.id === t.id || !o.dbUrlEncrypted || others.length >= 2 || tried >= 4) continue;
+    tried++;
     let url: string;
     try { url = decrypt(o.dbUrlEncrypted); } catch { continue; }
     const n = await migrationCount(env, url);
     if (n !== null) others.push(n);
+    else env.log(`schema note: workspace ${o.id} didn't answer; skipped`);
   }
   if (others.length === 0 || restored === null) return 'no other workspace was reachable: run Deploy to Production now to be safe';
   const ahead = Math.max(...others) - restored;

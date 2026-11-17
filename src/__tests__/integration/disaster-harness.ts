@@ -55,12 +55,31 @@ function onFakeHost(localUrl: string, host: string): string {
   return u.toString();
 }
 
+/**
+ * Builds the world; if any step fails part-way, everything already created is torn down before the error is rethrown
+ * (fix round 1, FR4: mutated runs used to leak scratch databases).
+ */
 export async function createWorld(n: number, prefix: string): Promise<World> {
+  const undo: Array<() => Promise<unknown>> = [];
+  try {
+    return await buildWorld(n, prefix, undo);
+  } catch (e) {
+    for (const u of undo.reverse()) await u().catch(() => {});
+    throw e;
+  }
+}
+
+async function buildWorld(n: number, prefix: string, undo: Array<() => Promise<unknown>>): Promise<World> {
   const cp = await createScratchDb('cp', { migrateControlPlane: true });
+  undo.push(() => dropScratchDb(cp.name));
   const original = await createScratchDb('t', { tenantSchema: true });
+  undo.push(() => dropScratchDb(original.name));
   const cpSql = postgres(cp.url, { max: 3, onnotice: () => {} });
+  undo.push(() => cpSql.end({ timeout: 5 }));
   const proxy = await startFakePgProxy({ kind: 'auth-fail' });
+  undo.push(() => proxy.close());
   const neon = await startFakeNeon({ serverUrl: SERVER_URL!, createDatabases: true, proxy: { host: proxy.host, port: proxy.port } });
+  undo.push(() => neon.close());
   const tenants: WorldTenant[] = [];
   for (let i = 0; i < n; i++) {
     const id = randomUUID();

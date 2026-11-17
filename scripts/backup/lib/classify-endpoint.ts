@@ -53,24 +53,33 @@ export type Connector = (url: string) => Promise<ConnectResult>;
  */
 export function pgConnector(o: { hostMap?: HostMap; connectTimeoutSeconds?: number } = {}): Connector {
   return async (url) => {
-    const seconds = o.connectTimeoutSeconds ?? 15;
-    const sql = postgres(clientUrl(connectUrl(url, o.hostMap)), {
-      max: 1, connect_timeout: seconds, idle_timeout: 1, onnotice: () => {}, prepare: false,
-    });
-    let timer: NodeJS.Timeout | undefined;
-    const deadline = new Promise<ConnectResult>((resolve) => {
-      timer = setTimeout(() => resolve({ cls: 'socket', code: 'CONNECT_TIMEOUT' }), seconds * 1000 + 2_000);
-    });
-    try {
-      return await Promise.race([
-        sql`SELECT 1`.then((): ConnectResult => ({ cls: 'ok', code: null }), (e: unknown) => classifyConnectError(e)),
-        deadline,
-      ]);
-    } finally {
-      clearTimeout(timer);
-      await sql.end({ timeout: 0 }).catch(() => {});
-    }
+    const r = await pgQuery(url, async (sql) => { await sql`SELECT 1`; }, o);
+    if (r.ok) return { cls: 'ok', code: null };
+    return r.timedOut ? { cls: 'socket', code: 'CONNECT_TIMEOUT' } : classifyConnectError(r.error);
   };
+}
+
+/**
+ * One query on a one-connection client with a HARD deadline (connect timeout + 2 s): the client is abandoned at the
+ * deadline, so the postgres.js reconnect loop can't hang the caller. Used by pgConnector and the schema note (FR11).
+ */
+export async function pgQuery<T>(url: string, fn: (sql: postgres.Sql) => Promise<T>, o: { hostMap?: HostMap; connectTimeoutSeconds?: number } = {}):
+  Promise<{ ok: true; value: T } | { ok: false; timedOut: boolean; error: unknown }> {
+  const seconds = o.connectTimeoutSeconds ?? 15;
+  const sql = postgres(clientUrl(connectUrl(url, o.hostMap)), { max: 1, connect_timeout: seconds, idle_timeout: 1, onnotice: () => {}, prepare: false });
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<{ ok: false; timedOut: true; error: null }>((resolve) => {
+    timer = setTimeout(() => resolve({ ok: false, timedOut: true, error: null }), seconds * 1000 + 2_000);
+  });
+  try {
+    return await Promise.race([
+      fn(sql).then((value) => ({ ok: true as const, value }), (error: unknown) => ({ ok: false as const, timedOut: false, error })),
+      deadline,
+    ]);
+  } finally {
+    clearTimeout(timer);
+    await sql.end({ timeout: 0 }).catch(() => {});
+  }
 }
 
 /** The projects that may legitimately hold a tenant's endpoint (§5 invariant 2(d)): a parameter so 3c-2 can pass its own. */

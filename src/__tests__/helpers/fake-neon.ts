@@ -42,8 +42,8 @@ export interface FakeNeon {
   script(route: string, statuses: Scripted[], id?: string): void;
   /** Operation statuses returned in order for the next created project (default: finished). */
   operationStatuses: string[];
-  /** Ids listed as unavailable on the next N list calls (default none). */
-  unavailable: { ids: string[]; calls: number };
+  /** Ids listed as unavailable on the next `calls` list calls, after skipping the next `skip` list calls (default none). */
+  unavailable: { ids: string[]; calls: number; skip?: number };
   pageSize: number;
   addProject(o: { id?: string; name: string; host?: string; deleted?: boolean; mapTo?: { host: string; port: number } }): FakeProject;
   /** Mark a project deleted (recoverable) without an API call; its hosts map to the proxy. */
@@ -158,7 +158,9 @@ export async function startFakeNeon(o: {
         .sort((a, b) => a.id.localeCompare(b.id));
       const start = cursor ? all.findIndex((p) => p.id > cursor) : 0;
       const page = start < 0 ? [] : all.slice(start, start + limit);
-      const unavailable = fake.unavailable.calls > 0 ? (fake.unavailable.calls--, fake.unavailable.ids) : [];
+      let unavailable: string[] = [];
+      if (fake.unavailable.skip && fake.unavailable.skip > 0) fake.unavailable.skip--;
+      else if (fake.unavailable.calls > 0) { fake.unavailable.calls--; unavailable = fake.unavailable.ids; }
       return send(res, 200, {
         projects: page.map((p) => ({ id: p.id, name: p.name, ...(p.deleted ? { deleted_at: p.deletedAt, recoverable_until: new Date(Date.parse(p.deletedAt!) + 7 * 86400_000).toISOString() } : {}) })),
         pagination: page.length ? { cursor: page[page.length - 1].id } : {},

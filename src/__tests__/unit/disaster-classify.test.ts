@@ -262,3 +262,29 @@ describe('D1: 3b labels learn Neon\'s proxy wording (override evidence)', () => 
     expect(summarizeError('connect', new Error("Couldn't connect to compute node"))).toBe('connect label=connection-refused');
   });
 });
+
+describe('fix round 1 (D1 additions)', () => {
+  it('M09: on the override path, an endpoint not listed whose candidate check can\'t complete (a partial list) → proof-failed, never unreachable', async () => {
+    const neon = memNeon({ projects: [{ id: 'prj-orig', name: 'cadenzpoint-acme-x', hosts: ['ep-new.us-east-1.aws.neon.tech'] }], unavailable: true });
+    const r = await classifyOverride({ url: URL_, projectId: 'prj-orig', connect: fixed({ cls: 'auth', code: '28P01' }), neon, rule });
+    expect(r.cls).toBe('proof-failed');
+  });
+
+  it('FR10: the create-operation wait stops at once on a stop; the error carries the created project id', async () => {
+    const fake = await startFakeNeon();
+    try {
+      fake.operationStatuses = Array.from({ length: 1000 }, () => 'running');
+      const stop = new AbortController();
+      const api = neonApi({ apiKey: fake.apiKey, orgId: fake.orgId, baseUrl: fake.url, operationPollMs: 50 });
+      setTimeout(() => stop.abort('stopped'), 120);
+      const t0 = Date.now();
+      const e = await api.createProject({ name: 'cadenzpoint-r-stop-1', databaseName: 'd', historyRetentionSeconds: 3600, regionId: 'aws-us-east-1' }, stop.signal).catch((x) => x);
+      expect(Date.now() - t0).toBeLessThan(2_000);
+      expect(e).toBeInstanceOf(NeonApiError);
+      expect((e as NeonApiError).code).toBe('stopped');
+      expect(createdIdOf(e)).toMatch(/^prj-/);
+    } finally {
+      await fake.close();
+    }
+  });
+});

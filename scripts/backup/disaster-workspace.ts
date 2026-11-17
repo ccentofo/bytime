@@ -54,7 +54,9 @@ export async function runWorkspace(ctx: RunContext): Promise<RunOutcome> {
       try {
         if (!(await env.neon.getProject(t.neonProjectId!)).found) gone.push(t.id);
       } catch (e) {
-        ctx.log(`${t.id}: project lookup failed (${summaryOf('neon', e)}); not a candidate`);
+        // FR9: never dropped silently: reported as proof-failed ("press again"), and the run isn't a pass.
+        ctx.log(`${t.id}: project lookup failed (${summaryOf('neon', e)})`);
+        results.push({ tenantId: t.id, result: 'proof-failed', detail: "its project lookup failed, so it couldn't be checked: press again" });
       }
     });
     ids = gone.sort();
@@ -85,7 +87,7 @@ export async function runWorkspace(ctx: RunContext): Promise<RunOutcome> {
   const ok = (r: WorkspaceResult) => r.result === 'linked' || r.result === 'not-lost';
   const email = [
     `Disaster restore (workspace${ctx.args.override === 'unreachable-4h' ? ', override unreachable-4h' : ''}), run ${ctx.args.runId}.`,
-    ids.length === 0 ? 'No workspace is proven lost: nothing was rebuilt.' : '',
+    ids.length === 0 && results.length === 0 ? 'No workspace is proven lost: nothing was rebuilt.' : '',
     ...results.flatMap((r) => emailLines(r)),
     results.some((r) => r.result === 'linked') ? 'Next: run Deploy to Production now (tick skip_lost_workspaces if other workspaces are still lost), then email each customer with template A (RESTORE.md runbook A).' : '',
   ].filter(Boolean);
@@ -151,7 +153,8 @@ async function rebuildOne(env: StepEnv, id: string, shared: SharedProof): Promis
   const clean = async (p: { id: string | null; name: string } | null, inFlight?: Promise<unknown>) => {
     if (!p) return 'failed' as const;
     if (pending && pending.id === p.id) pending = null;
-    return cleanupProject(env, t, p, { switchInFlight: inFlight, budgetMs: cleanupBudgetMs(env.signal, env.timing.cleanupBudgetMs), lockedReRead: true, oldProjectId });
+    const backup = built && used && built.projectId === p.id ? { key: used.key, sha256: used.sha256, startedAt: built.backupStartedAt } : undefined;
+    return cleanupProject(env, t, p, { switchInFlight: inFlight, budgetMs: cleanupBudgetMs(env.signal, env.timing.cleanupBudgetMs), lockedReRead: true, oldProjectId, backup });
   };
   try {
     candidatesLoop:
@@ -184,8 +187,11 @@ async function rebuildOne(env: StepEnv, id: string, shared: SharedProof): Promis
     }
 
     // ---- 8. the re-check, then the switch ------------------------------------------------------------------------------
+    // The re-check follows WHICH PROOF PASSED, never what was typed (fix round 1, FR1): an override press whose project
+    // turns out gone (404) took the gone proof, so it re-checks "still gone" and raises no `returned` at the switch.
+    const overrideProof = proof.status === 'unreachable-4h';
     throwIfAborted(ws.signal);
-    if (env.args.override === 'unreachable-4h') {
+    if (overrideProof) {
       const re = await recheckOverride(env, t, url, oldProjectId);
       if (!re.ok) {
         await clean(project);
@@ -198,7 +204,9 @@ async function rebuildOne(env: StepEnv, id: string, shared: SharedProof): Promis
       return out('original-back', 'the original is back: nothing switched', { slug });
     }
 
-    const inFlight = switchWorkspace(env, { t, oldUrlEncrypted, oldProjectId, built, backupKey: used.key, sha256: used.sha256, override: env.args.override === 'unreachable-4h' });
+    // FR5: a stop or the deadline during the guards or the re-check goes to cleanup, never to the switch.
+    throwIfAborted(ws.signal);
+    const inFlight = switchWorkspace(env, { t, oldUrlEncrypted, oldProjectId, built, backupKey: used.key, sha256: used.sha256, override: overrideProof });
     inFlightSwitch = inFlight;
     let s: Awaited<typeof inFlight>;
     try {
