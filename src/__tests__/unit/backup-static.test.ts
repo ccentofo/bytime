@@ -380,6 +380,15 @@ describe('U6: the vendored PGDG signing key', () => {
     expect(createHash('sha256').update(key).digest('hex')).toBe('0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76');
     expect(read('.dockerignore').split('\n').map((l) => l.trim())).not.toContain('ops/aws/pgdg-ACCC4CF8.asc');
   });
+
+  it('ci.yml installs the PG 16 tools from the vendored key: no curl of postgresql.org anywhere; apt retries', () => {
+    const ci = read('.github/workflows/ci.yml');
+    expect(ci).not.toMatch(/curl[^\n]*postgresql\.org/);
+    expect(ci).toContain('sudo install -m 644 ops/aws/pgdg-ACCC4CF8.asc /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc');
+    const apt = ci.match(/apt-get (?:-o \S+ )?(?:update|install)\b/g)!;
+    expect(apt.length).toBeGreaterThanOrEqual(2);
+    expect(apt.every((c) => c.includes('-o Acquire::Retries=5'))).toBe(true);
+  });
 });
 
 describe('U6: src/ never imports the AWS SDK', () => {
