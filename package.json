@@ -35,6 +35,8 @@
     "demo:local": "bash scripts/setup-local-demo.sh",
     "stress:isolation": "tsx scripts/stress-isolation.ts",
     "provision:tenant": "node --conditions=react-server --import tsx scripts/provision-tenant.ts",
+    "backup:local": "node --conditions=react-server --import tsx scripts/backup/local.ts",
+    "backup:bundle": "node scripts/backup/bundle.mjs",
     "pretest": "node scripts/patch-mantine-react-table.mjs",
     "test": "vitest run",
     "test:watch": "vitest",

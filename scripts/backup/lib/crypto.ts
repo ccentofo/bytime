@@ -23,6 +23,7 @@ import {
   type KeyringNode,
 } from '@aws-crypto/client-node';
 import type { BackupTarget } from './keys';
+import { FatalError } from './env';
 
 export const BACKUP_SUITE = AlgorithmSuiteIdentifier.ALG_AES256_GCM_IV12_TAG16_HKDF_SHA512_COMMIT_KEY;
 export const FRAME_LENGTH = 64 * 1024;
@@ -37,9 +38,9 @@ export interface KeyringFactory {
 
 /** Production: encrypt with the generator key; decrypt with a strict keyring naming the current and any retained keys. */
 export function kmsKeyringFactory(keyArn: string, decryptKeyArns: string[] = [keyArn]): KeyringFactory {
-  if (!/^arn:aws:kms:[a-z0-9-]+:\d{12}:key\//.test(keyArn)) throw new Error('BACKUP_KMS_KEY_ARN must be a key ARN (arn:aws:kms:…:key/…), not an alias');
+  if (!/^arn:aws:kms:[a-z0-9-]+:\d{12}:key\//.test(keyArn)) throw new FatalError('BACKUP_KMS_KEY_ARN must be a key ARN (arn:aws:kms:…:key/…), not an alias');
   for (const a of decryptKeyArns) {
-    if (!/^arn:aws:kms:[a-z0-9-]+:\d{12}:key\//.test(a)) throw new Error('BACKUP_DECRYPT_KEY_ARNS must list key ARNs, not aliases');
+    if (!/^arn:aws:kms:[a-z0-9-]+:\d{12}:key\//.test(a)) throw new FatalError('BACKUP_DECRYPT_KEY_ARNS must list key ARNs, not aliases');
   }
   return {
     encrypt: () => new KmsKeyringNode({ generatorKeyId: keyArn }),

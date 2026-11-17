@@ -54,7 +54,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────
   integration-tests:
     name: Integration Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: lint-build-test  # Only run if lint/build/unit pass
     # Runs on every push and PR (not just main) — all multi-tenant, billing, and charge-code
     # work lands on working branches first, so the integration suite must run there too.
@@ -101,9 +101,29 @@ jobs:
           DATABASE_URL: ${{ env.DATABASE_URL }}
           CONTROL_PLANE_DATABASE_URL: postgresql://bytime:bytime_dev@localhost:5432/bytime_cp_test
 
+      # feature-plan-database-backups.md §10.1 / §11: real pg_dump / pg_restore 16 (PGDG, absolute paths: on PATH
+      # `pg_dump` is Debian's pg_wrapper) and the empty restore-test target database.
+      - name: Install PostgreSQL 16 client tools
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client-16
+          /usr/lib/postgresql/16/bin/pg_dump --version
+          /usr/lib/postgresql/16/bin/pg_restore --version
+
+      - name: Create the restore-test target database (empty)
+        run: node -e "const p=require('postgres');const s=p(process.env.DATABASE_URL,{max:1});s.unsafe('CREATE DATABASE bytime_rt_test').catch(e=>{if(e.code!=='42P04')throw e}).finally(()=>s.end())"
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+
       - name: Run integration tests
         run: npm run test:integration
         env:
+          REQUIRE_PG16_TOOLS: '1'
+          BACKUP_PG_DUMP_BIN: /usr/lib/postgresql/16/bin/pg_dump
+          BACKUP_PG_RESTORE_BIN: /usr/lib/postgresql/16/bin/pg_restore
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
           DATABASE_URL: ${{ env.DATABASE_URL }}
           CONTROL_PLANE_DATABASE_URL: postgresql://bytime:bytime_dev@localhost:5432/bytime_cp_test
@@ -113,6 +133,30 @@ jobs:
           # CI's runner defaults to UTC; dev machines are usually US-local. Pin to a US-Eastern
           # zone with a DST transition so calendar-date bugs can't hide behind either default.
           TZ: America/New_York
+
+  # ─────────────────────────────────────────────────────────────
+  # Backup system (feature-plan-database-backups.md §10.1, §13): the
+  # CloudFormation templates lint clean, and the backup image builds
+  # and passes its self-check (every module loads; pg 16 tools).
+  # No AWS access, no secrets.
+  # ─────────────────────────────────────────────────────────────
+  backup-checks:
+    name: Backup templates and image
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: cfn-lint
+        run: |
+          python3 -m pip install --user cfn-lint==1.60.1
+          python3 -m cfnlint ops/aws/*.yml
+
+      - name: Build the backup image and run its self-check
+        run: |
+          docker build -f Dockerfile.backup -t backup-ci .
+          docker run --rm backup-ci --self-check
 
   # ─────────────────────────────────────────────────────────────
   # Job 3: Migration Check (verify schema ↔ migration sync)

@@ -1,0 +1,12 @@
+# The deploy list (feature-plan-database-backups.md §6.2): a change to any of these, compared with the last successfully
+# deployed commit, requests a backup-system deploy. `dir/**` matches everything under dir/; other lines match exactly.
+# U6 checks that every non-node_modules input of the esbuild bundle is matched here.
+scripts/backup/**
+src/lib/encryption.ts
+src/lib/tenant/direct-url.ts
+src/lib/tenant/backup-locks.ts
+ops/aws/backup-stack.yml
+Dockerfile.backup
+.dockerignore
+tsconfig.backup.json
+.github/workflows/backup-deploy.yml
