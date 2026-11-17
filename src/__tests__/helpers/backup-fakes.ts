@@ -103,9 +103,11 @@ export class FakeBucket implements BackupStore, BackupReader {
 }
 
 /** A node one-liner standing in for pg_dump: writes `bytes` random bytes, then exits `code` (optionally hangs). */
-export function fakeDumpArgs(o: { bytes?: number; code?: number; hang?: boolean; failAfterBytes?: number }): string[] {
+export function fakeDumpArgs(o: { bytes?: number; code?: number; hang?: boolean; failAfterBytes?: number; slowMs?: number }): string[] {
   const n = o.bytes ?? 200_000;
-  const script = o.hang
+  const script = o.slowMs !== undefined
+    ? `let i = 0; const t = setInterval(() => { process.stdout.write(Buffer.alloc(8192, i % 251)); if (++i * 50 >= ${o.slowMs}) { clearInterval(t); process.stdout.write(Buffer.alloc(8192, 3), () => process.exit(0)); } }, 50);`
+    : o.hang
     ? `process.stdout.write(Buffer.alloc(4096, 1)); setInterval(() => {}, 1000);`
     : o.failAfterBytes !== undefined
       ? `process.stdout.write(Buffer.alloc(${o.failAfterBytes}, 2), () => { process.stderr.write('pg_dump: error: Dumping the contents of table "users" failed\\npg_dump: detail: Command was: COPY public.users (id, email) TO stdout;\\nDETAIL: Key (email)=(secret@x.com)'); process.exit(${o.code ?? 1}); });`
