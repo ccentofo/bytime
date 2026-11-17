@@ -1,9 +1,9 @@
 # Disaster restore button: one workspace (build queue 3c)
 
-> **Status:** **DRAFT v3.1**, 2026-11-17, lead architect.
+> **Status:** **DRAFT v3.2**, 2026-11-17, lead architect.
 > - **Split (product owner, 2026-11-17):** this item is the **one-workspace** button. The control-plane rebuild, its reconcile and the whole-account runbook moved to **3c-2** (brief in `LAUNCH-TRACKER.md`).
 > - **Outage override accepted (2026-11-17)** (§6.4 step 2).
-> - Rounds 1–2 and confirmation pass 1 are fixed here (§15). Confirmation pass 2 is next.
+> - Rounds 1–2 and confirmation passes 1–2 are fixed here (§15). Confirmation pass 3 is next.
 >
 > **Branch:** `disaster-restore-button`, from `main` at `8af3b2c`.
 >
@@ -158,8 +158,8 @@ While some workspaces are lost, `deploy-prod` would fail on them (`tenant-migrat
   - **pins** `actions/checkout` and `actions/setup-node` by SHA, and the Vercel CLI by exact version (§2's rule).
 - **`--skip-lost`** skips a tenant only when all of these hold. Each skip prints "skipped (proven lost, awaiting rebuild)".
   1. its newest `disaster_actions` row of kind `proof` says `gone` or `unreachable-4h` (any age);
-  2. no `linked` row is newer;
-  3. **this deploy's connection attempt to it fails with any error.** A Neon proxy error for a deleted endpoint isn't a socket error. A tenant that connects is migrated normally, and its proof stops counting: the proof row gets a superseding `reachable-again`.
+  2. no `linked` row is newer, and no 3b `ok` backup finished after it;
+  3. **this deploy's `pendingCount` for it throws, with any error.** That's the first call, which connects and queries; `migrateOneTenant` catches it at `tenant-migration.ts:42-63`. A failure in `migrate()` itself is never skipped. A Neon proxy error for a deleted endpoint isn't a socket error. A tenant that connects is migrated normally, and its proof stops counting: **every `migrate-all` run** (with or without the flag, not `--check`) appends a superseding `proof` row `reachable-again` (`run_id` = `migrate-<timestamp>`) for each tenant with a live proof that connected.
 - `listTenants` gains the tenant `id`. The workflow calls `npm run db:migrate:all -- --skip-lost` (the `--`, or npm swallows the flag); D5 and the §3.7 run assert that the flag reaches argv.
 
   Any other unreachable tenant fails the deploy, as today.
@@ -269,8 +269,12 @@ jobs:
      1. connect to the database (direct host, `connect_timeout=15`, two tries 60 s apart);
      2. an authentication error or a successful connection → refuse `reachable`;
      3. two connection failures → look for evidence at least 4 hours old:
-        - an earlier `proof` row `observed-unreachable` for this tenant, from 4 to 48 hours ago;
+        - an earlier `proof` row `observed-unreachable` for this tenant **with the same `old_project_id`**, from 4 to 48 hours ago, with **no 3b `ok` row and no `reachable-again` since it**;
         - **or** 3b's rows for it within the last 26 hours are all `failed` with label `connection-refused` or `timeout`, the oldest at least 4 h ago, and no `ok` since.
+
+        **Either kind counts only if it's newer than the tenant's latest `linked` row** (or `database-rebuilt` audit), so evidence about an earlier original never justifies switching away from a rebuilt one.
+
+        **The task's network must be fine:** at least one of the step-3 "other workspaces" must have connected. Otherwise refuse `network-unproven`.
 
         Found → continue. The original stays and is watched, and the email names the evidence used. Not found → append `observed-unreachable` and refuse: "observed unreachable now; press again with the override after <now + 4 h>".
    - **200 without the override** → refuse `original-exists`: "if it has been unreachable for hours, press with the override".
@@ -279,7 +283,8 @@ jobs:
 4. **Backup, newest first, up to 3 tries:**
    - candidates are the tenant's `ok` rows plus objects under `v1/<current cp>/tenant/<id>/` whose SHA-256 is confirmed by a `BACKUP` line (the catch-up and late tenants);
    - the context's `cp` must be the current control plane's;
-   - a candidate failing any check in step 6 is recorded, the new project is emptied by being deleted (step 10), and the next candidate gets a fresh project.
+   - **only an integrity failure moves to an older candidate:** a context or `cp` mismatch, a decryption or authentication failure, a SHA or sidecar mismatch, or a count mismatch. The failed project is deleted (step 10), and the next candidate gets a fresh project;
+   - **an infrastructure failure** (labels `connection-refused`, `timeout`, `s3-error`, `kms-error`, `killed`, a Neon 5xx, 423 or 429 after backoff) **retries the same candidate once** in a fresh project. If that fails too, the workspace stops **without switching** (status `retryable`; the email says "press again"). A transient fault never pushes a workspace onto an older backup, which couldn't be undone once linked.
 5. **Create** (`neon-api.ts`):
    - name `cadenzpoint-r-<tenant id, first 8>-<yyyymmddhhmmss>-<try>` (at most 40 characters, unique);
    - insert the intent row first (`disaster_actions` kind `rebuild`, the name, `intended`);
@@ -310,7 +315,7 @@ jobs:
     - **first, wait for any in-flight switch call to settle** (the SIGTERM and deadline paths await it; `StopTimeout` is 120 s);
     - **then re-read the tenant row inside a transaction that takes the same tenant advisory lock** (`pg_advisory_xact_lock(hashtext('tenant:' || id))`, `lock_timeout = '30s'`), so a commit still in progress is waited for, not missed;
     - **if `neon_project_id` equals the new id** (a commit whose acknowledgement was lost), record `linked`, write the `LINKED` line, and **don't delete**;
-    - **a lock timeout or any read error → never delete:** append `failed`, and the leftover finding handles it;
+    - **a lock timeout or any read error → never delete:** retry the locked re-read every 30 s while the run deadline allows. If it still fails, append `failed`, and the leftover finding handles it;
     - otherwise delete the new project (the task is its Admin; 423 and 429 retried with backoff), verify the 404, and append `deleted`;
     - a failed delete appends `failed`, and the leftover finding picks it up;
     - **`linked` is terminal:** no later step, deadline or SIGTERM deletes a linked project.
@@ -326,12 +331,13 @@ Mode `workspace` for one id (or `auto`), with these differences:
   - the project answers 200;
   - the positive control passes;
   - the recoverable list was returned;
-  - **on a rehearsal started from the button with `--canary`** (§12 step 5): the list **contains `cadenzpoint-recoverable-canary`**, proving the Viewer sees other members' deleted projects. **Missing → the rehearsal fails.** Monthly rehearsals don't check the canary; the daily `rebuild-original-recoverable` finding (§6.8) catches a recoverable original after the fact, while recovery is still possible.
+  - (the canary check below polls the list the same way);
+  - **on a rehearsal started from the button with override `canary`** (§12 step 5): the list **contains `cadenzpoint-recoverable-canary`**, proving the Viewer sees other members' deleted projects. **Missing → the rehearsal fails.** Monthly rehearsals don't check the canary; the daily `rebuild-original-recoverable` finding (§6.8) catches a recoverable original after the fact, while recovery is still possible.
 - **its proof row has status `rehearse-ok`,** which `--skip-lost` and the override evidence ignore;
 - **step 8 runs its guards as plain `SELECT`s** (nothing written, no lock taken);
 - **step 10 always runs:**
   1. delete the project, verify the 404;
-  2. check it appears in the recoverable list (proving deletions are visible to the key);
+  2. check it appears in the recoverable list (polled up to 6 × 10 s, since the list may lag), proving deletions are visible to the key;
   3. record the SQLSTATE seen when connecting to the deleted endpoint (needed by 3c-2);
   4. append `rehearsed-deleted`.
 
@@ -359,8 +365,8 @@ The email reports the result and timings. A failed scheduled rehearsal raises `d
 | `run_id` | varchar(80) |
 | `tenant_id` | uuid null FK → `tenants.id` |
 | `kind` | `proof` \| `rebuild` \| `rehearse` |
-| `status` | `proof`: `gone` \| `unreachable-4h` \| `observed-unreachable` \| `refused:<reason>`; `rebuild`/`rehearse`: `intended` \| `created` \| `linked` \| `deleted` \| `failed` \| `rehearsed-deleted` \| `gone-confirmed` |
-| `project_name`, `new_project_id`, `old_project_id` | varchar null |
+| `status` | `proof`: `gone` \| `unreachable-4h` \| `observed-unreachable` \| `reachable-again` \| `rehearse-ok` \| `refused:<reason>`; `rebuild`/`rehearse`: `intended` \| `created` \| `linked` \| `deleted` \| `failed` \| `rehearsed-deleted` \| `gone-confirmed`. A run's **result** per workspace (`changed-meanwhile`, `retryable`, `no-backup`, …) is in `disaster_runs.summary` and the email, not in this column. |
+| `project_name`, `new_project_id`, `old_project_id` | varchar null (`proof` rows store `old_project_id` = the original they observed) |
 | `backup_key`, `backup_started_at` | null |
 | `detail` | text null (summary) |
 | `at` | timestamptz |
@@ -368,11 +374,11 @@ The email reports the result and timings. A failed scheduled rehearsal raises `d
 ### 6.8 Monitoring (3b's `backup-status.ts`, digest; Neon checks use the app's `NEON_API_KEY` with `org_id`, 10 s timeouts)
 | Finding | Condition | Alert (scope / dedup) |
 |---|---|---|
-| leftover project | a project whose latest action is `intended`/`created`/`failed` for over 6 h **and that no tenant row references** | `rebuild-orphan-project` (global / project id or name): "delete it in the Neon console". **Resolved** when the daily check finds no project by that id or name; the check then appends `gone-confirmed`, so it isn't re-checked. |
+| leftover project | a project whose latest action is `intended`/`created`/`failed` for over 6 h **and that no tenant row references** | `rebuild-orphan-project` (global / project id or name; detail includes `tenant_id` and slug): "delete it in the Neon console". **Resolved** when the daily check finds no project by that id or name; the check then appends `gone-confirmed`, so it isn't re-checked. |
 | disaster run stuck | a run `running` for over 6 h | `disaster-run-stuck` (global); resolved when it finishes or is closed `abandoned` (by the next run, at the latest the monthly rehearsal) |
 | rehearsal failed | the newest `rehearse` run (scheduled or by hand) is `fail`, or no rehearsal has passed in 40 days (anchored to the first) | `disaster-rehearse-failed` (global) |
 | original returned | an open watch's project answers 200 (or raised at the switch for an override) | `rebuild-original-returned` (global / old project id): "the original exists. Don't open it: ask the customer whether their re-entered hours are complete, then delete it in the Neon console (runbook A.6)". **Resolved on 404 alone.** |
-| original recoverable | a watched original answers 404 **and** is in the org key's recoverable list | `rebuild-original-recoverable` (global / old project id): "the original can still be recovered in Neon until about <deletion + 7 days>; consider recovering it instead (runbook A.6)". Resolved when it leaves the list, or returns. |
+| original recoverable | a watched original answers 404, **is** in the org key's recoverable list, and **was never reported `returned`** (so it wasn't deliberately deleted by the founder after returning) | `rebuild-original-recoverable` (global / old project id): "the original can still be recovered in Neon until about <first seen in the list + 7 days>; consider recovering it instead (runbook A.6)". Resolved when it leaves the list, or returns. |
 | watch done | at least 30 days since the watch started, and the project 404s and isn't recoverable | the watch resolved |
 | watch check failed | a Neon call fails | `rebuild-watch-check-failed` (global); resolved by the next success |
 
@@ -391,7 +397,7 @@ The email reports the result and timings. A failed scheduled rehearsal raises `d
 7. In the Neon console, on each rebuilt project's access settings, set `neon-ops@` to **Viewer** (Q1's residual).
 8. **A lost workspace that was due for deletion** (the button records its proof and refuses `deletion-due`): deploys skip it. `tenant:delete` refuses on a missing project today; the proven-gone deletion path is in 3c-2. Until then, it stays skipped and listed.
 9. **If GitHub is down (Q2):** in AWS CloudShell as `corey-admin`, run the command printed here (`aws ecs run-task … --started-by cloudshell-<date>` with the same overrides). The start emails you.
-10. **A workspace that can't be rebuilt** (`no-backup`): its proof keeps it skippable by deploys until it's rebuilt or reachable again. Contact the lead.
+10. **A workspace that can't be rebuilt** (`no-backup`): its proof keeps it skippable by deploys until it's rebuilt or reachable again. Contact the lead. 3b's daily `backup-failed`/`backup-stale` alerts for it continue meanwhile; that's expected.
 
 ## 7. State machines
 ### 7.1 One workspace
@@ -411,7 +417,8 @@ The email reports the result and timings. A failed scheduled rehearsal raises `d
 | intended | id returned | created | `created` |
 | intended | no id; found by name | created (adopted) | `created`, then cleanup |
 | intended | no id; not found | failed `create` | `failed` (no project) |
-| created | restore/SHA/sidecar/count fails | the next candidate, or cleanup | `deleted` |
+| created | integrity failure (context, decrypt, SHA, sidecar, counts) | the next older candidate (up to 3), or cleanup | `deleted` |
+| created | infrastructure failure | the same candidate once more, then stop without switching | `deleted`; result `retryable` |
 | created | guards fail | cleanup | `deleted` |
 | created | switch: 0 rows | cleanup | `changed-meanwhile` |
 | created | switch commits | **linked (terminal)** | audit, `linked`, watch, `LINKED` line |
@@ -464,7 +471,7 @@ The email reports the result and timings. A failed scheduled rehearsal raises `d
 | `ops/aws/backup-stack.yml`, `scripts/backup/lib/expected-policies.ts` | the task, roles, log group, monthly schedule, the two start rules, the SSM events, the exemptions, `ALL_ROLES`, `rulePatterns`, `InspectRules` |
 | migration + `src/db/control-plane/schema.ts` | `disaster_runs`, `disaster_actions` |
 | `src/lib/tenant/backup-status.ts`, `ops-digest.ts` | §6.8 |
-| `src/lib/tenant/delete-tenant.ts`, `scripts/delete-tenant.ts` | the refusal |
+| `src/lib/tenant/delete-tenant.ts`, `scripts/delete-tenant.ts` | the refusal, checked **inside step 3's tenant lock**; and inside that lock, require `db_url_encrypted` and `neon_project_id` to equal step 1's values. A switch between classification and deletion then refuses instead of deleting the old original and orphaning the rebuilt project. |
 | `scripts/migrate-all.ts`, `scripts/lib/migrate-all-run.ts`, `.github/workflows/deploy-prod.yml` | `--skip-lost`, the step 0 exclusion, the input, the pins |
 | `RESTORE.md`, `PRODUCTION-DEPLOY.md` Phase 13b, `FOUNDER-ACCOUNTS-SETUP.md` | runbook A, template A, the CloudShell command, the setup |
 | Tests | §11; `backup-static` (U6) extended |
@@ -496,14 +503,16 @@ Plus 3b's fakes (S3, KMS, SNS, a `LogReader`), a fake ECS list, a scratch contro
   - the describe loop survives a failed call;
   - a null exit code and exit 2 messages;
   - `parseDisasterArgs` grammar (`auto` and `canary` only with `rehearse`; a generated run id).
-- **D3:** backup candidates: rows plus log-verified objects; the current `cp`; fallback up to 3, each with a fresh project.
+- **D3:** backup candidates: rows plus log-verified objects; the current `cp`; **integrity failures** fall back up to 3, each with a fresh project; **infrastructure failures** retry the same candidate once, then `retryable` with no switch.
 - **D4:** the switch SQL: byte equality, the deletion clause, the `lifecycle_version` bump, the lock string.
 - **D5:** `--skip-lost`:
   - proven and unreachable → skipped (including a `deletion-due` proof);
   - proven and reachable → migrated;
   - unproven and unreachable → fails;
   - linked since → not skipped;
-  - older than 7 days → not skipped;
+  - a proof of any age → skipped (no expiry);
+  - a 3b `ok` row finished after the proof → not skipped;
+  - reachable, then `migrate()` fails → FAILED (the skip applies only when `pendingCount` throws);
   - step 0 excludes skipped tenants;
   - the `deploy-prod.yml` boolean (`false` never passes the flag).
 - **D6:** §6.8: leftover resolved by 404 with `gone-confirmed` appended; stuck at 6 h; rehearsal failed and its 40-day anchor; the watch's 30-day minimum and the override variant; not in `FINDING_KINDS`; excluded from monitoring off; the digest line.
@@ -529,7 +538,7 @@ Plus 3b's fakes (S3, KMS, SNS, a `LogReader`), a fake ECS list, a scratch contro
 - **R3:** `changed-meanwhile`.
 - **R4:** `all-lost` picks exactly the gone tenants (never via the override).
 - **R5b:** `workspace` started by the schedule (startedBy not `gh-`/`cloudshell-`) → refused; `rehearse` from the schedule → runs.
-- **R5:** the override: a first press records `observed-unreachable` and refuses; a press 4+ hours later (fake clock) proceeds; with 3b failure rows, a first press proceeds; an auth error refuses.
+- **R5:** the override: (also) **a rebuilt workspace that then flaps:** evidence from before its `linked` row is ignored; **observed, then reachable (a 3b `ok`), then unreachable:** the old observation is ignored; no other workspace reachable → `network-unproven`. And: a first press records `observed-unreachable` and refuses; a press 4+ hours later (fake clock) proceeds; with 3b failure rows, a first press proceeds; an auth error refuses.
 - **R6:** `rehearse`:
   - no switch; the project deleted;
   - the recoverable-list and canary checks;
@@ -537,7 +546,7 @@ Plus 3b's fakes (S3, KMS, SNS, a `LogReader`), a fake ECS list, a scratch contro
   - the row unchanged;
   - `auto` picks a workspace with a recent `ok`.
 - **R7:** `migrate-all --skip-lost` and `--check` against real databases.
-- **R8:** `tenant:delete` refuses while a returned or leftover alert names the tenant, and proceeds after the 404.
+- **R8:** `tenant:delete` refuses while a returned or leftover alert names the tenant, and proceeds after the 404; **a switch committed between its steps 2 and 3 → refused**.
 - **R9:** concurrency and termination:
   - a second run exits (the lock and oldest-wins);
   - SIGTERM mid-restore → cleanup;
@@ -617,3 +626,19 @@ As 3b §14, plus `BLUEPRINT-STANDARD.md` §3.7 and the early CI push.
   - a 3-minute lock wait, `--stop` retries, 423 retries on delete;
   - monitoring wording;
   - the rehearse proof status `rehearse-ok`.
+
+**Confirmation pass 2** (one fresh reviewer on v3.1): **3 MEDIUM (one stale text), 9 LOW; no HIGH.** Fixed in v3.2:
+- **only integrity failures fall back to an older backup;** infrastructure failures retry the same one, then stop without switching (`retryable`);
+- **override evidence is tied to the current original** (the same `old_project_id`, newer than the latest `linked`, no `ok` or `reachable-again` since), and **the task's network must be proven** by another workspace connecting;
+- **D5 matches §6.0** (no 7-day expiry).
+- **LOWs:**
+  - a 3b `ok` cancels a skip proof, and every `migrate-all` writes `reachable-again`;
+  - the skip applies only when `pendingCount` throws;
+  - the enums are completed, and result statuses moved to the summary;
+  - `override canary` naming;
+  - the recoverable-original alert is suppressed after a founder deletion, with first-seen + 7 days;
+  - **`tenant:delete` compares the URL and project id inside its lock** (a switch race);
+  - `tenant_id` in the orphan alert;
+  - the locked re-read is retried;
+  - the recoverable list is polled;
+  - the runbook note on 3b alerts for unrebuilt workspaces.
