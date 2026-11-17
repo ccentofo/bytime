@@ -160,6 +160,7 @@ GitHub needs an app-based 2FA first, then accepts keys.
 - `ccentofo/bytime` is public: anyone can read the code. No secrets are in it, and the backup design depends on that staying true.
 - It also matters for the backups: GitHub's "needs your approval" rule only works on free plans for public repos.
 - If you ever make the repo private, tell me first. The approval step would then need GitHub Enterprise, or a different design.
+- **Never rename or delete your GitHub account or the `bytime` repo without telling me first.** AWS trusts deploys from exactly `ccentofo/bytime`. If that name were freed and someone else registered it, they could look like you to AWS.
 
 ### 3.3 Later (Part 6)
 The `aws-backups` environment and four variables. Not now.
@@ -227,7 +228,7 @@ In the top-right region menu, choose **US East (N. Virginia) us-east-1** wheneve
 ### 4.8 What you can't do in this account, by design
 Once the backup system is deployed, your admin login is **refused** if it tries to download, decrypt or re-encrypt a backup. Only the automated restore test, and 3c's disaster button, can. Nothing can reach your Mac by accident.
 
-Stated honestly: an administrator can always change the rules on purpose (a policy, or a task's command). The system makes sure you'd know: any such change made outside a reviewed deploy **emails you immediately**, and AWS's audit trail keeps a record.
+Stated honestly: an administrator can always get access on purpose, for example by changing a policy or running a task with a different command. That's a deliberate act behind your hardware key, and AWS's audit trail records it. Any change to the protections themselves (the key, the bucket rules, the audit trail, the alerts) **emails you immediately**, whoever makes it, and a daily check confirms they're still in place.
 
 ---
 
@@ -252,7 +253,9 @@ The final checklist will be `PRODUCTION-DEPLOY.md`, Phase "Backups (AWS)". The f
    3. Uncheck **Allow administrators to bypass configured protection rules**. **Save protection rules**.
    4. **Deployment branches → Selected branches and tags → Add deployment branch or tag rule** → Branch, `main` → **Add rule**.
    5. Add the variable `BACKUP_ALERT_EMAIL` = `infra@cadenzpoint.com` (**Settings → Secrets and variables → Actions → Variables → New repository variable**).
-   6. **Check it:** run `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-backups` and send me the output. I confirm the approval rule and the branch rule are there.
+   6. **Check it:** run these two commands in Terminal and send me the output; I confirm the approval rule, the bypass setting and the branch rule:
+      - `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-backups`
+      - `curl -s https://api.github.com/repos/ccentofo/bytime/environments/aws-backups/deployment-branch-policies`
 2. **Create the bootstrap stack** (AWS, signed in as `corey-admin`, region us-east-1):
    1. **CloudFormation → Stacks → Create stack → With new resources (standard)**.
    2. **Choose an existing template → Upload a template file → Choose File** → `ops/aws/bootstrap.yml` from the repo → **Next**.
@@ -267,15 +270,15 @@ The final checklist will be `PRODUCTION-DEPLOY.md`, Phase "Backups (AWS)". The f
    Take them from your password manager, where PRODUCTION-DEPLOY Phase 4 keeps them. Vercel won't show sensitive values again.
 4. **First deploy:** in GitHub → **Actions → Backup system deploy → Run workflow**. GitHub emails you; on the run, **Review deployments** → `aws-backups` → **Approve and deploy**.
 5. **Confirm the alert email.** AWS sends "AWS Notification - Subscription Confirmation" to `infra@`; click **Confirm subscription** within 48 hours. If you miss it: AWS console → **SNS → Subscriptions** → the pending one → **Request confirmation**. (The daily digest will remind you if it's still unconfirmed.)
-6. **First runs and the "can't" checks:** together with me, in the AWS console and AWS CloudShell (a terminal in your browser that runs inside AWS), so nothing runs on your Mac. Each run you start by hand sends you an alert email ("a task was started by hand"); that's expected and shows the alarms work.
+6. **First runs and the "can't" checks:** together with me, in the AWS console and AWS CloudShell (a terminal in your browser that runs inside AWS), so nothing runs on your Mac. A few checks deliberately trigger alert emails; that's expected and proves the alarms work.
 7. **Switch to production:** edit the first two parameters to **production's** values. From the next scheduled run, production is backed up.
-8. **Vercel:** add `BACKUPS_EXPECTED=1` to production (staging stays `0`), then redeploy.
+8. **Vercel:** once I confirm production's first backup and audit have run, add `BACKUPS_EXPECTED=1` to production (staging stays `0`), then redeploy.
 
 ## Part 7. After setup: what you'll see, and what you never do
 **You'll see:**
 - a "Backups" section in the daily digest, with the newest backup and the last restore test;
 - alerts there if anything is wrong;
-- an immediate AWS email if anyone tries to delete or disable the backup key, changes the backup rules outside a reviewed deploy, or starts a backup task by hand;
+- an immediate AWS email if anyone tries to delete or disable the backup key, or changes the backup rules, the audit trail or the alerts (a backup-system deploy that changes them also emails; that's expected);
 - a GitHub approval email when the backup code changes (approve it once the change is merged).
 
 **You never:**
