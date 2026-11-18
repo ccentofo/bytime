@@ -42,13 +42,15 @@ export const PARAMETERS = {
   neonOrgId: '/cadenzpoint/backup/neon-org-id',
   restoreTestProjectId: '/cadenzpoint/backup/restore-test-project-id',
   controlPlaneProjectId: '/cadenzpoint/backup/control-plane-project-id',
+  // feature-plan-control-plane-disaster.md §6.0: the per-environment backup id (`prod` or `staging`).
+  controlPlaneBackupId: '/cadenzpoint/backup/control-plane-backup-id',
 } as const;
 
 const FAMILY_PARAMETERS: Record<Family, string[]> = {
-  backup: [PARAMETERS.controlPlaneUrl, PARAMETERS.encryptionKey],
-  'restore-test': [PARAMETERS.controlPlaneUrl, PARAMETERS.restoreTestUrl],
+  backup: [PARAMETERS.controlPlaneUrl, PARAMETERS.encryptionKey, PARAMETERS.controlPlaneBackupId],
+  'restore-test': [PARAMETERS.controlPlaneUrl, PARAMETERS.restoreTestUrl, PARAMETERS.controlPlaneBackupId],
   audit: [PARAMETERS.controlPlaneUrl, PARAMETERS.restoreTestUrl],
-  disaster: [PARAMETERS.controlPlaneUrl, PARAMETERS.encryptionKey, PARAMETERS.neonApiKey, PARAMETERS.neonOrgId, PARAMETERS.restoreTestProjectId, PARAMETERS.controlPlaneProjectId],
+  disaster: [PARAMETERS.controlPlaneUrl, PARAMETERS.encryptionKey, PARAMETERS.neonApiKey, PARAMETERS.neonOrgId, PARAMETERS.restoreTestProjectId, PARAMETERS.controlPlaneProjectId, PARAMETERS.controlPlaneBackupId, PARAMETERS.restoreTestUrl],
 };
 
 export const taskFamily = (f: Family) => `cadenzpoint-backup-${f}`;
@@ -207,7 +209,7 @@ export function expectedDocuments(o: { accountId: string; keyArn: string }): Exp
         { Sid: 'ReadBackups', Effect: 'Allow', Action: 's3:GetObject', Resource: backups },
         { Sid: 'ListBackups', Effect: 'Allow', Action: 's3:ListBucket', Resource: bucketArn, Condition: { StringLike: { 's3:prefix': 'v1/*' } } },
         { Sid: 'DecryptBackups', Effect: 'Allow', Action: 'kms:Decrypt', Resource: o.keyArn, Condition: purpose },
-        { Sid: 'ReadBackupLines', Effect: 'Allow', Action: 'logs:FilterLogEvents', Resource: `arn:aws:logs:${REGION}:${a}:log-group:${logGroup('backup')}:*` },
+        { Sid: 'ReadBackupLines', Effect: 'Allow', Action: 'logs:FilterLogEvents', Resource: [`arn:aws:logs:${REGION}:${a}:log-group:${logGroup('backup')}:*`, `arn:aws:logs:${REGION}:${a}:log-group:${logGroup('disaster')}:*`] },
         { Sid: 'ListOwnFamily', Effect: 'Allow', Action: 'ecs:ListTasks', Resource: '*', Condition: { ArnEquals: { 'ecs:cluster': clusterArn } } },
         { Sid: 'DescribeTasks', Effect: 'Allow', Action: 'ecs:DescribeTasks', Resource: `arn:aws:ecs:${REGION}:${a}:task/${NAMES.cluster}/*` },
         { Sid: 'EmailFounder', Effect: 'Allow', Action: 'sns:Publish', Resource: topicArn },

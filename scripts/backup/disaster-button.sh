@@ -74,19 +74,32 @@ if [ -n "$TARGETS" ]; then
   IFS=$OLD_IFS
 fi
 
-case "$MODE" in workspace|rehearse) ;; *) fail "mode must be workspace or rehearse" ;; esac
+case "$MODE" in workspace|rehearse|control-plane|reconcile) ;; *) fail "mode must be workspace, rehearse, control-plane or reconcile" ;; esac
 case "$OVERRIDE" in none|unreachable-4h|canary) ;; *) fail "override must be none, unreachable-4h or canary" ;; esac
 if [ "$MODE" = workspace ] && [ "$OVERRIDE" = canary ]; then fail "override canary is only for rehearse"; fi
 if [ "$MODE" = rehearse ] && [ "$OVERRIDE" = unreachable-4h ]; then fail "override unreachable-4h is only for workspace"; fi
+# feature-plan-control-plane-disaster.md §6.1: the control-plane modes take the literal target `control-plane` and no override.
+if [ "$MODE" = control-plane ] || [ "$MODE" = reconcile ]; then
+  if [ "$TARGETS" != control-plane ]; then fail "mode $MODE takes targets control-plane"; fi
+  if [ "$OVERRIDE" != none ]; then fail "mode $MODE takes override none"; fi
+fi
+if [ "$TARGETS" = control-plane ] && [ "$MODE" = rehearse ] && [ "$OVERRIDE" != none ]; then fail "the control-plane rehearsal takes override none"; fi
 
 EXPECTED_CONFIRM=$MODE
 if [ "$OVERRIDE" = unreachable-4h ]; then EXPECTED_CONFIRM="workspace unreachable-4h"; fi
 if [ "$CONFIRM" != "$EXPECTED_CONFIRM" ]; then fail "confirm must be exactly: $EXPECTED_CONFIRM"; fi
 
-if ! printf '%s' "$TARGETS" | grep -Eq "^(all-lost|${UUID}(,${UUID}){0,49})$"; then
+if [ "$TARGETS" = control-plane ]; then
+  case "$MODE" in rehearse|control-plane|reconcile) ;; *) fail "targets control-plane is only for rehearse, control-plane and reconcile" ;; esac
+elif ! printf '%s' "$TARGETS" | grep -Eq "^(all-lost|${UUID}(,${UUID}){0,49})$"; then
   fail "targets must be workspace ids (uuid, lowercase), comma-separated, up to 50, or all-lost"
 fi
-if [ "$TARGETS" = all-lost ]; then
+# What the stack's DisasterModes output must list for this press (§6.1).
+NEEDED_MODE=$MODE
+if [ "$MODE" = rehearse ] && [ "$TARGETS" = control-plane ]; then NEEDED_MODE=rehearse-control-plane; fi
+if [ "$TARGETS" = control-plane ]; then
+  : # the literal target: nothing to deduplicate
+elif [ "$TARGETS" = all-lost ]; then
   if [ "$MODE" != workspace ]; then fail "all-lost is only for workspace"; fi
   if [ "$OVERRIDE" != none ]; then fail "all-lost can't be combined with an override"; fi
 else
@@ -100,6 +113,14 @@ RUNNING=$(aws ecs list-tasks --cluster "$CLUSTER" --family "$FAMILY" --desired-s
 if [ "$RUNNING" != "0" ]; then fail "a disaster task is already running (RESTORE.md runbook A.11)"; fi
 
 # ---- 3. start ----------------------------------------------------------------------------------------------------------
+# An image older than this button can't run a newer mode: the stack lists the modes its image runs (§6.1). A stack from
+# before 3c-2 has no such output and runs 3c's modes only.
+MODES=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='DisasterModes'].OutputValue" --output text)
+if [ -z "$MODES" ] || [ "$MODES" = None ]; then MODES="workspace rehearse"; fi
+case " $MODES " in
+  *" $NEEDED_MODE "*) ;;
+  *) fail "the Backup system deploy that adds this mode is pending approval: approve it in GitHub, then press again" ;;
+esac
 SUBNETS=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='TaskSubnets'].OutputValue" --output text)
 SG=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='TaskSecurityGroup'].OutputValue" --output text)
 if [ -z "$SUBNETS" ] || [ "$SUBNETS" = None ] || [ -z "$SG" ] || [ "$SG" = None ]; then fail "the backup stack has no TaskSubnets/TaskSecurityGroup outputs (approve the pending Backup system deploy)"; fi

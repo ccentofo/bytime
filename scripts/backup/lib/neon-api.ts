@@ -10,6 +10,11 @@
  *   approved detail D4: `failed` is terminal even with a `retry_at`, which only says when it was last retried).
  * - 423 Locked and 429 are retried with backoff ("Any request that returns a 423 Locked response is safe to retry").
  * - DELETE answers 200 with the project body; a 404 on delete = already gone. Deletion is always verified by GET → 404.
+ * - feature-plan-control-plane-disaster.md §5 (impact analysis; Neon's OpenAPI spec, 2026-11-18): `ProjectListItem`
+ *   requires `created_at`; GET /projects/{id}/branches is cursor-paginated (`pagination.next`) and `Branch.default` marks
+ *   the default branch (no project field names it); GET /projects/{id}/branches/{branch}/databases returns databases
+ *   whose `owner_name` is required; GET /projects/{id}/connection_uri needs `database_name` and `role_name` and answers
+ *   `{ uri }` (`pooled=true` gives the `-pooler` host; its query may carry `channel_binding`, which callers strip).
  *
  * Errors carry ONLY the HTTP status and Neon's `code`, never a response body or message (which can name projects): the
  * disaster log group keeps ids only (invariant 6).
@@ -31,6 +36,8 @@ export class NeonApiError extends Error {
 export interface NeonProject {
   id: string;
   name: string;
+  /** `created_at` (required by the spec; null only if a response lacks it). */
+  createdAt?: string | null;
   deletedAt?: string | null;
   recoverableUntil?: string | null;
 }
@@ -77,6 +84,12 @@ export interface NeonApi {
   verifyGone(id: string, tries?: number, delayMs?: number): Promise<boolean>;
   /** Projects named exactly `name` (search, then an exact filter). */
   findByName(name: string): Promise<{ projects: NeonProject[]; unavailable: string[] }>;
+  /** Every branch of a project (paginated), with Neon's `default` flag. */
+  listBranches(projectId: string): Promise<Array<{ id: string; isDefault: boolean }>>;
+  /** The databases on one branch, with their owner role. */
+  listDatabases(projectId: string, branchId: string): Promise<Array<{ name: string; ownerName: string }>>;
+  /** GET connection_uri: the URI exactly as Neon returns it (the caller decides what to keep). */
+  getConnectionUri(o: { projectId: string; branchId?: string; databaseName: string; roleName: string; pooled: boolean }): Promise<string>;
 }
 
 interface Operation { id: string; status: string }
@@ -133,6 +146,7 @@ export function neonApi(o: NeonApiOptions): NeonApi {
 
   const toProject = (p: Record<string, unknown>): NeonProject => ({
     id: String(p.id), name: String(p.name ?? ''),
+    createdAt: typeof p.created_at === 'string' ? p.created_at : null,
     deletedAt: typeof p.deleted_at === 'string' ? p.deleted_at : null,
     recoverableUntil: typeof p.recoverable_until === 'string' ? p.recoverable_until : null,
   });
@@ -237,6 +251,34 @@ export function neonApi(o: NeonApiOptions): NeonApi {
     async findByName(name) {
       const l = await listProjects({ search: name });
       return { projects: l.projects.filter((p) => p.name === name), unavailable: l.unavailable };
+    },
+    async listBranches(projectId) {
+      const out: Array<{ id: string; isDefault: boolean }> = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 100; page++) {
+        const params = new URLSearchParams({ limit: '100' });
+        if (cursor) params.set('cursor', cursor);
+        const r = await call('list-branches', 'GET', `/projects/${encodeURIComponent(projectId)}/branches?${params}`);
+        if (r.status !== 200 || !r.json || !Array.isArray(r.json.branches)) fail('list-branches', r);
+        const items = r.json!.branches as Array<Record<string, unknown>>;
+        out.push(...items.map((b) => ({ id: String(b.id), isDefault: b.default === true })));
+        const next = (r.json!.pagination as { next?: string } | undefined)?.next;
+        if (items.length === 0 || !next || next === cursor) break;
+        cursor = next;
+      }
+      return out;
+    },
+    async listDatabases(projectId, branchId) {
+      const r = await call('list-databases', 'GET', `/projects/${encodeURIComponent(projectId)}/branches/${encodeURIComponent(branchId)}/databases`);
+      if (r.status !== 200 || !r.json || !Array.isArray(r.json.databases)) fail('list-databases', r);
+      return (r.json!.databases as Array<Record<string, unknown>>).map((d) => ({ name: String(d.name ?? ''), ownerName: String(d.owner_name ?? '') }));
+    },
+    async getConnectionUri(c) {
+      const params = new URLSearchParams({ database_name: c.databaseName, role_name: c.roleName, pooled: String(c.pooled) });
+      if (c.branchId) params.set('branch_id', c.branchId);
+      const r = await call('connection-uri', 'GET', `/projects/${encodeURIComponent(c.projectId)}/connection_uri?${params}`);
+      if (r.status !== 200 || typeof r.json?.uri !== 'string' || !r.json.uri) fail('connection-uri', r);
+      return r.json!.uri as string;
     },
   };
 }

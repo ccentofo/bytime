@@ -22,7 +22,7 @@ import { controlPlaneClient } from './lib/sql';
 import { summaryOf } from './lib/summarize-error';
 import type { DisasterEcs, Publisher } from './lib/aws-clients';
 import type { NeonApi } from './lib/neon-api';
-import type { LogReader } from './lib/log-reader';
+import type { DisasterLogReader, LogReader } from './lib/log-reader';
 import type { BackupReader } from './lib/store';
 import type { KeyringFactory } from './lib/crypto';
 import type { SpawnFn } from './lib/child';
@@ -30,18 +30,23 @@ import type { HostMap } from './lib/host-map';
 import { MINUTE } from './lib/util';
 import { runWorkspace } from './disaster-workspace';
 import { runRehearse } from './disaster-rehearse';
+import { runControlPlane } from './disaster-control-plane';
+import { runReconcileMode } from './disaster-reconcile';
+import { pgQuery } from './lib/classify-endpoint';
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const RUN_ID_RE = /^[A-Za-z0-9_/-]{1,80}$/;
 export const MAX_TARGETS = 50;
 
-export type DisasterMode = 'workspace' | 'rehearse';
+export type DisasterMode = 'workspace' | 'rehearse' | 'control-plane' | 'reconcile';
+/** The literal target of the control-plane modes (feature-plan-control-plane-disaster.md §6.1). */
+export const CONTROL_PLANE_TARGET = 'control-plane';
 export type DisasterOverride = 'none' | 'unreachable-4h' | 'canary';
 
 export interface DisasterArgs {
   mode: DisasterMode;
-  /** Workspace ids (deduplicated), or `all-lost` (workspace), or `auto` (rehearse). */
-  targets: string[] | 'all-lost' | 'auto';
+  /** Workspace ids (deduplicated), or `all-lost` (workspace), or `auto` (rehearse), or `control-plane` (the control-plane modes). */
+  targets: string[] | 'all-lost' | 'auto' | 'control-plane';
   override: DisasterOverride;
   runId: string;
 }
@@ -75,9 +80,11 @@ export function parseDisasterArgs(argv: string[], now: Date = new Date()): Parse
       positional.push(a);
     }
   }
-  if (positional.length !== 1) return bad('usage: disaster workspace|rehearse --targets … [--override …] [--run-id …]');
+  if (positional.length !== 1) return bad('usage: disaster workspace|rehearse|control-plane|reconcile --targets … [--override …] [--run-id …]');
   const mode = positional[0];
-  if (mode !== 'workspace' && mode !== 'rehearse') return bad('mode must be workspace or rehearse');
+  // An unknown mode keeps exit 1 (feature-plan-control-plane-disaster.md §6.1: the button refuses modes the stack's
+  // DisasterModes output doesn't list, so an older image is never asked to run one).
+  if (mode !== 'workspace' && mode !== 'rehearse' && mode !== 'control-plane' && mode !== 'reconcile') return bad('mode must be workspace, rehearse, control-plane or reconcile');
   const override = (flags.get('--override') ?? 'none') as DisasterOverride;
   if (!['none', 'unreachable-4h', 'canary'].includes(override)) return bad('override must be none, unreachable-4h or canary');
   if (mode === 'workspace' && override === 'canary') return bad('override canary is only for rehearse');
@@ -85,7 +92,15 @@ export function parseDisasterArgs(argv: string[], now: Date = new Date()): Parse
   const raw = flags.get('--targets');
   if (!raw) return bad('--targets is required');
   let targets: DisasterArgs['targets'];
-  if (raw === 'all-lost') {
+  if (mode === 'control-plane' || mode === 'reconcile') {
+    if (raw !== CONTROL_PLANE_TARGET) return bad(`mode ${mode} takes --targets control-plane`);
+    if (override !== 'none') return bad(`mode ${mode} takes --override none`);
+    targets = CONTROL_PLANE_TARGET;
+  } else if (raw === CONTROL_PLANE_TARGET) {
+    if (mode !== 'rehearse') return bad('control-plane is only for rehearse, control-plane and reconcile');
+    if (override !== 'none') return bad('the control-plane rehearsal takes --override none');
+    targets = CONTROL_PLANE_TARGET;
+  } else if (raw === 'all-lost') {
     if (mode !== 'workspace') return bad('all-lost is only for workspace');
     if (override !== 'none') return bad("all-lost can't be combined with an override");
     targets = 'all-lost';
@@ -114,6 +129,8 @@ export const DISASTER_DEFAULTS = {
 /** Everything the task needs; production wires the real clients (main.ts), tests the fakes. */
 export interface DisasterDeps {
   controlPlaneUrl: string;
+  /** The backup id: resolved once by main.ts (feature-plan-control-plane-disaster.md §6.0). */
+  cpId: string;
   neon: NeonApi;
   ecs: DisasterEcs;
   logReader: LogReader;
@@ -125,6 +142,10 @@ export interface DisasterDeps {
   regionId: string;
   restoreTestProjectId: string;
   controlPlaneProjectId: string;
+  /** RESTORE_TEST_DATABASE_URL: the control-plane modes' network-first check (feature-plan-control-plane-disaster.md §6.2). */
+  restoreTestUrl?: string;
+  /** DISASTER_LOG_GROUP's reader: the window's rebuild lines (§6.4 R2). Set for the control-plane modes. */
+  disasterLogReader?: DisasterLogReader;
   log: (line: string) => void;
   now?: () => Date;
   sleep?: (ms: number) => Promise<void>;
@@ -178,6 +199,8 @@ export interface WorkspaceResult {
 export interface RunOutcome {
   pass: boolean;
   results: WorkspaceResult[];
+  /** Merged into the run row's summary (feature-plan-control-plane-disaster.md §6.4: the reconcile's counts). */
+  summary?: Record<string, unknown>;
   /** Lines for the founder's email (may name slugs: the topic is private). */
   email: string[];
 }
@@ -197,7 +220,10 @@ export interface RunContext {
 /** The modes (filled in by feature-plan-disaster-restore.md §6.4 and §6.5). */
 export type ModeRunner = (ctx: RunContext) => Promise<RunOutcome>;
 
-export const MODES: Record<DisasterMode, ModeRunner> = { workspace: runWorkspace, rehearse: runRehearse };
+export const MODES: Record<'workspace' | 'rehearse' | 'reconcile', ModeRunner> = { workspace: runWorkspace, rehearse: runRehearse, reconcile: runReconcileMode };
+
+/** The run row's `target` (feature-plan-control-plane-disaster.md §6.5): written at INSERT for every mode, so a row closed early keeps it. */
+export const runTarget = (args: DisasterArgs): 'control-plane' | 'workspace' => (args.targets === CONTROL_PLANE_TARGET ? 'control-plane' : 'workspace');
 
 export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promise<{ exitCode: number; outcome: RunOutcome | null }> {
   const now = deps.now ?? (() => new Date());
@@ -214,8 +240,9 @@ export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promi
     return { exitCode: 1, outcome: null };
   }
   const startedBy = self.startedBy ?? '';
-  if (args.mode === 'workspace' && !/^(gh-|cloudshell-)/.test(startedBy)) {
-    log('refused: mode workspace runs only from the button (gh-…) or the CloudShell fallback (cloudshell-…)');
+  // A schedule can only rehearse (feature-plan-control-plane-disaster.md §6.1).
+  if (args.mode !== 'rehearse' && !/^(gh-|cloudshell-)/.test(startedBy)) {
+    log(`refused: mode ${args.mode} runs only from the button (gh-…) or the CloudShell fallback (cloudshell-…)`);
     return { exitCode: 1, outcome: null };
   }
 
@@ -234,6 +261,24 @@ export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promi
   } catch (e) {
     log(`refused: could not list running disaster tasks (${summaryOf('ecs', e)})`);
     return { exitCode: 1, outcome: null };
+  }
+
+  // ---- mode control-plane: the control plane is gone, so it has its own harness (no lock, no run row until it records;
+  // feature-plan-control-plane-disaster.md §6.3). It branches before any control-plane client is opened.
+  if (args.mode === 'control-plane') return runControlPlane(args, deps, startedBy);
+
+  // ---- mode reconcile: the control plane in SSM must answer before the lock is tried (§6.4 "repoint-first") -----------
+  if (args.mode === 'reconcile') {
+    const probe = await pgQuery(deps.controlPlaneUrl, async (sql) => { await sql`SELECT 1`; }, { hostMap: deps.hostMap });
+    if (!probe.ok) {
+      log('refused: repoint-first (the control plane in SSM does not answer)');
+      try {
+        await deps.publish(`CadenzPoint disaster reconcile FAILED: run ${args.runId}`, `Reconcile, run ${args.runId}: refused (repoint-first): the control plane in SSM doesn't answer: finish runbook B.5 (repoint SSM control-plane-url and control-plane-project-id to the new project), then press reconcile again. Nothing was changed.`);
+      } catch (e) {
+        log(`the email could not be sent (${summaryOf('sns', e)})`);
+      }
+      return { exitCode: 1, outcome: null };
+    }
   }
 
   // ---- the lock (a cancelled task can hold it for its 120-second stop) -----------------------------------------------
@@ -270,22 +315,24 @@ export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promi
     const abandoned = await cp`UPDATE disaster_runs SET status = 'fail', finished_at = ${now()},
       summary = coalesce(summary, '{}'::jsonb) || '{"detail":"abandoned"}'::jsonb WHERE status = 'running' RETURNING id`;
     if (abandoned.length > 0) log(`closed ${abandoned.length} abandoned disaster run(s)`);
-    const [row] = await cp<{ id: string }[]>`INSERT INTO disaster_runs (run_id, mode, started_at, status)
-      VALUES (${args.runId}, ${args.mode}, ${now()}, 'running') RETURNING id::text AS id`;
+    const [row] = await cp<{ id: string }[]>`INSERT INTO disaster_runs (run_id, mode, started_at, status, summary)
+      VALUES (${args.runId}, ${args.mode}, ${now()}, 'running', ${cp.json({ target: runTarget(args) })}) RETURNING id::text AS id`;
     runRowId = row.id;
     log(`disaster ${args.mode} run ${args.runId} started by ${startedBy || 'unknown'}`);
 
     let outcome: RunOutcome;
     try {
-      outcome = await MODES[args.mode]({ args, deps, cp, runRowId, signal: runAbort.signal, now, sleep, log });
+      outcome = await MODES[args.mode as 'workspace' | 'rehearse' | 'reconcile']({ args, deps, cp, runRowId, signal: runAbort.signal, now, sleep, log });
     } catch (e) {
       outcome = { pass: false, results: [], email: [`the run stopped: ${summaryOf('run', e)}`] };
       log(`run failed: ${summaryOf('run', e)}`);
     }
 
-    const summary = { mode: args.mode, override: args.override, results: outcome.results.map((r) => ({ tenantId: r.tenantId, result: r.result, detail: r.detail ?? null, newProjectId: r.newProjectId ?? null })) };
-    // Set once; never over a row the digest already closed as abandoned (§6.8 "disaster run stuck").
-    await cp`UPDATE disaster_runs SET status = ${outcome.pass ? 'pass' : 'fail'}, finished_at = ${now()}, summary = ${cp.json(summary)}
+    const summary = { ...(outcome.summary ?? {}), mode: args.mode, override: args.override, target: runTarget(args), results: outcome.results.map((r) => ({ tenantId: r.tenantId, result: r.result, detail: r.detail ?? null, newProjectId: r.newProjectId ?? null })) };
+    // Set once; never over a row the digest already closed as abandoned (§6.8 "disaster run stuck"). The summary MERGES
+    // into what the INSERT wrote (feature-plan-control-plane-disaster.md §6.5: `target` survives every close).
+    await cp`UPDATE disaster_runs SET status = ${outcome.pass ? 'pass' : 'fail'}, finished_at = ${now()},
+      summary = coalesce(summary, '{}'::jsonb) || ${cp.json(summary as postgres.JSONValue)}
       WHERE id = ${runRowId} AND status = 'running'`;
     for (const r of outcome.results) log(`  ${r.tenantId} ${r.result}${r.detail ? ` (${r.detail})` : ''}`);
     try {

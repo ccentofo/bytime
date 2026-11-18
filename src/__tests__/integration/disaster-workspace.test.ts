@@ -37,7 +37,7 @@ describe.skipIf(!CAN_RUN)('disaster workspace', () => {
   const keysOf = (t: WorldTenant) => [...w.bucket.objects.keys()].filter((k) => k.startsWith(targetPrefix(w.cpId, 'tenant', t.id)) && k.endsWith('.dump.enc'))
     .sort((a, b) => w.bucket.objects.get(b)!.lastModified.getTime() - w.bucket.objects.get(a)!.lastModified.getTime());
 
-  it('R1: a gone workspace is rebuilt end to end: exact counts, the row switched, audit/linked/watch/LINKED, the original untouched, no migrations; the email has the backup time and A.7; stdout has no slug', async () => {
+  it('R1: a gone workspace is rebuilt end to end: exact counts, the row switched, audit/linked/watch/LINKED, the original untouched, no migrations; the email has the backup time and the Admin line (3c-2 §6.8); stdout has no slug', async () => {
     const t = take();
     makeGone(w, t);
     const before = await tenantRow(w, t.id);
@@ -77,7 +77,9 @@ describe.skipIf(!CAN_RUN)('disaster workspace', () => {
     expect(li).toBeGreaterThan(sw);
     const mail = r.emails[0].message;
     expect(mail).toMatch(/changes after \d{4}-\d\d-\d\dT[\d:.]+Z UTC need re-entering/);
-    expect(mail).toContain(`lower neon-ops@ to Viewer on project ${after.neonProjectId}`);
+    // feature-plan-control-plane-disaster.md §6.8: the A.7 line is gone; creators stay Admin of rebuilt projects.
+    expect(mail).toContain(`you remain Admin of the rebuilt project ${after.neonProjectId} through the disaster key; that's expected.`);
+    expect(mail).not.toContain('lower neon-ops@');
     expect(mail).toContain('Deploy to Production');
     expect(mail).toContain(t.slug); // the private email may name the workspace
     expect(slugsIn(r.logs.join('\n'))).toEqual([]);

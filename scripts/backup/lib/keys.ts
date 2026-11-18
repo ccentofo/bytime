@@ -3,8 +3,11 @@
  *
  *   v1/<cp>/<target>/<id>/<YYYY>/<MM>/<DD>/<runId>-<rand8>.dump.enc      (sidecar: …-<rand8>.manifest.json.enc)
  *
- * `<cp>` = first 12 hex characters of SHA-256 of the control plane's DIRECT host, so the staging rehearsal's objects and
- * production's never share a prefix. `<id>` = the tenant uuid, or `control-plane`.
+ * `<cp>` = the per-environment backup id `prod` or `staging` (feature-plan-control-plane-disaster.md §6.0: SSM
+ * `/cadenzpoint/backup/control-plane-backup-id`, injected as BACKUP_CONTROL_PLANE_ID), so a rebuilt control plane (a new
+ * host) keeps finding every backup and staging's objects never share production's prefix. Unset (tests, the local dry
+ * run): the first 12 hex characters of SHA-256 of the control plane's DIRECT host, as 3b shipped. `<id>` = the tenant
+ * uuid, or `control-plane`.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { toDirectConnectionUrl } from '../../../src/lib/tenant/direct-url';
@@ -24,8 +27,19 @@ export function randomToken(length: number, bytes: (n: number) => Buffer = rando
   return out;
 }
 
-/** The control-plane id: sha256(direct host)[0:12]. Throws on an unparseable URL. */
-export function controlPlaneId(controlPlaneUrl: string): string {
+/** The two backup ids an environment may use (§6.0: a whitelist, since a wrong value is consistent everywhere). */
+export const BACKUP_ID_RE = /^(prod|staging)$/;
+
+/**
+ * The control-plane id: BACKUP_CONTROL_PLANE_ID when set (validated: `prod` or `staging`, else it throws), otherwise
+ * sha256(direct host)[0:12]. Throws on an unparseable URL. main.ts resolves it once and passes it in every task's deps.
+ */
+export function controlPlaneId(controlPlaneUrl: string, env: Record<string, string | undefined> = process.env): string {
+  const configured = env.BACKUP_CONTROL_PLANE_ID;
+  if (configured !== undefined) {
+    if (!BACKUP_ID_RE.test(configured)) throw new Error('BACKUP_CONTROL_PLANE_ID must be prod or staging');
+    return configured;
+  }
   const host = new URL(toDirectConnectionUrl(controlPlaneUrl)).hostname.toLowerCase();
   return createHash('sha256').update(host).digest('hex').slice(0, 12);
 }

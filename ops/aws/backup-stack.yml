@@ -545,7 +545,9 @@ Resources:
                 Effect: Allow
                 Action: logs:FilterLogEvents
                 Resource:
-                  Fn::Sub: arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/cadenzpoint/backup/backup:*
+                  - Fn::Sub: arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/cadenzpoint/backup/backup:*
+                  # feature-plan-control-plane-disaster.md §6.2 item 2: the reconcile follows the disaster log's rebuild lines.
+                  - Fn::Sub: arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/cadenzpoint/backup/disaster:*
               - Sid: ListOwnFamily
                 Effect: Allow
                 Action: ecs:ListTasks
@@ -619,6 +621,8 @@ Resources:
                   - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/neon-org-id
                   - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/restore-test-project-id
                   - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-project-id
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-backup-id
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/restore-test-url
 
   # feature-plan-disaster-restore.md §6.2: the button's role, reachable only from a job in the founder-approved
   # `aws-disaster` environment (GitHub OIDC). It may start only the disaster family, in this cluster; a role allowed to run
@@ -744,6 +748,7 @@ Resources:
                 Resource:
                   - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-url
                   - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/encryption-key
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-backup-id
 
   AuditExecRole:
     Type: AWS::IAM::Role
@@ -846,6 +851,7 @@ Resources:
                 Resource:
                   - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-url
                   - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/restore-test-url
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-backup-id
 
   SchedulerRole:
     Type: AWS::IAM::Role
@@ -954,6 +960,9 @@ Resources:
             - Name: ENCRYPTION_KEY
               ValueFrom:
                 Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/encryption-key
+            - Name: BACKUP_CONTROL_PLANE_ID
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-backup-id
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -1015,6 +1024,9 @@ Resources:
             - Name: RESTORE_TEST_DATABASE_URL
               ValueFrom:
                 Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/restore-test-url
+            - Name: BACKUP_CONTROL_PLANE_ID
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-backup-id
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -1134,6 +1146,9 @@ Resources:
               Value: aws-us-east-1
             - Name: DISASTER_DEADLINE_MINUTES
               Value: '330'
+            # feature-plan-control-plane-disaster.md §6.4 R2: the window's SWITCHING / LINKED / RELINKED lines.
+            - Name: DISASTER_LOG_GROUP
+              Value: /cadenzpoint/backup/disaster
           Secrets:
             - Name: CONTROL_PLANE_DATABASE_URL
               ValueFrom:
@@ -1153,6 +1168,13 @@ Resources:
             - Name: CONTROL_PLANE_PROJECT_ID
               ValueFrom:
                 Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-project-id
+            - Name: BACKUP_CONTROL_PLANE_ID
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-backup-id
+            # feature-plan-control-plane-disaster.md §6.2 item 2: the control-plane modes' network-first check.
+            - Name: RESTORE_TEST_DATABASE_URL
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/restore-test-url
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -1336,7 +1358,7 @@ Resources:
               startedBy: $.detail.startedBy
               stopCode: $.detail.stopCode
               time: $.time
-            InputTemplate: '"CadenzPoint disaster task <status> at <time> (started by <startedBy>; task <task>; stop code <stopCode>). If you did not press Disaster restore or run the CloudShell command, and it is not the monthly rehearsal (the 1st, 15:17 UTC), investigate now."'
+            InputTemplate: '"CadenzPoint disaster task <status> at <time> (started by <startedBy>; task <task>; stop code <stopCode>). If you did not press Disaster restore or run the CloudShell command, and it is not a monthly rehearsal (workspace on the 1st, control plane on the 15th, both 15:17 UTC), investigate now."'
 
   # The RunTask call itself (CloudTrail), so the email names the caller. Two prefixes in one array already match either
   # form (family or ARN): approved detail D6.
@@ -1860,6 +1882,82 @@ Resources:
               SecurityGroups:
                 - Ref: TaskSecurityGroup
 
+  # feature-plan-control-plane-disaster.md §6.2 item 3, §6.5: the monthly control-plane rehearsal (the 15th, 15:17 UTC, in
+  # the workspace rehearsal's quiet hour). Non-destructive: a copy of the control plane is restored, reconciled dry-run and
+  # deleted.
+  DisasterRehearseControlPlaneSchedule:
+    Type: AWS::Scheduler::Schedule
+    DependsOn:
+      - BackupKey
+      - BackupKeyAlias
+      - BackupBucket
+      - BackupBucketPolicy
+      - Vpc
+      - InternetGateway
+      - GatewayAttachment
+      - PublicRouteTable
+      - DefaultRoute
+      - SubnetARoutes
+      - SubnetBRoutes
+      - BackupLogGroup
+      - AuditLogGroup
+      - RestoreTestLogGroup
+      - BackupTaskRole
+      - RestoreTestTaskRole
+      - AuditTaskRole
+      - BackupExecRole
+      - AuditExecRole
+      - RestoreTestExecRole
+      - BackupTaskDefinition
+      - AuditTaskDefinition
+      - AlertTopic
+      - AlertSubscription
+      - AlertTopicPolicy
+      - ProtectionsRule
+      - RolesRule
+      - DlqAlarm
+      - MonthlyBudget
+      - DisasterLogGroup
+      - DisasterTaskRole
+      - DisasterExecRole
+      - DisasterButtonRole
+      - DisasterStartedRule
+      - DisasterRunTaskRule
+      - RestoreTestTaskDefinition
+    Properties:
+      Name: cadenzpoint-backup-disaster-rehearse-cp
+      ScheduleExpression: 'cron(17 15 15 * ? *)'
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      State: ENABLED
+      Target:
+        Arn:
+          Fn::GetAtt: [Cluster, Arn]
+        RoleArn:
+          Fn::GetAtt: [SchedulerRole, Arn]
+        Input: '{"containerOverrides":[{"name":"disaster","command":["disaster", "rehearse", "--targets", "control-plane"]}]}'
+        RetryPolicy:
+          MaximumRetryAttempts: 10
+          MaximumEventAgeInSeconds: 3600
+        DeadLetterConfig:
+          Arn:
+            Fn::GetAtt: [SchedulerDeadLetterQueue, Arn]
+        EcsParameters:
+          TaskDefinitionArn:
+            Ref: DisasterTaskDefinition
+          LaunchType: FARGATE
+          PlatformVersion: LATEST
+          TaskCount: 1
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              AssignPublicIp: ENABLED
+              Subnets:
+                - Ref: SubnetA
+                - Ref: SubnetB
+              SecurityGroups:
+                - Ref: TaskSecurityGroup
+
 Outputs:
   BackupBucket:
     Value:
@@ -1884,3 +1982,7 @@ Outputs:
   TaskSecurityGroup:
     Value:
       Ref: TaskSecurityGroup
+  # feature-plan-control-plane-disaster.md §6.1: the modes this stack's image runs. The button refuses a mode (or the
+  # control-plane rehearsal) not listed here, before any AWS start; a stack without this output allows 3c's modes only.
+  DisasterModes:
+    Value: workspace rehearse control-plane reconcile rehearse-control-plane

@@ -76,9 +76,25 @@ describe('D6: runs and rehearsals', () => {
     const reh = (status: string, days: number) => run({ id: `r${days}`, runId: `task-${days}`, mode: 'rehearse', status, startedAt: ago(days * D) });
     expect(kinds(disasterFindings(facts({ runs: [reh('fail', 1), reh('pass', 10)] }), view(), NOW))).toEqual(['disaster-rehearse-failed']);
     expect(disasterFindings(facts({ runs: [reh('pass', 1), reh('fail', 10)] }), view(), NOW).raise).toEqual([]);
-    expect(kinds(disasterFindings(facts({ runs: [], firstCpOkAt: ago(41 * D) }), view(), NOW))).toEqual(['disaster-rehearse-failed']); // never recorded a row
+    // 3c-2 §6.5: per target, so an anchored control plane with no rehearsal at all raises both (workspace '', control-plane).
+    expect(disasterFindings(facts({ runs: [], firstCpOkAt: ago(41 * D) }), view(), NOW).raise.map((x) => `${x.kind}|${x.dedupKey}`)).toEqual(['disaster-rehearse-failed|', 'disaster-rehearse-failed|control-plane']); // never recorded a row
     expect(disasterFindings(facts({ runs: [], firstCpOkAt: ago(39 * D) }), view(), NOW).raise).toEqual([]);
-    expect(kinds(disasterFindings(facts({ runs: [reh('pass', 41)], firstCpOkAt: ago(100 * D) }), view(), NOW))).toEqual(['disaster-rehearse-failed']);
+    expect(disasterFindings(facts({ runs: [reh('pass', 41)], firstCpOkAt: ago(100 * D) }), view(), NOW).raise.map((x) => x.dedupKey)).toEqual(['', 'control-plane']);
+  });
+
+  it('T22 (3c-2): disaster-rehearse-failed per target; a run without a target counts as workspace', () => {
+    const reh = (status: string, days: number, target?: string) => run({ id: `r${days}${target ?? ''}`, runId: `task-${days}-${target ?? 'none'}`, mode: 'rehearse', status, startedAt: ago(days * D), target });
+    const keys = (runs: ReturnType<typeof reh>[], firstCpOkAt: Date | null = null) => disasterFindings(facts({ runs, firstCpOkAt }), view(), NOW).raise.map((x) => `${x.dedupKey}:${(x.detail as { target: string }).target}`);
+    // A failed control-plane rehearsal raises only its own alert; the workspace one stays clear.
+    expect(keys([reh('pass', 2), reh('fail', 1, 'control-plane')])).toEqual(['control-plane:control-plane']);
+    // A failed workspace rehearsal (no target: 3c's rows) raises only the workspace alert.
+    expect(keys([reh('fail', 2), reh('pass', 1, 'control-plane')])).toEqual([':workspace']);
+    expect(keys([reh('fail', 2, 'workspace'), reh('pass', 1, 'control-plane')])).toEqual([':workspace']);
+    // A newer control-plane pass doesn't clear a workspace failure, and vice versa.
+    expect(keys([reh('fail', 3), reh('pass', 1, 'control-plane')])).toEqual([':workspace']);
+    // Anchored: each target needs its own pass within 40 days.
+    expect(keys([reh('pass', 5), reh('pass', 6, 'control-plane')], ago(100 * D))).toEqual([]);
+    expect(keys([reh('pass', 5), reh('pass', 45, 'control-plane')], ago(100 * D))).toEqual(['control-plane:control-plane']);
   });
 });
 

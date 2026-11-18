@@ -5,6 +5,7 @@
  * lifecycle write and with `tenant:delete`.
  */
 import type postgres from 'postgres';
+import { DECISIVE_PROOFS } from './disaster-proofs';
 
 type Sql = postgres.Sql;
 type Tx = postgres.TransactionSql;
@@ -42,7 +43,8 @@ export async function otherTenants(sql: Sql, id: string): Promise<Array<{ id: st
 export interface ActionRow {
   runId: string;
   tenantId: string | null;
-  kind: 'proof' | 'rebuild' | 'rehearse';
+  /** `window-project`: feature-plan-control-plane-disaster.md §6.4 R4 (3c's leftover check reads rebuild/rehearse only). */
+  kind: 'proof' | 'rebuild' | 'rehearse' | 'window-project';
   status: string;
   projectName?: string | null;
   newProjectId?: string | null;
@@ -143,4 +145,19 @@ export async function lockedProjectId(sql: Sql, tenantId: string, lockTimeout = 
     const [row] = await tx<Array<{ p: string | null }>>`SELECT neon_project_id AS p FROM tenants WHERE id = ${tenantId}`;
     return row?.p ?? null;
   }) as Promise<string | null>;
+}
+
+// ---- the newest decisive proof (feature-plan-control-plane-disaster.md §6.4 R3, 3c's all-lost filter) ---------------
+
+/**
+ * Each tenant's newest DECISIVE proof status (the same rule as scripts/lib/disaster-records.ts, which the image doesn't
+ * bundle). 3c's `all-lost` skips a tenant whose newest decisive proof is `chain-unconfirmed`.
+ */
+export async function newestDecisiveProofs(sql: Sql, tenantIds: string[]): Promise<Map<string, string>> {
+  if (tenantIds.length === 0) return new Map();
+  const rows = await sql<Array<{ tenantId: string; status: string }>>`
+    SELECT DISTINCT ON (tenant_id) tenant_id::text AS "tenantId", status FROM disaster_actions
+    WHERE kind = 'proof' AND status = ANY(${[...DECISIVE_PROOFS]}::text[]) AND tenant_id = ANY(${tenantIds}::uuid[])
+    ORDER BY tenant_id, at DESC, id DESC`;
+  return new Map(rows.map((r) => [r.tenantId, r.status]));
 }

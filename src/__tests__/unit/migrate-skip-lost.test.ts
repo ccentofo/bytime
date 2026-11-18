@@ -223,7 +223,8 @@ describe('D5: deploy-prod.yml passes --skip-lost only when the boolean is true',
 
 describe('fix round 1 (D5 additions)', () => {
   it('M01: the skippable proof statuses, pinned literally (refused:database-missing among them)', () => {
-    expect([...SKIPPABLE_PROOFS]).toEqual(['gone', 'unreachable-4h', 'observed-unreachable', 'refused:credentials', 'refused:database-missing']);
+    // feature-plan-control-plane-disaster.md §6.4 R3 adds the reconcile's three (pinned here too).
+    expect([...SKIPPABLE_PROOFS]).toEqual(['gone', 'unreachable-4h', 'observed-unreachable', 'refused:credentials', 'refused:database-missing', 'window-deleted', 'recoverable-deleted', 'chain-unconfirmed']);
     expect([...DECISIVE_PROOFS]).toEqual([...SKIPPABLE_PROOFS, 'reachable-again', 'refused:reachable']);
   });
 
@@ -235,5 +236,17 @@ describe('fix round 1 (D5 additions)', () => {
     const run = setup({ facts: { [T(1)]: facts({ proof: proof('gone') }) }, lost: { 'postgres://fake/lost': true } });
     expect(await runMigrateAll({ check: false, concurrency: 1 }, run.d)).toBe(1);
     expect(run.logs.some((l) => l.startsWith('✗ could not take the migration run lock'))).toBe(true); // the handshake ran
+  });
+});
+
+describe('T16 (3c-2): the reconcile\'s proofs', () => {
+  it('window-deleted, recoverable-deleted and chain-unconfirmed are skippable and decisive; a newer linked row or 3b ok ends them', () => {
+    for (const s of ['window-deleted', 'recoverable-deleted', 'chain-unconfirmed']) {
+      expect(SKIPPABLE_PROOFS as readonly string[], s).toContain(s);
+      expect(DECISIVE_PROOFS as readonly string[], s).toContain(s);
+      expect(hasLiveProof(facts({ proof: proof(s) })), s).toBe(true);
+      expect(hasLiveProof(facts({ proof: proof(s), linkedAt: later(1) })), s).toBe(false);
+      expect(hasLiveProof(facts({ proof: proof(s), lastOkAt: later(1) })), s).toBe(false);
+    }
   });
 });

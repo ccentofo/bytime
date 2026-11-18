@@ -24,7 +24,7 @@ case "$1 $2" in
       *) echo "\${STUB_RUNNING:-0}" ;;
     esac ;;
   "cloudformation describe-stacks")
-    case "$*" in *TaskSubnets*) echo "subnet-a,subnet-b" ;; *) echo "sg-1" ;; esac ;;
+    case "$*" in *TaskSubnets*) echo "subnet-a,subnet-b" ;; *DisasterModes*) echo "\${STUB_MODES-None}" ;; *) echo "sg-1" ;; esac ;;
   "ecs run-task")
     printf '%s\\t%s\\t%s\\n' "\${STUB_TASK-arn:aws:ecs:us-east-1:1:task/cadenzpoint-backup/t1}" "\${STUB_FAILURES:-0}" "\${STUB_REASON:-None}" ;;
   "ecs describe-tasks")
@@ -281,6 +281,75 @@ describe('fix round 1: FR6 multi-line inputs', () => {
       expect(r.out).not.toContain('SECOND-LINE-SECRET');
       expect(r.out).not.toContain(A);
       expect(r.aws).toEqual([]);
+    });
+  }
+});
+
+// ---- feature-plan-control-plane-disaster.md §11 T6, T6b ------------------------------------------------------------
+const ALL_MODES = 'workspace rehearse control-plane reconcile rehearse-control-plane';
+const cp = (mode: string, o: Partial<Record<'targets' | 'override' | 'confirm', string>> = {}) => ({ mode, targets: 'control-plane', override: 'none', confirm: mode, ...o });
+
+describe('T6: the control-plane presses', () => {
+  for (const [name, inputs, command] of [
+    ['mode control-plane', cp('control-plane'), '["disaster","control-plane","--targets","control-plane","--override","none","--run-id","gh-424242-2"]'],
+    ['mode reconcile', cp('reconcile'), '["disaster","reconcile","--targets","control-plane","--override","none","--run-id","gh-424242-2"]'],
+    ['the control-plane rehearsal', cp('rehearse'), '["disaster","rehearse","--targets","control-plane","--override","none","--run-id","gh-424242-2"]'],
+  ] as const) {
+    it(`${name}: accepted when the stack lists it; one task with the exact command; the literal target masked`, () => {
+      const r = runStep(inputs, undefined, { env: { STUB_MODES: ALL_MODES } });
+      expect(r.status, r.out).toBe(0);
+      expect(r.out.split('\n')[0]).toBe('::add-mask::control-plane');
+      expect(r.aws.filter((l) => l.startsWith('aws ecs run-task')).length).toBe(1);
+      expect(r.aws.find((l) => l.startsWith('aws ecs run-task'))).toContain(`"command":${command}`);
+      // The argv the button builds parses through the task's own grammar.
+      expect(parseDisasterArgs(JSON.parse(command).slice(1))).toMatchObject({ ok: true });
+    });
+  }
+
+  const refused: Array<[string, Record<string, string>]> = [
+    ['control-plane with a workspace id', cp('control-plane', { targets: A })],
+    ['reconcile with all-lost', cp('reconcile', { targets: 'all-lost' })],
+    ['control-plane with the canary', cp('control-plane', { override: 'canary' })],
+    ['control-plane with unreachable-4h', cp('control-plane', { override: 'unreachable-4h', confirm: 'workspace unreachable-4h' })],
+    ['the control-plane rehearsal with the canary', cp('rehearse', { override: 'canary' })],
+    ['workspace with targets control-plane', cp('workspace')],
+    ['control-plane confirmed with another word', cp('control-plane', { confirm: 'yes' })],
+    ['reconcile confirmed as control-plane', cp('reconcile', { confirm: 'control-plane' })],
+  ];
+  for (const [name, inputs] of refused) {
+    it(`refuses ${name}: exit 1, no AWS call`, () => {
+      const r = runStep(inputs, undefined, { env: { STUB_MODES: ALL_MODES } });
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toContain('refused:');
+      expect(r.aws).toEqual([]);
+    });
+  }
+
+  for (const [name, inputs, modes] of [
+    ['mode control-plane on a stack whose DisasterModes lacks it', cp('control-plane'), 'workspace rehearse reconcile rehearse-control-plane'],
+    ['mode reconcile on a stack whose DisasterModes lacks it', cp('reconcile'), 'workspace rehearse control-plane rehearse-control-plane'],
+    ['the control-plane rehearsal on a stack whose DisasterModes lacks it', cp('rehearse'), 'workspace rehearse control-plane reconcile'],
+  ] as const) {
+    it(`refuses ${name}, before any run-task, with the deploy hint`, () => {
+      const r = runStep(inputs, undefined, { env: { STUB_MODES: modes } });
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toContain('the Backup system deploy that adds this mode is pending approval');
+      expect(r.aws.some((l) => l.startsWith('aws ecs run-task'))).toBe(false);
+    });
+  }
+});
+
+describe('T6b: a stack with no DisasterModes output (before the 3c-2 deploy) allows 3c\'s modes only', () => {
+  it('workspace and the workspace rehearsal start', () => {
+    expect(runStep(ok()).status).toBe(0);
+    expect(runStep(ok({ mode: 'rehearse', confirm: 'rehearse', override: 'canary' })).status).toBe(0);
+  });
+  for (const mode of ['control-plane', 'reconcile', 'rehearse']) {
+    it(`${mode === 'rehearse' ? 'the control-plane rehearsal' : `mode ${mode}`} is refused with the deploy hint`, () => {
+      const r = runStep(cp(mode));
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toContain('pending approval');
+      expect(r.aws.some((l) => l.startsWith('aws ecs run-task'))).toBe(false);
     });
   }
 });

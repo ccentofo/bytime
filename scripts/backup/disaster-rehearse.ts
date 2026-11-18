@@ -14,13 +14,25 @@ import { loadTenant } from './lib/disaster-sql';
 import { classifyGoneEndpoint, tenantCandidateRule } from './lib/classify-endpoint';
 import { summaryOf } from './lib/summarize-error';
 import {
-  backupCandidates, buildOnce, cleanupProject, pollRecoverable, positiveControl, record, switchGuards, throwIfAborted,
+  backupCandidates, buildOnce, cleanupProject, networkProven, pollRecoverable, positiveControl, record, switchGuards, throwIfAborted,
   type Built, type StepEnv,
 } from './disaster-steps';
 import { cleanupBudgetMs, stepEnv } from './disaster-workspace';
 import type { RunContext, RunOutcome, WorkspaceResult } from './disaster';
+import { CANARY_PROJECT_NAME, controlPlaneRehearsalName } from './lib/project-names';
+import { CONTROL_PLANE_TARGET } from './disaster';
+import { CONTROL_PLANE_ID } from './lib/keys';
+import { connectUrl } from './lib/host-map';
+import { clientUrl } from './lib/pg-url';
+import { directHost } from './lib/neon-api';
+import { toDirectConnectionUrl } from '../../src/lib/tenant/direct-url';
+import { tenantDbHistoryRetentionSeconds } from '../../src/lib/tenant/lifecycle-config';
+import { buildCore, record as recordAction } from './disaster-steps';
+import { controlPlaneCandidates, earlierRebuilds } from './disaster-control-plane';
+import { runReconcile } from './disaster-reconcile';
+import postgres from 'postgres';
 
-export const CANARY_NAME = 'cadenzpoint-recoverable-canary';
+export const CANARY_NAME = CANARY_PROJECT_NAME;
 export const REHEARSAL_SLUG = 'rehearsal';
 const LIVE = new Set(['active', 'suspended', 'provisioning']);
 
@@ -41,6 +53,7 @@ export async function pickAuto(env: StepEnv, random: () => number = Math.random)
 }
 
 export async function runRehearse(ctx: RunContext): Promise<RunOutcome> {
+  if (ctx.args.targets === CONTROL_PLANE_TARGET) return runRehearseControlPlane(ctx);
   const env = stepEnv(ctx, 'rehearse');
   const started = Date.now();
   let id: string | null;
@@ -157,3 +170,138 @@ async function rehearseOne(env: StepEnv, id: string): Promise<WorkspaceResult> {
   return out('rehearsed', `deleted endpoint answers ${code ?? 'nothing'} (doesn't answer) after ${delay} s`, { slug, backupKey: used.key, backupStartedAt: built.backupStartedAt });
 }
 
+
+// ---- the control-plane rehearsal (feature-plan-control-plane-disaster.md §6.5) -----------------------------------------
+
+/**
+ * `rehearse --targets control-plane` (monthly on the 15th, and once at setup): the control plane is live, so 3c's normal
+ * start applies (lock, run row in the real control plane, target control-plane). Proof legs against the live control
+ * plane; the earlier-rebuild check read-only; build into the rehearsal name with 3c's `rehearse` rows in the REAL control
+ * plane (intended → created → rehearsed-deleted, so the leftover check covers a crash); a dry-run reconcile of the
+ * restored copy (proof rows land in the copy only); then always delete the copy and verify the 404.
+ */
+export async function runRehearseControlPlane(ctx: RunContext): Promise<RunOutcome> {
+  const env = stepEnv(ctx, 'rehearse');
+  const deps = ctx.deps;
+  const started = Date.now();
+  const head = `Disaster rehearsal of the control plane (run ${ctx.args.runId}).`;
+  const failed = (result: string, detail: string, more: Partial<WorkspaceResult> = {}): RunOutcome => ({
+    pass: false, results: [{ tenantId: 'control-plane', result, detail, ...more }],
+    email: [`${head} FAILED: ${result}: ${detail}.`, 'No workspace or control-plane data was changed. Tell the lead.'],
+  });
+  const record = (status: string, o: Parameters<typeof recordAction>[4] = {}) => recordAction(env, null, 'rehearse', status, o);
+
+  // ---- 1. proof legs against the live control plane -------------------------------------------------------------------
+  if (!(await networkProvenCp(env))) return failed('proof-failed', "this task's own network couldn't be proven");
+  if (!(await positiveControl(env, null))) return failed('proof-failed', "the positive control failed (the key or org can't see the organisation)");
+  try {
+    if (!(await deps.neon.getProject(deps.controlPlaneProjectId)).found) return failed('proof-failed', "CONTROL_PLANE_PROJECT_ID doesn't answer 200 (the real proof would misjudge)");
+  } catch (e) {
+    return failed('proof-failed', `the control plane's project lookup failed (${summaryOf('neon', e)})`);
+  }
+  if (!(await pollRecoverable(env))) return failed('proof-failed', 'the recoverable list could not be read completely');
+  let listed;
+  try {
+    listed = await controlPlaneCandidates(deps, ctx.log);
+  } catch (e) {
+    return failed('proof-failed', `the control-plane backup listing failed (${summaryOf('s3', e)})`);
+  }
+  if (listed.candidates.length === 0) return failed('no-backup', 'no verified control-plane backup (an object with a sidecar and a BACKUP line)');
+
+  // ---- 2. the earlier-rebuild check, read-only ---------------------------------------------------------------------------
+  try {
+    const all = await deps.neon.listProjects();
+    const earlier = all.unavailable.length ? null : earlierRebuilds(all.projects);
+    ctx.log(earlier === null ? 'rehearsal: the earlier-rebuild check could not list every project' : `rehearsal: ${earlier.length} earlier control-plane rebuild(s) present`);
+  } catch (e) {
+    ctx.log(`rehearsal: the earlier-rebuild check failed (${summaryOf('neon', e)})`);
+  }
+
+  // ---- 3. build into the rehearsal name (3c's failure classes) -------------------------------------------------------------
+  const cpUrl = new URL(toDirectConnectionUrl(deps.controlPlaneUrl));
+  const databaseName = decodeURIComponent(cpUrl.pathname.replace(/^\//, '')) || 'cadenzpoint_control';
+  let built: Built | null = null;
+  let used: (typeof listed.candidates)[number] | null = null;
+  let tryNo = 0;
+  const removeCopy = async (p: { id: string | null; name: string } | null): Promise<boolean> => {
+    if (!p?.id) return true;
+    try {
+      await deps.neon.deleteProject(p.id);
+      if (await deps.neon.verifyGone(p.id)) { await record('deleted', { projectName: p.name, newProjectId: p.id }); return true; }
+      await record('failed', { projectName: p.name, newProjectId: p.id, detail: 'delete: the copy still answers after DELETE (kept; the leftover check lists it)' }).catch(() => {});
+    } catch (e) {
+      await record('failed', { projectName: p.name, newProjectId: p.id, detail: `delete: ${summaryOf('neon', e)}` }).catch(() => {});
+    }
+    return false;
+  };
+  candidatesLoop:
+  for (const cand of listed.candidates.slice(0, 3)) {
+    let infraRetried = false;
+    for (;;) {
+      throwIfAborted(env.signal);
+      tryNo++;
+      const r = await buildCore(env, {
+        target: 'control-plane', id: CONTROL_PLANE_ID, name: controlPlaneRehearsalName(env.now(), tryNo), databaseName, historyRetentionSeconds: tenantDbHistoryRetentionSeconds(),
+        record: (status, f) => record(status, f),
+      }, cand, env.signal);
+      if (r.ok) { built = r.built; used = cand; break candidatesLoop; }
+      if (!(await removeCopy(r.project))) return failed('cleanup-failed', `a failed rehearsal copy could not be deleted (${r.project?.id}); the leftover check lists it`);
+      if (env.signal.aborted) return failed('not-finished', String(env.signal.reason));
+      if (r.failure.kind === 'integrity') continue candidatesLoop;
+      if (r.failure.kind === 'infra' && !infraRetried) { infraRetried = true; continue; }
+      return failed(r.failure.kind === 'infra' ? 'retryable' : r.failure.kind === 'create' ? 'create' : 'restore-failed', r.failure.summary);
+    }
+  }
+  if (!built || !used) return failed('no-backup', 'no candidate verified');
+
+  // ---- 4. reconcile the restored copy, dry run ------------------------------------------------------------------------------
+  let rc: Awaited<ReturnType<typeof runReconcile>> | null = null;
+  let rcError: string | null = null;
+  const copy = postgres(clientUrl(connectUrl(built.connectionUri, deps.hostMap)), { max: 4, connect_timeout: 30, onnotice: () => {}, prepare: false });
+  try {
+    rc = await runReconcile({
+      cp: copy, cpDirectHost: directHost(new URL(built.connectionUri).hostname), windowStart: built.backupStartedAt ?? new Date(env.now().getTime() - 26 * 3600_000), windowEnd: env.now(),
+      runId: ctx.args.runId, deps, dryRun: true, now: env.now, sleep: env.sleep, log: ctx.log, signal: env.signal,
+      controlPlaneProjectIds: [deps.controlPlaneProjectId, built.projectId],
+    });
+  } catch (e) {
+    rcError = summaryOf('reconcile', e);
+    ctx.log(`rehearsal: the reconcile of the copy failed (${rcError})`);
+  } finally {
+    await copy.end({ timeout: 5 }).catch(() => {});
+  }
+
+  // ---- 5. always: delete the copy, verify the 404, rehearsed-deleted --------------------------------------------------------
+  const p = { id: built.projectId, name: built.name };
+  let deleted = false;
+  try {
+    await deps.neon.deleteProject(p.id);
+    deleted = await deps.neon.verifyGone(p.id);
+  } catch (e) {
+    ctx.log(`rehearsal: deleting the copy ${p.id} failed (${summaryOf('neon', e)})`);
+  }
+  if (!deleted) {
+    await record('failed', { projectName: p.name, newProjectId: p.id, detail: 'delete: the rehearsal copy still answers (kept; the leftover check lists it)' }).catch(() => {});
+    return failed('cleanup-failed', `the rehearsal copy ${p.id} could not be deleted; the leftover check alerts after 6 hours`);
+  }
+  await record('rehearsed-deleted', { projectName: p.name, newProjectId: p.id, backupKey: used.key, detail: rcError ? `reconcile failed: ${rcError}` : 'copy restored, reconciled (dry run) and deleted' });
+  if (rcError || !rc) return failed('reconcile-failed', `the dry-run reconcile of the copy threw (${rcError}); the copy was deleted`, { backupKey: used.key });
+  const when = built.backupStartedAt?.toISOString() ?? 'unknown';
+  return {
+    pass: true,
+    results: [{ tenantId: 'control-plane', result: 'rehearsed', backupKey: used.key, backupStartedAt: built.backupStartedAt, newProjectId: built.projectId }],
+    summary: { reconcile: rc.summary },
+    email: [
+      `${head} passed.`,
+      `- backup restored: ${used.key} (started ${when} UTC); every count matched; the copy ${p.id} was reconciled (dry run) and deleted.`,
+      `- the dry-run reconcile's counts (informational): ${Object.entries(rc.counts).map(([k, v]) => `${k} ${v}`).join(', ')}.`,
+      `- took ${Math.round((Date.now() - started) / 1000)} s. No workspace or control-plane data was changed.`,
+    ],
+  };
+}
+
+/** Network first for the control-plane rehearsal: the restore-test database, or 3c's live-workspace check. */
+async function networkProvenCp(env: StepEnv): Promise<boolean> {
+  if (env.deps.restoreTestUrl && (await env.connect(env.deps.restoreTestUrl)).cls === 'ok') return true;
+  try { return await networkProven(env, '00000000-0000-0000-0000-000000000000'); } catch { return false; }
+}

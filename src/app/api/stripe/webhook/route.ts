@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse, after } from 'next/server';
 import type Stripe from 'stripe';
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { stripe } from '@/lib/billing/stripe';
 import { controlDb } from '@/db/control-plane';
 import { tenants } from '@/db/control-plane/schema';
@@ -8,10 +8,11 @@ import { LifecycleVersionConflictError, TenantLockTimeoutError, withLockedPool, 
 import { reconcileInLock } from '@/lib/billing/reconcile';
 import { readCustomerSubscriptions } from '@/lib/billing/stripe-state';
 import { isLive } from '@/lib/tenant/lifecycle';
-import { raiseAlert, readTenant, recordAudit, updateTenantGuarded } from '@/lib/tenant/lifecycle-store';
+import { raiseAlert, readTenant, updateTenantGuarded } from '@/lib/tenant/lifecycle-store';
 import { deliverNotice, enqueueNotice } from '@/lib/tenant/notices';
 import { invalidateTenant } from '@/lib/tenant/registry';
 import { markSeatSyncDue } from '@/lib/billing/seat-sync';
+import { checkoutLinkPatch } from '@/lib/billing/checkout-link';
 
 /**
  * Stripe webhook (feature-plan-terms-compliance-fixes.md §4.3). Never trusts event order or the event payload's
@@ -139,18 +140,10 @@ export async function POST(req: NextRequest) {
         const email = session.customer_details?.email ?? null;
         if (email) extraPatch.billingEmail = email;
         if (row.stripeCustomerId !== eventCustomer) {
-          const replaceable = row.stripeCustomerId === null || row.stripeCustomerDeletedAt !== null;
-          const [owner] = await tx.select({ id: tenants.id }).from(tenants)
-            .where(and(eq(tenants.stripeCustomerId, eventCustomer), ne(tenants.id, row.id))).limit(1);
-          if (!replaceable || owner) {
-            await raiseAlert(tx, { tenantId: row.id, kind: 'checkout-customer-conflict', dedupKey: eventCustomer, detail: { current: row.stripeCustomerId, checkout: eventCustomer, otherTenant: owner?.id ?? null } }, now);
-            return null; // never overwrite a live customer link
-          }
-          extraPatch.stripeCustomerId = eventCustomer;
-          extraPatch.stripeCustomerDeletedAt = null;
-          if (row.stripeCustomerId) {
-            await recordAudit(tx, { tenantId: row.id, kind: 'stripe-customer-replaced', actor: 'stripe-webhook', detail: `old=${row.stripeCustomerId} new=${eventCustomer}` });
-          }
+          // The checkout link rule, shared with `tenant:admin stripe-resync` (feature-plan-control-plane-disaster.md §6.10).
+          const link = await checkoutLinkPatch(tx, row, eventCustomer, { actor: 'stripe-webhook', now });
+          if (!link.ok) return null; // never overwrite a live customer link
+          Object.assign(extraPatch, link.patch);
         }
         const r = await reconcileInLock(tx, row, now, { customerId: eventCustomer, extraPatch });
         const noticeIds = [...r.noticeIds];
