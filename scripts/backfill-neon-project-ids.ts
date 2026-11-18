@@ -16,6 +16,7 @@ import dotenv from 'dotenv';
 dotenv.config({ path: ['.env.local', '.env'] });
 
 import postgres from 'postgres';
+import { postgresJsUrl } from '../src/lib/db/pg-url';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { and, eq, isNull, isNotNull } from 'drizzle-orm';
 import { tenants } from '../src/db/control-plane/schema';
@@ -35,7 +36,7 @@ async function main() {
   if (!controlUrl) fail('CONTROL_PLANE_DATABASE_URL is not set (checked .env.local and .env).');
   if (!process.env.NEON_API_KEY) fail('NEON_API_KEY is not set (checked .env.local and .env).');
 
-  const sql = postgres(controlUrl!, { max: 1 });
+  const sql = postgres(postgresJsUrl(controlUrl!), { max: 1 });
   const db = drizzle(sql);
 
   try {

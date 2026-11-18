@@ -1,4 +1,5 @@
 import postgres, { type ReservedSql, type Sql } from 'postgres';
+import { postgresJsUrl } from '../db/pg-url';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { alias } from 'drizzle-orm/pg-core';
 import { and, asc, eq, gt, sql, type SQL } from 'drizzle-orm';
@@ -48,7 +49,7 @@ function directUrl(url: string): string {
 }
 
 export async function openExportSnapshot(tenantDbUrl: string): Promise<ExportSnapshot> {
-  const client: Sql = postgres(directUrl(tenantDbUrl), { max: 1 });
+  const client: Sql = postgres(postgresJsUrl(directUrl(tenantDbUrl)), { max: 1 });
   let conn: ReservedSql;
   try {
     conn = await client.reserve();

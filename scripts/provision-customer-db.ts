@@ -5,6 +5,7 @@
 import 'dotenv/config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
+import { postgresJsUrl } from '../src/lib/db/pg-url';
 import * as schema from '../src/db/schema';
 import bcrypt from 'bcryptjs';
 
@@ -20,7 +21,7 @@ if (!email || !name || !password) {
   process.exit(1);
 }
 
-const client = postgres(connectionString, { max: 1, prepare: false });
+const client = postgres(postgresJsUrl(connectionString), { max: 1, prepare: false });
 const db = drizzle(client);
 
 async function provision() {

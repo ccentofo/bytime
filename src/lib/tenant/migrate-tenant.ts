@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import postgres from 'postgres';
+import { postgresJsUrl } from '../db/pg-url';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { toDirectConnectionUrl } from './direct-url';
@@ -20,7 +21,7 @@ export async function migrateTenantDatabase(
   url: string,
   opts: { migrationsFolder?: string; connectTimeoutSec?: number } = {},
 ): Promise<void> {
-  const sql = postgres(toDirectConnectionUrl(url), { max: 1, connect_timeout: opts.connectTimeoutSec ?? 30 });
+  const sql = postgres(postgresJsUrl(toDirectConnectionUrl(url)), { max: 1, connect_timeout: opts.connectTimeoutSec ?? 30 });
   try {
     await sql`SELECT pg_advisory_lock(${MIGRATION_LOCK_KEY})`;
     try {
@@ -51,7 +52,7 @@ export async function getPendingMigrationCount(
   const journalPath = path.join(migrationsFolder, 'meta', '_journal.json');
   const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8')) as Journal;
 
-  const sql = postgres(toDirectConnectionUrl(url), { max: 1, connect_timeout: 30 });
+  const sql = postgres(postgresJsUrl(toDirectConnectionUrl(url)), { max: 1, connect_timeout: 30 });
   try {
     let lastAppliedAt = 0;
     try {

@@ -23,6 +23,7 @@ import dotenv from 'dotenv';
 // app to fail decrypting tenants this script encrypted.)
 dotenv.config({ path: ['.env.local', '.env'] });
 import postgres from 'postgres';
+import { postgresJsUrl } from '../src/lib/db/pg-url';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { eq } from 'drizzle-orm';
@@ -67,7 +68,7 @@ async function main() {
   // 1. Migrate the tenant DB to the current schema. Tolerate a DB that already has the schema
   //    but no migration journal (e.g. one created via `drizzle-kit push`) — common when reusing
   //    an existing dev DB as a tenant. 42P07 = duplicate table, 42710 = duplicate object/type.
-  const tsql = postgres(tenantDbUrl, { max: 1 });
+  const tsql = postgres(postgresJsUrl(tenantDbUrl), { max: 1 });
   const tdb = drizzle(tsql, { schema });
   console.log(`→ Migrating tenant DB for "${slug}"...`);
   try {

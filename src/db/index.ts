@@ -1,5 +1,6 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
+import { postgresJsUrl } from '../lib/db/pg-url';
 import { sql } from 'drizzle-orm';
 import * as schema from './schema';
 
@@ -29,7 +30,7 @@ function clientFor(connectionString: string): TenantDb {
   if (!connectionString) throw new Error('No database URL for this workspace.');
   const existing = pools.get(connectionString);
   if (existing) return existing;
-  const client = postgres(connectionString, {
+  const client = postgres(postgresJsUrl(connectionString), {
     max: 10,
     idle_timeout: 20,
     connect_timeout: 10,
