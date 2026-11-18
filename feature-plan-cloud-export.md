@@ -1,6 +1,6 @@
 # Blueprint 3d: Cloud export link (the F2 change)
 
-> **Status: v2.1** (2026-11-18). Confirmation pass 1: 1 HIGH, 3 MEDIUM, 10 LOW. Confirmation pass 2: 2 MEDIUM, 8 LOW. Confirmation pass 3: 1 MEDIUM, 8 LOW. Confirmation pass 4: 1 MEDIUM, 7 LOW. Confirmation pass 5: 2 MEDIUM, 6 LOW. Confirmation pass 6: 2 MEDIUM, 6 LOW. Confirmation pass 7: 1 MEDIUM, 6 LOW. Confirmation pass 8: 1 MEDIUM, 5 LOW. Confirmation pass 9: 1 MEDIUM, 5 LOW. All addressed. Round 1: 7 HIGH, about 17 MEDIUM, 29 LOW. Round 2: 3 HIGH, 15 MEDIUM, 13 LOW. All addressed (§15). Branch `cloud-export`, from `main` at `17ac1c8`. Follows `BLUEPRINT-STANDARD.md`.
+> **Status: FINAL v3.0, pre-mortem CLEAN** (2026-11-18). 2 rounds plus 10 confirmation passes (pass 10 clean); every finding fixed and the LOWs folded in (§15). **Open for the product owner at acceptance: A1–A4** (§2).
 >
 > **Decisions:**
 > - `BUSINESS-DECISIONS.md` §5, "Consequence: the F2 'founder-held final export' must change";
@@ -225,7 +225,13 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
    - **The delivery and hold ids are generated before the upload**, because they're in the S3 key.
 4. **Record, in one control-plane transaction**, under the `tenant:` lock, with `SET LOCAL lock_timeout = '5s'` and `statement_timeout = '10s'` (`withTenantLock`'s values, `locked.ts:43-44`).
 
-   **Errors that certainly committed nothing** (after the upload, before the transaction starts: a refusal at the re-resolve such as `no-recipients`, a failed read on the fresh connection, or a lock timeout `55P03` on the first statement) → delete the object at once, and exit 1 with `export refused` and its code.
+   **Errors that certainly committed nothing** → delete the object at once, and exit 1 with `export refused` (or `export failed`) and its code. That covers every error the server returned **before COMMIT was sent**:
+   - a refusal at the re-resolve, such as `no-recipients`;
+   - a failed read on the fresh connection;
+   - the deadline firing before `BEGIN`;
+   - `55P03` on the `pg_advisory_xact_lock` statement.
+
+   This applies to `hold` too.
 
    **Once the transaction has started, the task never deletes the object after an error.** A record error isn't proof of failure: a COMMIT can succeed with its acknowledgement lost, a dropped socket can still let the server commit, and the deadline or a stop can land mid-commit. On any record error (including the deadline or a stop after the upload), the task:
    - leaves the object;
@@ -247,7 +253,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 - then an `export_holds` row (id, tenant id, key, bytes, sha256, reason, `run_id`, created_at, `released_at` null, `release_reason` null);
 - audit `export-held` **with the hold id in its detail**; an SNS line **including the hold id** (`export held: workspace <id>, hold <id>`), which `release` needs.
 - **No email to customers.**
-- **A record failure** (after upload) → the same rule as `deliver` step 4: the object is left, "outcome unknown: hold <id>" is logged, and the exit is 1. A committed hold is listed by the digest; an uncommitted one is reported by the sweep as `export-orphan-hold`.
+- **`hold` records under the same `tenant:` lock and timeouts as `deliver` step 4.** A certain no-commit error deletes the object at once; any other record failure leaves the object, "outcome unknown: hold <id>" is logged and emailed, and the exit is 1. A committed hold is listed by the digest; an uncommitted one is reported by the sweep as `export-orphan-hold`.
 - Allowed in every exportable status, including `policy_hold`, with no `--extra`.
 
 **`release`:**
@@ -263,7 +269,8 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 - `export delivered: workspace <id>, delivery <id>, <n> recipient(s), expires <iso>`;
 - `export held: workspace <id>, hold <id>`;
 - `export released: hold <id>`;
-- `export refused: <mode>, workspace <id>, <code>` (e.g. `schema-skew`, `changed`, `not-exportable`, `extra-required`, `no-recipients`, `too-large`);
+- `export refused: <mode>, <target>, <code>`, where the target is `workspace <id>` or, for `release`, `hold <id>` (e.g. `schema-skew`, `changed`, `not-exportable`, `extra-required`, `no-recipients`, `released`);
+- `export failed: <mode>, <target>, <code>` (a database or upload error, a deadline before the upload finished, `too-large`). An exit-2 parse error publishes `export failed: parse, -, version-skew`;
 - **`export outcome unknown: <mode>, workspace <id>, delivery <id>`** (or `hold <id>`).
 
 A failed publish is logged, and the exit code stands.
@@ -380,6 +387,7 @@ A failed publish is logged, and the exit code stands.
 - **Schedule `cadenzpoint-backup-export-sweep`:** EventBridge Scheduler, `rate(1 hour)`, input `["export","sweep"]`. `SchedulerRole` has RunTask and PassRole for it (§6.2).
   - **Not covered by the export start or RunTask email rules** (a different family).
   - **A start failure** goes to the existing schedule DLQ alarm.
+- **The sweep's limits:** a 15-minute run deadline, plus `connect_timeout` and server-side `statement_timeout` (as `audit.ts:137`), so a hung sweep can't pile up hourly starts.
 - **What `sweep` does (row-driven):**
   0. **if any control-plane read fails, stop.** Orphan steps never run on a lookup error, so an error can't be mistaken for "no row";
   1. for every `export_deliveries` row with `erased_at IS NULL AND (expires_at <= now() OR revoked_at IS NOT NULL)`, delete `s3_key` (an already-missing object counts as done), then set `erased_at`;
@@ -417,7 +425,8 @@ A failed publish is logged, and the exit code stands.
   - **in bold, at the top of the section:** "take the export and wait until the Export workspace run has passed (the run's result, or the 'export delivered' email) before running `tenant:delete`";
   - **"If you get `export outcome unknown`":** run `npm run tenant:admin -- show <slug>` and look for an `export-delivered` (or `export-held`) audit event whose detail has that delivery (or hold) id.
     - **Found:** it worked. Don't press again.
-    - **Not found after 10 minutes:** press again (the leftover copy is erased by the sweep after a day). Nothing technical stops a deletion during an export build; the export then fails `changed`;
+    - **Not found after 10 minutes:** press again. A leftover delivery copy is erased by the sweep after a day; a leftover **hold** copy raises `export-orphan-hold` instead, so tell the lead.
+  - **"If a run failed and no export email arrived"** (the task was killed): treat it as outcome unknown. Use `show`, and look for a recent `export-delivered`/`export-held` event. Nothing technical stops a deletion during an export build; the export then fails `changed`;
   - holds.
 - **`PRODUCTION-DEPLOY.md`:**
   - 13b: the bootstrap update;
@@ -562,7 +571,7 @@ A failed publish is logged, and the exit code stands.
 | T18 | The in-app export route is unchanged (existing tests pass as-is); the in-app manifest still carries `package.json`'s version |
 | T27 | Batch outcome: exactly N elements with string `.id` → sent (first id stored, all in `payload.providerIds`); a short array, a `validation_error` or a 429 → failed and retried with the same key; retry-by-name classification; strict validation set; **the 23-hour refreeze after a failed batch** bumps the generation and key, re-renders from `token_encrypted`, and keeps the stored recipients (never D10) |
 | T26 | More than 50 recipients → `too-many-recipients` |
-| T30 | The closing SNS line for each outcome (delivered, held, released, refused with code, outcome unknown), ids only; a failed publish doesn't change the exit code; certain no-commit errors after the upload (`no-recipients` at re-resolve, a lock timeout) delete at once and report `refused` |
+| T30 | The closing SNS line for each outcome (delivered, held, released, refused, failed, outcome unknown, parse failure), ids only, with a hold target for `release`; a failed publish doesn't change the exit code; certain no-commit errors after the upload (`no-recipients` at re-resolve, a lock timeout) delete at once and report `refused` |
 | T23 | The page's rate limit: the IP limit is checked before any token lookup; the per-delivery limit after |
 | T24 | `export-revoke` under the tenant lock warns when the lease is live |
 | T25 | `openExportSnapshot(url, opts)`: the task's server-side timeouts are applied; the app's call is unchanged |
@@ -770,3 +779,9 @@ A failed publish is logged, and the exit code stands.
     - certain no-commit errors after the upload delete at once and report `refused`;
     - the §7.1 record-error row;
     - the D10 range made consistent.
+- **FINAL v3.0, confirmation pass 10: CLEAN** (no HIGH or MEDIUM; 6 LOWs, all folded in):
+  - the runbook covers leftover hold copies and killed runs;
+  - certain no-commit is defined as "the server returned an error before COMMIT was sent", including the deadline before `BEGIN`;
+  - `hold` uses the same lock and rule;
+  - the `export failed` and parse-failure SNS lines, with a hold target for `release`;
+  - the sweep's deadline and timeouts.
