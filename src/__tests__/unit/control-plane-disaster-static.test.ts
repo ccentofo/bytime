@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';
 import { parseDisasterArgs } from '../../../scripts/backup/disaster';
@@ -104,4 +104,25 @@ describe('T13: the task constructs no SSM-write, Vercel or Stripe client (invari
       expect(text, f).not.toMatch(/PutParameterCommand|ssm:PutParameter|api\.vercel\.com|api\.stripe\.com|STRIPE_SECRET_KEY|VERCEL_TOKEN/);
     }
   }, 120_000);
+});
+
+describe('D3: backup-lib code reaches tenant:delete only, never the app bundle', () => {
+  const walk = (dir: string): string[] => {
+    return readdirSync(path.join(ROOT, dir)).flatMap((n) => {
+      const rel = `${dir}/${n}`;
+      if (n === 'node_modules' || n === '__tests__') return [];
+      return statSync(path.join(ROOT, rel)).isDirectory() ? walk(rel) : /\.(ts|tsx|mts|js)$/.test(n) ? [rel] : [];
+    });
+  };
+  const importsOf = (re: RegExp) => [...walk('src'), ...walk('scripts')].filter((f) => re.test(read(f).split('\n').filter((l) => /^\s*(import|export)\b|require\(/.test(l)).join('\n')));
+  it('no src/ module except delete-tenant.ts imports proven-gone.ts; nothing in src/ imports delete-tenant.ts; only the three CLI scripts do', () => {
+    expect(importsOf(/['"][^'"]*\/proven-gone['"]/)).toEqual(['src/lib/tenant/delete-tenant.ts']);
+    expect(importsOf(/['"][^'"]*\/delete-tenant['"]/).sort()).toEqual(['scripts/delete-tenant.ts', 'scripts/migrate-all.ts']);
+    expect(importsOf(/['"][^'"]*scripts\/backup\/lib\/[^'"]+['"]/).filter((f) => f.startsWith('src/'))).toEqual(['src/lib/tenant/proven-gone.ts']);
+  });
+  it('the CLI never sets the test-only provenGoneSeams; it passes --project-proven-gone through', () => {
+    const cli = read('scripts/delete-tenant.ts');
+    expect(cli).not.toMatch(/provenGoneSeams/);
+    expect(cli).toMatch(/projectProvenGone: args\.includes\('--project-proven-gone'\)/);
+  });
 });
