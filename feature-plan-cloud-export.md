@@ -1,6 +1,6 @@
 # Blueprint 3d: Cloud export link (the F2 change)
 
-> **Status: v1.3** (2026-11-18). Confirmation pass 1: 1 HIGH, 3 MEDIUM, 10 LOW, all addressed. Round 1: 7 HIGH, about 17 MEDIUM, 29 LOW. Round 2: 3 HIGH, 15 MEDIUM, 13 LOW. All addressed (§15). Branch `cloud-export`, from `main` at `17ac1c8`. Follows `BLUEPRINT-STANDARD.md`.
+> **Status: v1.4** (2026-11-18). Confirmation pass 1: 1 HIGH, 3 MEDIUM, 10 LOW. Confirmation pass 2: 2 MEDIUM, 8 LOW. All addressed. Round 1: 7 HIGH, about 17 MEDIUM, 29 LOW. Round 2: 3 HIGH, 15 MEDIUM, 13 LOW. All addressed (§15). Branch `cloud-export`, from `main` at `17ac1c8`. Follows `BLUEPRINT-STANDARD.md`.
 >
 > **Decisions:**
 > - `BUSINESS-DECISIONS.md` §5, "Consequence: the F2 'founder-held final export' must change";
@@ -138,7 +138,7 @@
   - `DenyPolicyAndLifecycleChangesExceptDeploy`.
 - **The `ExportKey` policy is deny-only, by `aws:PrincipalArn`, like the backup key.** It avoids KMS's principal-exists check, since `Fn::Sub` ARNs create no dependency:
   - the root-account statement, as the backup key;
-  - `DenyDecryptExceptExportRoles`;
+  - `DenyDecryptExceptExportRoles` (covering `kms:Decrypt` and `kms:ReEncrypt*`, as the backup key);
   - `DenyGenerateDataKeyExceptExportTask`;
   - `DenyShortDeletionWindow` (a pending window under 30 days) and `DenyKeyPolicyChangesExceptDeploy`, as the backup key (`expected-policies.ts:142-145`). Legal holds depend on this key.
 - **The grants live in the roles' own policies:**
@@ -170,7 +170,7 @@
   - permissions: `s3:GetObject` on `…/delivery/*`, plus `kms:Decrypt` as §6.1;
   - `MaxSessionDuration` 3600.
 - **`DisasterButtonRole`:** RunTask gains the `cadenzpoint-backup-export` family, and **`PassDisasterRoles` gains the export task and exec roles.** It stays the same `aws-disaster` environment. The comment at :628-630 ("stops a taskRoleArn override") is updated: with PassRole on both families, an override could swap their roles, which is accepted. Every press needs the founder's approval.
-- **`SchedulerRole`:** RunTask gains the `cadenzpoint-backup-sweep` family, and PassRole gains the export task and exec roles, in the stack and in `expected-policies.ts`'s `FAMILIES`. U6 asserts it.
+- **`SchedulerRole`:** RunTask gains the `cadenzpoint-backup-sweep` family, and PassRole gains the export task and exec roles. In the stack, and in `expected-policies.ts` as **explicit entries appended to its `RunTasks`/`PassTaskRoles` statements (:236-237). `FAMILIES` is unchanged** (§6.7). U6 asserts it.
 - **`expected-policies.ts`, the audit and U6:**
   - generalise to `BUCKETS = [backup, exports]` and `KEYS = [backup, exports]`, each with **its own expected policy and its own expected lifecycle-rule array** (the backup bucket keeps its one rule; the exports bucket has two). `audit.ts`'s single-rule check becomes a per-bucket comparison;
   - `ALL_ROLES` gains the three roles;
@@ -216,7 +216,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
    - for a `policy_hold` workspace whose export isn't re-enabled: the extra address only;
    - otherwise D10: active admins from the workspace database, plus the billing email, plus the signup email when there's no active admin, plus `--extra` if given;
    - lowercased and deduplicated;
-   - none → refuse `no-recipients`; more than 50 → refuse `too-many-recipients`;
+   - none → refuse `no-recipients`; more than 50 → refuse `too-many-recipients`. **The same count is pre-checked at step 1**, so nothing is built in vain. A workspace over 50 recipients uses the in-app self-export (TENANT-DELETION notes it);
    - the workspace's time zone (`workspace_settings.timezone`, canonicalised) is read here too.
 3. **Build:** `openExportSnapshot(decrypt(url))` → `createWorkspaceZipStream` → S3 multipart upload (`@aws-sdk/lib-storage` `Upload`, 8 MiB parts, `IfNoneMatch: '*'`), at key `delivery/<deliveryId>/<slug>-export-<yyyymmdd>.zip`, with SHA-256 computed while streaming.
    - **Failures:** the ZIP limits, a database error or an upload error → abort the upload, delete any object, result `failed`.
@@ -229,7 +229,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 5. **Email the founder** (SNS): `export delivered: workspace <id>, delivery <id>, <n> recipient(s), expires <iso>`, ids only.
 
 **`hold`:**
-- steps 1 and 3, with key `hold/<holdId>/<slug>-export-<yyyymmdd>.zip`;
+- steps 1, **1b (schema-skew)** and 3, with key `hold/<holdId>/<slug>-export-<yyyymmdd>.zip`;
 - then an `export_holds` row (id, tenant id, key, bytes, sha256, reason, `run_id`, created_at, `released_at` null, `release_reason` null);
 - audit `export-held`; an SNS line.
 - **No email to customers.**
@@ -276,7 +276,13 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
   - load the delivery by `notice_id = claimed.id`;
   - if it's missing, revoked, expired or erased → supersede and stop. **Never fall through to D10**;
   - otherwise skip `isNoticeSuperseded`;
-  - in the freeze: the decrypted stored recipients and the time zone. The send is **`resend.batch.send`** (the 4b reminder pattern) with **one message per recipient** (`to: [address]`, the same subject and HTML), under one batch idempotency key `${noticeId}:${generation}`. No support copy and no `bcc`. `tenant_notices.recipients` records the real recipient list, which keeps the proof of notice;
+  - in the freeze: the decrypted stored recipients and the time zone;
+  - **the send:** `client.batch.send(messages, { idempotencyKey: \`${noticeId}:${generation}\`, batchValidation: 'strict' })`, as `send-batch.ts:98` calls it but **strict** (all or nothing), with **one message per recipient** (`to: [address]`, the same subject and HTML). No support copy and no `bcc`;
+  - **outcome rules,** specific to this kind:
+    - **sent** only when `result.data.data` is an array of exactly N non-empty ids, N being the number of recipients. Then `provider_message_id` = the first id (the column is `varchar(100)`; the full id list goes into the existing `payload` jsonb as `providerIds`), and `recipients` = the real list, which is the proof of notice;
+    - anything else (an error, or a short or malformed array) → **failed**, and the next cron retries with the same key;
+    - errors are classified exactly as `deliverNotice` does today: 409 and 429 retried; `invalid_idempotent_request` raises its existing alert;
+    - **the permissive reminder helper (`deliverReminderBatch`) is not reused**: it counts a partial success as sent;
   - it **never** reads the workspace database, so a dropped or tombstoned workspace still gets its email;
   - the 23-hour refreeze uses the same branch.
 - **`renderNotice` for `export-ready`:**
@@ -286,7 +292,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
   - template `export-ready.tsx` (`LifecycleLayout`): "Your CadenzPoint workspace export is ready", the workspace name, the link, the expiry, "If you didn't ask for this, contact support@cadenzpoint.com".
 - **After the notice is sent** (`sent_at` set), in the same transaction:
   - `token_encrypted` is nulled;
-  - **the token is replaced in `payload.html` with `[link removed after sending]`.**
+  - **the token is replaced in `payload.html` with `[link removed after sending]`.** (`stated` never contains the link.)
   - The `sent_at` write becomes a transaction that includes both.
   - **On supersede** (revoke, expiry, or a missing delivery), the same nulling and redaction apply.
   - The recipient addresses stay in `tenant_notices.recipients` as the proof of notice, which is accepted (that's the table's purpose).
@@ -341,7 +347,8 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 - **Task family `cadenzpoint-backup-sweep`:**
   - the same image; 0.25 vCPU / 0.5 GB;
   - **the same task role and the same execution role** as the export family (`cadenzpoint-backup-export-exec`, whose `WriteLogs` covers both `/cadenzpoint/backup/export` and `/cadenzpoint/backup/sweep`); a secret for `CONTROL_PLANE_DATABASE_URL`; env `EXPORT_BUCKET`;
-  - **`FAMILIES` in `expected-policies.ts` is not extended** (that would expect sweep roles that don't exist). The sweep's task definition and `SchedulerRole`'s RunTask and PassRole get **explicit expected entries**, and U6 asserts both;
+  - **`FAMILIES` in `expected-policies.ts` is not extended** (that would expect sweep roles that don't exist). The sweep's task definition and `SchedulerRole`'s RunTask and PassRole get **explicit expected entries**, appended to `SchedulerRole`'s `RunTasks`/`PassTaskRoles` statements (`expected-policies.ts:236-237`). U6 asserts both;
+  - **U6's schedule rules:** the count becomes **8** (`backup-static.test.ts:167`); the sweep schedule keeps the "DependsOn every other resource" rule; its `Input` uses the pinned shape, `{"containerOverrides":[{"name":"<container>","command":["export","sweep"]}]}` (:189);
   - its own log group, `/cadenzpoint/backup/sweep` (30 days).
 - **Schedule `cadenzpoint-backup-export-sweep`:** EventBridge Scheduler, `rate(1 hour)`, input `["export","sweep"]`. `SchedulerRole` has RunTask and PassRole for it (§6.2).
   - **Not covered by the export start or RunTask email rules** (a different family).
@@ -354,7 +361,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 - **Findings,** in `ops-digest.ts`, in the slot `checkFounderExports` leaves (:80), with their own raise and resolve, **not** 3b's `syncBackupAlerts` (whose sweep would auto-resolve them):
   - **`export-copy-overdue`:** any row with `erased_at IS NULL AND LEAST(COALESCE(revoked_at, expires_at), expires_at) < now() - interval '6 hours'`; resolved when none remain;
   - **`export-download-misconfigured`:** raised by the page (§6.6), and resolved on success;
-  - **`export-orphan-hold`:** raised by the sweep, and resolved when that key has a row or is gone.
+  - **`export-orphan-hold`:** raised **and resolved by the sweep** (it's the only one that can list S3), when that key has a row or is gone. **The lead's runbook:** check the key's provenance; then insert the `export_holds` row (hold id from the key path) and `release` it, or keep it as a hold.
   - The findings run in the daily digest, so "after 6 hours" means **at the first digest at least 6 hours after expiry** (up to about 30 hours).
 - **The digest:**
   - **a line every day:** "Exports in the last 7 days: N delivered, M downloads, K not yet emailed (notice `sent_at` and `superseded_at` both null). Open legal holds: H (oldest D days)";
@@ -414,7 +421,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 `pending` → (cron) `sent`, with the delivery machinery unchanged except for the stored-recipients branch.
 - **Superseded only when its delivery is revoked, expired or erased**, never by `deleting`/`deleted` or `set-exempt`.
 - If the send fails, it retries as today.
-- **On `sent`, `token_encrypted` is nulled.**
+- **On `sent` or supersede, `token_encrypted` is nulled and the token is redacted from `payload.html`.**
 - Unsent ones show in the digest line.
 
 ## 8. Failure modes
@@ -492,7 +499,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 | T3 | `policy_hold` with export not re-enabled: without `--extra` refused; with it, the recipients are exactly the extra address. With `policy_export_allowed`: the normal recipients. A suspension starting mid-build → `changed`, the object deleted |
 | T4 | Statuses: deleted, deleting, provisioning and no URL → `not-exportable` |
 | T5 | Failure paths: the ZIP limit, a database error, an upload error, a recording error → no row, the object deleted, the upload aborted |
-| T6 | `hold` and `release`: the hold row and object; a release deletes and verifies; a second release refused |
+| T6 | `hold` and `release`: the schema-skew check applies; the hold row and object; a release deletes and verifies; a second release refused |
 | T7 | The notice **through `deliverNotice`**: the branch runs before the generic supersede; **one batch message per stored recipient** (no `bcc`, no support copy; a `policy_hold` export never reaches an admin); `recipients` records the real list; sent for a dropped database and for a tombstoned workspace; not superseded by `deleting`/`deleted`/`set-exempt`/`register-tenant`; superseded after revoke or expiry, or with a missing delivery (never D10), with the token nulled and redacted on supersede too; `force-notice-sent` refuses it; `isNoticeSuperseded` backstop; the link via `apexBaseUrl()`; the date and time in the stored time zone; on send, the token nulled and redacted in one transaction; the millisecond `scheduled_for` and the `notice_id` link |
 | T8 | The page GET: valid, expired, revoked, erased, unknown, malformed (no database read) and workspace-host-redirect states; **a GET never calls the presigner** (spy); the `/export` headers in the built config; the Sentry scrub |
 | T9 | The POST: re-checks; rate limit; a 5-minute presign with attachment disposition; `download_count` incremented; an expired token refused |
@@ -503,8 +510,9 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 | T14 | U6: the only `src/` importer of `@aws-sdk` is `download-url.ts`; the bundle's `src/` inputs are exact, with COPY lines; `package.json` never bundled |
 | T15 | The button: masking (target, both addresses, reason never visible); the two addresses must match; confirm = mode; a leading `-` refused; validation; the `ExportModes` gate; one at a time |
 | T16 | Retired: no `tenant:export` script, no `export-destroyed`, no `founder-export-overdue`; the receipt line; `tenant:delete` behaviour otherwise unchanged |
-| T17 | Logs: ids only; the reason logged as a length |
+| T17 | Logs: ids only, in the export **and sweep** tasks (never S3 keys, which contain the slug); the reason logged as a length |
 | T18 | The in-app export route is unchanged (existing tests pass as-is); the in-app manifest still carries `package.json`'s version |
+| T27 | Batch outcome: exactly N ids → sent (first id stored, all ids in `payload.providerIds`); a short array, a `validation_error` or a 429 → failed and retried with the same key; strict validation set |
 | T26 | More than 50 recipients → `too-many-recipients` |
 | T23 | The page's rate limit: the IP limit is checked before any token lookup; the per-delivery limit after |
 | T24 | `export-revoke` under the tenant lock warns when the lease is live |
@@ -630,3 +638,16 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
     - the overdue wording;
     - the 50-recipient cap;
     - the deletion-during-export doc line made prominent.
+- **v1.4, confirmation pass 2** (2 MEDIUM, 8 LOW; not clean). All addressed:
+  - **MEDIUM:**
+    - the batch's outcome rules are specified: strict validation; sent only with exactly N ids; the first id in the column and all ids in the payload; failures retried with the same key; the permissive reminder helper not reused;
+    - the §6.2 and §6.7 contradiction about `FAMILIES` resolved (explicit `SchedulerRole` entries; `FAMILIES` unchanged).
+  - **LOW:**
+    - `hold` runs the schema check;
+    - the sweep resolves `export-orphan-hold`, with a lead runbook;
+    - §7.3 mirrors the redaction;
+    - U6's schedule count (8) and the input shape;
+    - the 50-recipient cap pre-checked, with the self-export fallback;
+    - the sweep logs ids only;
+    - `ReEncrypt*` in the key's deny;
+    - `stated` never holds the link.
