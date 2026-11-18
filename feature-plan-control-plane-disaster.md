@@ -1,6 +1,6 @@
 # Blueprint 3c-2: Control-plane disaster (rebuild, reconcile, whole-account runbook)
 
-> **Status: v1.5** (2026-11-18). Round 1: 27 findings (5 HIGH). Round 2: 20 findings (3 HIGH). Confirmation pass 1: 4 MEDIUM, 5 LOW. Confirmation pass 2: 1 HIGH, 3 MEDIUM, 7 LOW. Confirmation pass 3: 1 MEDIUM, 7 LOW. All addressed; §15. **Open for the product owner: Q3** (§2).
+> **Status: FINAL v2.0, pre-mortem CLEAN** (2026-11-18). 2 rounds plus 4 confirmation passes (pass 4 clean); every finding fixed, and the LOWs folded in (§15). **Open for the product owner: Q3** (§2).
 > Branch `control-plane-disaster`, from `main` at `57d6729`. Follows `BLUEPRINT-STANDARD.md`.
 >
 > **Scope decisions:**
@@ -54,7 +54,7 @@ and resyncs billing from Stripe with one command. A runbook covers losing the wh
 
 **Founder duties at disaster time** (runbook B):
 - disable crons, press, read the email;
-- repoint (five places, including their own `.env.local`), deploy;
+- repoint (Vercel, GitHub, SSM and their own `.env.local`; B.5 lists every value), deploy;
 - run the Stripe resync, work the lists, re-enable crons;
 - email customers.
 
@@ -331,9 +331,10 @@ If any fails, every tenant is `unknown`.
 **R3. Classify each tenant** in `provisioning`/`active`/`suspended`/`deleting`, concurrency 4.
 - "Due" means `status = 'deleting'` or `deletion_scheduled_for <= now()`.
 - **A row without `neon_project_id` → `unknown`** (listed).
-- **`all-lost` (3c, `disaster-workspace.ts:49-63`) skips any tenant whose newest decisive proof is `chain-unconfirmed`**, listing it as "unconfirmed rebuild: contact the lead". A one-line filter; a later, unrelated `all-lost` press can't rebuild it either.
+- **`all-lost` (3c, `disaster-workspace.ts:49-63`) skips any tenant whose newest decisive proof is `chain-unconfirmed`**, with result `unconfirmed-rebuild` ("contact the lead"). That result counts as ok for the run's `pass`, like `not-lost`. A one-line filter; a later, unrelated `all-lost` press can't rebuild it either.
 - **A tenant with any listed (unconfirmed) R2 chain → `unconfirmed rebuild`, with proof `chain-unconfirmed`** *(new, skippable; never `gone`)*, whatever Neon says. Its newest data may sit in the chain's project, so it must never be rebuilt from an older backup without the lead. Deploys skip it, so it can't block B.6. The end state is the lead's: re-link by hand, or rebuild by explicit id. In runbook C every chain end 404s, so the lead rebuilds them.
 - A proof row is appended for every row of the table except `fine`, `in progress` and `unknown`.
+- **The first matching row wins**, in this order: unconfirmed rebuild, no project id, R1 failed/error, stale project id, then the rest as listed.
 
 | Neon | Row | Result | Proof row (decisive) | The email says |
 |---|---|---|---|---|
@@ -450,7 +451,7 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
 6. **Actions → Deploy to Production** with **Skip lost workspaces** ticked. It migrates the restored control plane and picks up the new URL.
 7. **Check** that the app loads and an admin can sign in to one workspace.
 8. **Stripe resync:** `npm run tenant:admin -- stripe-resync --since <window start from the email> --stripe-mode live`, read the plan, then the same command with `--yes` (§6.10). Then resolve any `stripe-event-unknown-customer` alerts raised since the window start whose customer is now linked.
-9. **Work the email's lists:**
+9. **Work the lists in the newest `reconcile` (or `control-plane`) email:**
    - **lost** → runbook A from step 3. **Use `all-lost` only if the email lists no unconfirmed rebuild;** otherwise press with the lost list's explicit ids. `all-lost` picks every live 404 tenant, including ones whose newest data sits in a chain project. **Check your deletion receipts for the window first:** if you deleted it on purpose, close it instead (`--project-proven-gone --force-with-reason`);
    - **deleted in window** → `npm run tenant:delete -- <slug> --project-proven-gone --yes`. If it aborts on a live subscription, the deletion was cancelled in the window: treat it as lost;
    - **recoverable, not due** → as the email says (receipts first);
@@ -481,6 +482,7 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
    - workspaces that weren't due classify **lost**;
    - due ones classify **deleted in window** (close them);
    - window deletions that weren't due can't be told apart from lost ones. **Check your receipts before rebuilding**;
+   - if `--project-proven-gone` refuses on its URL check (the old account's endpoints may not answer with `auth`), contact the lead; don't hold the crons for it (B.10).
    - the old watches resolve as unverifiable.
 
 **A (3c), updated:**
@@ -513,7 +515,7 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
 
 ### 6.10b `tenant:admin window-signup <slug>` (read-only)
 - **Only when** an open `window-project` alert names the slug; otherwise it refuses "not a window signup".
-- Prints **every** `signups` row for that slug (the table has no unique slug, `0001_lucky_leper_queen.sql`) with `created_at <=` the alert's `createdAt`, and either `expires_at >= createdAt` or waitlisted. Newest first, each with its company name, email, created, verified and waitlisted.
+- Prints **every** `signups` row for that slug (the table has no unique slug, `0001_lucky_leper_queen.sql`) with `created_at <=` the alert's `createdAt`, `consumed_at IS NULL`, and either `expires_at >= createdAt` or waitlisted. Newest first, each with its company name, email, created, verified and waitlisted.
 - None → "no restored signup; use Stripe or the email log".
 - It never writes. Printing one signup email to the founder is the same contact data the founder already gets from Stripe; it isn't workspace data.
 
@@ -583,7 +585,7 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
 | F9 | The old control plane returns before repoint | Step 7 during the run; afterwards, B.4 |
 | F10 | The old control plane returns after repoint | The watch → `rebuild-original-returned` |
 | F11 | Founder repoints only some places | A stale SSM URL → backups fail `connect` → `backup-failed`. A stale GitHub secret → the deploy fails. A stale `.env.local` → `--project-proven-gone`'s positive control refuses (wrong endpoint host). B.5 lists all of them |
-| F12 | A `LINKED` project's connection string can't be read | Listed; never guessed |
+| F12 | A chain end's connection string can't be read | 403/404 → listed (`chain-unconfirmed`); any other error → `unknown`, re-pressed (B.5a) |
 | F13 | The reconcile is interrupted | Re-run `reconcile`: guarded and idempotent |
 | F14 | A Stripe webhook during the outage | 5xx → Stripe retries; processed after repoint. A missed or lost fact comes back with the resync (B.8) |
 | F15 | A notice is re-sent | Accepted; dates only move later |
@@ -617,10 +619,10 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
   - `disaster-control-plane.ts` (new) and `disaster-reconcile.ts` (new);
   - `disaster-rehearse.ts`;
   - `disaster-steps.ts` (exports);
-  - `disaster-workspace.ts` (line 104 text);
+  - `disaster-workspace.ts` (line 104 text; the `all-lost` filter on `chain-unconfirmed`, with the decisive-proof query in `lib/disaster-sql.ts`);
   - `lib/neon-api.ts` (`createdAt`, `getConnectionUri`, the owner lookup);
   - `lib/classify-endpoint.ts` (`CONTROL_PLANE_RULE`);
-  - `lib/project-names.ts` (new, §6.11; `disaster-steps.ts`'s `rebuildName` moves here unchanged);
+  - `lib/project-names.ts` (new, §6.11; `disaster-steps.ts`'s `rebuildName` moves here unchanged). R4's `signup` typing needs `isValidSlug`, so `src/lib/tenant/slug-rules.ts` is added to `scripts/backup/deploy-paths.txt` and to U6's allowed `src/` inputs (`backup-static.test.ts:342`);
   - `lib/disaster-proofs.ts`;
   - `disaster-button.sh`, `lib/expected-policies.ts`.
 - **`.github/workflows/disaster-restore.yml`;** **`ops/aws/backup-stack.yml`** (secrets, env, grants, schedule, `DisasterModes`, the start-email template).
@@ -636,7 +638,7 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
   - `TENANT-DELETION.md`;
   - `FOUNDER-ACCOUNTS-SETUP.md`;
   - `.env.example` (`CONTROL_PLANE_PROJECT_ID` noted for local admin use).
-- **Tests:** §11. Existing 3b and 3c tests pass unchanged. Those that build log lines or keys inside ECS gain the env, and those that call the three callers pass `cpId`.
+- **Tests:** §11. Existing 3b and 3c tests pass unchanged, except U6's allowed-inputs list (+`slug-rules.ts`). Those that build log lines or keys inside ECS gain the env, and those that call the three callers pass `cpId`.
 
 ## 11. Required tests (each fails without the change it proves)
 **Testing rules (3c lessons):**
@@ -674,8 +676,8 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
 | T24 | Reserved slugs refused (each exact name; each §6.11 pattern built by its builder → its slug part refused); an ordinary slug valid; §6.11 builder → regex round trip for all three names |
 | T25 | Signup and provision refuse an open window slug; available after resolve; also after the daily check sees a tenant reference it |
 | T26 | Monitoring: `window-project` 404 → resolved; Neon failure → open; not resolved by the `NEON_KINDS` sweep; the control-plane watch wording |
-| T27 | `stripe-resync`: dry run writes nothing; `--yes` relinks a window checkout through `checkoutLinkPatch` only when the live customer's `metadata.tenantId` matches (a re-signup reusing the slug isn't linked); a row whose current customer was deleted in Stripe is replaceable; a conflict raises the alert; linked tenants mirrored in the same run; `markSeatSyncDue` when a tenant becomes good; the live billing email, never nulled; no notice delivered, no `after()`, no email printed; a second run changes nothing; exit 1 if any failed; a mode mismatch refused |
-| T28b | `window-signup`: prints every eligible row (two rows → both); excludes a row created after the project, and an expired unverified row; refuses without an open alert; writes nothing |
+| T27 | `stripe-resync`: dry run writes nothing; `--yes` relinks a window checkout through `checkoutLinkPatch` only when the live customer's `metadata.tenantId` matches (a re-signup reusing the slug isn't linked); a row whose current customer was deleted in Stripe is replaceable; a conflict raises the alert; linked tenants mirrored in the same run; `markSeatSyncDue` on every relink and when a tenant becomes good; the live billing email, never nulled; no notice delivered, no `after()`, no email printed; a second run changes nothing; exit 1 if any failed; a mode mismatch refused |
+| T28b | `window-signup`: prints every eligible row (two rows → both); excludes a row created after the project, a consumed row, and an expired, not-waitlisted row; refuses without an open alert; writes nothing |
 | T28 | `checkoutLinkPatch` extraction: the existing webhook tests pass unchanged |
 | T29 | Email and logs: truncation; no URL or secret; ids only (`DISASTER-PROJECT`, `RELINKED`); the public button log shows no target |
 
@@ -806,3 +808,13 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
     - B.5a's escape after 2 presses;
     - A.7 stays numbered;
     - `markSeatSyncDue` on every relink, with the line citations corrected.
+- **FINAL v2.0, confirmation pass 4: CLEAN** (no HIGH or MEDIUM; 9 LOWs, all folded in):
+  - the bundle boundary (`slug-rules.ts` into deploy paths and U6; the proof query in `disaster-sql.ts`);
+  - the `all-lost` skip result counts as ok;
+  - R3's row precedence;
+  - F12 aligned;
+  - "the newest email";
+  - `window-signup` excludes consumed rows;
+  - T27's relink seat-sync case;
+  - the C.4 escape for check 4;
+  - B.5's values instead of "five places".
