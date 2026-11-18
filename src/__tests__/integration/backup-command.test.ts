@@ -67,6 +67,7 @@ describe.skipIf(!SERVER_URL)('backup command', () => {
     const { dump, ...rest } = o;
     return {
       controlPlaneUrl: cp.url,
+      cpId: controlPlaneId(cp.url),
       store: bucket,
       keyring: testKeyring(),
       pgDumpBin: PG_DUMP ?? 'pg_dump',

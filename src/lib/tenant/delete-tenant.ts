@@ -18,6 +18,7 @@ import { raiseAlert, readTenant, recordAudit, updateTenantGuarded, type TenantRo
 import { databaseExists, deleteNeonProjectVerified, directNeonHost, dropDatabaseVerified, neonProjectExists } from './neon';
 import { invalidateTenant } from './registry';
 import type { FounderExportDetail } from './ops-digest';
+import { proveProjectGone, type ProvenGoneSeams } from './proven-gone';
 
 /**
  * Permanent workspace deletion (feature-plan-terms-compliance-fixes.md §5.3). Steps are ordered, idempotent, and
@@ -34,6 +35,14 @@ export interface DeleteTenantOptions {
   forceWithReason?: string;
   includeExempt?: boolean;
   dropSharedDatabase?: boolean;
+  /**
+   * feature-plan-control-plane-disaster.md §6.6: replaces ONLY the first run's "not found" refusal, after the read-only
+   * proof that the dedicated Neon project is gone. Every other check (dates and notices, Stripe, the disaster guard, the
+   * tombstone) is unchanged. A no-op on a resumed `deleting` run.
+   */
+  projectProvenGone?: boolean;
+  /** Tests only: the proof's Neon API and connection probe. The CLI never sets it (a static test). */
+  provenGoneSeams?: ProvenGoneSeams;
   actor: string;
   log?: (line: string) => void;
 }
@@ -251,9 +260,20 @@ export async function deleteTenant(opts: DeleteTenantOptions): Promise<DeleteTen
     log(`Database: ${describe(database)}`);
     if (opts.forceWithReason) log(`FORCED (bypasses the deletion-date and notice checks): ${opts.forceWithReason}`);
 
+    // feature-plan-control-plane-disaster.md §6.6 / §7.4: the proof that the project is gone replaces the "not found"
+    // refusal below, and nothing else. Read-only; runs in the dry run too, so a refusal shows before --yes.
+    let provenAt: Date | null = null;
+    if (opts.projectProvenGone && !resuming) {
+      if (database.kind !== 'neon-project') throw new Refusal('--project-proven-gone is only for a workspace with its own Neon project; nothing was changed.');
+      const proof = await proveProjectGone({ tenantId: first.id, slug: first.slug, projectId: database.projectId, tenantDbUrl, seams: opts.provenGoneSeams });
+      if (!proof.ok) throw new Refusal(`--project-proven-gone refused (${proof.check}): ${proof.reason}. Nothing was changed.`);
+      provenAt = proof.provenAt;
+      log(`Project ${database.projectId} is proven gone (${provenAt.toISOString()}).`);
+      if (proof.recoverable) log(`Neon can still recover this project until ${proof.recoverableUntil ?? 'about 7 days after it was deleted'}; closing the workspace doesn't recover it.`);
+    }
     // A first run must find the database it is about to delete: a 404 / missing database here means a wrong
     // neon_project_id, API key or URL — never "already deleted" (that is accepted only when resuming).
-    if (!resuming) {
+    if (!resuming && !provenAt) {
       const exists = database.kind === 'neon-project'
         ? await neonProjectExists(database.projectId)
         : await databaseExists(database.adminUrl, database.dbName);
@@ -301,7 +321,7 @@ export async function deleteTenant(opts: DeleteTenantOptions): Promise<DeleteTen
       if (row.lifecycleVersion !== step3.row.lifecycleVersion) throw new Refusal('The workspace changed during step 3; re-run.');
       if (row.status !== 'deleting') {
         await updateTenantGuarded(tx, row, { status: 'deleting' }, new Date());
-        await recordAudit(tx, { tenantId: row.id, kind: 'deletion-started', actor: opts.actor, detail: describe(database) });
+        await recordAudit(tx, { tenantId: row.id, kind: 'deletion-started', actor: opts.actor, detail: provenAt ? `${describe(database)} (${PROVEN_GONE_MARK} ${provenAt.toISOString()})` : describe(database) });
         if (opts.forceWithReason) await recordAudit(tx, { tenantId: row.id, kind: 'forced-deletion', actor: opts.actor, detail: opts.forceWithReason });
       }
     });
@@ -379,8 +399,15 @@ async function retryVoids(tenantId: string): Promise<void> {
   for (const p of pending) await voidSubscriptionInvoices(tenantId, p.dedupKey, new Date());
 }
 
+/** The `deletion-started` audit marker for a proven-gone project (feature-plan-control-plane-disaster.md §6.6, D7). */
+const PROVEN_GONE_MARK = 'project-proven-gone, proven at';
+
 async function receipt(row: TenantRow, forcedReason: string | null): Promise<DeletionReceipt> {
   const notices = (await noticeStates(row.id)).map(({ kind, anchor, sentAt, forcedAt, supersededAt }) => ({ kind, anchor, sentAt, forcedAt, supersededAt }));
+  // A proven-gone project's receipt says so, on this run's receipt and on every later one (read from the audit).
+  const [started] = await withLockedPool((db) => db.select({ detail: tenantAuditEvents.detail }).from(tenantAuditEvents)
+    .where(and(eq(tenantAuditEvents.tenantId, row.id), eq(tenantAuditEvents.kind, 'deletion-started'))).orderBy(desc(tenantAuditEvents.createdAt)).limit(1));
+  const proven = started?.detail ? new RegExp(`\\(${PROVEN_GONE_MARK} ([^)]+)\\)`).exec(started.detail)?.[1] ?? null : null;
   // F2: a founder export taken earlier must be destroyed by min(its own destroy-by, deletion + 30 days).
   const events = await withLockedPool((db) => db.select().from(tenantAuditEvents)
     .where(and(eq(tenantAuditEvents.tenantId, row.id), inArray(tenantAuditEvents.kind, ['founder-export-taken', 'founder-export-destroyed', 'founder-export-legal-hold'])))
@@ -398,6 +425,6 @@ async function receipt(row: TenantRow, forcedReason: string | null): Promise<Del
   }
   return {
     slug: row.slug, name: row.name, status: row.status, deletionScheduledFor: row.deletionScheduledFor, deletedAt: row.deletedAt,
-    database: row.neonProjectId ? `Neon project ${row.neonProjectId}` : 'database dropped', forcedReason, founderExportDestroyBy, notices,
+    database: row.neonProjectId ? `Neon project ${row.neonProjectId}${proven ? ` (already gone; proven at ${proven})` : ''}` : 'database dropped', forcedReason, founderExportDestroyBy, notices,
   };
 }

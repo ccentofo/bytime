@@ -11,16 +11,16 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'workspace (rebuild and switch) or rehearse (prove the path; no switch)'
+        description: 'workspace (rebuild and switch), rehearse (prove the path; no switch), control-plane (rebuild the lost control plane) or reconcile (re-run the window reconcile)'
         type: choice
-        options: [workspace, rehearse]
+        options: [workspace, rehearse, control-plane, reconcile]
         required: true
       targets:
-        description: 'Workspace ids (uuid), comma-separated, or all-lost (workspace only)'
+        description: 'Workspace ids (uuid), comma-separated, or all-lost (workspace only), or control-plane (modes control-plane and reconcile; rehearse of the control plane)'
         type: string
         required: true
       override:
-        description: 'unreachable-4h: workspace, original unreachable for 4+ hours; canary: rehearse only (first rehearsal)'
+        description: 'unreachable-4h: workspace, original unreachable for 4+ hours; canary: workspace rehearse only (first rehearsal); none for every control-plane press'
         type: choice
         options: ['none', 'unreachable-4h', 'canary']
         default: 'none'

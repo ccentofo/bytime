@@ -12,9 +12,12 @@
  *   --force-with-reason "<text>"             bypass the deletion-date / notice checks (audited)
  *   --include-exempt                         allow deleting a lifecycle-exempt workspace
  *   --drop-shared-database                   allow dropping a database inside the control plane's Neon project
+ *   --project-proven-gone                    the workspace's Neon project is gone (feature-plan-control-plane-disaster.md
+ *                                            §6.6): prove it (read-only), then close the workspace with every Stripe
+ *                                            safeguard kept. Replaces only the "database not found" refusal.
  *
  * Required env (.env.local then .env): CONTROL_PLANE_DATABASE_URL, ENCRYPTION_KEY, STRIPE_SECRET_KEY (if the
- * tenant has a Stripe customer), NEON_API_KEY (dedicated Neon project).
+ * tenant has a Stripe customer), NEON_API_KEY (dedicated Neon project), CONTROL_PLANE_PROJECT_ID (--project-proven-gone).
  */
 import dotenv from 'dotenv';
 dotenv.config({ path: ['.env.local', '.env'] });
@@ -58,7 +61,7 @@ async function main() {
   const args = process.argv.slice(2);
   const valueFlags = new Set(['--force-with-reason']);
   const slug = args.find((a, i) => !a.startsWith('--') && !valueFlags.has(args[i - 1]));
-  if (!slug) fail('Usage: tenant:delete -- <slug> [--yes] [--force-with-reason "<text>"] [--include-exempt] [--drop-shared-database]');
+  if (!slug) fail('Usage: tenant:delete -- <slug> [--yes] [--force-with-reason "<text>"] [--include-exempt] [--drop-shared-database] [--project-proven-gone]');
 
   const result = await deleteTenant({
     slug,
@@ -66,6 +69,7 @@ async function main() {
     forceWithReason: flagValue(args, '--force-with-reason'),
     includeExempt: args.includes('--include-exempt'),
     dropSharedDatabase: args.includes('--drop-shared-database'),
+    projectProvenGone: args.includes('--project-proven-gone'),
     actor: `founder:${process.env.USER ?? 'unknown'}`,
   });
 

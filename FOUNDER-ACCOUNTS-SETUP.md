@@ -267,13 +267,14 @@ The final checklist will be `PRODUCTION-DEPLOY.md`, Phase "Backups (AWS)". The f
 4. **Paste three values** in **Systems Manager → Parameter Store → Create parameter**, each **Tier: Standard**, **Type: SecureString**, KMS key left at the default (`alias/aws/ssm`). **Staging's values first:**
    - `/cadenzpoint/backup/control-plane-url`: **staging's** control-plane URL;
    - `/cadenzpoint/backup/encryption-key`: **staging's** `ENCRYPTION_KEY`;
-   - `/cadenzpoint/backup/restore-test-url`: the Neon string from Part 5. Re-copy it now from Neon → **Connect** (pooling off), since your clipboard has moved on.
+   - `/cadenzpoint/backup/restore-test-url`: the Neon string from Part 5. Re-copy it now from Neon → **Connect** (pooling off), since your clipboard has moved on;
+   - `/cadenzpoint/backup/control-plane-backup-id`: the word `staging` (it names the backups' folder; a rebuilt control plane keeps it). Only `staging` and `prod` are accepted, and without it no backup task starts.
 
    Take the first two from your password manager, where PRODUCTION-DEPLOY Phase 4 keeps them. Vercel won't show sensitive values again.
 5. **Switch it on and deploy:** in GitHub → **Settings → Secrets and variables → Actions → Variables → New repository variable**: `AWS_BACKUPS_ENABLED` = `true`. Then **Actions → Backup system deploy → Run workflow**. GitHub emails you; on the run, **Review deployments** → `aws-backups` → **Approve and deploy**.
 6. **Confirm the alert email.** AWS sends "AWS Notification - Subscription Confirmation" to `infra@`; click **Confirm subscription** within 48 hours. If you miss it: AWS console → **SNS → Subscriptions** → the pending one → **Request confirmation**. (The daily digest will remind you if it's still unconfirmed.)
 7. **First runs and the "can't" checks:** together with me, in the AWS console and AWS CloudShell (a terminal in your browser that runs inside AWS), so nothing runs on your Mac. A few checks deliberately trigger alert emails; that's expected and proves the alarms work.
-8. **Switch to production:** between 15:00 and 17:00 UTC (10am–noon Eastern in winter, 11am–1pm in summer; no backup job runs then), edit the first two parameters to **production's** values. From the next scheduled run, production is backed up.
+8. **Switch to production:** between 15:00 and 17:00 UTC (10am–noon Eastern in winter, 11am–1pm in summer; no backup job runs then), edit the first two parameters to **production's** values and set `control-plane-backup-id` to `prod`. From the next scheduled run, production is backed up. (Not on the 1st or the 15th of the month: the disaster rehearsals run at 15:17 UTC those days.)
 9. **Vercel:** once I confirm production's first backup and audit have run, add `BACKUPS_EXPECTED=1` to production (staging stays `0`), then redeploy.
 
 ## Part 6b. The Disaster restore button (after 3c is built; we do this together)
@@ -303,7 +304,11 @@ The checklist is `PRODUCTION-DEPLOY.md`, Phase 13c. About 30 minutes, plus waiti
 5. **The `rehearsal` workspace** (PRODUCTION-DEPLOY 13c step 5): provisioned once, exempt from the trial lifecycle, and kept as the rehearsals' target.
 6. **Canary, then the first rehearsal, the same day** (PRODUCTION-DEPLOY 13c step 6). Expect two emails from AWS (start and finish) and the "Disaster rehearsal passed" email.
 
-**In a disaster, your jobs are:** press and approve; run **Deploy to Production** when the email says; lower `neon-ops@` to **Viewer** on each rebuilt project (the email names it); email customers from template A (RESTORE.md, runbook A). If the console won't lower `neon-ops@` on a rebuilt project, tell me: it then stays Admin on that one project.
+**In a disaster, your jobs are:** press and approve; run **Deploy to Production** when the email says; email customers from template A (RESTORE.md, runbook A). `neon-ops@` stays Admin of the projects it rebuilds (Neon keeps a project's creator as its Admin); that's expected.
+
+**If the control plane itself is lost** (RESTORE.md runbook B), your jobs are: switch the Vercel cron jobs off, press mode `control-plane`, repoint Vercel, GitHub, Parameter Store and your `.env.local` to the new project from the email, deploy, run the Stripe resync, work the email's lists, switch the crons back on, and email customers (template B). **If the whole Neon account is lost** (runbook C): first a new Neon account on `infra@`, upgraded before anything else, with new keys in Parameter Store, Vercel, GitHub and `.env.local`, and a new restore-test project; then runbook B.
+
+**Once, after the 3c-2 deploy** (PRODUCTION-DEPLOY 13c-2): add `CONTROL_PLANE_PROJECT_ID` (production's control-plane project id) to your own `.env.local`, and press the control-plane rehearsal once (mode `rehearse`, targets `control-plane`, confirm `rehearse`).
 
 ## Part 7. After setup: what you'll see, and what you never do
 **You'll see:**

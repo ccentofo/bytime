@@ -893,7 +893,10 @@ this order**. Steps 6–11 are also the **staging rehearsal**, a production-read
    **SecureString**, from your password manager — Vercel doesn't reveal sensitive values):
    `/cadenzpoint/backup/control-plane-url` = **staging's** `CONTROL_PLANE_DATABASE_URL`;
    `/cadenzpoint/backup/encryption-key` = **staging's** `ENCRYPTION_KEY`;
-   `/cadenzpoint/backup/restore-test-url` = the Neon string from step 2.
+   `/cadenzpoint/backup/restore-test-url` = the Neon string from step 2;
+   `/cadenzpoint/backup/control-plane-backup-id` = `staging` (exactly that word; feature-plan-control-plane-disaster.md
+   §6.0: it names the backups' S3 prefix, so a rebuilt control plane keeps finding them. Only `staging` and `prod` are
+   accepted, and **no backup, restore-test or disaster task can start without it**).
 7. **First deploy:** set the repository variable `AWS_BACKUPS_ENABLED` = `true`, then Actions → "Backup system
    deploy" → Run workflow → **Review deployments → Approve and deploy**. Both jobs green.
 8. **Confirm the alert email** from AWS within 48 hours (missed it: SNS → the subscription → Request confirmation).
@@ -901,11 +904,13 @@ this order**. Steps 6–11 are also the **staging rehearsal**, a production-read
    `backup`, then `audit`; **wait at least 30 minutes after the backup task stops**, then `restore-test`. Expect in
    staging's control plane: `ok` rows with `region = us-east-1`; an audit row with `Enabled`,
    `alert_email_confirmed = true`, `protection_drift` and `errors` empty; a `pass` restore-test run; three
-   `backup_permission_checks` rows with `ok = true`. Set staging's `BACKUPS_EXPECTED=1` for a day, check the digest's
+   `backup_permission_checks` rows with `ok = true`; and the backup log (CloudWatch → `/cadenzpoint/backup/backup`) shows a
+   `BACKUP staging control-plane …` line (not `prod`, not a hex id). Set staging's `BACKUPS_EXPECTED=1` for a day, check the digest's
    Backups section, then set it back to `0`. The next day, check the 18:17 catch-up's log shows `--if-missing-today`, and,
    if the hand-run restore test happened since Monday 00:00 UTC, that the next 08:17 restore-test catch-up exits at once
    ("a completed restore test ran since Monday").
-10. **"Can't" checks** (Tuesday–Sunday, 15:00–17:00 UTC, no job runs then), in AWS CloudShell, commands from the lead:
+10. **"Can't" checks** (Tuesday–Sunday, 15:00–17:00 UTC, no job runs then, except the 1st and the 15th of the month,
+    when the disaster rehearsals start at 15:17), in AWS CloudShell, commands from the lead:
     `head-object` on a backup → 403 (HeadObject transfers no data, so nothing is downloaded even if the deny were
     missing); `kms decrypt` of the stored data key → AccessDeniedException;
     `schedule-key-deletion --pending-window-in-days 7` → AccessDeniedException (if it ever succeeds:
@@ -913,11 +918,12 @@ this order**. Steps 6–11 are also the **staging rehearsal**, a production-read
     email; `put-bucket-versioning … Enabled` → AccessDenied and an immediate email (CloudTrail records denied calls too; if no
     email arrives, the lead investigates before go-live); `set-alarm-state` on
     `cadenzpoint-backup-dlq` → an alarm email.
-11. **Switch to production** (15:00–17:00 UTC, when no task runs, so none starts between the two edits): replace the
-    first two SSM parameters with **production's** values. The next scheduled runs back up production into its own
-    `<cp>` prefix. Staging's rehearsal backups expire on their own.
+11. **Switch to production** (15:00–17:00 UTC, when no task runs, so none starts between the edits; not on the 1st or
+    the 15th, the rehearsal days): replace the first two SSM parameters with **production's** values, and set
+    `/cadenzpoint/backup/control-plane-backup-id` to `prod`. The next scheduled runs back up production into its own
+    `prod` prefix. Staging's rehearsal backups expire on their own.
 12. **Vercel:** once production's first `backup` and `audit` tasks have stopped with exit code 0 (ECS console) and
-    the backup log shows a `BACKUP … control-plane …` line, set production `BACKUPS_EXPECTED=1` and redeploy. The alerts'
+    the backup log shows a `BACKUP prod control-plane …` line (`prod`, not `staging`), set production `BACKUPS_EXPECTED=1` and redeploy. The alerts'
     anchors (no missed-run or stale alert before the first control-plane backup) prevent a go-live burst of alerts.
 
 **Runbook**
@@ -1000,7 +1006,8 @@ A founder-only button that rebuilds a lost workspace from its newest verified ba
      canary seen, the copy deleted and visible as recoverable); no change to the workspace.
    - **If the canary isn't seen:** in Neon, switch `neon-ops@` to **Editor** and rehearse again (Q1's fallback); tell
      the lead.
-7. **From then on** the monthly schedule (the 1st, 15:17 UTC) rehearses automatically; a failure appears in the
+7. **From then on** the monthly schedules rehearse automatically (a workspace on the 1st, the control plane on the 15th,
+   both 15:17 UTC); a failure appears in the
    digest as `disaster-rehearse-failed`.
 
 **When the digest shows a disaster alert**
@@ -1013,10 +1020,30 @@ A founder-only button that rebuilds a lost workspace from its newest verified ba
 | `rebuild-orphan-project` | A project the button created wasn't cleaned up: delete it in the Neon console (the alert names it). Resolves after the 404. |
 | `workspace-needs-deploy` | Run Deploy to Production (normal) now. |
 | `disaster-run-stuck` | A disaster task ran past its deadline; it was closed as abandoned. Check RESTORE.md A.11; tell the lead. |
-| `disaster-rehearse-failed` | The rehearsal failed, or none passed in 40 days: tell the lead (the key or the pipeline may not work). |
+| `disaster-rehearse-failed` | A rehearsal failed, or none passed in 40 days (one alert per target: the workspace rehearsal, or `control-plane`): tell the lead (the key or the pipeline may not work). |
+| `window-project` | A Neon project created during a control-plane rollback window (RESTORE.md runbook B.9 says what to do by type). Its address stays unavailable to new signups while open; it closes by itself when the project is deleted or becomes a workspace, or resolve it by hand (`tenant:admin resolve-alert`) once handled. |
 | `rebuild-watch-check-failed` | A Neon check failed, or the app's key can't see the organisation: check 5.5 and `CONTROL_PLANE_PROJECT_ID`; otherwise it retries tomorrow. |
 
 `tenant:admin resolve-alert` refuses the `rebuild-*` and `disaster-*` kinds: they close on the facts.
+
+### Phase 13c-2 — The control-plane disaster (you + the lead; feature-plan-control-plane-disaster.md §12)
+
+When the control plane itself is lost, the same button rebuilds it into a new Neon project (RESTORE.md runbook B); losing
+the whole Neon account is runbook C. With the deploy that merges this item:
+
+0. **If Phase 13b is already done:** create `/cadenzpoint/backup/control-plane-backup-id` = `prod` (Parameter Store,
+   SecureString like the others) **before** approving that Backup system deploy. Without it, ECS can't start any backup,
+   restore-test or disaster task.
+1. **Approve the pending Backup system deploy** (it adds the control-plane modes, the 15th-of-month rehearsal and the
+   `DisasterModes` output the button reads).
+2. **Rehearse the control plane once:** Actions → **Disaster restore** → mode `rehearse`, targets `control-plane`,
+   override `none`, confirm `rehearse` → approve. Expect "Disaster rehearsal of the control plane … passed" and no
+   `cadenzpoint-rehearse-cp-*` project left in Neon.
+3. **Your `.env.local`:** add `CONTROL_PLANE_PROJECT_ID` = production's control-plane project id (`tenant:delete
+   --project-proven-gone` needs it).
+4. **If production backups already existed** under a hex `<cp>` prefix before this deploy: they expire within 25 days,
+   and new ones go under `prod` from the next nightly run. Until then, the restore test may report `FAIL:list` for the
+   control plane for a day, and a workspace rebuild can use only backups taken after the deploy. Nothing to do.
 
 ---
 

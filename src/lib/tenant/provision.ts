@@ -17,6 +17,7 @@ import { lockUserRulesExclusive, recomputeSelfApproval } from '@/server/internal
 // The slug rules live in a pure module (usable outside 'server-only' code); re-exported for existing importers.
 export { isValidSlug } from './slug-rules';
 import { isValidSlug } from './slug-rules';
+import { isOpenWindowSlug } from './window-slugs';
 
 export type ProvisionInput = {
   slug: string;
@@ -57,6 +58,10 @@ export async function provisionTenant(input: ProvisionInput): Promise<ProvisionR
     if (existing.status !== 'provisioning' || !owner?.signupEmail || owner.signupEmail.toLowerCase() !== email) {
       throw new ProvisionConflictError(`Workspace "${slug}" already exists.`);
     }
+  } else if (await isOpenWindowSlug(slug)) {
+    // feature-plan-control-plane-disaster.md §6.7: a window signup's leftover project still holds this address (covers
+    // the verify link and the waitlist path). A resumed `provisioning` row above is never blocked.
+    throw new ProvisionConflictError(`Workspace "${slug}" already exists.`);
   }
 
   // 1. Create the database (only if we don't already have a record from a prior attempt).

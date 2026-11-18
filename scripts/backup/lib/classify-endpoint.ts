@@ -93,13 +93,23 @@ export function tenantCandidateRule(slug: string, tenantId: string): CandidateRu
   return { exactNames: [`cadenzpoint-${slug}`], prefixes: [`cadenzpoint-r-${tenantId.slice(0, 8)}-`] };
 }
 
+/**
+ * The projects that may legitimately hold the control plane's endpoint (feature-plan-control-plane-disaster.md §6.3 step
+ * 3(d)): `cadenzpoint-control-prod`/`-staging` and every control-plane rebuild. Customer projects can't match the prefix
+ * (those names are reserved slugs, §6.7), and couldn't serve the control plane's host anyway.
+ */
+export const CONTROL_PLANE_RULE: CandidateRule = { exactNames: [], prefixes: ['cadenzpoint-control'] };
+
+/** The two NeonApi calls candidateServes needs: the app's `tenant:delete` passes its own adapter (approved detail D3). */
+export type CandidateNeon = Pick<NeonApi, 'listProjects' | 'listEndpoints'>;
+
 export type Served = 'yes' | 'no' | 'unproven';
 
 /**
  * Does any live candidate project list an endpoint on the URL's direct host? Any endpoints call that isn't 200, or a
  * list with `unavailable_project_ids`, → unproven (never "not served").
  */
-export async function candidateServes(neon: NeonApi, url: string, rule: CandidateRule): Promise<Served> {
+export async function candidateServes(neon: CandidateNeon, url: string, rule: CandidateRule): Promise<Served> {
   const host = directHost(new URL(url).hostname);
   try {
     const seen = new Map<string, string>();

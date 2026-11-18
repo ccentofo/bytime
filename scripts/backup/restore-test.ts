@@ -16,7 +16,7 @@
  */
 import postgres from 'postgres';
 import { RESTORE_TEST_LOCK_KEY } from '../../src/lib/tenant/backup-locks';
-import { CONTROL_PLANE_ID, controlPlaneId, DUMP_SUFFIX, SIDECAR_SUFFIX, baseKey, rtDatabaseName, sidecarKeyFor, targetPrefix, type BackupTarget } from './lib/keys';
+import { CONTROL_PLANE_ID, DUMP_SUFFIX, SIDECAR_SUFFIX, baseKey, rtDatabaseName, sidecarKeyFor, targetPrefix, type BackupTarget } from './lib/keys';
 import { decryptBuffer, encryptionContext, type KeyringFactory } from './lib/crypto';
 import type { BackupReader, BackupStore } from './lib/store';
 import { restoreObject } from './lib/restore-stream';
@@ -34,6 +34,8 @@ import { HOUR, MINUTE, latestMondayUtc, runPool } from './lib/util';
 
 export interface RestoreTestDeps {
   controlPlaneUrl: string;
+  /** The backup id: resolved once by main.ts (feature-plan-control-plane-disaster.md §6.0). */
+  cpId: string;
   restoreTestUrl: string;
   reader: BackupReader;
   /** The probe calls (§6.13). Production always sets it. */
@@ -115,7 +117,7 @@ export async function runRestoreTest(deps: RestoreTestDeps): Promise<{ exitCode:
     minObjectAgeMs: deps.minObjectAgeMs ?? RT_DEFAULTS.minObjectAgeMs,
   };
   const log = deps.log;
-  const cpId = controlPlaneId(deps.controlPlaneUrl);
+  const cpId = deps.cpId;
   const cp = controlPlaneClient(deps.controlPlaneUrl);
   const results: ResultRow[] = [];
 

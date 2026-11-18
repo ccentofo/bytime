@@ -54,7 +54,7 @@ describe.skipIf(!SERVER_URL || !PG_DUMP || !PG_RESTORE)('restore test', () => {
     ids.b = rows.find((r) => r.slug === 'test-lc-b')!.id;
     bucket = new FakeBucket();
     const r = await runBackup({
-      controlPlaneUrl: cp.url, store: bucket, keyring: testKeyring(), pgDumpBin: PG_DUMP!, pgDumpVersion: 'pg_dump (PostgreSQL) 16',
+      controlPlaneUrl: cp.url, cpId, store: bucket, keyring: testKeyring(), pgDumpBin: PG_DUMP!, pgDumpVersion: 'pg_dump (PostgreSQL) 16',
       runId: `test-${randomUUID().slice(0, 8)}`, log: () => {},
     });
     expect(r.exitCode).toBe(0);
@@ -83,7 +83,7 @@ describe.skipIf(!SERVER_URL || !PG_DUMP || !PG_RESTORE)('restore test', () => {
   function deps(o: Partial<RestoreTestDeps> = {}): RestoreTestDeps & { lines: string[] } {
     const lines: string[] = [];
     return {
-      controlPlaneUrl: cp.url, restoreTestUrl: rtUrl, reader: bucket, store: bucket, keyring: testKeyring(), pgRestoreBin: PG_RESTORE!,
+      controlPlaneUrl: cp.url, cpId, restoreTestUrl: rtUrl, reader: bucket, store: bucket, keyring: testKeyring(), pgRestoreBin: PG_RESTORE!,
       runId: `test-${randomUUID().slice(0, 8)}`, log: (l) => lines.push(l), hostGuardOverride: true, lockRetryMs: 50, lockRetryMaxMs: 200,
       selectTargets: () => [], ...o, lines,
     };

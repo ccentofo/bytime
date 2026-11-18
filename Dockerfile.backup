@@ -19,6 +19,8 @@ COPY src/lib/tenant/backup-locks.ts src/lib/tenant/backup-locks.ts
 # The disaster command uses the app's database-name and history rules (type-only import of the schema: nothing else).
 COPY src/lib/tenant/db-name.ts src/lib/tenant/db-name.ts
 COPY src/lib/tenant/lifecycle-config.ts src/lib/tenant/lifecycle-config.ts
+# The control-plane reconcile types window projects with the app's slug rule (feature-plan-control-plane-disaster.md §6.4 R4).
+COPY src/lib/tenant/slug-rules.ts src/lib/tenant/slug-rules.ts
 RUN npm run backup:bundle
 
 # ---- runtime: node + PostgreSQL 16 client tools (PGDG) + the bundle only ------------------------------------------

@@ -137,3 +137,48 @@ describe.skipIf(!SERVER_URL)('R7: migrate-all --skip-lost against real databases
     }
   });
 });
+
+// ---- feature-plan-control-plane-disaster.md §11 T16 -------------------------------------------------------------------
+describe.skipIf(!SERVER_URL)('T16 (3c-2): the reconcile\'s new proofs are skippable; a newer linked row supersedes them', () => {
+  let cp: { name: string; url: string };
+  let proxy: FakePgProxy;
+  let sql: postgres.Sql;
+  const ids = {
+    windowDeleted: '33333333-3333-4333-8333-333333333331',
+    recoverableDeleted: '33333333-3333-4333-8333-333333333332',
+    chainUnconfirmed: '33333333-3333-4333-8333-333333333333',
+    superseded: '33333333-3333-4333-8333-333333333334',
+  };
+
+  beforeAll(async () => {
+    cp = await createScratchDb('cp', { migrateControlPlane: true });
+    proxy = await startFakePgProxy({ kind: 'auth-fail' });
+    sql = postgres(cp.url, { max: 1, onnotice: () => {} });
+    for (const [k, id] of Object.entries(ids)) {
+      const url = `postgres://neondb_owner:pw@127.0.0.1:${proxy.port}/tenant_t16_${k.toLowerCase()}`;
+      await sql`INSERT INTO tenants (id, slug, name, status, db_url_encrypted, neon_project_id) VALUES (${id}, ${`t16-${k.toLowerCase()}`}, 'T16', 'active', ${encrypt(url)}, ${`p-${k}`})`;
+    }
+    const proof = (id: string, status: string) => sql`INSERT INTO disaster_actions (run_id, tenant_id, kind, status, old_project_id, detail, at)
+      VALUES ('test-rc-1', ${id}, 'proof', ${status}, 'p', 'reconcile', now() - interval '2 hours')`;
+    await proof(ids.windowDeleted, 'window-deleted');
+    await proof(ids.recoverableDeleted, 'recoverable-deleted');
+    await proof(ids.chainUnconfirmed, 'chain-unconfirmed');
+    await proof(ids.superseded, 'chain-unconfirmed');
+    await sql`INSERT INTO disaster_actions (run_id, tenant_id, kind, status, new_project_id, at) VALUES ('gh-5-1', ${ids.superseded}, 'rebuild', 'linked', 'p-new', now() - interval '1 hour')`;
+  }, 120_000);
+
+  afterAll(async () => {
+    await sql?.end({ timeout: 5 });
+    await proxy?.close();
+    if (cp) await dropScratchDb(cp.name);
+  });
+
+  it('window-deleted, recoverable-deleted and chain-unconfirmed → skipped; chain-unconfirmed with a newer linked row → FAILED', async () => {
+    const r = await run(cp.url, ['--skip-lost']);
+    for (const id of [ids.windowDeleted, ids.recoverableDeleted, ids.chainUnconfirmed]) {
+      expect(r.stdout, id).toMatch(new RegExp(`${id}\\s+\\|\\s+active\\s+\\|\\s+skipped: skipped \\(proven lost, awaiting rebuild\\)`));
+    }
+    expect(r.stdout).toMatch(/t16-superseded\s+\|\s+active\s+\|\s+FAILED/);
+    expect(r.status).toBe(1);
+  }, 240_000);
+});

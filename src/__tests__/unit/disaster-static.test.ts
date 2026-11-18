@@ -69,21 +69,22 @@ describe('D7: the roles', () => {
     expect(actions(st).sort()).toEqual(['cloudformation:DescribeStacks', 'ecs:DescribeTasks', 'ecs:ListTasks', 'ecs:RunTask', 'ecs:StopTask', 'ecs:TagResource', 'iam:PassRole'].sort());
   });
 
-  it('the disaster task role: reads backups, decrypts with the purpose condition, reads the backup log group, lists its own family, emails; no SSM write, no S3 write, no wildcards in actions', () => {
+  it('the disaster task role: reads backups, decrypts with the purpose condition, reads the backup and disaster log groups (3c-2 §6.2), lists its own family, emails; no SSM write, no S3 write, no wildcards in actions', () => {
     const st = policyOf(taskRoleName('disaster'));
     const acts = actions(st);
     expect(acts.sort()).toEqual(['ecs:DescribeTasks', 'ecs:ListTasks', 'kms:Decrypt', 'logs:FilterLogEvents', 's3:GetObject', 's3:ListBucket', 'sns:Publish'].sort());
     expect(acts.some((a) => /^ssm:|^s3:Put|^s3:Delete|\*/.test(a))).toBe(false);
     expect(sid(st, 'DecryptBackups').Condition).toEqual({ StringEquals: { 'kms:EncryptionContext:purpose': 'cadenzpoint-backup' } });
-    expect(sid(st, 'ReadBackupLines').Resource).toBe(`arn:aws:logs:us-east-1:${ACCT}:log-group:/cadenzpoint/backup/backup:*`);
+    expect(sid(st, 'ReadBackupLines').Resource).toEqual([`arn:aws:logs:us-east-1:${ACCT}:log-group:/cadenzpoint/backup/backup:*`, `arn:aws:logs:us-east-1:${ACCT}:log-group:/cadenzpoint/backup/disaster:*`]);
     expect(sid(st, 'ListOwnFamily')).toMatchObject({ Resource: '*', Condition: { ArnEquals: { 'ecs:cluster': `arn:aws:ecs:us-east-1:${ACCT}:cluster/cadenzpoint-backup` } } });
   });
 
-  it('the disaster execution role reads exactly the six SSM parameters', () => {
+  it('the disaster execution role reads exactly its eight SSM parameters (3c-2 §6.2 adds the backup id and the restore-test URL)', () => {
     const ps = sid(policyOf(execRoleName('disaster')), 'ReadParameters').Resource as string[];
     expect(ps.map((p) => p.split(':parameter')[1]).sort()).toEqual([
-      '/cadenzpoint/backup/control-plane-project-id', '/cadenzpoint/backup/control-plane-url', '/cadenzpoint/backup/encryption-key',
-      '/cadenzpoint/backup/neon-api-key', '/cadenzpoint/backup/neon-org-id', '/cadenzpoint/backup/restore-test-project-id',
+      '/cadenzpoint/backup/control-plane-backup-id', '/cadenzpoint/backup/control-plane-project-id', '/cadenzpoint/backup/control-plane-url',
+      '/cadenzpoint/backup/encryption-key', '/cadenzpoint/backup/neon-api-key', '/cadenzpoint/backup/neon-org-id',
+      '/cadenzpoint/backup/restore-test-project-id', '/cadenzpoint/backup/restore-test-url',
     ]);
   });
 
@@ -131,9 +132,9 @@ describe('D7: the task definition, the schedule, the outputs', () => {
     expect(c).toMatchObject({ Name: 'disaster', Command: ['disaster'], StopTimeout: 120 });
     expect(((c.LogConfiguration as Node).Options as Node)['awslogs-group']).toEqual({ Ref: 'DisasterLogGroup' });
     const env = Object.fromEntries((c.Environment as Array<{ Name: string; Value: unknown }>).map((e) => [e.Name, e.Value]));
-    expect(env).toMatchObject({ NEON_REGION_ID: 'aws-us-east-1', DISASTER_DEADLINE_MINUTES: '330', BACKUP_LOG_GROUP: '/cadenzpoint/backup/backup', BACKUP_PG_RESTORE_BIN: '/usr/lib/postgresql/16/bin/pg_restore' });
+    expect(env).toMatchObject({ NEON_REGION_ID: 'aws-us-east-1', DISASTER_DEADLINE_MINUTES: '330', BACKUP_LOG_GROUP: '/cadenzpoint/backup/backup', BACKUP_PG_RESTORE_BIN: '/usr/lib/postgresql/16/bin/pg_restore', DISASTER_LOG_GROUP: '/cadenzpoint/backup/disaster' });
     expect(env.NEON_HISTORY_RETENTION_SECONDS).toBeUndefined();
-    expect((c.Secrets as Array<{ Name: string }>).map((x) => x.Name).sort()).toEqual(['CONTROL_PLANE_DATABASE_URL', 'CONTROL_PLANE_PROJECT_ID', 'ENCRYPTION_KEY', 'NEON_API_KEY', 'NEON_ORG_ID', 'RESTORE_TEST_PROJECT_ID']);
+    expect((c.Secrets as Array<{ Name: string }>).map((x) => x.Name).sort()).toEqual(['BACKUP_CONTROL_PLANE_ID', 'CONTROL_PLANE_DATABASE_URL', 'CONTROL_PLANE_PROJECT_ID', 'ENCRYPTION_KEY', 'NEON_API_KEY', 'NEON_ORG_ID', 'RESTORE_TEST_DATABASE_URL', 'RESTORE_TEST_PROJECT_ID']);
   });
 
   it('the monthly schedule rehearses only: its command parses through the real argv parser as rehearse/auto; 15:17 UTC on the 1st', () => {

@@ -60,10 +60,24 @@ npm run tenant:delete -- <slug> --yes
 
 # Before the notice window has elapsed (audited).
 npm run tenant:delete -- <slug> --yes --force-with-reason "customer written request, ticket #123"
+
+# The workspace's Neon project is already gone (RESTORE.md runbooks A.8, A.10 and B.9).
+npm run tenant:delete -- <slug> --project-proven-gone --yes
 ```
 
 Required env: `CONTROL_PLANE_DATABASE_URL`, `ENCRYPTION_KEY`, and `STRIPE_SECRET_KEY` / `NEON_API_KEY` if the
-tenant has a Stripe customer / a dedicated Neon project.
+tenant has a Stripe customer / a dedicated Neon project; `CONTROL_PLANE_PROJECT_ID` with `--project-proven-gone`.
+
+**`--project-proven-gone`** (feature-plan-control-plane-disaster.md §6.6): on a first run, a dedicated Neon project
+that's missing is normally refused ("the tenant database was not found": a wrong id or key looks the same). With this
+flag, the run first **proves** the project is gone, read-only, and refuses with the failed check named unless every
+check holds: `CONTROL_PLANE_PROJECT_ID` is set; the Neon key's organisation lists that project completely and it serves
+`CONTROL_PLANE_DATABASE_URL`'s host (so your `.env.local` points at the live control plane); the workspace's project
+answers 404; its address fails with an authentication error (what Neon says for a deleted endpoint); and no live project
+serves its address. If Neon can still recover the project, it says so (closing the workspace doesn't recover it). Then
+the normal steps below run unchanged: the date and notice checks (bypass only with `--force-with-reason`), the Stripe
+steps, the disaster guard, step 5 (already gone) and the tombstone. The audit and the receipt record the proof:
+`Neon project <id> (already gone; proven at <time>)`. On a resumed `deleting` run the flag does nothing.
 
 The steps, in order (each idempotent; a re-run resumes while `status = deleting`):
 
