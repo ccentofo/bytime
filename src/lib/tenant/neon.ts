@@ -1,5 +1,6 @@
 import 'server-only';
 import postgres from 'postgres';
+import { postgresJsUrl } from '../db/pg-url';
 import { tenantDatabaseName } from './db-name';
 import { tenantDbHistoryRetentionSeconds } from './lifecycle-config';
 import { isLoopbackUrl } from './loopback';
@@ -162,7 +163,7 @@ async function createLocalDevDatabase(slug: string): Promise<CreatedTenantDataba
 
   const dbName = tenantDatabaseName(slug); // same naming rule as production (see db-name.ts)
 
-  const admin = postgres(adminUrl, { max: 1 });
+  const admin = postgres(postgresJsUrl(adminUrl), { max: 1 });
   try {
     // CREATE DATABASE cannot run inside a transaction — use a simple unsafe query.
     await admin.unsafe(`CREATE DATABASE ${dbName}`);
@@ -248,7 +249,7 @@ export async function neonProjectExists(projectId: string): Promise<boolean> {
 
 /** §5.3 step 2 (first run): does the database exist on that server? */
 export async function databaseExists(adminUrl: string, dbName: string): Promise<boolean> {
-  const admin = postgres(adminUrl, { max: 1, prepare: false });
+  const admin = postgres(postgresJsUrl(adminUrl), { max: 1, prepare: false });
   try {
     return (await admin`SELECT 1 FROM pg_database WHERE datname = ${dbName}`).length > 0;
   } finally {
@@ -263,7 +264,7 @@ export async function databaseExists(adminUrl: string, dbName: string): Promise<
  */
 export async function dropDatabaseVerified(adminUrl: string, dbName: string): Promise<{ alreadyDeleted: boolean }> {
   if (!/^[a-z_][a-z0-9_]*$/.test(dbName)) throw new Error(`Refusing to drop an unexpected database name: ${dbName}`);
-  const admin = postgres(adminUrl, { max: 1, prepare: false });
+  const admin = postgres(postgresJsUrl(adminUrl), { max: 1, prepare: false });
   try {
     const before = await admin`SELECT 1 FROM pg_database WHERE datname = ${dbName}`;
     if (before.length === 0) return { alreadyDeleted: true };

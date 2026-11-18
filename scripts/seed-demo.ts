@@ -26,6 +26,7 @@
 import dotenv from 'dotenv';
 dotenv.config({ path: ['.env.local', '.env'] });
 import postgres from 'postgres';
+import { postgresJsUrl } from '../src/lib/db/pg-url';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { registerTenant } from './register-tenant';
@@ -63,7 +64,7 @@ async function main() {
   printTargetBanner();
   // 1. Migrate the tenant DB. Tolerate a DB that already has the schema but no migration
   //    journal (42P07 = duplicate table, 42710 = duplicate object/type).
-  const tsql = postgres(tenantDbUrl, { max: 1 });
+  const tsql = postgres(postgresJsUrl(tenantDbUrl), { max: 1 });
   const tdb = drizzle(tsql);
   console.log(`→ Migrating tenant DB for "${slug}"...`);
   try {

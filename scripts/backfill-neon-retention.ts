@@ -16,6 +16,7 @@ import dotenv from 'dotenv';
 dotenv.config({ path: ['.env.local', '.env'] });
 
 import postgres from 'postgres';
+import { postgresJsUrl } from '../src/lib/db/pg-url';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { ne } from 'drizzle-orm';
 import { tenants } from '../src/db/control-plane/schema';
@@ -38,7 +39,7 @@ async function main() {
   if (!process.env.NEON_API_KEY) fail('NEON_API_KEY is not set (checked .env.local and .env).');
   const target = tenantDbHistoryRetentionSeconds();
 
-  const sql = postgres(controlUrl!, { max: 1 });
+  const sql = postgres(postgresJsUrl(controlUrl!), { max: 1 });
   try {
     const rows = await drizzle(sql)
       .select({ slug: tenants.slug, status: tenants.status, neonProjectId: tenants.neonProjectId })

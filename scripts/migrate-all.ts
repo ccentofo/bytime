@@ -35,6 +35,7 @@ import dotenv from 'dotenv';
 dotenv.config({ path: ['.env.local', '.env'] });
 
 import postgres from 'postgres';
+import { postgresJsUrl } from '../src/lib/db/pg-url';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { inArray } from 'drizzle-orm';
 import { tenants } from '../src/db/control-plane/schema';
@@ -114,7 +115,7 @@ async function main() {
   }
 
   const listTenants = async () => {
-    const controlSql = postgres(controlUrl!, { max: 1 });
+    const controlSql = postgres(postgresJsUrl(controlUrl!), { max: 1 });
     try {
       return await drizzle(controlSql)
         .select({ id: tenants.id, slug: tenants.slug, status: tenants.status, dbUrlEncrypted: tenants.dbUrlEncrypted, neonProjectId: tenants.neonProjectId })
@@ -126,7 +127,7 @@ async function main() {
   };
 
   // feature-plan-disaster-restore.md §6.0: one control-plane client for the disaster records, ended before exit.
-  const recordsSql = postgres(controlUrl!, { max: 1, onnotice: () => {} });
+  const recordsSql = postgres(postgresJsUrl(controlUrl!), { max: 1, onnotice: () => {} });
   const runId = migrateRunId(new Date());
   const code = await runMigrateAll({ check, concurrency, onlySlug, skipLost }, {
     controlUrl: controlUrl!,
