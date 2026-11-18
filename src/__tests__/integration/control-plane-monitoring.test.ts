@@ -105,6 +105,11 @@ describe.skipIf(!cpReady)('3c-2: window addresses and monitoring', () => {
       neonFails = true;
       await syncWindowProjects(new Date(), { neon, env: ENV });
       expect(await alertOpen('window-project', failing)).toBe(true);
+      neonFails = false;
+      // M48: a Neon 5xx is not a 404: still open.
+      const fiveHundred: NeonFetch = async () => ({ status: 503, json: {} });
+      await syncWindowProjects(new Date(), { neon: fiveHundred, env: ENV });
+      expect(await alertOpen('window-project', failing)).toBe(true);
     });
   });
 
@@ -127,6 +132,38 @@ describe.skipIf(!cpReady)('3c-2: window addresses and monitoring', () => {
       expect((ret.detail as { todo: string }).todo).toContain("the old control plane exists again: don't use it");
       live.delete(oldId);
       await controlDb.delete(opsAlerts).where(eq(opsAlerts.dedupKey, oldId));
+    });
+  });
+
+  describe('fix round 1, FR10: monitoring end to end', () => {
+    it('M55/M61: a failed control-plane rehearsal read from the real disaster_runs raises the control-plane alert (dedup control-plane), not the workspace one', async () => {
+      const runId = `${PREFIX}rcpf-${randomUUID().slice(0, 6)}`;
+      await controlDb.insert(disasterRuns).values({ runId, mode: 'rehearse', startedAt: new Date(Date.now() - 60_000), finishedAt: new Date(), status: 'fail', summary: { target: 'control-plane' } });
+      await syncDisasterAlerts(new Date(), { neon, env: ENV });
+      const rows = await controlDb.select({ dedupKey: opsAlerts.dedupKey, detail: opsAlerts.detail }).from(opsAlerts)
+        .where(and(eq(opsAlerts.kind, 'disaster-rehearse-failed'), isNull(opsAlerts.resolvedAt), gte(opsAlerts.firstSeenAt, start)));
+      const cp = rows.find((x) => x.dedupKey === 'control-plane');
+      expect(cp?.detail).toMatchObject({ target: 'control-plane', reason: expect.stringContaining(runId) });
+      expect(rows.find((x) => x.dedupKey === '' && JSON.stringify(x.detail).includes(runId))).toBeUndefined();
+      await controlDb.delete(disasterRuns).where(eq(disasterRuns.runId, runId));
+      await controlDb.delete(opsAlerts).where(and(eq(opsAlerts.kind, 'disaster-rehearse-failed'), eq(opsAlerts.dedupKey, 'control-plane'), gte(opsAlerts.firstSeenAt, start)));
+    });
+
+    it('M62: the cron\'s monitoring step runs the window-project check (a referenced project\'s alert resolves)', async () => {
+      const projectId = key('cron');
+      await windowAlert(projectId, null);
+      const t = await makeTenant({ neonProjectId: projectId });
+      vi.stubEnv('BACKUPS_EXPECTED', '1');
+      vi.stubEnv('NEON_API_KEY', '');
+      try {
+        const { runDisasterMonitoring } = await import('@/lib/tenant/disaster-status');
+        await runDisasterMonitoring(new Date());
+      } finally {
+        vi.unstubAllEnvs();
+      }
+      expect(await alertOpen('window-project', projectId)).toBe(false);
+      await controlDb.delete(tenants).where(eq(tenants.id, t.id));
+      await controlDb.delete(opsAlerts).where(and(eq(opsAlerts.kind, 'rebuild-watch-check-failed'), eq(opsAlerts.scope, 'global'), gte(opsAlerts.firstSeenAt, start)));
     });
   });
 

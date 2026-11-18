@@ -120,6 +120,22 @@ describe.skipIf(!CAN_RUN)('the control-plane rehearsal', () => {
     }
   }, 180_000);
 
+  it('H04: the positive control fails (the restore-test and control-plane projects missing from the list) → fail, nothing created', async () => {
+    const base = worldDeps(w, { logs: [], emails: [] }).neon;
+    const neon: NeonApi = { ...base, async listProjects(q) { const l = await base.listProjects(q); return q?.recoverable || q?.search ? l : { ...l, projects: l.projects.filter((p) => p.id !== w.restoreTestProjectId && p.id !== w.controlPlaneProjectId && !w.tenants.some((t) => t.projectId === p.id)) }; } };
+    const r = await rehearse({ neon });
+    expect(r.exitCode).toBe(1);
+    expect(r.outcome?.results[0]).toMatchObject({ result: 'proof-failed', detail: expect.stringContaining('positive control') });
+    expect(copies()).toHaveLength(0);
+  }, 120_000);
+
+  it('H05: CONTROL_PLANE_PROJECT_ID doesn\'t answer 200 → fail, nothing created', async () => {
+    const r = await rehearse({ controlPlaneProjectId: 'prj-not-there' });
+    expect(r.exitCode).toBe(1);
+    expect(r.outcome?.results[0].detail).toContain("CONTROL_PLANE_PROJECT_ID doesn't answer 200");
+    expect(copies()).toHaveLength(0);
+  }, 120_000);
+
   it('T20: target written at INSERT for every mode; the outer catch and the abandoned close keep it; the summary merges', async () => {
     // A workspace press's row says workspace; a control-plane rehearsal's says control-plane (above).
     const ws = await press(w, { targets: [w.tenants[1].id] });

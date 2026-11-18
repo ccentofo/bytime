@@ -12,6 +12,8 @@ import { parseRebuildLine, type DisasterLogReader, type RebuildLine } from '../.
 import { controlPlaneRebuildName, controlPlaneRehearsalName, rebuildName } from '../../../scripts/backup/lib/project-names';
 import { poolerOf, fakeHost } from '../helpers/fake-neon';
 import type { DisasterDeps } from '../../../scripts/backup/disaster';
+import type { NeonApi } from '../../../scripts/backup/lib/neon-api';
+import { newestDecisiveProofs } from '../../../scripts/backup/lib/disaster-sql';
 
 /**
  * feature-plan-control-plane-disaster.md §11 T14–T19, T29 (and T15's 3c `all-lost` half): the window reconcile against
@@ -292,12 +294,157 @@ describe.skipIf(!CAN_RUN)('the window reconcile', () => {
         expect(alerts.map((a) => a.k).sort()).toEqual([...listed.keys()].sort());
         expect(alerts.find((a) => a.k === rnd.id)?.detail).toMatchObject({ projectId: rnd.id, name: 'cadenzpoint-r-and-d', slug: 'r-and-d', type: 'signup' });
         expect(await s.sql`SELECT 1 FROM disaster_actions WHERE kind = 'window-project' AND status = 'listed'`).toHaveLength(listed.size);
+        // FR6: the email prints each window-project alert's id (B.9 resolves it by id).
+        const [rndAlert] = await s.sql<Array<{ id: string }>>`SELECT id::text AS id FROM ops_alerts WHERE kind = 'window-project' AND dedup_key = ${rnd.id}`;
+        expect(r.email).toContain(`${rnd.id} cadenzpoint-r-and-d`);
+        expect(r.email).toContain(`alert ${rndAlert.id}`);
         // T19: a re-run raises nothing new (deduped by the "any alert" exclusion), and never reopens the resolved one.
         const again = await run(s, { ids: [w.controlPlaneProjectId, cpOld.id], lines: [[linked(chainT.id, chainT.projectId!, chainEnd.id, at(1)), at(1)]] });
         expect(again.r.windowProjects).toEqual([]);
         expect(await s.sql`SELECT 1 FROM ops_alerts WHERE kind = 'window-project' AND dedup_key = ${resolved.id} AND resolved_at IS NULL`).toHaveLength(0);
         for (const p of [early, late, tooEarly, rnd, rb, other, ...excluded, cpOld, resolved]) w.neon.purge(p.id);
       } finally { w.neon.projects.get(w.restoreTestProjectId)!.createdAt = new Date(0).toISOString(); await s.close(); }
+    }, 60_000);
+  });
+
+  describe('fix round 1: FR2, FR4 and FR10 (the reconcile)', () => {
+    const wrapNeon = (over: Partial<NeonApi>): NeonApi => ({ ...worldDeps(w, { logs: [], emails: [] }).neon, ...over });
+
+    it('FR2 (auditor A): a window signup rebuilt in the window (no tenant row) → its projects are never raised as window projects and are named "kept" under unconfirmed rebuilds', async () => {
+      const s = await scenario();
+      try {
+        const ghost = randomUUID();
+        const inWin = new Date(WINDOW_START.getTime() + 2 * HOUR);
+        const original = w.neon.addProject({ name: `cadenzpoint-ghost-${ghost.slice(0, 6)}`, createdAt: inWin });
+        const rebuilt = w.neon.addProject({ name: rebuildName(ghost, inWin, 1), createdAt: new Date(inWin.getTime() + HOUR) });
+        const r = await run(s, { lines: [[linked(ghost, original.id, rebuilt.id, at(3)), at(3)]] });
+        expect(r.r.windowProjects.map((p) => p.projectId)).not.toContain(rebuilt.id);
+        expect(await s.sql`SELECT 1 FROM ops_alerts WHERE kind = 'window-project' AND dedup_key = ${rebuilt.id}`).toHaveLength(0);
+        expect(r.email).toMatch(new RegExp(`Unconfirmed rebuilds[\\s\\S]*${ghost}: no tenant row for these rebuild lines; project\\(s\\) ${rebuilt.id} kept: contact the lead; don't delete`));
+        w.neon.purge(original.id); w.neon.purge(rebuilt.id);
+      } finally { await s.close(); }
+    }, 60_000);
+
+    it('FR4: a lost workspace plus a chain tenant whose end check 5xx\'d (unknown) → all-lost is NOT offered', async () => {
+      const s = await scenario();
+      try {
+        const lost = await addTenant(s, { state: 'gone' });
+        const t = await addTenant(s, { state: 'gone' });
+        const end = addEnd(t);
+        w.neon.script('GET /projects/:id/connection_uri', [503], end.id);
+        const r = await run(s, { lines: [[linked(t.id, t.projectId!, end.id, at(1)), at(1)]] });
+        expect(r.r.classes.get(t.id)?.cls).toBe('unknown');
+        expect(r.email).not.toContain('press mode workspace with all-lost');
+        expect(r.email).toContain(`NOT all-lost: a workspace rebuilt in the window is still unknown`);
+        expect(r.email).toContain(lost.id);
+      } finally { await s.close(); }
+    }, 60_000);
+
+    it('R01: a normal chain PLUS a healed `-` line for the same tenant → listed, never applied', async () => {
+      const s = await scenario();
+      try {
+        const t = await addTenant(s, { state: 'gone' });
+        const end = addEnd(t);
+        const r = await run(s, { lines: [[linked(t.id, t.projectId!, end.id, at(1)), at(1)], [`LINKED ${t.id} - ${end.id} - - (healed by the re-read)`, at(2)]] });
+        expect(r.r.classes.get(t.id)?.cls).toBe('unconfirmed-rebuild');
+        expect((await row(s, t.id)).p).toBe(t.projectId);
+      } finally { await s.close(); }
+    }, 60_000);
+
+    it('R08, R09: an end whose URI is not a pooled us-east-1 host, or names an rt_ database → listed, never applied', async () => {
+      const s = await scenario();
+      try {
+        const a = await addTenant(s, { state: 'gone' });
+        const aEnd = addEnd(a);
+        const b = await addTenant(s, { state: 'gone' });
+        const bEnd = addEnd(b);
+        const base = worldDeps(w, { logs: [], emails: [] }).neon;
+        const neon = wrapNeon({
+          async getConnectionUri(o) {
+            const uri = await base.getConnectionUri(o);
+            const u = new URL(uri);
+            if (o.projectId === aEnd.id) u.hostname = u.hostname.replace('-pooler', ''); // a direct host
+            if (o.projectId === bEnd.id) u.pathname = '/rt_20261118000000_abcdefgh';
+            return u.toString();
+          },
+        });
+        const r = await run(s, { over: { neon }, lines: [[linked(a.id, a.projectId!, aEnd.id, at(1)), at(1)], [linked(b.id, b.projectId!, bEnd.id, at(1)), at(1)]] });
+        expect(r.r.classes.get(a.id)?.detail).toContain('not a pooled us-east-1 Neon host');
+        expect(r.r.classes.get(b.id)?.detail).toContain('restore-test database');
+        for (const t of [a, b]) expect((await row(s, t.id)).p).toBe(t.projectId);
+      } finally { await s.close(); }
+    }, 60_000);
+
+    it('R12: the row\'s URL changes between the read and the apply → the guarded UPDATE matches nothing (unknown, re-press), never applied', async () => {
+      const s = await scenario();
+      try {
+        const t = await addTenant(s, { state: 'gone' });
+        const end = addEnd(t);
+        const base = worldDeps(w, { logs: [], emails: [] }).neon;
+        const neon = wrapNeon({
+          async getConnectionUri(o) {
+            await s.sql`UPDATE tenants SET db_url_encrypted = ${encrypt(t.url)} WHERE id = ${t.id}`; // same URL, new ciphertext
+            return base.getConnectionUri(o);
+          },
+        });
+        const r = await run(s, { over: { neon }, lines: [[linked(t.id, t.projectId!, end.id, at(1)), at(1)]] });
+        expect(r.r.classes.get(t.id)?.cls).toBe('unknown');
+        expect(r.r.counts.reapplied).toBe(0);
+        expect((await row(s, t.id)).p).toBe(t.projectId);
+      } finally { await s.close(); }
+    }, 60_000);
+
+    it('R16: a 404 project whose address a live project serves → stale project id (refused:reachable), never `gone`', async () => {
+      const s = await scenario();
+      try {
+        const t = await addTenant(s, { state: 'gone' });
+        const host = new URL(t.url).hostname.replace('-pooler', '');
+        const serving = w.neon.addProject({ name: `cadenzpoint-${t.slug}`, host });
+        for (const h of [host, poolerOf(host)]) w.neon.hostMap[h] = { host: w.proxy.host, port: w.proxy.port }; // its login still fails (28P01)
+        const r = await run(s);
+        expect(r.r.classes.get(t.id)?.cls).toBe('stale-project-id');
+        expect(await proofs(s, t.id)).toEqual(['refused:reachable']);
+        w.neon.purge(serving.id);
+      } finally { await s.close(); }
+    }, 60_000);
+
+    it('R27: the positive control fails (no listed known project answers) → R1 failed, every tenant unknown; R30: network first fails → the same', async () => {
+      const s = await scenario();
+      try {
+        const t = await addTenant(s, { state: 'gone' });
+        const r1 = await run(s, { over: { restoreTestProjectId: 'prj-nowhere' }, ids: ['prj-nowhere-2'] });
+        expect(r1.r.r1Failed).toBe(true);
+        expect(r1.r.classes.get(t.id)?.cls).toBe('unknown');
+        const r2 = await run(s, { over: { restoreTestUrl: 'postgres://u:p@127.0.0.1:1/dead' } });
+        expect(r2.r.r1Failed).toBe(true);
+        expect(r2.email).toContain("this task's own network couldn't be proven");
+        expect(await proofs(s, t.id)).toEqual([]);
+      } finally { await s.close(); }
+    }, 60_000);
+
+    it('R29 (P1): standalone reconcile with R1 failing → exit 1, FAILED', async () => {
+      const s = await scenario();
+      try {
+        await s.sql`INSERT INTO disaster_runs (run_id, mode, started_at, finished_at, status, summary) VALUES ('gh-old-2', 'control-plane', ${WINDOW_END}, ${WINDOW_END}, 'pass',
+          ${s.sql.json({ target: 'control-plane', previousProjectId: 'prj-old', newProjectId: 'prj-nowhere-3', backupStartedAt: WINDOW_START.toISOString(), cpRunStartedAt: WINDOW_END.toISOString() })})`;
+        const r = await press(w, { mode: 'reconcile', targets: 'control-plane' }, { controlPlaneUrl: s.url, restoreTestUrl: RESTORE_TEST_URL, disasterLogReader: reader([]), restoreTestProjectId: 'prj-nowhere', controlPlaneProjectId: 'prj-nowhere-4' });
+        expect(r.exitCode).toBe(1);
+        expect(r.emails[0].subject).toContain('FAILED');
+      } finally { await s.close(); }
+    }, 60_000);
+
+    it('L08: the newest DECISIVE proof wins (by time), a transient one never supersedes it', async () => {
+      const s = await scenario();
+      try {
+        const a = await addTenant(s, { state: 'gone' });
+        const b = await addTenant(s, { state: 'gone' });
+        const ins = (id: string, status: string, hoursAgo: number) => s.sql`INSERT INTO disaster_actions (run_id, tenant_id, kind, status, at) VALUES ('t', ${id}, 'proof', ${status}, now() - ${hoursAgo + ' hours'}::interval)`;
+        await ins(a.id, 'chain-unconfirmed', 3); await ins(a.id, 'gone', 1);
+        await ins(b.id, 'gone', 3); await ins(b.id, 'chain-unconfirmed', 2); await ins(b.id, 'refused:proof-failed', 1);
+        const m = await newestDecisiveProofs(s.sql, [a.id, b.id]);
+        expect(m.get(a.id)).toBe('gone');
+        expect(m.get(b.id)).toBe('chain-unconfirmed');
+      } finally { await s.close(); }
     }, 60_000);
   });
 

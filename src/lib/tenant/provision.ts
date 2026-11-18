@@ -37,8 +37,14 @@ export type ProvisionInput = {
 
 export type ProvisionResult = { slug: string; adminUserId: string };
 
-/** The workspace name belongs to an existing workspace or to another signer's in-progress provisioning. */
-export class ProvisionConflictError extends Error {}
+/**
+ * The workspace name belongs to an existing workspace or to another signer's in-progress provisioning (`exists`), or
+ * it's held by an open window-project alert (`window`; feature-plan-control-plane-disaster.md §6.7: the signup must stay
+ * unconsumed, so `tenant:admin window-signup` still lists it).
+ */
+export class ProvisionConflictError extends Error {
+  constructor(message: string, readonly reason: 'exists' | 'window' = 'exists') { super(message); }
+}
 
 /**
  * Provision a new tenant end-to-end. Idempotent and resumable: safe to re-run for a
@@ -61,7 +67,7 @@ export async function provisionTenant(input: ProvisionInput): Promise<ProvisionR
   } else if (await isOpenWindowSlug(slug)) {
     // feature-plan-control-plane-disaster.md §6.7: a window signup's leftover project still holds this address (covers
     // the verify link and the waitlist path). A resumed `provisioning` row above is never blocked.
-    throw new ProvisionConflictError(`Workspace "${slug}" already exists.`);
+    throw new ProvisionConflictError(`Workspace "${slug}" is taken.`, 'window');
   }
 
   // 1. Create the database (only if we don't already have a record from a prior attempt).

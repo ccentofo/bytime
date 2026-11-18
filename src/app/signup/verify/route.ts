@@ -178,6 +178,9 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     if (err instanceof ProvisionConflictError) {
+      // feature-plan-control-plane-disaster.md §6.7 (fix round 1, FR5): an open window address keeps the signup
+      // unconsumed (the founder may be about to free the address for this very signer, runbook B.9).
+      if (err.reason === 'window') return failRedirect('That workspace name is taken. Try another.');
       await controlDb.update(signups).set({ consumedAt: new Date() }).where(eq(signups.id, row.id));
       return failRedirect('That workspace name was just taken. Please sign up again with a different name.');
     }

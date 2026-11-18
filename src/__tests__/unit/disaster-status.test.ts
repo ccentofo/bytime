@@ -82,6 +82,15 @@ describe('D6: runs and rehearsals', () => {
     expect(disasterFindings(facts({ runs: [reh('pass', 41)], firstCpOkAt: ago(100 * D) }), view(), NOW).raise.map((x) => x.dedupKey)).toEqual(['', 'control-plane']);
   });
 
+  it('M51 (3c-2): a control-plane watch that turns recoverable gets the control-plane wording ("don\'t recover it")', () => {
+    // A watch for the old control plane: kind control-plane, no tenant.
+    const w = { oldProjectId: 'prj-oldcp', tenantId: null, slug: null, watchStartedAt: ago(2 * D), everReturned: false, detail: { kind: 'control-plane', oldProjectId: 'prj-oldcp' } };
+    const r = disasterFindings(facts({ watches: [w] }), view({ exists: new Map([['prj-oldcp', false]]), recoverable: new Map([['prj-oldcp', '2026-11-25T00:00:00Z']]) }), NOW);
+    const rec = r.raise.find((x) => x.kind === 'rebuild-original-recoverable')!;
+    expect((rec.detail as { todo: string }).todo).toContain("the old control plane can still be recovered in Neon until about 2026-11-25T00:00:00Z: don't recover it");
+    expect((rec.detail as { todo: string }).todo).not.toContain('settle with the customer');
+  });
+
   it('T22 (3c-2): disaster-rehearse-failed per target; a run without a target counts as workspace', () => {
     const reh = (status: string, days: number, target?: string) => run({ id: `r${days}${target ?? ''}`, runId: `task-${days}-${target ?? 'none'}`, mode: 'rehearse', status, startedAt: ago(days * D), target });
     const keys = (runs: ReturnType<typeof reh>[], firstCpOkAt: Date | null = null) => disasterFindings(facts({ runs, firstCpOkAt }), view(), NOW).raise.map((x) => `${x.dedupKey}:${(x.detail as { target: string }).target}`);

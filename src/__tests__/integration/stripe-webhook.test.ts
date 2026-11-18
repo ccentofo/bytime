@@ -319,6 +319,17 @@ describe.skipIf(!cpReady)('Stripe webhook (§4.3)', () => {
     expect((await openAlertsOf(tenant.id)).map((a) => a.kind)).toContain('checkout-customer-conflict');
   });
 
+  it('M56 (3c-2 fix round 1): a conflicting checkout never mirrors the OTHER customer\'s subscription (the conflict returns before the reconcile)', async () => {
+    const before = await getTenantRow(tenant.id);
+    const other = stripeState.addCustomer();
+    const otherSub = stripeState.addSub(other, 'active');
+    await post(event('checkout.session.completed', { id: 'cs_m56', object: 'checkout.session', customer: other, metadata: { slug: tenant.slug }, subscription: otherSub }));
+    const row = await getTenantRow(tenant.id);
+    expect(row.stripeCustomerId).toBe(customer);
+    expect(row.stripeSubscriptionId).not.toBe(otherSub);
+    expect(row.lifecycleVersion).toBe(before.lifecycleVersion);
+  });
+
   it('checkout replaces a DELETED customer (audited) and re-subscribing ends full', async () => {
     await setTenant(tenant.id, { stripeCustomerDeletedAt: daysFrom(NOW, -5), firstGoodAt: daysFrom(NOW, -90), subscriptionEndedAt: daysFrom(NOW, -5), deletionScheduledFor: daysFrom(NOW, 85) });
     const fresh = stripeState.addCustomer();

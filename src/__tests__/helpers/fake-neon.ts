@@ -18,6 +18,7 @@ import http from 'node:http';
 import postgres from 'postgres';
 import { randomToken } from '../../../scripts/backup/lib/keys';
 import type { HostMap } from '../../../scripts/backup/lib/host-map';
+import { dropDatabaseForce } from './drop-db';
 
 export interface FakeProject {
   id: string;
@@ -119,8 +120,13 @@ export async function startFakeNeon(o: {
       server.closeAllConnections?.();
       if (o.serverUrl) {
         const admin = postgres(withDb(o.serverUrl, 'postgres'), { max: 1, onnotice: () => {} });
+        const errors: unknown[] = [];
         try {
-          for (const p of projects.values()) if (p.localDb && /^bkt_dr_[a-z0-9]{8}$/.test(p.localDb)) await admin.unsafe(`DROP DATABASE IF EXISTS "${p.localDb}" WITH (FORCE)`);
+          // Every database is attempted even if one fails; autovacuum on a restored one is waited out (drop-db.ts).
+          for (const p of projects.values()) {
+            if (p.localDb && /^bkt_dr_[a-z0-9]{8}$/.test(p.localDb)) await dropDatabaseForce(admin, p.localDb).catch((e) => errors.push(e));
+          }
+          if (errors.length) throw errors[0];
         } finally {
           await admin.end({ timeout: 5 });
         }
