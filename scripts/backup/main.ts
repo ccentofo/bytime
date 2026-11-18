@@ -21,7 +21,7 @@ import { runAudit } from './audit';
 import { runRestoreTest } from './restore-test';
 import { parseDisasterArgs, runDisaster, DISASTER_DEFAULTS } from './disaster';
 import { neonApi } from './lib/neon-api';
-import { realLogReader } from './lib/log-reader';
+import { realDisasterLogReader, realLogReader } from './lib/log-reader';
 import { kmsKeyringFactory } from './lib/crypto';
 import { s3Reader, s3Store } from './lib/store';
 import { realAuditClients, realKeyProbeClient, realDisasterEcs, realPublisher } from './lib/aws-clients';
@@ -205,7 +205,7 @@ export async function main(argv: string[], env: Env, seams: MainSeams = {}): Pro
         const s3 = new S3Client({ region });
         return (await runDisaster(parsed.args, {
           controlPlaneUrl, cpId, restoreTestUrl, neon: neonApi({ apiKey, orgId }), ecs: realDisasterEcs({ region, metadataUri, family: 'cadenzpoint-backup-disaster' }),
-          logReader: realLogReader({ region, logGroup }), disasterLogReader: disasterLogGroup ? realLogReader({ region, logGroup: disasterLogGroup }) : undefined, reader: s3Reader(s3, bucket), keyring, publish: realPublisher({ region, topicArn }),
+          logReader: realLogReader({ region, logGroup }), disasterLogReader: disasterLogGroup ? realDisasterLogReader({ region, logGroup: disasterLogGroup }) : undefined, reader: s3Reader(s3, bucket), keyring, publish: realPublisher({ region, topicArn }),
           pgRestoreBin, regionId, restoreTestProjectId, controlPlaneProjectId, log, deadlineMs, stopSignal: stop.signal,
         })).exitCode;
       }

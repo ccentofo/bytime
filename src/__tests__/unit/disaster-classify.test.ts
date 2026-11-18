@@ -95,6 +95,9 @@ function memNeon(o: { projects?: Array<{ id: string; name: string; hosts: string
     deleteProject: async () => {},
     verifyGone: async () => true,
     findByName: async () => ({ projects: [], unavailable: [] }),
+    listBranches: async () => { throw new Error('unused'); },
+    listDatabases: async () => { throw new Error('unused'); },
+    getConnectionUri: async () => { throw new Error('unused'); },
   };
 }
 

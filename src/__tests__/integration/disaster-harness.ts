@@ -134,7 +134,10 @@ export function fakeEcs(o: { startedBy?: string; others?: EcsTaskInfo[] } = {}):
 }
 
 export function fakeLogReader(lines: BackupLine[], fail = false): LogReader {
-  return { async backupLines(cp, id) { if (fail) throw new Error('logs down'); return lines.filter((l) => l.cp === cp && l.id === id); } };
+  return {
+    async backupLines(cp, id) { if (fail) throw new Error('logs down'); return lines.filter((l) => l.cp === cp && l.target === 'tenant' && l.id === id); },
+    async controlPlaneLines(cp) { if (fail) throw new Error('logs down'); return lines.filter((l) => l.cp === cp && l.target === 'control-plane'); },
+  };
 }
 
 export interface RunCapture {

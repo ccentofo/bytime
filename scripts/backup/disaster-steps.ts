@@ -324,16 +324,35 @@ export type BuildResult =
   | { ok: true; built: Built }
   | { ok: false; failure: Failure; project: { id: string | null; name: string } | null };
 
-/** One try: intent row → create → restore → sidecar → counts. A failure returns the project (if any) for cleanup. */
-export async function buildOnce(env: StepEnv, t: TenantFacts, cand: Candidate, tryNo: number, signal: AbortSignal): Promise<BuildResult> {
-  const name = rebuildName(t.id, env.now(), tryNo);
-  const settings = rebuildSettings(t.slug);
-  const kind = env.projectKind;
-  await record(env, t.id, kind, 'intended', { projectName: name, oldProjectId: t.neonProjectId, backupKey: cand.key, backupStartedAt: cand.startedAt });
+/**
+ * What one build restores and how it records itself (approved detail D4, feature-plan-control-plane-disaster.md §6.3
+ * step 6): 3c's workspace rebuild and rehearsal (a tenant dump, `rebuild`/`rehearse` action rows), the control-plane
+ * rebuild (the control-plane dump; no control plane to record into, so it logs `DISASTER-PROJECT` instead) and the
+ * control-plane rehearsal (the control-plane dump; `rehearse` rows with no tenant in the real control plane).
+ */
+export interface BuildTarget {
+  target: 'tenant' | 'control-plane';
+  /** The tenant id, or `control-plane`: the S3 prefix's and the encryption context's `id`. */
+  id: string;
+  /** The project name for this try (computed once per try, before the intent row). */
+  name: string;
+  databaseName: string;
+  historyRetentionSeconds: number;
+  /** The intent/created/failed record (action rows, or a log line). Never throws past a failure it can't record. */
+  record: (status: 'intended' | 'created' | 'failed', fields: { projectName: string; newProjectId?: string; backupKey?: string; backupStartedAt?: Date | null; detail?: string }) => Promise<void>;
+}
+
+/** The parts of a StepEnv a build uses (mode `control-plane` has no control-plane client yet). */
+export type BuildEnv = Pick<StepEnv, 'deps' | 'neon' | 'cpId' | 'cpDirectHost' | 'now'>;
+
+/** One try: intent → create → restore → sidecar → counts. A failure returns the project (if any) for cleanup. */
+export async function buildCore(env: BuildEnv, bt: BuildTarget, cand: Candidate, signal: AbortSignal): Promise<BuildResult> {
+  const name = bt.name;
+  await bt.record('intended', { projectName: name, backupKey: cand.key, backupStartedAt: cand.startedAt });
   let created;
   try {
     throwIfAborted(signal);
-    created = await env.neon.createProject({ name, databaseName: settings.databaseName, historyRetentionSeconds: settings.historyRetentionSeconds, regionId: env.deps.regionId }, signal);
+    created = await env.neon.createProject({ name, databaseName: bt.databaseName, historyRetentionSeconds: bt.historyRetentionSeconds, regionId: env.deps.regionId }, signal);
   } catch (e) {
     let id = createdIdOf(e);
     if (!id && !(e instanceof Aborted)) {
@@ -343,13 +362,13 @@ export async function buildOnce(env: StepEnv, t: TenantFacts, cand: Candidate, t
       } catch { /* not found: no project */ }
     }
     if (id) {
-      await record(env, t.id, kind, 'created', { projectName: name, newProjectId: id, oldProjectId: t.neonProjectId, detail: 'adopted after a failed create' });
+      await bt.record('created', { projectName: name, newProjectId: id, detail: 'adopted after a failed create' });
       return { ok: false, failure: classifyRestoreFailure(e instanceof NeonApiError || e instanceof Aborted ? e : new NeonApiError('create-project', 0, 'network')), project: { id, name } };
     }
-    await record(env, t.id, kind, 'failed', { projectName: name, oldProjectId: t.neonProjectId, detail: `create: ${summaryOf('neon', e)}` });
+    await bt.record('failed', { projectName: name, detail: `create: ${summaryOf('neon', e)}` });
     return { ok: false, failure: classifyRestoreFailure(e), project: null };
   }
-  await record(env, t.id, kind, 'created', { projectName: name, newProjectId: created.projectId, oldProjectId: t.neonProjectId, backupKey: cand.key });
+  await bt.record('created', { projectName: name, newProjectId: created.projectId, backupKey: cand.key });
   const project = { id: created.projectId, name };
   try {
     // The region and control-plane guards on the real host (the host map only redirects the connection).
@@ -359,7 +378,7 @@ export async function buildOnce(env: StepEnv, t: TenantFacts, cand: Candidate, t
     if (directHost(host) === env.cpDirectHost) throw new StageError('guard', new Error('the new host is the control plane\'s'));
     const target = connectUrl(created.connectionUri, env.deps.hostMap);
     const child = childConnection(target);
-    const expectedContext = encryptionContext({ cp: env.cpId, kind: 'dump', target: 'tenant', id: t.id, key: baseKey(cand.key) });
+    const expectedContext = encryptionContext({ cp: env.cpId, kind: 'dump', target: bt.target, id: bt.id, key: baseKey(cand.key) });
     await restoreObject({
       reader: env.deps.reader, key: cand.key, factory: env.deps.keyring, spawn: env.deps.spawn ?? realSpawn, bin: env.deps.pgRestoreBin,
       args: ['--no-owner', '--no-acl', '--exit-on-error', '--single-transaction', `--dbname=${child.url}`],
@@ -369,7 +388,7 @@ export async function buildOnce(env: StepEnv, t: TenantFacts, cand: Candidate, t
     let manifest: { sha256?: string; rowCounts?: Record<string, unknown>; startedAt?: string };
     try {
       const buf = await streamToBuffer(await env.deps.reader.get(sidecarKeyFor(cand.key)));
-      manifest = JSON.parse((await decryptBuffer(env.deps.keyring, buf, encryptionContext({ cp: env.cpId, kind: 'manifest', target: 'tenant', id: t.id, key: baseKey(cand.key) }))).toString('utf8'));
+      manifest = JSON.parse((await decryptBuffer(env.deps.keyring, buf, encryptionContext({ cp: env.cpId, kind: 'manifest', target: bt.target, id: bt.id, key: baseKey(cand.key) }))).toString('utf8'));
     } catch (e) {
       throw new StageError('sidecar', e);
     }
@@ -391,6 +410,16 @@ export async function buildOnce(env: StepEnv, t: TenantFacts, cand: Candidate, t
   } catch (e) {
     return { ok: false, failure: classifyRestoreFailure(e), project };
   }
+}
+
+/** 3c's workspace build (rebuild or rehearsal): a tenant dump, recorded as `rebuild`/`rehearse` action rows. Unchanged behaviour. */
+export async function buildOnce(env: StepEnv, t: TenantFacts, cand: Candidate, tryNo: number, signal: AbortSignal): Promise<BuildResult> {
+  const settings = rebuildSettings(t.slug);
+  const kind = env.projectKind;
+  return buildCore(env, {
+    target: 'tenant', id: t.id, name: rebuildName(t.id, env.now(), tryNo), databaseName: settings.databaseName, historyRetentionSeconds: settings.historyRetentionSeconds,
+    record: (status, f) => record(env, t.id, kind, status, { ...f, oldProjectId: t.neonProjectId }),
+  }, cand, signal);
 }
 
 async function streamToBuffer(s: NodeJS.ReadableStream): Promise<Buffer> {

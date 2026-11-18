@@ -10,6 +10,9 @@
  *    (28P01), as a deleted endpoint answers;
  *  - scripted statuses per route (404, 403, 5xx, 423, 429), a dropped socket, a lost create response (created, then 500),
  *    and operation status sequences. Error bodies deliberately name the project, so tests prove they never leak.
+ *  - feature-plan-control-plane-disaster.md §5: `created_at` on every project (settable), one default branch per project,
+ *    its databases with `owner_name`, and GET connection_uri (which, like Neon's documented example, appends
+ *    `sslmode=require&channel_binding=require`, so a caller that stores it unchanged is caught).
  */
 import http from 'node:http';
 import postgres from 'postgres';
@@ -26,6 +29,11 @@ export interface FakeProject {
   localDb: string | null;
   connectionUri: string | null;
   pooledUri: string | null;
+  createdAt: string;
+  /** The default branch's one database and its owner (GET …/databases, connection_uri). */
+  databaseName: string;
+  owner: string;
+  password: string;
 }
 
 export type Scripted = number | 'drop' | 'lost';
@@ -45,7 +53,7 @@ export interface FakeNeon {
   /** Ids listed as unavailable on the next `calls` list calls, after skipping the next `skip` list calls (default none). */
   unavailable: { ids: string[]; calls: number; skip?: number };
   pageSize: number;
-  addProject(o: { id?: string; name: string; host?: string; deleted?: boolean; mapTo?: { host: string; port: number } }): FakeProject;
+  addProject(o: { id?: string; name: string; host?: string; deleted?: boolean; mapTo?: { host: string; port: number }; createdAt?: Date; databaseName?: string; owner?: string }): FakeProject;
   /** Mark a project deleted (recoverable) without an API call; its hosts map to the proxy. */
   markDeleted(id: string): void;
   /** Remove a project entirely (past the recovery window). */
@@ -84,7 +92,10 @@ export async function startFakeNeon(o: {
     addProject(p) {
       const id = p.id ?? `prj-${randomToken(10)}`;
       const host = p.host ?? fakeHost();
-      const proj: FakeProject = { id, name: p.name, endpoints: [{ id: host.split('.')[0], host }], deleted: Boolean(p.deleted), deletedAt: p.deleted ? new Date().toISOString() : null, localDb: null, connectionUri: null, pooledUri: null };
+      const proj: FakeProject = {
+        id, name: p.name, endpoints: [{ id: host.split('.')[0], host }], deleted: Boolean(p.deleted), deletedAt: p.deleted ? new Date().toISOString() : null, localDb: null, connectionUri: null, pooledUri: null,
+        createdAt: (p.createdAt ?? new Date()).toISOString(), databaseName: p.databaseName ?? 'neondb', owner: p.owner ?? 'neondb_owner', password: 'pw',
+      };
       projects.set(id, proj);
       const target = p.deleted ? o.proxy : p.mapTo ?? local ?? undefined;
       if (target) { hostMap[host] = target; hostMap[poolerOf(host)] = target; }
@@ -140,10 +151,11 @@ export async function startFakeNeon(o: {
     const path = u.pathname.replace(/^\/api\/v2/, '');
     requests.push({ method: req.method ?? '', path: path + u.search, body });
     if (req.headers.authorization !== `Bearer ${apiKey}`) return err(res, 401);
-    const m = /^\/projects(?:\/([^/]+))?(?:\/(endpoints|operations)(?:\/([^/]+))?)?$/.exec(path);
-    if (!m) return err(res, 404);
-    const [, id, sub, opId] = m;
-    const route = `${req.method} /projects${id ? '/:id' : ''}${sub ? `/${sub}` : ''}${opId ? '/:op' : ''}`;
+    const dbm = /^\/projects\/([^/]+)\/branches\/([^/]+)\/databases$/.exec(path);
+    const m = dbm ? null : /^\/projects(?:\/([^/]+))?(?:\/(endpoints|operations|branches|connection_uri)(?:\/([^/]+))?)?$/.exec(path);
+    if (!m && !dbm) return err(res, 404);
+    const [, id, sub, opId] = dbm ? [null, dbm[1], 'databases', dbm[2]] : m!;
+    const route = dbm ? `${req.method} /projects/:id/branches/:branch/databases` : `${req.method} /projects${id ? '/:id' : ''}${sub ? `/${sub}` : ''}${opId ? '/:op' : ''}`;
     const scripted = take(route, id);
     if (scripted === 'drop') { req.socket.destroy(); return; }
     if (typeof scripted === 'number' && scripted >= 300) return err(res, scripted, id ? projects.get(id)?.name : undefined);
@@ -162,7 +174,7 @@ export async function startFakeNeon(o: {
       if (fake.unavailable.skip && fake.unavailable.skip > 0) fake.unavailable.skip--;
       else if (fake.unavailable.calls > 0) { fake.unavailable.calls--; unavailable = fake.unavailable.ids; }
       return send(res, 200, {
-        projects: page.map((p) => ({ id: p.id, name: p.name, ...(p.deleted ? { deleted_at: p.deletedAt, recoverable_until: new Date(Date.parse(p.deletedAt!) + 7 * 86400_000).toISOString() } : {}) })),
+        projects: page.map((p) => ({ id: p.id, name: p.name, created_at: p.createdAt, ...(p.deleted ? { deleted_at: p.deletedAt, recoverable_until: new Date(Date.parse(p.deletedAt!) + 7 * 86400_000).toISOString() } : {}) })),
         pagination: page.length ? { cursor: page[page.length - 1].id } : {},
         ...(unavailable.length ? { unavailable_project_ids: unavailable } : {}),
       });
@@ -172,7 +184,10 @@ export async function startFakeNeon(o: {
       if (p.org_id !== orgId) return err(res, 400);
       const token = randomToken(8);
       const host = fakeHost();
-      const proj: FakeProject = { id: `prj-${randomToken(10)}`, name: String(p.name ?? ''), endpoints: [{ id: host.split('.')[0], host }], deleted: false, deletedAt: null, localDb: null, connectionUri: null, pooledUri: null };
+      const proj: FakeProject = {
+        id: `prj-${randomToken(10)}`, name: String(p.name ?? ''), endpoints: [{ id: host.split('.')[0], host }], deleted: false, deletedAt: null, localDb: null, connectionUri: null, pooledUri: null,
+        createdAt: new Date().toISOString(), databaseName: String(p.branch?.database_name ?? 'neondb'), owner: 'neondb_owner', password: 'pw',
+      };
       if (o.createDatabases && o.serverUrl) {
         proj.localDb = `bkt_dr_${token}`;
         const admin = postgres(withDb(o.serverUrl, 'postgres'), { max: 1, onnotice: () => {} });
@@ -180,6 +195,9 @@ export async function startFakeNeon(o: {
         const s = new URL(o.serverUrl);
         proj.connectionUri = `postgres://${s.username}:${s.password}@${host}/${proj.localDb}`;
         proj.pooledUri = `postgres://${s.username}:${s.password}@${poolerOf(host)}/${proj.localDb}`;
+        proj.databaseName = proj.localDb;
+        proj.owner = decodeURIComponent(s.username);
+        proj.password = decodeURIComponent(s.password);
       } else {
         proj.connectionUri = `postgres://neondb_owner:pw@${host}/${p.branch?.database_name ?? 'neondb'}`;
         proj.pooledUri = `postgres://neondb_owner:pw@${poolerOf(host)}/${p.branch?.database_name ?? 'neondb'}`;
@@ -201,6 +219,23 @@ export async function startFakeNeon(o: {
     if (!proj || proj.deleted) return err(res, 404, proj?.name);
     if (req.method === 'GET' && !sub) return send(res, 200, { project: { id: proj.id, name: proj.name } });
     if (req.method === 'GET' && sub === 'endpoints') return send(res, 200, { endpoints: proj.endpoints.map((e) => ({ id: e.id, host: e.host, type: 'read_write' })) });
+    if (req.method === 'GET' && sub === 'branches' && !opId) {
+      return send(res, 200, { branches: [{ id: `br-${proj.id}`, name: 'main', default: true, primary: true }], pagination: {} });
+    }
+    if (req.method === 'GET' && sub === 'databases') {
+      if (opId !== `br-${proj.id}`) return err(res, 404, proj.name);
+      return send(res, 200, { databases: [{ id: 1, branch_id: opId, name: proj.databaseName, owner_name: proj.owner, created_at: proj.createdAt, updated_at: proj.createdAt }] });
+    }
+    if (req.method === 'GET' && sub === 'connection_uri') {
+      const db = u.searchParams.get('database_name');
+      const role = u.searchParams.get('role_name');
+      if (!db || !role) return err(res, 400, proj.name);
+      if (db !== proj.databaseName || role !== proj.owner) return err(res, 404, proj.name);
+      const branch = u.searchParams.get('branch_id');
+      if (branch && branch !== `br-${proj.id}`) return err(res, 404, proj.name);
+      const host = u.searchParams.get('pooled') === 'true' ? poolerOf(proj.endpoints[0].host) : proj.endpoints[0].host;
+      return send(res, 200, { uri: `postgresql://${encodeURIComponent(role)}:${encodeURIComponent(proj.password)}@${host}/${encodeURIComponent(db)}?sslmode=require&channel_binding=require` });
+    }
     if (req.method === 'DELETE' && !sub) {
       fake.markDeleted(proj.id);
       return send(res, 200, { project: { id: proj.id, name: proj.name } });

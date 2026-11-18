@@ -33,6 +33,8 @@ export function parseBackupLine(message: string): BackupLine | null {
 export interface LogReader {
   /** Every exact `BACKUP <cp> tenant <id>` line in the backup log group (newest retention: 30 days). */
   backupLines(cp: string, tenantId: string): Promise<BackupLine[]>;
+  /** Every exact `BACKUP <cp> control-plane control-plane` line (feature-plan-control-plane-disaster.md §6.3 step 5). */
+  controlPlaneLines(cp: string): Promise<BackupLine[]>;
 }
 
 export function realLogReader(o: { region: string; logGroup: string; client?: Pick<CloudWatchLogsClient, 'send'> }): LogReader {
@@ -46,6 +48,77 @@ export function realLogReader(o: { region: string; logGroup: string; client?: Pi
         for (const e of r.events ?? []) {
           const l = parseBackupLine(e.message ?? '');
           if (l && l.cp === cp && l.target === 'tenant' && l.id === tenantId) out.push(l);
+        }
+        nextToken = r.nextToken;
+        if (!nextToken) break;
+      }
+      return out;
+    },
+    async controlPlaneLines(cp) {
+      const out: BackupLine[] = [];
+      let nextToken: string | undefined;
+      for (let page = 0; page < 10_000; page++) {
+        const r = await logs.send(new FilterLogEventsCommand({ logGroupName: o.logGroup, filterPattern: `"BACKUP ${cp} control-plane control-plane"`, nextToken }));
+        for (const e of r.events ?? []) {
+          const l = parseBackupLine(e.message ?? '');
+          if (l && l.cp === cp && l.target === 'control-plane' && l.id === 'control-plane') out.push(l);
+        }
+        nextToken = r.nextToken;
+        if (!nextToken) break;
+      }
+      return out;
+    },
+  };
+}
+
+// ---- the disaster log's rebuild lines (feature-plan-control-plane-disaster.md §6.4 R2) ------------------------------
+
+/**
+ * 3c's switch logs (disaster-steps.ts switchWorkspace, cleanupProject) and 3c-2's reconcile:
+ *   SWITCHING <tenant> <old> <new> <key> <sha256>              just before COMMIT (may or may not have committed)
+ *   LINKED <tenant> <old> <new> <key> <sha256>                 after COMMIT
+ *   LINKED <tenant> <old|-> <new> <key|-> <sha|-> (healed by the re-read)   a commit whose acknowledgement was lost
+ *   RELINKED <tenant> <start> <end>                            the reconcile re-applied a chain (§6.4 R2 step 10)
+ * Project ids follow Neon's pattern `^[a-z0-9-]{1,60}$`; anything else is not one of these lines.
+ */
+export type RebuildLine =
+  | { kind: 'SWITCHING' | 'LINKED'; tenantId: string; oldProjectId: string | null; newProjectId: string; healed: boolean; at: number }
+  | { kind: 'RELINKED'; tenantId: string; oldProjectId: string; newProjectId: string; healed: false; at: number };
+
+const SWITCH_RE = /^(SWITCHING|LINKED) ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) ([a-z0-9-]{1,60}) ([a-z0-9-]{1,60}) (\S+) (\S+)( \(healed by the re-read\))?$/;
+const RELINKED_RE = /^RELINKED ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) ([a-z0-9-]{1,60}) ([a-z0-9-]{1,60})$/;
+
+/** One exact rebuild line, or null. `at` is the log event's time (ms), which orders the lines. A `-` old id → null. */
+export function parseRebuildLine(message: string, at: number): RebuildLine | null {
+  const text = message.trim();
+  const r = RELINKED_RE.exec(text);
+  if (r) return { kind: 'RELINKED', tenantId: r[1], oldProjectId: r[2], newProjectId: r[3], healed: false, at };
+  const m = SWITCH_RE.exec(text);
+  if (!m) return null;
+  const healed = m[7] !== undefined;
+  if (healed && m[1] !== 'LINKED') return null; // only LINKED has a healed form
+  if (m[4] === '-') return null;
+  if (m[3] === '-' && !healed) return null; // only the healed form may lack the old id
+  return { kind: m[1] as 'SWITCHING' | 'LINKED', tenantId: m[2], oldProjectId: m[3] === '-' ? null : m[3], newProjectId: m[4], healed, at };
+}
+
+export interface DisasterLogReader {
+  /** Every exact rebuild line in the disaster log group at or after `since` (FilterLogEvents startTime). */
+  rebuildLines(since: Date): Promise<RebuildLine[]>;
+}
+
+export function realDisasterLogReader(o: { region: string; logGroup: string; client?: Pick<CloudWatchLogsClient, 'send'> }): DisasterLogReader {
+  const logs = o.client ?? new CloudWatchLogsClient({ region: o.region, requestHandler: { requestTimeout: 30_000, connectionTimeout: 10_000 } });
+  return {
+    async rebuildLines(since) {
+      const out: RebuildLine[] = [];
+      let nextToken: string | undefined;
+      for (let page = 0; page < 10_000; page++) {
+        // `?"LINKED" ?"SWITCHING"` matches either term anywhere (RELINKED contains LINKED); every line is re-parsed exactly.
+        const r = await logs.send(new FilterLogEventsCommand({ logGroupName: o.logGroup, filterPattern: '?"LINKED" ?"SWITCHING"', startTime: since.getTime(), nextToken }));
+        for (const e of r.events ?? []) {
+          const l = parseRebuildLine(e.message ?? '', e.timestamp ?? 0);
+          if (l) out.push(l);
         }
         nextToken = r.nextToken;
         if (!nextToken) break;

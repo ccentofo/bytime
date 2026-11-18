@@ -22,7 +22,7 @@ import { controlPlaneClient } from './lib/sql';
 import { summaryOf } from './lib/summarize-error';
 import type { DisasterEcs, Publisher } from './lib/aws-clients';
 import type { NeonApi } from './lib/neon-api';
-import type { LogReader } from './lib/log-reader';
+import type { DisasterLogReader, LogReader } from './lib/log-reader';
 import type { BackupReader } from './lib/store';
 import type { KeyringFactory } from './lib/crypto';
 import type { SpawnFn } from './lib/child';
@@ -142,7 +142,7 @@ export interface DisasterDeps {
   /** RESTORE_TEST_DATABASE_URL: the control-plane modes' network-first check (feature-plan-control-plane-disaster.md §6.2). */
   restoreTestUrl?: string;
   /** DISASTER_LOG_GROUP's reader: the window's rebuild lines (§6.4 R2). Set for the control-plane modes. */
-  disasterLogReader?: LogReader;
+  disasterLogReader?: DisasterLogReader;
   log: (line: string) => void;
   now?: () => Date;
   sleep?: (ms: number) => Promise<void>;
