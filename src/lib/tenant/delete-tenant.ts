@@ -1,5 +1,5 @@
 import 'server-only';
-import { and, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import {
   opsAlerts, paymentPendingObservations, tenantAuditEvents, tenantNotices, tenants,
 } from '@/db/control-plane/schema';
@@ -163,6 +163,24 @@ async function paymentActivity(
 }
 
 /**
+ * feature-plan-disaster-restore.md §6.8 and §10, checked inside step 3's tenant lock (the disaster switch takes the same
+ * lock): refuse while a copy of this workspace's data may still exist in Neon (an open `rebuild-original-returned` or
+ * `rebuild-orphan-project` naming it), and refuse if the database changed since step 1 (a switch between
+ * classification and deletion would otherwise delete the old original and orphan the rebuilt project).
+ */
+async function disasterGuard(tx: Parameters<Parameters<typeof withTenantLock>[1]>[0], first: TenantRow, row: TenantRow): Promise<void> {
+  const open = await tx.select({ kind: opsAlerts.kind, dedupKey: opsAlerts.dedupKey }).from(opsAlerts)
+    .where(and(inArray(opsAlerts.kind, ['rebuild-original-returned', 'rebuild-orphan-project']), isNull(opsAlerts.resolvedAt),
+      sql`${opsAlerts.detail}->>'tenantId' = ${first.id}`));
+  if (open.length > 0) {
+    throw new Refusal(`A copy of this workspace's data may still exist in Neon (${open.map((a) => `${a.kind} ${a.dedupKey}`).join(', ')}): delete it in the Neon console first; the alert resolves on the next daily check.`);
+  }
+  if (row.dbUrlEncrypted !== first.dbUrlEncrypted || row.neonProjectId !== first.neonProjectId) {
+    throw new Refusal("The workspace's database changed since this run started (a disaster rebuild?); nothing was changed. Re-run.");
+  }
+}
+
+/**
  * Abort of a run that had set `deleting`: reconcile + transition table, put the status back, audit, alert — and
  * COMMIT. The audit and alert are always written: a GOOD transition may already have restored the status itself.
  */
@@ -261,6 +279,7 @@ export async function deleteTenant(opts: DeleteTenantOptions): Promise<DeleteTen
       let row = await readTenant(tx, first.id);
       if (!row) throw new Refusal('Tenant disappeared.');
       if (!['active', 'suspended', 'deleting'].includes(row.status)) throw new Refusal(`Tenant is ${row.status}.`);
+      await disasterGuard(tx, first, row);
       const wasDeleting = row.status === 'deleting';
       const r = await reconcileInLock(tx, row, now3, { allowDeleting: true });
       row = r.row;
@@ -278,6 +297,7 @@ export async function deleteTenant(opts: DeleteTenantOptions): Promise<DeleteTen
     await withTenantLock(first.id, async (tx) => {
       const row = await readTenant(tx, first.id);
       if (!row) throw new Refusal('Tenant disappeared.');
+      await disasterGuard(tx, first, row);
       if (row.lifecycleVersion !== step3.row.lifecycleVersion) throw new Refusal('The workspace changed during step 3; re-run.');
       if (row.status !== 'deleting') {
         await updateTenantGuarded(tx, row, { status: 'deleting' }, new Date());

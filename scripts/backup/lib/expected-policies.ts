@@ -15,6 +15,8 @@ export const NAMES = {
   topic: 'cadenzpoint-backup-alerts',
   protectionsRule: 'cadenzpoint-backup-protections',
   rolesRule: 'cadenzpoint-backup-roles',
+  disasterStartedRule: 'cadenzpoint-backup-disaster-started',
+  disasterRunTaskRule: 'cadenzpoint-backup-disaster-runtask',
   trail: 'cadenzpoint-account-trail',
   dlq: 'cadenzpoint-backup-scheduler-dlq',
   dlqAlarm: 'cadenzpoint-backup-dlq',
@@ -28,27 +30,36 @@ export const NAMES = {
   lifecycleRule: 'expire-v1',
 } as const;
 
-export const FAMILIES = ['backup', 'audit', 'restore-test'] as const;
+export const FAMILIES = ['backup', 'audit', 'restore-test', 'disaster'] as const;
 export type Family = (typeof FAMILIES)[number];
 
 export const PARAMETERS = {
   controlPlaneUrl: '/cadenzpoint/backup/control-plane-url',
   encryptionKey: '/cadenzpoint/backup/encryption-key',
   restoreTestUrl: '/cadenzpoint/backup/restore-test-url',
+  // feature-plan-disaster-restore.md §6.2 (the founder creates them, §12 step 3).
+  neonApiKey: '/cadenzpoint/backup/neon-api-key',
+  neonOrgId: '/cadenzpoint/backup/neon-org-id',
+  restoreTestProjectId: '/cadenzpoint/backup/restore-test-project-id',
+  controlPlaneProjectId: '/cadenzpoint/backup/control-plane-project-id',
 } as const;
 
 const FAMILY_PARAMETERS: Record<Family, string[]> = {
   backup: [PARAMETERS.controlPlaneUrl, PARAMETERS.encryptionKey],
   'restore-test': [PARAMETERS.controlPlaneUrl, PARAMETERS.restoreTestUrl],
   audit: [PARAMETERS.controlPlaneUrl, PARAMETERS.restoreTestUrl],
+  disaster: [PARAMETERS.controlPlaneUrl, PARAMETERS.encryptionKey, PARAMETERS.neonApiKey, PARAMETERS.neonOrgId, PARAMETERS.restoreTestProjectId, PARAMETERS.controlPlaneProjectId],
 };
 
 export const taskFamily = (f: Family) => `cadenzpoint-backup-${f}`;
 export const taskRoleName = (f: Family) => `cadenzpoint-backup-${f}-task`;
 export const execRoleName = (f: Family) => `cadenzpoint-backup-${f}-exec`;
 export const SCHEDULER_ROLE = 'cadenzpoint-backup-scheduler';
+/** feature-plan-disaster-restore.md §6.2: the button's role (GitHub OIDC, environment aws-disaster). */
+export const DISASTER_BUTTON_ROLE = 'cadenzpoint-backup-disaster-button';
+export const DISASTER_OIDC_SUBJECT = 'repo:ccentofo/bytime:environment:aws-disaster';
 export const logGroup = (f: Family) => `/cadenzpoint/backup/${f}`;
-export const ALL_ROLES = [...FAMILIES.map(taskRoleName), ...FAMILIES.map(execRoleName), SCHEDULER_ROLE];
+export const ALL_ROLES = [...FAMILIES.map(taskRoleName), ...FAMILIES.map(execRoleName), SCHEDULER_ROLE, DISASTER_BUTTON_ROLE];
 
 /** The §6.1 protections rule: matched by eventName alone (plus the CloudTrail detail type), from any caller. */
 export const PROTECTION_EVENTS = [
@@ -59,6 +70,8 @@ export const PROTECTION_EVENTS = [
   'Unsubscribe', 'Subscribe', 'DeleteTopic', 'SetTopicAttributes', 'SetSubscriptionAttributes',
   'DeleteAlarms', 'DisableAlarmActions', 'PutMetricAlarm',
   'DeleteQueue', 'SetQueueAttributes',
+  // feature-plan-disaster-restore.md §6.2: by event name only (a requestParameters filter would stop the others matching).
+  'PutParameter', 'DeleteParameter', 'DeleteParameters',
 ] as const;
 /** The separate roles rule: IAM role-policy events on roles whose name starts `cadenzpoint-backup-`. */
 export const ROLE_EVENTS = ['UpdateAssumeRolePolicy', 'PutRolePolicy', 'DeleteRolePolicy', 'AttachRolePolicy', 'DetachRolePolicy'] as const;
@@ -101,6 +114,9 @@ export function expectedDocuments(o: { accountId: string; keyArn: string }): Exp
   const roleArn = (name: string) => `arn:aws:iam::${a}:role/cadenzpoint-backup/${name}`;
   const cfnExecRoleArn = `arn:aws:iam::${a}:role/cadenzpoint-bootstrap/${NAMES.cfnExecRole}`;
   const restoreRole = roleArn(taskRoleName('restore-test'));
+  const restoreRoles = [restoreRole, roleArn(taskRoleName('disaster'))];
+  const clusterArn = `arn:aws:ecs:${REGION}:${a}:cluster/${NAMES.cluster}`;
+  const disasterFamilyArn = `arn:aws:ecs:${REGION}:${a}:task-definition/${taskFamily('disaster')}`;
   const topicArn = `arn:aws:sns:${REGION}:${a}:${NAMES.topic}`;
   const trailArn = `arn:aws:cloudtrail:${REGION}:${a}:trail/${NAMES.trail}`;
   const dlqArn = `arn:aws:sqs:${REGION}:${a}:${NAMES.dlq}`;
@@ -115,13 +131,13 @@ export function expectedDocuments(o: { accountId: string; keyArn: string }): Exp
     { Sid: 'DenyPutWithoutIfNoneMatch', Effect: 'Deny', Principal: '*', Action: 's3:PutObject', Resource: objects, Condition: { Null: { 's3:if-none-match': 'true' }, Bool: { 's3:ObjectCreationOperation': 'true' } } },
     { Sid: 'DenyVersioningAndObjectLock', Effect: 'Deny', Principal: '*', Action: ['s3:PutBucketVersioning', 's3:PutBucketObjectLockConfiguration'], Resource: bucketArn },
     { Sid: 'DenyDeletes', Effect: 'Deny', Principal: '*', Action: 's3:DeleteObject*', Resource: objects },
-    { Sid: 'DenyReadsExceptRestoreTest', Effect: 'Deny', Principal: '*', Action: 's3:GetObject*', Resource: objects, Condition: { ArnNotEquals: { 'aws:PrincipalArn': restoreRole } } },
+    { Sid: 'DenyReadsExceptRestoreRoles', Effect: 'Deny', Principal: '*', Action: 's3:GetObject*', Resource: objects, Condition: { ArnNotEquals: { 'aws:PrincipalArn': restoreRoles } } },
     { Sid: 'DenyPolicyAndLifecycleChangesExceptDeploy', Effect: 'Deny', Principal: '*', Action: ['s3:PutBucketPolicy', 's3:DeleteBucketPolicy', 's3:PutLifecycleConfiguration'], Resource: bucketArn, Condition: { ArnNotEquals: { 'aws:PrincipalArn': cfnExecRoleArn } } },
   ];
 
   const keyPolicy: Statement[] = [
     { Sid: 'AccountRootAdministers', Effect: 'Allow', Principal: { AWS: `arn:aws:iam::${a}:root` }, Action: 'kms:*', Resource: '*' },
-    { Sid: 'DenyDecryptExceptRestoreTest', Effect: 'Deny', Principal: { AWS: '*' }, Action: ['kms:Decrypt', 'kms:ReEncrypt*'], Resource: '*', Condition: { ArnNotEquals: { 'aws:PrincipalArn': restoreRole } } },
+    { Sid: 'DenyDecryptExceptRestoreRoles', Effect: 'Deny', Principal: { AWS: '*' }, Action: ['kms:Decrypt', 'kms:ReEncrypt*'], Resource: '*', Condition: { ArnNotEquals: { 'aws:PrincipalArn': restoreRoles } } },
     { Sid: 'DenyShortDeletionWindow', Effect: 'Deny', Principal: { AWS: '*' }, Action: 'kms:ScheduleKeyDeletion', Resource: '*', Condition: { NumericLessThan: { 'kms:ScheduleKeyDeletionPendingWindowInDays': '30' } } },
     { Sid: 'DenyKeyPolicyChangesExceptDeploy', Effect: 'Deny', Principal: { AWS: '*' }, Action: 'kms:PutKeyPolicy', Resource: '*', Condition: { ArnNotEquals: { 'aws:PrincipalArn': cfnExecRoleArn } } },
   ];
@@ -134,6 +150,14 @@ export function expectedDocuments(o: { accountId: string; keyArn: string }): Exp
   const rulePatterns: Record<string, Doc> = {
     [NAMES.protectionsRule]: { 'detail-type': ['AWS API Call via CloudTrail'], detail: { eventName: [...PROTECTION_EVENTS] } },
     [NAMES.rolesRule]: { 'detail-type': ['AWS API Call via CloudTrail'], detail: { eventName: [...ROLE_EVENTS], requestParameters: { roleName: [{ prefix: 'cadenzpoint-backup-' }] } } },
+    [NAMES.disasterStartedRule]: {
+      source: ['aws.ecs'], 'detail-type': ['ECS Task State Change'],
+      detail: { taskDefinitionArn: [{ prefix: `${disasterFamilyArn}:` }], lastStatus: ['PENDING', 'PROVISIONING', 'STOPPED'] },
+    },
+    [NAMES.disasterRunTaskRule]: {
+      'detail-type': ['AWS API Call via CloudTrail'],
+      detail: { eventName: ['RunTask'], requestParameters: { taskDefinition: [{ prefix: taskFamily('disaster') }, { prefix: disasterFamilyArn }] } },
+    },
   };
 
   const ecsTrust: Statement[] = [{
@@ -169,12 +193,39 @@ export function expectedDocuments(o: { accountId: string; keyArn: string }): Exp
         { Sid: 'ListBackups', Effect: 'Allow', Action: 's3:ListBucket', Resource: bucketArn, Condition: { StringLike: { 's3:prefix': 'v1/*' } } },
         { Sid: 'InspectBucket', Effect: 'Allow', Action: ['s3:GetBucketPolicy', 's3:GetBucketVersioning', 's3:GetLifecycleConfiguration', 's3:ListBucketMultipartUploads'], Resource: bucketArn },
         { Sid: 'InspectKey', Effect: 'Allow', Action: ['kms:DescribeKey', 'kms:GetKeyPolicy'], Resource: o.keyArn },
-        { Sid: 'InspectRules', Effect: 'Allow', Action: ['events:DescribeRule', 'events:ListTargetsByRule'], Resource: [ruleArn(NAMES.protectionsRule), ruleArn(NAMES.rolesRule)] },
+        { Sid: 'InspectRules', Effect: 'Allow', Action: ['events:DescribeRule', 'events:ListTargetsByRule'], Resource: [ruleArn(NAMES.protectionsRule), ruleArn(NAMES.rolesRule), ruleArn(NAMES.disasterStartedRule), ruleArn(NAMES.disasterRunTaskRule)] },
         { Sid: 'InspectTopic', Effect: 'Allow', Action: ['sns:GetTopicAttributes', 'sns:ListSubscriptionsByTopic'], Resource: topicArn },
         { Sid: 'InspectSubscriptions', Effect: 'Allow', Action: 'sns:GetSubscriptionAttributes', Resource: `${topicArn}:*` },
         { Sid: 'InspectTrail', Effect: 'Allow', Action: 'cloudtrail:GetTrailStatus', Resource: trailArn },
         { Sid: 'InspectAlarm', Effect: 'Allow', Action: 'cloudwatch:DescribeAlarms', Resource: alarmArn },
         { Sid: 'InspectRoles', Effect: 'Allow', Action: ['iam:GetRole', 'iam:GetRolePolicy', 'iam:ListAttachedRolePolicies', 'iam:ListRolePolicies'], Resource: `arn:aws:iam::${a}:role/cadenzpoint-backup/*` },
+      ],
+    },
+    [taskRoleName('disaster')]: {
+      trust: ecsTrust,
+      policy: [
+        { Sid: 'ReadBackups', Effect: 'Allow', Action: 's3:GetObject', Resource: backups },
+        { Sid: 'ListBackups', Effect: 'Allow', Action: 's3:ListBucket', Resource: bucketArn, Condition: { StringLike: { 's3:prefix': 'v1/*' } } },
+        { Sid: 'DecryptBackups', Effect: 'Allow', Action: 'kms:Decrypt', Resource: o.keyArn, Condition: purpose },
+        { Sid: 'ReadBackupLines', Effect: 'Allow', Action: 'logs:FilterLogEvents', Resource: `arn:aws:logs:${REGION}:${a}:log-group:${logGroup('backup')}:*` },
+        { Sid: 'ListOwnFamily', Effect: 'Allow', Action: 'ecs:ListTasks', Resource: '*', Condition: { ArnEquals: { 'ecs:cluster': clusterArn } } },
+        { Sid: 'DescribeTasks', Effect: 'Allow', Action: 'ecs:DescribeTasks', Resource: `arn:aws:ecs:${REGION}:${a}:task/${NAMES.cluster}/*` },
+        { Sid: 'EmailFounder', Effect: 'Allow', Action: 'sns:Publish', Resource: topicArn },
+      ],
+    },
+    [DISASTER_BUTTON_ROLE]: {
+      trust: [{
+        Sid: 'TrustGitHubDisasterEnvironment', Effect: 'Allow',
+        Principal: { Federated: `arn:aws:iam::${a}:oidc-provider/token.actions.githubusercontent.com` }, Action: 'sts:AssumeRoleWithWebIdentity',
+        Condition: { StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com', 'token.actions.githubusercontent.com:sub': DISASTER_OIDC_SUBJECT } },
+      }],
+      policy: [
+        { Sid: 'RunDisasterTask', Effect: 'Allow', Action: 'ecs:RunTask', Resource: `${disasterFamilyArn}:*`, Condition: { ArnEquals: { 'ecs:cluster': clusterArn } } },
+        { Sid: 'ListTasks', Effect: 'Allow', Action: 'ecs:ListTasks', Resource: '*', Condition: { ArnEquals: { 'ecs:cluster': clusterArn } } },
+        { Sid: 'DescribeAndStopTasks', Effect: 'Allow', Action: ['ecs:DescribeTasks', 'ecs:StopTask'], Resource: `arn:aws:ecs:${REGION}:${a}:task/${NAMES.cluster}/*` },
+        { Sid: 'PassDisasterRoles', Effect: 'Allow', Action: 'iam:PassRole', Resource: [roleArn(taskRoleName('disaster')), roleArn(execRoleName('disaster'))], Condition: { StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } } },
+        { Sid: 'TagTasks', Effect: 'Allow', Action: 'ecs:TagResource', Resource: '*', Condition: { StringEquals: { 'ecs:CreateAction': 'RunTask' } } },
+        { Sid: 'ReadStackOutputs', Effect: 'Allow', Action: 'cloudformation:DescribeStacks', Resource: `arn:aws:cloudformation:${REGION}:${a}:stack/${NAMES.stack}/*` },
       ],
     },
     [SCHEDULER_ROLE]: {

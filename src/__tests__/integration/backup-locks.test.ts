@@ -91,9 +91,9 @@ describe.skipIf(!SERVER_URL)('S21: the ordered locks', () => {
 
   describe('migrate-all', () => {
     const rows = [
-      { slug: 'test-lc-a', status: 'active', dbUrlEncrypted: 'postgres://fake/a', neonProjectId: null },
-      { slug: 'test-lc-b', status: 'active', dbUrlEncrypted: 'postgres://fake/b', neonProjectId: null },
-      { slug: 'test-lc-c', status: 'active', dbUrlEncrypted: 'postgres://fake/c', neonProjectId: null },
+      { id: '00000000-0000-4000-8000-000000000001', slug: 'test-lc-a', status: 'active', dbUrlEncrypted: 'postgres://fake/a', neonProjectId: null },
+      { id: '00000000-0000-4000-8000-000000000002', slug: 'test-lc-b', status: 'active', dbUrlEncrypted: 'postgres://fake/b', neonProjectId: null },
+      { id: '00000000-0000-4000-8000-000000000003', slug: 'test-lc-c', status: 'active', dbUrlEncrypted: 'postgres://fake/c', neonProjectId: null },
     ];
     function deps(o: { pending?: number | 'error'; migrateMs?: number; waitMaxMs?: number } = {}) {
       const logs: string[] = [];
@@ -208,7 +208,7 @@ describe.skipIf(!SERVER_URL)('S21: the ordered locks', () => {
       const backup = (await acquireLock(cp.url, BACKUP_LOCK_KEY))!;
       try {
         const { d, logs } = deps({ pending: 0, waitMaxMs: 60_000 });
-        d.listTenants = async () => [...rows, { slug: 'test-lc-gone', status: 'deleting', dbUrlEncrypted: 'postgres://fake/gone', neonProjectId: 'p' }];
+        d.listTenants = async () => [...rows, { id: '00000000-0000-4000-8000-000000000009', slug: 'test-lc-gone', status: 'deleting', dbUrlEncrypted: 'postgres://fake/gone', neonProjectId: 'p' }];
         const count = vi.fn(async (url: string) => { if (url.endsWith('/gone')) throw Object.assign(new Error('does not exist'), { code: '3D000' }); return 0; });
         d.tenant.pendingCount = count;
         d.tenant.confirmedAbsent = vi.fn(async () => ({ absent: true as const }));
@@ -230,7 +230,7 @@ describe.skipIf(!SERVER_URL)('S21: the ordered locks', () => {
       const backup = (await acquireLock(cp.url, BACKUP_LOCK_KEY))!;
       try {
         const { d, logs } = deps({ pending: 0 });
-        d.listTenants = async () => [...rows, { slug: 'test-lc-gone', status: 'deleting', dbUrlEncrypted: 'postgres://fake/gone', neonProjectId: 'p' }];
+        d.listTenants = async () => [...rows, { id: '00000000-0000-4000-8000-000000000009', slug: 'test-lc-gone', status: 'deleting', dbUrlEncrypted: 'postgres://fake/gone', neonProjectId: 'p' }];
         d.tenant.pendingCount = vi.fn(async (url: string) => { if (url.endsWith('/gone')) throw new Error('ECONNREFUSED'); return 0; });
         d.tenant.confirmedAbsent = vi.fn(async () => ({ absent: false as const }));
         expect(await runMigrateAll({ check: false, concurrency: 2 }, d)).toBe(1);

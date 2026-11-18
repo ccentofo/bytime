@@ -169,18 +169,18 @@ describe('migrate-all', () => {
   });
 
   it('a deleting tenant whose database is confirmed deleted → skipped', async () => {
-    const r = await migrateOneTenant({ slug: 'del', status: 'deleting', neonProjectId: 'p' }, 'postgres://x', false, mdeps());
+    const r = await migrateOneTenant({ id: '00000000-0000-4000-8000-000000000001', slug: 'del', status: 'deleting', neonProjectId: 'p' }, 'postgres://x', false, mdeps());
     expect(r).toEqual({ outcome: 'skipped', detail: 'database deleted' });
   });
 
   it('a deleting tenant with a transient connect error (absence not confirmed) → FAILED', async () => {
-    const r = await migrateOneTenant({ slug: 'del', status: 'deleting', neonProjectId: 'p' }, 'postgres://x', false,
+    const r = await migrateOneTenant({ id: '00000000-0000-4000-8000-000000000001', slug: 'del', status: 'deleting', neonProjectId: 'p' }, 'postgres://x', false,
       mdeps({ confirmedAbsent: vi.fn(async (): Promise<AbsenceCheck> => ({ absent: false })) }));
     expect(r).toEqual({ outcome: 'FAILED', detail: 'getaddrinfo ENOTFOUND ep-x.neon.tech' });
   });
 
   it('audit A11: a deleting Neon tenant with no NEON_API_KEY → FAILED with "NEON_API_KEY missing — cannot confirm deletion"', async () => {
-    const t = { slug: 'del', status: 'deleting', neonProjectId: 'p-1' };
+    const t = { id: '00000000-0000-4000-8000-000000000001', slug: 'del', status: 'deleting', neonProjectId: 'p-1' };
     const neonExists = vi.fn(async () => false);
     const check = await isTenantDatabaseConfirmedAbsent(t, 'u', {
       classify: () => ({ kind: 'neon-project' as const, projectId: 'p-1' }), neonProjectExists: neonExists, databaseExists: async () => true, hasNeonKey: false,
@@ -203,7 +203,7 @@ describe('migrate-all', () => {
 
   it('a non-deleting tenant that fails is FAILED and never probed for absence', async () => {
     const d = mdeps();
-    const r = await migrateOneTenant({ slug: 'acme', status: 'active', neonProjectId: 'p' }, 'postgres://x', false, d);
+    const r = await migrateOneTenant({ id: '00000000-0000-4000-8000-000000000001', slug: 'acme', status: 'active', neonProjectId: 'p' }, 'postgres://x', false, d);
     expect(r.outcome).toBe('FAILED');
     expect(d.confirmedAbsent).not.toHaveBeenCalled();
   });
@@ -211,7 +211,7 @@ describe('migrate-all', () => {
   describe('confirmed absence', () => {
     const neonClass = () => ({ kind: 'neon-project' as const, projectId: 'p-1' });
     const localClass = () => ({ kind: 'local' as const, adminUrl: 'postgres://localhost/bytime', dbName: 'cp_del' });
-    const t = { slug: 'del', status: 'deleting', neonProjectId: 'p-1' };
+    const t = { id: '00000000-0000-4000-8000-000000000001', slug: 'del', status: 'deleting', neonProjectId: 'p-1' };
 
     it('Neon 404 → absent', async () => {
       expect(await isTenantDatabaseConfirmedAbsent(t, 'u', { classify: neonClass, neonProjectExists: async () => false, databaseExists: async () => true, hasNeonKey: true })).toEqual({ absent: true });

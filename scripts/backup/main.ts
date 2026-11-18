@@ -5,6 +5,8 @@
  *   backup [--if-missing-today] [--only control-plane|<slug>] [--dry-run] [--concurrency N]
  *   audit
  *   restore-test [--if-missed]
+ *   disaster workspace|rehearse --targets … [--override …] [--run-id …]   (feature-plan-disaster-restore.md §6.4; an
+ *                       unknown flag exits 2: the button reports "this image is older than the button")
  *   --self-check        loads every module and checks pg_dump / pg_restore are 16.x; needs no environment
  *
  * No dotenv is loaded here (scripts/backup/local.ts loads it for the local dry run). Outside ECS (no
@@ -16,14 +18,18 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { runBackup } from './backup';
 import { runAudit } from './audit';
 import { runRestoreTest } from './restore-test';
+import { parseDisasterArgs, runDisaster, DISASTER_DEFAULTS } from './disaster';
+import { neonApi } from './lib/neon-api';
+import { realLogReader } from './lib/log-reader';
 import { kmsKeyringFactory } from './lib/crypto';
 import { s3Reader, s3Store } from './lib/store';
-import { realAuditClients, realKeyProbeClient } from './lib/aws-clients';
+import { realAuditClients, realKeyProbeClient, realDisasterEcs, realPublisher } from './lib/aws-clients';
 import { checkToolVersion, defaultToolPath, FatalError, intEnv, isInEcs, listEnv, requireEnv, requireHexKey, runVersion, type Env, type VersionRunner } from './lib/env';
 import { isLoopbackUrl } from './lib/loopback';
 import { installCrashHandler, summaryOf } from './lib/summarize-error';
 import { newRunId } from './lib/keys';
 import { MINUTE, HOUR } from './lib/util';
+import { tenantDbHistoryRetentionSeconds } from '../../src/lib/tenant/lifecycle-config';
 
 export interface MainSeams {
   log?: (line: string) => void;
@@ -136,7 +142,46 @@ export async function main(argv: string[], env: Env, seams: MainSeams = {}): Pro
           keyArn, runId: newRunId(now), log,
         })).exitCode;
       }
-      log('usage: backup [--if-missing-today] [--only <slug>|control-plane] [--dry-run] [--concurrency N] | audit | restore-test [--if-missed] | --self-check');
+      if (command === 'disaster') {
+        // Parsed first: an unknown flag (a button newer than this image) exits 2 before any check.
+        const parsed = parseDisasterArgs(argv.slice(1), now);
+        if (!parsed.ok) {
+          log(`refused: ${parsed.message}`);
+          return parsed.exitCode;
+        }
+        const controlPlaneUrl = requireEnv(env, 'CONTROL_PLANE_DATABASE_URL');
+        requireHexKey(env);
+        const apiKey = requireEnv(env, 'NEON_API_KEY');
+        const orgId = requireEnv(env, 'NEON_ORG_ID');
+        const restoreTestProjectId = requireEnv(env, 'RESTORE_TEST_PROJECT_ID');
+        const controlPlaneProjectId = requireEnv(env, 'CONTROL_PLANE_PROJECT_ID');
+        const bucket = requireEnv(env, 'BACKUP_BUCKET');
+        const keyArn = requireEnv(env, 'BACKUP_KMS_KEY_ARN');
+        const topicArn = requireEnv(env, 'ALERT_TOPIC_ARN');
+        const logGroup = requireEnv(env, 'BACKUP_LOG_GROUP');
+        const metadataUri = requireEnv(env, 'ECS_CONTAINER_METADATA_URI_V4');
+        const regionId = requireEnv(env, 'NEON_REGION_ID');
+        if (regionId !== 'aws-us-east-1') throw new FatalError('NEON_REGION_ID must be aws-us-east-1');
+        const region = requireRegion(env);
+        const pgRestoreBin = requireEnv(env, 'BACKUP_PG_RESTORE_BIN');
+        await checkToolVersion(pgRestoreBin, 'pg_restore', seams.runVersion);
+        try {
+          tenantDbHistoryRetentionSeconds(); // a set-but-invalid NEON_HISTORY_RETENTION_SECONDS is fatal here, not mid-rebuild
+        } catch (e) {
+          throw new FatalError((e as Error).message);
+        }
+        const decryptArns = listEnv(env, 'BACKUP_DECRYPT_KEY_ARNS');
+        const keyring = kmsKeyringFactory(keyArn, decryptArns.length ? decryptArns : [keyArn]);
+        const deadlineMs = intEnv(env, 'DISASTER_DEADLINE_MINUTES', DISASTER_DEFAULTS.deadlineMs / MINUTE) * MINUTE;
+        if (seams.checksOnly) return 0;
+        const s3 = new S3Client({ region });
+        return (await runDisaster(parsed.args, {
+          controlPlaneUrl, neon: neonApi({ apiKey, orgId }), ecs: realDisasterEcs({ region, metadataUri, family: 'cadenzpoint-backup-disaster' }),
+          logReader: realLogReader({ region, logGroup }), reader: s3Reader(s3, bucket), keyring, publish: realPublisher({ region, topicArn }),
+          pgRestoreBin, regionId, restoreTestProjectId, controlPlaneProjectId, log, deadlineMs, stopSignal: stop.signal,
+        })).exitCode;
+      }
+      log('usage: backup [--if-missing-today] [--only <slug>|control-plane] [--dry-run] [--concurrency N] | audit | restore-test [--if-missed] | disaster workspace|rehearse --targets … | --self-check');
       return 1;
     } finally {
       process.off('SIGTERM', onTerm);

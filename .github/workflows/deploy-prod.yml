@@ -7,6 +7,11 @@ on:
         description: 'Type "deploy-prod" to confirm'
         required: true
         default: ''
+      # feature-plan-disaster-restore.md §6.0: skip workspaces the disaster button proved lost (RESTORE.md runbook A).
+      skip_lost_workspaces:
+        description: 'Skip workspaces proven lost by the Disaster restore button (only during a disaster)'
+        type: boolean
+        default: false
 
 jobs:
   deploy:
@@ -18,8 +23,9 @@ jobs:
     # reviewer on this Environment to gate production deploys behind a manual approval.
     environment: production
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # Pinned by SHA (BLUEPRINT-STANDARD.md §2; feature-plan-disaster-restore.md §6.0).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -29,21 +35,26 @@ jobs:
         env:
           AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
       - name: Migrate control plane + all tenants
-        run: npm run db:migrate:all
+        run: |
+          if [ "$SKIP_LOST" = true ]; then npm run db:migrate:all -- --skip-lost; else npm run db:migrate:all; fi
         env:
+          SKIP_LOST: ${{ inputs.skip_lost_workspaces == true }}
           CONTROL_PLANE_DATABASE_URL: ${{ secrets.CONTROL_PLANE_DATABASE_URL }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
           # Confirms a `deleting` tenant's Neon project is gone (skip, not FAIL) — launch-blockers audit A11.
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
       - name: Verify every database is current
-        run: npm run db:migrate:check
+        run: |
+          if [ "$SKIP_LOST" = true ]; then npm run db:migrate:check -- --skip-lost; else npm run db:migrate:check; fi
         env:
+          SKIP_LOST: ${{ inputs.skip_lost_workspaces == true }}
           CONTROL_PLANE_DATABASE_URL: ${{ secrets.CONTROL_PLANE_DATABASE_URL }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
           # Confirms a `deleting` tenant's Neon project is gone (skip, not FAIL) — launch-blockers audit A11.
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
       - name: Install Vercel CLI
-        run: npm i -g vercel@latest
+        # Exact version; npm ignores the project .npmrc in global mode, so the retries are explicit.
+        run: npm i -g vercel@65.17.0 --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000
       - name: Deploy to Vercel (production)
         run: |
           vercel pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"

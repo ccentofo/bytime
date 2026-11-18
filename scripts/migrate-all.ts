@@ -12,6 +12,8 @@
  *   npm run db:migrate:check                         # report pending counts only, apply nothing
  *   npm run db:migrate:all -- --concurrency 5        # override the default tenant concurrency (3)
  *   npm run db:migrate:all -- --tenant acme          # limit the tenant loop to one slug
+ *   npm run db:migrate:all -- --skip-lost            # skip workspaces the disaster button proved lost
+ *                                                    # (feature-plan-disaster-restore.md §6.0; also with --check)
  *
  * Runs under Node's `react-server` condition (package.json) so the `server-only` guard in src/lib/tenant/* — needed
  * for the deleted-database check — resolves to its no-op build.
@@ -42,7 +44,8 @@ import { classifyDatabase } from '../src/lib/tenant/delete-tenant';
 import { databaseExists, neonProjectExists } from '../src/lib/tenant/neon';
 import { printTargetBanner } from './lib/target';
 import { MIGRATABLE_TENANT_STATUSES, isTenantDatabaseConfirmedAbsent } from './lib/tenant-migration';
-import { runMigrateAll } from './lib/migrate-all-run';
+import { runMigrateAll, type DisasterActionInput } from './lib/migrate-all-run';
+import { readDisasterFacts, appendDisasterAction, migrateRunId } from './lib/disaster-records';
 
 const CONTROL_PLANE_MIGRATIONS_FOLDER = './drizzle/control-plane';
 const TENANT_MIGRATIONS_FOLDER = './drizzle';
@@ -61,11 +64,12 @@ function parseArgs(argv: string[]) {
     : DEFAULT_CONCURRENCY;
   const tenantFlagIdx = argv.indexOf('--tenant');
   const tenant = tenantFlagIdx !== -1 ? argv[tenantFlagIdx + 1] : undefined;
+  const skipLost = argv.includes('--skip-lost');
 
   if (!Number.isInteger(concurrency) || concurrency < 1) {
     fail(`--concurrency must be a positive integer (got "${argv[concurrencyFlagIdx + 1]}").`);
   }
-  return { check, concurrency, tenant };
+  return { check, concurrency, tenant, skipLost };
 }
 
 /** Never let a raw driver/connection-string error reach the console — only tenant slugs are logged. */
@@ -98,7 +102,7 @@ async function withConnectionRetry<T>(fn: () => Promise<T>): Promise<T> {
 
 async function main() {
   printTargetBanner();
-  const { check, concurrency, tenant: onlySlug } = parseArgs(process.argv.slice(2));
+  const { check, concurrency, tenant: onlySlug, skipLost } = parseArgs(process.argv.slice(2));
 
   const controlUrl = process.env.CONTROL_PLANE_DATABASE_URL;
   if (!controlUrl) fail('CONTROL_PLANE_DATABASE_URL is not set (checked .env.local and .env).');
@@ -113,7 +117,7 @@ async function main() {
     const controlSql = postgres(controlUrl!, { max: 1 });
     try {
       return await drizzle(controlSql)
-        .select({ slug: tenants.slug, status: tenants.status, dbUrlEncrypted: tenants.dbUrlEncrypted, neonProjectId: tenants.neonProjectId })
+        .select({ id: tenants.id, slug: tenants.slug, status: tenants.status, dbUrlEncrypted: tenants.dbUrlEncrypted, neonProjectId: tenants.neonProjectId })
         .from(tenants)
         .where(inArray(tenants.status, [...MIGRATABLE_TENANT_STATUSES]));
     } finally {
@@ -121,7 +125,10 @@ async function main() {
     }
   };
 
-  const code = await runMigrateAll({ check, concurrency, onlySlug }, {
+  // feature-plan-disaster-restore.md §6.0: one control-plane client for the disaster records, ended before exit.
+  const recordsSql = postgres(controlUrl!, { max: 1, onnotice: () => {} });
+  const runId = migrateRunId(new Date());
+  const code = await runMigrateAll({ check, concurrency, onlySlug, skipLost }, {
     controlUrl: controlUrl!,
     log: (l) => console.log(l),
     error: (l) => console.error(l),
@@ -130,10 +137,15 @@ async function main() {
     migrateControl: () => withConnectionRetry(() => migrateTenantDatabase(controlUrl!, { migrationsFolder: CONTROL_PLANE_MIGRATIONS_FOLDER })),
     listTenants,
     decryptUrl: decrypt,
+    disaster: {
+      runId,
+      readFacts: () => readDisasterFacts(recordsSql),
+      append: (row: DisasterActionInput) => appendDisasterAction(recordsSql, runId, row),
+    },
     tenant: {
       pendingCount: (url: string) => withConnectionRetry(() => getPendingMigrationCount(url, TENANT_MIGRATIONS_FOLDER)),
       migrate: (url: string) => withConnectionRetry(() => migrateTenantDatabase(url, { migrationsFolder: TENANT_MIGRATIONS_FOLDER })),
-      confirmedAbsent: (t: { slug: string; status: string; neonProjectId: string | null }, url: string) =>
+      confirmedAbsent: (t: { id: string; slug: string; status: string; neonProjectId: string | null }, url: string) =>
         isTenantDatabaseConfirmedAbsent(t, url, {
           classify: (u, row) => classifyDatabase(u, row, { dropSharedDatabase: true }), // existence check only — never drops
           neonProjectExists,
@@ -143,6 +155,7 @@ async function main() {
       redact,
     },
   });
+  await recordsSql.end({ timeout: 5 }).catch(() => {});
   process.exit(code);
 }
 

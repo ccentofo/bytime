@@ -175,12 +175,10 @@ describe('migrations as shipped', () => {
     expect(sqlText).toContain(`UPDATE "tenants" SET "plan" = 'standard' WHERE "plan" IN ('starter', 'pro');`);
   });
 
-  it('the newest control-plane migration is drizzle-kit generated as 0011 (database backups §6.3): the five tables, cascades, the unique s3_key', () => {
+  it('control-plane 0011 is drizzle-kit generated (database backups §6.3): the five tables, cascades, the unique s3_key', () => {
     const journal = JSON.parse(readFileSync(path.join(ROOT, 'drizzle/control-plane/meta/_journal.json'), 'utf8')) as { entries: Array<{ idx: number; tag: string; when: number }> };
-    const last = journal.entries[journal.entries.length - 1];
-    expect(last.idx).toBe(11);
+    const last = journal.entries.find((e) => e.idx === 11)!;
     expect(last.tag).toBe('0011_database_backups');
-    expect(last.when).toBe(Math.max(...journal.entries.map((e) => e.when)));
     const sqlText = readFileSync(path.join(ROOT, `drizzle/control-plane/${last.tag}.sql`), 'utf8');
     for (const t of ['database_backups', 'backup_audits', 'restore_test_runs', 'restore_test_results', 'backup_permission_checks']) {
       expect(sqlText).toContain(`CREATE TABLE "${t}"`);
@@ -188,6 +186,18 @@ describe('migrations as shipped', () => {
     expect(sqlText).toContain('CREATE UNIQUE INDEX "database_backups_s3_key_unique" ON "database_backups" USING btree ("s3_key") WHERE "database_backups"."s3_key" IS NOT NULL');
     expect(sqlText).toContain('"swept_test_dbs" integer DEFAULT 0 NOT NULL');
     expect(sqlText).toMatch(/"backup_id"\) REFERENCES "public"\."database_backups"\("id"\) ON DELETE set null/);
+    expect(sqlText).not.toMatch(/ALTER TABLE "tenants"|DROP |UPDATE "/);
+  });
+
+  it('the newest control-plane migration is drizzle-kit generated as 0012 (disaster restore §6.7): two tables, the tenant cascade, nothing else touched', () => {
+    const journal = JSON.parse(readFileSync(path.join(ROOT, 'drizzle/control-plane/meta/_journal.json'), 'utf8')) as { entries: Array<{ idx: number; tag: string; when: number }> };
+    const last = journal.entries[journal.entries.length - 1];
+    expect(last.idx).toBe(12);
+    expect(last.tag).toBe('0012_disaster_restore');
+    expect(last.when).toBe(Math.max(...journal.entries.map((e) => e.when)));
+    const sqlText = readFileSync(path.join(ROOT, `drizzle/control-plane/${last.tag}.sql`), 'utf8');
+    for (const t of ['disaster_runs', 'disaster_actions']) expect(sqlText).toContain(`CREATE TABLE "${t}"`);
+    expect(sqlText).toMatch(/"tenant_id"\) REFERENCES "public"\."tenants"\("id"\) ON DELETE cascade/);
     expect(sqlText).not.toMatch(/ALTER TABLE "tenants"|DROP |UPDATE "/);
   });
 });

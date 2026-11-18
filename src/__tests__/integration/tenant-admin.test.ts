@@ -202,6 +202,17 @@ describe.skipIf(!cpReady)('tenant:admin commands (§5.6)', () => {
     expect((await auditOf(t.id)).map((e) => e.kind)).toContain('founder-export-destroyed');
   });
 
+  it('resolve-alert refuses the disaster kinds (rebuild-*, disaster-*): they close only on the facts (feature-plan-disaster-restore.md §6.8)', async () => {
+    const t = await makeTenant();
+    for (const kind of ['rebuild-original-watch', 'rebuild-original-returned', 'disaster-rehearse-failed']) {
+      await raiseAlert(controlDb, { tenantId: t.id, kind, dedupKey: `prj-${kind}` }, NOW);
+    }
+    for (const a of await allAlertsOf(t.id)) {
+      await expect(resolveAlertById(a.id, 'trying', 'test')).rejects.toThrow(/closes only when its condition clears/);
+    }
+    expect((await allAlertsOf(t.id)).every((a) => a.resolvedAt === null)).toBe(true);
+  });
+
   it('audit-note appends a founder note (RESTORE.md in-place record) and changes no lifecycle state', async () => {
     const t = await makeTenant();
     const before = await getTenantRow(t.id);

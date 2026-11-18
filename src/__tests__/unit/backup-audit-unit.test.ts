@@ -30,8 +30,8 @@ describe('S20: protection drift', () => {
     ['a missing bucket-policy Sid', ({ state, exp, doc }) => { state.bucketPolicy = doc(exp.bucketPolicy.filter((x) => x.Sid !== 'DenyDeletes')); }, 'bucket-policy:DenyDeletes'],
     ['a missing key-policy Sid', ({ state, exp, doc }) => { state.keyPolicy = doc(exp.keyPolicy.filter((x) => x.Sid !== 'DenyShortDeletionWindow')); }, 'key-policy:DenyShortDeletionWindow'],
     ['a statement with its Sid kept but its ArnNotEquals exemption widened', ({ state, exp, doc }) => {
-      state.bucketPolicy = doc(exp.bucketPolicy.map((x) => (x.Sid === 'DenyReadsExceptRestoreTest' ? { ...x, Condition: { ArnNotEquals: { 'aws:PrincipalArn': [exp.roleArn(taskRoleName('restore-test')), 'arn:aws:iam::111122223333:user/intruder'] } } } : x)));
-    }, 'bucket-policy:DenyReadsExceptRestoreTest'],
+      state.bucketPolicy = doc(exp.bucketPolicy.map((x) => (x.Sid === 'DenyReadsExceptRestoreRoles' ? { ...x, Condition: { ArnNotEquals: { 'aws:PrincipalArn': [exp.roleArn(taskRoleName('restore-test')), exp.roleArn(taskRoleName('disaster')), 'arn:aws:iam::111122223333:user/intruder'] } } } : x)));
+    }, 'bucket-policy:DenyReadsExceptRestoreRoles'],
     ['a missing lifecycle rule', ({ state }) => { state.lifecycle = null; }, 'lifecycle'],
     ['a lifecycle rule at 90 days', ({ state }) => { state.lifecycle = [{ ...state.lifecycle![0], expirationDays: 90 }]; }, 'lifecycle'],
     ['a bucket policy removed', ({ state }) => { state.bucketPolicy = null; }, 'bucket-policy:missing'],

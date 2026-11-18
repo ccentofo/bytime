@@ -317,3 +317,40 @@ export const backupPermissionChecks = pgTable('backup_permission_checks', {
 }, (table) => [
   index('backup_permission_checks_role_idx').on(table.role, table.checkedAt),
 ]);
+
+/**
+ * feature-plan-disaster-restore.md §6.7: the disaster button's records, written by the backup image's `disaster` task
+ * (plain SQL, scripts/backup/disaster.ts) and by migrate-all (`skip` rows, `reachable-again` proofs), read by the deploy
+ * path (`--skip-lost`) and the daily digest (src/lib/tenant/disaster-status.ts). Ids only: no customer names.
+ * `disaster_runs`: finished_at / status / summary set once at the end. `disaster_actions`: append-only; the latest row per
+ * tenant and kind, or per project, is current. ON DELETE CASCADE: tests delete tenant rows (production tombstones).
+ */
+export const disasterRuns = pgTable('disaster_runs', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  runId: varchar('run_id', { length: 80 }).notNull(),
+  mode: varchar('mode', { length: 20 }).notNull(), // 'workspace' | 'rehearse'
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+  status: varchar('status', { length: 10 }).notNull(), // 'running' | 'pass' | 'fail'
+  summary: jsonb('summary'),
+}, (table) => [
+  index('disaster_runs_started_idx').on(table.startedAt),
+]);
+
+export const disasterActions = pgTable('disaster_actions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  runId: varchar('run_id', { length: 80 }).notNull(),
+  tenantId: uuid('tenant_id').references(() => tenants.id, { onDelete: 'cascade' }),
+  kind: varchar('kind', { length: 20 }).notNull(), // 'proof' | 'rebuild' | 'rehearse' | 'skip'
+  status: varchar('status', { length: 60 }).notNull(),
+  projectName: varchar('project_name', { length: 100 }),
+  newProjectId: varchar('new_project_id', { length: 100 }),
+  oldProjectId: varchar('old_project_id', { length: 100 }),
+  backupKey: text('backup_key'),
+  backupStartedAt: timestamp('backup_started_at', { withTimezone: true }),
+  detail: text('detail'),
+  at: timestamp('at', { withTimezone: true }).notNull(),
+}, (table) => [
+  index('disaster_actions_tenant_idx').on(table.tenantId, table.kind, table.at.desc()),
+  index('disaster_actions_project_idx').on(table.newProjectId),
+]);
