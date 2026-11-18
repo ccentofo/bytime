@@ -1,6 +1,6 @@
 # Blueprint 3d: Cloud export link (the F2 change)
 
-> **Status: v1.1** (2026-11-18). Round 1: 2 reviewers, 7 HIGH, about 17 MEDIUM and 29 LOW; all addressed (§15). Branch `cloud-export`, from `main` at `17ac1c8`. Follows `BLUEPRINT-STANDARD.md`.
+> **Status: v1.2** (2026-11-18). Round 1: 7 HIGH, about 17 MEDIUM, 29 LOW. Round 2: 3 HIGH, 15 MEDIUM, 13 LOW. All addressed (§15). Branch `cloud-export`, from `main` at `17ac1c8`. Follows `BLUEPRINT-STANDARD.md`.
 >
 > **Decisions:**
 > - `BUSINESS-DECISIONS.md` §5, "Consequence: the F2 'founder-held final export' must change";
@@ -114,9 +114,9 @@
 
 ## 5. Invariants that must not break
 1. **The founder's machine never receives customer data.** The task runs in AWS; the bytes go from S3 straight to the recipient.
-2. **Only the export task role writes or deletes in the bucket** (deliveries, holds, releases and the hourly sweep all run under it). The Vercel role may only `GetObject` under `delivery/`, through a 5-minute presign. Nothing is public, and every request is TLS-only.
-3. **A link works only for its delivery, until its `expires_at` (created + 7 days),** and only while it isn't revoked. The token is 32 random bytes. The control plane stores its SHA-256 for lookup, plus an encrypted copy for the email.
-4. **Recipients are fixed at export time and stored with the delivery (encrypted).** The delivery cron sends to exactly those addresses, never D10 at send time. They are the notice recipients plus the extra address when given, or the extra address only for a `policy_hold` workspace whose export isn't re-enabled (A1). An extra address must be typed twice and match.
+2. **Only the export task role writes or deletes in the bucket.** Deliveries, holds and releases run in the `cadenzpoint-backup-export` family; the hourly sweep runs in its own `cadenzpoint-backup-sweep` family **with the same task role**. The Vercel role may only `GetObject` under `delivery/`, through a 5-minute presign. Nothing is public, and every request is TLS-only.
+3. **A link works only for its delivery, until its `expires_at` (created + 7 days),** and only while it isn't revoked. The token is 32 random bytes. The control plane stores its SHA-256 for lookup, plus an encrypted copy that exists only until the email is sent. **Once sent, the token is redacted from the frozen payload** (§6.5).
+4. **Recipients are fixed at export time and stored with the delivery (encrypted).** The delivery cron sends to exactly those addresses, **in `bcc`, so no recipient sees another**, never D10 at send time. They are the notice recipients plus the extra address when given, or the extra address only for a `policy_hold` workspace whose export isn't re-enabled (A1). An extra address must be typed twice and match.
 5. **The task's logs and the public button log carry ids, never emails, slugs or tokens.** Inputs are masked first. **The token does appear in the request path** of the download page: Vercel's request logs (short retention, accepted) and Sentry's URL capture (scrubbed, §6.6). It also appears in the frozen notice payload and the email provider's log (§6.5).
 6. **Hold copies are never served by the download page** and never expire by themselves.
 7. **The in-app self-export is unchanged.**
@@ -136,10 +136,13 @@
   - `DenyWritesExceptExportTask` (Put/Delete/Abort): only `ExportTaskRole`, which also runs the sweep;
   - `DenyReadsExceptExportRoles` (`GetObject`): `ExportTaskRole`, plus `ExportDownloadRole` under `delivery/*` only;
   - `DenyPolicyAndLifecycleChangesExceptDeploy`.
-- **`ExportKey` policy statements:**
-  - root admin as the backup key, with the same structure;
-  - **`ExportTaskRole`:** `kms:GenerateDataKey` and `kms:Decrypt` (multipart SSE-KMS needs both), with the condition `kms:EncryptionContext:aws:s3:arn` = the bucket ARN (Bucket Keys);
-  - **`ExportDownloadRole`:** `kms:Decrypt` only, with `kms:ViaService = s3.us-east-1.amazonaws.com` and the same context condition;
+- **The `ExportKey` policy is deny-only, by `aws:PrincipalArn`, like the backup key.** It avoids KMS's principal-exists check, since `Fn::Sub` ARNs create no dependency:
+  - the root-account statement, as the backup key;
+  - `DenyDecryptExceptExportRoles`;
+  - `DenyGenerateDataKeyExceptExportTask`.
+- **The grants live in the roles' own policies:**
+  - **the export task role** (shared by both families): `kms:GenerateDataKey` and `kms:Decrypt`, with `kms:EncryptionContext:aws:s3:arn` = the bucket ARN;
+  - **the download role:** `kms:Decrypt`, with `kms:ViaService = s3.us-east-1.amazonaws.com` plus the same context;
   - **the audit role:** `kms:DescribeKey` and `kms:GetKeyPolicy`.
 
   3b's KMS-change alerts (key disable or deletion) also cover `ExportKey`. A deleted key would destroy legal holds.
@@ -148,7 +151,9 @@
   - its KMS alias statement gains `alias/cadenzpoint-exports`;
   - a new `AWS::IAM::OIDCProvider`: URL `https://oidc.vercel.com/<team>`, `ClientIdList` = `https://vercel.com/<team>`, and no thumbprints (as the GitHub provider).
 
-  The team slug and project name are **template constants**, committed once the founder gives them. **The Vercel team's issuer mode must be Team** (founder step).
+  The backup stack builds its ARN with `Fn::Sub`, the GitHub provider's precedent. The trust condition keys are exactly `oidc.vercel.com/<team>:aud` and `oidc.vercel.com/<team>:sub`.
+
+  The team slug and project name are **template constants**, committed once the founder gives them. They appear in `bootstrap.yml`, `backup-stack.yml` and `expected-policies.ts`, and **U6 asserts the three are equal.** **The Vercel team's issuer mode must be Team** (founder step).
 
 ### 6.2 Roles (`backup-stack.yml`, `expected-policies.ts`; all under path `/cadenzpoint-backup/`, named `cadenzpoint-backup-*`, as `BackupRolesOnly` requires)
 - **`cadenzpoint-backup-export-task`:**
@@ -163,11 +168,13 @@
   - trusted by the Vercel OIDC provider, with exact `StringEquals` on `aud` = `https://vercel.com/<team>` and `sub` = `owner:<team>:project:<project>:environment:production`;
   - permissions: `s3:GetObject` on `…/delivery/*`, plus `kms:Decrypt` as §6.1;
   - `MaxSessionDuration` 3600.
-- **`DisasterButtonRole`:** RunTask gains the `cadenzpoint-backup-export` family, and **`PassDisasterRoles` gains the export task and exec roles.** It stays the same `aws-disaster` environment.
+- **`DisasterButtonRole`:** RunTask gains the `cadenzpoint-backup-export` family, and **`PassDisasterRoles` gains the export task and exec roles.** It stays the same `aws-disaster` environment. The comment at :628-630 ("stops a taskRoleArn override") is updated: with PassRole on both families, an override could swap their roles, which is accepted. Every press needs the founder's approval.
+- **`SchedulerRole`:** RunTask gains the `cadenzpoint-backup-sweep` family, and PassRole gains the export task and exec roles, in the stack and in `expected-policies.ts`'s `FAMILIES`. U6 asserts it.
 - **`expected-policies.ts`, the audit and U6:**
-  - generalise to `BUCKETS = [backup, exports]` and `KEYS = [backup, exports]`, each with its expected policy, lifecycle and encryption;
+  - generalise to `BUCKETS = [backup, exports]` and `KEYS = [backup, exports]`, each with **its own expected policy and its own expected lifecycle-rule array** (the backup bucket keeps its one rule; the exports bucket has two). `audit.ts`'s single-rule check becomes a per-bucket comparison;
   - `ALL_ROLES` gains the three roles;
-  - the audit gets env `EXPORT_KEY_ARN` and `EXPORT_BUCKET`, and its role gains `s3:GetBucketPolicy`, `s3:GetLifecycleConfiguration` and **`s3:GetEncryptionConfiguration`** on the exports bucket, plus `kms:DescribeKey`/`GetKeyPolicy` on `ExportKey`;
+  - the audit gets env `EXPORT_KEY_ARN` and `EXPORT_BUCKET`, and its role gains `s3:GetBucketPolicy`, `s3:GetLifecycleConfiguration` and **`s3:GetEncryptionConfiguration`** on the exports bucket, plus `kms:DescribeKey`/`GetKeyPolicy` on `ExportKey`. Encryption is checked **only for the exports bucket**: the backup bucket's role grant doesn't include it, and its data is client-side encrypted;
+  - U6's "every task definition has `BACKUP_KMS_KEY_ARN`" rule exempts the export and sweep families;
   - `protectionDrift` checks both buckets and both keys, including **key state** (`Enabled`; `PendingDeletion` → finding);
   - U6 pins it all, including the exact role names and paths.
 
@@ -178,7 +185,9 @@
 - env: `EXPORT_BUCKET`, `ALERT_TOPIC_ARN`;
 - its own log group, `/cadenzpoint/backup/export` (365 days).
 
-**Run deadline:** 45 minutes (abort the upload and fail), plus postgres.js `connect_timeout` and an idle-socket timeout.
+**Run deadline:** 45 minutes (abort the upload and fail).
+- **`openExportSnapshot(url, opts?)` gains an optional options argument**; the app's call is unchanged.
+- The task passes `connect_timeout: 30`, plus server-side `idle_in_transaction_session_timeout` and `statement_timeout` (45 minutes) through `connection:`, as `audit.ts:144` does. A half-open socket can't then hold the snapshot past the deadline on the server.
 - **Why it's bounded:** a long REPEATABLE READ snapshot holds AccessShare locks, and a migration's `ALTER` queues behind them. That's the same exposure as the in-app export, whose bound is Vercel's 800 s.
 - **The ZIP limit** (~3.94 GiB) fits well inside 45 minutes.
 
@@ -186,14 +195,14 @@
 - `export deliver --workspace <uuid> [--extra <email>] [--reason <text>] --run-id <id>`
 - `export hold --workspace <uuid> --reason <text> --run-id <id>`
 - `export release --hold <uuid> --reason <text> --run-id <id>`
-- `export sweep --run-id <id>` (the hourly schedule only, §6.7)
+- `export sweep` (its own family, `cadenzpoint-backup-sweep`, §6.7)
 
-A value starting with `-` is refused (no flag confusion).
+A value starting with `-` is refused (no flag confusion). `--run-id` is optional and generated when absent (`disaster.ts:116`'s pattern).
 
 **The start:**
 - `startedBy` must be `gh-` or `cloudshell-` for deliver, hold and release;
-- `sweep` only from its schedule;
-- ECS oldest-wins for the family (sweep excluded: it never competes);
+- **`sweep` may run from any caller:** it only deletes expired, revoked or orphaned copies;
+- ECS oldest-wins within the `cadenzpoint-backup-export` family. The sweep is a different family, so it never competes, and the button's one-at-a-time check isn't affected;
 - an advisory lock `EXPORT_LOCK_KEY` (`728_402_206`, beside 3c's) on the control plane, held only for the short record transaction and **never during the build** (it would block nothing useful);
 - log `export <mode> run <runId> started by <x>`.
 
@@ -201,8 +210,8 @@ A value starting with `-` is refused (no flag confusion).
 1. **Load the tenant by id** (a plain read):
    - its status must be `active` or `suspended`, with `db_url_encrypted` set. Otherwise refuse (`not-exportable`: deleted, deleting, provisioning, no database);
    - a `policy_hold` workspace (suspension reason `policy`) with `policy_export_allowed` false **requires** `--extra` (refuse `extra-required`).
-1b. **Schema check:** the workspace's applied tenant migration count must equal the migration journal length baked into the image. Otherwise refuse `schema-skew` ("approve the pending Backup system deploy, or run Deploy to Production"). The bundled schema can't read columns the database lacks, or miss new ones.
-2. **Recipients:**
+1b. **Schema check, inside the snapshot:** the workspace's applied tenant migration count (`drizzle.__drizzle_migrations`; 3c's `migrationCount` query, `disaster-steps.ts:572`) must equal the journal length baked into the image. Otherwise refuse `schema-skew`: "approve the pending Backup system deploy (or run it from Actions → Backup system deploy if none is pending), or run Deploy to Production". The bundled schema can't read columns the database lacks, or miss new ones.
+2. **Recipients**, resolved **after the build, just before recording**, so an admin deactivated mid-build is left out:
    - for a `policy_hold` workspace whose export isn't re-enabled: the extra address only;
    - otherwise D10: active admins from the workspace database, plus the billing email, plus the signup email when there's no active admin, plus `--extra` if given;
    - lowercased and deduplicated;
@@ -211,7 +220,8 @@ A value starting with `-` is refused (no flag confusion).
 3. **Build:** `openExportSnapshot(decrypt(url))` → `createWorkspaceZipStream` → S3 multipart upload (`@aws-sdk/lib-storage` `Upload`, 8 MiB parts, `IfNoneMatch: '*'`), at key `delivery/<deliveryId>/<slug>-export-<yyyymmdd>.zip`, with SHA-256 computed while streaming.
    - **Failures:** the ZIP limits, a database error or an upload error → abort the upload, delete any object, result `failed`.
 4. **Record, in one control-plane transaction**, under the `tenant:` lock:
-   - **re-read the tenant first.** If its status, suspension reason or `policy_export_allowed` changed since step 1 → delete the object and refuse `changed` ("press again");
+   - the transaction takes `pg_advisory_xact_lock(hashtext('tenant:' || id))`, the exact key from `locked.ts:64`;
+   - **re-read the tenant first.** If its status, suspension reason, `policy_export_allowed` or `db_url_encrypted` changed since step 1 → roll back, then delete the object **outside the lock**, and refuse `changed` ("press again");
    - a `tenant_notices` row by raw SQL: kind `export-ready`, `scheduled_for` = `date_trunc('milliseconds', now())`; `sent_at`, `forced_at` and `superseded_at` null (= pending); the other columns take their defaults. `RETURNING id`;
    - an `export_deliveries` row (§6.5) carrying **`notice_id` = that id**;
    - a `tenant_audit_events` row `export-delivered` (detail: delivery id, recipient count, an extra-address flag, the reason's length).
@@ -249,7 +259,9 @@ A value starting with `-` is refused (no flag confusion).
 
   The reason is passed to the task as an argument; it's masked in the log, and the task logs only its length.
 - **The address and reason appear in CloudTrail's RunTask `overrides`** (the backup account, founder-only). That's accepted and documented.
-- **3c's start and RunTask email rules** (`backup-stack.yml:1331-1392`) are extended to the export family, so every press is emailed. The audit's rule list is updated too.
+- **Separate rules, `ExportStartedRule` and `ExportRunTaskRule`**, with export wording ("Export workspace task started …"), matching only the `cadenzpoint-backup-export` family. So every press is emailed, and **the hourly sweep is never emailed.**
+  - Both rules are in the audit's `InspectRules` list.
+  - `CfnExecRole`'s `AlertRules` grant covers them.
 
 ### 6.5 Delivery records and the `export-ready` notice
 - **Table `export_deliveries`:**
@@ -261,22 +273,29 @@ A value starting with `-` is refused (no flag confusion).
 - **`isNoticeSuperseded('export-ready', …)`:**
   - **true only when the linked delivery is revoked, expired or erased;**
   - **never because of `deleting`/`deleted`**, because an export taken before a deletion must still reach the customer.
-- **`deliverNotice` gains an `export-ready` branch, before `resolveRecipientsAndTimezone`:**
+- **`deliverNotice` gains an `export-ready` branch right after the claim** (`notices.ts:207`), **before the generic supersede check** (:209-213). The generic check would supersede `deleting`/`deleted`:
   - load the delivery by `notice_id = claimed.id`;
-  - `to` = the decrypted stored recipients; time zone = `time_zone`;
+  - if it's missing, revoked, expired or erased → supersede and stop. **Never fall through to D10**;
+  - otherwise skip `isNoticeSuperseded`;
+  - in the freeze, `bcc` = the decrypted stored recipients, `to` = `support@cadenzpoint.com`, time zone = `time_zone`. One message, one Resend idempotency key. The send call passes `bcc` (the Resend client already supports it; the dev confirms);
   - it **never** reads the workspace database, so a dropped or tombstoned workspace still gets its email;
   - the 23-hour refreeze uses the same branch.
 - **`renderNotice` for `export-ready`:**
   - the link `apexBaseUrl() + '/export/' + token` (decrypting `token_encrypted`);
+  - the time zone formatting uses `canonicalTimeZone` (so `src/lib/calendar-date.ts` is in the closure only if the task uses it; the task stores the canonical zone);
   - "works until <date and time, in the stored time zone>", with a new `fmtDateTime` (the existing `fmt` is date only);
   - template `export-ready.tsx` (`LifecycleLayout`): "Your CadenzPoint workspace export is ready", the workspace name, the link, the expiry, "If you didn't ask for this, contact support@cadenzpoint.com".
-- **After the notice is sent** (`sent_at` set), `token_encrypted` is nulled in the same transaction.
-- **The link remains in the frozen `tenant_notices.payload`** (kept indefinitely) and in the email provider's log. That's accepted: it stops working at `expires_at` or on revoke.
-- **Other supersede paths:** `set-exempt on`'s blanket supersede (`admin-commands.ts:121-123`) excludes `export-ready`.
+- **After the notice is sent** (`sent_at` set), in the same transaction:
+  - `token_encrypted` is nulled;
+  - **the token is replaced in `payload.html` with `[link removed after sending]`.**
+
+  The token is still in the email provider's log, and in the recipients' mailboxes. That's accepted: it stops working at `expires_at` or on revoke.
+- **Other supersede and force paths:** `set-exempt on`'s blanket supersede (`admin-commands.ts:121-123`) and `scripts/register-tenant.ts:45-46` both exclude `export-ready`. `force-notice-sent` (`admin-commands.ts:257-281`) refuses `export-ready` ("use `export-revoke`").
 - **`tenant:admin export-revoke <delivery-id> [--yes]`:**
   - refuses an unknown or already revoked/erased delivery;
   - without `--yes`, prints what it will do;
-  - with it: sets `revoked_at`, audits `export-revoked` and supersedes the pending notice in the same transaction.
+  - with it, **under `withTenantLock`:** sets `revoked_at`, audits `export-revoked` and supersedes the pending notice in the same transaction;
+  - **if the notice's lease is live** (a send in flight), it warns "the email may already be going out; the link is dead either way".
 
   The sweep then erases the file.
 
@@ -293,16 +312,16 @@ A value starting with `-` is refused (no flag confusion).
 
 **POST (the server action):**
 - re-check the token (valid, not expired or revoked);
-- rate-limit with the Upstash shared limiter, through two named entries in `SHARED_LIMITS` (`limits.ts:6`): `export-download` (per delivery, 20 per hour) and `export-download-ip` (per IP, 30 per hour);
+- rate-limit **first, by IP**, with `getClientIpFromHeaders` plus `ipIdentifier` (`rate-limit.ts:23-31`; Vercel sets `x-forwarded-for`) → `exportDownloadIp` (30 per hour); then check the token; then `exportDownload` per delivery (20 per hour). Both are `SHARED_LIMITS` entries (camelCase, `limits.ts:7-10`);
 - mint a **5-minute** presigned GET (`ResponseContentDisposition: attachment; filename="<file>"`) with `awsCredentialsProvider({ roleArn: EXPORT_DOWNLOAD_ROLE_ARN })`;
 - increment `download_count` and set `last_download_at`;
 - re-render the page with a plain **Download** link to that URL, "valid for 5 minutes". Navigation isn't governed by `form-action`.
 
 **Headers:**
-- a `headers()` entry in `next.config.ts` for `/export/:path*`: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex`. A page can't set headers, so this goes in config, and the build checks this entry wins over the global `Referrer-Policy`;
+- a `headers()` entry in `next.config.ts` for `/export/:path*`, **appended after the global `/:path*` entry** (the last match wins), with `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex`. T8 checks the built headers for `/export/x`;
 - page metadata `referrer: 'no-referrer'`, `robots: { index: false }`.
 
-**Sentry:** `beforeSend`/`beforeSendTransaction` replace `/export/<token>` with `/export/[token]` in URLs and breadcrumbs. A test covers it.
+**Sentry:** one shared deep scrub, the regex `/export/[A-Za-z0-9_-]{43}` → `/export/[token]`, applied to every string field (URLs, transaction names, span descriptions and data, breadcrumbs, `request.url`). It's wired into `beforeSend`, `beforeSendTransaction` and `beforeBreadcrumb` in **all three inits**: `sentry.server.config.ts`, `sentry.edge.config.ts` and `src/instrumentation-client.ts`. A test per runtime.
 
 **Packages:** `@aws-sdk/client-s3`, `@aws-sdk/s3-request-presigner` and `@vercel/oidc-aws-credentials-provider` move to runtime `dependencies`, all at exact versions. **U6's "no `@aws-sdk` in `src/`" rule** gains one allowed file, `src/lib/export/download-url.ts`, and that file is the only importer.
 
@@ -310,25 +329,30 @@ A value starting with `-` is refused (no flag confusion).
 - `EXPORT_DOWNLOAD_ROLE_ARN` and `EXPORT_BUCKET` (production only);
 - the region is **hard-coded `us-east-1`** in `download-url.ts` (Vercel sets `AWS_REGION` itself);
 - `awsCredentialsProvider({ roleArn })` with **no `audience` option** (the trust `aud` is the default);
-- **either value missing, or an assume-role or presign error** → the page says "downloads aren't available; contact support", and raises `export-download-misconfigured` (global, deduped, resolved by the next success).
+- **either value missing, or an assume-role or presign error** (only after a valid token) → the page says "downloads aren't available; contact support", and raises `export-download-misconfigured` with **`raiseAlertWithEmail`** (the signup pattern, `signals.ts`), because a customer is waiting. It's global and deduped, and the next successful presign resolves it.
 
 **Package pins:** `@aws-sdk/s3-request-presigner` at the same version as `client-s3`. The dev checks `@smithy/types` dedupes after adding the OIDC package.
 
 **Note:** a presigned URL can stop working before 5 minutes if the cached role session ends first. A download already in progress continues; the page says "if the link doesn't work, prepare it again".
 
 ### 6.7 The hourly expiry sweep and monitoring
-- **Schedule `cadenzpoint-backup-export-sweep`:** EventBridge Scheduler, `rate(1 hour)`. Its input is `["export","sweep","--run-id","…"]`, run as the export task family (`ExportTaskRole`). It's independent of the backup run, and its own failure is its own.
-- **What `sweep` does:**
-  - list `delivery/` and delete every object whose delivery has `expires_at <= now` **or** `revoked_at` set, or that has **no delivery row and is older than 1 day** (an orphan from a failed record);
-  - set `erased_at`;
-  - **access ends at `expires_at`, and the file is erased within the next hour.** Lifecycle's 8 days is the backstop.
-  - Its exit and errors are logged; three consecutive failures email the founder (SNS).
-- **Findings:** the app's daily cron, 3b's monitoring module, with global alerts:
-  - **`export-copy-overdue`:** any `export_deliveries` row with `erased_at IS NULL AND COALESCE(revoked_at, expires_at) < now() - interval '6 hours'`. That's an app query, so it doesn't depend on the sweep's own report; it resolves when none remain;
-  - **`export-download-misconfigured`** (§6.6).
+- **Task family `cadenzpoint-backup-sweep`:**
+  - the same image; 0.25 vCPU / 0.5 GB;
+  - **the same task role** as the export family; a secret for `CONTROL_PLANE_DATABASE_URL`; env `EXPORT_BUCKET`;
+  - its own log group, `/cadenzpoint/backup/sweep` (30 days).
+- **Schedule `cadenzpoint-backup-export-sweep`:** EventBridge Scheduler, `rate(1 hour)`, input `["export","sweep"]`. `SchedulerRole` has RunTask and PassRole for it (§6.2).
+  - **Not covered by the export start or RunTask email rules** (a different family).
+  - **A start failure** goes to the existing schedule DLQ alarm.
+- **What `sweep` does (row-driven):**
+  1. for every `export_deliveries` row with `erased_at IS NULL AND (expires_at <= now() OR revoked_at IS NOT NULL)`, delete `s3_key` (an already-missing object counts as done), then set `erased_at`;
+  2. **orphans only:** list `delivery/` and delete objects with no delivery row that are older than 1 day.
+  - **Access ends at `expires_at`, and the file is erased within the next hour.** Lifecycle's 8 days is the backstop.
+- **Findings,** in `ops-digest.ts`, in the slot `checkFounderExports` leaves (:80), with their own raise and resolve, **not** 3b's `syncBackupAlerts` (whose sweep would auto-resolve them):
+  - **`export-copy-overdue`:** any row with `erased_at IS NULL AND LEAST(COALESCE(revoked_at, expires_at), expires_at) < now() - interval '6 hours'`; resolved when none remain;
+  - **`export-download-misconfigured`:** raised by the page (§6.6), and resolved on success.
 - **The digest:**
-  - a line every day: "Exports in the last 7 days: N delivered (created_at within 7 days), M downloads (sum of `download_count` on those), K not yet emailed (notice `sent_at` null)";
-  - **on UTC day 1 only:** a section "Open legal holds", one line each (hold id, workspace id, age in days, reason). No alert, so it isn't repeated daily.
+  - **a line every day:** "Exports in the last 7 days: N delivered, M downloads, K not yet emailed (notice `sent_at` and `superseded_at` both null). Open legal holds: H (oldest D days)";
+  - **on UTC day 1:** also a section listing every open hold (hold id, workspace id, age, reason).
 
 ### 6.8 Retiring the F2 local export
 **Delete:**
@@ -367,7 +391,7 @@ A value starting with `-` is refused (no flag confusion).
 | `active` | a page POST with valid rate | `active` | a 5-minute URL; `download_count + 1` |
 | `active` | `now >= expires_at` | `expired` | the page shows "expired"; no URL |
 | `active` | `export-revoke --yes` | `revoked` | audit; the pending notice superseded |
-| `expired` or `revoked` | the hourly sweep | `erased` | the object deleted; `erased_at` |
+| `expired` or `revoked` | the hourly sweep (row-driven) | `erased` | the object deleted (a missing one counts); `erased_at` |
 | `erased` | a page GET | `erased` | "expired" |
 
 "Can't happen": `erased` → `active`. Nothing un-erases, and a new press creates a new delivery.
@@ -405,7 +429,9 @@ A value starting with `-` is refused (no flag confusion).
 | F14 | The workspace becomes policy-suspended during the build | step 4's re-read refuses `changed`; the object is deleted |
 | F15 | Image and workspace schemas differ | `schema-skew` before any read |
 | F16 | The export hangs (half-open socket) | the 45-minute deadline aborts the upload and fails; the lock was never held during the build |
-| F17 | The sweep fails repeatedly | `export-copy-overdue` (an app query) after 6 hours; the founder is emailed after 3 consecutive sweep failures |
+| F17 | The sweep fails repeatedly | start failures → the schedule DLQ alarm; the effect → `export-copy-overdue` after 6 hours (an app query in the digest); a lifecycle-deleted object still gets `erased_at` on the next good sweep (row-driven) |
+| F18 | A revoke while the send is in flight | the email may still go; the link is dead (revoked); `export-revoke` warns |
+| F19 | Two recipients from different parties | `bcc`: neither sees the other |
 | F13 | A release of a hold whose object is already gone | the delete is idempotent; a 404 verifies; it's released |
 
 ## 9. Platform limits
@@ -413,6 +439,7 @@ A value starting with `-` is refused (no flag confusion).
 - **ECS** 1 vCPU / 4 GB. Streaming keeps memory bounded (`highWaterMark 0`, 5,000-row batches).
 - **Vercel:** the page and action are light (one control-plane read and one presign).
 - **S3 storage:** cents per GB-month for at most 7 days, plus holds.
+- **The sweep:** 0.25 vCPU / 0.5 GB, hourly, for about a minute each: well under $1 a month.
 
 ## 10. Blast radius
 - **Stack:** `ops/aws/backup-stack.yml` (bucket, key, roles, task, log group, `ExportModes` output, button RunTask) and `ops/aws/bootstrap.yml`.
@@ -421,9 +448,9 @@ A value starting with `-` is refused (no flag confusion).
   - `export.ts` and `export-button.sh` (new);
   - `lib/expected-policies.ts` and `audit.ts` (multi-bucket);
   - `backup.ts` (the sweep step);
-  - `deploy-paths.txt`, `bundle.mjs`, `tsconfig.backup.json` (`paths` for `@/`), `Dockerfile.backup`: **exact files**, each with a COPY line, a tsconfig `include` and a deploy-paths entry: `src/lib/export/workspace-export.ts`, `src/lib/export/allowlists.ts`, `src/lib/export/manifest.ts`, `src/db/schema.ts`, `src/lib/db/pg-url.ts`, `src/lib/provenance.ts`, `src/lib/csv/escape.ts` (the dev confirms the closure with esbuild's metafile). **Not** `download-url.ts`.
-  - **`APP_VERSION`:** the app keeps `manifest.ts`'s `package.json` import, unchanged. `bundle.mjs` uses esbuild `define` (or an `alias` plugin) to replace that import with the version string read at build time, so `package.json` is never a bundle input and the image's manifest carries the real version. U6 asserts `package.json` isn't in the metafile.
-  - **The image's migration journal length** is a build-time constant too (`define`), for §6.3's schema check.
+  - `deploy-paths.txt`, `bundle.mjs`, `tsconfig.backup.json` (`paths` for `@/`), `Dockerfile.backup`: **exact files**, each with a COPY line, a tsconfig `include` and a deploy-paths entry: `src/lib/export/workspace-export.ts`, `src/lib/export/allowlists.ts`, `src/lib/export/manifest.ts`, `src/db/schema.ts`, `src/lib/db/pg-url.ts`, `src/lib/provenance.ts`, `src/lib/csv/escape.ts`, plus `src/lib/calendar-date.ts` if the closure needs it (the dev confirms with esbuild's metafile). **Also `drizzle/meta/_journal.json`**: it's read at build time for the journal length, so it isn't a metafile input. U6 asserts its COPY line and its `deploy-paths` entry. **Not** `download-url.ts`.
+  - **`APP_VERSION`:** the app keeps `manifest.ts`'s `package.json` import, unchanged. `bundle.mjs` adds an esbuild **`onResolve`/`onLoad` plugin** that serves `{ "version": "<read at build time>" }` for that import. `define` can't replace an imported binding, and `alias` doesn't apply to relative paths. U6 asserts `package.json` isn't in the metafile.
+  - **The image's migration journal length:** a `declare const __TENANT_JOURNAL_LENGTH__: number` global, set by esbuild `define` from `drizzle/meta/_journal.json`'s entry count. The same `define` goes in the vitest configs.
 - **`.github/workflows/export-workspace.yml`** (new).
 - **App:**
   - `src/app/export/[token]/page.tsx` and its action (new); `src/lib/export/download-url.ts` (new);
@@ -449,22 +476,25 @@ A value starting with `-` is refused (no flag confusion).
 | T4 | Statuses: deleted, deleting, provisioning and no URL → `not-exportable` |
 | T5 | Failure paths: the ZIP limit, a database error, an upload error, a recording error → no row, the object deleted, the upload aborted |
 | T6 | `hold` and `release`: the hold row and object; a release deletes and verifies; a second release refused |
-| T7 | The notice **through `deliverNotice`**: sent to the stored recipients only (a `policy_hold` export never reaches an admin); sent for a dropped database and for a tombstoned workspace; not superseded by `deleting`/`deleted`/`set-exempt`; superseded after revoke or expiry; the link via `apexBaseUrl()`; the date and time in the stored time zone; `token_encrypted` nulled on send; the millisecond `scheduled_for` and the `notice_id` link |
+| T7 | The notice **through `deliverNotice`**: the branch runs before the generic supersede; sent to the stored recipients **in `bcc`**, with `to` = support (a `policy_hold` export never reaches an admin); sent for a dropped database and for a tombstoned workspace; not superseded by `deleting`/`deleted`/`set-exempt`/`register-tenant`; superseded after revoke or expiry, or with a missing delivery (never D10); `force-notice-sent` refuses it; the link via `apexBaseUrl()`; the date and time in the stored time zone; on send, `token_encrypted` nulled **and the token redacted from `payload.html`**; the millisecond `scheduled_for` and the `notice_id` link |
 | T8 | The page GET: valid, expired, revoked, erased, unknown, malformed (no database read) and workspace-host-redirect states; **a GET never calls the presigner** (spy); the `/export` headers in the built config; the Sentry scrub |
 | T9 | The POST: re-checks; rate limit; a 5-minute presign with attachment disposition; `download_count` incremented; an expired token refused |
 | T10 | Either env value missing, or an assume-role or presign error → the support text plus the deduped alert; resolved on success |
-| T11 | The hourly sweep: deletes expired and revoked delivery objects and orphan objects older than 1 day; sets `erased_at`; never touches `hold/`; runs only from the schedule |
-| T12 | `export-copy-overdue` (the app query at 6 hours past expiry or revoke; resolved when none); the daily digest line's three counts; the holds section on UTC day 1 only |
-| T13 | U6 and the stack: the bucket policy statements; lifecycle (`delivery/` 8 days, no hold rule); KMS statements and actions (GenerateDataKey plus Decrypt for the task; Decrypt via S3 only for download; Describe/GetKeyPolicy for audit); the three roles' exact names and paths; the task role's ECS reads; the button's RunTask families and PassRole; the start and RunTask rules covering the export family; the sweep schedule; `ExportModes`; bootstrap (OIDC provider, `CfnExecRole` bucket and alias); the audit checks both buckets and keys, including key state |
+| T11 | The sweep (its own family): row-driven deletes of expired and revoked keys; a missing object still sets `erased_at`; orphans older than 1 day deleted; never touches `hold/`; runnable from any caller |
+| T12 | `export-copy-overdue` in ops-digest (the `LEAST` query at 6 hours; resolved when none; not touched by `syncBackupAlerts`); the daily line's counts (K excludes superseded) and the open-hold count; the full hold list on UTC day 1 |
+| T13 | U6 and the stack: the bucket policy statements; lifecycle (`delivery/` 8 days, no hold rule); **the deny-only `ExportKey` policy** and the role-side KMS grants; the three roles' names and paths; the task role's ECS reads; the button's RunTask families and PassRole; **`SchedulerRole`'s sweep RunTask and PassRole**; the **separate** export start and RunTask rules (export family only, not the sweep); the sweep schedule and family; `ExportModes`; bootstrap (OIDC provider, `CfnExecRole` bucket and alias); the team-slug constants equal in three files; the audit's per-bucket rule arrays, its exports-only encryption check and both keys' state; the `BACKUP_KMS_KEY_ARN` exemption |
 | T14 | U6: the only `src/` importer of `@aws-sdk` is `download-url.ts`; the bundle's `src/` inputs are exact, with COPY lines; `package.json` never bundled |
 | T15 | The button: masking (target, both addresses, reason never visible); the two addresses must match; confirm = mode; a leading `-` refused; validation; the `ExportModes` gate; one at a time |
 | T16 | Retired: no `tenant:export` script, no `export-destroyed`, no `founder-export-overdue`; the receipt line; `tenant:delete` behaviour otherwise unchanged |
 | T17 | Logs: ids only; the reason logged as a length |
 | T18 | The in-app export route is unchanged (existing tests pass as-is); the in-app manifest still carries `package.json`'s version |
-| T19 | `schema-skew`: a workspace one migration ahead of the image's journal → refused before any read |
+| T23 | The page's rate limit: the IP limit is checked before any token lookup; the per-delivery limit after |
+| T24 | `export-revoke` under the tenant lock warns when the lease is live |
+| T25 | `openExportSnapshot(url, opts)`: the task's server-side timeouts are applied; the app's call is unchanged |
+| T19 | `schema-skew`: a workspace one migration ahead of the image's journal → refused before any read; the journal length comes from `drizzle/meta/_journal.json` at build |
 | T20 | The 45-minute deadline aborts a stalled build (fake stalled stream) and deletes any object |
 | T21 | `export-revoke`: refusals; the dry run; `--yes` sets `revoked_at`, audits and supersedes the pending notice |
-| T22 | The bundle: `package.json` isn't a metafile input; the image's `APP_VERSION` equals `package.json`'s version |
+| T22 | The bundle: `package.json` isn't a metafile input (the plugin); the image's `APP_VERSION` equals `package.json`'s version; `_journal.json` is copied and on the deploy list |
 
 ## 12. Founder steps (`PRODUCTION-DEPLOY.md`)
 1. **13b:** before deploying `bootstrap.yml`, give the dev the Vercel team slug and project name (committed as constants). Deploy the updated bootstrap.
@@ -533,3 +563,35 @@ A value starting with `-` is refused (no flag confusion).
     - leading `-` refused;
     - role names and paths;
     - the sweep erases revoked deliveries.
+- **v1.2, round 2** (2 fresh reviewers; 3 HIGH, 15 MEDIUM, 13 LOW). All addressed:
+  - **HIGH:**
+    - the sweep in the export family would have emailed every hour and couldn't be started by the scheduler → its own small family, `cadenzpoint-backup-sweep`, with `SchedulerRole` RunTask and PassRole, and separate export-only email rules;
+    - every export email showed all recipients to each other → `bcc`, with `to` = support.
+  - **MEDIUM:**
+    - the export branch runs before the generic supersede, and a missing delivery is superseded, never D10;
+    - the token is redacted from the frozen payload on send;
+    - revoke runs under the tenant lock and warns about an in-flight send;
+    - the sweep is row-driven (lifecycle-deleted objects resolve);
+    - findings live in ops-digest, not `syncBackupAlerts`;
+    - a daily open-hold count;
+    - the Sentry scrub covers all three inits and every string field;
+    - `_journal.json` copied and on the deploy list;
+    - an esbuild plugin for the `package.json` import (`define` can't);
+    - server-side timeouts through an optional `openExportSnapshot` argument;
+    - a deny-only `ExportKey` policy with role-side grants;
+    - per-bucket lifecycle arrays and an exports-only encryption check;
+    - the "3 failures" email dropped.
+  - **LOW:**
+    - `register-tenant` and `force-notice-sent` exclusions;
+    - headers appended after the global entry;
+    - the IP limit first, with camelCase names;
+    - K excludes superseded, and `LEAST` for overdue;
+    - recipients resolved after the build, and `db_url_encrypted` added to `changed`;
+    - test-helper FK order (the dev deletes deliveries first);
+    - the exact lock SQL, with the delete after rollback;
+    - `--run-id` optional;
+    - PassRole comment honesty;
+    - `calendar-date.ts`;
+    - export-worded rules;
+    - team-slug constants asserted equal;
+    - sweep cost.
