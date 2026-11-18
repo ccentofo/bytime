@@ -1,6 +1,6 @@
 # Blueprint 3d: Cloud export link (the F2 change)
 
-> **Status: v1.8** (2026-11-18). Confirmation pass 1: 1 HIGH, 3 MEDIUM, 10 LOW. Confirmation pass 2: 2 MEDIUM, 8 LOW. Confirmation pass 3: 1 MEDIUM, 8 LOW. Confirmation pass 4: 1 MEDIUM, 7 LOW. Confirmation pass 5: 2 MEDIUM, 6 LOW. Confirmation pass 6: 2 MEDIUM, 6 LOW. All addressed. Round 1: 7 HIGH, about 17 MEDIUM, 29 LOW. Round 2: 3 HIGH, 15 MEDIUM, 13 LOW. All addressed (§15). Branch `cloud-export`, from `main` at `17ac1c8`. Follows `BLUEPRINT-STANDARD.md`.
+> **Status: v1.9** (2026-11-18). Confirmation pass 1: 1 HIGH, 3 MEDIUM, 10 LOW. Confirmation pass 2: 2 MEDIUM, 8 LOW. Confirmation pass 3: 1 MEDIUM, 8 LOW. Confirmation pass 4: 1 MEDIUM, 7 LOW. Confirmation pass 5: 2 MEDIUM, 6 LOW. Confirmation pass 6: 2 MEDIUM, 6 LOW. Confirmation pass 7: 1 MEDIUM, 6 LOW. All addressed. Round 1: 7 HIGH, about 17 MEDIUM, 29 LOW. Round 2: 3 HIGH, 15 MEDIUM, 13 LOW. All addressed (§15). Branch `cloud-export`, from `main` at `17ac1c8`. Follows `BLUEPRINT-STANDARD.md`.
 >
 > **Decisions:**
 > - `BUSINESS-DECISIONS.md` §5, "Consequence: the F2 'founder-held final export' must change";
@@ -222,7 +222,13 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
    - the workspace's time zone (`workspace_settings.timezone`, canonicalised) is read here too.
 3. **Build:** `openExportSnapshot(decrypt(url))` → `createWorkspaceZipStream` → S3 multipart upload (`@aws-sdk/lib-storage` `Upload`, 8 MiB parts, `IfNoneMatch: '*'`), at key `delivery/<deliveryId>/<slug>-export-<yyyymmdd>.zip`, with SHA-256 computed while streaming.
    - **Failures:** the ZIP limits, a database error or an upload error → abort the upload, delete any object, result `failed`.
-4. **Record, in one control-plane transaction**, under the `tenant:` lock:
+   - **The delivery and hold ids are generated before the upload**, because they're in the S3 key.
+4. **Record, in one control-plane transaction**, under the `tenant:` lock. **A record error isn't proof of failure:** a COMMIT can succeed with its acknowledgement lost (postgres.js rejects on a dropped connection), and the deadline or a stop can land mid-commit. So after any record error **other than the `changed` refusal** (which rolls back deliberately), the task checks **on a fresh connection** whether the delivery row (or hold row) with that pre-generated id exists:
+   - **it exists** → committed: go to step 5, exit 0;
+   - **it's absent** → delete the object (verified), exit 1;
+   - **the check itself fails** → leave the object. The sweep deletes a delivery orphan after 1 day, and reports a hold orphan as `export-orphan-hold`. Exit 1.
+
+   The transaction:
    - the transaction takes `pg_advisory_xact_lock(hashtext('tenant:' || id))`, the exact key from `locked.ts:64`;
    - **re-read the tenant first.** If its status, suspension reason, `policy_export_allowed` or `db_url_encrypted` changed since step 1 → roll back, then delete the object **outside the lock**, and refuse `changed` ("press again");
    - a `tenant_notices` row by raw SQL: kind `export-ready`, `scheduled_for` = `date_trunc('milliseconds', now())`; `sent_at`, `forced_at` and `superseded_at` null (= pending); the other columns take their defaults. `RETURNING id`;
@@ -233,9 +239,9 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 **`hold`:**
 - **step 1's status check only** (`active`/`suspended` with a database; **no recipient checks**: `extra-required`, `no-recipients` and `too-many-recipients` are deliver-only), then 1b (schema-skew) and 3, with key `hold/<holdId>/<slug>-export-<yyyymmdd>.zip`;
 - then an `export_holds` row (id, tenant id, key, bytes, sha256, reason, `run_id`, created_at, `released_at` null, `release_reason` null);
-- audit `export-held`; an SNS line **including the hold id** (`export held: workspace <id>, hold <id>`), which `release` needs.
+- audit `export-held` **with the hold id in its detail**; an SNS line **including the hold id** (`export held: workspace <id>, hold <id>`), which `release` needs.
 - **No email to customers.**
-- **A record failure** (after upload) → delete the object (verified), exit 1.
+- **A record failure** (after upload) → the same exists-check as `deliver` step 4: exists → committed (exit 0); absent → delete the object (verified), exit 1; check fails → leave it (reported by the sweep), exit 1.
 - Allowed in every exportable status, including `policy_hold`, with no `--extra`.
 
 **`release`:**
@@ -275,9 +281,9 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
   - **table `export_holds`** as in §6.3;
   - one drizzle-kit control-plane migration.
 - **`NoticeKind`** gains `export-ready`.
-- **`isNoticeSuperseded` is never consulted for `export-ready`:** the `deliverNotice` branch below decides. As a backstop, `isNoticeSuperseded` returns `false` for `export-ready` **before** its `deleting`/`deleted` line (`lifecycle.ts:186`).
+- **`isNoticeSuperseded` is never consulted for `export-ready`:** the `deliverNotice` branch below decides. As a backstop, `isNoticeSuperseded` returns `false` for `export-ready` **before** its `deleting`/`deleted` line (`lifecycle.ts:187`).
 - **`deliverNotice` gains an `export-ready` branch right after the claim** (`notices.ts:207`), **before the generic supersede check** (:209-213). The generic check would supersede `deleting`/`deleted`:
-  - load the delivery by `notice_id = claimed.id`;
+  - load the delivery by `notice_id = claimed.id`, and the tenant's **control-plane row** (a tombstone is fine; `renderNotice` needs its name and slug);
   - if it's missing, revoked, expired or erased → supersede and stop. **Never fall through to D10**;
   - otherwise skip `isNoticeSuperseded`;
   - in the freeze: the decrypted stored recipients and the time zone;
@@ -392,7 +398,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 - **`TENANT-DELETION.md` "Final export"** is rewritten:
   - the button;
   - the policy-hold rule;
-  - **in bold, at the top of the section:** "take the export and wait for the 'export delivered' email before running `tenant:delete`". Nothing technical stops a deletion during an export build; the export then fails `changed`;
+  - **in bold, at the top of the section:** "take the export and wait until the Export workspace run has passed (the run's result, or the 'export delivered' email) before running `tenant:delete`". Nothing technical stops a deletion during an export build; the export then fails `changed`;
   - holds.
 - **`PRODUCTION-DEPLOY.md`:**
   - 13b: the bootstrap update;
@@ -408,7 +414,9 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 |---|---|---|---|
 | — | `deliver` passes | `active` | row, notice, audit, SNS |
 | `active` | a page POST with valid rate | `active` | a 5-minute URL; `download_count + 1` |
-| `active` (`extra_only` false) | the tenant goes on a policy hold, export not re-enabled | `unavailable` | none (computed at read) |
+| `active` (`extra_only` false) | the tenant goes on a policy hold, or `set-policy-export off` during one | `unavailable` | none (computed at read) |
+| `active` (`extra_only` true) | a policy hold | `active` | none |
+| `active` | `tenant:delete` without a policy hold | `active` | none (the page needs only the delivery and the tombstone) |
 | `unavailable` | a page GET or POST | `unavailable` | the "expired" text; no URL |
 | `unavailable` | `unsuspend` or `set-policy-export on` (before expiry) | `active` | none |
 | `unavailable` | `tenant:delete` | `unavailable` | the tombstone keeps the reason; permanent |
@@ -418,6 +426,8 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 | `active` | `export-revoke --yes` | `revoked` | audit; the pending notice superseded |
 | `expired` or `revoked` | the hourly sweep (row-driven) | `erased` | the object deleted (a missing one counts); `erased_at` |
 | `erased` | a page GET | `erased` | "expired" |
+| `expired` | a page GET or POST | `expired` | "expired"; no URL |
+| `revoked` or `erased` | `export-revoke` | unchanged | refused |
 
 "Can't happen": `erased` → `active`. Nothing un-erases, and a new press creates a new delivery.
 
@@ -441,7 +451,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 |---|---|---|
 | F1 | A workspace over the ZIP limits | `failed` with "too large for a single ZIP: contact the lead"; nothing stored |
 | F2 | A database error mid-stream | the upload aborted, any object deleted, `failed` |
-| F3 | The upload succeeds but recording fails | the object deleted (verified), `failed`. No row means no link |
+| F3 | The upload succeeds but recording errors | an exists-check on a fresh connection: committed → treated as success (no second email); absent → the object deleted, `failed`; check fails → the object left for the sweep (delivery orphan after 1 day) |
 | F4 | The task dies after upload, before recording | an orphan object with no row → the hourly sweep deletes it after 1 day |
 | F5 | The notice fails to send | retried by the cron; the digest shows "not yet emailed" |
 | F6 | A workspace deleted (or its database dropped) before the email sends | still sent to the stored recipients with the stored time zone: the branch never reads the workspace database. The page doesn't need the workspace |
@@ -460,7 +470,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 | F20 | A hold task dies after upload, or a control-plane rollback loses a hold row | the orphaned hold object is kept and raises `export-orphan-hold`; the founder contacts the lead |
 | F21 | A workspace put on a policy hold after a link reached its admins | every delivery with `extra_only` false (even one that also had an extra address) is unavailable while the hold lasts, including after deletion; an email still pending at that moment is sent and its link shows unavailable; `extra_only` links keep working |
 | F22 | An SNS publish fails after a successful delivery, hold or release | logged; exit 0; the ids are in the audit and digest (no second press) |
-| F23 | A hold's record step fails after upload | the object deleted (verified); exit 1 |
+| F23 | A hold's record step errors after upload | the same exists-check: committed → success; absent → the object deleted, exit 1; check fails → the object kept and reported by the sweep as `export-orphan-hold` |
 | F13 | A release of a hold whose object is already gone | the delete is idempotent; a 404 verifies; it's released |
 
 ## 9. Platform limits
@@ -513,8 +523,8 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 | T2 | `deliver` against a scratch workspace with fake S3: the ZIP under `delivery/<id>/`; the SHA-256 matches; the notice, delivery (`notice_id`) and audit in one transaction; the recipients are D10 per `NOTICE_RECIPIENTS` plus the extra address, lowercased and deduplicated; the time zone stored; a schema-skewed workspace fails `schema-skew` before the recipient count |
 | T3 | `policy_hold` with export not re-enabled: without `--extra` refused; with it, the recipients are exactly the extra address and **`extra_only` is true**. With `policy_export_allowed`: the normal recipients, `extra_only` false. A normal deliver plus extra → `extra_only` false. A suspension starting mid-build → `changed`, the object deleted |
 | T4 | Statuses: deleted, deleting, provisioning and no URL → `not-exportable` |
-| T5 | Failure paths: the ZIP limit, a database error, an upload error, a recording error → no row, the object deleted, the upload aborted |
-| T6 | `hold` and `release`: the schema-skew check applies; **no recipient checks for a hold** (a `policy_hold` workspace without `--extra`, one with no recipients, and one over 50 all pass); the hold row and object; a release deletes and verifies; a second release refused |
+| T5 | Failure paths: the ZIP limit, a database error, an upload error → no row, the object deleted, the upload aborted; **a record error with the commit actually done** (a lost acknowledgement) → treated as success, the object kept, exit 0; a record error with no row → the object deleted, exit 1; a failing exists-check → the object kept, exit 1; a `changed` refusal → the object deleted (no exists-check); an SNS failure after commit → exit 0 |
+| T6 | `hold` and `release`: the schema-skew check applies; no recipient checks for a hold (a `policy_hold` workspace without `--extra`, one with no recipients, and one over 50 all pass); the hold row and object; the `export-held` audit carries the hold id; a hold record error → the same exists-check outcomes as T5; a release deletes and verifies; a release of an already-gone object succeeds (F13); a second release refused |
 | T7 | The notice **through `deliverNotice`**: the branch runs before the generic supersede; **one batch message per stored recipient** (no `bcc`, no support copy; a `policy_hold` export never reaches an admin); `recipients` records the real list; sent for a dropped database and for a tombstoned workspace; not superseded by `deleting`/`deleted`/`set-exempt`/`register-tenant`; superseded after revoke or expiry, or with a missing delivery (never D10), with the token nulled and redacted on supersede too; `force-notice-sent` refuses it; `isNoticeSuperseded` backstop; the link via `apexBaseUrl()`; the date and time in the stored time zone; on send, the token nulled and redacted in one transaction; the millisecond `scheduled_for` and the `notice_id` link |
 | T8 | The page GET: valid, expired, revoked, erased, unknown, malformed (no database read) and workspace-host-redirect states; **a GET never calls the presigner** (spy); the `/export` headers in the built config; the Sentry scrub |
 | T9 | The POST: re-checks; rate limit; a 5-minute presign with attachment disposition; `download_count` incremented; an expired token refused |
@@ -711,3 +721,12 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
     - outputs in T13;
     - the line reference;
     - the seed-tool note.
+- **v1.9, confirmation pass 7** (1 MEDIUM, 6 LOW; not clean). All addressed:
+  - **MEDIUM:** a lost COMMIT acknowledgement would delete a committed export's object (a dead link and a second email; a hold row without its copy) → ids pre-generated; after a record error (not the deliberate `changed` rollback), an exists-check on a fresh connection decides: committed, absent, or left for the sweep.
+  - **LOW:**
+    - tests for the SNS-exit-0, hold record failure and gone-object release;
+    - the TENANT-DELETION line accepts "run passed";
+    - the hold id in the `export-held` audit;
+    - the missing §7.1 cells;
+    - the branch reads the control-plane row;
+    - the line reference.
