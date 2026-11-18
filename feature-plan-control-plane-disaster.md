@@ -1,6 +1,6 @@
 # Blueprint 3c-2: Control-plane disaster (rebuild, reconcile, whole-account runbook)
 
-> **Status: v1.1** (2026-11-18). Round 1 fixed: 2 reviewers, 27 findings (5 HIGH), all addressed; §15.
+> **Status: v1.2** (2026-11-18). Round 1: 27 findings (5 HIGH). Round 2: 20 findings (3 HIGH). All addressed; §15.
 > Branch `control-plane-disaster`, from `main` at `57d6729`. Follows `BLUEPRINT-STANDARD.md`.
 >
 > **Scope decisions:**
@@ -19,7 +19,7 @@ same **Disaster restore** button. A task in AWS then does four things:
 - emails the founder exactly what to do next.
 
 The founder then repoints Vercel, GitHub and AWS to the new database by hand, from a checklist (accepted 2026-11-17 Q2),
-and replays the window's Stripe events with one command. A runbook covers losing the whole Neon account.
+and resyncs billing from Stripe with one command. A runbook covers losing the whole Neon account.
 
 **In scope:**
 1. **A stable, per-environment backup id**, so every backup stays findable after a rebuild (§6.0). This is a fix to 3b.
@@ -29,7 +29,7 @@ and replays the window's Stripe events with one command. A runbook covers losing
 5. **`tenant:delete --project-proven-gone`:** closes a workspace whose database is proven gone, with every Stripe safeguard kept (§6.6, decision Q1).
 6. **Window-workspace addresses** stay unavailable to new signups until resolved. System project names are reserved as slugs (§6.7).
 7. **Monitoring:** window projects, and the old control plane's watch (§6.8).
-8. **`tenant:admin stripe-replay`:** re-processes the window's Stripe events, so billing facts lost in the rollback come back (§6.10).
+8. **`tenant:admin stripe-resync`:** re-links checkouts completed in the window and refreshes every paying workspace from live Stripe, so billing facts lost in the rollback come back (§6.10). No event replay, and no email from the command.
 9. **Runbooks:** B (control plane lost) and C (whole Neon account lost), plus updates to A (§6.9).
 
 **Out of scope:**
@@ -38,7 +38,7 @@ and replays the window's Stripe events with one command. A runbook covers losing
 - A Stripe key in AWS (2026-11-18 Q1).
 - Re-attaching a window signup's data (2026-11-18 Q2).
 - An outage override for the control plane: during a Neon outage the founder waits (B.1). The 4-hour override stays workspace-only.
-- Changing the customer-facing product. The one visible effect, a handful of reserved slugs (§6.7), uses the existing "taken" message.
+- Changing the customer-facing product. The visible effects use existing messages: a handful of reserved slugs ("invalid") and open window slugs ("taken") (§6.7).
 
 ## 2. Product-owner decisions and founder duties
 | # | Decision (date) | Effect here |
@@ -54,11 +54,11 @@ and replays the window's Stripe events with one command. A runbook covers losing
 **Founder duties at disaster time** (runbook B):
 - disable crons, press, read the email;
 - repoint (five places, including their own `.env.local`), deploy;
-- run the Stripe replay, work the lists, re-enable crons;
+- run the Stripe resync, work the lists, re-enable crons;
 - email customers.
 
 **New one-time duties:**
-- **Set the backup id:** SSM `/cadenzpoint/backup/control-plane-backup-id` in PRODUCTION-DEPLOY 13b, alongside the control-plane URL (§6.0).
+- **Set the backup id:** SSM `/cadenzpoint/backup/control-plane-backup-id` (`staging` or `prod`) in PRODUCTION-DEPLOY 13b, alongside the control-plane URL. **If 13b is already done when 3c-2 deploys, create it as `prod` before approving that deploy** (§12 step 0).
 - **Rehearse once:** press the control-plane rehearsal at setup (§12).
 
 ## 3. Verified current state (`main` at `57d6729`)
@@ -121,13 +121,13 @@ and replays the window's Stripe events with one command. A runbook covers losing
 - **Stripe:**
   - metadata carries `{ slug, tenantId }` (`tenant-billing.ts:20-23`, `billing.ts:71-85`);
   - the webhook handler is inline in `POST` (`stripe/webhook/route.ts:64-242`): checkout resolves by `metadata.slug`, and an unknown slug is ignored with 200 (`:87-91`); an unknown customer raises `stripe-event-unknown-customer` (`:102-109`); it re-reads live Stripe state for every event (`:155,182`).
-  - **The daily cron does NOT re-read every tenant:** `shouldReconcile` is false without a customer, and for a GOOD subscription before its period ends (`lifecycle.ts:231-248`). **So billing facts lost in a rollback don't self-heal.** Example: a trial that converted in the window loses its customer link and goes read-only after the trial. Hence §6.10.
+  - **The daily cron does NOT re-read every tenant:** `shouldReconcile` is false without a customer, and for a GOOD subscription before its period ends (`lifecycle.ts:231-248`). **So billing facts lost in a rollback don't self-heal.** Example: a trial that converted in the window loses its customer link and goes read-only after the trial. Hence §6.10. The webhook's checkout branch passes the customer link to `reconcileInLock` as `extraPatch` (`route.ts:136-150`). `reconcileInLock` queues state-derived notices and alerts in the same transaction (`reconcile.ts:103-110`); they're delivered later by the notice cron.
 - **What a rollback loses** (control-plane writes after the backup's snapshot), each with what recovers it:
 
   | Lost | Recovered by |
   |---|---|
   | new `tenants` rows | the window signups; Q2 |
-  | lifecycle and Stripe facts | **the Stripe replay, §6.10** |
+  | lifecycle and Stripe facts | **the Stripe resync, §6.10** |
   | deletions | Q1 |
   | 3c rebuilds | re-applied, §6.4 R2 |
   | `tenant_notices` | can re-send; accepted 2026-11-17. Dates only move later |
@@ -171,7 +171,7 @@ and replays the window's Stripe events with one command. A runbook covers losing
 - `FilterLogEvents`: as in 3c §4.3.
 
 ### 4.4 Stripe
-- **`GET /v1/events`** lists events from the last 30 days, filterable by `created[gte]` and `types[]`, paginated with `starting_after`/`has_more` (stripe.com/docs/api/events/list). **The dev confirms the retention and filters in the impact analysis.**
+- **`GET /v1/checkout/sessions`** lists sessions, filterable by `created` and `status`, paginated (stripe.com/docs/api/checkout/sessions/list). **The dev confirms those filters in the impact analysis.** Customers and subscriptions are read live, as `reconcileInLock` already does.
 - AWS never calls Stripe.
 
 ## 5. Invariants that must not break
@@ -189,17 +189,20 @@ and replays the window's Stripe events with one command. A runbook covers losing
    - public GitHub logs show no target;
    - one disaster run at a time;
    - every start is emailed (EventBridge).
-9. **No customer data on the founder's machine.** `--project-proven-gone` reads Neon metadata and the control plane. `stripe-replay` reads Stripe, as `seat-sync` already does.
+9. **No customer data on the founder's machine.** `--project-proven-gone` reads Neon metadata and the control plane. `stripe-resync` reads Stripe, as `seat-sync` already does, and prints slugs and counts only, never an email address. Neither reads a workspace database or delivers a notice.
 
 ## 6. Design
 ### 6.0 A stable, per-environment backup id (fixes 3b)
 - **`controlPlaneId(url, env = process.env)`:**
-  - if `BACKUP_CONTROL_PLANE_ID` is set, return it, validated `^[a-z0-9-]{1,32}$` (else throw);
+  - if `BACKUP_CONTROL_PLANE_ID` is set, return it, validated **`^(prod|staging)$`** (else throw);
   - otherwise return today's host hash, unchanged for tests and local use.
-- **`LINE_RE`** (`log-reader.ts:24`) accepts the id as `[a-z0-9-]{1,32}`, so it covers both forms.
-- **The stack** injects `BACKUP_CONTROL_PLANE_ID` as a **secret** from SSM `/cadenzpoint/backup/control-plane-backup-id`. It goes on the backup, restore-test, audit and disaster task definitions, and each exec role's `ssm:GetParameters` gains that ARN.
+- **`LINE_RE`** (`log-reader.ts:24`) accepts the id as `([0-9a-f]{12}|prod|staging)`, so it covers both forms.
+- **`main.ts` resolves the id once** from its own `env` and passes `cpId` in the deps of backup, restore-test and disaster. The callers stop computing it, which keeps tests honest.
+- **The stack** injects `BACKUP_CONTROL_PLANE_ID` as a **secret** from SSM `/cadenzpoint/backup/control-plane-backup-id`. It goes on the backup, restore-test and disaster task definitions, not audit's (audit never computes the id). Each of those exec roles' `ssm:GetParameters` gains that ARN. **ECS can't start a task whose secret parameter is missing**, hence §12 step 0.
 - **The founder sets the value** in PRODUCTION-DEPLOY 13b step 6, beside the URL:
   - `staging` for 3b's staging rehearsal, switched to `prod` with the URL and key in step 11;
+  - step 9 checks for a `BACKUP staging control-plane` line, and step 12 for a `BACKUP prod control-plane` line;
+  - **a wrong value is the one thing the context check can't catch** (it's consistent everywhere), hence the two-value whitelist and those checks;
   - runbook B **never** changes it.
 - **`main.ts`:** inside ECS, a missing or invalid value is fatal for every command except `--self-check`.
 - **Effect:**
@@ -217,20 +220,18 @@ and replays the window's Stripe events with one command. A runbook covers losing
 - **Targets** must be the literal `control-plane` for modes `control-plane` and `reconcile`. `rehearse` accepts `control-plane`, or keeps `uuid`/`auto` for workspaces.
 - **The override** must be `none` for `control-plane`, `reconcile`, and `rehearse` of the control plane. `canary` stays workspace-only.
 - **`confirm`** equals the mode.
-- **`parseDisasterArgs`:**
-  - **an unknown mode exits 2** (was 1), so an image older than the button says "approve the pending Backup system deploy";
-  - every other refusal exits 1.
+- **An image older than the button** is refused **by the button**, before any AWS start: the stack gains an output `DisasterModes` (`workspace rehearse control-plane reconcile`, plus `rehearse-control-plane`). `disaster-button.sh` reads it alongside `TaskSubnets` (`:99`) and refuses a mode or target it doesn't list: "the Backup system deploy that adds this mode is pending approval". `parseDisasterArgs` keeps exit 1 for an unknown mode, so the existing tests stand.
 - **The startedBy gate:** `control-plane` and `reconcile` need `gh-` or `cloudshell-`. A schedule can only rehearse.
 - **Tests:** D2 cases for each new combination and refusal. The literal `control-plane` is masked like any target.
 
 ### 6.2 AWS (`ops/aws/backup-stack.yml`, `expected-policies.ts`)
-1. **The backup id secret** on four task definitions, with the matching exec-role `GetParameters` grants (§6.0).
+1. **The backup id secret** on three task definitions, with the matching exec-role `GetParameters` grants (§6.0). The output is `DisasterModes` (§6.1).
 2. **The disaster task:**
    - secret `RESTORE_TEST_DATABASE_URL` (the existing `/cadenzpoint/backup/restore-test-url`), and its exec-role grant;
    - plain env `DISASTER_LOG_GROUP: /cadenzpoint/backup/disaster`;
-   - `main.ts` requires both for the new modes;
+   - `main.ts` requires both for `control-plane`, `reconcile` and `rehearse --targets control-plane`;
    - the task role's `ReadBackupLines` gains `log-group:/cadenzpoint/backup/disaster:*`.
-3. **Schedule `cadenzpoint-backup-disaster-rehearse-cp`:** `cron(17 15 15 * ? *)` UTC, in the workspace rehearsal's hour, on day 15. The input is `["disaster","rehearse","--targets","control-plane"]`.
+3. **Schedule `cadenzpoint-backup-disaster-rehearse-cp`:** `cron(17 15 15 * ? *)` UTC, in the workspace rehearsal's hour, on day 15. The input is `["disaster","rehearse","--targets","control-plane"]`. **The start-email template** (`backup-stack.yml:1339`, "not the monthly rehearsal (the 1st …)") and RESTORE.md:137 name both rehearsals (the 1st and the 15th). PRODUCTION-DEPLOY 13b's quiet-window sentences add the 15th.
 4. **`expected-policies.ts` and U6** gain all of the above. **No `ssm:PutParameter` anywhere.**
 
 ### 6.3 Mode `control-plane` (`scripts/backup/disaster-control-plane.ts`)
@@ -251,13 +252,13 @@ The control plane is gone, so this mode has **its own run harness**:
    - (b) **Positive control:** the org list is complete and **contains** `RESTORE_TEST_PROJECT_ID`, and GET on it → 200.
    - (c) The id isn't in the recoverable list (`pollRecoverable`). If it's listed → refuse `recoverable` ("recover it in the Neon console: nothing is lost").
    - (d) `classifyGoneEndpoint(CONTROL_PLANE_DATABASE_URL, CONTROL_PLANE_RULE)`, where `CONTROL_PLANE_RULE = { exactNames: [], prefixes: ['cadenzpoint-control'] }`:
-     - a login or post-auth answer → `reachable`;
+     - a login or post-auth answer → `reachable` ("the control plane at SSM `control-plane-url` answers. If you rebuilt before, check that SSM's URL and project id match Vercel's; runbook B.5");
      - served by a candidate → `served` ("a live project holds the control plane's address: fix `/cadenzpoint/backup/control-plane-project-id`");
      - unproven → `proof-failed`.
 
      Customer projects matching the prefix can't serve the control plane's host, so they're harmless here.
 4. **Earlier rebuild still present:**
-   - if any **live** org project's name matches exactly `^cadenzpoint-control-r\d{12}-\d+$` → refuse `rebuild-exists` ("a rebuilt control plane already exists: `<id>`, created `<time>`. Finish runbook B with it, or delete it in Neon, then press again");
+   - if any **live** org project's name matches exactly the control-plane rebuild pattern (§6.11) → refuse `rebuild-exists`: "a rebuilt control plane exists: `<id>`, created `<time>`. **If Vercel, GitHub or your `.env.local` use it, it's your live control plane: don't delete it.** Put its pooled URL and id into SSM (runbook B.5) and stop. Delete it only if you never repointed to it (runbook B.3).";
    - an incomplete list → `proof-failed`;
    - there's **no age limit**.
 
@@ -268,14 +269,14 @@ The control plane is gone, so this mode has **its own run harness**:
    - no line → skipped (counted);
    - none → refuse `no-backup`.
 6. **Build** (3c's failure classes):
-   - **Create** `cadenzpoint-control-r<yyyymmddhhmm>-<try>` (pg 16, `NEON_REGION_ID`, `org_id`, the old URL's database name, which is `cadenzpoint_control` in production, the policy history retention).
+   - **Create** the control-plane rebuild name (§6.11) (pg 16, `NEON_REGION_ID`, `org_id`, the old URL's database name, which is `cadenzpoint_control` in production, the policy history retention).
    - **Log** `DISASTER-PROJECT <id> <name>` at once.
    - **Restore** with the context `{cp:<id>, kind:'dump', target:'control-plane', id:'control-plane', key}`, checked before `pg_restore`.
    - **Verify** the counts against the decrypted sidecar.
    - **Failures:** integrity → delete (verified), then the next older candidate (at most 3); infrastructure → delete, then the same once more; then `retryable`. An unverified delete → log `DISASTER-PROJECT-KEPT <id>` and name it in the email.
 7. **Re-check:** repeat legs (a) and (c). If the old project answers 200 or is recoverable → delete the new project, result `original-back` ("keep using the original; nothing was changed").
 8. **Record, in one transaction** on the new control plane's direct URL:
-   - a `disaster_runs` row: mode `control-plane`, status `running`, summary `{ target:'control-plane', previousProjectId, newProjectId, newProjectName, backupKey, backupStartedAt, sha256, cpRunStartedAt }`;
+   - a `disaster_runs` row: mode `control-plane`, status `running`, summary `{ target:'control-plane', previousProjectId, newProjectId, newProjectName, backupKey, backupStartedAt, sha256, cpRunStartedAt }`. **If this row is later closed by the digest** (the task died), 3c's stuck finding names RESTORE.md A.11, which gains a control-plane line: "the project is kept and complete: continue runbook B, then press `reconcile`";
    - the global `rebuild-original-watch`, dedup = the old project id, detail `{ kind:'control-plane', oldProjectId, newProjectId, watchStartedAt }`.
 
    **No `disaster_actions` row for the control plane:** 3c's leftover check reads those rows and would flag the live control plane (round 1).
@@ -295,7 +296,7 @@ The control plane is gone, so this mode has **its own run harness**:
 - a control-plane client;
 - `windowStart` and `windowEnd`. Standalone, these come from the newest `disaster_runs` row with mode `control-plane`: `summary.backupStartedAt` and `summary.cpRunStartedAt`. None → refuse `no-rebuild`.
 
-Standalone, the control plane is live, so it uses 3c's normal start (lock, run row of mode `reconcile`, summary `target:'control-plane'`). It's idempotent.
+Standalone, the control plane must be live, so it uses 3c's normal start (lock, run row of mode `reconcile`, summary `target:'control-plane'`). **A first connect that fails (any error) → refuse `repoint-first`** ("the control plane in SSM doesn't answer: finish runbook B.5"), instead of 3c's misleading lock message. It's idempotent.
 
 **R1. The shared proof legs,** fetched once:
 - network first (a live workspace, or the restore-test URL);
@@ -304,22 +305,27 @@ Standalone, the control plane is live, so it uses 3c's normal start (lock, run r
 
 If any fails, every tenant is `unknown`.
 
-**R2. Rebuilds made in the window:**
-- Read `DISASTER_LOG_GROUP` from `windowStart` to now. Collect `SWITCHING` and `LINKED` lines, healed included, parsed exactly and **sorted by log time**.
-- **Per tenant, in order, for each `LINKED <t> <old> <new> <key> <sha>`:** apply it only if the row is live, not due for deletion, and has `neon_project_id = old`. Applying it means:
-  1. `GET /projects/{new}` → 200;
-  2. the database's owner role;
-  3. `GET connection_uri?pooled=true`;
-  4. **3c's full switch** (`switchWorkspace`'s UPDATE conditions: status, deletion date, byte-equal URL and project id, under the tenant lock and `lock_timeout`, plus `switchGuards` on the new database's host);
-  5. audit `database-rebuilt` with `{ reapplied: true }`;
-  6. action `rebuild`/`linked`;
-  7. re-raise the watch for `old`.
-
-  Log `RELINKED <t> <old> <new>`. A chain old→n1→n2 ends on n2.
+**R2. Rebuilds made in the window: follow each chain to its end.**
+- Read `DISASTER_LOG_GROUP` from `windowStart` to now. Collect `LINKED` lines (full form only), `RELINKED` lines (§ below), and `SWITCHING` lines, parsed exactly. A healed `LINKED` whose `old` is `-` is listed as unconfirmed.
+- **Per tenant:**
+  - start at the row's `neon_project_id` and follow the links `old → new` in log-time order until none continues;
+  - the middle projects are gone by design, since 3c rebuilds only after proving the original gone, so **only the chain's end is checked**.
+  - If the end equals the row's project, it's **already applied** (counted separately; this is what makes re-runs quiet).
+- **Otherwise, apply once:**
+  1. the row is live and not due;
+  2. `GET /projects/{end}` → 200;
+  3. the database's owner role;
+  4. `GET connection_uri?pooled=true`;
+  5. one guarded UPDATE with **`switchWorkspace`'s conditions** (status, deletion date, byte-equal restored URL and project id, the tenant lock and `lock_timeout`). It doesn't use `switchWorkspace` itself, so no new `SWITCHING`/`LINKED` lines.
+  6. The guards check the end's host: not the **new** control plane's direct host (from the new URL), and an `rt_`-free name. `Built` is formed as `{ projectId: end, pooledUri, backupStartedAt: null }`.
+  7. audit `database-rebuilt` `{ reapplied: true, chain }`;
+  8. action `rebuild`/`linked`;
+  9. re-raise the watch for the chain's start.
+  10. **log `RELINKED <t> <start> <end>`**, which a future reconcile follows like a `LINKED`.
 - **Listed, never applied:**
-  - a `SWITCHING` without a matching `LINKED`;
-  - a `LINKED` whose project 404s, or whose connection string can't be read;
-  - a row missing, deleted, or on another project.
+  - a `SWITCHING` with no matching `LINKED` at the chain's end;
+  - an end that 404s, or whose connection string can't be read;
+  - a row missing, deleted, due, or on a project outside every chain.
 
 **R3. Classify each tenant** in `provisioning`/`active`/`suspended`/`deleting`, concurrency 4.
 - "Due" means `status = 'deleting'` or `deletion_scheduled_for <= now()`.
@@ -345,11 +351,12 @@ If any fails, every tenant is `unknown`.
   - any project a `tenants` row references (any status);
   - the old and new control-plane ids;
   - `RESTORE_TEST_PROJECT_ID`;
-  - names matching exactly `^cadenzpoint-control-r\d{12}-\d+$`, `^cadenzpoint-rehearse-cp-\d{12}-\d+$` or `cadenzpoint-recoverable-canary`;
+  - names matching the control-plane rebuild and rehearsal patterns (§6.11), or `cadenzpoint-recoverable-canary`;
   - the projects R2 re-applied;
-  - **any project id that already has a `window-project` alert (open or resolved)**, so a re-run never reopens a resolved one.
+  - **any project id that already has a `window-project` alert (open or resolved)**, so a re-run never reopens a resolved one;
+  - the ends of every chain R2 found, applied or listed (they appear under R2).
 - **Type** each remaining project:
-  - `rebuild`: name matches 3c's rebuild pattern exactly, `^cadenzpoint-r-[0-9a-f]{8}-\d{12}-\d+$`;
+  - `rebuild`: name matches 3c's rebuild pattern (§6.11), checked **before** `signup`;
   - `signup`: name is `cadenzpoint-<slug>` with `isValidSlug(slug)`;
   - `other`: anything else.
 - Raise a global `window-project` alert (dedup = the project id, detail `{ projectId, name, createdAt, slug | null, type }`) and append an action row.
@@ -366,16 +373,16 @@ If any fails, every tenant is `unknown`.
 The control plane is live, so this uses 3c's normal start (lock, run row in the real control plane, summary `target:'control-plane'`).
 1. **Proof legs against the live control plane:** network first; the positive control; `GET CONTROL_PLANE_PROJECT_ID` → 200; the recoverable list; the control-plane candidate listing completes. Any failure → `fail`.
 2. **The earlier-rebuild check runs read-only** (§6.3 step 4). It logs the result and refuses nothing.
-3. **Build** as §6.3 steps 5–6, into `cadenzpoint-rehearse-cp-<yyyymmddhhmm>-<try>`. **The real control plane gets 3c's `rehearse` action rows** (`intended` → `created` → `rehearsed-deleted`), so the leftover check covers a copy left by a crash.
+3. **Build** as §6.3 steps 5–6, into the rehearsal name (§6.11). **The real control plane gets 3c's `rehearse` action rows** (`intended` → `created` → `rehearsed-deleted`), so the leftover check covers a copy left by a crash.
 4. **Reconcile the restored copy**, with `windowStart` = that backup's `startedAt`, `windowEnd` = now, and `dryRun`:
    - R2 resolves but doesn't switch;
    - R3 writes proof rows **into the copy only**;
    - R4 lists and raises nothing.
 
-   The real control plane gets only the run row's summary (counts per class).
+   The real control plane gets only the run row's summary (counts per class). **The reconcile throwing → `fail`.** The counts are informational, including `unknown`.
 5. **Always:** delete the copy, verify the 404, and append `rehearsed-deleted`. If that fails → `fail`, the copy is named, and the leftover check alerts after 6 h.
 
-**`disaster-rehearse-failed`** evaluates targets separately. A row with no `target` counts as `workspace`. 3c's rows are unchanged, and 3c's final update writes `target` from now on.
+**`disaster-rehearse-failed`** evaluates targets separately. **`target` is written in the run-row INSERT** (`disaster.ts:255`) for every mode, and later updates **merge**. So rows closed by the outer catch, the abandoned close or the digest keep it. A row with no `target` (3c's existing ones) counts as `workspace`.
 
 ### 6.6 `tenant:delete --project-proven-gone`
 - **Allowed only for `neon-project` databases.** On a resumed `deleting` run it's a no-op (that run already accepts a missing project).
@@ -384,6 +391,7 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
   2. **Positive control tied to the connected control plane:** the org list is complete; it contains `CONTROL_PLANE_PROJECT_ID`; and that project's endpoints include the direct host of `CONTROL_PLANE_DATABASE_URL`.
   3. `GET /projects/{neon_project_id}` → 404.
   4. The tenant's URL fails with **`auth` (28xxx)**, which is what Neon's proxy says for a deleted endpoint. A socket error, timeout, proxy error, `3D000`, post-auth answer or login → refuse "couldn't prove the database is gone".
+  5. **No live org project serves the tenant's host** (`candidateServes` with 3c's `tenantCandidateRule`; any endpoints call that fails → refuse). This catches a stale password on a project that's still alive. Hosts are compared with `directHost` (`neon-api.ts:88-91`), which strips `-pooler`.
 - **If the project is in the recoverable list,** print "Neon can still recover this project until <…>; closing the workspace doesn't recover it", and continue.
 - **Then the normal flow, unchanged:** preconditions (`--force-with-reason` to bypass, audited); the locked reconcile and disaster guard; `deleting`; Stripe; step 5 (`alreadyDeleted`); the tombstone.
 - **Audit:** `deletion-started` gains detail `project-proven-gone`. The receipt reads `Neon project <id> (already gone; proven at <time>)`.
@@ -391,12 +399,12 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
 ### 6.7 Window addresses and reserved slugs (`slug-rules.ts`, `server/internal/signup.ts`, `provision.ts`)
 - **`isValidSlug` also refuses system project names:**
   - exact: `control-prod`, `control-staging`, `restore-tests`, `recoverable-canary`;
-  - patterns: `^control-r\d{12}-\d+$`, `^rehearse-cp-\d{12}-\d+$`, `^r-[0-9a-f]{8}-`.
+  - patterns: as §6.11.
 
   No production workspaces exist yet. The dev checks the seed and demo data and the tests.
 - **The slug check also refuses a slug** when an open `window-project` alert has `detail->>'slug' = slug`.
   - It applies in `startSignup` and `provisionTenant` (which covers the waitlist path).
-  - It shows the existing "taken" message.
+  - It shows the existing "taken" message for an open window slug. A reserved name fails `isValidSlug` and shows the existing "invalid" message (`signup.ts:21`).
 - **The slug becomes available** when the alert resolves (§6.8), or when the founder resolves it by hand. `window-project` isn't a `rebuild-`/`disaster-` kind, so `resolve-alert` allows it.
 
 ### 6.8 Monitoring (`src/lib/tenant/disaster-status.ts`)
@@ -419,7 +427,7 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
 2. **Vercel → Schedules → Cron Jobs → Disable Cron Jobs.**
 3. **Press:** Actions → **Disaster restore** → mode `control-plane`, targets `control-plane`, confirm `control-plane` → approve. Read the email.
    - **If GitHub is down:** run the CloudShell command printed in RESTORE.md, with these arguments.
-   - **If the press refuses `rebuild-exists`:** an earlier press left a rebuilt project. If you never repointed to it, delete it in Neon and press again; otherwise continue from step 5 with it.
+   - **If the press refuses `rebuild-exists`:** **check Vercel, GitHub and `.env.local` first.** If any use that project, it's your live control plane: never delete it; put its URL and id into SSM (step 5) and stop. Only if you never repointed to it: delete it in Neon and press again.
 4. **If the old project came back meanwhile** (check the Neon console): keep the old one, delete the new project, re-enable the crons, and stop.
 5. **Repoint.** Neon console → the new project (named in the email) → Connect → database `cadenzpoint_control` → **pooled** string. Put it in:
    - Vercel production `CONTROL_PLANE_DATABASE_URL`;
@@ -433,9 +441,10 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
    - `.env.local`.
 
    **Don't change** `/cadenzpoint/backup/control-plane-backup-id`.
+5a. **If the email shows `fail`, or any `unknown`:** press mode `reconcile` now (it uses the SSM URL you just set), and repeat until there's no `unknown`. If Neon's API is down, wait. A deploy fails on a lost workspace that has no proof.
 6. **Actions → Deploy to Production** with **Skip lost workspaces** ticked. It migrates the restored control plane and picks up the new URL.
 7. **Check** that the app loads and an admin can sign in to one workspace.
-8. **Stripe replay:** `npm run tenant:admin -- stripe-replay --since <window start from the email> --stripe-mode live`, read the plan, then the same command with `--yes` (§6.10).
+8. **Stripe resync:** `npm run tenant:admin -- stripe-resync --since <window start from the email> --stripe-mode live`, read the plan, then the same command with `--yes` (§6.10).
 9. **Work the email's lists:**
    - **lost** → runbook A from step 3 (`all-lost`). **Check your deletion receipts for the window first:** if you deleted it on purpose, close it instead (`--project-proven-gone --force-with-reason`);
    - **deleted in window** → `npm run tenant:delete -- <slug> --project-proven-gone --yes`. If it aborts on a live subscription, the deletion was cancelled in the window: treat it as lost;
@@ -447,7 +456,7 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
      - `other` → staging, or unknown: resolve the alert by hand.
    - **unconfirmed rebuilds, stale ids** → contact the lead;
    - **unknown** → press `reconcile` later.
-10. **Re-enable the cron jobs in Vercel** once steps 8–9 are done, except for the lost workspaces (deploys skip them). Then **Deploy to Production** (normal) after the last lost workspace is rebuilt or closed.
+10. **Re-enable the cron jobs in Vercel** once step 8 is done and the **deleted in window** and **in progress** items are closed. Don't wait for lost rebuilds, signup confirmations or `unknown`. Then **Deploy to Production** (normal) after the last lost workspace is rebuilt or closed.
 11. **Email affected customers** with template B.
 
 **C. The whole Neon account lost:**
@@ -472,16 +481,34 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
 - **B:** to every customer after a control-plane rebuild. Their data is intact; a notice from the lost day may repeat; billing is corrected the same day.
 - **B2:** to a window signup. Sorry; please sign up again; any charge from that day is refunded.
 
-### 6.10 `tenant:admin stripe-replay --since <iso> --stripe-mode live|test [--yes]`
-- **Extract** the webhook's post-verification body into `processStripeEvent(event)` (`src/lib/billing/webhook-events.ts`). `POST` keeps its signature check and calls it, with behaviour unchanged (existing tests pass as-is).
-- **The command:**
-  1. lists events since `--since` (minus 1 h) of the types `processStripeEvent` handles, oldest first, all pages;
-  2. without `--yes`, prints counts per type and the tenants they resolve to;
-  3. with `--yes`, calls `processStripeEvent` for each in order, then prints a per-outcome summary.
-- **Safety:** the handler re-reads live Stripe state under the tenant lock for every event, so a replay converges and is safe to repeat. Unknown customers raise the existing alert, and window-signup checkouts are ignored.
+### 6.10 `tenant:admin stripe-resync --since <iso> --stripe-mode live|test [--yes]`
+**Not an event replay** (round 2: replaying event-anchored side effects could send false emails or roll back fields).
+1. **Re-link window checkouts:**
+   - list Checkout Sessions with `status=complete` and `created >= since − 1 h`, all pages;
+   - for each whose `metadata.slug` names a live tenant whose `stripe_customer_id` differs from `session.customer`, apply **the webhook's checkout link rule**: `replaceable` = no customer or a deleted one; no other tenant owns that customer (else raise `checkout-customer-conflict`, as `route.ts:141-148`);
+   - the rule moves into a shared helper `checkoutLinkPatch(tx, row, customerId)`, which both the webhook and the command call; the webhook's behaviour is unchanged.
+2. **Refresh every paying workspace:**
+   - for every `active`/`suspended` tenant with a `stripe_customer_id`, under its tenant lock, call **`reconcileInLock(tx, row, now, { extraPatch })`**, as the daily cron does;
+   - `extraPatch` holds step 1's link, if any, and `billingEmail` from the **live** customer (retrieved now, never from an event).
+3. **Output:**
+   - without `--yes`: counts (links to make, tenants to refresh) and slugs; nothing is written;
+   - with `--yes`: the same plus outcomes (refreshed, linked, conflict, failed). **Exit 1 if any failed.**
+   - No email address is printed.
+- **Side effects** are exactly `reconcileInLock`'s: state-derived notices queued in the same transaction, delivered later by the notice cron (crons resume at B.10), and alerts. **The command never delivers a notice, never calls `after()`, and never reads a workspace database.** Re-running it is safe: it converges on live state.
 - **Refusals:**
-  - `--since` older than 30 days → refuse (Stripe's retention);
-  - a `--stripe-mode` that doesn't match the key → refuse (as `seat-sync`).
+  - `--since` missing;
+  - a `--stripe-mode` that doesn't match the key (as `seat-sync`).
+
+### 6.11 System project names (one module, `scripts/backup/lib/project-names.ts`)
+**One exported builder and one regex per name, tested round-trip.** They use 3c's existing 14-digit stamp (`disaster-steps.ts:319-321`):
+
+| Name | Builder | Regex |
+|---|---|---|
+| 3c workspace rebuild | `cadenzpoint-r-<id8>-<stamp14>-<try>` (moved here unchanged) | `^cadenzpoint-r-[0-9a-f]{8}-\d{14}-\d+$` |
+| control-plane rebuild | `cadenzpoint-control-r<stamp14>-<try>` | `^cadenzpoint-control-r\d{14}-\d+$` |
+| control-plane rehearsal copy | `cadenzpoint-rehearse-cp-<stamp14>-<try>` | `^cadenzpoint-rehearse-cp-\d{14}-\d+$` |
+
+`isValidSlug`'s reserved patterns (§6.7) mirror these: `^r-[0-9a-f]{8}-`, `^control-r\d{14}-\d+$`, `^rehearse-cp-\d{14}-\d+$`.
 
 ## 7. State machines
 ### 7.1 One control-plane run (mode `control-plane`)
@@ -521,6 +548,7 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
 | positive control (in list + endpoint host) | refused |
 | GET not 404 | refused |
 | URL result not `auth` | refused |
+| a live org project serves the tenant's host (or a check fails) | refused |
 | all pass | the normal flow from the preconditions on; every later refusal unchanged |
 
 ## 8. Failure modes
@@ -529,7 +557,7 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
 | F1 | Wrong Neon key or org | Positive control fails → refused; nothing created |
 | F2 | Neon outage | `original-exists` → wait (B.1) |
 | F3 | Control-plane project deleted minutes ago | `recoverable` → recover in the console |
-| F4 | A second press after a successful one | `rebuild-exists`, unless repointed (then leg (a) refuses with 200) |
+| F4 | A second press after a successful one | `rebuild-exists`, with a refusal that says not to delete a project in use; or, if fully repointed, leg (a) refuses with 200 |
 | F5 | Two presses at once | ECS oldest-wins |
 | F6 | No `BACKUP` line for the newest dump | Skipped; an older one is used; counted |
 | F7 | A corrupt or tampered dump, or another environment's | The context (per-environment id) or count check fails → next candidate |
@@ -539,7 +567,7 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
 | F11 | Founder repoints only some places | A stale SSM URL → backups fail `connect` → `backup-failed`. A stale GitHub secret → the deploy fails. A stale `.env.local` → `--project-proven-gone`'s positive control refuses (wrong endpoint host). B.5 lists all of them |
 | F12 | A `LINKED` project's connection string can't be read | Listed; never guessed |
 | F13 | The reconcile is interrupted | Re-run `reconcile`: guarded and idempotent |
-| F14 | A Stripe webhook during the outage | 5xx → Stripe retries; processed after repoint. A missed or lost fact comes back with the replay (B.8) |
+| F14 | A Stripe webhook during the outage | 5xx → Stripe retries; processed after repoint. A missed or lost fact comes back with the resync (B.8) |
 | F15 | A notice is re-sent | Accepted; dates only move later |
 | F16 | A window signup's slug is taken by someone new | Blocked while the alert is open |
 | F17 | Staging shares the org | Its new projects list as `other` or `signup`; the founder resolves them by hand |
@@ -547,18 +575,20 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
 | F19 | A workspace classified lost was only slow | 3c's proof: the shared network-first and positive control, (d) with no answer, no serving candidate |
 | F20 | `--project-proven-gone` against a live project | Refused (200, an endpoint answer, or no `auth` failure) |
 | F21 | A rehearsal copy is left behind | 3c's `rehearse` rows in the real control plane → the leftover alert after 6 h |
-| F22 | A trial converted in the window (customer link lost) | B.8 replay → `checkout.session.completed` relinks it by `metadata.slug` |
+| F22 | A trial converted in the window (customer link lost) | B.8 resync → the window's completed checkout relinks it, and `reconcileInLock` mirrors the live subscription |
 | F23 | A forced deletion in the window | Shows as recoverable-not-due or lost → B.9 says check receipts first |
 | F24 | A due date cancelled in the window, then the project lost | `tenant:delete` aborts on the live subscription → B.9: treat as lost |
 | F25 | A row restored mid-change (`deleting`/`provisioning`, project live) | Listed `in progress` |
-| F26 | Pressing a new mode before the Backup system deploy is approved | Exit 2 → the button says "approve the pending deploy" |
+| F27 | The founder repointed Vercel and GitHub but not SSM, then pressed again | Leg (d) refuses `reachable` with the SSM hint, or step 4 refuses `rebuild-exists` with the don't-delete wording; nothing is created |
+| F28 | The backup id was typed wrong (staging's value in production) | The whitelist allows only two values; 13b steps 9/12 check for the right `BACKUP` line; the founder fixes SSM before production's first backup |
+| F26 | Pressing a new mode before the Backup system deploy is approved | The button reads the stack's `DisasterModes` and refuses with "approve the pending deploy"; no task starts |
 
 ## 9. Platform limits
 - **The control plane is small:** a restore takes minutes, inside the 330-minute deadline.
 - **The reconcile** makes about 1 Neon call per tenant, plus shared lists, at concurrency 4. That's minutes at 1,000 tenants, with 3c's 429/423 backoff.
 - **`FilterLogEvents`:** two scans, paginated, under 25 TPS.
 - **The email:** lists truncated at 200 per class, under SNS's 256 KB.
-- **Stripe replay:** one list call per 100 events, plus the handler's own reads, run sequentially. A day of events at launch is tens to hundreds.
+- **Stripe resync:** one paginated session list, plus about 3 Stripe reads per paying tenant (`reconcileInLock` and the live customer), run sequentially. At launch, minutes; at 1,000 paying tenants, under Stripe's rate limits with its SDK retries.
 
 ## 10. Blast radius
 - **`scripts/backup/`:**
@@ -572,22 +602,23 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
   - `disaster-workspace.ts` (line 104 text);
   - `lib/neon-api.ts` (`createdAt`, `getConnectionUri`, the owner lookup);
   - `lib/classify-endpoint.ts` (`CONTROL_PLANE_RULE`);
+  - `lib/project-names.ts` (new, §6.11; `disaster-steps.ts`'s `rebuildName` moves here unchanged);
   - `lib/disaster-proofs.ts`;
   - `disaster-button.sh`, `lib/expected-policies.ts`.
-- **`.github/workflows/disaster-restore.yml`;** **`ops/aws/backup-stack.yml`.**
+- **`.github/workflows/disaster-restore.yml`;** **`ops/aws/backup-stack.yml`** (secrets, env, grants, schedule, `DisasterModes`, the start-email template).
 - **App and scripts:**
   - `src/lib/tenant/delete-tenant.ts` and `scripts/delete-tenant.ts`;
   - `src/lib/tenant/disaster-status.ts`;
   - `src/lib/tenant/slug-rules.ts`, `server/internal/signup.ts`, `src/lib/tenant/provision.ts`;
-  - `src/app/api/stripe/webhook/route.ts` and `src/lib/billing/webhook-events.ts` (new);
-  - `scripts/tenant-admin.ts` and `src/lib/tenant/admin-commands.ts` (`stripe-replay`).
+  - `src/app/api/stripe/webhook/route.ts` (the checkout link rule moves into `src/lib/billing/checkout-link.ts`, behaviour unchanged);
+  - `scripts/tenant-admin.ts` and `src/lib/tenant/admin-commands.ts` (`stripe-resync`).
 - **Docs:**
-  - `RESTORE.md`;
-  - `PRODUCTION-DEPLOY.md` (13b step 6/11 backup id; 13c additions);
+  - `RESTORE.md` (B, C, A.7/A.8, the A.11 control-plane line, `:137`'s rehearsal times, templates);
+  - `PRODUCTION-DEPLOY.md` (13b steps 6/9/11/12 backup id and checks; the quiet-window sentences; 13c additions);
   - `TENANT-DELETION.md`;
   - `FOUNDER-ACCOUNTS-SETUP.md`;
   - `.env.example` (`CONTROL_PLANE_PROJECT_ID` noted for local admin use).
-- **Tests:** §11. Existing 3b and 3c tests pass unchanged. Those that build log lines or keys inside ECS gain the env.
+- **Tests:** §11. Existing 3b and 3c tests pass unchanged. Those that build log lines or keys inside ECS gain the env, and those that call the three callers pass `cpId`.
 
 ## 11. Required tests (each fails without the change it proves)
 **Testing rules (3c lessons):**
@@ -598,38 +629,39 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
 
 | # | Scenario |
 |---|---|
-| T1 | `controlPlaneId`: env → value; invalid → throws; unset → the host hash. `parseBackupLine` accepts a `prod` line and a host-hash line |
+| T1 | `controlPlaneId`: `prod`/`staging` → that value; anything else (`probe`, `Prod`) → throws; unset → the host hash. `parseBackupLine` accepts `prod`, `staging` and host-hash lines, and rejects others. `main` passes `cpId` in deps (a test env without a global env still uses it) |
 | T2 | `main.ts` in ECS without the id → fatal; `--self-check` runs |
-| T3 | U6: the id secret on all four task definitions, plus the exec grants; the restore-test URL secret, `DISASTER_LOG_GROUP` and the disaster log-group read; the schedule name, cron and input exact; no `ssm:PutParameter` |
+| T3 | U6: the id secret on backup, restore-test and disaster (not audit), plus their exec grants; the restore-test URL secret, `DISASTER_LOG_GROUP` and the disaster log-group read; the `DisasterModes` output; the schedule name, cron and input exact; the start-email template names both rehearsals; no `ssm:PutParameter` |
 | T4 | Backup → control-plane rebuild → **a workspace rebuild finds the pre-rebuild tenant backup** (fails with the host hash) |
 | T5 | The restore test after a rebuild finds the control-plane backup |
-| T6 | Parse and button: each new combination accepted; wrong ones refused; an unknown mode exits **2**; override `none` (and `canary` refused for the control-plane target); confirm = mode; the startedBy gate |
+| T6 | Parse and button: each new combination accepted; wrong ones refused (exit 1, the existing tests unchanged); a mode or target missing from the stack's `DisasterModes` → the button refuses before any `run-task`, with the deploy hint; override `none` (`canary` refused for the control-plane target); confirm = mode; the startedBy gate |
 | T7 | Gone-proof legs one at a time: 200, recoverable, list without the restore-test id, login, served, network unproven → each refusal; full proof → proceeds |
-| T8 | `rebuild-exists`: a live `cadenzpoint-control-r202611180000-1` → refused at any age; `cadenzpoint-control-risk` (a slug-shaped name) → not counted; an incomplete list → `proof-failed` |
+| T8 | `rebuild-exists`: a live project named by the §6.11 builder → refused at any age, with the don't-delete wording; `cadenzpoint-control-risk` → not counted; an incomplete list → `proof-failed`. `reachable` carries the SSM hint |
 | T9 | Candidates: no line → skipped; integrity → older (≤ 3); infrastructure → the same once, then `retryable`; each failed project deleted and verified; another environment's dump fails the context check |
 | T10 | Re-check: original back → the new project deleted, `original-back`, nothing recorded |
 | T11 | Recording: the run row and watch are in the **new** control plane, in one transaction; no `disaster_actions` row; nothing written to the old URL (spy). A recording failure → project deleted, `retryable` |
 | T12 | **The daily disaster checks raise nothing about the rebuilt control plane** (no `rebuild-orphan-project`) |
 | T13 | The task constructs no SSM-write, Vercel or Stripe client |
-| T14 | R2: `LINKED` + row on `old` → relinked (`connection_uri`, full guard, audit, watch); old→n1→n2 out of order in the input → ends on n2; `SWITCHING` without `LINKED` → listed; a 404 project → listed; a row changed meanwhile, or now due → not applied |
+| T14 | R2 chains: old→n1→n2 with n1 gone (as in reality), lines shuffled → one update old→n2, `RELINKED <t> old n2`; a re-run → "already applied", nothing listed; `SWITCHING` without `LINKED` at the end → listed; healed `-` → listed; end 404 → listed; row due or changed → not applied; no `SWITCHING`/`LINKED` lines written by R2; the guard uses the **new** control plane's host |
 | T15 | R3: every row of the table, including the `in progress` rows, a null project id → unknown, and R1 failing → all unknown |
 | T16 | `--skip-lost` skips `window-deleted` and `recoverable-deleted`; superseded by a newer `linked` or `ok` |
-| T17 | R4 bounds: created 30 min before `windowStart` and unreferenced → listed; after `windowEnd` → not listed; referenced, control-plane, restore-test, canary, cp-rebuild and rehearsal names excluded; types exact (`cadenzpoint-r-and-d` is `signup`, not `rebuild`); an existing resolved alert → not reopened |
+| T17 | R4 bounds: created 30 min before `windowStart` and unreferenced → listed; after `windowEnd` → not listed; referenced, control-plane, restore-test, canary, cp-rebuild, rehearsal and chain-end projects excluded; types from §6.11's regexes (`cadenzpoint-r-and-d` → `signup`; a real 3c rebuild name → `rebuild`); an existing resolved alert → not reopened |
 | T18 | The mass warning at 3, not at 2 |
-| T19 | A reconcile re-run is idempotent; standalone without a control-plane run → `no-rebuild` |
-| T20 | Summary merge: `backupStartedAt` survives the finish; 3c's final update writes `target`; a missing target counts as `workspace` |
-| T21 | Rehearsal: rows in the real control plane (`intended`/`created`/`rehearsed-deleted`); proof rows only in the copy; the copy deleted; a delete failure → `fail` and the leftover alert later; retries in one minute use distinct names |
+| T19 | A reconcile re-run is quiet (no relink, no listing of already-applied chains, alerts deduped); standalone without a control-plane run → `no-rebuild`; standalone when the control plane doesn't answer → `repoint-first` |
+| T20 | `target` written at INSERT for every mode; the summary merges (`backupStartedAt` survives); a row closed by the outer catch, abandoned close or digest keeps `target`; a missing target counts as `workspace` |
+| T21 | Rehearsal: rows in the real control plane (`intended`/`created`/`rehearsed-deleted`); proof rows only in the copy; the copy deleted; a delete failure → `fail` and the leftover alert later; the reconcile throwing → `fail`; `unknown` counts don't fail it; retries in one minute use distinct names |
 | T22 | `disaster-rehearse-failed` per target |
-| T23 | `--project-proven-gone`: each check of §7.4 refuses alone (including a timeout instead of `auth`, and a control-plane endpoint host mismatch); all pass → the Stripe steps run (spy), tombstone, receipt line; no-op on a resumed `deleting` run; without the flag the refusal is unchanged; preconditions apply without `--force-with-reason` |
-| T24 | Reserved slugs refused (each exact name and pattern); an ordinary slug still valid |
+| T23 | `--project-proven-gone`: each check of §7.4 refuses alone (including a timeout instead of `auth`, a control-plane endpoint host mismatch, and a live org project serving the tenant's host); all pass → the Stripe steps run (spy), tombstone, receipt line; no-op on a resumed `deleting` run; without the flag the refusal is unchanged; preconditions apply without `--force-with-reason` |
+| T24 | Reserved slugs refused (each exact name; each §6.11 pattern built by its builder → its slug part refused); an ordinary slug valid; §6.11 builder → regex round trip for all three names |
 | T25 | Signup and provision refuse an open window slug; available after resolve; also after the daily check sees a tenant reference it |
 | T26 | Monitoring: `window-project` 404 → resolved; Neon failure → open; not resolved by the `NEON_KINDS` sweep; the control-plane watch wording |
-| T27 | `stripe-replay`: dry run prints the plan and calls nothing; `--yes` calls `processStripeEvent` oldest first; a converted trial relinked; idempotent on a second run; `--since` beyond 30 days refused; a mode mismatch refused |
-| T28 | `processStripeEvent` extraction: the existing webhook tests pass unchanged; `POST` still rejects a bad signature |
+| T27 | `stripe-resync`: dry run writes nothing; `--yes` relinks a window checkout through `checkoutLinkPatch` (a conflict raises the alert and isn't linked); refreshes every paying tenant through `reconcileInLock` with the live billing email; no notice delivered, no `after()` call, no email printed; a second run changes nothing; exit 1 if any failed; a mode mismatch refused |
+| T28 | `checkoutLinkPatch` extraction: the existing webhook tests pass unchanged |
 | T29 | Email and logs: truncation; no URL or secret; ids only (`DISASTER-PROJECT`, `RELINKED`); the public button log shows no target |
 
 ## 12. Founder steps and rehearsal (`PRODUCTION-DEPLOY.md`)
-1. **13b step 6:** create `/cadenzpoint/backup/control-plane-backup-id` = `staging` for the rehearsal. **Step 11:** switch it to `prod` with the URL and key.
+0. **If 13b is already done when 3c-2 deploys:** create `/cadenzpoint/backup/control-plane-backup-id` = `prod` **before** approving the Backup system deploy. Without it, ECS can't start any backup, restore-test or disaster task.
+1. **13b step 6:** create the parameter = `staging` for the rehearsal; step 9 checks for a `BACKUP staging control-plane` line. **Step 11:** switch it to `prod` with the URL and key; step 12 checks for a `BACKUP prod control-plane` line.
 2. **13c, after the deploy that merges 3c-2:** Actions → Disaster restore → `rehearse`, targets `control-plane`, confirm `rehearse`. Expect `pass`, and no `cadenzpoint-rehearse-cp-*` project left.
 3. **`.env.local`:** add `CONTROL_PLANE_PROJECT_ID` (production's).
 4. **A 13b note** if production backups already existed (§6.0).
@@ -644,7 +676,7 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
   - the button refusals;
   - the reserved and window slugs;
   - `--project-proven-gone` against a local workspace (test-only Neon seam);
-  - `stripe-replay`'s dry run with a stub;
+  - `stripe-resync`'s dry run with a stub;
   - the reconcile against a scratch control plane with fakes.
 
 ## 14. Hand-off rules
@@ -695,3 +727,27 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
     - null project id → unknown;
     - `window-project` kept out of `NEON_KINDS`;
     - the founder-export audit gap.
+- **v1.2, round 2** (2 fresh reviewers; 20 findings: 3 HIGH, 9 MEDIUM, 8 LOW). All fixed:
+  - **HIGH:**
+    - **R2 chains never applied** (middle projects are gone by design) → follow each chain to its end, check only the end, apply once, log `RELINKED`;
+    - **the Stripe replay couldn't run** (`after()` outside a request; working around it would breach constraint 2) and **would replay event-anchored side effects** (a false bank-failure email, a stale billing email) → replaced by `stripe-resync`: re-link window checkouts with the webhook's own rule, and refresh every paying tenant with `reconcileInLock` and live customer reads. No replay, no notice delivery;
+    - **`rebuild-exists` could lead the founder to delete the live control plane** (repointed Vercel but not SSM) → don't-delete wording, the SSM hint on `reachable`, and B.3 aligned.
+  - **MEDIUM:**
+    - exit 2 can't help the image running during the upgrade → the button reads the stack's `DisasterModes`;
+    - the id whitelisted to `prod|staging`, with 13b `BACKUP`-line checks;
+    - a missing SSM parameter stops every task → §12 step 0;
+    - `target` written at INSERT;
+    - 3c's rebuild stamp is 14 digits → one names module with round-trip tests (§6.11);
+    - R2 re-runs listed already-applied chains → "already applied";
+    - B.6 failed when there were unknowns → B.5a;
+    - `stripe-resync` rolling back the billing email → live reads.
+  - **LOW:**
+    - `candidateServes` added to `--project-proven-gone`;
+    - `Built` and the new control plane's host spelled out;
+    - the reserved-slug message is "invalid";
+    - B.10's criteria;
+    - the start-email template and the rehearsal times;
+    - `main` resolves `cpId` once, and audit doesn't need the id;
+    - A.11's control-plane line, and `repoint-first`;
+    - `DISASTER_LOG_GROUP` for the control-plane rehearsal;
+    - the rehearsal's pass rule.
