@@ -7,7 +7,6 @@
  */
 import { decrypt } from '../../src/lib/encryption';
 import { toDirectConnectionUrl } from '../../src/lib/tenant/direct-url';
-import { controlPlaneId } from './lib/keys';
 import { pgConnector } from './lib/classify-endpoint';
 import { liveTenants, loadTenant, type TenantFacts } from './lib/disaster-sql';
 import { summaryOf } from './lib/summarize-error';
@@ -28,7 +27,7 @@ const LIVE = new Set(['active', 'suspended', 'provisioning']);
 
 export function stepEnv(ctx: RunContext, projectKind: StepEnv['projectKind']): StepEnv {
   return {
-    args: ctx.args, deps: ctx.deps, cp: ctx.cp, cpId: controlPlaneId(ctx.deps.controlPlaneUrl),
+    args: ctx.args, deps: ctx.deps, cp: ctx.cp, cpId: ctx.deps.cpId,
     cpDirectHost: directHost(new URL(toDirectConnectionUrl(ctx.deps.controlPlaneUrl)).hostname),
     neon: ctx.deps.neon, connect: ctx.deps.connector ?? pgConnector({ hostMap: ctx.deps.hostMap }), now: ctx.now, sleep: ctx.sleep, log: ctx.log,
     signal: ctx.signal, projectKind, timing: { ...DEFAULT_TIMING, ...ctx.deps.timing },

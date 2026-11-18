@@ -43,7 +43,7 @@ describe('U5: outside ECS', () => {
 });
 
 describe('U5: environment checks in ECS', () => {
-  const backupEnv = { ...ECS, CONTROL_PLANE_DATABASE_URL: 'postgresql://u:p@ep-x.us-east-1.aws.neon.tech/db', ENCRYPTION_KEY: KEY, BACKUP_BUCKET: 'b', BACKUP_KMS_KEY_ARN: ARN, AWS_REGION: 'us-east-1', BACKUP_PG_DUMP_BIN: '/usr/lib/postgresql/16/bin/pg_dump' };
+  const backupEnv = { ...ECS, BACKUP_CONTROL_PLANE_ID: 'prod', CONTROL_PLANE_DATABASE_URL: 'postgresql://u:p@ep-x.us-east-1.aws.neon.tech/db', ENCRYPTION_KEY: KEY, BACKUP_BUCKET: 'b', BACKUP_KMS_KEY_ARN: ARN, AWS_REGION: 'us-east-1', BACKUP_PG_DUMP_BIN: '/usr/lib/postgresql/16/bin/pg_dump' };
   it('backup: every value present and valid → ok; each missing or empty one is fatal with its name; a non-hex key; a wrong region; pg_dump 17', async () => {
     expect(await main(['backup'], backupEnv, { log: () => {}, runVersion: pg16, checksOnly: true })).toBe(0);
     for (const k of ['CONTROL_PLANE_DATABASE_URL', 'ENCRYPTION_KEY', 'BACKUP_BUCKET', 'BACKUP_KMS_KEY_ARN', 'AWS_REGION', 'BACKUP_PG_DUMP_BIN']) {
@@ -61,7 +61,7 @@ describe('U5: environment checks in ECS', () => {
   });
 
   it('restore-test and audit: their required values; an alias for the key is refused', async () => {
-    const rt = { ...ECS, CONTROL_PLANE_DATABASE_URL: 'x', RESTORE_TEST_DATABASE_URL: 'y', BACKUP_BUCKET: 'b', BACKUP_KMS_KEY_ARN: ARN, AWS_REGION: 'us-east-1', BACKUP_PG_RESTORE_BIN: '/usr/lib/postgresql/16/bin/pg_restore' };
+    const rt = { ...ECS, BACKUP_CONTROL_PLANE_ID: 'prod', CONTROL_PLANE_DATABASE_URL: 'x', RESTORE_TEST_DATABASE_URL: 'y', BACKUP_BUCKET: 'b', BACKUP_KMS_KEY_ARN: ARN, AWS_REGION: 'us-east-1', BACKUP_PG_RESTORE_BIN: '/usr/lib/postgresql/16/bin/pg_restore' };
     expect(await main(['restore-test'], rt, { log: () => {}, runVersion: pg16, checksOnly: true })).toBe(0);
     expect(await main(['restore-test'], { ...rt, RESTORE_TEST_DATABASE_URL: '' }, { log: () => {}, runVersion: pg16, checksOnly: true })).toBe(1);
     const alias = capture();
@@ -84,7 +84,7 @@ describe('U5: environment checks in ECS', () => {
 describe('3c: the disaster command (feature-plan-disaster-restore.md §6.3, §6.4 "argv")', () => {
   const A = '0a1b2c3d-1111-4222-8333-444455556666';
   const env = {
-    ...ECS, CONTROL_PLANE_DATABASE_URL: 'postgresql://u:p@ep-x-pooler.us-east-1.aws.neon.tech/cp', ENCRYPTION_KEY: KEY, NEON_API_KEY: 'k', NEON_ORG_ID: 'org-1',
+    ...ECS, BACKUP_CONTROL_PLANE_ID: 'prod', CONTROL_PLANE_DATABASE_URL: 'postgresql://u:p@ep-x-pooler.us-east-1.aws.neon.tech/cp', ENCRYPTION_KEY: KEY, NEON_API_KEY: 'k', NEON_ORG_ID: 'org-1',
     RESTORE_TEST_PROJECT_ID: 'prj-rt', CONTROL_PLANE_PROJECT_ID: 'prj-cp', BACKUP_BUCKET: 'b', BACKUP_KMS_KEY_ARN: ARN, BACKUP_DECRYPT_KEY_ARNS: ARN,
     ALERT_TOPIC_ARN: 't', BACKUP_LOG_GROUP: '/cadenzpoint/backup/backup', NEON_REGION_ID: 'aws-us-east-1', AWS_REGION: 'us-east-1',
     BACKUP_PG_RESTORE_BIN: '/usr/lib/postgresql/16/bin/pg_restore', DISASTER_DEADLINE_MINUTES: '330',
@@ -127,6 +127,78 @@ describe('3c: the disaster command (feature-plan-disaster-restore.md §6.3, §6.
     // Neither seam is ever read from the environment.
     for (const f of ['scripts/backup/disaster.ts', 'scripts/backup/disaster-workspace.ts', 'scripts/backup/disaster-steps.ts']) {
       expect(readFileSync(new URL(`../../../${f}`, import.meta.url), 'utf8'), f).not.toMatch(/env\.(HOST_MAP|CONNECTOR)|process\.env\.[A-Z_]*(HOST|CONNECT)/);
+    }
+  });
+});
+
+// ---- feature-plan-control-plane-disaster.md §11 T1 (main's half), T2 -------------------------------------------------
+describe('T2: the backup id in ECS', () => {
+  const base = { ...ECS, CONTROL_PLANE_DATABASE_URL: 'postgresql://u:p@ep-x-pooler.us-east-1.aws.neon.tech/cp', ENCRYPTION_KEY: KEY, BACKUP_BUCKET: 'b', BACKUP_KMS_KEY_ARN: ARN, AWS_REGION: 'us-east-1' };
+  const cmds: Array<[string[], Record<string, string>]> = [
+    [['backup'], { BACKUP_PG_DUMP_BIN: '/usr/lib/postgresql/16/bin/pg_dump' }],
+    [['restore-test'], { RESTORE_TEST_DATABASE_URL: 'y', BACKUP_PG_RESTORE_BIN: '/usr/lib/postgresql/16/bin/pg_restore' }],
+    [['disaster', 'rehearse', '--targets', 'auto'], {
+      NEON_API_KEY: 'k', NEON_ORG_ID: 'org-1', RESTORE_TEST_PROJECT_ID: 'prj-rt', CONTROL_PLANE_PROJECT_ID: 'prj-cp', ALERT_TOPIC_ARN: 't',
+      BACKUP_LOG_GROUP: '/cadenzpoint/backup/backup', NEON_REGION_ID: 'aws-us-east-1', BACKUP_PG_RESTORE_BIN: '/usr/lib/postgresql/16/bin/pg_restore',
+    }],
+  ];
+  for (const [argv, extra] of cmds) {
+    it(`${argv[0]}: missing → fatal; \`Prod\` or \`probe\` → fatal; \`prod\` and \`staging\` → ok`, async () => {
+      const env = { ...base, ...extra };
+      const missing = capture();
+      expect(await main(argv, env, { log: missing.log, runVersion: pg16, checksOnly: true })).toBe(1);
+      expect(missing.lines).toEqual(['fatal: BACKUP_CONTROL_PLANE_ID is required (SSM /cadenzpoint/backup/control-plane-backup-id)']);
+      for (const bad of ['Prod', 'probe', '']) {
+        const c = capture();
+        expect(await main(argv, { ...env, BACKUP_CONTROL_PLANE_ID: bad }, { log: c.log, runVersion: pg16, checksOnly: true }), bad).toBe(1);
+        expect(c.lines[0]).toMatch(/^fatal: BACKUP_CONTROL_PLANE_ID (is required|must be prod or staging)/);
+      }
+      for (const good of ['prod', 'staging']) expect(await main(argv, { ...env, BACKUP_CONTROL_PLANE_ID: good }, { log: () => {}, runVersion: pg16, checksOnly: true }), good).toBe(0);
+    });
+  }
+
+  it('audit and --self-check never read it', async () => {
+    const au = { ...ECS, CONTROL_PLANE_DATABASE_URL: 'x', RESTORE_TEST_DATABASE_URL: 'y', BACKUP_BUCKET: 'b', BACKUP_KMS_KEY_ARN: ARN, ALERT_TOPIC_ARN: 't', ALERT_RULE_NAMES: 'a,b', TRAIL_NAME: 'tr', DLQ_ALARM_NAME: 'd', AWS_REGION: 'us-east-1' };
+    expect(await main(['audit'], au, { log: () => {}, checksOnly: true })).toBe(0);
+    expect(await main(['audit'], { ...au, BACKUP_CONTROL_PLANE_ID: 'junk' }, { log: () => {}, checksOnly: true })).toBe(0);
+    expect(await main(['--self-check'], { BACKUP_CONTROL_PLANE_ID: 'junk' }, { log: () => {}, runVersion: pg16 })).toBe(0);
+  });
+
+  it('the control-plane modes also need RESTORE_TEST_DATABASE_URL and DISASTER_LOG_GROUP; the workspace modes don\'t', async () => {
+    const env = { ...base, ...cmds[2][1], BACKUP_CONTROL_PLANE_ID: 'prod', RESTORE_TEST_DATABASE_URL: 'y', DISASTER_LOG_GROUP: '/cadenzpoint/backup/disaster' };
+    for (const argv of [['disaster', 'control-plane', '--targets', 'control-plane'], ['disaster', 'reconcile', '--targets', 'control-plane'], ['disaster', 'rehearse', '--targets', 'control-plane']]) {
+      expect(await main(argv, env, { log: () => {}, runVersion: pg16, checksOnly: true }), argv[1]).toBe(0);
+      for (const k of ['RESTORE_TEST_DATABASE_URL', 'DISASTER_LOG_GROUP']) {
+        const c = capture();
+        expect(await main(argv, { ...env, [k]: '' }, { log: c.log, runVersion: pg16, checksOnly: true }), `${argv[1]} ${k}`).toBe(1);
+        expect(c.lines).toEqual([`fatal: ${k} is not set`]);
+      }
+    }
+    const workspaceEnv: Record<string, string> = { ...env };
+    delete workspaceEnv.RESTORE_TEST_DATABASE_URL;
+    delete workspaceEnv.DISASTER_LOG_GROUP;
+    expect(await main(['disaster', 'rehearse', '--targets', 'auto'], workspaceEnv, { log: () => {}, runVersion: pg16, checksOnly: true })).toBe(0);
+  });
+});
+
+describe('T1: main resolves the id once and passes cpId to every task', () => {
+  it('resolveCpId uses the env it is given (not the process environment); outside ECS it falls back to the host hash', async () => {
+    const { resolveCpId } = await import('../../../scripts/backup/main');
+    const { controlPlaneId } = await import('../../../scripts/backup/lib/keys');
+    expect(process.env.BACKUP_CONTROL_PLANE_ID).toBeUndefined();
+    expect(resolveCpId({ ...ECS, BACKUP_CONTROL_PLANE_ID: 'staging' }, 'postgresql://u:p@ep-x.us-east-1.aws.neon.tech/cp')).toBe('staging');
+    expect(resolveCpId({ BACKUP_CONTROL_PLANE_ID: 'prod' }, 'postgresql://u:p@localhost/cp')).toBe('prod');
+    expect(resolveCpId({}, 'postgresql://u:p@localhost/cp')).toBe(controlPlaneId('postgresql://u:p@localhost/cp', {}));
+    expect(() => resolveCpId({ BACKUP_CONTROL_PLANE_ID: 'Prod' }, 'postgresql://u:p@localhost/cp')).toThrow(/prod or staging/);
+  });
+
+  it('runBackup (both calls), runRestoreTest and runDisaster each receive cpId; the three callers never compute it', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../../../scripts/backup/main.ts', import.meta.url), 'utf8');
+    for (const call of src.split(/await (?=run(?:Backup|RestoreTest|Disaster)\()/).slice(1)) expect(call.slice(0, 400)).toMatch(/\bcpId\b/);
+    expect(src.match(/await run(Backup|RestoreTest|Disaster)\(/g)).toHaveLength(4);
+    for (const f of ['scripts/backup/backup.ts', 'scripts/backup/restore-test.ts', 'scripts/backup/disaster-workspace.ts', 'scripts/backup/disaster.ts']) {
+      expect(readFileSync(new URL(`../../../${f}`, import.meta.url), 'utf8'), f).not.toMatch(/controlPlaneId\(/);
     }
   });
 });

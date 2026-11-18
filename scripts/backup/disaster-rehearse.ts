@@ -19,8 +19,9 @@ import {
 } from './disaster-steps';
 import { cleanupBudgetMs, stepEnv } from './disaster-workspace';
 import type { RunContext, RunOutcome, WorkspaceResult } from './disaster';
+import { CANARY_PROJECT_NAME } from './lib/project-names';
 
-export const CANARY_NAME = 'cadenzpoint-recoverable-canary';
+export const CANARY_NAME = CANARY_PROJECT_NAME;
 export const REHEARSAL_SLUG = 'rehearsal';
 const LIVE = new Set(['active', 'suspended', 'provisioning']);
 

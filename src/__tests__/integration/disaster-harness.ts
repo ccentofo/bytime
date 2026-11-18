@@ -13,7 +13,6 @@ import { runDisaster, type DisasterArgs, type DisasterDeps } from '../../../scri
 import { neonApi } from '../../../scripts/backup/lib/neon-api';
 import { parseBackupLine, type BackupLine, type LogReader } from '../../../scripts/backup/lib/log-reader';
 import type { DisasterEcs, EcsTaskInfo } from '../../../scripts/backup/lib/aws-clients';
-import { controlPlaneId } from '../../../scripts/backup/lib/keys';
 import { FakeBucket, testKeyring } from '../helpers/backup-fakes';
 import { startFakeNeon, fakeHost, poolerOf, type FakeNeon } from '../helpers/fake-neon';
 import { startFakePgProxy, type FakePgProxy } from '../helpers/fake-pg-proxy';
@@ -23,6 +22,8 @@ export const PG_DUMP = process.env.BACKUP_PG_DUMP_BIN;
 export const PG_RESTORE = process.env.BACKUP_PG_RESTORE_BIN;
 if (process.env.REQUIRE_PG16_TOOLS === '1' && (!PG_DUMP || !PG_RESTORE)) throw new Error('REQUIRE_PG16_TOOLS=1 but BACKUP_PG_DUMP_BIN / BACKUP_PG_RESTORE_BIN are not set');
 export const CAN_RUN = Boolean(SERVER_URL && PG_DUMP && PG_RESTORE);
+/** feature-plan-control-plane-disaster.md §11: the disaster worlds back up under the per-environment id, as production does. */
+export const WORLD_CP_ID = 'prod';
 
 export interface WorldTenant {
   id: string;
@@ -93,7 +94,7 @@ async function buildWorld(n: number, prefix: string, undo: Array<() => Promise<u
   const logs: string[] = [];
   for (let run = 0; run < 2; run++) {
     const r = await runBackup({
-      controlPlaneUrl: cp.url, store: bucket, keyring: testKeyring(), pgDumpBin: PG_DUMP!, pgDumpVersion: 'pg_dump (PostgreSQL) 16',
+      controlPlaneUrl: cp.url, cpId: WORLD_CP_ID, store: bucket, keyring: testKeyring(), pgDumpBin: PG_DUMP!, pgDumpVersion: 'pg_dump (PostgreSQL) 16',
       runId: `test-${randomUUID().slice(0, 8)}`, log: (l) => logs.push(l),
     });
     if (r.exitCode !== 0) throw new Error(`the setup backup failed: ${logs.join('\n')}`);
@@ -112,7 +113,7 @@ async function buildWorld(n: number, prefix: string, undo: Array<() => Promise<u
   const rt = neon.addProject({ name: 'cadenzpoint-restore-test' });
   const cpp = neon.addProject({ name: 'cadenzpoint-control-plane' });
   return {
-    cp, cpSql, original, bucket, neon, proxy, lines, tenants, cpId: controlPlaneId(cp.url),
+    cp, cpSql, original, bucket, neon, proxy, lines, tenants, cpId: WORLD_CP_ID,
     restoreTestProjectId: rt.id, controlPlaneProjectId: cpp.id,
     async close() {
       await cpSql.end({ timeout: 5 });
@@ -144,6 +145,7 @@ export interface RunCapture {
 export function deps(w: World, cap: RunCapture, over: Partial<DisasterDeps> = {}): DisasterDeps {
   return {
     controlPlaneUrl: w.cp.url,
+    cpId: w.cpId,
     neon: neonApi({ apiKey: w.neon.apiKey, orgId: w.neon.orgId, baseUrl: w.neon.url, sleep: async () => {}, operationPollMs: 1 }),
     ecs: fakeEcs(),
     logReader: fakeLogReader(w.lines),

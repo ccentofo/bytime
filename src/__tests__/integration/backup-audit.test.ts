@@ -12,6 +12,7 @@ import { runAudit, type AuditDeps } from '../../../scripts/backup/audit';
 import { runBackup } from '../../../scripts/backup/backup';
 import { acquireLock } from '../../../scripts/backup/lib/locks';
 import { withDatabase } from '../../../scripts/backup/lib/pg-url';
+import { controlPlaneId } from '../../../scripts/backup/lib/keys';
 import { deniedKeyClient, FakeBucket, fakeAuditClients, fakeDumpArgs, TEST_KEY_ARN, testKeyring } from '../helpers/backup-fakes';
 import { adminUrl, createScratchDb, dropScratchDb, listRtDatabases, SERVER_URL } from './backup-helpers';
 
@@ -135,7 +136,7 @@ describe.skipIf(!SERVER_URL)('audit', () => {
     const bucket = new FakeBucket();
     const backupRun = `test-${randomUUID().slice(0, 8)}`;
     const r = await runBackup({
-      controlPlaneUrl: cp.url, store: bucket, keyring: testKeyring(), keyClient: deniedKeyClient(), pgDumpBin: 'unused', pgDumpVersion: 'x',
+      controlPlaneUrl: cp.url, cpId: controlPlaneId(cp.url), store: bucket, keyring: testKeyring(), keyClient: deniedKeyClient(), pgDumpBin: 'unused', pgDumpVersion: 'x',
       runId: backupRun, log: () => {}, hooks: { dumpCommand: () => ({ bin: process.execPath, args: fakeDumpArgs({}) }) },
     });
     expect(r.exitCode).toBe(0);

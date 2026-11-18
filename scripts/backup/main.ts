@@ -5,8 +5,9 @@
  *   backup [--if-missing-today] [--only control-plane|<slug>] [--dry-run] [--concurrency N]
  *   audit
  *   restore-test [--if-missed]
- *   disaster workspace|rehearse --targets … [--override …] [--run-id …]   (feature-plan-disaster-restore.md §6.4; an
- *                       unknown flag exits 2: the button reports "this image is older than the button")
+ *   disaster workspace|rehearse|control-plane|reconcile --targets … [--override …] [--run-id …]
+ *                       (feature-plan-disaster-restore.md §6.4, feature-plan-control-plane-disaster.md §6.1; an unknown
+ *                       flag exits 2: the button reports "this image is older than the button")
  *   --self-check        loads every module and checks pg_dump / pg_restore are 16.x; needs no environment
  *
  * No dotenv is loaded here (scripts/backup/local.ts loads it for the local dry run). Outside ECS (no
@@ -27,7 +28,7 @@ import { realAuditClients, realKeyProbeClient, realDisasterEcs, realPublisher } 
 import { checkToolVersion, defaultToolPath, FatalError, intEnv, isInEcs, listEnv, requireEnv, requireHexKey, runVersion, type Env, type VersionRunner } from './lib/env';
 import { isLoopbackUrl } from './lib/loopback';
 import { installCrashHandler, summaryOf } from './lib/summarize-error';
-import { newRunId } from './lib/keys';
+import { BACKUP_ID_RE, controlPlaneId, newRunId } from './lib/keys';
 import { MINUTE, HOUR } from './lib/util';
 import { tenantDbHistoryRetentionSeconds } from '../../src/lib/tenant/lifecycle-config';
 
@@ -43,6 +44,25 @@ export const OUTSIDE_ECS_REFUSAL = 'refused: outside ECS only `--self-check` and
 function flagValue(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
   return i === -1 ? undefined : argv[i + 1];
+}
+
+/**
+ * The backup id (feature-plan-control-plane-disaster.md §6.0), resolved once here and passed in every task's deps. Inside
+ * ECS a missing or invalid BACKUP_CONTROL_PLANE_ID is fatal (the stack injects it from SSM
+ * `/cadenzpoint/backup/control-plane-backup-id`); outside ECS (the local dry run) it falls back to the host hash.
+ */
+export function resolveCpId(env: Env, controlPlaneUrl: string): string {
+  if (isInEcs(env)) {
+    const id = env.BACKUP_CONTROL_PLANE_ID;
+    if (!id) throw new FatalError('BACKUP_CONTROL_PLANE_ID is required (SSM /cadenzpoint/backup/control-plane-backup-id)');
+    if (!BACKUP_ID_RE.test(id)) throw new FatalError('BACKUP_CONTROL_PLANE_ID must be prod or staging');
+    return id;
+  }
+  try {
+    return controlPlaneId(controlPlaneUrl, env);
+  } catch (e) {
+    throw new FatalError((e as Error).message);
+  }
 }
 
 function requireRegion(env: Env): string {
@@ -79,12 +99,13 @@ export async function main(argv: string[], env: Env, seams: MainSeams = {}): Pro
       if (command === 'backup') {
         const controlPlaneUrl = requireEnv(env, 'CONTROL_PLANE_DATABASE_URL');
         requireHexKey(env);
+        const cpId = resolveCpId(env, controlPlaneUrl);
         const only = flagValue(argv, '--only');
         const concurrencyFlag = flagValue(argv, '--concurrency');
         if (dryRun) {
           if (seams.checksOnly) return 0;
           return (await runBackup({
-            controlPlaneUrl, store: undefined as never, keyring: undefined as never, pgDumpBin: '', pgDumpVersion: '', runId: newRunId(now), log,
+            controlPlaneUrl, cpId, store: undefined as never, keyring: undefined as never, pgDumpBin: '', pgDumpVersion: '', runId: newRunId(now), log,
             options: { dryRun: true, only },
           })).exitCode;
         }
@@ -98,7 +119,7 @@ export async function main(argv: string[], env: Env, seams: MainSeams = {}): Pro
         if (seams.checksOnly) return 0;
         const s3 = new S3Client({ region });
         return (await runBackup({
-          controlPlaneUrl, store: s3Store(s3, bucket), keyring: kmsKeyringFactory(keyArn), keyClient: realKeyProbeClient(region, keyArn),
+          controlPlaneUrl, cpId, store: s3Store(s3, bucket), keyring: kmsKeyringFactory(keyArn), keyClient: realKeyProbeClient(region, keyArn),
           pgDumpBin, pgDumpVersion, runId: newRunId(now), log, concurrency, targetDeadlineMs, stopSignal: stop.signal,
           options: { ifMissingToday: argv.includes('--if-missing-today'), only },
         })).exitCode;
@@ -106,6 +127,7 @@ export async function main(argv: string[], env: Env, seams: MainSeams = {}): Pro
       if (command === 'restore-test') {
         const controlPlaneUrl = requireEnv(env, 'CONTROL_PLANE_DATABASE_URL');
         const restoreTestUrl = requireEnv(env, 'RESTORE_TEST_DATABASE_URL');
+        const cpId = resolveCpId(env, controlPlaneUrl);
         const bucket = requireEnv(env, 'BACKUP_BUCKET');
         const keyArn = requireEnv(env, 'BACKUP_KMS_KEY_ARN');
         const region = requireRegion(env);
@@ -119,7 +141,7 @@ export async function main(argv: string[], env: Env, seams: MainSeams = {}): Pro
         if (seams.checksOnly) return 0;
         const s3 = new S3Client({ region });
         return (await runRestoreTest({
-          controlPlaneUrl, restoreTestUrl, reader: s3Reader(s3, bucket), store: s3Store(s3, bucket), keyring, pgRestoreBin, runId: newRunId(now), log,
+          controlPlaneUrl, cpId, restoreTestUrl, reader: s3Reader(s3, bucket), store: s3Store(s3, bucket), keyring, pgRestoreBin, runId: newRunId(now), log,
           ifMissed: argv.includes('--if-missed'), concurrency, runDeadlineMs, targetDeadlineMs, stopSignal: stop.signal,
         })).exitCode;
       }
@@ -151,6 +173,12 @@ export async function main(argv: string[], env: Env, seams: MainSeams = {}): Pro
         }
         const controlPlaneUrl = requireEnv(env, 'CONTROL_PLANE_DATABASE_URL');
         requireHexKey(env);
+        const cpId = resolveCpId(env, controlPlaneUrl);
+        // feature-plan-control-plane-disaster.md §6.2 item 2: the control-plane modes need the restore-test URL (network
+        // first) and the disaster log group (the window's rebuild lines); 3c's workspace modes don't.
+        const needsCpEnv = parsed.args.mode === 'control-plane' || parsed.args.mode === 'reconcile' || parsed.args.targets === 'control-plane';
+        const restoreTestUrl = needsCpEnv ? requireEnv(env, 'RESTORE_TEST_DATABASE_URL') : undefined;
+        const disasterLogGroup = needsCpEnv ? requireEnv(env, 'DISASTER_LOG_GROUP') : undefined;
         const apiKey = requireEnv(env, 'NEON_API_KEY');
         const orgId = requireEnv(env, 'NEON_ORG_ID');
         const restoreTestProjectId = requireEnv(env, 'RESTORE_TEST_PROJECT_ID');
@@ -176,12 +204,12 @@ export async function main(argv: string[], env: Env, seams: MainSeams = {}): Pro
         if (seams.checksOnly) return 0;
         const s3 = new S3Client({ region });
         return (await runDisaster(parsed.args, {
-          controlPlaneUrl, neon: neonApi({ apiKey, orgId }), ecs: realDisasterEcs({ region, metadataUri, family: 'cadenzpoint-backup-disaster' }),
-          logReader: realLogReader({ region, logGroup }), reader: s3Reader(s3, bucket), keyring, publish: realPublisher({ region, topicArn }),
+          controlPlaneUrl, cpId, restoreTestUrl, neon: neonApi({ apiKey, orgId }), ecs: realDisasterEcs({ region, metadataUri, family: 'cadenzpoint-backup-disaster' }),
+          logReader: realLogReader({ region, logGroup }), disasterLogReader: disasterLogGroup ? realLogReader({ region, logGroup: disasterLogGroup }) : undefined, reader: s3Reader(s3, bucket), keyring, publish: realPublisher({ region, topicArn }),
           pgRestoreBin, regionId, restoreTestProjectId, controlPlaneProjectId, log, deadlineMs, stopSignal: stop.signal,
         })).exitCode;
       }
-      log('usage: backup [--if-missing-today] [--only <slug>|control-plane] [--dry-run] [--concurrency N] | audit | restore-test [--if-missed] | disaster workspace|rehearse --targets … | --self-check');
+      log('usage: backup [--if-missing-today] [--only <slug>|control-plane] [--dry-run] [--concurrency N] | audit | restore-test [--if-missed] | disaster workspace|rehearse|control-plane|reconcile --targets … | --self-check');
       return 1;
     } finally {
       process.off('SIGTERM', onTerm);

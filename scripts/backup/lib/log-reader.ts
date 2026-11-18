@@ -21,7 +21,7 @@ export interface BackupLine {
   bytes: number;
 }
 
-const LINE_RE = /^BACKUP ([0-9a-f]{12}) (tenant|control-plane) (\S+) \S+ (\S+) (v1\/\S+\.dump\.enc) ([0-9a-f]{64}) (\d+)$/;
+const LINE_RE = /^BACKUP ([0-9a-f]{12}|prod|staging) (tenant|control-plane) (\S+) \S+ (\S+) (v1\/\S+\.dump\.enc) ([0-9a-f]{64}) (\d+)$/;
 
 /** One exact line, or null. Lines with a trailing ` row-failed` (the row insert failed) still confirm the object. */
 export function parseBackupLine(message: string): BackupLine | null {

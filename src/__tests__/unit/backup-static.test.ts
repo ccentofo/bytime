@@ -165,7 +165,7 @@ describe('U6: the backup can only add; the audit can only look', () => {
 describe('U6: schedules, tasks, alerting', () => {
   const schedules = ofType(stack, 'AWS::Scheduler::Schedule');
   it('every schedule pins a revision (Ref to the task definition), UTC, FlexibleTimeWindow OFF, a retry policy, the DLQ, created last', () => {
-    expect(schedules.length).toBe(6);
+    expect(schedules.length).toBe(7); // 3c-2 §6.2 item 3 adds the control-plane rehearsal
     const others = Object.entries(stack.Resources).filter(([, r]) => r.Type !== 'AWS::Scheduler::Schedule').map(([k]) => k).sort();
     for (const [name, s] of schedules) {
       const p = s.Properties;
@@ -335,14 +335,26 @@ describe('U6: the Dockerfile and the bundle inputs', () => {
     inputs = Object.keys(r.metafile!.inputs);
   }, 120_000);
 
-  it('every non-node_modules input of the esbuild bundle matches the deploy list; the src/ inputs are only the five named modules (3c adds db-name, lifecycle-config)', () => {
+  it('every non-node_modules input of the esbuild bundle matches the deploy list; the src/ inputs are only the six named modules (3c adds db-name, lifecycle-config; 3c-2 adds slug-rules)', () => {
     const own = inputs.filter((i) => !i.startsWith('node_modules/'));
     expect(own.length).toBeGreaterThan(10);
     expect(own.filter((i) => !listed(i))).toEqual([]);
-    expect(own.filter((i) => i.startsWith('src/')).sort()).toEqual(['src/lib/encryption.ts', 'src/lib/tenant/backup-locks.ts', 'src/lib/tenant/db-name.ts', 'src/lib/tenant/direct-url.ts', 'src/lib/tenant/lifecycle-config.ts']);
+    expect(own.filter((i) => i.startsWith('src/')).sort()).toEqual(['src/lib/encryption.ts', 'src/lib/tenant/backup-locks.ts', 'src/lib/tenant/db-name.ts', 'src/lib/tenant/direct-url.ts', 'src/lib/tenant/lifecycle-config.ts', 'src/lib/tenant/slug-rules.ts']);
     for (const f of ['tsconfig.backup.json', '.npmrc', 'ops/aws/pgdg-ACCC4CF8.asc', 'Dockerfile.backup', 'ops/aws/backup-stack.yml', '.github/workflows/backup-deploy.yml']) expect(listed(f), f).toBe(true);
     expect(listed('ops/aws/bootstrap.yml')).toBe(false);
     expect(listed('package.json')).toBe(false);
+  });
+
+  it('D2 (3c-2): every src/ input of the bundle has an exact `COPY <path> <path>` line in the builder stage, and tsconfig.backup.json includes it', () => {
+    const builder = read('Dockerfile.backup').split(/^FROM /m)[1];
+    const copies = new Set(builder.split('\n').filter((l) => l.startsWith('COPY ')).map((l) => l.trim()));
+    const include = (JSON.parse(read('tsconfig.backup.json')) as { include: string[] }).include;
+    const src = inputs.filter((i) => i.startsWith('src/'));
+    expect(src.length).toBeGreaterThan(0);
+    for (const f of src) {
+      expect(copies.has(`COPY ${f} ${f}`), `Dockerfile.backup: COPY ${f} ${f}`).toBe(true);
+      expect(include, `tsconfig.backup.json include: ${f}`).toContain(f);
+    }
   });
 });
 

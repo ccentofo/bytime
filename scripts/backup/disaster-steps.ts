@@ -24,6 +24,7 @@ import {
 } from './lib/disaster-sql';
 import type { DisasterArgs, DisasterDeps } from './disaster';
 import { rebuildSettings } from './disaster-settings';
+import { rebuildName } from './lib/project-names';
 import postgresLib from 'postgres';
 
 export const HOUR = 3600_000;
@@ -316,9 +317,8 @@ export function classifyRestoreFailure(e: unknown): Failure {
   return { kind: 'other', summary };
 }
 
-const stamp = (d: Date) => d.toISOString().replace(/[-:T]/g, '').slice(0, 14);
-/** `cadenzpoint-r-<tenant id first 8>-<yyyymmddhhmmss>-<try>` (≤ 40 characters, unique per try). */
-export const rebuildName = (tenantId: string, now: Date, tryNo: number) => `cadenzpoint-r-${tenantId.slice(0, 8)}-${stamp(now)}-${tryNo}`;
+/** `cadenzpoint-r-<tenant id first 8>-<yyyymmddhhmmss>-<try>`: moved to lib/project-names.ts (feature-plan-control-plane-disaster.md §6.11). */
+export { rebuildName };
 
 export type BuildResult =
   | { ok: true; built: Built }

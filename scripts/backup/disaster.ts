@@ -35,13 +35,15 @@ export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 export const RUN_ID_RE = /^[A-Za-z0-9_/-]{1,80}$/;
 export const MAX_TARGETS = 50;
 
-export type DisasterMode = 'workspace' | 'rehearse';
+export type DisasterMode = 'workspace' | 'rehearse' | 'control-plane' | 'reconcile';
+/** The literal target of the control-plane modes (feature-plan-control-plane-disaster.md §6.1). */
+export const CONTROL_PLANE_TARGET = 'control-plane';
 export type DisasterOverride = 'none' | 'unreachable-4h' | 'canary';
 
 export interface DisasterArgs {
   mode: DisasterMode;
-  /** Workspace ids (deduplicated), or `all-lost` (workspace), or `auto` (rehearse). */
-  targets: string[] | 'all-lost' | 'auto';
+  /** Workspace ids (deduplicated), or `all-lost` (workspace), or `auto` (rehearse), or `control-plane` (the control-plane modes). */
+  targets: string[] | 'all-lost' | 'auto' | 'control-plane';
   override: DisasterOverride;
   runId: string;
 }
@@ -75,9 +77,11 @@ export function parseDisasterArgs(argv: string[], now: Date = new Date()): Parse
       positional.push(a);
     }
   }
-  if (positional.length !== 1) return bad('usage: disaster workspace|rehearse --targets … [--override …] [--run-id …]');
+  if (positional.length !== 1) return bad('usage: disaster workspace|rehearse|control-plane|reconcile --targets … [--override …] [--run-id …]');
   const mode = positional[0];
-  if (mode !== 'workspace' && mode !== 'rehearse') return bad('mode must be workspace or rehearse');
+  // An unknown mode keeps exit 1 (feature-plan-control-plane-disaster.md §6.1: the button refuses modes the stack's
+  // DisasterModes output doesn't list, so an older image is never asked to run one).
+  if (mode !== 'workspace' && mode !== 'rehearse' && mode !== 'control-plane' && mode !== 'reconcile') return bad('mode must be workspace, rehearse, control-plane or reconcile');
   const override = (flags.get('--override') ?? 'none') as DisasterOverride;
   if (!['none', 'unreachable-4h', 'canary'].includes(override)) return bad('override must be none, unreachable-4h or canary');
   if (mode === 'workspace' && override === 'canary') return bad('override canary is only for rehearse');
@@ -85,7 +89,15 @@ export function parseDisasterArgs(argv: string[], now: Date = new Date()): Parse
   const raw = flags.get('--targets');
   if (!raw) return bad('--targets is required');
   let targets: DisasterArgs['targets'];
-  if (raw === 'all-lost') {
+  if (mode === 'control-plane' || mode === 'reconcile') {
+    if (raw !== CONTROL_PLANE_TARGET) return bad(`mode ${mode} takes --targets control-plane`);
+    if (override !== 'none') return bad(`mode ${mode} takes --override none`);
+    targets = CONTROL_PLANE_TARGET;
+  } else if (raw === CONTROL_PLANE_TARGET) {
+    if (mode !== 'rehearse') return bad('control-plane is only for rehearse, control-plane and reconcile');
+    if (override !== 'none') return bad('the control-plane rehearsal takes --override none');
+    targets = CONTROL_PLANE_TARGET;
+  } else if (raw === 'all-lost') {
     if (mode !== 'workspace') return bad('all-lost is only for workspace');
     if (override !== 'none') return bad("all-lost can't be combined with an override");
     targets = 'all-lost';
@@ -114,6 +126,8 @@ export const DISASTER_DEFAULTS = {
 /** Everything the task needs; production wires the real clients (main.ts), tests the fakes. */
 export interface DisasterDeps {
   controlPlaneUrl: string;
+  /** The backup id: resolved once by main.ts (feature-plan-control-plane-disaster.md §6.0). */
+  cpId: string;
   neon: NeonApi;
   ecs: DisasterEcs;
   logReader: LogReader;
@@ -125,6 +139,10 @@ export interface DisasterDeps {
   regionId: string;
   restoreTestProjectId: string;
   controlPlaneProjectId: string;
+  /** RESTORE_TEST_DATABASE_URL: the control-plane modes' network-first check (feature-plan-control-plane-disaster.md §6.2). */
+  restoreTestUrl?: string;
+  /** DISASTER_LOG_GROUP's reader: the window's rebuild lines (§6.4 R2). Set for the control-plane modes. */
+  disasterLogReader?: LogReader;
   log: (line: string) => void;
   now?: () => Date;
   sleep?: (ms: number) => Promise<void>;
@@ -197,7 +215,7 @@ export interface RunContext {
 /** The modes (filled in by feature-plan-disaster-restore.md §6.4 and §6.5). */
 export type ModeRunner = (ctx: RunContext) => Promise<RunOutcome>;
 
-export const MODES: Record<DisasterMode, ModeRunner> = { workspace: runWorkspace, rehearse: runRehearse };
+export const MODES: Record<'workspace' | 'rehearse', ModeRunner> = { workspace: runWorkspace, rehearse: runRehearse };
 
 export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promise<{ exitCode: number; outcome: RunOutcome | null }> {
   const now = deps.now ?? (() => new Date());
@@ -214,8 +232,13 @@ export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promi
     return { exitCode: 1, outcome: null };
   }
   const startedBy = self.startedBy ?? '';
-  if (args.mode === 'workspace' && !/^(gh-|cloudshell-)/.test(startedBy)) {
-    log('refused: mode workspace runs only from the button (gh-…) or the CloudShell fallback (cloudshell-…)');
+  // A schedule can only rehearse (feature-plan-control-plane-disaster.md §6.1).
+  if (args.mode !== 'rehearse' && !/^(gh-|cloudshell-)/.test(startedBy)) {
+    log(`refused: mode ${args.mode} runs only from the button (gh-…) or the CloudShell fallback (cloudshell-…)`);
+    return { exitCode: 1, outcome: null };
+  }
+  if (args.mode === 'control-plane' || args.mode === 'reconcile' || args.targets === CONTROL_PLANE_TARGET) {
+    log(`refused: ${args.mode === 'rehearse' ? 'the control-plane rehearsal' : `mode ${args.mode}`} is not in this build`);
     return { exitCode: 1, outcome: null };
   }
 
@@ -277,7 +300,7 @@ export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promi
 
     let outcome: RunOutcome;
     try {
-      outcome = await MODES[args.mode]({ args, deps, cp, runRowId, signal: runAbort.signal, now, sleep, log });
+      outcome = await MODES[args.mode as 'workspace' | 'rehearse']({ args, deps, cp, runRowId, signal: runAbort.signal, now, sleep, log });
     } catch (e) {
       outcome = { pass: false, results: [], email: [`the run stopped: ${summaryOf('run', e)}`] };
       log(`run failed: ${summaryOf('run', e)}`);

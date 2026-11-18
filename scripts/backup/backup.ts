@@ -18,7 +18,7 @@ import postgres from 'postgres';
 import { BACKUP_LOCK_KEY, MIGRATE_RUN_LOCK_KEY } from '../../src/lib/tenant/backup-locks';
 import { toDirectConnectionUrl } from '../../src/lib/tenant/direct-url';
 import { decrypt } from '../../src/lib/encryption';
-import { CONTROL_PLANE_ID, controlPlaneId, dumpKey, baseKey, sidecarKeyFor, type BackupTarget } from './lib/keys';
+import { CONTROL_PLANE_ID, dumpKey, baseKey, sidecarKeyFor, type BackupTarget } from './lib/keys';
 import { encryptBuffer, encryptionContext, makeEncryptStream, type HeaderInfo, type KeyringFactory } from './lib/crypto';
 import type { BackupStore } from './lib/store';
 import { runDumpPipeline } from './lib/dump-pipeline';
@@ -65,6 +65,8 @@ type DbConnect = (url: string, options: postgres.Options<{}>) => postgres.Sql;
 
 export interface BackupDeps {
   controlPlaneUrl: string;
+  /** The backup id (keys, contexts, BACKUP lines): resolved once by main.ts (feature-plan-control-plane-disaster.md §6.0). */
+  cpId: string;
   store: BackupStore;
   keyring: KeyringFactory;
   /** When set, the permission probes run at the end (§6.13). Production always sets it. */
@@ -142,7 +144,7 @@ export async function runBackup(deps: BackupDeps): Promise<{ exitCode: number; o
   };
   const log = deps.log;
   const cpUrl = deps.controlPlaneUrl;
-  const cpId = controlPlaneId(cpUrl);
+  const cpId = deps.cpId;
   const cp = controlPlaneClient(cpUrl);
 
   try {

@@ -15,6 +15,7 @@
     "src/lib/tenant/direct-url.ts",
     "src/lib/tenant/backup-locks.ts",
     "src/lib/tenant/db-name.ts",
-    "src/lib/tenant/lifecycle-config.ts"
+    "src/lib/tenant/lifecycle-config.ts",
+    "src/lib/tenant/slug-rules.ts"
   ]
 }
