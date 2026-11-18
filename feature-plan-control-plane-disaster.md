@@ -1,6 +1,6 @@
 # Blueprint 3c-2: Control-plane disaster (rebuild, reconcile, whole-account runbook)
 
-> **Status: FINAL v2.0, pre-mortem CLEAN** (2026-11-18). 2 rounds plus 4 confirmation passes (pass 4 clean); every finding fixed, and the LOWs folded in (§15). **Open for the product owner: Q3** (§2).
+> **Status: FINAL v2.0, pre-mortem CLEAN** (2026-11-18). 2 rounds plus 4 confirmation passes (pass 4 clean); every finding fixed, and the LOWs folded in (§15). **Accepted by the product owner 2026-11-18, with Q3 as recommended.**
 > Branch `control-plane-disaster`, from `main` at `57d6729`. Follows `BLUEPRINT-STANDARD.md`.
 >
 > **Scope decisions:**
@@ -50,7 +50,7 @@ and resyncs billing from Stripe with one command. A runbook covers losing the wh
 | 2026-11-17 Q5 | The founder emails affected customers from a template | Templates B, B2 |
 | **2026-11-18 Q1** | Workspaces deleted in the window, and lost workspaces that can't be rebuilt, are closed by the founder with `tenant:delete <slug> --project-proven-gone`. Every Stripe safeguard is kept | §6.6 |
 | **2026-11-18 Q2** | A customer who signed up in the window signs up again (any charge that day refunded). The founder deletes the leftover database once they confirm | §6.4 R4, runbook B |
-| **Q3 (open)** | A window signup whose email can't be found (no restored `signups` row, no Stripe customer, nothing in the email provider's log). **Recommended:** delete the leftover database 30 days after the reconcile if they haven't been reached; it holds at most a day of trial data. **Alternative:** keep it until the founder decides case by case | runbook B.9 |
+| **2026-11-18 Q3** | A window signup whose email can't be found (no restored `signups` row, no Stripe customer, nothing in the email provider's log): **the founder deletes the leftover database, by its id, 30 days after the reconcile** if they haven't been reached (at most a day of trial data) | runbook B.9 |
 
 **Founder duties at disaster time** (runbook B):
 - disable crons, press, read the email;
@@ -462,7 +462,7 @@ The control plane is live, so this uses 3c's normal start (lock, run row in the 
        2. Stripe → Customers, searching `metadata['slug']:'<slug>'` (set when they reached billing);
        3. the email provider's sent log, by the signup time in the alert and the slug.
 
-       If the customer's `tenantId` is one the control plane knows, it isn't a window signup: contact the lead. Otherwise refund and cancel anything from that day, **resolve the project's `window-project` alert** (so their address is free again), and email template B2. Once they confirm, **delete the project by the id in the email**, after checking in Neon that its created date is before the window end. A re-signup creates a second project with the same name. **If nobody can be found:** Q3. **A staging workspace** (staging shares the org): resolve the alert by hand and never delete it.
+       If the customer's `tenantId` is one the control plane knows, it isn't a window signup: contact the lead. Otherwise refund and cancel anything from that day, **resolve the project's `window-project` alert** (so their address is free again), and email template B2. Once they confirm, **delete the project by the id in the email**, after checking in Neon that its created date is before the window end. A re-signup creates a second project with the same name. **If nobody can be found:** delete the project by its id 30 days after the reconcile (Q3), then resolve the alert. **A staging workspace** (staging shares the org): resolve the alert by hand and never delete it.
      - `rebuild` → delete it in Neon if nothing in the email names it.
      - `other` → staging, or unknown: resolve the alert by hand.
    - **unconfirmed rebuilds, stale ids** → contact the lead;
