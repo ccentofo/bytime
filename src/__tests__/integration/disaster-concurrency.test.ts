@@ -28,7 +28,8 @@ describe.skipIf(!CAN_RUN)('R9: concurrency and termination', () => {
 
   it('a second run exits: the disaster lock is held (waited for, then refused), or an older task is running (oldest wins)', async () => {
     const t = take();
-    const held = (await acquireLock(w.cp.url, DISASTER_LOCK_KEY, { timing: FAST_LOCK }))!;
+    // The test's held lock keeps a slow heartbeat: under load a fast one can time out and drop the lock (timing fix).
+    const held = (await acquireLock(w.cp.url, DISASTER_LOCK_KEY, { timing: { heartbeatMs: 60_000, heartbeatTimeoutMs: 15_000 } }))!;
     try {
       const r = await press(w, { targets: [t.id] }, { lockWaitMs: 300, lockRetryMs: 100 });
       expect(r.exitCode).toBe(1);
@@ -51,7 +52,7 @@ describe.skipIf(!CAN_RUN)('R9: concurrency and termination', () => {
     makeGone(w, t);
     const held = (await acquireLock(w.cp.url, DISASTER_LOCK_KEY, { timing: FAST_LOCK }))!;
     setTimeout(() => { void held.release(); }, 300);
-    const r = await press(w, { targets: [t.id] }, { lockWaitMs: 5_000, lockRetryMs: 100 });
+    const r = await press(w, { targets: [t.id] }, { lockWaitMs: 20_000, lockRetryMs: 100 });
     expect(r.exitCode, r.logs.join('\n')).toBe(0);
     expect(r.outcome!.results[0].result).toBe('linked');
   }, 30_000);
@@ -66,7 +67,8 @@ describe.skipIf(!CAN_RUN)('R9: concurrency and termination', () => {
     chmodSync(slow, 0o755);
     const stop = new AbortController();
     const running = press(w, { targets: [t.id] }, { pgRestoreBin: slow, stopSignal: stop.signal });
-    for (let i = 0; i < 200 && !(await actions(w, t.id)).some((a) => a.status === 'created'); i++) await new Promise((r) => setTimeout(r, 25));
+    // Wait for the project to exist (no fixed cap that a slow runner can outlast), then stop mid-restore.
+    await waitFor(async () => (await actions(w, t.id)).some((a) => a.status === 'created'), 60_000);
     stop.abort('stopped');
     const r = await running;
     expect(r.outcome!.results[0].result).toBe('not-finished');
@@ -111,6 +113,24 @@ describe.skipIf(!CAN_RUN)('R9: concurrency and termination', () => {
     expect(w.neon.projects.get(row.neonProjectId!)!.deleted).toBe(false);
   }, 30_000);
 
+  /** Poll until `cond` holds (no fixed sleep standing in for "the other side has got there"). */
+  async function waitFor(cond: () => Promise<boolean> | boolean, maxMs: number): Promise<void> {
+    const end = Date.now() + maxMs;
+    while (!(await cond())) {
+      if (Date.now() > end) throw new Error('waitFor: condition not reached');
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+  /** Sessions holding (granted) or waiting for (not granted) the tenant's advisory lock in the world's control plane. */
+  async function advisoryWaiters(tenantId: string, granted: boolean): Promise<number> {
+    const [{ n }] = await w.cpSql<Array<{ n: number }>>`SELECT count(*)::int AS n FROM pg_locks l
+      WHERE l.locktype = 'advisory' AND l.granted = ${granted} AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+        AND l.objsubid = 1
+        AND l.objid::bigint = (hashtext(${'tenant:' + tenantId})::bigint & 4294967295)
+        AND l.classid::bigint = ((hashtext(${'tenant:' + tenantId})::bigint >> 32) & 4294967295)`;
+    return n;
+  }
+
   /** A StepEnv for calling cleanup directly (the same wiring as a run). */
   async function directEnv(cap: RunCapture, timing: Record<string, unknown> = {}) {
     const d = deps(w, cap, { timing: { recoverablePolls: 1, recoverablePollMs: 1, overrideGapMs: 1, lockRetryMs: 10, cleanupRetryMs: 50, ...timing } });
@@ -133,10 +153,10 @@ describe.skipIf(!CAN_RUN)('R9: concurrency and termination', () => {
         await tx`UPDATE tenants SET neon_project_id = ${p.id} WHERE id = ${t.id}`;
         await committed;
       });
-      await new Promise((r) => setTimeout(r, 100));
+      await waitFor(() => advisoryWaiters(t.id, true).then((n) => n === 1), 15_000); // the switch holds the tenant lock
       const facts = (await loadTenant(cp, t.id))!;
-      const cleaning = cleanupProject(env, facts, { id: p.id, name: p.name }, { budgetMs: 5_000, lockedReRead: true, oldProjectId: t.projectId });
-      await new Promise((r) => setTimeout(r, 300));
+      const cleaning = cleanupProject(env, facts, { id: p.id, name: p.name }, { budgetMs: 15_000, lockedReRead: true, oldProjectId: t.projectId });
+      await waitFor(() => advisoryWaiters(t.id, false).then((n) => n === 1), 15_000); // cleanup is now waiting on it
       commit();
       await switching;
       expect(await cleaning).toBe('linked');
@@ -157,7 +177,7 @@ describe.skipIf(!CAN_RUN)('R9: concurrency and termination', () => {
       let done!: () => void;
       const hold = new Promise<void>((r) => { done = r; });
       const holding = holder.begin(async (tx) => { await tx`SELECT pg_advisory_xact_lock(hashtext(${'tenant:' + t.id}))`; await hold; });
-      await new Promise((r) => setTimeout(r, 100));
+      await waitFor(() => advisoryWaiters(t.id, true).then((n) => n === 1), 15_000); // the holder really holds it
       const facts = (await loadTenant(cp, t.id))!;
       expect(await cleanupProject(env, facts, { id: p.id, name: p.name }, { budgetMs: 400, lockedReRead: true, oldProjectId: t.projectId })).toBe('failed');
       done();
@@ -170,20 +190,29 @@ describe.skipIf(!CAN_RUN)('R9: concurrency and termination', () => {
     }
   });
 
-  it('D8: the hard-exit timer fires 5 minutes (here: ms) after the deadline when a run hangs', async () => {
-    const original = MODES.workspace;
-    let unblock!: () => void;
-    MODES.workspace = () => new Promise((r) => { unblock = () => r({ pass: false, results: [], email: [] }); });
-    const exits: number[] = [];
-    try {
-      const cap: RunCapture = { logs: [], emails: [] };
-      const running = runDisaster({ mode: 'workspace', targets: [take().id], override: 'none', runId: 'gh-hang-1' },
-        deps(w, cap, { deadlineMs: 50, hardExitAfterDeadlineMs: 50, hardExit: (c) => { exits.push(c); unblock(); } }));
-      await running;
-      expect(exits).toEqual([1]);
-      expect(cap.logs).toContain('hard exit: still running 5 minutes after the deadline');
-    } finally {
-      MODES.workspace = original;
-    }
-  });
+  // Both orders: the mode already hanging when the timer fires (50 + 50 ms), and the timer firing before the start
+  // sequence has called the mode (0 + 0 ms: the run-row I/O always outlasts a 0 ms timer; CI's slow-runner case).
+  for (const [label, ms] of [['the mode hangs first', 50], ['the timer fires before the mode is called', 0]] as const) {
+    it(`D8: the hard-exit timer fires 5 minutes (here: ms) after the deadline when a run hangs (${label})`, async () => {
+      // Deterministic on a slow runner: the timer starts at run start and may fire before the (slow) start sequence has
+      // even called the mode. So the hard exit is remembered: a mode called afterwards resolves at once, and a mode
+      // already hanging is unblocked by it. Without the timer, the mode hangs and the test times out.
+      const original = MODES.workspace;
+      const done = { pass: false, results: [], email: [] };
+      let fired = false;
+      let unblock: (() => void) | undefined;
+      MODES.workspace = () => (fired ? Promise.resolve(done) : new Promise((r) => { unblock = () => r(done); }));
+      const exits: number[] = [];
+      try {
+        const cap: RunCapture = { logs: [], emails: [] };
+        const running = runDisaster({ mode: 'workspace', targets: [take().id], override: 'none', runId: 'gh-hang-1' },
+          deps(w, cap, { deadlineMs: ms, hardExitAfterDeadlineMs: ms, hardExit: (c) => { exits.push(c); fired = true; unblock?.(); } }));
+        await running;
+        expect(exits).toEqual([1]);
+        expect(cap.logs).toContain('hard exit: still running 5 minutes after the deadline');
+      } finally {
+        MODES.workspace = original;
+      }
+    }, 15_000);
+  }
 });
