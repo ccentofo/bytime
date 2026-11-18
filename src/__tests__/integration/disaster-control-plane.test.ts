@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from
 import postgres from 'postgres';
 import { randomUUID } from 'node:crypto';
 import {
-  CAN_RUN, PG_DUMP, PG_RESTORE, RESTORE_TEST_URL, controlPlaneNeonUrl, createWorld, deps as worldDeps, fakeLogReader, makeGone, press, setControlPlane,
+  CAN_RUN, PG_RESTORE, RESTORE_TEST_URL, backUpControlPlaneAgain, controlPlaneNeonUrl, createWorld, deps as worldDeps, fakeLogReader, makeGone, press, setControlPlane,
   type RunCapture, type World,
 } from './disaster-harness';
 import { runDisaster, type DisasterDeps } from '../../../scripts/backup/disaster';
@@ -12,8 +12,6 @@ import { connectUrl } from '../../../scripts/backup/lib/host-map';
 import { clientUrl } from '../../../scripts/backup/lib/pg-url';
 import { controlPlaneRebuildName } from '../../../scripts/backup/lib/project-names';
 import { neonApi, type NeonApi } from '../../../scripts/backup/lib/neon-api';
-import { parseBackupLine } from '../../../scripts/backup/lib/log-reader';
-import { runBackup } from '../../../scripts/backup/backup';
 import { encryptionContext, encryptBuffer, decryptBuffer } from '../../../scripts/backup/lib/crypto';
 import { baseKey } from '../../../scripts/backup/lib/keys';
 import { createHash } from 'node:crypto';
@@ -338,17 +336,3 @@ describe.skipIf(!CAN_RUN)('T4 variant: with BACKUP_CONTROL_PLANE_ID unset (the h
     expect(ws.outcome?.results[0].result).toBe('no-backup');
   }, 180_000);
 });
-
-/**
- * The world's setup backups ran before its tenants got their Neon projects, so one more control-plane-only backup makes
- * the newest control-plane dump hold the tenants as production's would (Neon URLs and project ids).
- */
-async function backUpControlPlaneAgain(w: World): Promise<void> {
-  const logs: string[] = [];
-  const r = await runBackup({
-    controlPlaneUrl: w.cp.url, cpId: w.cpId, store: w.bucket, keyring: testKeyring(), pgDumpBin: PG_DUMP!, pgDumpVersion: 'pg_dump (PostgreSQL) 16',
-    runId: `test-${randomUUID().slice(0, 8)}`, log: (l) => logs.push(l), options: { only: 'control-plane' },
-  });
-  if (r.exitCode !== 0) throw new Error(`the control-plane backup failed: ${logs.join('\n')}`);
-  for (const l of logs) { const b = parseBackupLine(l); if (b) w.lines.push(b); }
-}

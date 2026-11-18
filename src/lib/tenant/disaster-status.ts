@@ -69,7 +69,8 @@ export interface WatchFact {
 }
 
 export interface DisasterFacts {
-  runs: Array<{ id: string; runId: string; mode: string; status: string; startedAt: Date; finishedAt: Date | null }>;
+  /** `target`: feature-plan-control-plane-disaster.md §6.5 (written at INSERT; a row without one counts as `workspace`). */
+  runs: Array<{ id: string; runId: string; mode: string; status: string; startedAt: Date; finishedAt: Date | null; target?: string | null }>;
   firstCpOkAt: Date | null;
   projects: ProjectGroup[];
   deploy: DeployFact[];
@@ -146,14 +147,18 @@ export function disasterFindings(f: DisasterFacts, neon: NeonView, now: Date): F
     out.closeRuns.push(...stuck.map((r) => r.id));
   }
 
-  // Rehearsals.
-  const rehearsals = f.runs.filter((r) => r.mode === 'rehearse' && r.status !== 'running').sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
-  const newest = rehearsals[0];
-  const lastPass = rehearsals.find((r) => r.status === 'pass');
+  // Rehearsals, per target (feature-plan-control-plane-disaster.md §6.5): the workspace rehearsal (the 1st; dedup '' as
+  // before) and the control-plane rehearsal (the 15th; dedup `control-plane`). A run without a target is a workspace one.
   const anchored = f.firstCpOkAt !== null && t - f.firstCpOkAt.getTime() > REHEARSAL_MAX_GAP_MS;
-  const stale = anchored && (!lastPass || t - lastPass.startedAt.getTime() > REHEARSAL_MAX_GAP_MS);
-  if ((newest && newest.status === 'fail') || stale) {
-    out.raise.push({ kind: 'disaster-rehearse-failed', dedupKey: '', detail: { reason: newest?.status === 'fail' ? `the newest rehearsal (${newest.runId}) failed` : 'no rehearsal has passed in 40 days', todo: 'contact the lead (the disaster key or pipeline may not work)' } });
+  for (const target of ['workspace', 'control-plane'] as const) {
+    const rehearsals = f.runs.filter((r) => r.mode === 'rehearse' && r.status !== 'running' && (r.target ?? 'workspace') === target).sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+    const newest = rehearsals[0];
+    const lastPass = rehearsals.find((r) => r.status === 'pass');
+    const stale = anchored && (!lastPass || t - lastPass.startedAt.getTime() > REHEARSAL_MAX_GAP_MS);
+    if ((newest && newest.status === 'fail') || stale) {
+      const what = target === 'workspace' ? 'rehearsal' : 'control-plane rehearsal';
+      out.raise.push({ kind: 'disaster-rehearse-failed', dedupKey: target === 'workspace' ? '' : 'control-plane', detail: { target, reason: newest?.status === 'fail' ? `the newest ${what} (${newest.runId}) failed` : `no ${what} has passed in 40 days`, todo: 'contact the lead (the disaster key or pipeline may not work)' } });
+    }
   }
 
   // The original watch (§7.2).
@@ -186,7 +191,7 @@ function orphanDetail(p: ProjectGroup, id: string | null): Record<string, unknow
 
 export async function readDisasterFacts(now: Date): Promise<DisasterFacts> {
   return withLockedPool(async (db) => {
-    const runs = await db.select({ id: disasterRuns.id, runId: disasterRuns.runId, mode: disasterRuns.mode, status: disasterRuns.status, startedAt: disasterRuns.startedAt, finishedAt: disasterRuns.finishedAt })
+    const runs = await db.select({ id: disasterRuns.id, runId: disasterRuns.runId, mode: disasterRuns.mode, status: disasterRuns.status, startedAt: disasterRuns.startedAt, finishedAt: disasterRuns.finishedAt, target: sql<string | null>`${disasterRuns.summary}->>'target'` })
       .from(disasterRuns).where(sql`${disasterRuns.startedAt} > ${new Date(now.getTime() - 90 * DAY).toISOString()}::timestamptz OR ${disasterRuns.status} = 'running'`);
     const [cp] = await db.select({ at: sql<Date | null>`min(${databaseBackups.finishedAt})` }).from(databaseBackups)
       .where(and(isNull(databaseBackups.tenantId), eq(databaseBackups.status, 'ok')));

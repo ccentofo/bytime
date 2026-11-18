@@ -221,3 +221,17 @@ export function setControlPlane(w: World, state: 'live' | 'recoverable' | 'gone'
 
 /** A local database every test can reach: the network-first check of the control-plane modes. */
 export const RESTORE_TEST_URL = SERVER_URL ? (() => { const u = new URL(SERVER_URL); u.pathname = '/postgres'; return u.toString(); })() : '';
+
+/**
+ * The world's setup backups ran before its tenants got their Neon projects, so one more control-plane-only backup makes
+ * the newest control-plane dump hold the tenants as production's would (Neon URLs and project ids).
+ */
+export async function backUpControlPlaneAgain(w: World): Promise<void> {
+  const logs: string[] = [];
+  const r = await runBackup({
+    controlPlaneUrl: w.cp.url, cpId: w.cpId, store: w.bucket, keyring: testKeyring(), pgDumpBin: PG_DUMP!, pgDumpVersion: 'pg_dump (PostgreSQL) 16',
+    runId: `test-${randomUUID().slice(0, 8)}`, log: (l) => logs.push(l), options: { only: 'control-plane' },
+  });
+  if (r.exitCode !== 0) throw new Error(`the control-plane backup failed: ${logs.join('\n')}`);
+  for (const l of logs) { const b = parseBackupLine(l); if (b) w.lines.push(b); }
+}

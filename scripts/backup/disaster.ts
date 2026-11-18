@@ -245,10 +245,6 @@ export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promi
     log(`refused: mode ${args.mode} runs only from the button (gh-…) or the CloudShell fallback (cloudshell-…)`);
     return { exitCode: 1, outcome: null };
   }
-  if (args.mode === 'rehearse' && args.targets === CONTROL_PLANE_TARGET) {
-    log(`refused: ${args.mode === 'rehearse' ? 'the control-plane rehearsal' : `mode ${args.mode}`} is not in this build`);
-    return { exitCode: 1, outcome: null };
-  }
 
   // ---- one run at a time: the oldest running task wins ---------------------------------------------------------------
   try {
