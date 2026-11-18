@@ -1,6 +1,6 @@
 # Control-plane disaster (3c-2): checks
 
-> **Status: to be run by Planning** against the finished branch. Results go into `CONTROL-PLANE-DISASTER-AUDIT.md`, and the product owner reviews those (2026-11-13 decision). Every block is rehearsed verbatim in a fresh zsh.
+> **Status: RUN by Planning on 2026-11-18, first at `bce561e`, then again at `f1ea99e` after fix round 1.** All as expected. Results go into `CONTROL-PLANE-DISASTER-AUDIT.md`, and the product owner reviews those (2026-11-13 decision). Every block is rehearsed verbatim in a fresh zsh.
 
 Everything here runs **locally, with no AWS, Neon, Stripe or GitHub**. A control-plane rebuild, the reconcile against real Neon projects, the rehearsal, a real `--project-proven-gone` close and `stripe-resync` against Stripe are proven later:
 - by the founder's rehearsal press (PRODUCTION-DEPLOY 13c);
@@ -178,7 +178,7 @@ bash /tmp/cp-check.sh slugs cpchkwindow
 npm run --silent tenant:admin -- window-signup cpchkwindow 2>&1 | tail -2
 ```
 **Expect:**
-- `Window project test-cpchk-proj for "cpchkwindow", created …`;
+- `Window project test-cpchk-proj for "cpchkwindow", created …; its window-project alert is <uuid> …` (the alert id, which B.9 uses to resolve it);
 - the line `"CP Check Co"  cpchk@example.invalid  created …  not verified`.
 
 ### C.5 The address is released once a workspace references the project

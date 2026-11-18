@@ -4,7 +4,14 @@
 
 **Audited:** `7b6a845..bce561e` on `control-plane-disaster`: 11 dev commits (C1–C9 and two test commits). Auditors at `bce561e`.
 
-## Verdict: **NOT READY, fix round 1 required**
+## Verdict: **READY** at `f1ea99e` (after fix round 1)
+Round 1 (`bce561e`) was NOT READY (§4). Fix round 1 (FR1–FR10) is verified in §6. The lead's gates, integration alone, break-it (10/10) and re-run checks (§7) all pass.
+
+**Merge gate for the product owner:** push `f1ea99e` (plus the lead's commits) and get a green CI run, push and PR. The early run on `4e63039` was all green. Production readiness: PRODUCTION-DEPLOY 13b step 0/6/11 (the backup id) and 13c (the control-plane rehearsal press), with the founder.
+
+No scope items for the product owner.
+
+## Round 1 verdict (kept for the record): NOT READY, fix round 1 required
 - **Severity:** no HIGH; 2 MEDIUM code defects, about 9 LOWs, and test gaps (30 surviving mutations across both auditors).
 - **Nothing in the code** can rebuild a live control plane, delete a project something points at, write outside the new project in mode `control-plane`, or skip a live workspace in a deploy.
 - **Fix round:** none of the findings changes what the product does, so it goes to the dev directly, inside the blueprint (§5).
@@ -132,8 +139,43 @@ Then:
 - commit by name;
 - message the lead.
 
-## 6. Verification after fix round 1
-_(pending)_
+## 6. Verification after fix round 1 (`f1ea99e`)
+**Code read by the lead:**
+- **FR1:** a conflicting workspace is refreshed with `reconcileInLock` against its current customer, using that customer's live email, and reported under both conflict and refreshed.
+- **FR3:** a failed read of the current customer → `failed` (exit 1).
+- **FR2:** every project a listed or unknown chain names is kept out of R4 and printed with "kept: contact the lead; don't delete". That's a superset of the rule asked for, on the safe side.
+- **FR4:** `all-lost` is offered only with no unconfirmed rebuild and no unknown chain.
+- **FR5:** `ProvisionConflictError` gains a `window` reason; the verify route shows "taken" without consuming the signup.
+- **FR6:** alert ids are printed by `window-signup` and in the reconcile email. B.8 uses a documented psql line, since `tenant:admin` lists only tenant-scoped alerts.
+- **FR7, FR8 and FR9:** done as specified.
+
+**The dev's evidence:**
+- 39/39 revert checks caught;
+- 42/42 green across the 7 touched files (5× each plus a CPU-hog run);
+- full integration: 1,070 passed, 0 failed.
+
+**Lead gates:**
+
+| Gate | Result |
+|---|---|
+| `npx tsc --noEmit` | ✅ |
+| `eslint . --ignore-pattern '.claude/**'` | ✅ 0 errors |
+| `npx vitest run` | ✅ 3,154 passed, 1 skipped |
+| Integration, **run alone**, CI-equivalent environment, finished 10:28 Eastern | ✅ 112 files passed, 1 skipped; **1,070 passed, 0 failed**; no scratch databases left |
+
+**Lead break-it** (`/tmp/cp2-breakit/run.py`; one exact edit each, run the test, restore): **10 of 10 caught, tree clean.**
+1. FR1, a conflicting workspace not refreshed;
+2. FR2, listed chains' projects back in R4;
+3. R3, a served address no longer stale;
+4. `rebuild-exists` without the don't-delete wording;
+5. `--project-proven-gone` accepting a non-`auth` failure;
+6. `--project-proven-gone` ignoring a live project serving the host;
+7. `control-prod` not reserved;
+8. window addresses not held at signup;
+9. the backup id accepting any value;
+10. `all-lost` not skipping `chain-unconfirmed`.
+
+Case 4 first ran against the unit suite by mistake; it's caught by `disaster-control-plane.test.ts`.
 
 ## 7. Checks run by the lead (`CONTROL-PLANE-DISASTER-BROWSER-CHECKS.md`, at `bce561e`, 2026-11-18)
 **Method:** every bash block (32) was extracted verbatim, and each ran in a fresh `zsh -i -s`. The blocks whose lines the display had cut off were re-run whole. Throwaway workspaces `cp1118094710` and `cp1118094754`.
@@ -158,6 +200,8 @@ _(pending)_
 | F.3 No flag | ✅ | `FAILED: database "bytime_cp…" does not exist`; `exit code: 1` |
 | G Templates | ✅ | `cfn-lint: clean` |
 | H Clean up | ✅ | `cleaned: cp…`; 0 `bytime_cp*` databases, 0 test alerts, 0 test signup rows left |
+
+**Re-run at `f1ea99e`:** all 32 blocks verbatim, every **Expect** met. C.4 now also prints the alert id (FR6). Workspace `cp1118102906`, cleaned (0 databases, alerts or signup rows left).
 
 **Not covered locally** (covered by the fakes-based integration tests, CI and the founder's 13c rehearsal):
 - a real control-plane rebuild;
