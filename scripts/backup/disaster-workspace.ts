@@ -8,7 +8,7 @@
 import { decrypt } from '../../src/lib/encryption';
 import { toDirectConnectionUrl } from '../../src/lib/tenant/direct-url';
 import { pgConnector } from './lib/classify-endpoint';
-import { liveTenants, loadTenant, type TenantFacts } from './lib/disaster-sql';
+import { liveTenants, loadTenant, newestDecisiveProofs, type TenantFacts } from './lib/disaster-sql';
 import { summaryOf } from './lib/summarize-error';
 import { runPool } from './lib/util';
 import {
@@ -47,7 +47,15 @@ export async function runWorkspace(ctx: RunContext): Promise<RunOutcome> {
   let shared: SharedProof = {};
   if (ctx.args.targets === 'all-lost') {
     // Only tenants whose project 404s are candidates (never via the override); then ONE control and ONE list for all.
-    const live = (await liveTenants(ctx.cp)).filter((t) => t.neonProjectId);
+    // feature-plan-control-plane-disaster.md §6.4 R3: a tenant whose newest decisive proof is `chain-unconfirmed` is
+    // skipped: its newest data may sit in a rebuilt project, so it is never rebuilt from an older backup without the lead.
+    const candidates = (await liveTenants(ctx.cp)).filter((t) => t.neonProjectId);
+    const proofs = await newestDecisiveProofs(ctx.cp, candidates.map((t) => t.id));
+    const live = candidates.filter((t) => {
+      if (proofs.get(t.id) !== 'chain-unconfirmed') return true;
+      results.push({ tenantId: t.id, slug: t.slug, result: 'unconfirmed-rebuild', detail: 'a rebuild in the lost window is unconfirmed: contact the lead (never all-lost)' });
+      return false;
+    });
     const gone: string[] = [];
     await runPool(live, 4, async (t) => {
       try {
@@ -83,7 +91,7 @@ export async function runWorkspace(ctx: RunContext): Promise<RunOutcome> {
     ctx.log(`${id}: ${r.result}`);
   });
 
-  const ok = (r: WorkspaceResult) => r.result === 'linked' || r.result === 'not-lost';
+  const ok = (r: WorkspaceResult) => r.result === 'linked' || r.result === 'not-lost' || r.result === 'unconfirmed-rebuild';
   const email = [
     `Disaster restore (workspace${ctx.args.override === 'unreachable-4h' ? ', override unreachable-4h' : ''}), run ${ctx.args.runId}.`,
     ids.length === 0 && results.length === 0 ? 'No workspace is proven lost: nothing was rebuilt.' : '',

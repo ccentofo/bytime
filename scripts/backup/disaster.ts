@@ -31,6 +31,8 @@ import { MINUTE } from './lib/util';
 import { runWorkspace } from './disaster-workspace';
 import { runRehearse } from './disaster-rehearse';
 import { runControlPlane } from './disaster-control-plane';
+import { runReconcileMode } from './disaster-reconcile';
+import { pgQuery } from './lib/classify-endpoint';
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const RUN_ID_RE = /^[A-Za-z0-9_/-]{1,80}$/;
@@ -197,6 +199,8 @@ export interface WorkspaceResult {
 export interface RunOutcome {
   pass: boolean;
   results: WorkspaceResult[];
+  /** Merged into the run row's summary (feature-plan-control-plane-disaster.md §6.4: the reconcile's counts). */
+  summary?: Record<string, unknown>;
   /** Lines for the founder's email (may name slugs: the topic is private). */
   email: string[];
 }
@@ -216,7 +220,10 @@ export interface RunContext {
 /** The modes (filled in by feature-plan-disaster-restore.md §6.4 and §6.5). */
 export type ModeRunner = (ctx: RunContext) => Promise<RunOutcome>;
 
-export const MODES: Record<'workspace' | 'rehearse', ModeRunner> = { workspace: runWorkspace, rehearse: runRehearse };
+export const MODES: Record<'workspace' | 'rehearse' | 'reconcile', ModeRunner> = { workspace: runWorkspace, rehearse: runRehearse, reconcile: runReconcileMode };
+
+/** The run row's `target` (feature-plan-control-plane-disaster.md §6.5): written at INSERT for every mode, so a row closed early keeps it. */
+export const runTarget = (args: DisasterArgs): 'control-plane' | 'workspace' => (args.targets === CONTROL_PLANE_TARGET ? 'control-plane' : 'workspace');
 
 export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promise<{ exitCode: number; outcome: RunOutcome | null }> {
   const now = deps.now ?? (() => new Date());
@@ -238,7 +245,7 @@ export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promi
     log(`refused: mode ${args.mode} runs only from the button (gh-…) or the CloudShell fallback (cloudshell-…)`);
     return { exitCode: 1, outcome: null };
   }
-  if (args.mode === 'reconcile' || (args.mode === 'rehearse' && args.targets === CONTROL_PLANE_TARGET)) {
+  if (args.mode === 'rehearse' && args.targets === CONTROL_PLANE_TARGET) {
     log(`refused: ${args.mode === 'rehearse' ? 'the control-plane rehearsal' : `mode ${args.mode}`} is not in this build`);
     return { exitCode: 1, outcome: null };
   }
@@ -263,6 +270,20 @@ export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promi
   // ---- mode control-plane: the control plane is gone, so it has its own harness (no lock, no run row until it records;
   // feature-plan-control-plane-disaster.md §6.3). It branches before any control-plane client is opened.
   if (args.mode === 'control-plane') return runControlPlane(args, deps, startedBy);
+
+  // ---- mode reconcile: the control plane in SSM must answer before the lock is tried (§6.4 "repoint-first") -----------
+  if (args.mode === 'reconcile') {
+    const probe = await pgQuery(deps.controlPlaneUrl, async (sql) => { await sql`SELECT 1`; }, { hostMap: deps.hostMap });
+    if (!probe.ok) {
+      log('refused: repoint-first (the control plane in SSM does not answer)');
+      try {
+        await deps.publish(`CadenzPoint disaster reconcile FAILED: run ${args.runId}`, `Reconcile, run ${args.runId}: refused (repoint-first): the control plane in SSM doesn't answer: finish runbook B.5 (repoint SSM control-plane-url and control-plane-project-id to the new project), then press reconcile again. Nothing was changed.`);
+      } catch (e) {
+        log(`the email could not be sent (${summaryOf('sns', e)})`);
+      }
+      return { exitCode: 1, outcome: null };
+    }
+  }
 
   // ---- the lock (a cancelled task can hold it for its 120-second stop) -----------------------------------------------
   let lock: HeldLock | null = null;
@@ -298,22 +319,24 @@ export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promi
     const abandoned = await cp`UPDATE disaster_runs SET status = 'fail', finished_at = ${now()},
       summary = coalesce(summary, '{}'::jsonb) || '{"detail":"abandoned"}'::jsonb WHERE status = 'running' RETURNING id`;
     if (abandoned.length > 0) log(`closed ${abandoned.length} abandoned disaster run(s)`);
-    const [row] = await cp<{ id: string }[]>`INSERT INTO disaster_runs (run_id, mode, started_at, status)
-      VALUES (${args.runId}, ${args.mode}, ${now()}, 'running') RETURNING id::text AS id`;
+    const [row] = await cp<{ id: string }[]>`INSERT INTO disaster_runs (run_id, mode, started_at, status, summary)
+      VALUES (${args.runId}, ${args.mode}, ${now()}, 'running', ${cp.json({ target: runTarget(args) })}) RETURNING id::text AS id`;
     runRowId = row.id;
     log(`disaster ${args.mode} run ${args.runId} started by ${startedBy || 'unknown'}`);
 
     let outcome: RunOutcome;
     try {
-      outcome = await MODES[args.mode as 'workspace' | 'rehearse']({ args, deps, cp, runRowId, signal: runAbort.signal, now, sleep, log });
+      outcome = await MODES[args.mode as 'workspace' | 'rehearse' | 'reconcile']({ args, deps, cp, runRowId, signal: runAbort.signal, now, sleep, log });
     } catch (e) {
       outcome = { pass: false, results: [], email: [`the run stopped: ${summaryOf('run', e)}`] };
       log(`run failed: ${summaryOf('run', e)}`);
     }
 
-    const summary = { mode: args.mode, override: args.override, results: outcome.results.map((r) => ({ tenantId: r.tenantId, result: r.result, detail: r.detail ?? null, newProjectId: r.newProjectId ?? null })) };
-    // Set once; never over a row the digest already closed as abandoned (§6.8 "disaster run stuck").
-    await cp`UPDATE disaster_runs SET status = ${outcome.pass ? 'pass' : 'fail'}, finished_at = ${now()}, summary = ${cp.json(summary)}
+    const summary = { ...(outcome.summary ?? {}), mode: args.mode, override: args.override, target: runTarget(args), results: outcome.results.map((r) => ({ tenantId: r.tenantId, result: r.result, detail: r.detail ?? null, newProjectId: r.newProjectId ?? null })) };
+    // Set once; never over a row the digest already closed as abandoned (§6.8 "disaster run stuck"). The summary MERGES
+    // into what the INSERT wrote (feature-plan-control-plane-disaster.md §6.5: `target` survives every close).
+    await cp`UPDATE disaster_runs SET status = ${outcome.pass ? 'pass' : 'fail'}, finished_at = ${now()},
+      summary = coalesce(summary, '{}'::jsonb) || ${cp.json(summary as postgres.JSONValue)}
       WHERE id = ${runRowId} AND status = 'running'`;
     for (const r of outcome.results) log(`  ${r.tenantId} ${r.result}${r.detail ? ` (${r.detail})` : ''}`);
     try {

@@ -11,6 +11,8 @@
 /** Proof statuses that let `--skip-lost` skip a workspace whose database doesn't connect (any age). */
 export const SKIPPABLE_PROOFS = [
   'gone', 'unreachable-4h', 'observed-unreachable', 'refused:credentials', 'refused:database-missing',
+  // feature-plan-control-plane-disaster.md §6.4 R3: written by the window reconcile (never `gone`).
+  'window-deleted', 'recoverable-deleted', 'chain-unconfirmed',
 ] as const;
 
 /** Decisive proof statuses: the newest of these is the workspace's current proof. */

@@ -164,6 +164,8 @@ emailed (start, finish and caller) and logged. The button does **not** migrate: 
 - `facts`: the workspace id isn't a live workspace with a database (check the id; contact the lead).
 - `restore-failed`, `create`, `guard`, `error`: contact the lead with the email.
 - `cleanup-failed` (rehearsal): contact the lead; a project may be left in Neon (the digest's leftover check lists it).
+- `unconfirmed-rebuild` (`all-lost` only): a rebuild in a control-plane rollback window is unconfirmed (runbook B's
+  reconcile listed it), so `all-lost` never rebuilds it from an older backup; contact the lead.
 
 **The monthly rehearsal** (the 1st, 15:17 UTC, automatic) does all of this for the `rehearsal` workspace without the
 switch, then deletes its copy. A failure appears in the digest as `disaster-rehearse-failed`: tell the lead.
