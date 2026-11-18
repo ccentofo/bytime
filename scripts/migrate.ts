@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
+import { postgresJsUrl } from '../src/lib/db/pg-url';
 
 async function runMigrations() {
   const connectionString = process.env.DATABASE_URL;
@@ -13,7 +14,7 @@ async function runMigrations() {
   console.log('Running database migrations...');
 
   // Use max 1 connection for migrations
-  const migrationClient = postgres(connectionString, { max: 1 });
+  const migrationClient = postgres(postgresJsUrl(connectionString), { max: 1 });
   const db = drizzle(migrationClient);
 
   try {

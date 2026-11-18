@@ -7,6 +7,7 @@
  * date, supersedes pending lifecycle notices, and records an audit event when the flag changes.
  */
 import postgres from 'postgres';
+import { postgresJsUrl } from '../src/lib/db/pg-url';
 
 export async function registerTenant(controlUrl: string, input: {
   slug: string;
@@ -15,7 +16,7 @@ export async function registerTenant(controlUrl: string, input: {
   exempt: boolean;
   actor: string;
 }): Promise<void> {
-  const sql = postgres(controlUrl, { max: 1 });
+  const sql = postgres(postgresJsUrl(controlUrl), { max: 1 });
   const now = new Date();
   try {
     await sql.begin(async (tx) => {

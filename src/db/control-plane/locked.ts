@@ -1,6 +1,7 @@
 import 'server-only';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
+import { postgresJsUrl } from '../../lib/db/pg-url';
 import { sql } from 'drizzle-orm';
 import * as schema from './schema';
 
@@ -18,7 +19,7 @@ function getLockedDb(): ControlDb {
   if (!lockedDb) {
     const url = process.env.CONTROL_PLANE_DATABASE_URL;
     if (!url) throw new Error('CONTROL_PLANE_DATABASE_URL is not set. See .env.example.');
-    lockedDb = drizzle(postgres(url, { max: 3, prepare: false }), { schema });
+    lockedDb = drizzle(postgres(postgresJsUrl(url), { max: 3, prepare: false }), { schema });
   }
   return lockedDb;
 }

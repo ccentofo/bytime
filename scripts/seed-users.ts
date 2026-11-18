@@ -8,6 +8,7 @@
 import 'dotenv/config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
+import { postgresJsUrl } from '../src/lib/db/pg-url';
 import { users } from '../src/db/schema';
 import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
@@ -19,7 +20,7 @@ async function seedUsers() {
     process.exit(1);
   }
 
-  const client = postgres(connectionString, { max: 1 });
+  const client = postgres(postgresJsUrl(connectionString), { max: 1 });
   const db = drizzle(client);
 
   const defaultPassword = 'Password123!';

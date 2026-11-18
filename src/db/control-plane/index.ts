@@ -1,5 +1,6 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
+import { postgresJsUrl } from '../../lib/db/pg-url';
 import * as schema from './schema';
 
 function getControlDb() {
@@ -8,7 +9,7 @@ function getControlDb() {
     throw new Error('CONTROL_PLANE_DATABASE_URL is not set. See .env.example.');
   }
   // Small pool — the registry is read-light and cached in front of.
-  const client = postgres(url, { max: 5, prepare: false });
+  const client = postgres(postgresJsUrl(url), { max: 5, prepare: false });
   return drizzle(client, { schema });
 }
 

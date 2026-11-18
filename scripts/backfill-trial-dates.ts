@@ -24,6 +24,7 @@ import dotenv from 'dotenv';
 dotenv.config({ path: ['.env.local', '.env'] });
 
 import postgres from 'postgres';
+import { postgresJsUrl } from '../src/lib/db/pg-url';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { and, asc, eq, isNull, isNotNull, sql as dsql } from 'drizzle-orm';
 import { tenants, signups } from '../src/db/control-plane/schema';
@@ -44,7 +45,7 @@ async function main() {
   const controlUrl = process.env.CONTROL_PLANE_DATABASE_URL;
   if (!controlUrl) fail('CONTROL_PLANE_DATABASE_URL is not set (checked .env.local and .env).');
 
-  const sql = postgres(controlUrl!, { max: 1 });
+  const sql = postgres(postgresJsUrl(controlUrl!), { max: 1 });
   const db = drizzle(sql);
 
   try {

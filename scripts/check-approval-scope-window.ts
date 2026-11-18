@@ -16,6 +16,7 @@ import dotenv from 'dotenv';
 dotenv.config({ path: ['.env.local', '.env'] });
 
 import postgres from 'postgres';
+import { postgresJsUrl } from '../src/lib/db/pg-url';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { inArray } from 'drizzle-orm';
 import { tenants } from '../src/db/control-plane/schema';
@@ -47,7 +48,7 @@ async function main() {
   if (!controlUrl) fail('CONTROL_PLANE_DATABASE_URL is not set (checked .env.local and .env).');
   if (!process.env.ENCRYPTION_KEY) fail('ENCRYPTION_KEY is not set (checked .env.local and .env).');
 
-  const controlSql = postgres(controlUrl, { max: 1 });
+  const controlSql = postgres(postgresJsUrl(controlUrl), { max: 1 });
   let rows: Array<{ slug: string; dbUrlEncrypted: string | null }>;
   try {
     rows = await drizzle(controlSql).select({ slug: tenants.slug, dbUrlEncrypted: tenants.dbUrlEncrypted })
@@ -64,7 +65,7 @@ async function main() {
   for (const t of rows) {
     let sql: ReturnType<typeof postgres> | null = null;
     try {
-      sql = postgres(decrypt(t.dbUrlEncrypted!), { max: 1 });
+      sql = postgres(postgresJsUrl(decrypt(t.dbUrlEncrypted!)), { max: 1 });
       const findings = await approvalScopeWindowFindings(drizzle(sql, { schema }) as never, since);
       for (const line of formatWindowFindings(t.slug, findings)) console.log(line);
     } catch (err) {

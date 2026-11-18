@@ -16,6 +16,7 @@
 import 'dotenv/config';
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
+import { postgresJsUrl } from '../src/lib/db/pg-url';
 import * as schema from '../src/db/schema';
 import { eq } from 'drizzle-orm';
 import { clearTenantData, SEED_EMAIL_DOMAINS } from '../src/db/clear-tenant-data';
@@ -645,7 +646,7 @@ export async function seedRichData(
 
 async function main() {
   const connectionString = process.env.DATABASE_URL ?? 'postgresql://bytime:bytime_dev@localhost:5432/bytime';
-  const client = postgres(connectionString, { max: 1 });
+  const client = postgres(postgresJsUrl(connectionString), { max: 1 });
   const db = drizzle(client);
   await seedRichData(db, { wipeDemoData: process.argv.includes('--wipe-demo-data') });
   await client.end();
