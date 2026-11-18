@@ -91,3 +91,17 @@ describe('T3/T6: the DisasterModes output (§6.1)', () => {
     expect(wf.on.workflow_dispatch.inputs.mode.options).toEqual(['workspace', 'rehearse', 'control-plane', 'reconcile']);
   });
 });
+
+describe('T13: the task constructs no SSM-write, Vercel or Stripe client (invariant 3)', () => {
+  it('no bundled module imports an SSM, Vercel or Stripe client, or names PutParameterCommand (expected-policies.ts names the PutParameter EVENT only, for its alarm)', async () => {
+    const { build } = await import('esbuild');
+    const { BUNDLE_OPTIONS } = await import('../../../scripts/backup/bundle.mjs');
+    const r = await build({ ...(BUNDLE_OPTIONS as import('esbuild').BuildOptions), absWorkingDir: ROOT, write: false, metafile: true, logLevel: 'silent' });
+    const inputs = Object.keys(r.metafile!.inputs);
+    expect(inputs.filter((i) => /@aws-sdk\/client-ssm|node_modules\/stripe\/|@vercel\/|node_modules\/vercel\//.test(i))).toEqual([]);
+    for (const f of inputs.filter((i) => !i.startsWith('node_modules/'))) {
+      const text = read(f);
+      expect(text, f).not.toMatch(/PutParameterCommand|ssm:PutParameter|api\.vercel\.com|api\.stripe\.com|STRIPE_SECRET_KEY|VERCEL_TOKEN/);
+    }
+  }, 120_000);
+});

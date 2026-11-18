@@ -45,6 +45,8 @@ export interface World {
   cpId: string;
   restoreTestProjectId: string;
   controlPlaneProjectId: string;
+  /** The control plane's Neon-shaped host (feature-plan-control-plane-disaster.md: the lost-control-plane tests). */
+  controlPlaneHost: string;
   close(): Promise<void>;
 }
 
@@ -60,19 +62,20 @@ function onFakeHost(localUrl: string, host: string): string {
  * Builds the world; if any step fails part-way, everything already created is torn down before the error is rethrown
  * (fix round 1, FR4: mutated runs used to leak scratch databases).
  */
-export async function createWorld(n: number, prefix: string): Promise<World> {
+export async function createWorld(n: number, prefix: string, o: { cpId?: (cpUrl: string) => string } = {}): Promise<World> {
   const undo: Array<() => Promise<unknown>> = [];
   try {
-    return await buildWorld(n, prefix, undo);
+    return await buildWorld(n, prefix, undo, o);
   } catch (e) {
     for (const u of undo.reverse()) await u().catch(() => {});
     throw e;
   }
 }
 
-async function buildWorld(n: number, prefix: string, undo: Array<() => Promise<unknown>>): Promise<World> {
+async function buildWorld(n: number, prefix: string, undo: Array<() => Promise<unknown>>, o: { cpId?: (cpUrl: string) => string }): Promise<World> {
   const cp = await createScratchDb('cp', { migrateControlPlane: true });
   undo.push(() => dropScratchDb(cp.name));
+  const cpId = o.cpId ? o.cpId(cp.url) : WORLD_CP_ID;
   const original = await createScratchDb('t', { tenantSchema: true });
   undo.push(() => dropScratchDb(original.name));
   const cpSql = postgres(cp.url, { max: 3, onnotice: () => {} });
@@ -94,7 +97,7 @@ async function buildWorld(n: number, prefix: string, undo: Array<() => Promise<u
   const logs: string[] = [];
   for (let run = 0; run < 2; run++) {
     const r = await runBackup({
-      controlPlaneUrl: cp.url, cpId: WORLD_CP_ID, store: bucket, keyring: testKeyring(), pgDumpBin: PG_DUMP!, pgDumpVersion: 'pg_dump (PostgreSQL) 16',
+      controlPlaneUrl: cp.url, cpId, store: bucket, keyring: testKeyring(), pgDumpBin: PG_DUMP!, pgDumpVersion: 'pg_dump (PostgreSQL) 16',
       runId: `test-${randomUUID().slice(0, 8)}`, log: (l) => logs.push(l),
     });
     if (r.exitCode !== 0) throw new Error(`the setup backup failed: ${logs.join('\n')}`);
@@ -113,8 +116,8 @@ async function buildWorld(n: number, prefix: string, undo: Array<() => Promise<u
   const rt = neon.addProject({ name: 'cadenzpoint-restore-test' });
   const cpp = neon.addProject({ name: 'cadenzpoint-control-plane' });
   return {
-    cp, cpSql, original, bucket, neon, proxy, lines, tenants, cpId: WORLD_CP_ID,
-    restoreTestProjectId: rt.id, controlPlaneProjectId: cpp.id,
+    cp, cpSql, original, bucket, neon, proxy, lines, tenants, cpId,
+    restoreTestProjectId: rt.id, controlPlaneProjectId: cpp.id, controlPlaneHost: cpp.endpoints[0].host,
     async close() {
       await cpSql.end({ timeout: 5 });
       await neon.close();
@@ -192,3 +195,29 @@ export async function actions(w: World, tenantId: string) {
   return w.cpSql<Array<{ kind: string; status: string; newProjectId: string | null; projectName: string | null; detail: string | null; oldProjectId: string | null }>>`
     SELECT kind, status, new_project_id AS "newProjectId", project_name AS "projectName", detail, old_project_id AS "oldProjectId" FROM disaster_actions WHERE tenant_id = ${tenantId} ORDER BY at, id`;
 }
+
+// ---- feature-plan-control-plane-disaster.md: the lost control plane -------------------------------------------------
+
+/** The control plane's Neon-shaped pooled URL (its database is the scratch control plane while the project is live). */
+export function controlPlaneNeonUrl(w: World): string {
+  return onFakeHost(w.cp.url, w.controlPlaneHost);
+}
+
+/**
+ * The old control plane's state in the fake Neon: `live` (200, its host reaches the scratch database), `recoverable`
+ * (deleted, listed recoverable, host → the 28P01 proxy) or `gone` (purged, host → the proxy).
+ */
+export function setControlPlane(w: World, state: 'live' | 'recoverable' | 'gone'): void {
+  const id = w.controlPlaneProjectId;
+  if (state === 'live') {
+    const local = new URL(SERVER_URL!);
+    w.neon.addProject({ id, name: 'cadenzpoint-control-plane', host: w.controlPlaneHost, mapTo: { host: local.hostname, port: Number(local.port || 5432) } });
+    return;
+  }
+  if (!w.neon.projects.has(id)) w.neon.addProject({ id, name: 'cadenzpoint-control-plane', host: w.controlPlaneHost });
+  if (state === 'recoverable') w.neon.markDeleted(id);
+  else w.neon.purge(id);
+}
+
+/** A local database every test can reach: the network-first check of the control-plane modes. */
+export const RESTORE_TEST_URL = SERVER_URL ? (() => { const u = new URL(SERVER_URL); u.pathname = '/postgres'; return u.toString(); })() : '';

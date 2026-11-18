@@ -30,6 +30,7 @@ import type { HostMap } from './lib/host-map';
 import { MINUTE } from './lib/util';
 import { runWorkspace } from './disaster-workspace';
 import { runRehearse } from './disaster-rehearse';
+import { runControlPlane } from './disaster-control-plane';
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const RUN_ID_RE = /^[A-Za-z0-9_/-]{1,80}$/;
@@ -237,7 +238,7 @@ export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promi
     log(`refused: mode ${args.mode} runs only from the button (gh-…) or the CloudShell fallback (cloudshell-…)`);
     return { exitCode: 1, outcome: null };
   }
-  if (args.mode === 'control-plane' || args.mode === 'reconcile' || args.targets === CONTROL_PLANE_TARGET) {
+  if (args.mode === 'reconcile' || (args.mode === 'rehearse' && args.targets === CONTROL_PLANE_TARGET)) {
     log(`refused: ${args.mode === 'rehearse' ? 'the control-plane rehearsal' : `mode ${args.mode}`} is not in this build`);
     return { exitCode: 1, outcome: null };
   }
@@ -258,6 +259,10 @@ export async function runDisaster(args: DisasterArgs, deps: DisasterDeps): Promi
     log(`refused: could not list running disaster tasks (${summaryOf('ecs', e)})`);
     return { exitCode: 1, outcome: null };
   }
+
+  // ---- mode control-plane: the control plane is gone, so it has its own harness (no lock, no run row until it records;
+  // feature-plan-control-plane-disaster.md §6.3). It branches before any control-plane client is opened.
+  if (args.mode === 'control-plane') return runControlPlane(args, deps, startedBy);
 
   // ---- the lock (a cancelled task can hold it for its 120-second stop) -----------------------------------------------
   let lock: HeldLock | null = null;
