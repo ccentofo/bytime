@@ -1,6 +1,6 @@
 # Blueprint 3d: Cloud export link (the F2 change)
 
-> **Status: v1.7** (2026-11-18). Confirmation pass 1: 1 HIGH, 3 MEDIUM, 10 LOW. Confirmation pass 2: 2 MEDIUM, 8 LOW. Confirmation pass 3: 1 MEDIUM, 8 LOW. Confirmation pass 4: 1 MEDIUM, 7 LOW. Confirmation pass 5: 2 MEDIUM, 6 LOW. All addressed. Round 1: 7 HIGH, about 17 MEDIUM, 29 LOW. Round 2: 3 HIGH, 15 MEDIUM, 13 LOW. All addressed (§15). Branch `cloud-export`, from `main` at `17ac1c8`. Follows `BLUEPRINT-STANDARD.md`.
+> **Status: v1.8** (2026-11-18). Confirmation pass 1: 1 HIGH, 3 MEDIUM, 10 LOW. Confirmation pass 2: 2 MEDIUM, 8 LOW. Confirmation pass 3: 1 MEDIUM, 8 LOW. Confirmation pass 4: 1 MEDIUM, 7 LOW. Confirmation pass 5: 2 MEDIUM, 6 LOW. Confirmation pass 6: 2 MEDIUM, 6 LOW. All addressed. Round 1: 7 HIGH, about 17 MEDIUM, 29 LOW. Round 2: 3 HIGH, 15 MEDIUM, 13 LOW. All addressed (§15). Branch `cloud-export`, from `main` at `17ac1c8`. Follows `BLUEPRINT-STANDARD.md`.
 >
 > **Decisions:**
 > - `BUSINESS-DECISIONS.md` §5, "Consequence: the F2 'founder-held final export' must change";
@@ -43,7 +43,7 @@
 - **A1, the policy-breach rule:**
   - a `policy_hold` workspace whose export the founder hasn't re-enabled (`policyExportAllowed` false) → the link goes **only** to the extra address, which is required;
   - once the founder has re-enabled export for that workspace (`set-policy-export on`, F5's honest-mistake path), it goes to the normal recipients;
-  - **any link sent earlier to the normal recipients** (with or without an extra address alongside) **stops working while the workspace is on such a hold, including after the workspace is deleted** (§6.6). The page shows it as unavailable; it isn't revoked. If the founder lifts the hold or re-enables export within the 7 days, it works again. Only a delivery addressed to the extra address **alone** keeps working;
+  - **any link sent earlier to the normal recipients** (with or without an extra address alongside) **stops working while the workspace is on such a hold, including after the workspace is deleted** (§6.6). The page shows it as unavailable; it isn't revoked. If the founder lifts the hold or re-enables export within the 7 days, it works again. **After a deletion that's no longer possible** (both commands need `suspended`), so those links stay dead. Only a delivery addressed to the extra address **alone** keeps working;
   - **an export email not yet sent when the hold starts** still goes to its recipients, and its link then shows as unavailable. No data reaches them.
 - **A2, the expiry wording:** access ends at exactly 7 days, and an hourly sweep erases the file within 1 hour after that, with S3's own expiry as the backstop (§6.7). BUSINESS-DECISIONS says "files … expire automatically within 7 days". Accept "access ends at 7 days; erased within the hour after", or ask the business session to word it.
 - **A3, the Privacy page:** it lists AWS for "encrypted backups" only (`src/app/privacy/page.tsx:51`), and §3 (:43) says data "is then permanently deleted". Export copies are also stored in AWS, and a legal-hold copy can outlive a deletion. The business session supplies the sentence(s).
@@ -117,7 +117,7 @@
 ## 5. Invariants that must not break
 1. **The founder's machine never receives customer data.** The task runs in AWS; the bytes go from S3 straight to the recipient.
 2. **Only the export task role writes or deletes in the bucket.** Deliveries, holds and releases run in the `cadenzpoint-backup-export` family; the hourly sweep runs in its own `cadenzpoint-backup-sweep` family **with the same task role**. The Vercel role may only `GetObject` under `delivery/`, through a 5-minute presign. Nothing is public, and every request is TLS-only.
-3. **A link works only for its delivery, until its `expires_at` (created + 7 days),** and only while it isn't revoked. The token is 32 random bytes. The control plane stores its SHA-256 for lookup, plus an encrypted copy that exists only until the email is sent. **Once sent, the token is redacted from the frozen payload** (§6.5).
+3. **A link works only for its delivery, until its `expires_at` (created + 7 days),** only while it isn't revoked, and only while it isn't unavailable under a policy hold (§6.6). The token is 32 random bytes. The control plane stores its SHA-256 for lookup, plus an encrypted copy that exists only until the email is sent. **Once sent, the token is redacted from the frozen payload** (§6.5).
 4. **Recipients are fixed at export time and stored with the delivery (encrypted).** The delivery cron sends to exactly those addresses, **as one separate message per recipient (a Resend batch), so no recipient sees another and no one else gets a copy**, never D10 at send time. At most 50 recipients (refused above that). They are the notice recipients plus the extra address when given, or the extra address only for a `policy_hold` workspace whose export isn't re-enabled (A1). An extra address must be typed twice and match.
 5. **The task's logs and the public button log carry ids, never emails, slugs or tokens.** Inputs are masked first. **The token does appear in the request path** of the download page: Vercel's request logs (short retention, accepted) and Sentry's URL capture (scrubbed, §6.6). It also appears in the frozen notice payload and the email provider's log (§6.5).
 6. **Hold copies are never served by the download page** and never expire by themselves.
@@ -226,15 +226,16 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
    - the transaction takes `pg_advisory_xact_lock(hashtext('tenant:' || id))`, the exact key from `locked.ts:64`;
    - **re-read the tenant first.** If its status, suspension reason, `policy_export_allowed` or `db_url_encrypted` changed since step 1 → roll back, then delete the object **outside the lock**, and refuse `changed` ("press again");
    - a `tenant_notices` row by raw SQL: kind `export-ready`, `scheduled_for` = `date_trunc('milliseconds', now())`; `sent_at`, `forced_at` and `superseded_at` null (= pending); the other columns take their defaults. `RETURNING id`;
-   - an `export_deliveries` row (§6.5) carrying **`notice_id` = that id**;
+   - an `export_deliveries` row (§6.5) carrying **`notice_id` = that id**, and **`extra_only` = (`suspension_reason = 'policy'` AND NOT `policy_export_allowed`)**, computed from **this same re-read** that guards `changed`;
    - a `tenant_audit_events` row `export-delivered` (detail: delivery id, recipient count, an extra-address flag, the reason's length).
-5. **Email the founder** (SNS): `export delivered: workspace <id>, delivery <id>, <n> recipient(s), expires <iso>`, ids only.
+5. **Email the founder** (SNS): `export delivered: workspace <id>, delivery <id>, <n> recipient(s), expires <iso>`, ids only. **A publish failure after the commit is logged, and the exit stays 0** (3c's rule, `disaster.ts:339-341`). The ids are in the audit and the digest, so the founder never presses again for a delivery that worked. The same applies to `hold` and `release`.
 
 **`hold`:**
 - **step 1's status check only** (`active`/`suspended` with a database; **no recipient checks**: `extra-required`, `no-recipients` and `too-many-recipients` are deliver-only), then 1b (schema-skew) and 3, with key `hold/<holdId>/<slug>-export-<yyyymmdd>.zip`;
 - then an `export_holds` row (id, tenant id, key, bytes, sha256, reason, `run_id`, created_at, `released_at` null, `release_reason` null);
 - audit `export-held`; an SNS line **including the hold id** (`export held: workspace <id>, hold <id>`), which `release` needs.
 - **No email to customers.**
+- **A record failure** (after upload) → delete the object (verified), exit 1.
 - Allowed in every exportable status, including `policy_hold`, with no `--extra`.
 
 **`release`:**
@@ -269,7 +270,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 
 ### 6.5 Delivery records and the `export-ready` notice
 - **Table `export_deliveries`:**
-  - columns: `id` uuid PK; `tenant_id` FK; **`notice_id` uuid unique** (FK `tenant_notices`); `s3_key`; `bytes`; `sha256`; `token_hash` char(64) unique; `token_encrypted` text null; `recipients_encrypted` text (a JSON array, `encrypt()`ed); **`time_zone`** varchar(100); `extra_recipient` boolean; **`extra_only`** boolean (true only when the policy-hold rule sent it to the extra address alone); `reason` text null; `created_at`; `expires_at`; `revoked_at` null; `erased_at` null; `download_count` int default 0; `last_download_at` null; `run_id`;
+  - columns: `id` uuid PK; `tenant_id` FK; **`notice_id` uuid unique** (FK `tenant_notices`); `s3_key`; `bytes`; `sha256`; `token_hash` char(64) unique; `token_encrypted` text null; `recipients_encrypted` text (a JSON array, `encrypt()`ed); **`time_zone`** varchar(100); `extra_recipient` boolean; **`extra_only`** boolean **NOT NULL, no default** (true only when the policy-hold rule sent it to the extra address alone; set by step 4); `reason` text null; `created_at`; `expires_at`; `revoked_at` null; `erased_at` null; `download_count` int default 0; `last_download_at` null; `run_id`;
   - index `(tenant_id, created_at)`;
   - **table `export_holds`** as in §6.3;
   - one drizzle-kit control-plane migration.
@@ -321,7 +322,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 
   A GET never mints a URL, so email scanners fetch only the page.
 
-**Policy hold:** a delivery with **`extra_only` false** is **unavailable** (the "expired" text, no URL) while its tenant has `suspension_reason = 'policy'` and `policy_export_allowed` false, **whatever its status**. `tenant:delete` keeps both on the tombstone, so deleting a breach workspace doesn't release the block; `unsuspend` clears the reason (`admin-commands.ts:102`). Both GET and POST check this, reading the tenant row. A delivery with `extra_only` true (the founder's verified address alone) is unaffected (A1).
+**Policy hold:** a delivery with **`extra_only` false** is **unavailable** (the "expired" text, no URL) while its tenant has `suspension_reason = 'policy'` and `policy_export_allowed` false, **whatever its status**. `tenant:delete` keeps both on the tombstone, so deleting a breach workspace doesn't release the block; `unsuspend` clears the reason (`admin-commands.ts:101`). The seed tool `register-tenant.ts:37` also clears it on re-register (dev and seed only). Both GET and POST check this, reading the tenant row. A delivery with `extra_only` true (the founder's verified address alone) is unaffected (A1).
 
 **POST (the server action):**
 - re-check the token (valid, not expired or revoked, and not unavailable under a policy hold);
@@ -407,6 +408,12 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 |---|---|---|---|
 | — | `deliver` passes | `active` | row, notice, audit, SNS |
 | `active` | a page POST with valid rate | `active` | a 5-minute URL; `download_count + 1` |
+| `active` (`extra_only` false) | the tenant goes on a policy hold, export not re-enabled | `unavailable` | none (computed at read) |
+| `unavailable` | a page GET or POST | `unavailable` | the "expired" text; no URL |
+| `unavailable` | `unsuspend` or `set-policy-export on` (before expiry) | `active` | none |
+| `unavailable` | `tenant:delete` | `unavailable` | the tombstone keeps the reason; permanent |
+| `unavailable` | `now >= expires_at` | `expired` | none |
+| `unavailable` | `export-revoke --yes` | `revoked` | as revoke |
 | `active` | `now >= expires_at` | `expired` | the page shows "expired"; no URL |
 | `active` | `export-revoke --yes` | `revoked` | audit; the pending notice superseded |
 | `expired` or `revoked` | the hourly sweep (row-driven) | `erased` | the object deleted (a missing one counts); `erased_at` |
@@ -452,6 +459,8 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 | F19 | Two recipients from different parties | one separate message each (a batch): neither sees the other, and no support copy exists |
 | F20 | A hold task dies after upload, or a control-plane rollback loses a hold row | the orphaned hold object is kept and raises `export-orphan-hold`; the founder contacts the lead |
 | F21 | A workspace put on a policy hold after a link reached its admins | every delivery with `extra_only` false (even one that also had an extra address) is unavailable while the hold lasts, including after deletion; an email still pending at that moment is sent and its link shows unavailable; `extra_only` links keep working |
+| F22 | An SNS publish fails after a successful delivery, hold or release | logged; exit 0; the ids are in the audit and digest (no second press) |
+| F23 | A hold's record step fails after upload | the object deleted (verified); exit 1 |
 | F13 | A release of a hold whose object is already gone | the delete is idempotent; a 404 verifies; it's released |
 
 ## 9. Platform limits
@@ -502,7 +511,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 |---|---|
 | T1 | `parseExportArgs`: every mode and its required flags; an unknown flag exits 2; a bad uuid, email or reason refused; `--extra` on `hold`/`release` → exit 1 `extra-not-allowed` |
 | T2 | `deliver` against a scratch workspace with fake S3: the ZIP under `delivery/<id>/`; the SHA-256 matches; the notice, delivery (`notice_id`) and audit in one transaction; the recipients are D10 per `NOTICE_RECIPIENTS` plus the extra address, lowercased and deduplicated; the time zone stored; a schema-skewed workspace fails `schema-skew` before the recipient count |
-| T3 | `policy_hold` with export not re-enabled: without `--extra` refused; with it, the recipients are exactly the extra address. With `policy_export_allowed`: the normal recipients. A suspension starting mid-build → `changed`, the object deleted |
+| T3 | `policy_hold` with export not re-enabled: without `--extra` refused; with it, the recipients are exactly the extra address and **`extra_only` is true**. With `policy_export_allowed`: the normal recipients, `extra_only` false. A normal deliver plus extra → `extra_only` false. A suspension starting mid-build → `changed`, the object deleted |
 | T4 | Statuses: deleted, deleting, provisioning and no URL → `not-exportable` |
 | T5 | Failure paths: the ZIP limit, a database error, an upload error, a recording error → no row, the object deleted, the upload aborted |
 | T6 | `hold` and `release`: the schema-skew check applies; **no recipient checks for a hold** (a `policy_hold` workspace without `--extra`, one with no recipients, and one over 50 all pass); the hold row and object; a release deletes and verifies; a second release refused |
@@ -512,7 +521,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 | T10 | Either env value missing, or an assume-role or presign error → the support text plus the deduped alert; resolved on success |
 | T11 | The sweep (its own family, the export exec role): row-driven deletes of expired and revoked keys; a missing object still sets `erased_at`; delivery orphans older than 1 day deleted; **hold orphans raise `export-orphan-hold` and are never deleted**; holds with rows untouched; runnable from any caller |
 | T12 | `export-copy-overdue` in ops-digest (the `LEAST` query at 6 hours; resolved when none; not touched by `syncBackupAlerts`); the daily line's counts (K excludes superseded) and the open-hold count; the full hold list on UTC day 1 |
-| T13 | U6 and the stack: the bucket policy statements; lifecycle (`delivery/` 8 days, no hold rule); **the deny-only `ExportKey` policy** and the role-side KMS grants; the three roles' names and paths; the task role's ECS reads; the button's RunTask families and PassRole; **`SchedulerRole`'s sweep RunTask and PassRole**; the **separate** export start and RunTask rules (export family only, not the sweep); the sweep schedule and family; `ExportModes`; bootstrap (OIDC provider, `CfnExecRole` bucket and alias); the team-slug constants equal in three files; the audit's per-bucket rule arrays, its exports-only encryption check and both keys' state; the `BACKUP_KMS_KEY_ARN` exemption |
+| T13 | U6 and the stack: the bucket policy statements; lifecycle (`delivery/` 8 days, no hold rule); **the deny-only `ExportKey` policy** and the role-side KMS grants; the three roles' names and paths; the task role's ECS reads; the button's RunTask families and PassRole; **`SchedulerRole`'s sweep RunTask and PassRole**; the **separate** export start and RunTask rules (export family only, not the sweep); the sweep schedule and family; `ExportModes`, **`ExportDownloadRoleArn` and `ExportBucket` outputs**; bootstrap (OIDC provider, `CfnExecRole` bucket and alias); the team-slug constants equal in three files; the audit's per-bucket rule arrays, its exports-only encryption check and both keys' state; the `BACKUP_KMS_KEY_ARN` exemption |
 | T14 | U6: the only `src/` importer of `@aws-sdk` is `download-url.ts`; the bundle's `src/` inputs are exact, with COPY lines; `package.json` never bundled |
 | T15 | The button: masking (target, both addresses, reason never visible); the two addresses must match; an extra address on `hold` or `release` refused; confirm = mode; a leading `-` refused; validation; the `ExportModes` gate; one at a time |
 | T16 | Retired: no `tenant:export` script, no `export-destroyed`, no `founder-export-overdue`; the receipt line; `tenant:delete` behaviour otherwise unchanged |
@@ -523,7 +532,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 | T23 | The page's rate limit: the IP limit is checked before any token lookup; the per-delivery limit after |
 | T24 | `export-revoke` under the tenant lock warns when the lease is live |
 | T25 | `openExportSnapshot(url, opts)`: the task's server-side timeouts are applied; the app's call is unchanged |
-| T28 | The page under a later policy hold: an admins-only delivery and an admins-plus-extra delivery are both unavailable on GET and POST (no presign); an `extra_only` delivery still works; it's still unavailable after `tenant:delete` (tombstone with the reason); `unsuspend` or `set-policy-export on` makes it available again |
+| T28 | The page under a later policy hold (deliveries made **through `deliver`**, not seeded): an admins-only delivery and an admins-plus-extra delivery are both unavailable on GET and POST (no presign); an `extra_only` delivery still works; still unavailable after `tenant:delete`; `unsuspend` or `set-policy-export on` (before deletion) makes it available again |
 | T29 | The recipient rule: the shared fixture gives equal results for the task's copy and `notices.ts`'s; an admin deactivated mid-build is left out (fresh connection); a `cloudshell-` start with `--extra` refused |
 | T19 | `schema-skew`: a workspace one migration ahead of the image's journal → refused before any read; the journal length comes from `drizzle/meta/_journal.json` at build |
 | T20 | The 45-minute deadline aborts a stalled build (fake stalled stream) and deletes any object |
@@ -691,3 +700,14 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
     - `--extra` on hold or release → exit 1;
     - the hold id in the SNS line;
     - F21 notes the pending email.
+- **v1.8, confirmation pass 6** (2 MEDIUM, 6 LOW; not clean). All addressed:
+  - **MEDIUM:**
+    - `extra_only` was read but never written → step 4 computes it from the guarding re-read; NOT NULL, no default; T3 and T28 test it through `deliver`;
+    - §7.1 lacked the hold-unavailable state → five rows added.
+  - **LOW:**
+    - A1 and F21 note that deletion makes the block permanent;
+    - invariant 3 mentions the hold;
+    - an SNS failure after commit → exit 0 (3c's rule); hold record failure → delete and exit 1;
+    - outputs in T13;
+    - the line reference;
+    - the seed-tool note.
