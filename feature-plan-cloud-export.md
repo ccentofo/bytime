@@ -1,6 +1,6 @@
 # Blueprint 3d: Cloud export link (the F2 change)
 
-> **Status: v2.0** (2026-11-18). Confirmation pass 1: 1 HIGH, 3 MEDIUM, 10 LOW. Confirmation pass 2: 2 MEDIUM, 8 LOW. Confirmation pass 3: 1 MEDIUM, 8 LOW. Confirmation pass 4: 1 MEDIUM, 7 LOW. Confirmation pass 5: 2 MEDIUM, 6 LOW. Confirmation pass 6: 2 MEDIUM, 6 LOW. Confirmation pass 7: 1 MEDIUM, 6 LOW. Confirmation pass 8: 1 MEDIUM, 5 LOW. All addressed. Round 1: 7 HIGH, about 17 MEDIUM, 29 LOW. Round 2: 3 HIGH, 15 MEDIUM, 13 LOW. All addressed (§15). Branch `cloud-export`, from `main` at `17ac1c8`. Follows `BLUEPRINT-STANDARD.md`.
+> **Status: v2.1** (2026-11-18). Confirmation pass 1: 1 HIGH, 3 MEDIUM, 10 LOW. Confirmation pass 2: 2 MEDIUM, 8 LOW. Confirmation pass 3: 1 MEDIUM, 8 LOW. Confirmation pass 4: 1 MEDIUM, 7 LOW. Confirmation pass 5: 2 MEDIUM, 6 LOW. Confirmation pass 6: 2 MEDIUM, 6 LOW. Confirmation pass 7: 1 MEDIUM, 6 LOW. Confirmation pass 8: 1 MEDIUM, 5 LOW. Confirmation pass 9: 1 MEDIUM, 5 LOW. All addressed. Round 1: 7 HIGH, about 17 MEDIUM, 29 LOW. Round 2: 3 HIGH, 15 MEDIUM, 13 LOW. All addressed (§15). Branch `cloud-export`, from `main` at `17ac1c8`. Follows `BLUEPRINT-STANDARD.md`.
 >
 > **Decisions:**
 > - `BUSINESS-DECISIONS.md` §5, "Consequence: the F2 'founder-held final export' must change";
@@ -216,7 +216,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 1b. **Schema check, inside the snapshot:** the workspace's applied tenant migration count (`drizzle.__drizzle_migrations`; 3c's `migrationCount` query, `disaster-steps.ts:572`) must equal the journal length baked into the image. Otherwise refuse `schema-skew`: "approve the pending Backup system deploy (or run it from Actions → Backup system deploy if none is pending), or run Deploy to Production". The bundled schema can't read columns the database lacks, or miss new ones.
 2. **Recipients**, resolved **after the build, just before recording, on a fresh connection after the snapshot closes** (a REPEATABLE READ snapshot can't see later changes), so an admin deactivated mid-build is left out:
    - for a `policy_hold` workspace whose export isn't re-enabled: the extra address only;
-   - otherwise D10. It's the task's own copy of `notices.ts:72-91` (which is `server-only`), so **one shared fixture test** (an integration test; `notices.ts` exports `resolveRecipientsAndTimezone` as an internal export for it, with the `server-only` stub as `setup-db.ts:11`) runs both against the same workspace states and requires equal results. It **honours `NOTICE_RECIPIENTS`** (`lifecycle-config.ts:145`, bundled): active admins from the workspace database, plus the billing email, plus the signup email when there's no active admin, plus `--extra` if given;
+   - otherwise D10. It's the task's own copy of `notices.ts:73-91` (which is `server-only`), so **one shared fixture test** (an integration test; `notices.ts` exports `resolveRecipientsAndTimezone` as an internal export for it, with the `server-only` stub as `setup-db.ts:11`) runs both against the same workspace states and requires equal results. It **honours `NOTICE_RECIPIENTS`** (`lifecycle-config.ts:145`, bundled): active admins from the workspace database, plus the billing email, plus the signup email when there's no active admin, plus `--extra` if given;
    - lowercased and deduplicated;
    - none → refuse `no-recipients`; more than 50 → refuse `too-many-recipients`. **For `deliver` only, the same count is pre-checked right after 1b** (after the schema check, so a skewed workspace fails `schema-skew`, not a raw read error), so nothing is built in vain. A workspace over 50 recipients uses the in-app self-export (TENANT-DELETION notes it);
    - the workspace's time zone (`workspace_settings.timezone`, canonicalised) is read here too.
@@ -225,9 +225,11 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
    - **The delivery and hold ids are generated before the upload**, because they're in the S3 key.
 4. **Record, in one control-plane transaction**, under the `tenant:` lock, with `SET LOCAL lock_timeout = '5s'` and `statement_timeout = '10s'` (`withTenantLock`'s values, `locked.ts:43-44`).
 
-   **Once the upload has finished, the task never deletes the object after a record error.** A record error isn't proof of failure: a COMMIT can succeed with its acknowledgement lost, a dropped socket can still let the server commit, and the deadline or a stop can land mid-commit. On any record error (including the deadline or a stop after the upload), the task:
+   **Errors that certainly committed nothing** (after the upload, before the transaction starts: a refusal at the re-resolve such as `no-recipients`, a failed read on the fresh connection, or a lock timeout `55P03` on the first statement) → delete the object at once, and exit 1 with `export refused` and its code.
+
+   **Once the transaction has started, the task never deletes the object after an error.** A record error isn't proof of failure: a COMMIT can succeed with its acknowledgement lost, a dropped socket can still let the server commit, and the deadline or a stop can land mid-commit. On any record error (including the deadline or a stop after the upload), the task:
    - leaves the object;
-   - logs `export outcome unknown: delivery <id>` (or `hold <id>`): "check the audit or digest for this id before pressing again";
+   - logs, and emails (SNS), `export outcome unknown: deliver, workspace <id>, delivery <id>` (or `hold <id>`);
    - exits 1.
 
    If the transaction committed, the notice is sent and the link works. If it didn't, the object has no row: the hourly sweep deletes a delivery orphan after 1 day, and reports a hold orphan as `export-orphan-hold`. **Only the `changed` refusal deletes at once**, after its deliberate rollback (a rolled-back transaction can't have committed).
@@ -238,7 +240,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
    - a `tenant_notices` row by raw SQL: kind `export-ready`, `scheduled_for` = `date_trunc('milliseconds', now())`; `sent_at`, `forced_at` and `superseded_at` null (= pending); the other columns take their defaults. `RETURNING id`;
    - an `export_deliveries` row (§6.5) carrying **`notice_id` = that id**, and **`extra_only` = (`suspension_reason = 'policy'` AND NOT `policy_export_allowed`)**, computed from **this same re-read** that guards `changed`;
    - a `tenant_audit_events` row `export-delivered` (detail: delivery id, recipient count, an extra-address flag, the reason's length).
-5. **Email the founder** (SNS): `export delivered: workspace <id>, delivery <id>, <n> recipient(s), expires <iso>`, ids only. **A publish failure after the commit is logged, and the exit stays 0** (3c's rule, `disaster.ts:339-341`). The ids are in the audit and the digest, so the founder never presses again for a delivery that worked. The same applies to `hold` and `release`.
+5. **Email the founder** (SNS, the run's closing line, see below). **A publish failure after the commit is logged, and the exit stays 0** (3c's rule, `disaster.ts:339-341`). The id is in the `export-delivered` audit event, which `tenant:admin show <slug>` prints (`scripts/tenant-admin.ts:202-204`).
 
 **`hold`:**
 - **step 1's status check only** (`active`/`suspended` with a database; **no recipient checks**: `extra-required`, `no-recipients` and `too-many-recipients` are deliver-only), then 1b (schema-skew) and 3, with key `hold/<holdId>/<slug>-export-<yyyymmdd>.zip`;
@@ -256,6 +258,15 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 **`sweep`:** hourly (§6.7).
 
 **Exit codes:** pass 0; refusal or failure 1. Unknown-flag version skew 2, as 3c.
+
+**Every run, of every mode except `sweep`, ends with one SNS line to the founder,** with ids and codes only (invariant 5), whatever its outcome:
+- `export delivered: workspace <id>, delivery <id>, <n> recipient(s), expires <iso>`;
+- `export held: workspace <id>, hold <id>`;
+- `export released: hold <id>`;
+- `export refused: <mode>, workspace <id>, <code>` (e.g. `schema-skew`, `changed`, `not-exportable`, `extra-required`, `no-recipients`, `too-large`);
+- **`export outcome unknown: <mode>, workspace <id>, delivery <id>`** (or `hold <id>`).
+
+A failed publish is logged, and the exit code stands.
 
 ### 6.4 The Export workspace button (`.github/workflows/export-workspace.yml`, `scripts/backup/export-button.sh`)
 - **Workflow:**
@@ -370,6 +381,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
   - **Not covered by the export start or RunTask email rules** (a different family).
   - **A start failure** goes to the existing schedule DLQ alarm.
 - **What `sweep` does (row-driven):**
+  0. **if any control-plane read fails, stop.** Orphan steps never run on a lookup error, so an error can't be mistaken for "no row";
   1. for every `export_deliveries` row with `erased_at IS NULL AND (expires_at <= now() OR revoked_at IS NOT NULL)`, delete `s3_key` (an already-missing object counts as done), then set `erased_at`;
   2. **delivery orphans:** list `delivery/` and delete objects with no delivery row that are older than 1 day;
   3. **hold orphans:** list `hold/`. An object with no `export_holds` row that is older than 1 day is **not deleted** (it may be a legal copy whose row a control-plane rollback lost). It raises `export-orphan-hold` (global, dedup = key; the founder contacts the lead). Holds with rows are never touched.
@@ -402,7 +414,10 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 - **`TENANT-DELETION.md` "Final export"** is rewritten:
   - the button;
   - the policy-hold rule;
-  - **in bold, at the top of the section:** "take the export and wait until the Export workspace run has passed (the run's result, or the 'export delivered' email) before running `tenant:delete`". Nothing technical stops a deletion during an export build; the export then fails `changed`;
+  - **in bold, at the top of the section:** "take the export and wait until the Export workspace run has passed (the run's result, or the 'export delivered' email) before running `tenant:delete`";
+  - **"If you get `export outcome unknown`":** run `npm run tenant:admin -- show <slug>` and look for an `export-delivered` (or `export-held`) audit event whose detail has that delivery (or hold) id.
+    - **Found:** it worked. Don't press again.
+    - **Not found after 10 minutes:** press again (the leftover copy is erased by the sweep after a day). Nothing technical stops a deletion during an export build; the export then fails `changed`;
   - holds.
 - **`PRODUCTION-DEPLOY.md`:**
   - 13b: the bootstrap update;
@@ -433,6 +448,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 | `expired` | a page GET or POST | `expired` | "expired"; no URL |
 | `revoked` | a page GET or POST | `revoked` | "expired"; no URL |
 | `erased` | a page POST | `erased` | "expired"; no URL |
+| — | a record error after the transaction started | `active` if it committed; otherwise no row (the sweep erases the object after 1 day) | SNS "outcome unknown" |
 | `active` | a page POST over a rate limit | `active` | refused ("try again later"); no presign |
 | `revoked` or `erased` | `export-revoke` | unchanged | refused |
 
@@ -458,7 +474,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 |---|---|---|
 | F1 | A workspace over the ZIP limits | `failed` with "too large for a single ZIP: contact the lead"; nothing stored |
 | F2 | A database error mid-stream | the upload aborted, any object deleted, `failed` |
-| F3 | The upload succeeds but recording errors (including a lost acknowledgement, the deadline or a stop) | the object is left; "outcome unknown: delivery <id>"; exit 1. Committed → the email and the working link (no second press needed: the id is in the audit and digest). Not committed → the sweep deletes the orphan after 1 day |
+| F3 | The upload succeeds but recording errors after the transaction started (including a lost acknowledgement, the deadline or a stop) | the object is left; SNS "outcome unknown" with the delivery id; exit 1. The runbook: `tenant:admin show <slug>` → `export-delivered` with that id means done. Committed → the email and working link. Not → the sweep erases the orphan after 1 day |
 | F4 | The task dies after upload, before recording | an orphan object with no row → the hourly sweep deletes it after 1 day |
 | F5 | The notice fails to send | retried by the cron; the digest shows "not yet emailed" |
 | F6 | A workspace deleted (or its database dropped) before the email sends | still sent to the stored recipients with the stored time zone: the branch never reads the workspace database. The page doesn't need the workspace |
@@ -476,7 +492,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 | F19 | Two recipients from different parties | one separate message each (a batch): neither sees the other, and no support copy exists |
 | F20 | A hold task dies after upload, or a control-plane rollback loses a hold row | the orphaned hold object is kept and raises `export-orphan-hold`; the founder contacts the lead |
 | F21 | A workspace put on a policy hold after a link reached its admins | every delivery with `extra_only` false (even one that also had an extra address) is unavailable while the hold lasts, including after deletion; an email still pending at that moment is sent and its link shows unavailable; `extra_only` links keep working |
-| F22 | An SNS publish fails after a successful delivery, hold or release | logged; exit 0; the ids are in the audit and digest (no second press) |
+| F22 | An SNS publish fails | logged; the exit code stands; the audit event (`tenant:admin show`) has the id |
 | F23 | A hold's record step errors after upload | the object is left; "outcome unknown: hold <id>"; exit 1. Committed → listed as a hold. Not → the sweep reports `export-orphan-hold` (never deletes it) |
 | F13 | A release of a hold whose object is already gone | the delete is idempotent; a 404 verifies; it's released |
 
@@ -536,7 +552,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 | T8 | The page GET: valid, expired, revoked, erased, unknown, malformed (no database read) and workspace-host-redirect states; **a GET never calls the presigner** (spy); the `/export` headers in the built config; the Sentry scrub |
 | T9 | The POST: re-checks; rate limit; a 5-minute presign with attachment disposition; `download_count` incremented; an expired token refused |
 | T10 | Either env value missing, or an assume-role or presign error → the support text plus the deduped alert; resolved on success |
-| T11 | The sweep (its own family, the export exec role): row-driven deletes of expired and revoked keys; a missing object still sets `erased_at`; delivery orphans older than 1 day deleted; **hold orphans raise `export-orphan-hold` and are never deleted**; holds with rows untouched; runnable from any caller |
+| T11 | The sweep (its own family, the export exec role): row-driven deletes of expired and revoked keys; a missing object still sets `erased_at`; delivery orphans older than 1 day deleted, **a row-less `delivery/` object under 1 day old kept**; **a control-plane lookup error stops before any orphan step**; hold orphans raise `export-orphan-hold` and are never deleted; holds with rows untouched; runnable from any caller |
 | T12 | `export-copy-overdue` in ops-digest (the `LEAST` query at 6 hours; resolved when none; not touched by `syncBackupAlerts`); the daily line's counts (K excludes superseded) and the open-hold count; the full hold list on UTC day 1 |
 | T13 | U6 and the stack: the bucket policy statements; lifecycle (`delivery/` 8 days, no hold rule); **the deny-only `ExportKey` policy** and the role-side KMS grants; the three roles' names and paths; the task role's ECS reads; the button's RunTask families and PassRole; **`SchedulerRole`'s sweep RunTask and PassRole**; the **separate** export start and RunTask rules (export family only, not the sweep); the sweep schedule and family; `ExportModes`, **`ExportDownloadRoleArn` and `ExportBucket` outputs**; bootstrap (OIDC provider, `CfnExecRole` bucket and alias); the team-slug constants equal in three files; the audit's per-bucket rule arrays, its exports-only encryption check and both keys' state; the `BACKUP_KMS_KEY_ARN` exemption |
 | T14 | U6: the only `src/` importer of `@aws-sdk` is `download-url.ts`; the bundle's `src/` inputs are exact, with COPY lines; `package.json` never bundled |
@@ -546,6 +562,7 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
 | T18 | The in-app export route is unchanged (existing tests pass as-is); the in-app manifest still carries `package.json`'s version |
 | T27 | Batch outcome: exactly N elements with string `.id` → sent (first id stored, all in `payload.providerIds`); a short array, a `validation_error` or a 429 → failed and retried with the same key; retry-by-name classification; strict validation set; **the 23-hour refreeze after a failed batch** bumps the generation and key, re-renders from `token_encrypted`, and keeps the stored recipients (never D10) |
 | T26 | More than 50 recipients → `too-many-recipients` |
+| T30 | The closing SNS line for each outcome (delivered, held, released, refused with code, outcome unknown), ids only; a failed publish doesn't change the exit code; certain no-commit errors after the upload (`no-recipients` at re-resolve, a lock timeout) delete at once and report `refused` |
 | T23 | The page's rate limit: the IP limit is checked before any token lookup; the per-delivery limit after |
 | T24 | `export-revoke` under the tenant lock warns when the lease is live |
 | T25 | `openExportSnapshot(url, opts)`: the task's server-side timeouts are applied; the app's call is unchanged |
@@ -745,3 +762,11 @@ A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` 
     - record `lock_timeout`/`statement_timeout`;
     - the send attempt timeout;
     - the `limits.ts` comment.
+- **v2.1, confirmation pass 9** (1 MEDIUM, 5 LOW; not clean). All addressed:
+  - **MEDIUM:** "outcome unknown" and refusals reached only CloudWatch, and the digest has no ids → every run ends with one SNS line (ids and codes only) for every outcome, and the runbook checks with `tenant:admin show <slug>` for the id.
+  - **LOW:**
+    - a test that a row-less object under 1 day is kept;
+    - a lookup error stops the orphan steps;
+    - certain no-commit errors after the upload delete at once and report `refused`;
+    - the §7.1 record-error row;
+    - the D10 range made consistent.
