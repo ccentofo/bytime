@@ -1,6 +1,6 @@
 # Blueprint 3d: Cloud export link (the F2 change)
 
-> **Status: FINAL v3.0, pre-mortem CLEAN** (2026-11-18). 2 rounds plus 10 confirmation passes (pass 10 clean); every finding fixed and the LOWs folded in (§15). **Open for the product owner at acceptance: A1–A4** (§2).
+> **Status: FINAL v3.0, pre-mortem CLEAN** (2026-11-18). 2 rounds plus 10 confirmation passes (pass 10 clean); every finding fixed and the LOWs folded in (§15). **Accepted by the product owner 2026-11-18:** A1, A2 and A4 as designed. **A3** (the Privacy sentence or sentences) comes from the business session; the dev builds everything else, and the Privacy change lands when the wording arrives.
 >
 > **Decisions:**
 > - `BUSINESS-DECISIONS.md` §5, "Consequence: the F2 'founder-held final export' must change";
