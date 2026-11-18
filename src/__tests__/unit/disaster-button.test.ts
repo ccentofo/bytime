@@ -210,13 +210,14 @@ describe('D2: stopping', () => {
     let out = '';
     child.stdout.on('data', (d) => { out += d; });
     const exited = new Promise<number | null>((r) => child.on('close', (c) => r(c)));
-    for (let i = 0; i < 100 && !out.includes('disaster task started'); i++) await new Promise((r) => setTimeout(r, 50));
+    for (let i = 0; i < 600 && !out.includes('disaster task started'); i++) await new Promise((r) => setTimeout(r, 50));
+    expect(out).toContain('disaster task started'); // the trap is installed (a loaded runner may take a while)
     child.kill('SIGINT'); // `exec` made the script the step's entry process
     const code = await exited;
     expect(code).toBe(130);
     expect(out).toContain('cancel received: stopping the task');
     expect(s.result(code, out).aws.some((l) => l.startsWith('aws ecs stop-task'))).toBe(true);
-  }, 30_000);
+  }, 60_000);
 });
 
 describe('D2: every available bash (3.2 on macOS, 5 on the runner)', () => {

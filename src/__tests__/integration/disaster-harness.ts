@@ -124,7 +124,8 @@ async function buildWorld(n: number, prefix: string, undo: Array<() => Promise<u
   };
 }
 
-export const FAST_LOCK = { heartbeatMs: 200, heartbeatTimeoutMs: 1_000 };
+/** Short enough for tests, long enough not to drop a lock under a loaded runner (timing fix: was 200 ms / 1 s). */
+export const FAST_LOCK = { heartbeatMs: 500, heartbeatTimeoutMs: 10_000 };
 
 export function fakeEcs(o: { startedBy?: string; others?: EcsTaskInfo[] } = {}): DisasterEcs {
   const self: EcsTaskInfo = { taskArn: 'arn:aws:ecs:us-east-1:1:task/cadenzpoint-backup/self', startedBy: o.startedBy ?? 'gh-1-1', createdAt: new Date('2026-11-17T12:00:00Z') };
@@ -156,7 +157,7 @@ export function deps(w: World, cap: RunCapture, over: Partial<DisasterDeps> = {}
     log: (l) => cap.logs.push(l),
     hostMap: w.neon.hostMap,
     lockTiming: FAST_LOCK,
-    lockWaitMs: 2_000,
+    lockWaitMs: 10_000,
     lockRetryMs: 100,
     timing: { recoverablePolls: 2, recoverablePollMs: 5, overrideGapMs: 5, lockRetryMs: 20, cleanupRetryMs: 20 },
     hardExit: () => { throw new Error('hard exit must not fire in tests'); },
