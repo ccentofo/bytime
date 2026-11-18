@@ -114,15 +114,42 @@ describe('D3: backup-lib code reaches tenant:delete only, never the app bundle',
       return statSync(path.join(ROOT, rel)).isDirectory() ? walk(rel) : /\.(ts|tsx|mts|js)$/.test(n) ? [rel] : [];
     });
   };
-  const importsOf = (re: RegExp) => [...walk('src'), ...walk('scripts')].filter((f) => re.test(read(f).split('\n').filter((l) => /^\s*(import|export)\b|require\(/.test(l)).join('\n')));
-  it('no src/ module except delete-tenant.ts imports proven-gone.ts; nothing in src/ imports delete-tenant.ts; only the three CLI scripts do', () => {
-    expect(importsOf(/['"][^'"]*\/proven-gone['"]/)).toEqual(['src/lib/tenant/delete-tenant.ts']);
-    expect(importsOf(/['"][^'"]*\/delete-tenant['"]/).sort()).toEqual(['scripts/delete-tenant.ts', 'scripts/migrate-all.ts']);
-    expect(importsOf(/['"][^'"]*scripts\/backup\/lib\/[^'"]+['"]/).filter((f) => f.startsWith('src/'))).toEqual(['src/lib/tenant/proven-gone.ts']);
+  // Fix round 1, FR8: the module specifier is matched ANYWHERE in the file (a quoted path), so a multi-line import, an
+  // `await import()` or a `require()` is caught too; a path in a comment isn't quoted.
+  const importsOf = (re: RegExp) => [...walk('src'), ...walk('scripts')].filter((f) => re.test(read(f)));
+  it('no src/ module except delete-tenant.ts imports proven-gone.ts; nothing in src/ imports delete-tenant.ts; only the two CLI scripts (delete-tenant, migrate-all) do', () => {
+    expect(importsOf(/['"`][^'"`\n]*\/proven-gone['"`]/)).toEqual(['src/lib/tenant/delete-tenant.ts']);
+    expect(importsOf(/['"`][^'"`\n]*\/tenant\/delete-tenant['"`]/).sort()).toEqual(['scripts/delete-tenant.ts', 'scripts/migrate-all.ts']);
+    expect(importsOf(/['"`][^'"`\n]*scripts\/backup\/lib\/[^'"`\n]+['"`]/).filter((f) => f.startsWith('src/'))).toEqual(['src/lib/tenant/proven-gone.ts']);
+  });
+  it('FR8: the matcher catches a multi-line import and a dynamic import()', () => {
+    const re = /['"`][^'"`\n]*\/tenant\/delete-tenant['"`]/;
+    expect(re.test("import {\n  deleteTenant,\n} from '@/lib/tenant/delete-tenant';")).toBe(true);
+    expect(re.test("const m = await import('../src/lib/tenant/delete-tenant');")).toBe(true);
+    expect(re.test('// see src/lib/tenant/delete-tenant.ts classifyDatabase')).toBe(false);
   });
   it('the CLI never sets the test-only provenGoneSeams; it passes --project-proven-gone through', () => {
     const cli = read('scripts/delete-tenant.ts');
     expect(cli).not.toMatch(/provenGoneSeams/);
     expect(cli).toMatch(/projectProvenGone: args\.includes\('--project-proven-gone'\)/);
+  });
+});
+
+describe('fix round 1, FR10: stripe-resync statics (M36, M37, no after())', () => {
+  const cli = read('scripts/tenant-admin.ts');
+  const fn = cli.slice(cli.indexOf('async function stripeResync('), cli.indexOf('async function main('));
+  it('M37: the CLI runs the --stripe-mode guard before any Stripe call; M36: it exits 1 when any workspace failed', () => {
+    expect(fn).toMatch(/const mode = stripeModeOrExit\(args\);[\s\S]*await stripeResyncCommand\(/);
+    expect(fn.indexOf('stripeModeOrExit(args)')).toBeLessThan(fn.indexOf('stripeResyncCommand('));
+    expect(fn).toMatch(/if \(out\.failed\.length\) process\.exit\(1\);/);
+    expect(cli).toMatch(/if \(process\.argv\[2\] === 'stripe-resync'\) \{\s*await stripeResync\(process\.argv\.slice\(3\)\);/);
+  });
+  it('the resync path never calls after() or delivers a notice (§6.10)', () => {
+    const cmds = read('src/lib/tenant/admin-commands.ts');
+    const resync = cmds.slice(cmds.indexOf('export async function stripeResyncCommand('), cmds.indexOf('export interface WindowSignupRow'));
+    expect(resync.length).toBeGreaterThan(500);
+    for (const src of [resync, read('src/lib/billing/checkout-link.ts'), fn]) {
+      expect(src).not.toMatch(/\bafter\(|from 'next\/server'|deliverNotice|deliverPendingNotices/);
+    }
   });
 });

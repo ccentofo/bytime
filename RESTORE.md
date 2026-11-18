@@ -81,8 +81,8 @@ backup in AWS us-east-1 (BUSINESS-DECISIONS.md §5). Everything runs on its own;
 - **The weekly restore test** restores the control plane and the workspaces due for a test into temporary databases
   in the dedicated `cadenzpoint-restore-tests` Neon project, checks every table's row count, then deletes them.
   Every workspace is tested at least once every 13 weeks. This replaces the old monthly manual drill.
-- **A lost workspace project:** the **Disaster restore** button, below (runbook A). **The control plane or the whole
-  Neon account:** item 3c-2 (still to be built); until it exists, contact the lead; don't improvise.
+- **A lost workspace project:** the **Disaster restore** button, below (runbook A). **The control plane:** the same
+  button in mode `control-plane` (runbook B). **The whole Neon account:** runbook C.
 - **`backup-old-objects` (a backup older than 29 days):** nothing can delete backups by hand, by design. AWS removes
   expired objects asynchronously and stops billing for them at expiry. If the alert persists past day 30, open an AWS
   support case (Lifecycle expiration delayed) with the bucket name and the object key from the audit.
@@ -216,7 +216,8 @@ backup (the "window"). It writes nothing outside the new project; you repoint ev
      stop. Only if you never repointed to it: delete it in the Neon console and press again.
    - `reachable`: the control plane in SSM answers. If you rebuilt before, make SSM's URL and project id match Vercel's
      (step 5). `served`: fix SSM `/cadenzpoint/backup/control-plane-project-id`. `original-exists`: wait for Neon.
-     `recoverable`: recover it in Neon. `proof-failed`, `retryable`: press again. `no-backup`: contact the lead.
+     `recoverable`: recover it in Neon. `network-unproven`, `proof-failed`, `retryable`: press again. `no-backup`: contact
+     the lead.
 4. **If the old project came back meanwhile** (check the Neon console): keep the old one, delete the new project, re-enable
    the crons, and stop.
 5. **Repoint.** Neon console → the new project (named in the email) → **Connect** → database `cadenzpoint_control` →
@@ -239,7 +240,9 @@ backup (the "window"). It writes nothing outside the new project; you repoint ev
 7. **Check** that the app loads and an admin can sign in to one workspace.
 8. **Stripe resync:** `npm run tenant:admin -- stripe-resync --since <window start from the email> --stripe-mode live`,
    read the plan, then the same command with `--yes`. Then resolve any `stripe-event-unknown-customer` alerts raised since
-   the window start whose customer is now linked (`npm run tenant:admin -- resolve-alert <id> --note "relinked by the resync" --yes`).
+   the window start whose customer is now linked. List their ids (with your `.env.local` loaded:
+   `psql "$CONTROL_PLANE_DATABASE_URL" -c "SELECT id, dedup_key AS customer, first_seen_at FROM ops_alerts WHERE kind = 'stripe-event-unknown-customer' AND resolved_at IS NULL ORDER BY first_seen_at"`),
+   then for each: `npm run tenant:admin -- resolve-alert <id> --note "relinked by the resync" --yes`.
 9. **Work the lists in the newest `reconcile` (or `control-plane`) email:**
    - **lost** → runbook A from step 3. **Use `all-lost` only if the email lists no unconfirmed rebuild;** otherwise press
      with the lost list's explicit ids (`all-lost` would pick up a workspace whose newest data sits in a rebuilt
@@ -260,7 +263,8 @@ backup (the "window"). It writes nothing outside the new project; you repoint ev
 
        If the customer's `tenantId` is one the control plane knows, it isn't a window signup: contact the lead.
        Otherwise refund and cancel anything from that day, **resolve the project's `window-project` alert** (so their
-       address is free again), and email **template B2**. Once they confirm, **delete the project by the id in the
+       address is free again: `npm run tenant:admin -- resolve-alert <alert id> --note "<what you did>" --yes`; the email
+       and `window-signup` print the alert's id), and email **template B2**. Once they confirm, **delete the project by the id in the
        email**, after checking in Neon that its created date is before the window end (a re-signup creates a second
        project with the same name). **If nobody can be found:** delete the project by its id 30 days after the
        reconcile, then resolve the alert. **A staging workspace** (staging shares the organisation): resolve the alert by

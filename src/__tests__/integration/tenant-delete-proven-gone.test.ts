@@ -147,6 +147,18 @@ describe.skipIf(!isLocal)('tenant:delete --project-proven-gone (T23)', () => {
       expect((r as { reason: string }).reason).toContain("doesn't serve CONTROL_PLANE_DATABASE_URL's host");
       await unchanged(t);
     });
+    it('M03: CONTROL_PLANE_PROJECT_ID answers by id and serves the host, but is missing from the org list (a wrong org) → positive-control', async () => {
+      const t = await goneTenant();
+      const filtered: NeonFetch = async (path) => {
+        const r = await fetchNeon(path);
+        if (path.startsWith('/projects?') && r.json && Array.isArray(r.json.projects)) return { ...r, json: { ...r.json, projects: (r.json.projects as Array<{ id: string }>).filter((p) => p.id !== cpProjectId) } };
+        return r;
+      };
+      const r = await run(t.slug, { provenGoneSeams: { neon: filtered, connect: auth } });
+      refusedWith(r, 'positive-control');
+      expect((r as { reason: string }).reason).toContain("is not in the key's organisation");
+      await unchanged(t);
+    });
     it('GET is not 404 (the project still exists; or the lookup fails)', async () => {
       const t = await goneTenant({ state: 'live' });
       refusedWith(await run(t.slug), 'project-404');

@@ -18,7 +18,10 @@ const h = vi.hoisted(() => ({
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/db/control-plane', async () => ({ controlDb: (await import('../helpers/fake-control-db')).createFakeControlDb() }));
-vi.mock('@/lib/tenant/provision', () => ({ ProvisionConflictError: class extends Error {}, provisionTenant: h.provision }));
+vi.mock('@/lib/tenant/provision', () => ({
+  ProvisionConflictError: class extends Error { constructor(m: string, readonly reason: 'exists' | 'window' = 'exists') { super(m); } },
+  provisionTenant: h.provision,
+}));
 vi.mock('@/lib/tenant/invite', () => ({ issueSetPasswordToken: async () => 'set-token' }));
 vi.mock('@/lib/tenant/registry', () => ({ getTenantBySlug: async () => h.tenant }));
 vi.mock('@/lib/tenant/ops-alert-email', () => ({ raiseAlertWithEmail: async (a: Record<string, unknown>) => { h.alerts.push(a); return { opened: true, emailed: true }; } }));
@@ -28,6 +31,7 @@ import { controlDb } from '@/db/control-plane';
 import { signups, tenants } from '@/db/control-plane/schema';
 import type { FakeControlDb } from '../helpers/fake-control-db';
 import { GET, POST } from '@/app/signup/verify/route';
+import { ProvisionConflictError } from '@/lib/tenant/provision';
 
 const db = controlDb as unknown as FakeControlDb;
 const TOKEN = 'raw-token';
@@ -105,6 +109,23 @@ describe('verify POST — flag off (as before)', () => {
     expect(h.provision).toHaveBeenCalledTimes(1);
     expect(updatedKeys()).toEqual(['consumedAt', 'provisionedAt']); // audit S1: provisioned_at on the success path
     expect(location(res)).toContain('/reset-password?token=set-token');
+  });
+});
+
+describe('verify POST — a provisioning conflict (feature-plan-control-plane-disaster.md §6.7, fix round 1 FR5)', () => {
+  it('an open window address: the plain "taken" message, and the signup stays unconsumed (window-signup still lists it)', async () => {
+    db.onSelect(signups, [signupRow({ ipHash: null })]);
+    h.provision.mockImplementation(async () => { throw new ProvisionConflictError('Workspace "newco" is taken.', 'window'); });
+    const res = await post();
+    expect(location(res)).toContain('That workspace name is taken. Try another.');
+    expect(updatedKeys()).not.toContain('consumedAt');
+  });
+  it('another signer\'s workspace (as before): consumed, "sign up again with a different name"', async () => {
+    db.onSelect(signups, [signupRow({ ipHash: null })]);
+    h.provision.mockImplementation(async () => { throw new ProvisionConflictError('Workspace "newco" already exists.'); });
+    const res = await post();
+    expect(location(res)).toContain('That workspace name was just taken. Please sign up again with a different name.');
+    expect(updatedKeys()).toContain('consumedAt');
   });
 });
 

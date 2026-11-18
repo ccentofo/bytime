@@ -1,4 +1,11 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
+
+// Fix round 1, FR10 (C19, C20): the reconcile's inputs from mode control-plane are captured (the real reconcile still runs).
+const reconcileInputs: Array<{ cpDirectHost: string; windowStart: Date; windowEnd: Date; controlPlaneProjectIds: string[] }> = [];
+vi.mock('../../../scripts/backup/disaster-reconcile', async (orig) => {
+  const real = await orig<typeof import('../../../scripts/backup/disaster-reconcile')>();
+  return { ...real, runReconcile: async (input: Parameters<typeof real.runReconcile>[0]) => { reconcileInputs.push({ cpDirectHost: input.cpDirectHost, windowStart: input.windowStart, windowEnd: input.windowEnd, controlPlaneProjectIds: input.controlPlaneProjectIds }); return real.runReconcile(input); } };
+});
 import postgres from 'postgres';
 import { randomUUID } from 'node:crypto';
 import {
@@ -11,7 +18,7 @@ import { controlPlaneId, targetPrefix } from '../../../scripts/backup/lib/keys';
 import { connectUrl } from '../../../scripts/backup/lib/host-map';
 import { clientUrl } from '../../../scripts/backup/lib/pg-url';
 import { controlPlaneRebuildName } from '../../../scripts/backup/lib/project-names';
-import { neonApi, type NeonApi } from '../../../scripts/backup/lib/neon-api';
+import { directHost, neonApi, type NeonApi } from '../../../scripts/backup/lib/neon-api';
 import { encryptionContext, encryptBuffer, decryptBuffer } from '../../../scripts/backup/lib/crypto';
 import { baseKey } from '../../../scripts/backup/lib/keys';
 import { createHash } from 'node:crypto';
@@ -283,6 +290,73 @@ describe.skipIf(!CAN_RUN)('disaster control-plane', () => {
       const text = r.logs.join('\n');
       for (const bad of ['postgres://', 'postgresql://', w.controlPlaneHost, 'neon.tech', ...w.tenants.map((t) => t.slug)]) expect(text).not.toContain(bad);
     }, 120_000);
+  });
+
+  describe('fix round 1, FR10: mode control-plane', () => {
+    it('C07: leg (d) unproven (an unclassifiable connection result) → proof-failed, nothing created', async () => {
+      const real = pgConnector({ hostMap: w.neon.hostMap });
+      const connector: Connector = async (url) => (url === oldUrl() ? { cls: 'unknown', code: null } : real(url));
+      const r = await pressCp({ connector });
+      expect(r.outcome?.results[0].result).toBe('proof-failed');
+      expect(everCreated()).toHaveLength(0);
+    });
+
+    it('C14: the old project turns recoverable after the build → original-back (the re-check reads the recoverable list), nothing recorded', async () => {
+      const base = worldDeps(w, { logs: [], emails: [] }).neon;
+      const neon: NeonApi = { ...base, async createProject(o, sig) { const c = await base.createProject(o, sig); setControlPlane(w, 'recoverable'); return c; } };
+      const r = await pressCp({ neon });
+      expect(r.outcome?.results[0].result).toBe('original-back');
+      expect(everCreated().every((p) => p.deleted)).toBe(true);
+    }, 120_000);
+
+    it('C17 (§7.1): the reconcile throws → fail (exit 1), the project kept, the run row `fail`, the email says to press reconcile', async () => {
+      const r = await pressCp({ disasterLogReader: { async rebuildLines() { throw new Error('logs down'); } } });
+      expect(r.exitCode).toBe(1);
+      expect(r.outcome?.results[0].result).toBe('rebuilt-reconcile-failed');
+      const [p] = live();
+      expect(p).toBeDefined();
+      expect(r.emails[0].subject).toContain('FAILED');
+      expect(r.emails[0].message).toContain('press mode reconcile');
+      const sql = newCp(p.id);
+      try {
+        const [row] = await sql<Array<{ status: string }>>`SELECT status FROM disaster_runs WHERE run_id = ${r.args.runId}`;
+        expect(row.status).toBe('fail');
+      } finally { await sql.end({ timeout: 5 }); }
+    }, 120_000);
+
+    it('C19, C20: the reconcile runs with the NEW control plane\'s direct host and the window backupStartedAt → cpRunStartedAt', async () => {
+      reconcileInputs.length = 0;
+      const r = await pressCp();
+      const [p] = live();
+      expect(reconcileInputs).toHaveLength(1);
+      const got = reconcileInputs[0];
+      expect(got.cpDirectHost).toBe(directHost(new URL(w.neon.projects.get(p.id)!.connectionUri!).hostname));
+      expect(got.cpDirectHost).not.toBe(directHost(w.controlPlaneHost));
+      const sql = newCp(p.id);
+      try {
+        const [row] = await sql<Array<{ summary: { backupStartedAt: string; cpRunStartedAt: string } }>>`SELECT summary FROM disaster_runs WHERE run_id = ${r.args.runId}`;
+        expect(got.windowStart.toISOString()).toBe(row.summary.backupStartedAt);
+        expect(got.windowEnd.toISOString()).toBe(row.summary.cpRunStartedAt);
+        expect(got.windowStart.getTime()).toBeLessThan(got.windowEnd.getTime());
+      } finally { await sql.end({ timeout: 5 }); }
+      expect(got.controlPlaneProjectIds).toEqual([w.controlPlaneProjectId, p.id]);
+    }, 120_000);
+
+    it('C11: at most 3 candidates: with the 3 newest dumps corrupt, an older good one is never tried → no-backup', async () => {
+      await backUpControlPlaneAgain(w); // 4+ control-plane dumps
+      const objs = cpObjects();
+      expect(objs.length).toBeGreaterThanOrEqual(4);
+      const saved = objs.slice(0, 3).map((k) => [k, Buffer.from(w.bucket.objects.get(k)!.bytes)] as const);
+      for (const [k, b] of saved) w.bucket.objects.get(k)!.bytes = Buffer.concat([b.subarray(0, b.length - 1), Buffer.from([b[b.length - 1] ^ 0xff])]);
+      try {
+        const r = await pressCp();
+        expect(r.outcome?.results[0].result).toBe('no-backup');
+        expect(everCreated()).toHaveLength(3);
+        expect(everCreated().every((p) => p.deleted)).toBe(true);
+      } finally {
+        for (const [k, b] of saved) w.bucket.objects.get(k)!.bytes = b;
+      }
+    }, 180_000);
   });
 
   describe('T4, T5: backups stay findable after a rebuild', () => {

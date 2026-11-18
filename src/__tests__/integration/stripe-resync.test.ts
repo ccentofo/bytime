@@ -123,6 +123,72 @@ describe.skipIf(!cpReady)('T27: stripe-resync', () => {
     expect(seatDue).toEqual([good.id]);
   });
 
+  it('FR1 (auditor B): a conflicting window checkout still refreshes the workspace against its CURRENT customer; the conflict alert is raised', async () => {
+    const t = await makeTenant({ stripeCustomerId: 'cus_cur', stripeSubscriptionId: 'sub_cur', subscriptionStatus: 'past_due', pastDueSince: new Date(Date.now() - 3 * 86400_000), billingEmail: 'old@b.test' });
+    customer('cus_cur', { tenantId: t.id, email: 'current@b.test' });
+    stripeState.addSub('cus_cur', 'active', { id: 'sub_cur' });
+    customer('cus_second', { tenantId: t.id, email: 'second@b.test' });
+    session({ slug: t.slug, customer: 'cus_second' });
+    const r = await run(false);
+    expect(r.outcomes).toMatchObject({ linked: [], conflict: [t.slug], failed: [] });
+    expect(r.outcomes!.refreshed).toContain(t.slug);
+    const after = await getTenantRow(t.id);
+    expect(after).toMatchObject({ stripeCustomerId: 'cus_cur', subscriptionStatus: 'active', pastDueSince: null, billingEmail: 'current@b.test' });
+    expect((await openAlertsOf(t.id)).map((a) => a.kind)).toContain('checkout-customer-conflict');
+    expect(seatDue).toContain(t.id); // it became good
+  });
+
+  it('FR3: a failed read of the current customer → that workspace failed (exit 1), never a conflict', async () => {
+    const t = await makeTenant({ stripeCustomerId: 'cus_unreadable' });
+    customer('cus_unreadable', {});
+    customer('cus_win3', { tenantId: t.id });
+    session({ slug: t.slug, customer: 'cus_win3' });
+    let n = 0;
+    stripeState.hooks.set('customers.retrieve', () => { n++; if (n === 2) throw Object.assign(new Error('stripe 500'), { type: 'StripeAPIError' }); });
+    const dry = await run(true);
+    expect(dry.readFailed).toEqual([t.slug]);
+    n = 0;
+    const r = await run(false);
+    expect(r.outcomes!.failed.map((f) => f.slug)).toContain(t.slug);
+    expect(r.outcomes!.conflict).toEqual([]);
+    expect((await openAlertsOf(t.id)).map((a) => a.kind)).not.toContain('checkout-customer-conflict');
+  });
+
+  it('M25: every page of sessions is read; M34: one link per workspace (the newest checkout), no self-conflict; M35: only active/suspended workspaces', async () => {
+    stripeState.pageSize = 2;
+    const ts = [await makeTenant({}), await makeTenant({}), await makeTenant({})];
+    ts.forEach((t, i) => { customer(`cus_p${i}`, { tenantId: t.id }); session({ slug: t.slug, customer: `cus_p${i}`, created: new Date(SINCE.getTime() + (i + 1) * 60_000) }); });
+    // Two checkouts for one workspace: the newer wins and the older never produces a conflict with it.
+    const dup = await makeTenant({});
+    customer('cus_new', { tenantId: dup.id });
+    customer('cus_older', { tenantId: dup.id });
+    session({ slug: dup.slug, customer: 'cus_older', created: new Date(SINCE.getTime() + 60_000) });
+    session({ slug: dup.slug, customer: 'cus_new', created: new Date(SINCE.getTime() + 10 * 60_000) });
+    // Not live: never linked.
+    const closed = await makeTenant({ status: 'deleting' });
+    customer('cus_closed', { tenantId: closed.id });
+    session({ slug: closed.slug, customer: 'cus_closed' });
+    // M35: a closed workspace is never planned (D12: active/suspended only), so it isn't in the plan the founder reads.
+    const plan = await run(true);
+    expect(plan.links).not.toContain(closed.slug);
+    expect(plan.refresh).not.toContain(closed.slug);
+    const r = await run(false);
+    expect(r.outcomes!.linked.sort()).toEqual([...ts.map((t) => t.slug), dup.slug].sort());
+    expect(r.outcomes!.conflict).toEqual([]);
+    expect((await getTenantRow(dup.id)).stripeCustomerId).toBe('cus_new');
+    expect((await getTenantRow(closed.id)).stripeCustomerId).toBeNull();
+    expect(stripeState.sessionListParams.length).toBeGreaterThan(2);
+  });
+
+  it('M30: a relinked workspace whose live customer has no email keeps its stored billing email', async () => {
+    const t = await makeTenant({ billingEmail: 'keep@relink.test' });
+    customer('cus_noemail', { tenantId: t.id, email: null });
+    session({ slug: t.slug, customer: 'cus_noemail' });
+    const r = await run(false);
+    expect(r.outcomes!.linked).toEqual([t.slug]);
+    expect(await getTenantRow(t.id)).toMatchObject({ stripeCustomerId: 'cus_noemail', billingEmail: 'keep@relink.test' });
+  });
+
   it('a Stripe failure → that workspace is listed failed (the CLI exits 1); a mode mismatch is refused', async () => {
     const t = await makeTenant({ stripeCustomerId: 'cus_f' });
     customer('cus_f', {});
@@ -161,6 +227,9 @@ describe.skipIf(!cpReady)('T28b: window-signup', () => {
     const n = await count();
     const r = await windowSignupCommand(slug);
     expect(r.projectId).toBe(projectId);
+    // FR6: the alert's id, for resolve-alert.
+    const [al] = await controlDb.select({ id: opsAlerts.id }).from(opsAlerts).where(eq(opsAlerts.dedupKey, projectId));
+    expect(r.alertId).toBe(al.id);
     expect(r.rows.map((x) => x.companyName)).toEqual(['Second Co', 'First Co', 'Waitlisted Co']);
     expect(await count()).toBe(n);
     // Once the alert is resolved, it's refused again.

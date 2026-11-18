@@ -292,6 +292,9 @@ export async function runReconcile(input: ReconcileInput): Promise<ReconcileResu
   const perTenant = new Map<string, RebuildLine[]>();
   for (const l of lines) perTenant.set(l.tenantId, [...(perTenant.get(l.tenantId) ?? []), l]);
   const chains = new Map<string, ChainOutcome>();
+  /** Every `new` project id in each tenant's rebuild lines (fix round 1, FR2: a listed chain's projects are kept). */
+  const chainProjects = new Map<string, string[]>();
+  for (const [tenantId, ls] of perTenant) chainProjects.set(tenantId, [...new Set(ls.map((l) => l.newProjectId))].sort());
   for (const [tenantId, ls] of [...perTenant.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     throwIfAborted(input.signal);
     const c = await resolveChain(input, env, byId.get(tenantId), ls, legs);
@@ -319,9 +322,14 @@ export async function runReconcile(input: ReconcileInput): Promise<ReconcileResu
 
   // R4: projects created in the window.
   const windowProjects: ReconcileResult['windowProjects'] = [];
+  const alertIds = new Map<string, string>();
   if (legs.ok) {
     const referenced = new Set(rows.map((r) => r.neonProjectId).filter((x): x is string => Boolean(x)));
     const chainEnds = new Set([...chains.values()].map((c) => ('end' in c ? c.end : null)).filter((x): x is string => Boolean(x)));
+    // FR2: every project a LISTED (or unknown) chain names is kept out of R4, ends or not: with no resolvable end (no row,
+    // a deleted row, a row off the chain, a healed `-`), its new project may be a customer's only copy, so it must never
+    // be offered as a `rebuild` to delete. They're named under "unconfirmed rebuilds" instead.
+    for (const [tenantId, c] of chains) if (c.kind === 'listed' || c.kind === 'unknown') for (const id of chainProjects.get(tenantId) ?? []) chainEnds.add(id);
     const alerted = new Set((await input.cp<Array<{ k: string }>>`SELECT dedup_key AS k FROM ops_alerts WHERE kind = 'window-project'`).map((a) => a.k));
     const lo = input.windowStart.getTime() - 3600_000;
     const hi = input.windowEnd.getTime();
@@ -338,6 +346,9 @@ export async function runReconcile(input: ReconcileInput): Promise<ReconcileResu
       for (const wp of windowProjects) {
         const at = input.now();
         await raiseGlobalAlert(input.cp, { kind: 'window-project', dedupKey: wp.projectId, detail: { projectId: wp.projectId, name: wp.name, createdAt: wp.createdAt, slug: wp.slug, type: wp.type } }, at);
+        // FR6: the alert's id, printed in the email (B.9 resolves it by id).
+        const [a] = await input.cp<Array<{ id: string }>>`SELECT id::text AS id FROM ops_alerts WHERE kind = 'window-project' AND dedup_key = ${wp.projectId} AND resolved_at IS NULL`;
+        if (a) alertIds.set(wp.projectId, a.id);
         await appendAction(input.cp, { runId: input.runId, tenantId: null, kind: 'window-project', status: 'listed', projectName: wp.name, newProjectId: wp.projectId, detail: wp.type }, at);
       }
     }
@@ -352,7 +363,7 @@ export async function runReconcile(input: ReconcileInput): Promise<ReconcileResu
   counts['would-reapply'] = chainCount('would-apply');
   counts['already-applied'] = chainCount('already');
   counts['window-projects'] = windowProjects.length;
-  const email = reconcileEmail(input, legs, classes, chains, byId, windowProjects, counts);
+  const email = reconcileEmail(input, legs, classes, chains, byId, windowProjects, counts, chainProjects, alertIds);
   const summary = { windowStart: input.windowStart.toISOString(), windowEnd: input.windowEnd.toISOString(), dryRun: input.dryRun, r1Failed: !legs.ok, counts };
   log(`reconcile counts: ${Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(' ')}`);
   return { r1Failed: !legs.ok, counts, summary, email, classes, windowProjects };
@@ -361,6 +372,7 @@ export async function runReconcile(input: ReconcileInput): Promise<ReconcileResu
 function reconcileEmail(
   input: ReconcileInput, legs: SharedLegs, classes: ReconcileResult['classes'], chains: Map<string, ChainOutcome>, byId: Map<string, Row>,
   windowProjects: ReconcileResult['windowProjects'], counts: Record<string, number>,
+  chainProjects: Map<string, string[]>, alertIds: Map<string, string>,
 ): string[] {
   const out: string[] = [];
   const list = (ids: string[], fmt: (id: string) => string) => {
@@ -377,15 +389,30 @@ function reconcileEmail(
   out.push(`Counts: ${Object.entries(counts).map(([k, v]) => `${k} ${v}`).join(', ')}.`);
   const unconfirmed = of('unconfirmed-rebuild');
   const lost = of('lost');
+  // FR4: all-lost is offered only when no workspace is an unconfirmed rebuild AND no workspace with rebuild lines in the
+  // window is unknown (its chain couldn't be checked, so it has no chain-unconfirmed proof for all-lost to skip).
+  const chainUnknown = [...chains.entries()].some(([id, c]) => c.kind === 'unknown' || classes.get(id)?.cls === 'unknown');
+  const offerAllLost = unconfirmed.length === 0 && !chainUnknown;
   const section = (title: string, ids: string[], todo: string) => { if (ids.length) out.push(`${title} (${ids.length}): ${todo}`, ...list(ids, named)); };
-  section('Lost', lost, unconfirmed.length === 0
+  section('Lost', lost, offerAllLost
     ? 'runbook A from step 3; press mode workspace with all-lost (check your deletion receipts for the window first; deleted on purpose → `tenant:delete <slug> --project-proven-gone --force-with-reason`).'
-    : `runbook A from step 3, pressing these ids explicitly (NOT all-lost: an unconfirmed rebuild is listed below): ${lost.join(',')}. Check your deletion receipts for the window first.`);
+    : `runbook A from step 3, pressing these ids explicitly (NOT all-lost: ${unconfirmed.length ? 'an unconfirmed rebuild is listed below' : 'a workspace rebuilt in the window is still unknown; press reconcile again first'}): ${lost.join(',')}. Check your deletion receipts for the window first.`);
   section('Deleted in the window', of('window-deleted'), 'npm run tenant:delete -- <slug> --project-proven-gone --yes. If it aborts on a live subscription, the deletion was cancelled in the window: treat it as lost (runbook A).');
   section('Recoverable, not due', of('recoverable-deleted'), 'check your deletion receipts for the window first. Not deleted on purpose → recover it in the Neon console. Deleted on purpose (e.g. forced) → `--project-proven-gone --force-with-reason`.');
   section('In progress', of('in-progress'), '`deleting` → re-run `npm run tenant:delete -- <slug>` (it finishes or restores); `provisioning` → contact the lead.');
   section('Stale project id', of('stale-project-id'), 'contact the lead.');
-  section('Unconfirmed rebuilds', unconfirmed, 'contact the lead; never all-lost. Its newest data may sit in a rebuilt project.');
+  // FR2: every listed chain (classified or not) names the projects it kept.
+  const kept = (id: string) => { const ps = chainProjects.get(id) ?? []; return ps.length ? `; project(s) ${ps.join(', ')} kept: contact the lead; don't delete` : ''; };
+  const orphanListed = [...chains.entries()].filter(([id, c]) => c.kind === 'listed' && !classes.has(id)).map(([id]) => id).sort();
+  const allUnconfirmed = [...unconfirmed, ...orphanListed];
+  if (allUnconfirmed.length) {
+    out.push(`Unconfirmed rebuilds (${allUnconfirmed.length}): contact the lead; never all-lost. The newest data may sit in a rebuilt project.`);
+    out.push(...list(allUnconfirmed, (id) => {
+      const c = chains.get(id) as { reason?: string } | undefined;
+      const slug = classes.get(id)?.slug ?? byId.get(id)?.slug;
+      return `${id}${slug ? ` (${slug})` : ''}: ${classes.get(id)?.detail ?? c?.reason ?? 'listed'}${kept(id)}`;
+    }));
+  }
   section('Unknown', of('unknown'), 'press mode reconcile again later; if the same workspace is unknown after 2 presses, contact the lead.');
   const reapplied = [...chains.entries()].filter(([, c]) => c.kind === 'applied' || c.kind === 'would-apply');
   if (reapplied.length) {
@@ -393,10 +420,10 @@ function reconcileEmail(
     out.push(...list(reapplied.map(([id]) => id), (id) => { const c = chains.get(id) as { start: string; end: string }; return `${id} (${byId.get(id)?.slug ?? '?'}): ${c.start} → ${c.end}`; }));
   }
   if (counts['already-applied']) out.push(`Rebuilds already applied: ${counts['already-applied']}.`);
-  const orphanChains = [...chains.entries()].filter(([id, c]) => (c.kind === 'listed' || c.kind === 'unknown') && !classes.has(id)).map(([id]) => id).sort();
+  const orphanChains = [...chains.entries()].filter(([id, c]) => c.kind === 'unknown' && !classes.has(id)).map(([id]) => id).sort();
   if (orphanChains.length) {
-    out.push(`Rebuild lines for workspaces this control plane doesn't classify (${orphanChains.length}): contact the lead.`);
-    out.push(...list(orphanChains, (id) => { const c = chains.get(id) as { reason: string }; return `${id}${byId.get(id) ? ` (${byId.get(id)!.slug})` : ''}: ${c.reason}`; }));
+    out.push(`Rebuild lines that couldn't be checked, for workspaces this control plane doesn't classify (${orphanChains.length}): press reconcile again later; contact the lead if it repeats.`);
+    out.push(...list(orphanChains, (id) => { const c = chains.get(id) as { reason: string }; return `${id}${byId.get(id) ? ` (${byId.get(id)!.slug})` : ''}: ${c.reason}${kept(id)}`; }));
   }
   if (windowProjects.length) {
     out.push(`Projects created in the window (${windowProjects.length}), each with a window-project alert${input.dryRun ? ' (not raised: dry run)' : ''}:`);
@@ -407,7 +434,7 @@ function reconcileEmail(
         ? 'find the person (`npm run tenant:admin -- window-signup <slug>`, then Stripe, then the email log), refund and cancel, resolve the alert, email template B2; delete the project BY ID once they confirm (Q3: by id 30 days after this reconcile if nobody can be found; never a staging workspace).'
         : type === 'rebuild' ? 'delete it in Neon if nothing in this email names it.' : 'staging, or unknown: resolve the alert by hand.';
       out.push(`  ${type} (${ps.length}): ${todo}`);
-      out.push(...list(ps.map((p) => p.projectId), (id) => { const p = ps.find((x) => x.projectId === id)!; return `${p.projectId} ${p.name} created ${p.createdAt ?? '?'}${p.slug ? ` (slug ${p.slug})` : ''}`; }));
+      out.push(...list(ps.map((p) => p.projectId), (id) => { const p = ps.find((x) => x.projectId === id)!; return `${p.projectId} ${p.name} created ${p.createdAt ?? '?'}${p.slug ? ` (slug ${p.slug})` : ''}${alertIds.get(id) ? `; alert ${alertIds.get(id)}` : ''}`; }));
     }
   }
   return out;

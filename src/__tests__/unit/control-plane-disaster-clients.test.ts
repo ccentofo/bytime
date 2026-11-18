@@ -99,7 +99,10 @@ describe('the log readers', () => {
 
   it('controlPlaneLines: the exact phrase filter; empty pages with a token are followed; only exact control-plane lines', async () => {
     const line = (cp: string) => `BACKUP ${cp} control-plane control-plane control-plane ecs-1 v1/${cp}/control-plane/control-plane/2026/11/18/ecs-1-abcd1234.dump.enc ${SHA} 10`;
-    const c = client([{ events: [], nextToken: 'a' }, { events: [{ message: line('prod') }, { message: `${line('prod')} row-failed` }, { message: line('staging') }, { message: 'BACKUP prod control-plane garbage' }], nextToken: 'b' }, { events: [] }]);
+    const c = client([{ events: [], nextToken: 'a' }, { events: [{ message: line('prod') }, { message: `${line('prod')} row-failed` }, { message: line('staging') }, { message: 'BACKUP prod control-plane garbage' },
+      // L11: a page can carry other lines (the phrase filter is CloudWatch's, not ours): a tenant line and another id are dropped.
+      { message: `BACKUP prod tenant ${T} acme ecs-1 v1/prod/tenant/${T}/2026/11/18/ecs-1-abcd1234.dump.enc ${SHA} 10` },
+      { message: `BACKUP prod control-plane other-id control-plane ecs-1 v1/prod/control-plane/other-id/2026/11/18/ecs-1-abcd1234.dump.enc ${SHA} 10` }], nextToken: 'b' }, { events: [] }]);
     const r = await realLogReader({ region: 'us-east-1', logGroup: '/cadenzpoint/backup/backup', client: c as never }).controlPlaneLines('prod');
     expect(r.map((l) => l.cp)).toEqual(['prod', 'prod']);
     expect(c.calls.map((x) => x.filterPattern)).toEqual(Array(3).fill('"BACKUP prod control-plane control-plane"'));

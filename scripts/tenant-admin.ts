@@ -219,6 +219,7 @@ async function stripeResync(args: string[]) {
   console.log(`Window checkouts to re-link: ${r.links.length}${r.links.length ? ` (${r.links.join(', ')})` : ''}`);
   if (r.notThisWorkspace.length) console.log(`Not this workspace's checkout (left alone; a re-signup can reuse a slug): ${r.notThisWorkspace.join(', ')}`);
   console.log(`Paying workspaces to refresh from live Stripe: ${r.refresh.length}${r.refresh.length ? ` (${r.refresh.join(', ')})` : ''}`);
+  if (r.readFailed.length) console.log(`Current customer couldn't be read (these fail with --yes): ${r.readFailed.join(', ')}`);
   if (!yes) {
     console.log('\nDry run — nothing was written. Pass --yes to apply.');
     return;
@@ -226,7 +227,7 @@ async function stripeResync(args: string[]) {
   const out = r.outcomes!;
   console.log(`\nLinked: ${out.linked.length}${out.linked.length ? ` (${out.linked.join(', ')})` : ''}`);
   console.log(`Refreshed: ${out.refreshed.length}`);
-  if (out.conflict.length) console.log(`Conflict (checkout-customer-conflict raised; see the digest): ${out.conflict.join(', ')}`);
+  if (out.conflict.length) console.log(`Conflict (refreshed against the current customer; checkout-customer-conflict raised, see the digest): ${out.conflict.join(', ')}`);
   for (const f of out.failed) console.error(`✗ ${f.slug}: ${f.error}`);
   console.log('Notices this queued are delivered by the notice cron once the crons are re-enabled (runbook B.10).');
   if (out.failed.length) process.exit(1);
@@ -357,7 +358,7 @@ async function main() {
     }
     case 'window-signup': {
       const r = await windowSignupCommand(target);
-      console.log(`Window project ${r.projectId} for "${target}", created ${r.createdAt}.`);
+      console.log(`Window project ${r.projectId} for "${target}", created ${r.createdAt}; its window-project alert is ${r.alertId} (resolve-alert takes this id).`);
       if (r.rows.length === 0) {
         console.log('No restored signup for this address: use Stripe (Customers, metadata[\'slug\']) or the email log (RESTORE.md B.9).');
         break;

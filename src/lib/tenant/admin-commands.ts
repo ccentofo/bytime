@@ -348,6 +348,9 @@ export interface StripeResyncResult {
   notThisWorkspace: string[];
   /** Paying workspaces to refresh from live Stripe. */
   refresh: string[];
+  /** Fix round 1, FR3: workspaces whose current customer couldn't be read (they fail with --yes; exit 1). */
+  readFailed: string[];
+  /** `conflict`: the checkout couldn't be linked (alert raised), and the workspace was refreshed against its CURRENT customer (FR1). */
   outcomes?: { linked: string[]; refreshed: string[]; conflict: string[]; failed: Array<{ slug: string; error: string }> };
 }
 
@@ -383,7 +386,7 @@ export async function stripeResyncCommand(o: { since: Date; dryRun: boolean; act
     if (!list.has_more || list.data.length === 0) break;
     startingAfter = list.data[list.data.length - 1].id;
   }
-  const planned: Array<{ row: TenantRow; customerId: string; currentDeleted: boolean; email: string | null }> = [];
+  const planned: Array<{ row: TenantRow; customerId: string; currentDeleted: boolean; email: string | null; currentEmail: string | null; readError: string | null }> = [];
   const notThisWorkspace: string[] = [];
   const seen = new Set<string>();
   for (const s of sessions) {
@@ -393,18 +396,29 @@ export async function stripeResyncCommand(o: { since: Date; dryRun: boolean; act
     if (!row || !customerId || row.stripeCustomerId === customerId || seen.has(row.id)) continue;
     const customer = await stripe.customers.retrieve(customerId) as { deleted?: boolean; email?: string | null; metadata?: Record<string, string> };
     if (customer.deleted || customer.metadata?.tenantId !== row.id) { notThisWorkspace.push(row.slug); continue; }
+    // The row's current customer, read live: deleted in Stripe → replaceable; its email refreshes a conflicting workspace
+    // (FR1). A failed read is a failure (FR3), never a guess.
     let currentDeleted = false;
+    let currentEmail: string | null = null;
+    let readError: string | null = null;
     if (row.stripeCustomerId && row.stripeCustomerDeletedAt === null) {
-      try { currentDeleted = Boolean((await stripe.customers.retrieve(row.stripeCustomerId) as { deleted?: boolean }).deleted); } catch { currentDeleted = false; }
+      try {
+        const cur = await stripe.customers.retrieve(row.stripeCustomerId) as { deleted?: boolean; email?: string | null };
+        currentDeleted = Boolean(cur.deleted);
+        currentEmail = cur.deleted ? null : cur.email ?? null;
+      } catch (e) {
+        readError = `the current customer couldn't be read (${e instanceof Error ? e.message.slice(0, 120) : String(e)})`;
+      }
     }
     seen.add(row.id);
-    planned.push({ row, customerId, currentDeleted, email: customer.email ?? null });
+    planned.push({ row, customerId, currentDeleted, email: customer.email ?? null, currentEmail, readError });
   }
   const linkIds = new Set(planned.map((p) => p.row.id));
   const toRefresh = live.filter((r) => r.stripeCustomerId && !linkIds.has(r.id));
   const result: StripeResyncResult = {
     links: planned.map((p) => p.row.slug).sort(), notThisWorkspace: [...new Set(notThisWorkspace)].sort(),
     refresh: [...planned.map((p) => p.row.slug), ...toRefresh.map((r) => r.slug)].sort(),
+    readFailed: planned.filter((p) => p.readError).map((p) => p.row.slug).sort(),
   };
   if (o.dryRun) return result;
 
@@ -413,22 +427,32 @@ export async function stripeResyncCommand(o: { since: Date; dryRun: boolean; act
   const { checkoutLinkPatch } = await import('@/lib/billing/checkout-link');
   const out: NonNullable<StripeResyncResult['outcomes']> = { linked: [], refreshed: [], conflict: [], failed: [] };
   for (const p of planned) {
+    if (p.readError) { out.failed.push({ slug: p.row.slug, error: p.readError }); continue; }
     try {
       const r = await withTenantLock(p.row.id, async (tx) => {
         const fresh = await readTenant(tx, p.row.id);
-        if (!fresh || !LIVE_STATUSES.has(fresh.status)) return 'skipped' as const;
+        if (!fresh || !LIVE_STATUSES.has(fresh.status)) return { kind: 'skipped' as const, becameGood: false };
         let extraPatch: TenantPatch = {};
         if (fresh.stripeCustomerId !== p.customerId) {
           const link = await checkoutLinkPatch(tx, fresh, p.customerId, { actor: o.actor, now: now(), currentCustomerDeleted: p.currentDeleted });
-          if (!link.ok) return 'conflict' as const;
+          if (!link.ok) {
+            // FR1: §6.10 step 2 refreshes EVERY paying workspace: one whose checkout conflicts is refreshed against its
+            // current customer (no link patch), with that customer's live email when present.
+            const patch: TenantPatch = p.currentEmail && p.currentEmail !== fresh.billingEmail ? { billingEmail: p.currentEmail } : {};
+            const rc = fresh.stripeCustomerId ? await reconcileInLock(tx, fresh, now(), { extraPatch: patch }) : null;
+            return { kind: 'conflict' as const, becameGood: rc?.becameGood ?? false };
+          }
           extraPatch = { ...link.patch };
         }
         if (p.email) extraPatch.billingEmail = p.email;
         await reconcileInLock(tx, fresh, now(), { customerId: p.customerId, extraPatch });
-        return 'linked' as const;
+        return { kind: 'linked' as const, becameGood: true };
       });
-      if (r === 'conflict') out.conflict.push(p.row.slug);
-      else if (r === 'linked') { out.linked.push(p.row.slug); await markSeatSyncDue(p.row.id); }
+      if (r.kind === 'conflict') {
+        out.conflict.push(p.row.slug);
+        out.refreshed.push(p.row.slug);
+        if (r.becameGood) await markSeatSyncDue(p.row.id);
+      } else if (r.kind === 'linked') { out.linked.push(p.row.slug); await markSeatSyncDue(p.row.id); }
       invalidateTenant(p.row.slug);
     } catch (e) {
       out.failed.push({ slug: p.row.slug, error: e instanceof Error ? e.message.slice(0, 200) : String(e) });
@@ -461,8 +485,8 @@ export interface WindowSignupRow { companyName: string; email: string; createdAt
  * restored `signups` row for it created at or before the project, not consumed, and not expired then (or waitlisted),
  * newest first. The founder matches on the company name and never guesses (runbook B.9).
  */
-export async function windowSignupCommand(slug: string): Promise<{ projectId: string; createdAt: string | null; rows: WindowSignupRow[] }> {
-  const [alert] = await withLockedPool((db) => db.select({ dedupKey: opsAlerts.dedupKey, detail: opsAlerts.detail }).from(opsAlerts)
+export async function windowSignupCommand(slug: string): Promise<{ alertId: string; projectId: string; createdAt: string | null; rows: WindowSignupRow[] }> {
+  const [alert] = await withLockedPool((db) => db.select({ id: opsAlerts.id, dedupKey: opsAlerts.dedupKey, detail: opsAlerts.detail }).from(opsAlerts)
     .where(and(eq(opsAlerts.kind, 'window-project'), isNull(opsAlerts.resolvedAt), sql`${opsAlerts.detail}->>'slug' = ${slug}`)).limit(1));
   if (!alert) throw new AdminCommandError(`"${slug}" is not a window signup (no open window-project alert names it).`);
   const createdAtRaw = (alert.detail as { createdAt?: string | null } | null)?.createdAt ?? null;
@@ -472,5 +496,5 @@ export async function windowSignupCommand(slug: string): Promise<{ projectId: st
     companyName: signups.companyName, email: signups.email, createdAt: signups.createdAt, verifiedAt: signups.verifiedAt, waitlistedAt: signups.waitlistedAt,
   }).from(signups).where(and(eq(signups.slug, slug), lte(signups.createdAt, createdAt), isNull(signups.consumedAt),
     or(gte(signups.expiresAt, createdAt), isNotNull(signups.waitlistedAt)))).orderBy(desc(signups.createdAt)));
-  return { projectId: alert.dedupKey, createdAt: createdAtRaw, rows };
+  return { alertId: alert.id, projectId: alert.dedupKey, createdAt: createdAtRaw, rows };
 }
