@@ -1,6 +1,6 @@
 # Blueprint 3d: Cloud export link (the F2 change)
 
-> **Status: v1.4** (2026-11-18). Confirmation pass 1: 1 HIGH, 3 MEDIUM, 10 LOW. Confirmation pass 2: 2 MEDIUM, 8 LOW. All addressed. Round 1: 7 HIGH, about 17 MEDIUM, 29 LOW. Round 2: 3 HIGH, 15 MEDIUM, 13 LOW. All addressed (§15). Branch `cloud-export`, from `main` at `17ac1c8`. Follows `BLUEPRINT-STANDARD.md`.
+> **Status: v1.5** (2026-11-18). Confirmation pass 1: 1 HIGH, 3 MEDIUM, 10 LOW. Confirmation pass 2: 2 MEDIUM, 8 LOW. Confirmation pass 3: 1 MEDIUM, 8 LOW. All addressed. Round 1: 7 HIGH, about 17 MEDIUM, 29 LOW. Round 2: 3 HIGH, 15 MEDIUM, 13 LOW. All addressed (§15). Branch `cloud-export`, from `main` at `17ac1c8`. Follows `BLUEPRINT-STANDARD.md`.
 >
 > **Decisions:**
 > - `BUSINESS-DECISIONS.md` §5, "Consequence: the F2 'founder-held final export' must change";
@@ -202,7 +202,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 
 **The start:**
 - `startedBy` must be `gh-` or `cloudshell-` for deliver, hold and release;
-- **`sweep` may run from any caller:** it only deletes expired, revoked or orphaned copies;
+- **`sweep` may run from any caller:** it only deletes expired or revoked delivery copies, and orphaned **delivery** copies (hold orphans are only reported);
 - ECS oldest-wins within the `cadenzpoint-backup-export` family. The sweep is a different family, so it never competes, and the button's one-at-a-time check isn't affected;
 - an advisory lock `EXPORT_LOCK_KEY` (`728_402_206`, beside 3c's) on the control plane, held only for the short record transaction and **never during the build** (it would block nothing useful);
 - log `export <mode> run <runId> started by <x>`.
@@ -214,9 +214,9 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 1b. **Schema check, inside the snapshot:** the workspace's applied tenant migration count (`drizzle.__drizzle_migrations`; 3c's `migrationCount` query, `disaster-steps.ts:572`) must equal the journal length baked into the image. Otherwise refuse `schema-skew`: "approve the pending Backup system deploy (or run it from Actions → Backup system deploy if none is pending), or run Deploy to Production". The bundled schema can't read columns the database lacks, or miss new ones.
 2. **Recipients**, resolved **after the build, just before recording**, so an admin deactivated mid-build is left out:
    - for a `policy_hold` workspace whose export isn't re-enabled: the extra address only;
-   - otherwise D10: active admins from the workspace database, plus the billing email, plus the signup email when there's no active admin, plus `--extra` if given;
+   - otherwise D10, **honouring `NOTICE_RECIPIENTS`** (`lifecycle-config.ts:145`, bundled): active admins from the workspace database, plus the billing email, plus the signup email when there's no active admin, plus `--extra` if given;
    - lowercased and deduplicated;
-   - none → refuse `no-recipients`; more than 50 → refuse `too-many-recipients`. **The same count is pre-checked at step 1**, so nothing is built in vain. A workspace over 50 recipients uses the in-app self-export (TENANT-DELETION notes it);
+   - none → refuse `no-recipients`; more than 50 → refuse `too-many-recipients`. **For `deliver` only, the same count is pre-checked right after 1b** (after the schema check, so a skewed workspace fails `schema-skew`, not a raw read error), so nothing is built in vain. A workspace over 50 recipients uses the in-app self-export (TENANT-DELETION notes it);
    - the workspace's time zone (`workspace_settings.timezone`, canonicalised) is read here too.
 3. **Build:** `openExportSnapshot(decrypt(url))` → `createWorkspaceZipStream` → S3 multipart upload (`@aws-sdk/lib-storage` `Upload`, 8 MiB parts, `IfNoneMatch: '*'`), at key `delivery/<deliveryId>/<slug>-export-<yyyymmdd>.zip`, with SHA-256 computed while streaming.
    - **Failures:** the ZIP limits, a database error or an upload error → abort the upload, delete any object, result `failed`.
@@ -229,7 +229,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 5. **Email the founder** (SNS): `export delivered: workspace <id>, delivery <id>, <n> recipient(s), expires <iso>`, ids only.
 
 **`hold`:**
-- steps 1, **1b (schema-skew)** and 3, with key `hold/<holdId>/<slug>-export-<yyyymmdd>.zip`;
+- **step 1's status check only** (`active`/`suspended` with a database; **no recipient checks**: `extra-required`, `no-recipients` and `too-many-recipients` are deliver-only), then 1b (schema-skew) and 3, with key `hold/<holdId>/<slug>-export-<yyyymmdd>.zip`;
 - then an `export_holds` row (id, tenant id, key, bytes, sha256, reason, `run_id`, created_at, `released_at` null, `release_reason` null);
 - audit `export-held`; an SNS line.
 - **No email to customers.**
@@ -279,9 +279,9 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
   - in the freeze: the decrypted stored recipients and the time zone;
   - **the send:** `client.batch.send(messages, { idempotencyKey: \`${noticeId}:${generation}\`, batchValidation: 'strict' })`, as `send-batch.ts:98` calls it but **strict** (all or nothing), with **one message per recipient** (`to: [address]`, the same subject and HTML). No support copy and no `bcc`;
   - **outcome rules,** specific to this kind:
-    - **sent** only when `result.data.data` is an array of exactly N non-empty ids, N being the number of recipients. Then `provider_message_id` = the first id (the column is `varchar(100)`; the full id list goes into the existing `payload` jsonb as `providerIds`), and `recipients` = the real list, which is the proof of notice;
+    - **sent** only when `result.data.data` is an array of exactly N elements, each with a non-empty string `.id` (as `settleOk` checks), N being the number of recipients. Then `provider_message_id` = the first id (the column is `varchar(100)`; the full id list goes into the existing `payload` jsonb as `providerIds`), and `recipients` = the real list, which is the proof of notice;
     - anything else (an error, or a short or malformed array) → **failed**, and the next cron retries with the same key;
-    - errors are classified exactly as `deliverNotice` does today: 409 and 429 retried; `invalid_idempotent_request` raises its existing alert;
+    - errors are classified **by name**, exactly as `notices.ts:286-288`: `concurrent_idempotent_requests`, `rate_limit_exceeded` or a 429 → retried; `invalid_idempotent_request` raises its existing alert;
     - **the permissive reminder helper (`deliverReminderBatch`) is not reused**: it counts a partial success as sent;
   - it **never** reads the workspace database, so a dropped or tombstoned workspace still gets its email;
   - the 23-hour refreeze uses the same branch.
@@ -348,7 +348,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
   - the same image; 0.25 vCPU / 0.5 GB;
   - **the same task role and the same execution role** as the export family (`cadenzpoint-backup-export-exec`, whose `WriteLogs` covers both `/cadenzpoint/backup/export` and `/cadenzpoint/backup/sweep`); a secret for `CONTROL_PLANE_DATABASE_URL`; env `EXPORT_BUCKET`;
   - **`FAMILIES` in `expected-policies.ts` is not extended** (that would expect sweep roles that don't exist). The sweep's task definition and `SchedulerRole`'s RunTask and PassRole get **explicit expected entries**, appended to `SchedulerRole`'s `RunTasks`/`PassTaskRoles` statements (`expected-policies.ts:236-237`). U6 asserts both;
-  - **U6's schedule rules:** the count becomes **8** (`backup-static.test.ts:167`); the sweep schedule keeps the "DependsOn every other resource" rule; its `Input` uses the pinned shape, `{"containerOverrides":[{"name":"<container>","command":["export","sweep"]}]}` (:189);
+  - **U6's schedule rules:** the count becomes **8** (`backup-static.test.ts:167`); the "DependsOn every other resource" rule applies to **all eight** schedules, so every existing schedule's `DependsOn` grows with the new resources (`:179-181`); its `Input` uses the pinned shape, `{"containerOverrides":[{"name":"<container>","command":["export","sweep"]}]}` (:189);
   - its own log group, `/cadenzpoint/backup/sweep` (30 days).
 - **Schedule `cadenzpoint-backup-export-sweep`:** EventBridge Scheduler, `rate(1 hour)`, input `["export","sweep"]`. `SchedulerRole` has RunTask and PassRole for it (§6.2).
   - **Not covered by the export start or RunTask email rules** (a different family).
@@ -473,7 +473,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
   - `lib/expected-policies.ts` and `audit.ts` (multi-bucket);
   - `export.ts` (`deliver`, `hold`, `release` and `sweep`); **`backup.ts` is unchanged** (the backup task can't delete in the exports bucket);
   - `deploy-paths.txt`, `bundle.mjs`, `tsconfig.backup.json` (`paths` for `@/`), `Dockerfile.backup`: **exact files**, each with a COPY line, a tsconfig `include` and a deploy-paths entry: `src/lib/export/workspace-export.ts`, `src/lib/export/allowlists.ts`, `src/lib/export/manifest.ts`, `src/db/schema.ts`, `src/lib/db/pg-url.ts`, `src/lib/provenance.ts`, `src/lib/csv/escape.ts`, plus `src/lib/calendar-date.ts` if the closure needs it (the dev confirms with esbuild's metafile). **Also `drizzle/meta/_journal.json`**: it's read at build time for the journal length, so it isn't a metafile input. U6 asserts its COPY line and its `deploy-paths` entry. **Not** `download-url.ts`.
-  - **`APP_VERSION`:** the app keeps `manifest.ts`'s `package.json` import, unchanged. `bundle.mjs` adds an esbuild **`onResolve`/`onLoad` plugin** that serves `{ "version": "<read at build time>" }` for that import. `define` can't replace an imported binding, and `alias` doesn't apply to relative paths. U6 asserts `package.json` isn't in the metafile, and exempts the plugin's virtual namespace from its `listed()` check (`backup-static.test.ts:340`).
+  - **`APP_VERSION`:** the app keeps `manifest.ts`'s `package.json` import, unchanged. `bundle.mjs` adds an esbuild **`onResolve`/`onLoad` plugin** that serves `{ "version": "<read at build time>" }` for that import. `define` can't replace an imported binding, and `alias` doesn't apply to relative paths. U6 asserts `package.json` isn't in the metafile, and exempts the plugin's virtual namespace from its `listed()` check (`backup-static.test.ts:340`). `package.json` stays off the deploy list, so an export manifest can carry the version of the last backup deploy rather than the newest app release. That's accepted and documented in the README the ZIP carries.
   - **The image's migration journal length:** a `declare const __TENANT_JOURNAL_LENGTH__: number` global, set by esbuild `define` from `drizzle/meta/_journal.json`'s entry count. The same `define` goes in the vitest configs.
 - **`.github/workflows/export-workspace.yml`** (new).
 - **App:**
@@ -495,11 +495,11 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 | # | Scenario |
 |---|---|
 | T1 | `parseExportArgs`: every mode and its required flags; an unknown flag exits 2; a bad uuid, email or reason refused |
-| T2 | `deliver` against a scratch workspace with fake S3: the ZIP under `delivery/<id>/`; the SHA-256 matches; the notice, delivery (`notice_id`) and audit written in one transaction; the recipients are D10 plus the extra address, lowercased and deduplicated; the time zone stored |
+| T2 | `deliver` against a scratch workspace with fake S3: the ZIP under `delivery/<id>/`; the SHA-256 matches; the notice, delivery (`notice_id`) and audit in one transaction; the recipients are D10 per `NOTICE_RECIPIENTS` plus the extra address, lowercased and deduplicated; the time zone stored; a schema-skewed workspace fails `schema-skew` before the recipient count |
 | T3 | `policy_hold` with export not re-enabled: without `--extra` refused; with it, the recipients are exactly the extra address. With `policy_export_allowed`: the normal recipients. A suspension starting mid-build → `changed`, the object deleted |
 | T4 | Statuses: deleted, deleting, provisioning and no URL → `not-exportable` |
 | T5 | Failure paths: the ZIP limit, a database error, an upload error, a recording error → no row, the object deleted, the upload aborted |
-| T6 | `hold` and `release`: the schema-skew check applies; the hold row and object; a release deletes and verifies; a second release refused |
+| T6 | `hold` and `release`: the schema-skew check applies; **no recipient checks for a hold** (a `policy_hold` workspace without `--extra`, one with no recipients, and one over 50 all pass); the hold row and object; a release deletes and verifies; a second release refused |
 | T7 | The notice **through `deliverNotice`**: the branch runs before the generic supersede; **one batch message per stored recipient** (no `bcc`, no support copy; a `policy_hold` export never reaches an admin); `recipients` records the real list; sent for a dropped database and for a tombstoned workspace; not superseded by `deleting`/`deleted`/`set-exempt`/`register-tenant`; superseded after revoke or expiry, or with a missing delivery (never D10), with the token nulled and redacted on supersede too; `force-notice-sent` refuses it; `isNoticeSuperseded` backstop; the link via `apexBaseUrl()`; the date and time in the stored time zone; on send, the token nulled and redacted in one transaction; the millisecond `scheduled_for` and the `notice_id` link |
 | T8 | The page GET: valid, expired, revoked, erased, unknown, malformed (no database read) and workspace-host-redirect states; **a GET never calls the presigner** (spy); the `/export` headers in the built config; the Sentry scrub |
 | T9 | The POST: re-checks; rate limit; a 5-minute presign with attachment disposition; `download_count` incremented; an expired token refused |
@@ -512,7 +512,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 | T16 | Retired: no `tenant:export` script, no `export-destroyed`, no `founder-export-overdue`; the receipt line; `tenant:delete` behaviour otherwise unchanged |
 | T17 | Logs: ids only, in the export **and sweep** tasks (never S3 keys, which contain the slug); the reason logged as a length |
 | T18 | The in-app export route is unchanged (existing tests pass as-is); the in-app manifest still carries `package.json`'s version |
-| T27 | Batch outcome: exactly N ids → sent (first id stored, all ids in `payload.providerIds`); a short array, a `validation_error` or a 429 → failed and retried with the same key; strict validation set |
+| T27 | Batch outcome: exactly N elements with string `.id` → sent (first id stored, all in `payload.providerIds`); a short array, a `validation_error` or a 429 → failed and retried with the same key; retry-by-name classification; strict validation set; **the 23-hour refreeze after a failed batch** bumps the generation and key, re-renders from `token_encrypted`, and keeps the stored recipients (never D10) |
 | T26 | More than 50 recipients → `too-many-recipients` |
 | T23 | The page's rate limit: the IP limit is checked before any token lookup; the per-delivery limit after |
 | T24 | `export-revoke` under the tenant lock warns when the lease is live |
@@ -651,3 +651,14 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
     - the sweep logs ids only;
     - `ReEncrypt*` in the key's deny;
     - `stated` never holds the link.
+- **v1.5, confirmation pass 3** (1 MEDIUM, 8 LOW; not clean). All addressed:
+  - **MEDIUM:** the recipient checks could refuse a legal hold → they're deliver-only; a hold needs only the status check, the schema check and the build.
+  - **LOW:**
+    - retry-by-name classification;
+    - `.id` elements;
+    - a refreeze-after-failure test;
+    - the schema check before the recipient count;
+    - `NOTICE_RECIPIENTS` honoured;
+    - sweep wording;
+    - every schedule's `DependsOn` grows;
+    - the manifest version note.
