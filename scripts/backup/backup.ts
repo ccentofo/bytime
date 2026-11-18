@@ -322,6 +322,10 @@ export async function runBackup(deps: BackupDeps): Promise<{ exitCode: number; o
         if (signal.aborted) throw new StageError(String(signal.reason));
         const sql = connectTarget(clientUrl(direct), { max: 1, connect_timeout: 30, max_lifetime: null, idle_timeout: null as unknown as undefined, onnotice: () => {} });
         const pipelineDone = deferred<{ key: string; sha256: string; bytes: number }>();
+        // A deadline or stop can reject this before anything awaits it (e.g. during the version query below): never an
+        // unhandled rejection, which the crash handler would turn into exit 1 for the whole run (3b-fix). The real
+        // awaits below still see the rejection.
+        pipelineDone.promise.catch(() => {});
         const onAbort = () => {
           pipelineDone.reject(new StageError(String(signal.reason)));
           void sql.end({ timeout: 5 }).catch(() => {});
