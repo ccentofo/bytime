@@ -5,6 +5,7 @@ import { controlDb } from '@/db/control-plane';
 import { signups, tenants } from '@/db/control-plane/schema';
 import { getTenantBySlug } from '@/lib/tenant/registry';
 import { isValidSlug } from '@/lib/tenant/slug-rules';
+import { isOpenWindowSlug } from '@/lib/tenant/window-slugs';
 import { UserFacingError } from '@/lib/errors';
 import { verifyTurnstile } from '@/lib/turnstile';
 import { missingSignupConfig, VERIFICATION_FAILED } from '@/lib/signup/controls';
@@ -20,7 +21,9 @@ import {
 export async function checkSlugAvailableInternal(slug: string): Promise<{ available: boolean; reason?: string }> {
   if (!isValidSlug(slug)) return { available: false, reason: 'invalid' };
   const existing = await getTenantBySlug(slug);
-  return existing ? { available: false, reason: 'taken' } : { available: true };
+  if (existing) return { available: false, reason: 'taken' };
+  // feature-plan-control-plane-disaster.md §6.7: an open window-project address is "taken" until it resolves.
+  return (await isOpenWindowSlug(slug)) ? { available: false, reason: 'taken' } : { available: true };
 }
 
 // ── Signup abuse controls (feature-plan-launch-blockers.md P5) — only called when SIGNUP_CONTROLS_ENABLED ──────────

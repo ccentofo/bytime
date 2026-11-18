@@ -161,18 +161,23 @@ export function disasterFindings(f: DisasterFacts, neon: NeonView, now: Date): F
     }
   }
 
-  // The original watch (§7.2).
+  // The original watch (§7.2). A control-plane watch (feature-plan-control-plane-disaster.md §6.8) has its own wording.
   for (const wch of f.watches) {
     if (neon.failed) continue;
+    const controlPlane = wch.detail.kind === 'control-plane';
     const exists = neon.exists.get(wch.oldProjectId);
     if (exists === true) {
-      out.raise.push({ kind: 'rebuild-original-returned', dedupKey: wch.oldProjectId, detail: { ...wch.detail, todo: "the original exists. Don't open it: ask the customer whether their re-entered hours are complete, then delete it in the Neon console (runbook A.6)" } });
+      out.raise.push({ kind: 'rebuild-original-returned', dedupKey: wch.oldProjectId, detail: { ...wch.detail, todo: controlPlane
+        ? "the old control plane exists again: don't use it; delete it in the Neon console once you're satisfied (RESTORE.md B)"
+        : "the original exists. Don't open it: ask the customer whether their re-entered hours are complete, then delete it in the Neon console (runbook A.6)" } });
       continue;
     }
     const recoverable = neon.recoverable.has(wch.oldProjectId);
     if (recoverable && !wch.everReturned) {
       const until = neon.recoverable.get(wch.oldProjectId) ?? null;
-      out.raise.push({ kind: 'rebuild-original-recoverable', dedupKey: wch.oldProjectId, detail: { ...wch.detail, recoverableUntil: until, todo: `the original can still be recovered in Neon until about ${until ?? '7 days after it was first seen'}. Recovering it won't switch the workspace back; it would become a 'returned' copy to settle with the customer (runbook A.6)` } });
+      out.raise.push({ kind: 'rebuild-original-recoverable', dedupKey: wch.oldProjectId, detail: { ...wch.detail, recoverableUntil: until, todo: controlPlane
+        ? `the old control plane can still be recovered in Neon until about ${until ?? '7 days after it was first seen'}: don't recover it (the rebuilt control plane is the live one)`
+        : `the original can still be recovered in Neon until about ${until ?? '7 days after it was first seen'}. Recovering it won't switch the workspace back; it would become a 'returned' copy to settle with the customer (runbook A.6)` } });
     }
     if (!recoverable && t - wch.watchStartedAt.getTime() >= WATCH_MIN_MS) out.watchesDone.push(wch.oldProjectId);
   }
@@ -350,8 +355,46 @@ export async function syncDisasterAlerts(now: Date, o: {
   return { synced: true, findings: res.raise.length };
 }
 
+// ---- window projects (feature-plan-control-plane-disaster.md §6.8; state table §7.3) ------------------------------------
+
+/**
+ * The daily `window-project` check, its own step and NOT one of NEON_KINDS (the sweep above never resolves it): an open
+ * alert resolves when its project 404s ("project deleted") or a tenants row references it ("now a workspace"). A Neon
+ * failure, or no key, leaves it open (so the address stays held). Only where backup monitoring is on, like the sweep.
+ */
+export async function syncWindowProjects(now: Date, o: { neon?: NeonFetch | null; env?: Record<string, string | undefined> } = {}): Promise<{ checked: number; resolved: number } | null> {
+  const env = o.env ?? process.env;
+  if (backupsExpected(env) !== 'on') return null;
+  const neon = o.neon !== undefined ? o.neon : env.NEON_API_KEY ? appNeonFetch(env.NEON_API_KEY) : null;
+  const open = await withLockedPool((db) => db.select({ dedupKey: opsAlerts.dedupKey }).from(opsAlerts)
+    .where(and(eq(opsAlerts.kind, 'window-project'), isNull(opsAlerts.resolvedAt), eq(opsAlerts.scope, 'global'))));
+  let resolved = 0;
+  for (const a of open) {
+    const projectId = a.dedupKey;
+    const [ref] = await withLockedPool((db) => db.select({ id: tenants.id }).from(tenants).where(eq(tenants.neonProjectId, projectId)).limit(1));
+    let note: string | null = ref ? 'now a workspace' : null;
+    if (!note && neon) {
+      try {
+        const r = await neon(`/projects/${encodeURIComponent(projectId)}`);
+        if (r.status === 404) note = 'project deleted';
+      } catch { /* a Neon failure leaves it open */ }
+    }
+    if (note) {
+      await withLockedPool((db) => resolveAlert(db as unknown as ControlTx, { tenantId: null, kind: 'window-project', dedupKey: projectId }, now, note!));
+      resolved++;
+    }
+  }
+  return { checked: open.length, resolved };
+}
+
 /** The cron's isolated step: a throw raises `rebuild-watch-check-failed` (best effort) and never stops the cron. */
 export async function runDisasterMonitoring(now: Date): Promise<{ synced: boolean; findings: number } | { error: true }> {
+  // The window-project check is isolated from the sweep: either failing never stops the other.
+  try {
+    await syncWindowProjects(now);
+  } catch (err) {
+    console.error('[disaster] window-project check failed:', (err as Error)?.name ?? 'error');
+  }
   try {
     return await syncDisasterAlerts(now);
   } catch (err) {
@@ -365,8 +408,9 @@ export async function runDisasterMonitoring(now: Date): Promise<{ synced: boolea
 
 /** The digest's line (Backups section): disaster runs in the last 7 days. */
 export async function disasterDigestLines(now: Date): Promise<string[]> {
-  const runs = await withLockedPool((db) => db.select({ mode: disasterRuns.mode, status: disasterRuns.status, startedAt: disasterRuns.startedAt }).from(disasterRuns)
+  const runs = await withLockedPool((db) => db.select({ mode: disasterRuns.mode, status: disasterRuns.status, startedAt: disasterRuns.startedAt, target: sql<string | null>`${disasterRuns.summary}->>'target'` }).from(disasterRuns)
     .where(sql`${disasterRuns.startedAt} >= ${new Date(now.getTime() - 7 * DAY).toISOString()}::timestamptz`).orderBy(desc(disasterRuns.startedAt)));
   if (runs.length === 0) return ['Disaster runs in the last 7 days: none.'];
-  return [`Disaster runs in the last 7 days: ${runs.map((r) => `${r.mode} ${r.status} at ${r.startedAt.toISOString()}`).join('; ')}.`];
+  // feature-plan-control-plane-disaster.md §6.8 (D10): every mode is listed; a control-plane rehearsal says so.
+  return [`Disaster runs in the last 7 days: ${runs.map((r) => `${r.mode}${r.mode === 'rehearse' && r.target === 'control-plane' ? ' (control plane)' : ''} ${r.status} at ${r.startedAt.toISOString()}`).join('; ')}.`];
 }

@@ -110,7 +110,8 @@ function emailLines(r: WorkspaceResult): string[] {
     `  backup used: ${r.backupKey ?? '?'} (started ${when} UTC); changes after ${when} UTC need re-entering.`,
     r.skippedBackups ? `  ${r.skippedBackups} newer backup(s) failed verification and were skipped.` : '',
     r.evidence ? `  override evidence: ${r.evidence}; the original is kept and watched.` : '  the original is kept and watched.',
-    `  in the Neon console, lower neon-ops@ to Viewer on project ${r.newProjectId} (runbook A.7).`,
+    // feature-plan-control-plane-disaster.md §6.8: creators stay Admin of their projects (A.7 removed).
+    `  you remain Admin of the rebuilt project ${r.newProjectId} through the disaster key; that's expected.`,
   ].filter(Boolean);
 }
 
