@@ -1,6 +1,6 @@
 # Blueprint 3d: Cloud export link (the F2 change)
 
-> **Status: v1.6** (2026-11-18). Confirmation pass 1: 1 HIGH, 3 MEDIUM, 10 LOW. Confirmation pass 2: 2 MEDIUM, 8 LOW. Confirmation pass 3: 1 MEDIUM, 8 LOW. Confirmation pass 4: 1 MEDIUM, 7 LOW. All addressed. Round 1: 7 HIGH, about 17 MEDIUM, 29 LOW. Round 2: 3 HIGH, 15 MEDIUM, 13 LOW. All addressed (§15). Branch `cloud-export`, from `main` at `17ac1c8`. Follows `BLUEPRINT-STANDARD.md`.
+> **Status: v1.7** (2026-11-18). Confirmation pass 1: 1 HIGH, 3 MEDIUM, 10 LOW. Confirmation pass 2: 2 MEDIUM, 8 LOW. Confirmation pass 3: 1 MEDIUM, 8 LOW. Confirmation pass 4: 1 MEDIUM, 7 LOW. Confirmation pass 5: 2 MEDIUM, 6 LOW. All addressed. Round 1: 7 HIGH, about 17 MEDIUM, 29 LOW. Round 2: 3 HIGH, 15 MEDIUM, 13 LOW. All addressed (§15). Branch `cloud-export`, from `main` at `17ac1c8`. Follows `BLUEPRINT-STANDARD.md`.
 >
 > **Decisions:**
 > - `BUSINESS-DECISIONS.md` §5, "Consequence: the F2 'founder-held final export' must change";
@@ -43,7 +43,8 @@
 - **A1, the policy-breach rule:**
   - a `policy_hold` workspace whose export the founder hasn't re-enabled (`policyExportAllowed` false) → the link goes **only** to the extra address, which is required;
   - once the founder has re-enabled export for that workspace (`set-policy-export on`, F5's honest-mistake path), it goes to the normal recipients;
-  - **a link sent earlier to the normal recipients stops working while the workspace is on such a hold** (§6.6). The page shows it as unavailable; it isn't revoked. If the hold is lifted or export re-enabled within the 7 days, it works again. Links sent to the extra address keep working.
+  - **any link sent earlier to the normal recipients** (with or without an extra address alongside) **stops working while the workspace is on such a hold, including after the workspace is deleted** (§6.6). The page shows it as unavailable; it isn't revoked. If the founder lifts the hold or re-enables export within the 7 days, it works again. Only a delivery addressed to the extra address **alone** keeps working;
+  - **an export email not yet sent when the hold starts** still goes to its recipients, and its link then shows as unavailable. No data reaches them.
 - **A2, the expiry wording:** access ends at exactly 7 days, and an hourly sweep erases the file within 1 hour after that, with S3's own expiry as the backstop (§6.7). BUSINESS-DECISIONS says "files … expire automatically within 7 days". Accept "access ends at 7 days; erased within the hour after", or ask the business session to word it.
 - **A3, the Privacy page:** it lists AWS for "encrypted backups" only (`src/app/privacy/page.tsx:51`), and §3 (:43) says data "is then permanently deleted". Export copies are also stored in AWS, and a legal-hold copy can outlive a deletion. The business session supplies the sentence(s).
 - **A4, what "verified address" means** (Q2): v1.1 reads it as the founder typing the address twice (two button inputs that must match, both masked), plus the founder's own check out of band, recorded in the reason. If the business side needs more (for example a confirmation email the recipient must click first), it's a scope change.
@@ -199,10 +200,10 @@
 - `export release --hold <uuid> --reason <text> --run-id <id>`
 - `export sweep` (its own family, `cadenzpoint-backup-sweep`, §6.7)
 
-A value starting with `-` is refused (no flag confusion). `--run-id` is optional and generated when absent (`disaster.ts:116`'s pattern).
+A value starting with `-` is refused (no flag confusion). **`--extra` on `hold` or `release`** is refused with exit 1 (`extra-not-allowed`), not exit 2. `--run-id` is optional and generated when absent (`disaster.ts:116`'s pattern).
 
 **The start:**
-- `startedBy` must be `gh-` or `cloudshell-` for deliver, hold and release. **`--extra` is accepted only from a `gh-` start**, because only the button enforces the type-twice check. A `cloudshell-` deliver with `--extra` is refused;
+- `startedBy` must be `gh-` or `cloudshell-` for deliver, hold and release. **`--extra` is accepted only from a `gh-` start**, because only the button enforces the type-twice check. A `cloudshell-` deliver with `--extra` is refused. **This is an honour-system convention:** `startedBy` is whatever the caller passes, so a CloudShell user could type `gh-…`. It's the same as 3c's gate (`disaster.ts:244`): the founder is the only CloudShell user;
 - **`sweep` may run from any caller:** it only deletes expired or revoked delivery copies, and orphaned **delivery** copies (hold orphans are only reported);
 - ECS oldest-wins within the `cadenzpoint-backup-export` family. The sweep is a different family, so it never competes, and the button's one-at-a-time check isn't affected;
 - an advisory lock `EXPORT_LOCK_KEY` (`728_402_206`, beside 3c's) on the control plane, held only for the short record transaction and **never during the build** (it would block nothing useful);
@@ -215,7 +216,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 1b. **Schema check, inside the snapshot:** the workspace's applied tenant migration count (`drizzle.__drizzle_migrations`; 3c's `migrationCount` query, `disaster-steps.ts:572`) must equal the journal length baked into the image. Otherwise refuse `schema-skew`: "approve the pending Backup system deploy (or run it from Actions → Backup system deploy if none is pending), or run Deploy to Production". The bundled schema can't read columns the database lacks, or miss new ones.
 2. **Recipients**, resolved **after the build, just before recording, on a fresh connection after the snapshot closes** (a REPEATABLE READ snapshot can't see later changes), so an admin deactivated mid-build is left out:
    - for a `policy_hold` workspace whose export isn't re-enabled: the extra address only;
-   - otherwise D10. It's the task's own copy of `notices.ts:72-91` (which is `server-only`), so **one shared fixture test** runs both against the same workspace states and requires equal results. It **honours `NOTICE_RECIPIENTS`** (`lifecycle-config.ts:145`, bundled): active admins from the workspace database, plus the billing email, plus the signup email when there's no active admin, plus `--extra` if given;
+   - otherwise D10. It's the task's own copy of `notices.ts:72-91` (which is `server-only`), so **one shared fixture test** (an integration test; `notices.ts` exports `resolveRecipientsAndTimezone` as an internal export for it, with the `server-only` stub as `setup-db.ts:11`) runs both against the same workspace states and requires equal results. It **honours `NOTICE_RECIPIENTS`** (`lifecycle-config.ts:145`, bundled): active admins from the workspace database, plus the billing email, plus the signup email when there's no active admin, plus `--extra` if given;
    - lowercased and deduplicated;
    - none → refuse `no-recipients`; more than 50 → refuse `too-many-recipients`. **For `deliver` only, the same count is pre-checked right after 1b** (after the schema check, so a skewed workspace fails `schema-skew`, not a raw read error), so nothing is built in vain. A workspace over 50 recipients uses the in-app self-export (TENANT-DELETION notes it);
    - the workspace's time zone (`workspace_settings.timezone`, canonicalised) is read here too.
@@ -232,7 +233,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 **`hold`:**
 - **step 1's status check only** (`active`/`suspended` with a database; **no recipient checks**: `extra-required`, `no-recipients` and `too-many-recipients` are deliver-only), then 1b (schema-skew) and 3, with key `hold/<holdId>/<slug>-export-<yyyymmdd>.zip`;
 - then an `export_holds` row (id, tenant id, key, bytes, sha256, reason, `run_id`, created_at, `released_at` null, `release_reason` null);
-- audit `export-held`; an SNS line.
+- audit `export-held`; an SNS line **including the hold id** (`export held: workspace <id>, hold <id>`), which `release` needs.
 - **No email to customers.**
 - Allowed in every exportable status, including `policy_hold`, with no `--extra`.
 
@@ -268,7 +269,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 
 ### 6.5 Delivery records and the `export-ready` notice
 - **Table `export_deliveries`:**
-  - columns: `id` uuid PK; `tenant_id` FK; **`notice_id` uuid unique** (FK `tenant_notices`); `s3_key`; `bytes`; `sha256`; `token_hash` char(64) unique; `token_encrypted` text null; `recipients_encrypted` text (a JSON array, `encrypt()`ed); **`time_zone`** varchar(100); `extra_recipient` boolean; `reason` text null; `created_at`; `expires_at`; `revoked_at` null; `erased_at` null; `download_count` int default 0; `last_download_at` null; `run_id`;
+  - columns: `id` uuid PK; `tenant_id` FK; **`notice_id` uuid unique** (FK `tenant_notices`); `s3_key`; `bytes`; `sha256`; `token_hash` char(64) unique; `token_encrypted` text null; `recipients_encrypted` text (a JSON array, `encrypt()`ed); **`time_zone`** varchar(100); `extra_recipient` boolean; **`extra_only`** boolean (true only when the policy-hold rule sent it to the extra address alone); `reason` text null; `created_at`; `expires_at`; `revoked_at` null; `erased_at` null; `download_count` int default 0; `last_download_at` null; `run_id`;
   - index `(tenant_id, created_at)`;
   - **table `export_holds`** as in §6.3;
   - one drizzle-kit control-plane migration.
@@ -320,7 +321,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 
   A GET never mints a URL, so email scanners fetch only the page.
 
-**Policy hold:** a delivery with `extra_recipient` false is **unavailable** (the "expired" text, no URL) while its tenant is `suspended` with suspension reason `policy` and `policy_export_allowed` false. Both GET and POST check this, reading the tenant row (a tombstone counts as not on hold). The founder's verified extra address is unaffected (A1).
+**Policy hold:** a delivery with **`extra_only` false** is **unavailable** (the "expired" text, no URL) while its tenant has `suspension_reason = 'policy'` and `policy_export_allowed` false, **whatever its status**. `tenant:delete` keeps both on the tombstone, so deleting a breach workspace doesn't release the block; `unsuspend` clears the reason (`admin-commands.ts:102`). Both GET and POST check this, reading the tenant row. A delivery with `extra_only` true (the founder's verified address alone) is unaffected (A1).
 
 **POST (the server action):**
 - re-check the token (valid, not expired or revoked, and not unavailable under a policy hold);
@@ -450,7 +451,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 | F18 | A revoke while the send is in flight | the email may still go; the link is dead (revoked); `export-revoke` warns |
 | F19 | Two recipients from different parties | one separate message each (a batch): neither sees the other, and no support copy exists |
 | F20 | A hold task dies after upload, or a control-plane rollback loses a hold row | the orphaned hold object is kept and raises `export-orphan-hold`; the founder contacts the lead |
-| F21 | A workspace put on a policy hold after a link reached its admins | the page treats that delivery as unavailable while the hold lasts (export not re-enabled); the extra-address links keep working |
+| F21 | A workspace put on a policy hold after a link reached its admins | every delivery with `extra_only` false (even one that also had an extra address) is unavailable while the hold lasts, including after deletion; an email still pending at that moment is sent and its link shows unavailable; `extra_only` links keep working |
 | F13 | A release of a hold whose object is already gone | the delete is idempotent; a 404 verifies; it's released |
 
 ## 9. Platform limits
@@ -468,7 +469,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
     - the export and sweep task definitions; the `/export` and `/sweep` log groups;
     - the sweep schedule;
     - the `ExportStartedRule` and `ExportRunTaskRule`;
-    - the `ExportModes` output and an **`ExportDownloadRoleArn` output** (the founder copies it into Vercel);
+    - the `ExportModes` output, plus **`ExportDownloadRoleArn` and `ExportBucket` outputs** (the founder copies both into Vercel);
     - the button's RunTask and PassRole; `SchedulerRole`'s RunTask and PassRole;
     - the audit role's reads;
   - `ops/aws/bootstrap.yml`.
@@ -499,7 +500,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 
 | # | Scenario |
 |---|---|
-| T1 | `parseExportArgs`: every mode and its required flags; an unknown flag exits 2; a bad uuid, email or reason refused |
+| T1 | `parseExportArgs`: every mode and its required flags; an unknown flag exits 2; a bad uuid, email or reason refused; `--extra` on `hold`/`release` → exit 1 `extra-not-allowed` |
 | T2 | `deliver` against a scratch workspace with fake S3: the ZIP under `delivery/<id>/`; the SHA-256 matches; the notice, delivery (`notice_id`) and audit in one transaction; the recipients are D10 per `NOTICE_RECIPIENTS` plus the extra address, lowercased and deduplicated; the time zone stored; a schema-skewed workspace fails `schema-skew` before the recipient count |
 | T3 | `policy_hold` with export not re-enabled: without `--extra` refused; with it, the recipients are exactly the extra address. With `policy_export_allowed`: the normal recipients. A suspension starting mid-build → `changed`, the object deleted |
 | T4 | Statuses: deleted, deleting, provisioning and no URL → `not-exportable` |
@@ -522,7 +523,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 | T23 | The page's rate limit: the IP limit is checked before any token lookup; the per-delivery limit after |
 | T24 | `export-revoke` under the tenant lock warns when the lease is live |
 | T25 | `openExportSnapshot(url, opts)`: the task's server-side timeouts are applied; the app's call is unchanged |
-| T28 | The page under a later policy hold: a non-extra delivery is unavailable on GET and POST (no presign); an extra-address delivery still works; lifting the hold makes it available again |
+| T28 | The page under a later policy hold: an admins-only delivery and an admins-plus-extra delivery are both unavailable on GET and POST (no presign); an `extra_only` delivery still works; it's still unavailable after `tenant:delete` (tombstone with the reason); `unsuspend` or `set-policy-export on` makes it available again |
 | T29 | The recipient rule: the shared fixture gives equal results for the task's copy and `notices.ts`'s; an admin deactivated mid-build is left out (fresh connection); a `cloudshell-` start with `--extra` refused |
 | T19 | `schema-skew`: a workspace one migration ahead of the image's journal → refused before any read; the journal length comes from `drizzle/meta/_journal.json` at build |
 | T20 | The 45-minute deadline aborts a stalled build (fake stalled stream) and deletes any object |
@@ -533,7 +534,7 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
 1. **13b:** before deploying `bootstrap.yml`, give the dev the Vercel team slug and project name (committed as constants). Deploy the updated bootstrap.
 2. **13d (new):**
    - Vercel → team settings → OIDC: issuer mode **Team**;
-   - set the Vercel production env `EXPORT_DOWNLOAD_ROLE_ARN` (the stack output `ExportDownloadRoleArn`) and `EXPORT_BUCKET`, then deploy;
+   - set the Vercel production env `EXPORT_DOWNLOAD_ROLE_ARN` (stack output `ExportDownloadRoleArn`) and `EXPORT_BUCKET` (stack output `ExportBucket`), then deploy;
    - press Export workspace → `deliver`, target = the `rehearsal` workspace id, extra = your own address (typed in both address boxes), reason "setup test", confirm `deliver` → approve;
    - open the email in a private window → Prepare download → Download, and check the ZIP opens;
    - revoke the delivery (`tenant:admin export-revoke`).
@@ -679,3 +680,14 @@ A value starting with `-` is refused (no flag confusion). `--run-id` is optional
     - an extra address refused for hold and release;
     - `--extra` only from `gh-` starts;
     - a shared recipient-rule fixture.
+- **v1.7, confirmation pass 5** (2 MEDIUM, 6 LOW; not clean). All addressed:
+  - **MEDIUM:**
+    - the hold exemption keyed on "had an extra" let admins-plus-extra links work → a stored `extra_only` flag; every other delivery is blocked;
+    - deletion released the block → it's based on the reason and the flag whatever the status (the tombstone keeps them).
+  - **LOW:**
+    - the `ExportBucket` output;
+    - the recipient function exported for the integration fixture;
+    - `startedBy` documented as an honour system;
+    - `--extra` on hold or release → exit 1;
+    - the hold id in the SNS line;
+    - F21 notes the pending email.
