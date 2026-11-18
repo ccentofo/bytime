@@ -86,6 +86,11 @@ describe.skipIf(!CAN_RUN)('disaster control-plane', () => {
       expect((await pressCp({ restoreTestProjectId: 'prj-not-in-the-org' })).outcome?.results[0].result).toBe('proof-failed');
       w.neon.unavailable = { ids: ['prj-x'], calls: 1 };
       expect((await pressCp()).outcome?.results[0].result).toBe('proof-failed');
+      // The restore-test project answers 200 by id but isn't in the key's organisation list (a wrong org: GET by id
+      // ignores the org, so a 200 alone proves nothing).
+      const base = worldDeps(w, { logs: [], emails: [] }).neon;
+      const neon: NeonApi = { ...base, async listProjects(q) { const l = await base.listProjects(q); return { ...l, projects: l.projects.filter((p) => p.id !== w.restoreTestProjectId) }; } };
+      expect((await pressCp({ neon })).outcome?.results[0].result).toBe('proof-failed');
       expect(everCreated()).toHaveLength(0);
     });
 
