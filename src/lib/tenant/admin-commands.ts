@@ -1,6 +1,6 @@
 import 'server-only';
-import { and, desc, eq, isNull } from 'drizzle-orm';
-import { opsAlerts, tenantAuditEvents, tenantNotices, tenants } from '@/db/control-plane/schema';
+import { and, desc, eq, gte, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { opsAlerts, signups, tenantAuditEvents, tenantNotices, tenants } from '@/db/control-plane/schema';
 import { withLockedPool, withTenantLock, type ControlTx } from '@/db/control-plane/locked';
 import { addDays, cycleAnchor, deletionDateFrom, getTenantAccess, hasSubscribed, type LifecycleFacts } from './lifecycle';
 import { DELETION_NOTICE_DAYS, POST_END_RETENTION_DAYS } from './lifecycle-config';
@@ -337,4 +337,140 @@ export async function resolveAlertById(alertId: string, note: string, actor: str
     throw new AdminCommandError(`${alert.kind} closes only when its condition clears (feature-plan-disaster-restore.md §6.8); it can't be resolved by hand.`);
   }
   await withLockedPool((db) => db.update(opsAlerts).set({ resolvedAt: new Date(), resolutionNote: `${note} (${actor})` }).where(eq(opsAlerts.id, alertId)));
+}
+
+// ---- feature-plan-control-plane-disaster.md §6.10, §6.10b ----------------------------------------------------------------
+
+export interface StripeResyncResult {
+  /** Workspaces whose window checkout would be (or was) re-linked. Slugs only: never an email address. */
+  links: string[];
+  /** Completed checkouts whose live customer belongs to another workspace (a re-signup can reuse a slug). */
+  notThisWorkspace: string[];
+  /** Paying workspaces to refresh from live Stripe. */
+  refresh: string[];
+  outcomes?: { linked: string[]; refreshed: string[]; conflict: string[]; failed: Array<{ slug: string; error: string }> };
+}
+
+const idOf = (x: string | { id: string } | null | undefined) => (typeof x === 'string' ? x : x?.id ?? null);
+const LIVE_STATUSES = new Set(['active', 'suspended']);
+
+/**
+ * `tenant:admin stripe-resync --since <iso> --stripe-mode live|test [--yes]` (§6.10): NOT an event replay.
+ *  1. Re-link window checkouts: every `complete` Checkout Session created since `since − 1 h` whose `metadata.slug` names
+ *     a live workspace (active/suspended, approved detail D12) linked to another customer, and whose LIVE customer's
+ *     `metadata.tenantId` is that workspace's id, goes through the webhook's own link rule (checkoutLinkPatch); the row's
+ *     current customer, read live, counts as replaceable when Stripe says it's deleted.
+ *  2. Refresh every paying workspace with reconcileInLock (as the daily cron does), under its tenant lock; a relinked one
+ *     gets its customer passed, so its subscription is mirrored in the same run. The billing email comes from the live
+ *     customer, and a null one never clears the stored one.
+ * Side effects are reconcileInLock's (notices queued, delivered later by the notice cron; alerts) plus markSeatSyncDue
+ * for every relink and every workspace that became good. It never delivers a notice, never reads a workspace database,
+ * and re-running it converges on live Stripe.
+ */
+export async function stripeResyncCommand(o: { since: Date; dryRun: boolean; actor: string; now?: () => Date }): Promise<StripeResyncResult> {
+  const { stripe } = await import('@/lib/billing/stripe');
+  const now = o.now ?? (() => new Date());
+  const rows = await withLockedPool((db) => db.select().from(tenants));
+  const live = rows.filter((r) => LIVE_STATUSES.has(r.status));
+  const bySlug = new Map(live.map((r) => [r.slug, r]));
+
+  // 1. The window's completed checkouts (all pages).
+  const sessions: Array<{ id: string; customer: unknown; metadata: Record<string, string> | null }> = [];
+  let startingAfter: string | undefined;
+  for (let page = 0; page < 1000; page++) {
+    const list = await stripe.checkout.sessions.list({ status: 'complete', created: { gte: Math.floor((o.since.getTime() - 3600_000) / 1000) }, limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) });
+    sessions.push(...(list.data as unknown as typeof sessions));
+    if (!list.has_more || list.data.length === 0) break;
+    startingAfter = list.data[list.data.length - 1].id;
+  }
+  const planned: Array<{ row: TenantRow; customerId: string; currentDeleted: boolean; email: string | null }> = [];
+  const notThisWorkspace: string[] = [];
+  const seen = new Set<string>();
+  for (const s of sessions) {
+    const slug = s.metadata?.slug;
+    const customerId = idOf(s.customer as string | { id: string } | null);
+    const row = slug ? bySlug.get(slug) : undefined;
+    if (!row || !customerId || row.stripeCustomerId === customerId || seen.has(row.id)) continue;
+    const customer = await stripe.customers.retrieve(customerId) as { deleted?: boolean; email?: string | null; metadata?: Record<string, string> };
+    if (customer.deleted || customer.metadata?.tenantId !== row.id) { notThisWorkspace.push(row.slug); continue; }
+    let currentDeleted = false;
+    if (row.stripeCustomerId && row.stripeCustomerDeletedAt === null) {
+      try { currentDeleted = Boolean((await stripe.customers.retrieve(row.stripeCustomerId) as { deleted?: boolean }).deleted); } catch { currentDeleted = false; }
+    }
+    seen.add(row.id);
+    planned.push({ row, customerId, currentDeleted, email: customer.email ?? null });
+  }
+  const linkIds = new Set(planned.map((p) => p.row.id));
+  const toRefresh = live.filter((r) => r.stripeCustomerId && !linkIds.has(r.id));
+  const result: StripeResyncResult = {
+    links: planned.map((p) => p.row.slug).sort(), notThisWorkspace: [...new Set(notThisWorkspace)].sort(),
+    refresh: [...planned.map((p) => p.row.slug), ...toRefresh.map((r) => r.slug)].sort(),
+  };
+  if (o.dryRun) return result;
+
+  const { reconcileInLock } = await import('@/lib/billing/reconcile');
+  const { markSeatSyncDue } = await import('@/lib/billing/seat-sync');
+  const { checkoutLinkPatch } = await import('@/lib/billing/checkout-link');
+  const out: NonNullable<StripeResyncResult['outcomes']> = { linked: [], refreshed: [], conflict: [], failed: [] };
+  for (const p of planned) {
+    try {
+      const r = await withTenantLock(p.row.id, async (tx) => {
+        const fresh = await readTenant(tx, p.row.id);
+        if (!fresh || !LIVE_STATUSES.has(fresh.status)) return 'skipped' as const;
+        let extraPatch: TenantPatch = {};
+        if (fresh.stripeCustomerId !== p.customerId) {
+          const link = await checkoutLinkPatch(tx, fresh, p.customerId, { actor: o.actor, now: now(), currentCustomerDeleted: p.currentDeleted });
+          if (!link.ok) return 'conflict' as const;
+          extraPatch = { ...link.patch };
+        }
+        if (p.email) extraPatch.billingEmail = p.email;
+        await reconcileInLock(tx, fresh, now(), { customerId: p.customerId, extraPatch });
+        return 'linked' as const;
+      });
+      if (r === 'conflict') out.conflict.push(p.row.slug);
+      else if (r === 'linked') { out.linked.push(p.row.slug); await markSeatSyncDue(p.row.id); }
+      invalidateTenant(p.row.slug);
+    } catch (e) {
+      out.failed.push({ slug: p.row.slug, error: e instanceof Error ? e.message.slice(0, 200) : String(e) });
+    }
+  }
+  for (const row of toRefresh) {
+    try {
+      const customer = await stripe.customers.retrieve(row.stripeCustomerId!).catch(() => null) as { deleted?: boolean; email?: string | null } | null;
+      const email = customer && !customer.deleted ? customer.email ?? null : null;
+      const becameGood = await withTenantLock(row.id, async (tx) => {
+        const fresh = await readTenant(tx, row.id);
+        if (!fresh || !LIVE_STATUSES.has(fresh.status) || !fresh.stripeCustomerId) return null;
+        const extraPatch: TenantPatch = email && email !== fresh.billingEmail ? { billingEmail: email } : {};
+        return (await reconcileInLock(tx, fresh, now(), { extraPatch })).becameGood;
+      });
+      if (becameGood !== null) out.refreshed.push(row.slug);
+      if (becameGood) await markSeatSyncDue(row.id);
+      invalidateTenant(row.slug);
+    } catch (e) {
+      out.failed.push({ slug: row.slug, error: e instanceof Error ? e.message.slice(0, 200) : String(e) });
+    }
+  }
+  return { ...result, outcomes: out };
+}
+
+export interface WindowSignupRow { companyName: string; email: string; createdAt: Date; verifiedAt: Date | null; waitlistedAt: Date | null }
+
+/**
+ * `tenant:admin window-signup <slug>` (§6.10b, read-only): only while an open window-project alert names the slug; every
+ * restored `signups` row for it created at or before the project, not consumed, and not expired then (or waitlisted),
+ * newest first. The founder matches on the company name and never guesses (runbook B.9).
+ */
+export async function windowSignupCommand(slug: string): Promise<{ projectId: string; createdAt: string | null; rows: WindowSignupRow[] }> {
+  const [alert] = await withLockedPool((db) => db.select({ dedupKey: opsAlerts.dedupKey, detail: opsAlerts.detail }).from(opsAlerts)
+    .where(and(eq(opsAlerts.kind, 'window-project'), isNull(opsAlerts.resolvedAt), sql`${opsAlerts.detail}->>'slug' = ${slug}`)).limit(1));
+  if (!alert) throw new AdminCommandError(`"${slug}" is not a window signup (no open window-project alert names it).`);
+  const createdAtRaw = (alert.detail as { createdAt?: string | null } | null)?.createdAt ?? null;
+  const createdAt = createdAtRaw ? new Date(createdAtRaw) : null;
+  if (!createdAt || Number.isNaN(createdAt.getTime())) throw new AdminCommandError(`The window-project alert for "${slug}" has no creation time; contact the lead.`);
+  const rows = await withLockedPool((db) => db.select({
+    companyName: signups.companyName, email: signups.email, createdAt: signups.createdAt, verifiedAt: signups.verifiedAt, waitlistedAt: signups.waitlistedAt,
+  }).from(signups).where(and(eq(signups.slug, slug), lte(signups.createdAt, createdAt), isNull(signups.consumedAt),
+    or(gte(signups.expiresAt, createdAt), isNotNull(signups.waitlistedAt)))).orderBy(desc(signups.createdAt)));
+  return { projectId: alert.dedupKey, createdAt: createdAtRaw, rows };
 }

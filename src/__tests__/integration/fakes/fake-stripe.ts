@@ -56,7 +56,11 @@ export interface FakeSchedule {
 const unix = (d: Date) => Math.floor(d.getTime() / 1000);
 
 export const stripeState = {
-  customers: new Map<string, { deleted: boolean; email?: string | null }>(),
+  customers: new Map<string, { deleted: boolean; email?: string | null; metadata?: Record<string, string> }>(),
+  /** feature-plan-control-plane-disaster.md §6.10: Checkout Sessions for `checkout.sessions.list` (status, created). */
+  sessions: [] as Array<{ id: string; status: 'complete' | 'expired' | 'open'; created: number; customer: string | null; metadata: Record<string, string> | null }>,
+  /** Every checkout.sessions.list params object. */
+  sessionListParams: [] as Array<Record<string, unknown>>,
   subs: new Map<string, FakeSub>(),
   invoices: new Map<string, FakeInvoice>(),
   /** What a customer-scoped list returns for a deleted customer. */
@@ -105,6 +109,8 @@ export const stripeState = {
     this.schedules.clear();
     this.updates = [];
     this.checkoutParams = [];
+    this.sessions = [];
+    this.sessionListParams = [];
     this.sentInvoices = [];
     this.failAfterApply.clear();
     this.blockers.clear();
@@ -339,7 +345,7 @@ export const fakeStripe = {
       await op('customers.retrieve');
       const c = stripeState.customers.get(id);
       if (!c) throw resourceMissing(`customer: '${id}'`);
-      return c.deleted ? { id, object: 'customer', deleted: true } : { id, object: 'customer', email: c.email ?? null };
+      return c.deleted ? { id, object: 'customer', deleted: true } : { id, object: 'customer', email: c.email ?? null, metadata: c.metadata ?? {} };
     },
     async create(_params: unknown, opts?: { idempotencyKey?: string }) {
       await op('customers.create');
@@ -359,6 +365,17 @@ export const fakeStripe = {
         await op('checkout.sessions.create');
         stripeState.checkoutParams.push(params);
         return { id: 'cs_test', url: 'https://checkout.stripe.test/session' };
+      },
+      /** Newest first, `status` and `created.gte` filters, cursor pages (`starting_after`, `has_more`), as Stripe. */
+      async list(params: { status?: string; created?: { gte?: number }; limit?: number; starting_after?: string } = {}) {
+        await op('checkout.sessions.list');
+        stripeState.sessionListParams.push(params as Record<string, unknown>);
+        const all = [...stripeState.sessions].sort((a, b) => b.created - a.created || b.id.localeCompare(a.id))
+          .filter((x) => (!params.status || x.status === params.status) && (params.created?.gte === undefined || x.created >= params.created.gte));
+        const start = params.starting_after ? all.findIndex((x) => x.id === params.starting_after) + 1 : 0;
+        const limit = Math.min(params.limit ?? 10, stripeState.pageSize);
+        const page = all.slice(start, start + limit);
+        return { object: 'list', data: page.map((x) => ({ object: 'checkout.session', ...x })), has_more: start + limit < all.length };
       },
     },
   },

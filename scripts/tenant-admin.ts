@@ -21,6 +21,12 @@
  *                                                   `standard` only undoes enterprise)
  *   ensure-customer <slug> --stripe-mode live|test --yes   (link the workspace's Stripe customer; prints cus_…)
  *   seat-sync <slug> --stripe-mode live|test [--yes]       (one quantity sync; without --yes: planned calls only, no writes)
+ *   stripe-resync --since <iso> --stripe-mode live|test [--yes]
+ *                                                   (feature-plan-control-plane-disaster.md §6.10, runbook B.8: re-link the
+ *                                                   window's completed checkouts and refresh every paying workspace from
+ *                                                   live Stripe; without --yes: the plan only. Prints slugs, never emails)
+ *   window-signup <slug>                            (§6.10b, runbook B.9: the restored signups rows for an open window
+ *                                                   address, to find the person; read-only)
  *   waitlist list                                   (LB-D2: verified signups held back by the daily cap)
  *   waitlist provision <signup-id> --yes            (provision one, bypassing the cap; emails the set-password link)
  *
@@ -46,7 +52,8 @@ import type { TenantRow } from '../src/lib/tenant/lifecycle-store';
 import { deliverPendingNotices } from '../src/lib/tenant/notices';
 import {
   AdminCommandError, applyAdminPlan, checkStripeMode, ensureCustomerCommand, findForceableNotice, forceNoticeSent, plans,
-  recordFounderExportDisposal, recordFounderNote, resolveAlertById, seatSyncCommand, setPlanPlanner, stripeKeyMode, type Planner,
+  recordFounderExportDisposal, recordFounderNote, resolveAlertById, seatSyncCommand, setPlanPlanner, stripeKeyMode, stripeResyncCommand,
+  windowSignupCommand, type Planner,
 } from '../src/lib/tenant/admin-commands';
 import { printTargetBanner } from './lib/target';
 import { listWaitlist, provisionWaitlistedSignup, WaitlistError } from '../src/lib/tenant/waitlist';
@@ -200,8 +207,37 @@ async function show(slug: string) {
   });
 }
 
+/** `stripe-resync` (feature-plan-control-plane-disaster.md §6.10): it takes no slug. Exit 1 if any workspace failed. */
+async function stripeResync(args: string[]) {
+  const since = flag(args, '--since') ?? fail('stripe-resync requires --since <iso> (the window start from the email).');
+  const sinceDate = new Date(since);
+  if (Number.isNaN(sinceDate.getTime())) fail('--since must be an ISO date-time, e.g. 2026-11-18T03:00:00Z.');
+  const mode = stripeModeOrExit(args);
+  const yes = args.includes('--yes');
+  const r = await stripeResyncCommand({ since: sinceDate, dryRun: !yes, actor: ACTOR });
+  console.log(`Stripe resync (${mode} mode) since ${sinceDate.toISOString()} (checkouts from one hour earlier).`);
+  console.log(`Window checkouts to re-link: ${r.links.length}${r.links.length ? ` (${r.links.join(', ')})` : ''}`);
+  if (r.notThisWorkspace.length) console.log(`Not this workspace's checkout (left alone; a re-signup can reuse a slug): ${r.notThisWorkspace.join(', ')}`);
+  console.log(`Paying workspaces to refresh from live Stripe: ${r.refresh.length}${r.refresh.length ? ` (${r.refresh.join(', ')})` : ''}`);
+  if (!yes) {
+    console.log('\nDry run — nothing was written. Pass --yes to apply.');
+    return;
+  }
+  const out = r.outcomes!;
+  console.log(`\nLinked: ${out.linked.length}${out.linked.length ? ` (${out.linked.join(', ')})` : ''}`);
+  console.log(`Refreshed: ${out.refreshed.length}`);
+  if (out.conflict.length) console.log(`Conflict (checkout-customer-conflict raised; see the digest): ${out.conflict.join(', ')}`);
+  for (const f of out.failed) console.error(`✗ ${f.slug}: ${f.error}`);
+  console.log('Notices this queued are delivered by the notice cron once the crons are re-enabled (runbook B.10).');
+  if (out.failed.length) process.exit(1);
+}
+
 async function main() {
   printTargetBanner();
+  if (process.argv[2] === 'stripe-resync') {
+    await stripeResync(process.argv.slice(3));
+    process.exit(0);
+  }
   const [command, target, ...rest] = process.argv.slice(2);
   if (!command || !target) fail('Usage: tenant-admin.ts <command> <slug|alert-id> [args] [--yes] (see the header of scripts/tenant-admin.ts)');
   const yes = rest.includes('--yes');
@@ -317,6 +353,19 @@ async function main() {
       const r = await seatSyncCommand(t.id, { mode, dryRun: false, actor: ACTOR });
       console.log(`Seat sync (${mode} mode): ${r.outcome}${r.from !== undefined ? ` (Stripe ${r.from} → ${r.to})` : ''}${r.billable !== undefined ? `, billable ${r.billable}` : ''}${r.error ? ` — ${r.error}` : ''}${r.invoiceSent ? `; sent invoice ${r.invoiceSent}` : ''}`);
       if (r.outcome === 'failed' || r.outcome === 'busy') process.exit(1);
+      break;
+    }
+    case 'window-signup': {
+      const r = await windowSignupCommand(target);
+      console.log(`Window project ${r.projectId} for "${target}", created ${r.createdAt}.`);
+      if (r.rows.length === 0) {
+        console.log('No restored signup for this address: use Stripe (Customers, metadata[\'slug\']) or the email log (RESTORE.md B.9).');
+        break;
+      }
+      if (r.rows.length > 1) console.log(`${r.rows.length} signups match: don't guess. Match on the company name the customer used (ask when you email); contact the lead if it's still unclear.`);
+      for (const x of r.rows) {
+        console.log(`  "${x.companyName}"  ${x.email}  created ${x.createdAt.toISOString()}  ${x.verifiedAt ? `verified ${x.verifiedAt.toISOString()}` : 'not verified'}${x.waitlistedAt ? `  waitlisted ${x.waitlistedAt.toISOString()}` : ''}`);
+      }
       break;
     }
     case 'waitlist': {
