@@ -47,7 +47,7 @@ Resources:
                 Fn::Sub: arn:aws:iam::${AWS::AccountId}:root
             Action: kms:*
             Resource: '*'
-          - Sid: DenyDecryptExceptRestoreTest
+          - Sid: DenyDecryptExceptRestoreRoles
             Effect: Deny
             Principal:
               AWS: '*'
@@ -58,7 +58,8 @@ Resources:
             Condition:
               ArnNotEquals:
                 aws:PrincipalArn:
-                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-task
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-task
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-disaster-task
           - Sid: DenyShortDeletionWindow
             Effect: Deny
             Principal:
@@ -157,7 +158,7 @@ Resources:
             Action: s3:DeleteObject*
             Resource:
               Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}/*
-          - Sid: DenyReadsExceptRestoreTest
+          - Sid: DenyReadsExceptRestoreRoles
             Effect: Deny
             Principal: '*'
             Action: s3:GetObject*
@@ -166,7 +167,8 @@ Resources:
             Condition:
               ArnNotEquals:
                 aws:PrincipalArn:
-                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-task
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-task
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-disaster-task
           - Sid: DenyPolicyAndLifecycleChangesExceptDeploy
             Effect: Deny
             Principal: '*'
@@ -300,6 +302,13 @@ Resources:
     Properties:
       LogGroupName: /cadenzpoint/backup/restore-test
       RetentionInDays: 30
+
+  # feature-plan-disaster-restore.md §6.2: ids only (invariant 6), kept a year.
+  DisasterLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /cadenzpoint/backup/disaster
+      RetentionInDays: 365
 
   # ---- roles (path /cadenzpoint-backup/; every name starts cadenzpoint-backup-) -------------------------------------
   BackupTaskRole:
@@ -450,6 +459,8 @@ Resources:
                 Resource:
                   - Fn::Sub: arn:aws:events:us-east-1:${AWS::AccountId}:rule/cadenzpoint-backup-protections
                   - Fn::Sub: arn:aws:events:us-east-1:${AWS::AccountId}:rule/cadenzpoint-backup-roles
+                  - Fn::Sub: arn:aws:events:us-east-1:${AWS::AccountId}:rule/cadenzpoint-backup-disaster-started
+                  - Fn::Sub: arn:aws:events:us-east-1:${AWS::AccountId}:rule/cadenzpoint-backup-disaster-runtask
               - Sid: InspectTopic
                 Effect: Allow
                 Action:
@@ -481,6 +492,207 @@ Resources:
                   - iam:ListRolePolicies
                 Resource:
                   Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/*
+
+  # feature-plan-disaster-restore.md §6.2: the disaster task reads backups (like the restore test), the backup task's
+  # BACKUP lines, its own family's running tasks, and emails the founder. No SSM write, no S3 write.
+  DisasterTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cadenzpoint-backup-disaster-task
+      Path: /cadenzpoint-backup/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustEcsTasks
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
+              ArnLike:
+                aws:SourceArn:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:*
+      Policies:
+        - PolicyName: cadenzpoint-backup-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadBackups
+                Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}/v1/*
+              - Sid: ListBackups
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource:
+                  Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}
+                Condition:
+                  StringLike:
+                    s3:prefix: v1/*
+              - Sid: DecryptBackups
+                Effect: Allow
+                Action: kms:Decrypt
+                Resource:
+                  Fn::GetAtt: [BackupKey, Arn]
+                Condition:
+                  StringEquals:
+                    kms:EncryptionContext:purpose: cadenzpoint-backup
+              - Sid: ReadBackupLines
+                Effect: Allow
+                Action: logs:FilterLogEvents
+                Resource:
+                  Fn::Sub: arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/cadenzpoint/backup/backup:*
+              - Sid: ListOwnFamily
+                Effect: Allow
+                Action: ecs:ListTasks
+                Resource: '*'
+                Condition:
+                  ArnEquals:
+                    ecs:cluster:
+                      Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:cluster/cadenzpoint-backup
+              - Sid: DescribeTasks
+                Effect: Allow
+                Action: ecs:DescribeTasks
+                Resource:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task/cadenzpoint-backup/*
+              - Sid: EmailFounder
+                Effect: Allow
+                Action: sns:Publish
+                Resource:
+                  Fn::Sub: arn:aws:sns:us-east-1:${AWS::AccountId}:cadenzpoint-backup-alerts
+
+  DisasterExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cadenzpoint-backup-disaster-exec
+      Path: /cadenzpoint-backup/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustEcsTasks
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
+              ArnLike:
+                aws:SourceArn:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:*
+      Policies:
+        - PolicyName: cadenzpoint-backup-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PullAuth
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: PullImage
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource:
+                  Fn::Sub: arn:aws:ecr:us-east-1:${AWS::AccountId}:repository/cadenzpoint-backup
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  Fn::Sub: arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/cadenzpoint/backup/disaster:*
+              - Sid: ReadParameters
+                Effect: Allow
+                Action: ssm:GetParameters
+                Resource:
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-url
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/encryption-key
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/neon-api-key
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/neon-org-id
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/restore-test-project-id
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-project-id
+
+  # feature-plan-disaster-restore.md §6.2: the button's role, reachable only from a job in the founder-approved
+  # `aws-disaster` environment (GitHub OIDC). It may start only the disaster family, in this cluster; a role allowed to run
+  # the family may run it with any command or environment (no IAM condition restricts overrides), and Describe/Stop also
+  # reach the backup tasks in this cluster. PassRole only to ecs-tasks (that's what stops a taskRoleArn override).
+  DisasterButtonRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cadenzpoint-backup-disaster-button
+      Path: /cadenzpoint-backup/
+      MaxSessionDuration: 21600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustGitHubDisasterEnvironment
+            Effect: Allow
+            Principal:
+              Federated:
+                Fn::Sub: arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: repo:ccentofo/bytime:environment:aws-disaster
+      Policies:
+        - PolicyName: cadenzpoint-backup-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: RunDisasterTask
+                Effect: Allow
+                Action: ecs:RunTask
+                Resource:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-disaster:*
+                Condition:
+                  ArnEquals:
+                    ecs:cluster:
+                      Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:cluster/cadenzpoint-backup
+              - Sid: ListTasks
+                Effect: Allow
+                Action: ecs:ListTasks
+                Resource: '*'
+                Condition:
+                  ArnEquals:
+                    ecs:cluster:
+                      Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:cluster/cadenzpoint-backup
+              - Sid: DescribeAndStopTasks
+                Effect: Allow
+                Action:
+                  - ecs:DescribeTasks
+                  - ecs:StopTask
+                Resource:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task/cadenzpoint-backup/*
+              - Sid: PassDisasterRoles
+                Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-disaster-task
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-disaster-exec
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
+              - Sid: TagTasks
+                Effect: Allow
+                Action: ecs:TagResource
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    ecs:CreateAction: RunTask
+              - Sid: ReadStackOutputs
+                Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource:
+                  Fn::Sub: arn:aws:cloudformation:us-east-1:${AWS::AccountId}:stack/cadenzpoint-backup/*
 
   BackupExecRole:
     Type: AWS::IAM::Role
@@ -664,6 +876,7 @@ Resources:
                   - Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-backup:*
                   - Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-audit:*
                   - Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-restore-test:*
+                  - Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-disaster:*
               - Sid: PassTaskRoles
                 Effect: Allow
                 Action: iam:PassRole
@@ -671,9 +884,11 @@ Resources:
                   - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-backup-task
                   - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-audit-task
                   - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-task
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-disaster-task
                   - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-backup-exec
                   - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-audit-exec
                   - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-exec
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-disaster-exec
                 Condition:
                   StringLike:
                     iam:PassedToService: ecs-tasks.amazonaws.com
@@ -847,7 +1062,7 @@ Resources:
               Value:
                 Ref: AlertTopic
             - Name: ALERT_RULE_NAMES
-              Value: cadenzpoint-backup-protections,cadenzpoint-backup-roles
+              Value: cadenzpoint-backup-protections,cadenzpoint-backup-roles,cadenzpoint-backup-disaster-started,cadenzpoint-backup-disaster-runtask
             - Name: TRAIL_NAME
               Value: cadenzpoint-account-trail
             - Name: DLQ_ALARM_NAME
@@ -866,6 +1081,85 @@ Resources:
                 Ref: AuditLogGroup
               awslogs-region: us-east-1
               awslogs-stream-prefix: audit
+
+  # feature-plan-disaster-restore.md §6.2, §6.4: the button's task. Container `disaster` (the button's and the schedule's
+  # overrides name it). NEON_HISTORY_RETENTION_SECONDS is deliberately unset: the bundled policy value applies, as in the
+  # app's production (impact analysis §6.15).
+  DisasterTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: cadenzpoint-backup-disaster
+      Cpu: '2048'
+      Memory: '4096'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
+      ExecutionRoleArn:
+        Fn::GetAtt: [DisasterExecRole, Arn]
+      TaskRoleArn:
+        Fn::GetAtt: [DisasterTaskRole, Arn]
+      ContainerDefinitions:
+        - Name: disaster
+          Image:
+            Ref: ImageUri
+          Essential: true
+          Command:
+            - disaster
+          StopTimeout: 120
+          LinuxParameters:
+            InitProcessEnabled: true
+          Environment:
+            - Name: AWS_REGION
+              Value: us-east-1
+            - Name: BACKUP_BUCKET
+              Value:
+                Ref: BackupBucket
+            - Name: BACKUP_KMS_KEY_ARN
+              Value:
+                Fn::GetAtt: [BackupKey, Arn]
+            - Name: BACKUP_DECRYPT_KEY_ARNS
+              Value:
+                Fn::GetAtt: [BackupKey, Arn]
+            - Name: BACKUP_PG_RESTORE_BIN
+              Value: /usr/lib/postgresql/16/bin/pg_restore
+            - Name: ALERT_TOPIC_ARN
+              Value:
+                Ref: AlertTopic
+            - Name: BACKUP_LOG_GROUP
+              Value: /cadenzpoint/backup/backup
+            - Name: NEON_REGION_ID
+              Value: aws-us-east-1
+            - Name: DISASTER_DEADLINE_MINUTES
+              Value: '330'
+          Secrets:
+            - Name: CONTROL_PLANE_DATABASE_URL
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-url
+            - Name: ENCRYPTION_KEY
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/encryption-key
+            - Name: NEON_API_KEY
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/neon-api-key
+            - Name: NEON_ORG_ID
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/neon-org-id
+            - Name: RESTORE_TEST_PROJECT_ID
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/restore-test-project-id
+            - Name: CONTROL_PLANE_PROJECT_ID
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-project-id
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Ref: DisasterLogGroup
+              awslogs-region: us-east-1
+              awslogs-stream-prefix: disaster
 
   # ---- alerting: immediate email, straight from AWS -----------------------------------------------------------------
   SchedulerDeadLetterQueue:
@@ -959,6 +1253,9 @@ Resources:
             - PutMetricAlarm
             - DeleteQueue
             - SetQueueAttributes
+            - PutParameter
+            - DeleteParameter
+            - DeleteParameters
       Targets:
         - Id: alert-topic
           Arn:
@@ -1005,6 +1302,71 @@ Resources:
               time: $.time
               role: $.detail.requestParameters.roleName
             InputTemplate: '"CadenzPoint backup role changed: <event> on <role> by <caller> at <time>. If you did not make this change, investigate now."'
+
+  # feature-plan-disaster-restore.md §6.2 (invariant 7): EVERY start and finish of a disaster task is emailed, whatever
+  # the caller or path (button, CloudShell, schedule), from ECS's own task-state events (no CloudTrail needed). ECS can send
+  # an event more than once, so an occasional duplicate email is expected. `startedBy` is shown when the event carries it.
+  DisasterStartedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: cadenzpoint-backup-disaster-started
+      Description: Every disaster task start and finish emails the founder
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.ecs
+        detail-type:
+          - ECS Task State Change
+        detail:
+          taskDefinitionArn:
+            - prefix:
+                Fn::Sub: 'arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-disaster:'
+          lastStatus:
+            - PENDING
+            - PROVISIONING
+            - STOPPED
+      Targets:
+        - Id: alert-topic
+          Arn:
+            Ref: AlertTopic
+          InputTransformer:
+            InputPathsMap:
+              status: $.detail.lastStatus
+              task: $.detail.taskArn
+              startedBy: $.detail.startedBy
+              stopCode: $.detail.stopCode
+              time: $.time
+            InputTemplate: '"CadenzPoint disaster task <status> at <time> (started by <startedBy>; task <task>; stop code <stopCode>). If you did not press Disaster restore or run the CloudShell command, and it is not the monthly rehearsal (the 1st, 15:17 UTC), investigate now."'
+
+  # The RunTask call itself (CloudTrail), so the email names the caller. Two prefixes in one array already match either
+  # form (family or ARN): approved detail D6.
+  DisasterRunTaskRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: cadenzpoint-backup-disaster-runtask
+      Description: Every RunTask of the disaster family emails the founder with the caller
+      State: ENABLED
+      EventPattern:
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventName:
+            - RunTask
+          requestParameters:
+            taskDefinition:
+              - prefix: cadenzpoint-backup-disaster
+              - prefix:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-disaster
+      Targets:
+        - Id: alert-topic
+          Arn:
+            Ref: AlertTopic
+          InputTransformer:
+            InputPathsMap:
+              caller: $.detail.userIdentity.arn
+              time: $.time
+              startedBy: $.detail.requestParameters.startedBy
+            InputTemplate: '"CadenzPoint disaster task requested by <caller> at <time> (started by <startedBy>). If you did not make this request, investigate now."'
 
   DlqAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -1092,6 +1454,13 @@ Resources:
       - RolesRule
       - DlqAlarm
       - MonthlyBudget
+      - DisasterLogGroup
+      - DisasterTaskRole
+      - DisasterExecRole
+      - DisasterButtonRole
+      - DisasterTaskDefinition
+      - DisasterStartedRule
+      - DisasterRunTaskRule
     Properties:
       Name: cadenzpoint-backup-daily
       ScheduleExpression: 'cron(17 6 * * ? *)'
@@ -1157,6 +1526,13 @@ Resources:
       - RolesRule
       - DlqAlarm
       - MonthlyBudget
+      - DisasterLogGroup
+      - DisasterTaskRole
+      - DisasterExecRole
+      - DisasterButtonRole
+      - DisasterTaskDefinition
+      - DisasterStartedRule
+      - DisasterRunTaskRule
     Properties:
       Name: cadenzpoint-backup-catchup
       ScheduleExpression: 'cron(17 18 * * ? *)'
@@ -1223,6 +1599,13 @@ Resources:
       - RolesRule
       - DlqAlarm
       - MonthlyBudget
+      - DisasterLogGroup
+      - DisasterTaskRole
+      - DisasterExecRole
+      - DisasterButtonRole
+      - DisasterTaskDefinition
+      - DisasterStartedRule
+      - DisasterRunTaskRule
     Properties:
       Name: cadenzpoint-backup-audit-daily
       ScheduleExpression: 'cron(17 11 * * ? *)'
@@ -1288,6 +1671,13 @@ Resources:
       - RolesRule
       - DlqAlarm
       - MonthlyBudget
+      - DisasterLogGroup
+      - DisasterTaskRole
+      - DisasterExecRole
+      - DisasterButtonRole
+      - DisasterTaskDefinition
+      - DisasterStartedRule
+      - DisasterRunTaskRule
     Properties:
       Name: cadenzpoint-backup-restore-test-weekly
       ScheduleExpression: 'cron(17 8 ? * MON *)'
@@ -1353,6 +1743,13 @@ Resources:
       - RolesRule
       - DlqAlarm
       - MonthlyBudget
+      - DisasterLogGroup
+      - DisasterTaskRole
+      - DisasterExecRole
+      - DisasterButtonRole
+      - DisasterTaskDefinition
+      - DisasterStartedRule
+      - DisasterRunTaskRule
     Properties:
       Name: cadenzpoint-backup-restore-test-catchup
       ScheduleExpression: 'cron(17 8 ? * SUN,TUE-SAT *)'
@@ -1387,6 +1784,82 @@ Resources:
               SecurityGroups:
                 - Ref: TaskSecurityGroup
 
+  # feature-plan-disaster-restore.md §6.2, §6.5: the monthly rehearsal (the 1st, 15:17 UTC, when no backup job runs).
+  # `auto` = the `rehearsal` workspace when eligible; the task generates its run id. A schedule can only rehearse: mode
+  # workspace refuses unless startedBy begins gh- or cloudshell-.
+  DisasterRehearseSchedule:
+    Type: AWS::Scheduler::Schedule
+    DependsOn:
+      - BackupKey
+      - BackupKeyAlias
+      - BackupBucket
+      - BackupBucketPolicy
+      - Vpc
+      - InternetGateway
+      - GatewayAttachment
+      - PublicRouteTable
+      - DefaultRoute
+      - SubnetARoutes
+      - SubnetBRoutes
+      - BackupLogGroup
+      - AuditLogGroup
+      - RestoreTestLogGroup
+      - BackupTaskRole
+      - RestoreTestTaskRole
+      - AuditTaskRole
+      - BackupExecRole
+      - AuditExecRole
+      - RestoreTestExecRole
+      - BackupTaskDefinition
+      - AuditTaskDefinition
+      - AlertTopic
+      - AlertSubscription
+      - AlertTopicPolicy
+      - ProtectionsRule
+      - RolesRule
+      - DlqAlarm
+      - MonthlyBudget
+      - DisasterLogGroup
+      - DisasterTaskRole
+      - DisasterExecRole
+      - DisasterButtonRole
+      - DisasterStartedRule
+      - DisasterRunTaskRule
+      - RestoreTestTaskDefinition
+    Properties:
+      Name: cadenzpoint-backup-disaster-rehearse
+      ScheduleExpression: 'cron(17 15 1 * ? *)'
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      State: ENABLED
+      Target:
+        Arn:
+          Fn::GetAtt: [Cluster, Arn]
+        RoleArn:
+          Fn::GetAtt: [SchedulerRole, Arn]
+        Input: '{"containerOverrides":[{"name":"disaster","command":["disaster", "rehearse", "--targets", "auto"]}]}'
+        RetryPolicy:
+          MaximumRetryAttempts: 10
+          MaximumEventAgeInSeconds: 3600
+        DeadLetterConfig:
+          Arn:
+            Fn::GetAtt: [SchedulerDeadLetterQueue, Arn]
+        EcsParameters:
+          TaskDefinitionArn:
+            Ref: DisasterTaskDefinition
+          LaunchType: FARGATE
+          PlatformVersion: LATEST
+          TaskCount: 1
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              AssignPublicIp: ENABLED
+              Subnets:
+                - Ref: SubnetA
+                - Ref: SubnetB
+              SecurityGroups:
+                - Ref: TaskSecurityGroup
+
 Outputs:
   BackupBucket:
     Value:
@@ -1397,3 +1870,17 @@ Outputs:
   ClusterName:
     Value:
       Ref: Cluster
+  # feature-plan-disaster-restore.md §6.1: the button reads these (cloudformation:DescribeStacks); the role's ARN goes into
+  # the aws-disaster environment secret AWS_DISASTER_ROLE_ARN.
+  DisasterButtonRoleArn:
+    Value:
+      Fn::GetAtt: [DisasterButtonRole, Arn]
+  TaskSubnets:
+    Value:
+      Fn::Join:
+        - ','
+        - - Ref: SubnetA
+          - Ref: SubnetB
+  TaskSecurityGroup:
+    Value:
+      Ref: TaskSecurityGroup

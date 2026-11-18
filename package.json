@@ -80,6 +80,8 @@
     "@aws-crypto/client-node": "5.0.2",
     "@aws-sdk/client-cloudtrail": "3.1170.0",
     "@aws-sdk/client-cloudwatch": "3.1170.0",
+    "@aws-sdk/client-cloudwatch-logs": "3.1170.0",
+    "@aws-sdk/client-ecs": "3.1170.0",
     "@aws-sdk/client-eventbridge": "3.1170.0",
     "@aws-sdk/client-iam": "3.1170.0",
     "@aws-sdk/client-kms": "3.1170.0",

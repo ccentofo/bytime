@@ -397,9 +397,20 @@ export async function backupDigest(now: Date, env: Record<string, string | undef
     lines.push(last
       ? `Last restore test ${last.finishedAt!.toISOString().slice(0, 10)}: ${last.status}, control plane + ${Math.max(0, (last.planned ?? 1) - 1)} workspaces.`
       : 'No restore test has completed yet.');
+    // feature-plan-disaster-restore.md §6.8: the disaster button's runs.
+    lines.push(...await disasterLines(now));
     return { lines, news: false };
   } catch {
     return { lines: ['Backup status could not be read.'], news: true };
   }
 }
 
+/** feature-plan-disaster-restore.md §6.8: "Disaster runs in the last 7 days: …" (lazy import: no cycle with disaster-status.ts). */
+async function disasterLines(now: Date): Promise<string[]> {
+  try {
+    const { disasterDigestLines } = await import('./disaster-status');
+    return await disasterDigestLines(now);
+  } catch {
+    return ['Disaster runs could not be read.'];
+  }
+}

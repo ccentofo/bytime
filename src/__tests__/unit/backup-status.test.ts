@@ -305,9 +305,9 @@ describe('U9: the digest Backups lines', () => {
     expect(await backupDigest(NOW, { NODE_ENV: 'development' })).toEqual({ lines: [], news: false });
   });
 
-  it('on, with an empty control plane: both summary lines, not news', async () => {
+  it('on, with an empty control plane: both summary lines and the disaster line (3c §6.8), not news', async () => {
     expect(await backupDigest(NOW, { BACKUPS_EXPECTED: '1' })).toEqual({
-      lines: ['0 of 0 workspaces backed up in the last 26 h. Newest control-plane backup: none.', 'No restore test has completed yet.'],
+      lines: ['0 of 0 workspaces backed up in the last 26 h. Newest control-plane backup: none.', 'No restore test has completed yet.', 'Disaster runs in the last 7 days: none.'],
       news: false,
     });
   });

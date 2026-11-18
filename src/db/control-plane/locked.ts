@@ -71,7 +71,10 @@ export async function withTenantLock<T>(tenantId: string, fn: (tx: ControlTx) =>
   }
 }
 
-/** A plain (unlocked) transaction on the dedicated pool, for writes that are order-safe without the lock. */
+/**
+ * The dedicated pool itself, for writes that are order-safe without the lock. NOT a transaction: each statement commits on
+ * its own; callers that need several writes to land together open `db.transaction(...)` inside.
+ */
 export async function withLockedPool<T>(fn: (db: ControlDb) => Promise<T>): Promise<T> {
   return fn(getLockedDb());
 }

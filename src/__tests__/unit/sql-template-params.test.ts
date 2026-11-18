@@ -45,6 +45,7 @@ const ALLOWLIST: Array<{ file: string; expr: string; why: string }> = [
   { file: 'src/server/internal/labor-rates.ts', expr: 'chargeCodeId', why: 'typed `SQL` fragment parameter — the type forbids values (dated rates D3)' },
   { file: 'src/server/internal/cost-basis.ts', expr: 'CHARGE_CODE_CATEGORY', why: 'SQL fragment from chargeCodeLaborCategoryOnSql (dated rates D3)' },
   { file: 'src/lib/cron/heartbeat.ts', expr: 'name', why: 'the heartbeat cron name (a CronName string)' },
+  { file: 'src/lib/tenant/delete-tenant.ts', expr: 'first.id', why: "the tenant id (a UUID string) compared with an alert's detail->>'tenantId' (feature-plan-disaster-restore.md §6.8)" },
   { file: 'src/lib/signup/signals.ts', expr: '`${key}:last`', why: 'a signal_counters key (a string)' },
   { file: 'src/server/internal/team-period-status.ts', expr: 'tz', why: 'the workspace timezone NAME for AT TIME ZONE (a string; UX-2 §4.5.2)' },
   { file: 'src/server/internal/past-periods.ts', expr: 'userId', why: 'the session user id (a UUID string), bound as a parameter: an interpolated column renders unqualified in a single-table select (UX-3 fix round 2, M3)' },

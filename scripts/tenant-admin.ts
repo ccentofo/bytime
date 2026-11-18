@@ -77,6 +77,7 @@ const iso = (d: Date | null) => d?.toISOString() ?? '(none)';
 
 function printTenant(label: string, t: TenantRow) {
   console.log(`${label}:`);
+  console.log(`  id:                         ${t.id}`); // RESTORE.md runbook A.3: the Disaster restore button takes ids
   console.log(`  access mode now:            ${getTenantAccess(toLifecycleFacts(t), new Date())}`);
   console.log(`  status:                     ${t.status}${t.suspensionReason ? ` (${t.suspensionReason})` : ''}`);
   console.log(`  lifecycle_exempt:           ${t.lifecycleExempt ? 'YES (demo/internal)' : 'no'}`);

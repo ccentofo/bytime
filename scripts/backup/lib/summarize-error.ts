@@ -58,6 +58,9 @@ export function labelFor(err: unknown, stderr?: string): ErrorLabel {
   if (/ENOSPC|no space left on device|disk full/i.test(t)) return 'disk';
   if (/AccessDenied|\bForbidden\b|not authorized|permission denied/i.test(t)) return 'access-denied';
   if (/timed out|timeout|ETIMEDOUT|CONNECT_TIMEOUT|\b57014\b/i.test(t)) return 'timeout';
+  // Neon's proxy wording (feature-plan-disaster-restore.md §6.4.1): the compute or endpoint can't be reached. Best effort:
+  // the docs don't quote these strings; an unmatched one labels `other` and simply doesn't count as override evidence.
+  if (/couldn['’]t connect to compute node|endpoint (?:is|has been) disabled|endpoint not found|endpoint could not be found/i.test(t)) return 'connection-refused';
   if (/ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|getaddrinfo|connection refused|could not connect|could not translate host|CONNECTION_CLOSED|CONNECTION_ENDED|CONNECTION_DESTROYED|server closed the connection|\b57P01\b|\b08\d{3}\b/i.test(t)) return 'connection-refused';
   if (/\bKMS\b|KMSInvalid|KeyUnavailable|InvalidCiphertext|DisabledException|NotFoundException.*key|kms\./i.test(t)) return 'kms-error';
   if (e.$metadata !== undefined || /\bS3\b|NoSuchBucket|NoSuchKey|SlowDown|PreconditionFailed|EntityTooSmall|InvalidRequest/i.test(t)) return 's3-error';
