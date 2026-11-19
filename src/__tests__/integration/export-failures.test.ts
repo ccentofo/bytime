@@ -105,17 +105,25 @@ d('T5: a record error after the transaction started → the object is kept, outc
     const stop = new AbortController();
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
+    let runPid: number | null = null;
     const r = await w.run({ mode: 'deliver' }, {
       stopSignal: stop.signal,
-      hooks: { beforeCommit: async () => { stop.abort(); await gate; } },
+      hooks: {
+        beforeCommit: async (tx) => {
+          runPid = (await tx<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`)[0].pid; // the run's own backend
+          stop.abort();
+          await gate;
+        },
+      },
     });
     expect(r.exitCode).toBe(1);
     expect(r.line).toMatch(new RegExp(`^export outcome unknown: deliver, workspace ${w.tenant.id}, delivery [0-9a-f-]{36}$`));
     const id = r.line.split(' ').pop()!;
     release();
-    // The run closed its client (production: the process exits), so the open transaction ends without its COMMIT. Wait on
-    // the real state: no session of the control plane is still inside a transaction.
-    await waitUntil(async () => (await w.cp`SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND state LIKE 'idle in transaction%' AND pid <> pg_backend_pid()`).length === 0);
+    // The run closed its client (production: the process exits), so its open transaction ends without a COMMIT. Wait on
+    // the real state of THAT backend only: gone, or no longer inside a transaction (other files' sessions don't matter).
+    expect(runPid).not.toBeNull();
+    await waitUntil(async () => (await w.cp`SELECT 1 FROM pg_stat_activity WHERE pid = ${runPid} AND xact_start IS NOT NULL`).length === 0);
     expect((await rows(w)).deliveries.length).toBe(0); // it never committed: the sweep erases the orphan after a day
     expect([...w.bucket.objects.keys()].some((k) => k.startsWith(`delivery/${id}/`))).toBe(true);
     expect(w.bucket.deleted).toEqual([]);

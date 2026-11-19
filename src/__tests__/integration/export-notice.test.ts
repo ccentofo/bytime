@@ -63,7 +63,11 @@ d('T7: the export-ready notice through deliverNotice', () => {
     const call = resendState.batchCalls[0];
     expect(call.batchValidation).toBe('strict');
     expect(call.idempotencyKey).toBe(`${noticeId}:0`);
-    expect(call.messages.map((m) => m.to).sort()).toEqual([['billing@acme.test'], ['first@acme.test'], ['second@acme.test']]); // one message each (order not asserted)
+    expect(call.messages.every((m) => m.to.length === 1)).toBe(true); // one recipient per message
+    const stored = JSON.parse(decrypt(row.recipientsEncrypted)) as string[];
+    // The batch follows the delivery's STORED order (fixed once stored), so a retry under the same key is the identical batch.
+    expect(call.messages.map((m) => m.to[0])).toEqual(stored);
+    expect(call.messages.map((m) => m.to[0]).sort()).toEqual(['billing@acme.test', 'first@acme.test', 'second@acme.test']);
     for (const m of call.messages) {
       expect(m.bcc).toBeUndefined();
       expect(m.cc).toBeUndefined();
@@ -73,7 +77,7 @@ d('T7: the export-ready notice through deliverNotice', () => {
     expect(resendState.calls).toEqual([]); // never the single-send (D10) path
     const n = await notice(noticeId);
     expect(n.sentAt).not.toBeNull();
-    expect([...n.recipients].sort()).toEqual(['billing@acme.test', 'first@acme.test', 'second@acme.test']);
+    expect(n.recipients).toEqual(stored); // the proof of notice: the real list, in the batch's order
     const p = n.payload as Payload;
     expect(p.providerIds).toHaveLength(3);
     expect(n.providerMessageId).toBe(p.providerIds![0]);
@@ -162,6 +166,7 @@ d('T27: the batch outcome rules', () => {
     expect((await notice(noticeId)).lastError).toMatch(/expected 2 message ids, got 1/);
     expect(await deliverNotice(noticeId, new Date(Date.now() + 11 * MIN))).toBe('sent');
     expect(resendState.batchCalls.map((c) => c.idempotencyKey)).toEqual([`${noticeId}:0`, `${noticeId}:0`]);
+    expect(resendState.batchCalls[1].messages).toEqual(resendState.batchCalls[0].messages); // the identical batch under the same key
     expect(resendState.batchDelivered).toHaveLength(2); // one message per recipient, accepted once
   });
 
