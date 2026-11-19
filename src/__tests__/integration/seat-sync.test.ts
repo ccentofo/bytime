@@ -198,6 +198,16 @@ describe.skipIf(!cpReady)('seat sync (feature-plan-per-user-billing.md §6.4)', 
     expect(updatesOf(late.sub)).toEqual([]);
   });
 
+  // SWEEP-FINDINGS.md §5 P08: the quantity never goes below 1 (Math.max(1, …)), even with no billable users.
+  it('P08: zero active users in the renewal window → the quantity comes down to 1, never 0', async () => {
+    await setUsers(0, 2);
+    const { tenant, sub } = await subscriber({ quantity: 3, periodEnd: new Date(Date.now() + 12 * HOUR) });
+    await markSeatSyncDue(tenant.id);
+    await run([tenant.id]);
+    expect(updatesOf(sub)).toEqual([{ quantity: 1, proration: 'none' }]);
+    expect(quantityOf(sub)).toBe(1);
+  });
+
   it('S5: 3 → 4 users on annual → one call A with none, never always_invoice (no $0 invoice in the flat tier)', async () => {
     await setUsers(4);
     const { tenant, sub } = await subscriber({ quantity: 3, interval: 'year' });

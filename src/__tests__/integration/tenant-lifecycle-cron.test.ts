@@ -370,6 +370,17 @@ describe.skipIf(!cpReady)('tenant lifecycle cron (§4.4)', () => {
       expect(overdue.readyForDeletion!.overdue).toBe(true);
     });
 
+    // SWEEP-FINDINGS.md §5 A2-G10: DELETION_SLA_DAYS (7) is a strict "more than": not overdue at exactly D + 7 days.
+    it('A2-G10: OVERDUE only past D + 7 days (not at exactly D + 7 d; yes 1 ms later)', async () => {
+      const { t, E } = await endedTenant(daysFrom(NOW, -95), daysFrom(NOW, -1));
+      await insertNotice(t.id, 'deletion-notice', E, { sentAt: daysFrom(NOW, -30), providerMessageId: 'msg_dn' });
+      const D = (await getTenantRow(t.id)).deletionScheduledFor!;
+      const atSla = await runTenantLifecycle(t.id, daysFrom(D, 7));
+      expect(atSla.readyForDeletion).toEqual({ deletionScheduledFor: D, overdue: false });
+      const past = await runTenantLifecycle(t.id, new Date(daysFrom(D, 7).getTime() + 1));
+      expect(past.readyForDeletion!.overdue).toBe(true);
+    });
+
     it('a deletion notice for an OLD anchor never makes the workspace ready', async () => {
       const { t } = await endedTenant(daysFrom(NOW, -95), daysFrom(NOW, -1));
       await insertNotice(t.id, 'deletion-notice', daysFrom(NOW, -400), { sentAt: daysFrom(NOW, -30), providerMessageId: 'msg_old' });
