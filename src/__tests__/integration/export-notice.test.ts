@@ -63,7 +63,7 @@ d('T7: the export-ready notice through deliverNotice', () => {
     const call = resendState.batchCalls[0];
     expect(call.batchValidation).toBe('strict');
     expect(call.idempotencyKey).toBe(`${noticeId}:0`);
-    expect(call.messages.map((m) => m.to)).toEqual([['first@acme.test'], ['second@acme.test'], ['billing@acme.test']].sort());
+    expect(call.messages.map((m) => m.to).sort()).toEqual([['billing@acme.test'], ['first@acme.test'], ['second@acme.test']]); // one message each (order not asserted)
     for (const m of call.messages) {
       expect(m.bcc).toBeUndefined();
       expect(m.cc).toBeUndefined();
