@@ -47,7 +47,14 @@ async function throwawayDb(): Promise<{ name: string; url: string }> {
 const dbExists = (name: string) => admin(async (sql) => (await sql`SELECT 1 FROM pg_database WHERE datname = ${name}`).length > 0);
 const run = (slug: string, o: Partial<DeleteTenantOptions> = {}) => deleteTenant({ slug, apply: true, actor: 'test', log: () => {}, ...o });
 
-describe.skipIf(!isLocal)('deleteTenant (§5.3) — throwaway local databases only', () => {
+// Every DROP DATABASE (step 5, and afterAll's clean-up) forces a server-wide checkpoint and waits for it (pg 16), so
+// its cost is every dirty buffer on the shared local server, not this test's own work. Measured under a 12-loop CPU
+// hog with other integration files: one checkpoint took 32 s and another 57 s (log_checkpoints, 2026-11-19), against
+// well under 1 s unloaded. The default 30 s timeout made the dropping tests flaky under load; the work is real, so the
+// suite allows it time (SWEEP-FIX-BILLING-DEV-REPORT.md).
+const DROP_TIMEOUT_MS = 120_000;
+
+describe.skipIf(!isLocal)('deleteTenant (§5.3) — throwaway local databases only', { timeout: DROP_TIMEOUT_MS }, () => {
   const NOW = new Date();
   let db: { name: string; url: string };
 
@@ -70,7 +77,7 @@ describe.skipIf(!isLocal)('deleteTenant (§5.3) — throwaway local databases on
   });
   afterAll(async () => {
     for (const name of created) await admin((sql) => sql.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`));
-  });
+  }, 5 * DROP_TIMEOUT_MS); // one forced checkpoint per database still left (refusals and dry runs keep theirs)
 
   describe('R8 (feature-plan-disaster-restore.md §6.8): a copy of the data may still exist in Neon', () => {
     for (const kind of ['rebuild-original-returned', 'rebuild-orphan-project']) {
