@@ -161,7 +161,8 @@ can take 60 s to show in the app): `show <slug>`, `extend-trial <slug> <days>`, 
 `suspend <slug> --reason "…"` (policy breach: hold screen for everyone, export blocked, admins emailed),
 `unsuspend <slug>`, `set-policy-export <slug> on|off --reason "…"` (F5: allow/block export for one policy hold),
 `set-exempt <slug> on|off --reason "…"`,
-`force-notice-sent <slug> <kind> --reason "…"`, `export-destroyed <slug> [--legal-hold "…"]`,
+`force-notice-sent <slug> <kind> --reason "…"`, `export-revoke <delivery-id>` (stop a sent export link; see
+[`TENANT-DELETION.md`](TENANT-DELETION.md) "Final export"),
 `resolve-alert <id> --note "…"`, `audit-note <slug> --note "…"` (append a note to the audit trail — used by
 [`RESTORE.md`](RESTORE.md)), `waitlist list` and `waitlist provision <signup-id>` (below),
 `reopen-import-window <slug> --days <1-30> --reason "…"` (`feature-plan-certified-outputs.md` C1: lets one workspace
@@ -884,7 +885,11 @@ this order**. Steps 6–11 are also the **staging rehearsal**, a production-read
      (exactly one policy: `main`, type `branch`).
 
    **3b may merge only after this check.** With `AWS_BACKUPS_ENABLED` unset, the deploy workflow does nothing.
-4. **Bootstrap stack:** AWS console (your admin login, us-east-1) → CloudFormation → Create stack → upload
+4. **Bootstrap stack:** first give the lead your **Vercel team slug** and **project name** (feature-plan-cloud-export.md
+   §6.1; FOUNDER-ACCOUNTS-SETUP Part 6c). Until then `ops/aws/bootstrap.yml`, `ops/aws/backup-stack.yml` and
+   `scripts/backup/lib/expected-policies.ts` hold the fail-closed placeholders `vercel-team-slug-pending` /
+   `vercel-project-pending`; the lead replaces them in all three (U6 checks they're equal) and that change is merged
+   first. Then: AWS console (your admin login, us-east-1) → CloudFormation → Create stack → upload
    `ops/aws/bootstrap.yml` → acknowledge IAM → Submit. Copy its four outputs into `aws-backups` **environment
    secrets**: `AWS_DEPLOY_ROLE_ARN`, `AWS_CFN_EXEC_ROLE_ARN`, `AWS_BACKUP_REPOSITORY_URI`, `AWS_ARTIFACTS_BUCKET`.
 5. **Deploy the app with this item's migration** (`0011_database_backups`) to staging and production (Phases 12.1
@@ -1044,6 +1049,30 @@ the whole Neon account is runbook C. With the deploy that merges this item:
 4. **If production backups already existed** under a hex `<cp>` prefix before this deploy: they expire within 25 days,
    and new ones go under `prod` from the next nightly run. Until then, the restore test may report `FAIL:list` for the
    control plane for a day, and a workspace rebuild can use only backups taken after the deploy. Nothing to do.
+
+### Phase 13d — The Export workspace button and the download link (you + the lead; feature-plan-cloud-export.md §12)
+
+The founder never downloads customer data: a sent export is a cloud job, and the customer's link is on cadenzpoint.com.
+With the deploy that merges this item:
+
+1. **If the bootstrap stack already exists** (13b step 4 ran before this item): give the lead the Vercel team slug and
+   project name; once the placeholders are replaced and merged, update the bootstrap stack in the console
+   (CloudFormation → `cadenzpoint-backup-bootstrap` → Update → replace the template with the new `ops/aws/bootstrap.yml`).
+   It adds the Vercel OIDC provider and lets the deploy role manage the exports bucket and its key alias.
+2. **Approve the pending Backup system deploy.** It adds the exports bucket and key, the export and sweep tasks, the
+   hourly sweep, the export emails, and the `ExportModes`, `ExportDownloadRoleArn` and `ExportBucket` outputs.
+3. **Vercel → team settings → OIDC Federation:** issuer mode **Team**.
+4. **Vercel production env:** `EXPORT_DOWNLOAD_ROLE_ARN` = the stack output `ExportDownloadRoleArn`; `EXPORT_BUCKET` =
+   the stack output `ExportBucket` (CloudFormation → `cadenzpoint-backup` → Outputs). Redeploy production.
+5. **One test delivery:** Actions → **Export workspace** → mode `deliver`, target = the `rehearsal` workspace id, extra =
+   your own address (typed in both address boxes), reason "setup test", confirm `deliver` → approve. Expect the
+   "export delivered" email, then the export email.
+6. Open the export email **in a private window** → **Prepare download** → **Download**, and check the ZIP opens.
+7. **Revoke it:** `npm run tenant:admin -- export-revoke <delivery-id> --yes` (the id is in the "export delivered" email).
+   The page then says the link has expired; the hourly sweep erases the copy.
+
+If the page says "Downloads aren't available right now", you'll also get an `export-download-misconfigured` alert email:
+check steps 3 and 4 (and the template constants from step 1).
 
 ---
 
