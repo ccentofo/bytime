@@ -9,6 +9,8 @@ import { CURRENT_CLASS_NOTE, CURRENT_RATES_NOTE } from '@/lib/cost-labels';
 import { escapeCsvField } from '@/lib/csv/escape';
 import { noHours, noHoursMessage } from '@/lib/reports/empty-range';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // feature-plan-excel-cost-report.md §6.3 (Q5): a UTF-8 byte-order mark so Excel opens the file as UTF-8 ("—" not "â€”"),
 // as the workspace export does. Written as an escape so it's visible.
 const BOM = '\uFEFF';
@@ -27,6 +29,10 @@ export async function GET(request: NextRequest) {
 
   if (!startDate || !endDate || !isCalendarDate(startDate) || !isCalendarDate(endDate)) {
     return NextResponse.json({ error: 'Missing or invalid startDate/endDate (expected YYYY-MM-DD)' }, { status: 400 });
+  }
+  // SWEEP-FINDINGS.md A3-D5: a malformed contractId is a 400 (as /api/v1/costs), not a database error (500).
+  if (contractId && !UUID_RE.test(contractId)) {
+    return NextResponse.json({ error: 'contractId must be a valid UUID.' }, { status: 400 });
   }
 
   // Generation is inside the try too (feature-plan-ux-page-fixes.md C15): a failure returns the JSON 500.

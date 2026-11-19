@@ -7,7 +7,8 @@ export const ADMIN_CHANGE_ACTIONS = {
   /** Computed by recomputeSelfApproval; entity_id = the admin. */
   self_approval: ['enabled', 'disabled'],
   charge_code: ['deactivated', 'reactivated'],
-  workspace_settings: ['workweek_start_day_changed'],
+  /** entity_id = all zeros (the single settings row). SWEEP-FINDINGS.md A3-D6: time zone changes too. */
+  workspace_settings: ['workweek_start_day_changed', 'timezone_changed'],
   /** entity_id = the charge code. */
   charge_code_labor_category: ['category_change_added', 'category_corrected', 'category_change_removed'],
   /** entity_id = the user. R5: role, active state, overtime status, credentials and creation are logged too. */
@@ -16,6 +17,8 @@ export const ADMIN_CHANGE_ACTIONS = {
   labor_category_rate: ['rate_change_added', 'rate_corrected', 'rate_change_removed'],
   /** feature-plan-approval-scope.md §4.2: entity_id = the approval_scopes row; values `{ supervisorId, clinId }`. */
   approval_scope: ['granted', 'removed', 'kept'],
+  /** SWEEP-FINDINGS.md A3-D9: charge-code access; entity_id = the person; values `{ chargeCodeId }`. */
+  user_charge_code: ['assigned', 'removed'],
 } as const;
 
 /**

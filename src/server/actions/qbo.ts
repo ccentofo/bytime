@@ -6,7 +6,7 @@ import { eq, and } from 'drizzle-orm';
 import { requireAdmin, requireAdminFresh } from '@/lib/session';
 import { ensureValidToken, fetchQBOEmployees, fetchQBOCustomers, fetchQBOServiceItems, fetchQBOVendors, fetchQBOClasses } from '@/lib/integrations/connectors/qbo-api';
 import { executeSyncOperation } from '@/lib/integrations/sync-engine';
-import { createCostClassInternal, createChargeCodeInternal } from '@/server/internal/charge-codes';
+import { createCostClassInternal, createChargeCodeInternal, validateChargeCodeInput, validName } from '@/server/internal/charge-codes';
 import type { CalendarDate } from '@/lib/calendar-date';
 import { validateUUID } from '@/lib/validation';
 import { safeErrorMessage } from '@/server/internal/import-errors';
@@ -21,6 +21,22 @@ import { userAction } from '@/lib/action-result';
  * ensureValidToken (qbo-api.ts, launch hardening H6: the integration-token lock plus a re-read). The 4 queries then run with
  * Promise.allSettled: one failed list returns its own (safe) message and the others still load.
  */
+/**
+ * SWEEP-FINDINGS.md A3-D2 (lead, Q1): a refused QuickBooks import item's message names the item, e.g.
+ * `"Senior Engineer": Choose an active CLIN.`
+ */
+async function withItemName<T>(name: unknown, fn: () => T | Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof UserFacingError) {
+      const label = typeof name === 'string' && name.trim() ? name.trim() : 'An item';
+      throw new UserFacingError(`"${label}": ${err.message}`, err.code);
+    }
+    throw err;
+  }
+}
+
 type QboList<T> = { ok: true; data: T[] } | { ok: false; error: string };
 
 function settle<T>(result: PromiseSettledResult<T[]>): QboList<T> {
@@ -155,39 +171,45 @@ export async function fetchQBOClassesForMapping(connectionId: string) {
 export async function importQboClasses(connectionId: string, selected: Array<{ qboId: string; name: string }>) {
   return userAction(async () => {
     await requireAdminFresh();
+    const connId = validateUUID(connectionId, 'Connection');
+    if (!Array.isArray(selected)) throw new UserFacingError('Choose the classes to import.');
     const db = await getDbForWrite();
-    let created = 0;
-    let updated = 0;
+    // SWEEP-FINDINGS.md A3-D2: every name validated, and the whole import in ONE transaction (all or nothing).
+    return db.transaction(async (tx) => {
+      let created = 0;
+      let updated = 0;
 
-    for (const item of selected) {
-      const existing = await db.select({ id: integrationEntityMappings.id, bytimeEntityId: integrationEntityMappings.bytimeEntityId })
-        .from(integrationEntityMappings)
-        .where(and(
-          eq(integrationEntityMappings.connectionId, connectionId),
-          eq(integrationEntityMappings.entityType, 'class'),
-          eq(integrationEntityMappings.externalEntityId, item.qboId),
-        )).limit(1);
+      for (const item of selected) {
+        const name = await withItemName(item?.name, () => validName(item?.name));
+        const existing = await tx.select({ id: integrationEntityMappings.id, bytimeEntityId: integrationEntityMappings.bytimeEntityId })
+          .from(integrationEntityMappings)
+          .where(and(
+            eq(integrationEntityMappings.connectionId, connId),
+            eq(integrationEntityMappings.entityType, 'class'),
+            eq(integrationEntityMappings.externalEntityId, item.qboId),
+          )).limit(1);
 
-      if (existing.length > 0) {
-        updated++;
-        continue; // already imported
+        if (existing.length > 0) {
+          updated++;
+          continue; // already imported
+        }
+
+        // Create the cost class (idempotent via UNIQUE constraint on name)
+        const costClass = await createCostClassInternal(tx, name);
+        if (!costClass) continue;
+
+        await tx.insert(integrationEntityMappings).values({
+          connectionId: connId, entityType: 'class',
+          bytimeEntityId: costClass.id,
+          bytimeEntityName: costClass.name,
+          externalEntityId: item.qboId,
+          externalEntityName: item.name,
+        });
+        created++;
       }
 
-      // Create the cost class (idempotent via UNIQUE constraint on name)
-      const costClass = await createCostClassInternal(db, item.name);
-      if (!costClass) continue;
-
-      await db.insert(integrationEntityMappings).values({
-        connectionId, entityType: 'class',
-        bytimeEntityId: costClass.id,
-        bytimeEntityName: costClass.name,
-        externalEntityId: item.qboId,
-        externalEntityName: item.name,
-      });
-      created++;
-    }
-
-    return { created, updated };
+      return { created, updated };
+    });
   });
 }
 
@@ -207,45 +229,57 @@ export async function importQboChargeCodes(
 ) {
   return userAction(async () => {
     await requireAdminFresh();
+    const connId = validateUUID(connectionId, 'Connection');
+    if (!Array.isArray(items)) throw new UserFacingError('Choose the charge codes to import.');
     const db = await getDbForWrite();
-    let created = 0;
-    let updated = 0;
+    // SWEEP-FINDINGS.md A3-D2: each item through the same rules as createChargeCode (validateChargeCodeInput: lengths,
+    // an active CLIN on an active contract, the work location), and the whole import in ONE transaction: the first
+    // refused item, or a duplicate code, writes nothing at all. Errors name the QuickBooks item.
+    return db.transaction(async (tx) => {
+      let created = 0;
+      let updated = 0;
 
-    for (const item of items) {
-      if (!item.clinId) throw new UserFacingError(`Charge code "${item.name}" requires a CLIN selection.`);
+      for (const item of items) {
+        if (!item?.clinId) throw new UserFacingError(`Charge code "${item?.name}" requires a CLIN selection.`);
 
-      const existing = await db.select({ id: integrationEntityMappings.id, bytimeEntityId: integrationEntityMappings.bytimeEntityId })
-        .from(integrationEntityMappings)
-        .where(and(
-          eq(integrationEntityMappings.connectionId, connectionId),
-          eq(integrationEntityMappings.entityType, 'charge_code'),
-          eq(integrationEntityMappings.externalEntityId, item.qboId),
-        )).limit(1);
+        const existing = await tx.select({ id: integrationEntityMappings.id, bytimeEntityId: integrationEntityMappings.bytimeEntityId })
+          .from(integrationEntityMappings)
+          .where(and(
+            eq(integrationEntityMappings.connectionId, connId),
+            eq(integrationEntityMappings.entityType, 'charge_code'),
+            eq(integrationEntityMappings.externalEntityId, item.qboId),
+          )).limit(1);
 
-      if (existing.length > 0) {
-        // Already imported — idempotent skip (could update name here if desired)
-        updated++;
-        continue;
+        if (existing.length > 0) {
+          // Already imported — idempotent skip (could update name here if desired)
+          updated++;
+          continue;
+        }
+
+        // Use QBO item name as both code and human name (admin can edit later)
+        const input = await withItemName(item.name, async () => {
+          const code = typeof item.name === 'string' ? item.name.replace(/\s+/g, '-').substring(0, 100) : item.name;
+          return validateChargeCodeInput(tx, {
+            code, name: item.name,
+            clinId: validateUUID(item.clinId, 'CLIN'),
+            classId: item.classId === undefined || item.classId === null || item.classId === '' ? undefined : validateUUID(item.classId, 'Class'),
+            workLocation: item.workLocation,
+          });
+        });
+        const chargeCode = await createChargeCodeInternal(tx, input);
+        if (!chargeCode) continue;
+
+        await tx.insert(integrationEntityMappings).values({
+          connectionId: connId, entityType: 'charge_code',
+          bytimeEntityId: chargeCode.id,
+          bytimeEntityName: chargeCode.name,
+          externalEntityId: item.qboId,
+          externalEntityName: item.name,
+        });
+        created++;
       }
 
-      // Use QBO item name as both code and human name (admin can edit later)
-      const code = item.name.replace(/\s+/g, '-').substring(0, 100);
-      const chargeCode = await createChargeCodeInternal(db, {
-        code, name: item.name, clinId: item.clinId,
-        classId: item.classId ?? undefined, workLocation: item.workLocation,
-      });
-      if (!chargeCode) continue;
-
-      await db.insert(integrationEntityMappings).values({
-        connectionId, entityType: 'charge_code',
-        bytimeEntityId: chargeCode.id,
-        bytimeEntityName: chargeCode.name,
-        externalEntityId: item.qboId,
-        externalEntityName: item.name,
-      });
-      created++;
-    }
-
-    return { created, updated };
+      return { created, updated };
+    });
   });
 }

@@ -27,17 +27,28 @@ export async function getWorkspaceTimezoneSetting(): Promise<string> {
  */
 export async function updateWorkspaceTimezone(timezone: string): Promise<ActionResult<string>> {
   return userAction(async () => {
-    await requireAdminFresh();
+    const actor = await requireAdminFresh();
     const canonical = canonicalTimeZone(timezone);
     if (!canonical) {
       throw new UserFacingError('Choose a timezone from the list (an IANA name such as America/New_York).');
     }
     const db = await getDbForWrite();
-    // Upsert: an UPDATE alone would silently do nothing if the settings row were missing.
-    await db.insert(workspaceSettings)
-      .values({ id: 1, timezone: canonical, updatedAt: new Date() })
-      .onConflictDoUpdate({ target: workspaceSettings.id, set: { timezone: canonical, updatedAt: new Date() } });
-    return canonical;
+    // SWEEP-FINDINGS.md A3-D6 (PO decision 4): every change is recorded in admin_change_log (old → new), in the same
+    // transaction, as the workweek change is. No change, no write and no log row.
+    return db.transaction(async (tx) => {
+      const [current] = await tx.select({ timezone: workspaceSettings.timezone }).from(workspaceSettings).where(eq(workspaceSettings.id, 1)).for('update');
+      const old = current?.timezone ?? null;
+      if (old === canonical) return canonical;
+      // Upsert: an UPDATE alone would silently do nothing if the settings row were missing.
+      await tx.insert(workspaceSettings)
+        .values({ id: 1, timezone: canonical, updatedAt: new Date() })
+        .onConflictDoUpdate({ target: workspaceSettings.id, set: { timezone: canonical, updatedAt: new Date() } });
+      await logAdminChange(tx, {
+        actorId: actor.id, entity: 'workspace_settings', entityId: WORKSPACE_SETTINGS_ENTITY_ID, action: 'timezone_changed',
+        oldValue: { timezone: old }, newValue: { timezone: canonical },
+      });
+      return canonical;
+    });
   });
 }
 

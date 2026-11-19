@@ -345,9 +345,9 @@ export const EXPORT_TABLES: ExportTableConfig[] = [
   table('admin_change_log', adminChangeLog, [
     { key: 'id', header: 'id' },
     { key: 'actorId', header: 'actor_id', description: 'Who made the change (users.csv id).' },
-    { key: 'entity', header: 'entity', description: 'What was changed: charge_code, user, self_approval, workspace_settings.' },
+    { key: 'entity', header: 'entity', description: 'What was changed: charge_code, user, self_approval, workspace_settings, user_charge_code (charge-code access; entity_id is the person).' },
     { key: 'entityId', header: 'entity_id', description: 'Which record (its id in the matching file; all zeros for workspace_settings).' },
-    { key: 'action', header: 'action', description: 'The change, e.g. labor_category_changed, deactivated, reactivated, approver_changed, enabled, disabled, workweek_start_day_changed.' },
+    { key: 'action', header: 'action', description: 'The change, e.g. labor_category_changed, deactivated, reactivated, approver_changed, enabled, disabled, workweek_start_day_changed, timezone_changed, assigned, removed.' },
     { key: 'oldValue', header: 'old_value', description: 'The value before the change (JSON).' },
     { key: 'newValue', header: 'new_value', description: 'The value after the change (JSON).' },
     { key: 'createdAt', header: 'created_at', description: 'When the change was made (UTC). This file is append-only.' },

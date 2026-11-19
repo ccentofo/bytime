@@ -90,7 +90,7 @@ Then run `bash /tmp/bk-check.sh`. **Expect:** the usage line.
 4. **Expect:** the old sentence `Deleted data may remain in backups for up to 30 days.` appears nowhere on the page.
 
 ## B. The backup command, locally
-1. Run `npm run backup:bundle`, then `ls -la build/backup/backup.cjs`. **Expect** a file of about 3.5 MB.
+1. Run `npm run backup:bundle`, then `ls -la build/backup/backup.cjs`. **Expect** a file of about 4.6 MB (it grew with 3c, 3c-2 and 3d).
 2. Run `node build/backup/backup.cjs --self-check`. **Expect:** `fatal: pg_dump could not be run (check BACKUP_PG_DUMP_BIN)` (the image's default path doesn't exist on a Mac).
 3. Run the self-check with the Mac's pg 16 tools:
 ```bash
@@ -114,7 +114,7 @@ Run each step and compare.
 
 | Step | Expect |
 |---|---|
-| `bash /tmp/bk-check.sh digest BACKUPS_EXPECTED=1` | `lines: ["N of M workspaces backed up in the last 26 h. Newest control-plane backup: none.","No restore test has completed yet."] news: false` |
+| `bash /tmp/bk-check.sh digest BACKUPS_EXPECTED=1` | `lines: ["N of M workspaces backed up in the last 26 h. Newest control-plane backup: none.","No restore test has completed yet.","Disaster runs in the last 7 days: none."] news: false` |
 | `bash /tmp/bk-check.sh digest BACKUPS_EXPECTED=0` | `lines: ["Backup monitoring is off on this deployment (BACKUPS_EXPECTED=0)."] news: false` |
 | `bash /tmp/bk-check.sh digest BACKUPS_EXPECTED=0 APP_ROOT_DOMAIN=cadenzpoint.com` | the same line, `news: true` (counts on the production domain) |
 | `bash /tmp/bk-check.sh digest NODE_ENV=production` | `lines: ["Backup monitoring is not configured (BACKUPS_EXPECTED)."] news: true` |

@@ -5,11 +5,10 @@ import { timesheetEntries, timesheetPeriods, users } from '@/db/schema';
 import { addDays, type CalendarDate } from '@/lib/calendar-date';
 import { LATEST_REVISION } from './cost-basis';
 
-/**
- * Who is expected to submit (UX2-Q1 default, pending the product owner): active employees and supervisors, plus any
- * admin who recorded hours or has a period row for that period. Change it here — one line.
- */
-export const EXPECTED_SUBMITTER_ROLES = ['employee', 'supervisor'] as const;
+import { EXPECTED_SUBMITTER_ROLES } from '@/lib/submitter-roles';
+
+/** Who is expected to submit: defined once in src/lib/submitter-roles.ts (client-safe), re-exported for server readers. */
+export { EXPECTED_SUBMITTER_ROLES };
 
 export type TeamBucket = 'submitted' | 'returned' | 'inProgress' | 'notStarted';
 export type TeamPeriodStatus = Record<TeamBucket, { count: number; names: string[] }>;

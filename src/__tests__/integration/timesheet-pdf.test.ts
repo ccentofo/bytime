@@ -92,4 +92,11 @@ describe('timesheet PDF data (certified-outputs C5)', () => {
     expect(first.approvedBy).toBe('Ann Admin');
     expect(await getTimesheetReportData(emp.id, start)).toEqual(first);
   });
+
+  it('SWEEP-FINDINGS.md A3-G8: a rejected (returned) period has no approval line and no approver on the PDF', async () => {
+    await db().insert(schema.timesheetPeriods).values({ userId: emp.id, periodStart: start, status: 'rejected', submittedAt: new Date('2026-01-10T15:00:00Z'), reviewedBy: admin.id, reviewedAt: new Date('2026-01-11T15:00:00Z') });
+    const data = (await getTimesheetReportData(emp.id, start))!;
+    expect(data.approvalLine).toBeNull();
+    expect(data.approvedBy).toBeNull();
+  });
 });

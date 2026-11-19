@@ -60,12 +60,16 @@ describe('static: no admin_change_log insert outside the writer', () => {
   it('the certified-outputs writers and the dated-rates actions use it (same transaction client)', () => {
     const uses = (rel: string) => (readFileSync(path.join(ROOT, rel), 'utf8').match(/await logAdminChange\(tx, \{/g) ?? []).length;
     // dated rates D3: the labor-category log moved from updateChargeCode into the category actions.
-    expect(uses('src/server/actions/charge-codes.ts')).toBe(2);
+    // SWEEP-FINDINGS.md A3-D9: + unassignChargeCodeFromUser's removal.
+    expect(uses('src/server/actions/charge-codes.ts')).toBe(3);
     expect(uses('src/server/actions/labor-category-rates.ts')).toBe(3);
     expect(uses('src/server/actions/charge-code-categories.ts')).toBe(3);
     // UX-4c R5: + updateUser (role / active / overtime) and createUserWithPassword (created, approver).
     expect(uses('src/server/actions/users.ts')).toBe(6);
-    expect(uses('src/server/actions/workspace-settings.ts')).toBe(1);
+    // SWEEP-FINDINGS.md A3-D6: + the time zone change.
+    expect(uses('src/server/actions/workspace-settings.ts')).toBe(2);
+    // A3-D9: the assignment log is written by the shared helper with its caller's transaction client (named `db` there).
+    expect(readFileSync(path.join(ROOT, 'src/server/internal/charge-codes.ts'), 'utf8')).toMatch(/await logAdminChange\(db, \{/);
     expect(readFileSync(path.join(ROOT, 'src/server/internal/approval-rules.ts'), 'utf8')).toMatch(/const logId = await logAdminChange\(tx, \{/);
   });
 });

@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getDb } from '@/db';
-import { timesheetPeriods, users } from '@/db/schema';
+import { timesheetPeriods, users, periodStatusEnum } from '@/db/schema';
 import { eq, and, gte, lt } from 'drizzle-orm';
 import { handleApiRequest, apiStreamResponse, apiError } from '@/lib/api-auth';
 import { addDays, isCalendarDate } from '@/lib/calendar-date';
@@ -32,6 +32,11 @@ async function listPeriods(request: NextRequest): Promise<Response> {
   if (endDate && !isCalendarDate(endDate)) {
     return apiError('endDate must be a valid date (YYYY-MM-DD).');
   }
+  // SWEEP-FINDINGS.md A3-D3: an unknown status is a 400, not a database enum error (500).
+  const statuses = periodStatusEnum.enumValues;
+  if (status && !(statuses as readonly string[]).includes(status)) {
+    return apiError(`status must be one of: ${statuses.join(', ')}.`);
+  }
 
   const conditions = [];
 
@@ -42,7 +47,7 @@ async function listPeriods(request: NextRequest): Promise<Response> {
     conditions.push(lt(timesheetPeriods.periodStart, addDays(endDate, 1)));
   }
   if (status) {
-    conditions.push(eq(timesheetPeriods.status, status as any));
+    conditions.push(eq(timesheetPeriods.status, status as (typeof statuses)[number]));
   }
 
   const rows = await db

@@ -114,3 +114,35 @@ describe('empty ranges (R4, R-3 companion)', () => {
     expect(await res.json()).toEqual({ error: 'No hours recorded between Dec 16, 2025 and Jan 15, 2026.' });
   });
 });
+
+describe('a malformed contractId → 400 before any query (SWEEP-FINDINGS.md A3-D5)', () => {
+  const base = 'startDate=2026-10-01&endDate=2026-10-31';
+  const UUID = '6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b';
+  const BAD = { error: 'contractId must be a valid UUID.' };
+
+  it.each([
+    ['the cost CSV', 'cost-report-csv', ''],
+    ['the detailed cost Excel', 'cost-report-xlsx', ''],
+    ['the summary Excel (one rule for both formats)', 'cost-report-xlsx', '&format=summary'],
+  ])('%s', async (_label, route, extra) => {
+    const { getDetailedCostReport, getEmployeeSummaryReport } = await import('@/server/actions/reports');
+    vi.mocked(getDetailedCostReport).mockClear();
+    vi.mocked(getEmployeeSummaryReport).mockClear();
+    const get = route === 'cost-report-csv' ? csvGET : xlsxGET;
+    for (const bad of ['nope', "x'%20OR%201=1", `${UUID}0`]) {
+      const res = await get(new NextRequest(`http://localhost/api/reports/${route}?${base}&contractId=${bad}${extra}`));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual(BAD);
+    }
+    expect(getDetailedCostReport).not.toHaveBeenCalled();
+    expect(getEmployeeSummaryReport).not.toHaveBeenCalled();
+  });
+
+  it('a valid contractId reaches the detailed query (CSV and Excel)', async () => {
+    const { getDetailedCostReport } = await import('@/server/actions/reports');
+    vi.mocked(getDetailedCostReport).mockClear();
+    expect((await csvGET(new NextRequest(`http://localhost/api/reports/cost-report-csv?${base}&contractId=${UUID}`))).status).toBe(200);
+    expect((await xlsxGET(new NextRequest(`http://localhost/api/reports/cost-report-xlsx?${base}&contractId=${UUID}`))).status).toBe(200);
+    expect(vi.mocked(getDetailedCostReport).mock.calls).toEqual([['2026-10-01', '2026-10-31', UUID], ['2026-10-01', '2026-10-31', UUID]]);
+  });
+});

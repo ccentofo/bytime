@@ -295,3 +295,20 @@ describe('ruling Q8 email', () => {
     expect(notify).toMatch(/only: item\.recipients, \.\.\.\(item\.designeeLost \? \{ note: DESIGNEE_LOST_NOTE \} : \{\}\)/);
   });
 });
+
+describe('an inactive approver (SWEEP-FINDINGS.md A3-G9)', () => {
+  it('an inactive admin and an inactive in-scope supervisor can\'t approve, and aren\'t eligible approvers', () => {
+    const f = facts(
+      { id: 'admGone', role: 'admin', isActive: false },
+      { id: 'admOn', role: 'admin' },
+      { id: 'supGone', role: 'supervisor', clins: ['c1'], isActive: false },
+      { id: 'supOn', role: 'supervisor', clins: ['c1'] },
+      { id: 'emp', role: 'employee', clins: ['c1'] },
+    );
+    expect(canApprove(f, 'admGone', 'emp')).toBe(false);
+    expect(canApprove(f, 'supGone', 'emp')).toBe(false);
+    expect(canApprove(f, 'admOn', 'emp')).toBe(true);
+    expect(canApprove(f, 'supOn', 'emp')).toBe(true);
+    expect(eligibleApprovers(f, 'emp').sort()).toEqual(['admOn', 'supOn']);
+  });
+});

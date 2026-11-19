@@ -24,7 +24,8 @@ vi.mock('@/lib/session', () => {
   const admin = async () => ({ id: 'admin-1', email: 'a@x', fullName: 'Ann', role: 'admin' });
   return { AuthorizationError, requireSession: admin, requireAdmin: admin, requireAdminFresh: admin };
 });
-vi.mock('@/server/internal/workspace-settings', () => ({ getWorkspaceToday: async () => '2026-01-15' }));
+const today = vi.hoisted(() => ({ value: '2026-01-15' }));
+vi.mock('@/server/internal/workspace-settings', () => ({ getWorkspaceToday: async () => today.value }));
 
 import * as dbModule from '@/db';
 import { payPeriodConfig, timesheetEntries } from '@/db/schema';
@@ -33,7 +34,7 @@ import { updatePayPeriodConfig } from '@/server/actions/pay-period-config';
 import type { CalendarDate } from '@/lib/calendar-date';
 
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
-beforeEach(() => db.reset());
+beforeEach(() => { db.reset(); today.value = '2026-01-15'; });
 
 const D = (s: string) => s as CalendarDate;
 const CURRENT = { periodType: 'semimonthly' as const, anchorDate: D('2026-01-01'), weekStartDay: 1 };
@@ -122,5 +123,23 @@ describe('updatePayPeriodConfig (C7)', () => {
     expect(await updatePayPeriodConfig({ ...BIWEEKLY, effectiveFrom: null }))
       .toEqual({ ok: false, code: 'validation', error: 'Timesheets already exist, so a schedule change must start on a future date.' });
     expect(db.ops.indexOf('execute')).toBe(0);
+  });
+});
+
+describe('updatePayPeriodConfig: effectiveFrom of today (SWEEP-FINDINGS.md A3-G13)', () => {
+  it('today, even on a valid boundary of both schedules, is refused as current; nothing written', async () => {
+    today.value = '2026-02-16'; // a boundary of the semimonthly and the biweekly (anchored 2025-01-06) schedules
+    script(null);
+    expect(await updatePayPeriodConfig({ ...BIWEEKLY, effectiveFrom: D('2026-02-16') })).toMatchObject({
+      ok: false, error: 'Cannot set effective_from to a past or current period. Changes are future-effective only.',
+    });
+    expect(writes()).toEqual([]);
+  });
+
+  it('the next boundary after today is accepted', async () => {
+    today.value = '2026-02-15';
+    script(null);
+    db.onReturning('insert', payPeriodConfig, [{ id: 'new' }]);
+    expect(await updatePayPeriodConfig({ ...BIWEEKLY, effectiveFrom: D('2026-02-16') })).toMatchObject({ ok: true });
   });
 });

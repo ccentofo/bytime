@@ -99,6 +99,11 @@ describe.skipIf(!SERVER_URL)('S21: the ordered locks', () => {
       const logs: string[] = [];
       const migrated: string[] = [];
       let controlMigrated = false;
+      // SWEEP-FINDINGS.md T-1: a virtual clock for the backup-wait handshake (the existing lock.now / lock.sleep seam).
+      // It advances only when the handshake sleeps, so connection setup on a loaded machine never eats the wait budget:
+      // "Waiting…" is always logged when the backup lock is held, and the wait takes exactly waitMaxMs / pollMs polls.
+      let clock = 0;
+      const lockSleep = async (ms: number) => { clock += ms; await sleep(5); };
       const d: MigrateAllDeps = {
         controlUrl: cp.url,
         log: (l) => logs.push(l),
@@ -114,7 +119,7 @@ describe.skipIf(!SERVER_URL)('S21: the ordered locks', () => {
           confirmedAbsent: vi.fn(async () => ({ absent: false })),
           redact: (m) => m,
         },
-        lock: { timing: FAST, waitMaxMs: o.waitMaxMs ?? 400, pollMs: 50, sleep },
+        lock: { timing: FAST, waitMaxMs: o.waitMaxMs ?? 400, pollMs: 50, now: () => clock, sleep: lockSleep },
       };
       return { d, logs, migrated, controlMigrated: () => controlMigrated };
     }
@@ -145,8 +150,13 @@ describe.skipIf(!SERVER_URL)('S21: the ordered locks', () => {
         sawMigrateLock ||= await isAdvisoryLockHeld(probe, MIGRATE_RUN_LOCK_KEY);
         migrated.push(url);
       });
-      setTimeout(() => void backup.release(), 200);
+      // T-1: released from the handshake's first sleep, which comes only after "Waiting…" was logged and a poll saw the
+      // lock held — never on a timer that could beat the first check.
+      let released = false;
+      const waitSleep = d.lock!.sleep!;
+      d.lock = { ...d.lock, sleep: async (ms) => { if (!released) { released = true; await backup.release(); } await waitSleep(ms); } };
       expect(await runMigrateAll({ check: false, concurrency: 1 }, d)).toBe(0);
+      expect(released).toBe(true);
       expect(logs).toContain('Waiting for the backup run to finish…');
       expect(migrated).toEqual(['postgres://fake/a', 'postgres://fake/b', 'postgres://fake/c']);
       expect(sawMigrateLock).toBe(true);
