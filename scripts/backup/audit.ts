@@ -64,7 +64,9 @@ export interface AuditRow {
 /**
  * Every protection-drift finding against what AWS returned (exported for S20). feature-plan-cloud-export.md §6.2 (3d): both
  * buckets (each against its own policy and lifecycle rules; encryption for the exports bucket only: the backup bucket's data
- * is client-side encrypted) and both keys, including their state (`Enabled`; anything else, e.g. PendingDeletion, is drift).
+ * is client-side encrypted) and both key policies. Key STATE here is the export key's only (`Enabled`; anything else, e.g.
+ * PendingDeletion, is drift): the backup key's state is the audit's own `kms_key_state` step, so a failing read of it is
+ * reported once (lead's call after the early CI run).
  */
 export async function protectionDrift(clients: AuditClients, keyArn: string, exportKeyArn: string): Promise<{ drift: string[]; errors: string[] }> {
   const exp = expectedDocuments({ accountId: accountIdFromKeyArn(keyArn), keyArn, exportKeyArn });
@@ -80,10 +82,6 @@ export async function protectionDrift(clients: AuditClients, keyArn: string, exp
   });
   await check('lifecycle', async () => {
     drift.push(...lifecycleDrift('lifecycle', exp.lifecycle.backup, await clients.bucket.lifecycle()));
-  });
-  await check('key-state', async () => {
-    const state = await clients.key.state();
-    if (state !== 'Enabled') drift.push(`key-state:${state}`);
   });
   await check('exports-bucket-policy', async () => {
     const st = statementsOf(await clients.exports.policy());

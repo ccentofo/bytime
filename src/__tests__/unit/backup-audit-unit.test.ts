@@ -37,7 +37,6 @@ describe('S20: protection drift', () => {
     ['a bucket policy removed', ({ state }) => { state.bucketPolicy = null; }, 'bucket-policy:missing'],
     ['an extra (widening) bucket statement', ({ state, exp, doc }) => { state.bucketPolicy = doc([...exp.bucketPolicy, { Sid: 'AllowEveryone', Effect: 'Allow', Principal: '*', Action: 's3:GetObject', Resource: '*' }]); }, 'bucket-policy:AllowEveryone'],
     // feature-plan-cloud-export.md §6.2 (T13, the audit half): both buckets, both keys, key state, exports-only encryption.
-    ['the backup key pending deletion', ({ state }) => { state.keyState = 'PendingDeletion'; }, 'key-state:PendingDeletion'],
     ['the export key pending deletion', ({ state }) => { state.exportKeyState = 'PendingDeletion'; }, 'export-key-state:PendingDeletion'],
     ['the export key disabled', ({ state }) => { state.exportKeyState = 'Disabled'; }, 'export-key-state:Disabled'],
     ['an exports bucket policy removed', ({ state }) => { state.exportBucketPolicy = null; }, 'exports-bucket-policy:missing'],
@@ -77,6 +76,19 @@ describe('S20: protection drift', () => {
     const f = fakeAuditClients();
     f.state.lifecycle = f.state.exportLifecycle;
     expect((await protectionDrift(f.clients, TEST_KEY_ARN, TEST_EXPORT_KEY_ARN)).drift).toEqual(['lifecycle']);
+  });
+
+  it('3d: key state in protectionDrift is the export key\'s only: a failing export-key describe is one error naming it; the backup key\'s state never appears here (kms_key_state records it)', async () => {
+    const f = fakeAuditClients();
+    f.state.throwOn.add('export-key-state');
+    const r = await protectionDrift(f.clients, TEST_KEY_ARN, TEST_EXPORT_KEY_ARN);
+    expect(r.drift).toEqual([]);
+    expect(r.errors).toEqual(['drift:export-key-state label=s3-error']);
+    const g = fakeAuditClients();
+    g.state.throwOn.add('key-state');
+    g.state.keyState = 'PendingDeletion';
+    const s = await protectionDrift(g.clients, TEST_KEY_ARN, TEST_EXPORT_KEY_ARN);
+    expect(s).toEqual({ drift: [], errors: [] });
   });
 
   it('a check that throws records an error, not drift', async () => {
