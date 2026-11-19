@@ -8,6 +8,9 @@
  *   disaster workspace|rehearse|control-plane|reconcile --targets … [--override …] [--run-id …]
  *                       (feature-plan-disaster-restore.md §6.4, feature-plan-control-plane-disaster.md §6.1; an unknown
  *                       flag exits 2: the button reports "this image is older than the button")
+ *   export deliver|hold|release|sweep …
+ *                       (feature-plan-cloud-export.md §6.3, §6.7: the Export workspace button's task and the hourly sweep;
+ *                       an unknown flag exits 2, as disaster)
  *   --self-check        loads every module and checks pg_dump / pg_restore are 16.x; needs no environment
  *
  * No dotenv is loaded here (scripts/backup/local.ts loads it for the local dry run). Outside ECS (no
@@ -31,6 +34,9 @@ import { installCrashHandler, summaryOf } from './lib/summarize-error';
 import { BACKUP_ID_RE, controlPlaneId, newRunId } from './lib/keys';
 import { MINUTE, HOUR } from './lib/util';
 import { tenantDbHistoryRetentionSeconds } from '../../src/lib/tenant/lifecycle-config';
+import { EXPORT_FAMILY, parseExportArgs, parseFailureLine, publishLine, runExport } from './export';
+import { runSweep } from './export-sweep';
+import { s3ExportStore } from './lib/export-store';
 
 export interface MainSeams {
   log?: (line: string) => void;
@@ -209,7 +215,40 @@ export async function main(argv: string[], env: Env, seams: MainSeams = {}): Pro
           pgRestoreBin, regionId, restoreTestProjectId, controlPlaneProjectId, log, deadlineMs, stopSignal: stop.signal,
         })).exitCode;
       }
-      log('usage: backup [--if-missing-today] [--only <slug>|control-plane] [--dry-run] [--concurrency N] | audit | restore-test [--if-missed] | disaster workspace|rehearse|control-plane|reconcile --targets … | --self-check');
+      if (command === 'export') {
+        // Parsed first: an unknown flag (a button newer than this image) exits 2 before any check.
+        const parsed = parseExportArgs(argv.slice(1), now);
+        if (!parsed.ok) {
+          log(`refused: ${parsed.message}`);
+          // D16 (impact analysis): the closing line, published leniently: a missing topic or region only logs.
+          if (parsed.mode !== 'sweep') {
+            if (env.ALERT_TOPIC_ARN && env.AWS_REGION === 'us-east-1') {
+              await publishLine(realPublisher({ region: env.AWS_REGION, topicArn: env.ALERT_TOPIC_ARN }), log, parseFailureLine(parsed));
+            } else {
+              log('the parse failure could not be emailed (no ALERT_TOPIC_ARN / AWS_REGION)');
+            }
+          }
+          return parsed.exitCode;
+        }
+        const controlPlaneUrl = requireEnv(env, 'CONTROL_PLANE_DATABASE_URL');
+        const bucket = requireEnv(env, 'EXPORT_BUCKET');
+        const region = requireRegion(env);
+        if (parsed.args.mode === 'sweep') {
+          if (seams.checksOnly) return 0;
+          const s3 = new S3Client({ region, requestHandler: { requestTimeout: 60_000, connectionTimeout: 10_000 } });
+          return (await runSweep({ controlPlaneUrl, store: s3ExportStore(s3, bucket), log })).exitCode;
+        }
+        requireHexKey(env);
+        const topicArn = requireEnv(env, 'ALERT_TOPIC_ARN');
+        const metadataUri = requireEnv(env, 'ECS_CONTAINER_METADATA_URI_V4');
+        if (seams.checksOnly) return 0;
+        const s3 = new S3Client({ region });
+        return (await runExport(parsed.args, {
+          controlPlaneUrl, store: s3ExportStore(s3, bucket), ecs: realDisasterEcs({ region, metadataUri, family: EXPORT_FAMILY }),
+          publish: realPublisher({ region, topicArn }), log, stopSignal: stop.signal,
+        })).exitCode;
+      }
+      log('usage: backup [--if-missing-today] [--only <slug>|control-plane] [--dry-run] [--concurrency N] | audit | restore-test [--if-missed] | disaster workspace|rehearse|control-plane|reconcile --targets … | export deliver|hold|release|sweep … | --self-check');
       return 1;
     } finally {
       process.off('SIGTERM', onTerm);

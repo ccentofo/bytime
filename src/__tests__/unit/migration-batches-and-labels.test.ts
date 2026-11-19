@@ -189,15 +189,28 @@ describe('migrations as shipped', () => {
     expect(sqlText).not.toMatch(/ALTER TABLE "tenants"|DROP |UPDATE "/);
   });
 
-  it('the newest control-plane migration is drizzle-kit generated as 0012 (disaster restore §6.7): two tables, the tenant cascade, nothing else touched', () => {
+  it('control-plane migration 0012 (disaster restore §6.7): two tables, the tenant cascade, nothing else touched', () => {
     const journal = JSON.parse(readFileSync(path.join(ROOT, 'drizzle/control-plane/meta/_journal.json'), 'utf8')) as { entries: Array<{ idx: number; tag: string; when: number }> };
-    const last = journal.entries[journal.entries.length - 1];
-    expect(last.idx).toBe(12);
+    const last = journal.entries.find((e) => e.idx === 12)!;
     expect(last.tag).toBe('0012_disaster_restore');
-    expect(last.when).toBe(Math.max(...journal.entries.map((e) => e.when)));
     const sqlText = readFileSync(path.join(ROOT, `drizzle/control-plane/${last.tag}.sql`), 'utf8');
     for (const t of ['disaster_runs', 'disaster_actions']) expect(sqlText).toContain(`CREATE TABLE "${t}"`);
     expect(sqlText).toMatch(/"tenant_id"\) REFERENCES "public"\."tenants"\("id"\) ON DELETE cascade/);
     expect(sqlText).not.toMatch(/ALTER TABLE "tenants"|DROP |UPDATE "/);
+  });
+
+  it('the newest control-plane migration is drizzle-kit generated as 0013 (cloud export, feature-plan-cloud-export.md §6.5): two tables, no cascade, nothing else touched', () => {
+    const journal = JSON.parse(readFileSync(path.join(ROOT, 'drizzle/control-plane/meta/_journal.json'), 'utf8')) as { entries: Array<{ idx: number; tag: string; when: number }> };
+    const last = journal.entries[journal.entries.length - 1];
+    expect(last.idx).toBe(13);
+    expect(last.tag).toBe('0013_cloud_export');
+    expect(last.when).toBe(Math.max(...journal.entries.map((e) => e.when)));
+    const sqlText = readFileSync(path.join(ROOT, `drizzle/control-plane/${last.tag}.sql`), 'utf8');
+    for (const t of ['export_deliveries', 'export_holds']) expect(sqlText).toContain(`CREATE TABLE "${t}"`);
+    expect(sqlText).toContain('CONSTRAINT "export_deliveries_notice_id_unique" UNIQUE("notice_id")');
+    expect(sqlText).toContain('CONSTRAINT "export_deliveries_token_hash_unique" UNIQUE("token_hash")');
+    expect(sqlText).toContain('"extra_only" boolean NOT NULL,'); // no default: the task always writes it (§6.5)
+    expect(sqlText).not.toMatch(/ON DELETE cascade/); // a hold survives the workspace's deletion by design
+    expect(sqlText).not.toMatch(/ALTER TABLE "tenants"|ALTER TABLE "tenant_notices"|DROP |UPDATE "/);
   });
 });

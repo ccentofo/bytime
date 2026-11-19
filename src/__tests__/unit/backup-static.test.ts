@@ -328,21 +328,51 @@ describe('U6: the Dockerfile and the bundle inputs', () => {
   });
 
   let inputs: string[] = [];
+  let bundleText = '';
   beforeAll(async () => {
     const { build } = await import('esbuild');
-    const { BUNDLE_OPTIONS } = await import('../../../scripts/backup/bundle.mjs');
-    const r = await build({ ...(BUNDLE_OPTIONS as import('esbuild').BuildOptions), absWorkingDir: ROOT, write: false, metafile: true, logLevel: 'silent' });
+    const { BUNDLE_OPTIONS, bundleDefines } = await import('../../../scripts/backup/bundle.mjs');
+    const r = await build({ ...(BUNDLE_OPTIONS as import('esbuild').BuildOptions), define: bundleDefines(ROOT), absWorkingDir: ROOT, write: false, metafile: true, logLevel: 'silent' });
     inputs = Object.keys(r.metafile!.inputs);
+    bundleText = r.outputFiles![0].text;
   }, 120_000);
 
-  it('every non-node_modules input of the esbuild bundle matches the deploy list; the src/ inputs are only the six named modules (3c adds db-name, lifecycle-config; 3c-2 adds slug-rules)', () => {
-    const own = inputs.filter((i) => !i.startsWith('node_modules/'));
+  /** feature-plan-cloud-export.md §10: the plugin's virtual `{ version }` module is not a file, so not on the deploy list. */
+  const VIRTUAL = 'app-version:';
+
+  it('every non-node_modules input of the esbuild bundle matches the deploy list; the src/ inputs are exactly the named modules (3c adds db-name, lifecycle-config; 3c-2 adds slug-rules; 3d adds the export closure)', () => {
+    const own = inputs.filter((i) => !i.startsWith('node_modules/') && !i.startsWith(VIRTUAL));
     expect(own.length).toBeGreaterThan(10);
     expect(own.filter((i) => !listed(i))).toEqual([]);
-    expect(own.filter((i) => i.startsWith('src/')).sort()).toEqual(['src/lib/encryption.ts', 'src/lib/tenant/backup-locks.ts', 'src/lib/tenant/db-name.ts', 'src/lib/tenant/direct-url.ts', 'src/lib/tenant/lifecycle-config.ts', 'src/lib/tenant/slug-rules.ts']);
-    for (const f of ['tsconfig.backup.json', '.npmrc', 'ops/aws/pgdg-ACCC4CF8.asc', 'Dockerfile.backup', 'ops/aws/backup-stack.yml', '.github/workflows/backup-deploy.yml']) expect(listed(f), f).toBe(true);
+    expect(own.filter((i) => i.startsWith('src/')).sort()).toEqual([
+      'src/db/schema.ts', 'src/lib/calendar-date.ts', 'src/lib/csv/escape.ts', 'src/lib/db/pg-url.ts', 'src/lib/encryption.ts',
+      'src/lib/export/allowlists.ts', 'src/lib/export/manifest.ts', 'src/lib/export/workspace-export.ts', 'src/lib/provenance.ts',
+      'src/lib/tenant/backup-locks.ts', 'src/lib/tenant/db-name.ts', 'src/lib/tenant/direct-url.ts', 'src/lib/tenant/lifecycle-config.ts',
+      'src/lib/tenant/slug-rules.ts',
+    ]);
+    // Never the export page's AWS code (feature-plan-cloud-export.md §10: not download-url.ts).
+    expect(inputs.some((i) => i.includes('download-url'))).toBe(false);
+    for (const f of ['tsconfig.backup.json', '.npmrc', 'ops/aws/pgdg-ACCC4CF8.asc', 'Dockerfile.backup', 'ops/aws/backup-stack.yml', '.github/workflows/backup-deploy.yml', 'drizzle/meta/_journal.json']) expect(listed(f), f).toBe(true);
     expect(listed('ops/aws/bootstrap.yml')).toBe(false);
     expect(listed('package.json')).toBe(false);
+  });
+
+  it('T22 (3d): package.json is never a bundle input (the plugin serves only its version); the bundled APP_VERSION is package.json\'s; the journal length is defined at build time', () => {
+    expect(inputs).not.toContain('package.json');
+    expect(inputs.filter((i) => i.endsWith('package.json') && !i.startsWith('node_modules/') && !i.startsWith(VIRTUAL))).toEqual([]);
+    expect(inputs).toContain(`${VIRTUAL}package.json`);
+    const version = (JSON.parse(read('package.json')) as { version: string }).version;
+    const m = /app-version:package\.json\s*\n\s*var (\w+) = \{ version: "([^"]+)" \};/.exec(bundleText);
+    expect(m?.[2]).toBe(version);
+    expect(bundleText).not.toMatch(/\{\s*version:\s*"[^"]+",\s*private/); // never the whole package.json
+    expect(bundleText).not.toContain('__TENANT_JOURNAL_LENGTH__');
+    const journal = (JSON.parse(read('drizzle/meta/_journal.json')) as { entries: unknown[] }).entries.length;
+    expect(__TENANT_JOURNAL_LENGTH__).toBe(journal); // the vitest define equals the journal too
+    // The Dockerfile copies the journal (read at build time) and the tsconfig resolves `@/` (the export closure's imports).
+    const builder = docker.split(/^FROM /m)[1];
+    expect(builder).toMatch(/^COPY drizzle\/meta\/_journal\.json drizzle\/meta\/_journal\.json$/m);
+    expect(builder.indexOf('COPY drizzle/meta/_journal.json')).toBeLessThan(builder.indexOf('RUN npm run backup:bundle'));
+    expect((JSON.parse(read('tsconfig.backup.json')) as { compilerOptions: { paths: Record<string, string[]> } }).compilerOptions.paths).toEqual({ '@/*': ['./src/*'] });
   });
 
   it('D2 (3c-2): every src/ input of the bundle has an exact `COPY <path> <path>` line in the builder stage, and tsconfig.backup.json includes it', () => {

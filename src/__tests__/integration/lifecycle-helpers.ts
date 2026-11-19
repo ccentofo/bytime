@@ -1,7 +1,7 @@
 import { and, eq, inArray, isNull, like, or } from 'drizzle-orm';
 import { controlDb } from '@/db/control-plane';
 import {
-  opsAlerts, paymentPendingObservations, tenantAuditEvents, tenantNotices, tenants,
+  exportDeliveries, exportHolds, opsAlerts, paymentPendingObservations, tenantAuditEvents, tenantNotices, tenants,
 } from '@/db/control-plane/schema';
 import { encrypt } from '@/lib/encryption';
 import { invalidateTenant } from '@/lib/tenant/registry';
@@ -72,6 +72,9 @@ export async function cleanupLifecycleTenants(): Promise<void> {
   const rows = await controlDb.select({ id: tenants.id }).from(tenants).where(like(tenants.slug, 'test-lc-%'));
   const ids = rows.map((r) => r.id);
   if (ids.length === 0) return;
+  // feature-plan-cloud-export.md §6.5: deliveries reference their notice and tenant (no cascade), so they go first.
+  await controlDb.delete(exportDeliveries).where(inArray(exportDeliveries.tenantId, ids));
+  await controlDb.delete(exportHolds).where(inArray(exportHolds.tenantId, ids));
   await controlDb.delete(tenantNotices).where(inArray(tenantNotices.tenantId, ids));
   await controlDb.delete(opsAlerts).where(or(inArray(opsAlerts.tenantId, ids), inArray(opsAlerts.scope, ids)));
   await controlDb.delete(tenantAuditEvents).where(inArray(tenantAuditEvents.tenantId, ids));

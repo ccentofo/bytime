@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
-# The backup image (feature-plan-database-backups.md §6.2): one bundle, four commands (backup, audit, restore-test, and
-# disaster: feature-plan-disaster-restore.md §6.3).
+# The backup image (feature-plan-database-backups.md §6.2): one bundle, five commands (backup, audit, restore-test,
+# disaster: feature-plan-disaster-restore.md §6.3, and export: feature-plan-cloud-export.md §6.3).
 # It runs only in AWS (ECS Fargate, us-east-1). The build compiles code; it never connects to a database and holds no
 # secrets. No npm code runs on the GitHub runner: npm runs only here, in the builder stage, with --ignore-scripts.
 
@@ -21,6 +21,17 @@ COPY src/lib/tenant/db-name.ts src/lib/tenant/db-name.ts
 COPY src/lib/tenant/lifecycle-config.ts src/lib/tenant/lifecycle-config.ts
 # The control-plane reconcile types window projects with the app's slug rule (feature-plan-control-plane-disaster.md §6.4 R4).
 COPY src/lib/tenant/slug-rules.ts src/lib/tenant/slug-rules.ts
+# The export task (feature-plan-cloud-export.md §10): the workspace export builder and exactly its closure (esbuild metafile).
+COPY src/lib/export/workspace-export.ts src/lib/export/workspace-export.ts
+COPY src/lib/export/allowlists.ts src/lib/export/allowlists.ts
+COPY src/lib/export/manifest.ts src/lib/export/manifest.ts
+COPY src/db/schema.ts src/db/schema.ts
+COPY src/lib/db/pg-url.ts src/lib/db/pg-url.ts
+COPY src/lib/provenance.ts src/lib/provenance.ts
+COPY src/lib/csv/escape.ts src/lib/csv/escape.ts
+COPY src/lib/calendar-date.ts src/lib/calendar-date.ts
+# Read by bundle.mjs at build time (the tenant journal length for the export's schema check); not a bundle input.
+COPY drizzle/meta/_journal.json drizzle/meta/_journal.json
 RUN npm run backup:bundle
 
 # ---- runtime: node + PostgreSQL 16 client tools (PGDG) + the bundle only ------------------------------------------

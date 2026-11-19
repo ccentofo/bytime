@@ -15,8 +15,8 @@ import { FORMULA_PATTERN } from '@/lib/csv/escape';
 export { FORMULA_PATTERN };
 
 /**
- * Full workspace export builder (feature-plan-terms-compliance-fixes.md §5.2, R8). Used by the export route and
- * `tenant:export`. Takes an explicit connection — no `headers()`, `getDb()`, session or `next/*` here.
+ * Full workspace export builder (feature-plan-terms-compliance-fixes.md §5.2, R8). Used by the export route and the
+ * backup image's export task (feature-plan-cloud-export.md §6.3). Takes an explicit connection — no `headers()`, `getDb()`, session or `next/*` here.
  *
  * - One consistent snapshot: a dedicated connection to the tenant's DIRECT host, `BEGIN ISOLATION LEVEL
  *   REPEATABLE READ READ ONLY`, keyset-paginated reads (5,000 rows) pulled lazily as the consumer reads.
@@ -30,6 +30,22 @@ const BOM = '﻿';
 const CRLF = '\r\n';
 const MAX_ENTRIES = 65_000;            // zip limit 65,535 without Zip64
 const MAX_BYTES = 4 * 1024 ** 3 - 64 * 1024 ** 2; // stay under 4 GiB (no Zip64), with headroom for headers
+
+/** The workspace is over a zip limit (no Zip64): the export task reports it as `too-large` (feature-plan-cloud-export.md §8 F1). */
+export class ExportTooLargeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ExportTooLargeError';
+  }
+}
+
+/** Options for the export task's snapshot (feature-plan-cloud-export.md §6.3); the app's call passes none. */
+export interface ExportSnapshotOptions {
+  /** postgres.js `connect_timeout`, in seconds. */
+  connectTimeoutSeconds?: number;
+  /** Server-side settings sent at connect (postgres.js `connection:`), e.g. statement_timeout in milliseconds. */
+  connection?: Record<string, string | number>;
+}
 
 type ExportDb = ReturnType<typeof drizzle>;
 
@@ -48,8 +64,12 @@ function directUrl(url: string): string {
   return u.toString();
 }
 
-export async function openExportSnapshot(tenantDbUrl: string): Promise<ExportSnapshot> {
-  const client: Sql = postgres(postgresJsUrl(directUrl(tenantDbUrl)), { max: 1 });
+export async function openExportSnapshot(tenantDbUrl: string, opts?: ExportSnapshotOptions): Promise<ExportSnapshot> {
+  const client: Sql = postgres(postgresJsUrl(directUrl(tenantDbUrl)), {
+    max: 1,
+    ...(opts?.connectTimeoutSeconds !== undefined ? { connect_timeout: opts.connectTimeoutSeconds } : {}),
+    ...(opts?.connection ? { connection: opts.connection } : {}),
+  });
   let conn: ReservedSql;
   try {
     conn = await client.reserve();
@@ -290,7 +310,7 @@ export function createWorkspaceZipStream(snapshot: ExportSnapshot, opts: Workspa
         return;
       }
       const src = sources[nextSource++];
-      if (entries + 3 > MAX_ENTRIES) throw new Error('Export exceeds the zip entry limit; use tenant:export.');
+      if (entries + 3 > MAX_ENTRIES) throw new ExportTooLargeError('Export exceeds the zip entry limit; contact the lead.');
       const file = new ZipDeflate(src.name, { level: 6 });
       zip.add(file);
       entries++;
@@ -304,11 +324,11 @@ export function createWorkspaceZipStream(snapshot: ExportSnapshot, opts: Workspa
     } else {
       const chunk = encoder.encode(r.value);
       current.bytes += chunk.length;
-      if (current.bytes > MAX_BYTES) throw new Error(`${current.file.filename} exceeds 4 GiB uncompressed (zip limit); use tenant:export.`);
+      if (current.bytes > MAX_BYTES) throw new ExportTooLargeError(`${current.file.filename} exceeds 4 GiB uncompressed (zip limit); contact the lead.`);
       current.file.push(chunk);
     }
     if (zipError) throw zipError;
-    if (outBytes > MAX_BYTES) throw new Error('Export exceeds 4 GiB (zip limit); use tenant:export.');
+    if (outBytes > MAX_BYTES) throw new ExportTooLargeError('Export exceeds 4 GiB (zip limit); contact the lead.');
   }
 
   const fail = async (controller: ReadableStreamDefaultController<Uint8Array>, err: unknown) => {

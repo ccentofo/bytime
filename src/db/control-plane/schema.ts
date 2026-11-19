@@ -354,3 +354,56 @@ export const disasterActions = pgTable('disaster_actions', {
   index('disaster_actions_tenant_idx').on(table.tenantId, table.kind, table.at.desc()),
   index('disaster_actions_project_idx').on(table.newProjectId),
 ]);
+
+/**
+ * feature-plan-cloud-export.md §6.5 (3d): one row per sent export (the "Export workspace" button's `deliver`), written by
+ * the backup image's export task in the same transaction as its `export-ready` notice (`notice_id`) and audit event.
+ * `token_encrypted` exists only until the notice is sent or superseded; `token_hash` (SHA-256 hex) is the page's lookup.
+ * `recipients_encrypted` is an encrypt()ed JSON array: the exact addresses the notice goes to (never D10 at send time).
+ * `extra_only` is true only when the policy-hold rule sent it to the verified extra address alone (A1). No cascade:
+ * production tombstones tenants and never deletes them; the hourly sweep erases the S3 copy and sets `erased_at`.
+ */
+export const exportDeliveries = pgTable('export_deliveries', {
+  id: uuid('id').primaryKey(),
+  tenantId: uuid('tenant_id').notNull().references(() => tenants.id),
+  noticeId: uuid('notice_id').notNull().unique('export_deliveries_notice_id_unique').references(() => tenantNotices.id),
+  s3Key: text('s3_key').notNull(),
+  bytes: bigint('bytes', { mode: 'number' }).notNull(),
+  sha256: char('sha256', { length: 64 }).notNull(),
+  tokenHash: char('token_hash', { length: 64 }).notNull().unique('export_deliveries_token_hash_unique'),
+  tokenEncrypted: text('token_encrypted'),
+  recipientsEncrypted: text('recipients_encrypted').notNull(),
+  timeZone: varchar('time_zone', { length: 100 }).notNull(),
+  extraRecipient: boolean('extra_recipient').notNull(),
+  extraOnly: boolean('extra_only').notNull(),
+  reason: text('reason'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  erasedAt: timestamp('erased_at', { withTimezone: true }),
+  downloadCount: integer('download_count').notNull().default(0),
+  lastDownloadAt: timestamp('last_download_at', { withTimezone: true }),
+  runId: varchar('run_id', { length: 80 }).notNull(),
+}, (table) => [
+  index('export_deliveries_tenant_created_idx').on(table.tenantId, table.createdAt),
+]);
+
+/**
+ * feature-plan-cloud-export.md §6.3 `hold` (3d): a legal-hold copy in the exports bucket under `hold/`, kept until the
+ * founder releases it (`release` deletes the object, verifies a 404, then sets `released_at`). Never served by the
+ * download page and never expired by the sweep. No cascade (a hold survives the workspace's deletion by design).
+ */
+export const exportHolds = pgTable('export_holds', {
+  id: uuid('id').primaryKey(),
+  tenantId: uuid('tenant_id').notNull().references(() => tenants.id),
+  s3Key: text('s3_key').notNull(),
+  bytes: bigint('bytes', { mode: 'number' }).notNull(),
+  sha256: char('sha256', { length: 64 }).notNull(),
+  reason: text('reason').notNull(),
+  runId: varchar('run_id', { length: 80 }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  releasedAt: timestamp('released_at', { withTimezone: true }),
+  releaseReason: text('release_reason'),
+}, (table) => [
+  index('export_holds_tenant_idx').on(table.tenantId, table.createdAt),
+]);
