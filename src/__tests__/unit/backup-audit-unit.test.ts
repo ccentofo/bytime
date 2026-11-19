@@ -5,14 +5,14 @@ import { describe, it, expect } from 'vitest';
  * AWS clients rendered from expected-policies.ts. No AWS.
  */
 import { protectionDrift } from '../../../scripts/backup/audit';
-import { normalize, statementDrift, NAMES, SCHEDULER_ROLE, taskRoleName } from '../../../scripts/backup/lib/expected-policies';
+import { normalize, statementDrift, NAMES, SCHEDULER_ROLE, taskRoleName, EXPORT_DOWNLOAD_ROLE, EXPORT_TASK_ROLE } from '../../../scripts/backup/lib/expected-policies';
 import { auditProbes, backupProbes, classifyHead, classifyKms, classifyS3, probesOk, restoreTestProbes } from '../../../scripts/backup/lib/probes';
-import { deniedKeyClient, FakeBucket, fakeAuditClients, headForbidden, kmsDenied, s3Denied, TEST_KEY_ARN } from '../helpers/backup-fakes';
+import { deniedKeyClient, FakeBucket, fakeAuditClients, headForbidden, kmsDenied, s3Denied, TEST_EXPORT_KEY_ARN, TEST_KEY_ARN } from '../helpers/backup-fakes';
 
 describe('S20: protection drift', () => {
   it('all equal → no drift', async () => {
     const { clients } = fakeAuditClients();
-    expect(await protectionDrift(clients, TEST_KEY_ARN)).toEqual({ drift: [], errors: [] });
+    expect(await protectionDrift(clients, TEST_KEY_ARN, TEST_EXPORT_KEY_ARN)).toEqual({ drift: [], errors: [] });
   });
 
   const cases: Array<[string, (s: ReturnType<typeof fakeAuditClients>) => void, string]> = [
@@ -36,11 +36,32 @@ describe('S20: protection drift', () => {
     ['a lifecycle rule at 90 days', ({ state }) => { state.lifecycle = [{ ...state.lifecycle![0], expirationDays: 90 }]; }, 'lifecycle'],
     ['a bucket policy removed', ({ state }) => { state.bucketPolicy = null; }, 'bucket-policy:missing'],
     ['an extra (widening) bucket statement', ({ state, exp, doc }) => { state.bucketPolicy = doc([...exp.bucketPolicy, { Sid: 'AllowEveryone', Effect: 'Allow', Principal: '*', Action: 's3:GetObject', Resource: '*' }]); }, 'bucket-policy:AllowEveryone'],
+    // feature-plan-cloud-export.md §6.2 (T13, the audit half): both buckets, both keys, key state, exports-only encryption.
+    ['the backup key pending deletion', ({ state }) => { state.keyState = 'PendingDeletion'; }, 'key-state:PendingDeletion'],
+    ['the export key pending deletion', ({ state }) => { state.exportKeyState = 'PendingDeletion'; }, 'export-key-state:PendingDeletion'],
+    ['the export key disabled', ({ state }) => { state.exportKeyState = 'Disabled'; }, 'export-key-state:Disabled'],
+    ['an exports bucket policy removed', ({ state }) => { state.exportBucketPolicy = null; }, 'exports-bucket-policy:missing'],
+    ['the hold-read deny removed', ({ state, exp, doc }) => { state.exportBucketPolicy = doc(exp.exportBucketPolicy.filter((x) => x.Sid !== 'DenyHoldReadsExceptExportTask')); }, 'exports-bucket-policy:DenyHoldReadsExceptExportTask'],
+    ['the download role exempted from the write deny', ({ state, exp, doc }) => {
+      state.exportBucketPolicy = doc(exp.exportBucketPolicy.map((x) => (x.Sid === 'DenyWritesExceptExportTask' ? { ...x, Condition: { ArnNotEquals: { 'aws:PrincipalArn': [exp.roleArn(EXPORT_TASK_ROLE), exp.roleArn(EXPORT_DOWNLOAD_ROLE)] } } } : x)));
+    }, 'exports-bucket-policy:DenyWritesExceptExportTask'],
+    ['an exports lifecycle with only one rule (the backup bucket\'s shape)', ({ state }) => { state.exportLifecycle = [state.exportLifecycle![0]]; }, 'exports-lifecycle'],
+    ['a hold/ expiry rule added', ({ state }) => { state.exportLifecycle = [...state.exportLifecycle!, { id: 'expire-hold', status: 'Enabled', prefix: 'hold/', expirationDays: 30, abortDays: null, other: false }]; }, 'exports-lifecycle'],
+    ['delivery/ expiring at 30 days', ({ state }) => { state.exportLifecycle = state.exportLifecycle!.map((r) => (r.id === 'expire-delivery' ? { ...r, expirationDays: 30 } : r)); }, 'exports-lifecycle'],
+    ['the exports lifecycle removed', ({ state }) => { state.exportLifecycle = null; }, 'exports-lifecycle'],
+    ['the exports bucket on S3-managed keys', ({ state }) => { state.exportEncryption = { algorithm: 'AES256', keyId: null, bucketKeyEnabled: false, rules: 1 }; }, 'exports-encryption'],
+    ['the exports bucket on another KMS key', ({ state }) => { state.exportEncryption = { ...state.exportEncryption!, keyId: TEST_KEY_ARN }; }, 'exports-encryption'],
+    ['the exports bucket without the bucket key', ({ state }) => { state.exportEncryption = { ...state.exportEncryption!, bucketKeyEnabled: false }; }, 'exports-encryption'],
+    ['no default encryption on the exports bucket', ({ state }) => { state.exportEncryption = null; }, 'exports-encryption:missing'],
+    ['an export key policy without the GenerateDataKey deny', ({ state, exp, doc }) => { state.exportKeyPolicy = doc(exp.exportKeyPolicy.filter((x) => x.Sid !== 'DenyGenerateDataKeyExceptExportTask')); }, 'export-key-policy:DenyGenerateDataKeyExceptExportTask'],
+    ['the download role\'s trust widened to preview deployments', ({ state, exp, doc }) => {
+      state.roles[EXPORT_DOWNLOAD_ROLE].trust = doc(exp.roles[EXPORT_DOWNLOAD_ROLE].trust.map((x) => ({ ...x, Condition: { StringLike: { 'x:sub': 'owner:*' } } })));
+    }, `role:${EXPORT_DOWNLOAD_ROLE}:trust:TrustVercelProduction`],
   ];
   it.each(cases)('%s → recorded', async (_name, mutate, expected) => {
     const f = fakeAuditClients();
     mutate(f);
-    const r = await protectionDrift(f.clients, TEST_KEY_ARN);
+    const r = await protectionDrift(f.clients, TEST_KEY_ARN, TEST_EXPORT_KEY_ARN);
     expect(r.drift).toContain(expected);
     expect(r.errors).toEqual([]);
   });
@@ -52,10 +73,16 @@ describe('S20: protection drift', () => {
     expect(normalize({ b: [true], a: 1 })).toEqual({ a: '1', b: 'true' });
   });
 
+  it('3d: the backup bucket\'s lifecycle is never compared with the exports bucket\'s rules (each bucket its own array)', async () => {
+    const f = fakeAuditClients();
+    f.state.lifecycle = f.state.exportLifecycle;
+    expect((await protectionDrift(f.clients, TEST_KEY_ARN, TEST_EXPORT_KEY_ARN)).drift).toEqual(['lifecycle']);
+  });
+
   it('a check that throws records an error, not drift', async () => {
     const f = fakeAuditClients();
     f.state.throwOn.add('key-policy');
-    const r = await protectionDrift(f.clients, TEST_KEY_ARN);
+    const r = await protectionDrift(f.clients, TEST_KEY_ARN, TEST_EXPORT_KEY_ARN);
     expect(r.drift).toEqual([]);
     expect(r.errors).toEqual(['drift:key-policy label=s3-error']);
   });

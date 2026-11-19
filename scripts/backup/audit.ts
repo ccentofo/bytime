@@ -21,7 +21,7 @@ import { restoreServerRefusal, restoreUrlRefusal } from './lib/rt-guards';
 import { sweepRtDatabases } from './lib/rt-db';
 import { clientUrl } from './lib/pg-url';
 import {
-  accountIdFromKeyArn, ALL_ROLES, expectedDocuments, NAMES, normalize, statementDrift, statementsOf,
+  accountIdFromKeyArn, ALL_ROLES, expectedDocuments, lifecycleDrift, NAMES, normalize, statementDrift, statementsOf,
 } from './lib/expected-policies';
 import { DAY, MINUTE } from './lib/util';
 
@@ -33,6 +33,8 @@ export interface AuditDeps {
   clients: AuditClients;
   keyClient: KeyProbeClient;
   keyArn: string;
+  /** feature-plan-cloud-export.md §6.2: EXPORT_KEY_ARN (the exports bucket's key). */
+  exportKeyArn: string;
   runId: string;
   log: (line: string) => void;
   now?: () => Date;
@@ -59,9 +61,13 @@ export interface AuditRow {
   errors: string | null;
 }
 
-/** Every protection-drift finding against what AWS returned (exported for S20). */
-export async function protectionDrift(clients: AuditClients, keyArn: string): Promise<{ drift: string[]; errors: string[] }> {
-  const exp = expectedDocuments({ accountId: accountIdFromKeyArn(keyArn), keyArn });
+/**
+ * Every protection-drift finding against what AWS returned (exported for S20). feature-plan-cloud-export.md §6.2 (3d): both
+ * buckets (each against its own policy and lifecycle rules; encryption for the exports bucket only: the backup bucket's data
+ * is client-side encrypted) and both keys, including their state (`Enabled`; anything else, e.g. PendingDeletion, is drift).
+ */
+export async function protectionDrift(clients: AuditClients, keyArn: string, exportKeyArn: string): Promise<{ drift: string[]; errors: string[] }> {
+  const exp = expectedDocuments({ accountId: accountIdFromKeyArn(keyArn), keyArn, exportKeyArn });
   const drift: string[] = [];
   const errors: string[] = [];
   const check = async (label: string, fn: () => Promise<void>) => {
@@ -73,10 +79,33 @@ export async function protectionDrift(clients: AuditClients, keyArn: string): Pr
     else drift.push(...statementDrift('bucket-policy', exp.bucketPolicy, st));
   });
   await check('lifecycle', async () => {
-    const rules = await clients.bucket.lifecycle();
-    const ok = rules !== null && rules.length === 1 && rules[0].status === 'Enabled' && rules[0].prefix === 'v1/'
-      && rules[0].expirationDays === 25 && rules[0].abortDays === 1 && !rules[0].other;
-    if (!ok) drift.push('lifecycle');
+    drift.push(...lifecycleDrift('lifecycle', exp.lifecycle.backup, await clients.bucket.lifecycle()));
+  });
+  await check('key-state', async () => {
+    const state = await clients.key.state();
+    if (state !== 'Enabled') drift.push(`key-state:${state}`);
+  });
+  await check('exports-bucket-policy', async () => {
+    const st = statementsOf(await clients.exports.policy());
+    if (st === null) drift.push('exports-bucket-policy:missing');
+    else drift.push(...statementDrift('exports-bucket-policy', exp.exportBucketPolicy, st));
+  });
+  await check('exports-lifecycle', async () => {
+    drift.push(...lifecycleDrift('exports-lifecycle', exp.lifecycle.exports, await clients.exports.lifecycle()));
+  });
+  await check('exports-encryption', async () => {
+    const enc = await clients.exports.encryption();
+    if (!enc) { drift.push('exports-encryption:missing'); return; }
+    if (enc.rules !== 1 || enc.algorithm !== 'aws:kms' || enc.keyId !== exportKeyArn || !enc.bucketKeyEnabled) drift.push('exports-encryption');
+  });
+  await check('export-key-policy', async () => {
+    const st = statementsOf(await clients.exportKey.policy());
+    if (st === null) drift.push('export-key-policy:missing');
+    else drift.push(...statementDrift('export-key-policy', exp.exportKeyPolicy, st));
+  });
+  await check('export-key-state', async () => {
+    const state = await clients.exportKey.state();
+    if (state !== 'Enabled') drift.push(`export-key-state:${state}`);
   });
   await check('key-policy', async () => {
     const st = statementsOf(await clients.key.policy());
@@ -203,7 +232,7 @@ export async function runAudit(deps: AuditDeps): Promise<{ exitCode: number; row
       });
       // 5b. Protection drift.
       await isolated('drift', async () => {
-        const d = await protectionDrift(deps.clients, deps.keyArn);
+        const d = await protectionDrift(deps.clients, deps.keyArn, deps.exportKeyArn);
         errors.push(...d.errors);
         row.protectionDrift = d.drift.length ? d.drift.join(', ').slice(0, 4000) : null;
       });

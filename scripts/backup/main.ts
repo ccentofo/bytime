@@ -37,6 +37,7 @@ import { tenantDbHistoryRetentionSeconds } from '../../src/lib/tenant/lifecycle-
 import { EXPORT_FAMILY, parseExportArgs, parseFailureLine, publishLine, runExport } from './export';
 import { runSweep } from './export-sweep';
 import { s3ExportStore } from './lib/export-store';
+import { isKeyArn } from './lib/expected-policies';
 
 export interface MainSeams {
   log?: (line: string) => void;
@@ -160,14 +161,18 @@ export async function main(argv: string[], env: Env, seams: MainSeams = {}): Pro
         requireEnv(env, 'ALERT_RULE_NAMES');
         const trailName = requireEnv(env, 'TRAIL_NAME');
         requireEnv(env, 'DLQ_ALARM_NAME');
+        // feature-plan-cloud-export.md §6.2: the exports bucket and its key (protection drift for both buckets and keys).
+        const exportBucket = requireEnv(env, 'EXPORT_BUCKET');
+        const exportKeyArn = requireEnv(env, 'EXPORT_KEY_ARN');
         const region = requireRegion(env);
         kmsKeyringFactory(keyArn); // validates the key ARN shape
+        if (!isKeyArn(exportKeyArn)) throw new FatalError('EXPORT_KEY_ARN must be a key ARN');
         if (seams.checksOnly) return 0;
         const s3 = new S3Client({ region, requestHandler: { requestTimeout: 30_000, connectionTimeout: 10_000 } });
         return (await runAudit({
           controlPlaneUrl, restoreTestUrl, reader: s3Reader(s3, bucket), store: s3Store(s3, bucket),
-          clients: realAuditClients({ region, bucket, keyArn, topicArn, trailName }), keyClient: realKeyProbeClient(region, keyArn),
-          keyArn, runId: newRunId(now), log,
+          clients: realAuditClients({ region, bucket, keyArn, exportBucket, exportKeyArn, topicArn, trailName }), keyClient: realKeyProbeClient(region, keyArn),
+          keyArn, exportKeyArn, runId: newRunId(now), log,
         })).exitCode;
       }
       if (command === 'disaster') {

@@ -28,7 +28,43 @@ export const NAMES = {
   deployRole: 'cadenzpoint-backup-deploy',
   inlinePolicy: 'cadenzpoint-backup-policy',
   lifecycleRule: 'expire-v1',
+  // feature-plan-cloud-export.md §6.1, §6.4, §6.7 (3d).
+  exportBucketPrefix: 'cadenzpoint-exports-',
+  exportKeyAlias: 'alias/cadenzpoint-exports',
+  exportStartedRule: 'cadenzpoint-backup-export-started',
+  exportRunTaskRule: 'cadenzpoint-backup-export-runtask',
+  exportSweepSchedule: 'cadenzpoint-backup-export-sweep',
 } as const;
+
+/**
+ * feature-plan-cloud-export.md §6.1 (3d): the Vercel team slug and project name, template constants equal in three files
+ * (bootstrap.yml's OIDC provider, backup-stack.yml's download role trust, and here; U6 asserts it). P1 (product owner,
+ * 2026-11-18): FAIL-CLOSED placeholders until the founder gives the real values; PRODUCTION-DEPLOY 13b replaces them before
+ * the bootstrap is deployed. With the placeholders no Vercel token can satisfy the trust, so downloads fail closed.
+ */
+export const VERCEL_TEAM_SLUG = 'vercel-team-slug-pending';
+export const VERCEL_PROJECT = 'vercel-project-pending';
+export const VERCEL_OIDC_HOST = `oidc.vercel.com/${VERCEL_TEAM_SLUG}`;
+export const VERCEL_OIDC_AUDIENCE = `https://vercel.com/${VERCEL_TEAM_SLUG}`;
+export const VERCEL_OIDC_SUBJECT = `owner:${VERCEL_TEAM_SLUG}:project:${VERCEL_PROJECT}:environment:production`;
+
+/** The export families: not in FAMILIES (§6.2, §6.7: their roles are explicit entries, shared by both families). */
+export const EXPORT_FAMILY = 'cadenzpoint-backup-export';
+export const SWEEP_FAMILY = 'cadenzpoint-backup-sweep';
+export const EXPORT_TASK_ROLE = 'cadenzpoint-backup-export-task';
+export const EXPORT_EXEC_ROLE = 'cadenzpoint-backup-export-exec';
+export const EXPORT_DOWNLOAD_ROLE = 'cadenzpoint-backup-export-download';
+export const EXPORT_LOG_GROUP = '/cadenzpoint/backup/export';
+export const SWEEP_LOG_GROUP = '/cadenzpoint/backup/sweep';
+
+/** A bucket's lifecycle rule as the audit reads it (aws-clients.ts LifecycleRuleInfo, `other` false). */
+export interface ExpectedLifecycleRule {
+  id: string;
+  status: 'Enabled';
+  prefix: string;
+  expirationDays: number | null;
+  abortDays: number | null;
+}
 
 export const FAMILIES = ['backup', 'audit', 'restore-test', 'disaster'] as const;
 export type Family = (typeof FAMILIES)[number];
@@ -61,7 +97,7 @@ export const SCHEDULER_ROLE = 'cadenzpoint-backup-scheduler';
 export const DISASTER_BUTTON_ROLE = 'cadenzpoint-backup-disaster-button';
 export const DISASTER_OIDC_SUBJECT = 'repo:ccentofo/bytime:environment:aws-disaster';
 export const logGroup = (f: Family) => `/cadenzpoint/backup/${f}`;
-export const ALL_ROLES = [...FAMILIES.map(taskRoleName), ...FAMILIES.map(execRoleName), SCHEDULER_ROLE, DISASTER_BUTTON_ROLE];
+export const ALL_ROLES = [...FAMILIES.map(taskRoleName), ...FAMILIES.map(execRoleName), SCHEDULER_ROLE, DISASTER_BUTTON_ROLE, EXPORT_TASK_ROLE, EXPORT_EXEC_ROLE, EXPORT_DOWNLOAD_ROLE];
 
 /** The §6.1 protections rule: matched by eventName alone (plus the CloudTrail detail type), from any caller. */
 export const PROTECTION_EVENTS = [
@@ -77,6 +113,11 @@ export const PROTECTION_EVENTS = [
 ] as const;
 /** The separate roles rule: IAM role-policy events on roles whose name starts `cadenzpoint-backup-`. */
 export const ROLE_EVENTS = ['UpdateAssumeRolePolicy', 'PutRolePolicy', 'DeleteRolePolicy', 'AttachRolePolicy', 'DetachRolePolicy'] as const;
+
+/** Same account, any key: the export key's ARN shape check (EXPORT_KEY_ARN). */
+export function isKeyArn(arn: string): boolean {
+  return /^arn:aws:kms:[a-z0-9-]+:\d{12}:key\/[0-9a-f-]{36}$/.test(arn);
+}
 
 export function accountIdFromKeyArn(keyArn: string): string {
   const m = /^arn:aws:kms:[a-z0-9-]+:(\d{12}):key\//.exec(keyArn);
@@ -103,12 +144,25 @@ export interface ExpectedDocuments {
   bucketPolicy: Statement[];
   keyPolicy: Statement[];
   topicPolicy: Statement[];
+  /** feature-plan-cloud-export.md §6.1 (3d): the exports bucket and its key. */
+  exportBucket: string;
+  exportBucketArn: string;
+  exportKeyArn: string;
+  exportBucketPolicy: Statement[];
+  exportKeyPolicy: Statement[];
+  /** Each bucket's own expected lifecycle rules (§6.2: the backup bucket keeps one; the exports bucket has two). */
+  lifecycle: { backup: ExpectedLifecycleRule[]; exports: ExpectedLifecycleRule[] };
   rulePatterns: Record<string, Doc>;
   roles: Record<string, { trust: Statement[]; policy: Statement[] }>;
 }
 
-export function expectedDocuments(o: { accountId: string; keyArn: string }): ExpectedDocuments {
+export function expectedDocuments(o: { accountId: string; keyArn: string; exportKeyArn: string }): ExpectedDocuments {
   const a = o.accountId;
+  const exportBucket = `${NAMES.exportBucketPrefix}${a}`;
+  const exportBucketArn = `arn:aws:s3:::${exportBucket}`;
+  const exportObjects = `${exportBucketArn}/*`;
+  const exportFamilyArn = `arn:aws:ecs:${REGION}:${a}:task-definition/${EXPORT_FAMILY}`;
+  const sweepFamilyArn = `arn:aws:ecs:${REGION}:${a}:task-definition/${SWEEP_FAMILY}`;
   const bucket = `${NAMES.bucketPrefix}${a}`;
   const bucketArn = `arn:aws:s3:::${bucket}`;
   const objects = `${bucketArn}/*`;
@@ -137,6 +191,28 @@ export function expectedDocuments(o: { accountId: string; keyArn: string }): Exp
     { Sid: 'DenyPolicyAndLifecycleChangesExceptDeploy', Effect: 'Deny', Principal: '*', Action: ['s3:PutBucketPolicy', 's3:DeleteBucketPolicy', 's3:PutLifecycleConfiguration'], Resource: bucketArn, Condition: { ArnNotEquals: { 'aws:PrincipalArn': cfnExecRoleArn } } },
   ];
 
+  const exportTaskRole = roleArn(EXPORT_TASK_ROLE);
+  const exportDownloadRole = roleArn(EXPORT_DOWNLOAD_ROLE);
+  // feature-plan-cloud-export.md §6.1 and D4: deny-only, by aws:PrincipalArn (the backup bucket's pattern). The download
+  // role reads delivery/ only: everything but the task role is denied hold/ reads.
+  const exportBucketPolicy: Statement[] = [
+    { Sid: 'DenyInsecureTransport', Effect: 'Deny', Principal: '*', Action: 's3:*', Resource: [exportBucketArn, exportObjects], Condition: { Bool: { 'aws:SecureTransport': 'false' } } },
+    { Sid: 'DenyVersioningAndObjectLock', Effect: 'Deny', Principal: '*', Action: ['s3:PutBucketVersioning', 's3:PutBucketObjectLockConfiguration'], Resource: exportBucketArn },
+    { Sid: 'DenyWritesExceptExportTask', Effect: 'Deny', Principal: '*', Action: ['s3:PutObject*', 's3:DeleteObject*', 's3:AbortMultipartUpload'], Resource: exportObjects, Condition: { ArnNotEquals: { 'aws:PrincipalArn': exportTaskRole } } },
+    { Sid: 'DenyReadsExceptExportRoles', Effect: 'Deny', Principal: '*', Action: 's3:GetObject*', Resource: exportObjects, Condition: { ArnNotEquals: { 'aws:PrincipalArn': [exportTaskRole, exportDownloadRole] } } },
+    { Sid: 'DenyHoldReadsExceptExportTask', Effect: 'Deny', Principal: '*', Action: 's3:GetObject*', Resource: `${exportBucketArn}/hold/*`, Condition: { ArnNotEquals: { 'aws:PrincipalArn': exportTaskRole } } },
+    { Sid: 'DenyPolicyAndLifecycleChangesExceptDeploy', Effect: 'Deny', Principal: '*', Action: ['s3:PutBucketPolicy', 's3:DeleteBucketPolicy', 's3:PutLifecycleConfiguration', 's3:PutEncryptionConfiguration'], Resource: exportBucketArn, Condition: { ArnNotEquals: { 'aws:PrincipalArn': cfnExecRoleArn } } },
+  ];
+  // Legal holds depend on this key: deny-only, like the backup key (no principal-exists check).
+  const exportKeyPolicy: Statement[] = [
+    { Sid: 'AccountRootAdministers', Effect: 'Allow', Principal: { AWS: `arn:aws:iam::${a}:root` }, Action: 'kms:*', Resource: '*' },
+    { Sid: 'DenyDecryptExceptExportRoles', Effect: 'Deny', Principal: { AWS: '*' }, Action: ['kms:Decrypt', 'kms:ReEncrypt*'], Resource: '*', Condition: { ArnNotEquals: { 'aws:PrincipalArn': [exportTaskRole, exportDownloadRole] } } },
+    { Sid: 'DenyGenerateDataKeyExceptExportTask', Effect: 'Deny', Principal: { AWS: '*' }, Action: 'kms:GenerateDataKey*', Resource: '*', Condition: { ArnNotEquals: { 'aws:PrincipalArn': exportTaskRole } } },
+    { Sid: 'DenyShortDeletionWindow', Effect: 'Deny', Principal: { AWS: '*' }, Action: 'kms:ScheduleKeyDeletion', Resource: '*', Condition: { NumericLessThan: { 'kms:ScheduleKeyDeletionPendingWindowInDays': '30' } } },
+    { Sid: 'DenyKeyPolicyChangesExceptDeploy', Effect: 'Deny', Principal: { AWS: '*' }, Action: 'kms:PutKeyPolicy', Resource: '*', Condition: { ArnNotEquals: { 'aws:PrincipalArn': cfnExecRoleArn } } },
+  ];
+  const s3Context = { 'kms:EncryptionContext:aws:s3:arn': exportBucketArn };
+
   const keyPolicy: Statement[] = [
     { Sid: 'AccountRootAdministers', Effect: 'Allow', Principal: { AWS: `arn:aws:iam::${a}:root` }, Action: 'kms:*', Resource: '*' },
     { Sid: 'DenyDecryptExceptRestoreRoles', Effect: 'Deny', Principal: { AWS: '*' }, Action: ['kms:Decrypt', 'kms:ReEncrypt*'], Resource: '*', Condition: { ArnNotEquals: { 'aws:PrincipalArn': restoreRoles } } },
@@ -159,6 +235,15 @@ export function expectedDocuments(o: { accountId: string; keyArn: string }): Exp
     [NAMES.disasterRunTaskRule]: {
       'detail-type': ['AWS API Call via CloudTrail'],
       detail: { eventName: ['RunTask'], requestParameters: { taskDefinition: [{ prefix: taskFamily('disaster') }, { prefix: disasterFamilyArn }] } },
+    },
+    // feature-plan-cloud-export.md §6.4: every press of Export workspace is emailed; the hourly sweep (its own family) never is.
+    [NAMES.exportStartedRule]: {
+      source: ['aws.ecs'], 'detail-type': ['ECS Task State Change'],
+      detail: { taskDefinitionArn: [{ prefix: `${exportFamilyArn}:` }], lastStatus: ['PENDING', 'PROVISIONING', 'STOPPED'] },
+    },
+    [NAMES.exportRunTaskRule]: {
+      'detail-type': ['AWS API Call via CloudTrail'],
+      detail: { eventName: ['RunTask'], requestParameters: { taskDefinition: [{ prefix: EXPORT_FAMILY }, { prefix: exportFamilyArn }] } },
     },
   };
 
@@ -195,7 +280,10 @@ export function expectedDocuments(o: { accountId: string; keyArn: string }): Exp
         { Sid: 'ListBackups', Effect: 'Allow', Action: 's3:ListBucket', Resource: bucketArn, Condition: { StringLike: { 's3:prefix': 'v1/*' } } },
         { Sid: 'InspectBucket', Effect: 'Allow', Action: ['s3:GetBucketPolicy', 's3:GetBucketVersioning', 's3:GetLifecycleConfiguration', 's3:ListBucketMultipartUploads'], Resource: bucketArn },
         { Sid: 'InspectKey', Effect: 'Allow', Action: ['kms:DescribeKey', 'kms:GetKeyPolicy'], Resource: o.keyArn },
-        { Sid: 'InspectRules', Effect: 'Allow', Action: ['events:DescribeRule', 'events:ListTargetsByRule'], Resource: [ruleArn(NAMES.protectionsRule), ruleArn(NAMES.rolesRule), ruleArn(NAMES.disasterStartedRule), ruleArn(NAMES.disasterRunTaskRule)] },
+        { Sid: 'InspectRules', Effect: 'Allow', Action: ['events:DescribeRule', 'events:ListTargetsByRule'], Resource: [ruleArn(NAMES.protectionsRule), ruleArn(NAMES.rolesRule), ruleArn(NAMES.disasterStartedRule), ruleArn(NAMES.disasterRunTaskRule), ruleArn(NAMES.exportStartedRule), ruleArn(NAMES.exportRunTaskRule)] },
+        // feature-plan-cloud-export.md §6.2: the exports bucket (encryption is checked for it only) and its key.
+        { Sid: 'InspectExportBucket', Effect: 'Allow', Action: ['s3:GetBucketPolicy', 's3:GetLifecycleConfiguration', 's3:GetEncryptionConfiguration'], Resource: exportBucketArn },
+        { Sid: 'InspectExportKey', Effect: 'Allow', Action: ['kms:DescribeKey', 'kms:GetKeyPolicy'], Resource: o.exportKeyArn },
         { Sid: 'InspectTopic', Effect: 'Allow', Action: ['sns:GetTopicAttributes', 'sns:ListSubscriptionsByTopic'], Resource: topicArn },
         { Sid: 'InspectSubscriptions', Effect: 'Allow', Action: 'sns:GetSubscriptionAttributes', Resource: `${topicArn}:*` },
         { Sid: 'InspectTrail', Effect: 'Allow', Action: 'cloudtrail:GetTrailStatus', Resource: trailArn },
@@ -222,10 +310,11 @@ export function expectedDocuments(o: { accountId: string; keyArn: string }): Exp
         Condition: { StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com', 'token.actions.githubusercontent.com:sub': DISASTER_OIDC_SUBJECT } },
       }],
       policy: [
-        { Sid: 'RunDisasterTask', Effect: 'Allow', Action: 'ecs:RunTask', Resource: `${disasterFamilyArn}:*`, Condition: { ArnEquals: { 'ecs:cluster': clusterArn } } },
+        // feature-plan-cloud-export.md §6.2: the same button role also starts the export family (same environment).
+        { Sid: 'RunDisasterTask', Effect: 'Allow', Action: 'ecs:RunTask', Resource: [`${disasterFamilyArn}:*`, `${exportFamilyArn}:*`], Condition: { ArnEquals: { 'ecs:cluster': clusterArn } } },
         { Sid: 'ListTasks', Effect: 'Allow', Action: 'ecs:ListTasks', Resource: '*', Condition: { ArnEquals: { 'ecs:cluster': clusterArn } } },
         { Sid: 'DescribeAndStopTasks', Effect: 'Allow', Action: ['ecs:DescribeTasks', 'ecs:StopTask'], Resource: `arn:aws:ecs:${REGION}:${a}:task/${NAMES.cluster}/*` },
-        { Sid: 'PassDisasterRoles', Effect: 'Allow', Action: 'iam:PassRole', Resource: [roleArn(taskRoleName('disaster')), roleArn(execRoleName('disaster'))], Condition: { StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } } },
+        { Sid: 'PassDisasterRoles', Effect: 'Allow', Action: 'iam:PassRole', Resource: [roleArn(taskRoleName('disaster')), roleArn(execRoleName('disaster')), exportTaskRole, roleArn(EXPORT_EXEC_ROLE)], Condition: { StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } } },
         { Sid: 'TagTasks', Effect: 'Allow', Action: 'ecs:TagResource', Resource: '*', Condition: { StringEquals: { 'ecs:CreateAction': 'RunTask' } } },
         { Sid: 'ReadStackOutputs', Effect: 'Allow', Action: 'cloudformation:DescribeStacks', Resource: `arn:aws:cloudformation:${REGION}:${a}:stack/${NAMES.stack}/*` },
       ],
@@ -233,8 +322,9 @@ export function expectedDocuments(o: { accountId: string; keyArn: string }): Exp
     [SCHEDULER_ROLE]: {
       trust: [{ Sid: 'TrustScheduler', Effect: 'Allow', Principal: { Service: 'scheduler.amazonaws.com' }, Action: 'sts:AssumeRole', Condition: { StringEquals: { 'aws:SourceAccount': a } } }],
       policy: [
-        { Sid: 'RunTasks', Effect: 'Allow', Action: 'ecs:RunTask', Resource: FAMILIES.map((f) => `arn:aws:ecs:${REGION}:${a}:task-definition/${taskFamily(f)}:*`) },
-        { Sid: 'PassTaskRoles', Effect: 'Allow', Action: 'iam:PassRole', Resource: [...FAMILIES.map(taskRoleName), ...FAMILIES.map(execRoleName)].map(roleArn), Condition: { StringLike: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } } },
+        // feature-plan-cloud-export.md §6.2, §6.7: explicit entries for the sweep family and its (export) roles; FAMILIES unchanged.
+        { Sid: 'RunTasks', Effect: 'Allow', Action: 'ecs:RunTask', Resource: [...FAMILIES.map((f) => `arn:aws:ecs:${REGION}:${a}:task-definition/${taskFamily(f)}:*`), `${sweepFamilyArn}:*`] },
+        { Sid: 'PassTaskRoles', Effect: 'Allow', Action: 'iam:PassRole', Resource: [...[...FAMILIES.map(taskRoleName), ...FAMILIES.map(execRoleName)].map(roleArn), exportTaskRole, roleArn(EXPORT_EXEC_ROLE)], Condition: { StringLike: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } } },
         { Sid: 'TagTasks', Effect: 'Allow', Action: 'ecs:TagResource', Resource: '*', Condition: { StringEquals: { 'ecs:CreateAction': 'RunTask' } } },
         { Sid: 'SendToDeadLetterQueue', Effect: 'Allow', Action: 'sqs:SendMessage', Resource: dlqArn },
       ],
@@ -242,7 +332,54 @@ export function expectedDocuments(o: { accountId: string; keyArn: string }): Exp
   };
   for (const f of FAMILIES) roles[execRoleName(f)] = { trust: ecsTrust, policy: execPolicy(f) };
 
-  return { accountId: a, bucket, bucketArn, keyArn: o.keyArn, topicArn, trailArn, dlqArn, alarmArn, roleArn, cfnExecRoleArn, bucketPolicy, keyPolicy, topicPolicy, rulePatterns, roles };
+  // feature-plan-cloud-export.md §6.2: explicit entries (FAMILIES is unchanged). The task role runs both the export and the
+  // sweep families; no access to the backup bucket or key.
+  roles[EXPORT_TASK_ROLE] = {
+    trust: ecsTrust,
+    policy: [
+      { Sid: 'ExportObjects', Effect: 'Allow', Action: ['s3:PutObject', 's3:GetObject', 's3:DeleteObject', 's3:AbortMultipartUpload'], Resource: exportObjects },
+      { Sid: 'ListExports', Effect: 'Allow', Action: 's3:ListBucket', Resource: exportBucketArn },
+      { Sid: 'UseExportKey', Effect: 'Allow', Action: ['kms:GenerateDataKey', 'kms:Decrypt'], Resource: o.exportKeyArn, Condition: { StringEquals: s3Context } },
+      { Sid: 'ListOwnFamily', Effect: 'Allow', Action: 'ecs:ListTasks', Resource: '*', Condition: { ArnEquals: { 'ecs:cluster': clusterArn } } },
+      { Sid: 'DescribeTasks', Effect: 'Allow', Action: 'ecs:DescribeTasks', Resource: `arn:aws:ecs:${REGION}:${a}:task/${NAMES.cluster}/*` },
+      { Sid: 'EmailFounder', Effect: 'Allow', Action: 'sns:Publish', Resource: topicArn },
+    ],
+  };
+  roles[EXPORT_EXEC_ROLE] = {
+    trust: ecsTrust,
+    policy: [
+      { Sid: 'PullAuth', Effect: 'Allow', Action: 'ecr:GetAuthorizationToken', Resource: '*' },
+      { Sid: 'PullImage', Effect: 'Allow', Action: ['ecr:BatchCheckLayerAvailability', 'ecr:BatchGetImage', 'ecr:GetDownloadUrlForLayer'], Resource: repoArn },
+      { Sid: 'WriteLogs', Effect: 'Allow', Action: ['logs:CreateLogStream', 'logs:PutLogEvents'], Resource: [`arn:aws:logs:${REGION}:${a}:log-group:${EXPORT_LOG_GROUP}:*`, `arn:aws:logs:${REGION}:${a}:log-group:${SWEEP_LOG_GROUP}:*`] },
+      { Sid: 'ReadParameters', Effect: 'Allow', Action: 'ssm:GetParameters', Resource: [PARAMETERS.controlPlaneUrl, PARAMETERS.encryptionKey].map(paramArn) },
+    ],
+  };
+  roles[EXPORT_DOWNLOAD_ROLE] = {
+    trust: [{
+      Sid: 'TrustVercelProduction', Effect: 'Allow',
+      Principal: { Federated: `arn:aws:iam::${a}:oidc-provider/${VERCEL_OIDC_HOST}` }, Action: 'sts:AssumeRoleWithWebIdentity',
+      Condition: { StringEquals: { [`${VERCEL_OIDC_HOST}:aud`]: VERCEL_OIDC_AUDIENCE, [`${VERCEL_OIDC_HOST}:sub`]: VERCEL_OIDC_SUBJECT } },
+    }],
+    policy: [
+      { Sid: 'ReadDeliveries', Effect: 'Allow', Action: 's3:GetObject', Resource: `${exportBucketArn}/delivery/*` },
+      { Sid: 'DecryptDeliveries', Effect: 'Allow', Action: 'kms:Decrypt', Resource: o.exportKeyArn, Condition: { StringEquals: { 'kms:ViaService': `s3.${REGION}.amazonaws.com`, ...s3Context } } },
+    ],
+  };
+
+  const lifecycle = {
+    backup: [{ id: NAMES.lifecycleRule, status: 'Enabled', prefix: 'v1/', expirationDays: 25, abortDays: 1 }] as ExpectedLifecycleRule[],
+    // §6.1: delivery/ copies expire at 8 days (the backstop: lifecycle counts from the upload and rounds to midnight UTC);
+    // incomplete uploads are aborted after a day; no rule for hold/.
+    exports: [
+      { id: 'expire-delivery', status: 'Enabled', prefix: 'delivery/', expirationDays: 8, abortDays: null },
+      { id: 'abort-mpu', status: 'Enabled', prefix: '', expirationDays: null, abortDays: 1 },
+    ] as ExpectedLifecycleRule[],
+  };
+
+  return {
+    accountId: a, bucket, bucketArn, keyArn: o.keyArn, topicArn, trailArn, dlqArn, alarmArn, roleArn, cfnExecRoleArn, bucketPolicy, keyPolicy, topicPolicy, rulePatterns, roles,
+    exportBucket, exportBucketArn, exportKeyArn: o.exportKeyArn, exportBucketPolicy, exportKeyPolicy, lifecycle,
+  };
 }
 
 /**
@@ -278,6 +415,20 @@ export function statementDrift(label: string, expected: Statement[], actual: unk
   }
   for (const extra of bySid.keys()) out.push(`${label}:${extra}`);
   return [...new Set(out)];
+}
+
+/** A bucket's lifecycle against its expected rules (§6.2): missing, extra or changed rules, or any extra rule kind. */
+export function lifecycleDrift(
+  label: string,
+  expected: ExpectedLifecycleRule[],
+  actual: Array<{ id: string | null; status: string | null; prefix: string | null; expirationDays: number | null; abortDays: number | null; other: boolean }> | null,
+): string[] {
+  if (actual === null) return [label]; // the same finding as before 3d (no ':missing' suffix)
+  const key = (r: { id: string | null; status: string | null; prefix: string | null; expirationDays: number | null; abortDays: number | null }) =>
+    JSON.stringify([r.id, r.status, r.prefix ?? '', r.expirationDays ?? null, r.abortDays ?? null]);
+  const want = new Set(expected.map(key));
+  const ok = actual.length === expected.length && actual.every((r) => !r.other && want.has(key(r)));
+  return ok ? [] : [label];
 }
 
 /** Statements from a policy document string (or null when absent / unparseable). */
