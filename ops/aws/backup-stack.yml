@@ -183,6 +183,192 @@ Resources:
                 aws:PrincipalArn:
                   Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-bootstrap/cadenzpoint-backup-cfn
 
+  # ---- the exports bucket and its key (feature-plan-cloud-export.md §6.1) -------------------------------------------
+  # Sent export copies (delivery/, 7-day links) and legal-hold copies (hold/, kept until released). SSE-KMS with the bucket
+  # key; only the export task role writes, reads hold/ or deletes; the Vercel download role reads delivery/ through
+  # 5-minute presigned URLs. Legal holds depend on this key: the same deletion-window and policy-change denies as the
+  # backup key, and 3b's KMS alerts (matched by event name) cover it.
+  ExportKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: CadenzPoint exports bucket (SSE-KMS with the bucket key; legal holds depend on it)
+      KeySpec: SYMMETRIC_DEFAULT
+      KeyUsage: ENCRYPT_DECRYPT
+      EnableKeyRotation: true
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AccountRootAdministers
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: '*'
+          - Sid: DenyDecryptExceptExportRoles
+            Effect: Deny
+            Principal:
+              AWS: '*'
+            Action:
+              - kms:Decrypt
+              - kms:ReEncrypt*
+            Resource: '*'
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn:
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-export-task
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-export-download
+          - Sid: DenyGenerateDataKeyExceptExportTask
+            Effect: Deny
+            Principal:
+              AWS: '*'
+            Action: kms:GenerateDataKey*
+            Resource: '*'
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-export-task
+          - Sid: DenyShortDeletionWindow
+            Effect: Deny
+            Principal:
+              AWS: '*'
+            Action: kms:ScheduleKeyDeletion
+            Resource: '*'
+            Condition:
+              NumericLessThan:
+                kms:ScheduleKeyDeletionPendingWindowInDays: '30'
+          - Sid: DenyKeyPolicyChangesExceptDeploy
+            Effect: Deny
+            Principal:
+              AWS: '*'
+            Action: kms:PutKeyPolicy
+            Resource: '*'
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-bootstrap/cadenzpoint-backup-cfn
+
+  ExportKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/cadenzpoint-exports
+      TargetKeyId:
+        Ref: ExportKey
+
+  ExportBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName:
+        Fn::Sub: cadenzpoint-exports-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID:
+                Fn::GetAtt: [ExportKey, Arn]
+            BucketKeyEnabled: true
+      # expire-delivery is the backstop (the hourly sweep erases a copy within the hour after its link expires): lifecycle
+      # counts from the upload and rounds to midnight UTC, so 7 days could remove a file before its link expires. No rule
+      # for hold/ (kept until the founder releases it).
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-delivery
+            Status: Enabled
+            Prefix: delivery/
+            ExpirationInDays: 8
+          - Id: abort-mpu
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+
+  ExportBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: ExportBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - Fn::Sub: arn:aws:s3:::cadenzpoint-exports-${AWS::AccountId}
+              - Fn::Sub: arn:aws:s3:::cadenzpoint-exports-${AWS::AccountId}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+          - Sid: DenyVersioningAndObjectLock
+            Effect: Deny
+            Principal: '*'
+            Action:
+              - s3:PutBucketVersioning
+              - s3:PutBucketObjectLockConfiguration
+            Resource:
+              Fn::Sub: arn:aws:s3:::cadenzpoint-exports-${AWS::AccountId}
+          - Sid: DenyWritesExceptExportTask
+            Effect: Deny
+            Principal: '*'
+            Action:
+              - s3:PutObject*
+              - s3:DeleteObject*
+              - s3:AbortMultipartUpload
+            Resource:
+              Fn::Sub: arn:aws:s3:::cadenzpoint-exports-${AWS::AccountId}/*
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-export-task
+          - Sid: DenyReadsExceptExportRoles
+            Effect: Deny
+            Principal: '*'
+            Action: s3:GetObject*
+            Resource:
+              Fn::Sub: arn:aws:s3:::cadenzpoint-exports-${AWS::AccountId}/*
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn:
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-export-task
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-export-download
+          - Sid: DenyHoldReadsExceptExportTask
+            Effect: Deny
+            Principal: '*'
+            Action: s3:GetObject*
+            Resource:
+              Fn::Sub: arn:aws:s3:::cadenzpoint-exports-${AWS::AccountId}/hold/*
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-export-task
+          - Sid: DenyPolicyAndLifecycleChangesExceptDeploy
+            Effect: Deny
+            Principal: '*'
+            Action:
+              - s3:PutBucketPolicy
+              - s3:DeleteBucketPolicy
+              - s3:PutLifecycleConfiguration
+              - s3:PutEncryptionConfiguration
+            Resource:
+              Fn::Sub: arn:aws:s3:::cadenzpoint-exports-${AWS::AccountId}
+            Condition:
+              ArnNotEquals:
+                aws:PrincipalArn:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-bootstrap/cadenzpoint-backup-cfn
+
   # ---- network: public subnets, no NAT gateway ---------------------------------------------------------------------
   Vpc:
     Type: AWS::EC2::VPC
@@ -309,6 +495,19 @@ Resources:
     Properties:
       LogGroupName: /cadenzpoint/backup/disaster
       RetentionInDays: 365
+
+  # feature-plan-cloud-export.md §6.3, §6.7: the export task's log (ids only), kept a year; the hourly sweep's, 30 days.
+  ExportLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /cadenzpoint/backup/export
+      RetentionInDays: 365
+
+  SweepLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /cadenzpoint/backup/sweep
+      RetentionInDays: 30
 
   # ---- roles (path /cadenzpoint-backup/; every name starts cadenzpoint-backup-) -------------------------------------
   BackupTaskRole:
@@ -461,6 +660,25 @@ Resources:
                   - Fn::Sub: arn:aws:events:us-east-1:${AWS::AccountId}:rule/cadenzpoint-backup-roles
                   - Fn::Sub: arn:aws:events:us-east-1:${AWS::AccountId}:rule/cadenzpoint-backup-disaster-started
                   - Fn::Sub: arn:aws:events:us-east-1:${AWS::AccountId}:rule/cadenzpoint-backup-disaster-runtask
+                  - Fn::Sub: arn:aws:events:us-east-1:${AWS::AccountId}:rule/cadenzpoint-backup-export-started
+                  - Fn::Sub: arn:aws:events:us-east-1:${AWS::AccountId}:rule/cadenzpoint-backup-export-runtask
+              # feature-plan-cloud-export.md §6.2: the exports bucket (its encryption is checked; the backup bucket's isn't:
+              # its data is client-side encrypted) and its key.
+              - Sid: InspectExportBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketPolicy
+                  - s3:GetLifecycleConfiguration
+                  - s3:GetEncryptionConfiguration
+                Resource:
+                  Fn::Sub: arn:aws:s3:::cadenzpoint-exports-${AWS::AccountId}
+              - Sid: InspectExportKey
+                Effect: Allow
+                Action:
+                  - kms:DescribeKey
+                  - kms:GetKeyPolicy
+                Resource:
+                  Fn::GetAtt: [ExportKey, Arn]
               - Sid: InspectTopic
                 Effect: Allow
                 Action:
@@ -624,10 +842,182 @@ Resources:
                   - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-backup-id
                   - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/restore-test-url
 
+  # feature-plan-cloud-export.md §6.2: the export task role, shared by the export family (deliver, hold, release) and the
+  # hourly sweep family. The exports bucket and key only (no access to the backup bucket or key), its own family's running
+  # tasks (oldest wins), and the founder's email.
+  ExportTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cadenzpoint-backup-export-task
+      Path: /cadenzpoint-backup/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustEcsTasks
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
+              ArnLike:
+                aws:SourceArn:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:*
+      Policies:
+        - PolicyName: cadenzpoint-backup-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ExportObjects
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                  - s3:AbortMultipartUpload
+                Resource:
+                  Fn::Sub: arn:aws:s3:::cadenzpoint-exports-${AWS::AccountId}/*
+              - Sid: ListExports
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource:
+                  Fn::Sub: arn:aws:s3:::cadenzpoint-exports-${AWS::AccountId}
+              - Sid: UseExportKey
+                Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource:
+                  Fn::GetAtt: [ExportKey, Arn]
+                Condition:
+                  StringEquals:
+                    kms:EncryptionContext:aws:s3:arn:
+                      Fn::Sub: arn:aws:s3:::cadenzpoint-exports-${AWS::AccountId}
+              - Sid: ListOwnFamily
+                Effect: Allow
+                Action: ecs:ListTasks
+                Resource: '*'
+                Condition:
+                  ArnEquals:
+                    ecs:cluster:
+                      Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:cluster/cadenzpoint-backup
+              - Sid: DescribeTasks
+                Effect: Allow
+                Action: ecs:DescribeTasks
+                Resource:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task/cadenzpoint-backup/*
+              - Sid: EmailFounder
+                Effect: Allow
+                Action: sns:Publish
+                Resource:
+                  Fn::Sub: arn:aws:sns:us-east-1:${AWS::AccountId}:cadenzpoint-backup-alerts
+
+  # The execution role of both families: it writes both log groups.
+  ExportExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cadenzpoint-backup-export-exec
+      Path: /cadenzpoint-backup/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustEcsTasks
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
+              ArnLike:
+                aws:SourceArn:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:*
+      Policies:
+        - PolicyName: cadenzpoint-backup-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PullAuth
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: PullImage
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource:
+                  Fn::Sub: arn:aws:ecr:us-east-1:${AWS::AccountId}:repository/cadenzpoint-backup
+              - Sid: WriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - Fn::Sub: arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/cadenzpoint/backup/export:*
+                  - Fn::Sub: arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/cadenzpoint/backup/sweep:*
+              - Sid: ReadParameters
+                Effect: Allow
+                Action: ssm:GetParameters
+                Resource:
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-url
+                  - Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/encryption-key
+
+  # feature-plan-cloud-export.md §6.2, §6.6: the download page's role on cadenzpoint.com, trusted by the Vercel OIDC provider
+  # (bootstrap.yml) for the production environment of one project only (exact StringEquals on aud and sub; no stored key).
+  # It reads delivery/ only, through 5-minute presigned URLs. The team slug and project name are the template constants
+  # (equal here, in bootstrap.yml and in expected-policies.ts; U6). Until the founder gives them they are fail-closed
+  # placeholders (P1): no Vercel token can satisfy this trust.
+  ExportDownloadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cadenzpoint-backup-export-download
+      Path: /cadenzpoint-backup/
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TrustVercelProduction
+            Effect: Allow
+            Principal:
+              Federated:
+                Fn::Sub: arn:aws:iam::${AWS::AccountId}:oidc-provider/oidc.vercel.com/PENDING_TEAM
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'oidc.vercel.com/PENDING_TEAM:aud': 'https://vercel.com/PENDING_TEAM'
+                'oidc.vercel.com/PENDING_TEAM:sub': 'owner:PENDING_TEAM:project:PENDING_PROJECT:environment:production'
+      Policies:
+        - PolicyName: cadenzpoint-backup-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadDeliveries
+                Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  Fn::Sub: arn:aws:s3:::cadenzpoint-exports-${AWS::AccountId}/delivery/*
+              - Sid: DecryptDeliveries
+                Effect: Allow
+                Action: kms:Decrypt
+                Resource:
+                  Fn::GetAtt: [ExportKey, Arn]
+                Condition:
+                  StringEquals:
+                    kms:ViaService: s3.us-east-1.amazonaws.com
+                    kms:EncryptionContext:aws:s3:arn:
+                      Fn::Sub: arn:aws:s3:::cadenzpoint-exports-${AWS::AccountId}
+
   # feature-plan-disaster-restore.md §6.2: the button's role, reachable only from a job in the founder-approved
-  # `aws-disaster` environment (GitHub OIDC). It may start only the disaster family, in this cluster; a role allowed to run
-  # the family may run it with any command or environment (no IAM condition restricts overrides), and Describe/Stop also
-  # reach the backup tasks in this cluster. PassRole only to ecs-tasks (that's what stops a taskRoleArn override).
+  # `aws-disaster` environment (GitHub OIDC). It may start only the disaster family and (feature-plan-cloud-export.md §6.2)
+  # the export family, in this cluster; a role allowed to run a family may run it with any command or environment (no IAM
+  # condition restricts overrides), and Describe/Stop also reach the backup tasks in this cluster. PassRole only to
+  # ecs-tasks, for both families' task and execution roles: with PassRole on both, a taskRoleArn override could swap one
+  # family's role for the other's. That is accepted: every press needs the founder's approval.
   DisasterButtonRole:
     Type: AWS::IAM::Role
     Properties:
@@ -656,7 +1046,8 @@ Resources:
                 Effect: Allow
                 Action: ecs:RunTask
                 Resource:
-                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-disaster:*
+                  - Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-disaster:*
+                  - Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-export:*
                 Condition:
                   ArnEquals:
                     ecs:cluster:
@@ -682,6 +1073,8 @@ Resources:
                 Resource:
                   - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-disaster-task
                   - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-disaster-exec
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-export-task
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-export-exec
                 Condition:
                   StringEquals:
                     iam:PassedToService: ecs-tasks.amazonaws.com
@@ -883,6 +1276,8 @@ Resources:
                   - Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-audit:*
                   - Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-restore-test:*
                   - Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-disaster:*
+                  # feature-plan-cloud-export.md §6.7: the hourly sweep family (explicit; not one of the four families).
+                  - Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-sweep:*
               - Sid: PassTaskRoles
                 Effect: Allow
                 Action: iam:PassRole
@@ -895,6 +1290,8 @@ Resources:
                   - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-audit-exec
                   - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-restore-test-exec
                   - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-disaster-exec
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-export-task
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cadenzpoint-backup/cadenzpoint-backup-export-exec
                 Condition:
                   StringLike:
                     iam:PassedToService: ecs-tasks.amazonaws.com
@@ -1074,7 +1471,14 @@ Resources:
               Value:
                 Ref: AlertTopic
             - Name: ALERT_RULE_NAMES
-              Value: cadenzpoint-backup-protections,cadenzpoint-backup-roles,cadenzpoint-backup-disaster-started,cadenzpoint-backup-disaster-runtask
+              Value: cadenzpoint-backup-protections,cadenzpoint-backup-roles,cadenzpoint-backup-disaster-started,cadenzpoint-backup-disaster-runtask,cadenzpoint-backup-export-started,cadenzpoint-backup-export-runtask
+            # feature-plan-cloud-export.md §6.2: protection drift for the exports bucket and its key.
+            - Name: EXPORT_BUCKET
+              Value:
+                Ref: ExportBucket
+            - Name: EXPORT_KEY_ARN
+              Value:
+                Fn::GetAtt: [ExportKey, Arn]
             - Name: TRAIL_NAME
               Value: cadenzpoint-account-trail
             - Name: DLQ_ALARM_NAME
@@ -1182,6 +1586,105 @@ Resources:
                 Ref: DisasterLogGroup
               awslogs-region: us-east-1
               awslogs-stream-prefix: disaster
+
+  # feature-plan-cloud-export.md §6.3: the Export workspace button's task (deliver, hold, release). 1 vCPU / 4 GB; the ZIP
+  # streams (bounded memory). No BACKUP_KMS_KEY_ARN: it never touches the backup bucket or key.
+  ExportTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: cadenzpoint-backup-export
+      Cpu: '1024'
+      Memory: '4096'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
+      ExecutionRoleArn:
+        Fn::GetAtt: [ExportExecRole, Arn]
+      TaskRoleArn:
+        Fn::GetAtt: [ExportTaskRole, Arn]
+      ContainerDefinitions:
+        - Name: export
+          Image:
+            Ref: ImageUri
+          Essential: true
+          Command:
+            - export
+          StopTimeout: 120
+          LinuxParameters:
+            InitProcessEnabled: true
+          Environment:
+            - Name: AWS_REGION
+              Value: us-east-1
+            - Name: EXPORT_BUCKET
+              Value:
+                Ref: ExportBucket
+            - Name: ALERT_TOPIC_ARN
+              Value:
+                Ref: AlertTopic
+          Secrets:
+            - Name: CONTROL_PLANE_DATABASE_URL
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-url
+            - Name: ENCRYPTION_KEY
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/encryption-key
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Ref: ExportLogGroup
+              awslogs-region: us-east-1
+              awslogs-stream-prefix: export
+
+  # feature-plan-cloud-export.md §6.7: the hourly sweep, its own family (so it never competes with a press and is never
+  # emailed), the same task and execution roles as the export family. 0.25 vCPU / 0.5 GB.
+  SweepTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: cadenzpoint-backup-sweep
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: X86_64
+      ExecutionRoleArn:
+        Fn::GetAtt: [ExportExecRole, Arn]
+      TaskRoleArn:
+        Fn::GetAtt: [ExportTaskRole, Arn]
+      ContainerDefinitions:
+        - Name: sweep
+          Image:
+            Ref: ImageUri
+          Essential: true
+          Command:
+            - export
+            - sweep
+          StopTimeout: 120
+          LinuxParameters:
+            InitProcessEnabled: true
+          Environment:
+            - Name: AWS_REGION
+              Value: us-east-1
+            - Name: EXPORT_BUCKET
+              Value:
+                Ref: ExportBucket
+          Secrets:
+            - Name: CONTROL_PLANE_DATABASE_URL
+              ValueFrom:
+                Fn::Sub: arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/cadenzpoint/backup/control-plane-url
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Ref: SweepLogGroup
+              awslogs-region: us-east-1
+              awslogs-stream-prefix: sweep
 
   # ---- alerting: immediate email, straight from AWS -----------------------------------------------------------------
   SchedulerDeadLetterQueue:
@@ -1390,6 +1893,68 @@ Resources:
               startedBy: $.detail.requestParameters.startedBy
             InputTemplate: '"CadenzPoint disaster task requested by <caller> at <time> (started by <startedBy>). If you did not make this request, investigate now."'
 
+  # feature-plan-cloud-export.md §6.4: every Export workspace press is emailed (start and finish, and the RunTask call with
+  # its caller). The export family only: the hourly sweep (cadenzpoint-backup-sweep) is never emailed.
+  ExportStartedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: cadenzpoint-backup-export-started
+      Description: Every export task start and finish emails the founder
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.ecs
+        detail-type:
+          - ECS Task State Change
+        detail:
+          taskDefinitionArn:
+            - prefix:
+                Fn::Sub: 'arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-export:'
+          lastStatus:
+            - PENDING
+            - PROVISIONING
+            - STOPPED
+      Targets:
+        - Id: alert-topic
+          Arn:
+            Ref: AlertTopic
+          InputTransformer:
+            InputPathsMap:
+              status: $.detail.lastStatus
+              task: $.detail.taskArn
+              startedBy: $.detail.startedBy
+              stopCode: $.detail.stopCode
+              time: $.time
+            InputTemplate: '"CadenzPoint Export workspace task <status> at <time> (started by <startedBy>; task <task>; stop code <stopCode>). If you did not press Export workspace or run the CloudShell command, investigate now."'
+
+  ExportRunTaskRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: cadenzpoint-backup-export-runtask
+      Description: Every RunTask of the export family emails the founder with the caller
+      State: ENABLED
+      EventPattern:
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventName:
+            - RunTask
+          requestParameters:
+            taskDefinition:
+              - prefix: cadenzpoint-backup-export
+              - prefix:
+                  Fn::Sub: arn:aws:ecs:us-east-1:${AWS::AccountId}:task-definition/cadenzpoint-backup-export
+      Targets:
+        - Id: alert-topic
+          Arn:
+            Ref: AlertTopic
+          InputTransformer:
+            InputPathsMap:
+              caller: $.detail.userIdentity.arn
+              time: $.time
+              startedBy: $.detail.requestParameters.startedBy
+            InputTemplate: '"CadenzPoint Export workspace task requested by <caller> at <time> (started by <startedBy>). If you did not make this request, investigate now."'
+
   DlqAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -1483,6 +2048,19 @@ Resources:
       - DisasterTaskDefinition
       - DisasterStartedRule
       - DisasterRunTaskRule
+      - ExportKey
+      - ExportKeyAlias
+      - ExportBucket
+      - ExportBucketPolicy
+      - ExportLogGroup
+      - SweepLogGroup
+      - ExportTaskRole
+      - ExportExecRole
+      - ExportDownloadRole
+      - ExportTaskDefinition
+      - SweepTaskDefinition
+      - ExportStartedRule
+      - ExportRunTaskRule
     Properties:
       Name: cadenzpoint-backup-daily
       ScheduleExpression: 'cron(17 6 * * ? *)'
@@ -1555,6 +2133,19 @@ Resources:
       - DisasterTaskDefinition
       - DisasterStartedRule
       - DisasterRunTaskRule
+      - ExportKey
+      - ExportKeyAlias
+      - ExportBucket
+      - ExportBucketPolicy
+      - ExportLogGroup
+      - SweepLogGroup
+      - ExportTaskRole
+      - ExportExecRole
+      - ExportDownloadRole
+      - ExportTaskDefinition
+      - SweepTaskDefinition
+      - ExportStartedRule
+      - ExportRunTaskRule
     Properties:
       Name: cadenzpoint-backup-catchup
       ScheduleExpression: 'cron(17 18 * * ? *)'
@@ -1628,6 +2219,19 @@ Resources:
       - DisasterTaskDefinition
       - DisasterStartedRule
       - DisasterRunTaskRule
+      - ExportKey
+      - ExportKeyAlias
+      - ExportBucket
+      - ExportBucketPolicy
+      - ExportLogGroup
+      - SweepLogGroup
+      - ExportTaskRole
+      - ExportExecRole
+      - ExportDownloadRole
+      - ExportTaskDefinition
+      - SweepTaskDefinition
+      - ExportStartedRule
+      - ExportRunTaskRule
     Properties:
       Name: cadenzpoint-backup-audit-daily
       ScheduleExpression: 'cron(17 11 * * ? *)'
@@ -1700,6 +2304,19 @@ Resources:
       - DisasterTaskDefinition
       - DisasterStartedRule
       - DisasterRunTaskRule
+      - ExportKey
+      - ExportKeyAlias
+      - ExportBucket
+      - ExportBucketPolicy
+      - ExportLogGroup
+      - SweepLogGroup
+      - ExportTaskRole
+      - ExportExecRole
+      - ExportDownloadRole
+      - ExportTaskDefinition
+      - SweepTaskDefinition
+      - ExportStartedRule
+      - ExportRunTaskRule
     Properties:
       Name: cadenzpoint-backup-restore-test-weekly
       ScheduleExpression: 'cron(17 8 ? * MON *)'
@@ -1772,6 +2389,19 @@ Resources:
       - DisasterTaskDefinition
       - DisasterStartedRule
       - DisasterRunTaskRule
+      - ExportKey
+      - ExportKeyAlias
+      - ExportBucket
+      - ExportBucketPolicy
+      - ExportLogGroup
+      - SweepLogGroup
+      - ExportTaskRole
+      - ExportExecRole
+      - ExportDownloadRole
+      - ExportTaskDefinition
+      - SweepTaskDefinition
+      - ExportStartedRule
+      - ExportRunTaskRule
     Properties:
       Name: cadenzpoint-backup-restore-test-catchup
       ScheduleExpression: 'cron(17 8 ? * SUN,TUE-SAT *)'
@@ -1848,6 +2478,19 @@ Resources:
       - DisasterStartedRule
       - DisasterRunTaskRule
       - RestoreTestTaskDefinition
+      - ExportKey
+      - ExportKeyAlias
+      - ExportBucket
+      - ExportBucketPolicy
+      - ExportLogGroup
+      - SweepLogGroup
+      - ExportTaskRole
+      - ExportExecRole
+      - ExportDownloadRole
+      - ExportTaskDefinition
+      - SweepTaskDefinition
+      - ExportStartedRule
+      - ExportRunTaskRule
     Properties:
       Name: cadenzpoint-backup-disaster-rehearse
       ScheduleExpression: 'cron(17 15 1 * ? *)'
@@ -1924,6 +2567,19 @@ Resources:
       - DisasterStartedRule
       - DisasterRunTaskRule
       - RestoreTestTaskDefinition
+      - ExportKey
+      - ExportKeyAlias
+      - ExportBucket
+      - ExportBucketPolicy
+      - ExportLogGroup
+      - SweepLogGroup
+      - ExportTaskRole
+      - ExportExecRole
+      - ExportDownloadRole
+      - ExportTaskDefinition
+      - SweepTaskDefinition
+      - ExportStartedRule
+      - ExportRunTaskRule
     Properties:
       Name: cadenzpoint-backup-disaster-rehearse-cp
       ScheduleExpression: 'cron(17 15 15 * ? *)'
@@ -1946,6 +2602,94 @@ Resources:
         EcsParameters:
           TaskDefinitionArn:
             Ref: DisasterTaskDefinition
+          LaunchType: FARGATE
+          PlatformVersion: LATEST
+          TaskCount: 1
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              AssignPublicIp: ENABLED
+              Subnets:
+                - Ref: SubnetA
+                - Ref: SubnetB
+              SecurityGroups:
+                - Ref: TaskSecurityGroup
+
+  # feature-plan-cloud-export.md §6.7: the hourly export sweep (its own family; not covered by the export emails). A start
+  # failure goes to the schedule DLQ alarm; an effect failure shows as export-copy-overdue in the digest.
+  ExportSweepSchedule:
+    Type: AWS::Scheduler::Schedule
+    DependsOn:
+      - BackupKey
+      - BackupKeyAlias
+      - BackupBucket
+      - BackupBucketPolicy
+      - ExportKey
+      - ExportKeyAlias
+      - ExportBucket
+      - ExportBucketPolicy
+      - Vpc
+      - InternetGateway
+      - GatewayAttachment
+      - PublicRouteTable
+      - DefaultRoute
+      - SubnetARoutes
+      - SubnetBRoutes
+      - BackupLogGroup
+      - AuditLogGroup
+      - RestoreTestLogGroup
+      - DisasterLogGroup
+      - ExportLogGroup
+      - SweepLogGroup
+      - BackupTaskRole
+      - RestoreTestTaskRole
+      - AuditTaskRole
+      - DisasterTaskRole
+      - DisasterExecRole
+      - ExportTaskRole
+      - ExportExecRole
+      - ExportDownloadRole
+      - DisasterButtonRole
+      - BackupExecRole
+      - AuditExecRole
+      - RestoreTestExecRole
+      - BackupTaskDefinition
+      - RestoreTestTaskDefinition
+      - AuditTaskDefinition
+      - DisasterTaskDefinition
+      - ExportTaskDefinition
+      - AlertTopic
+      - AlertSubscription
+      - AlertTopicPolicy
+      - ProtectionsRule
+      - RolesRule
+      - DisasterStartedRule
+      - DisasterRunTaskRule
+      - ExportStartedRule
+      - ExportRunTaskRule
+      - DlqAlarm
+      - MonthlyBudget
+    Properties:
+      Name: cadenzpoint-backup-export-sweep
+      ScheduleExpression: 'rate(1 hour)'
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      State: ENABLED
+      Target:
+        Arn:
+          Fn::GetAtt: [Cluster, Arn]
+        RoleArn:
+          Fn::GetAtt: [SchedulerRole, Arn]
+        Input: '{"containerOverrides":[{"name":"sweep","command":["export","sweep"]}]}'
+        RetryPolicy:
+          MaximumRetryAttempts: 10
+          MaximumEventAgeInSeconds: 3600
+        DeadLetterConfig:
+          Arn:
+            Fn::GetAtt: [SchedulerDeadLetterQueue, Arn]
+        EcsParameters:
+          TaskDefinitionArn:
+            Ref: SweepTaskDefinition
           LaunchType: FARGATE
           PlatformVersion: LATEST
           TaskCount: 1
@@ -1986,3 +2730,16 @@ Outputs:
   # control-plane rehearsal) not listed here, before any AWS start; a stack without this output allows 3c's modes only.
   DisasterModes:
     Value: workspace rehearse control-plane reconcile rehearse-control-plane
+  # feature-plan-cloud-export.md §6.4: the modes this stack's image runs (the Export workspace button refuses others), and
+  # the two values the founder copies into Vercel's production env (EXPORT_DOWNLOAD_ROLE_ARN, EXPORT_BUCKET; 13d).
+  ExportModes:
+    Value: deliver hold release
+  ExportDownloadRoleArn:
+    Value:
+      Fn::GetAtt: [ExportDownloadRole, Arn]
+  ExportBucket:
+    Value:
+      Ref: ExportBucket
+  ExportKeyArn:
+    Value:
+      Fn::GetAtt: [ExportKey, Arn]

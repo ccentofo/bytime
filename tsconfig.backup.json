@@ -7,7 +7,10 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "paths": {
+      "@/*": ["./src/*"]
+    }
   },
   "include": [
     "scripts/backup/**/*.ts",
@@ -16,6 +19,14 @@
     "src/lib/tenant/backup-locks.ts",
     "src/lib/tenant/db-name.ts",
     "src/lib/tenant/lifecycle-config.ts",
-    "src/lib/tenant/slug-rules.ts"
+    "src/lib/tenant/slug-rules.ts",
+    "src/lib/export/workspace-export.ts",
+    "src/lib/export/allowlists.ts",
+    "src/lib/export/manifest.ts",
+    "src/db/schema.ts",
+    "src/lib/db/pg-url.ts",
+    "src/lib/provenance.ts",
+    "src/lib/csv/escape.ts",
+    "src/lib/calendar-date.ts"
   ]
 }

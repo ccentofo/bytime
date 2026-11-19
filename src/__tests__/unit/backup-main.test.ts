@@ -67,11 +67,15 @@ describe('U5: environment checks in ECS', () => {
     const alias = capture();
     expect(await main(['restore-test'], { ...rt, BACKUP_KMS_KEY_ARN: 'arn:aws:kms:us-east-1:111122223333:alias/cadenzpoint-backup' }, { log: alias.log, runVersion: pg16, checksOnly: true })).toBe(1);
     expect(alias.lines[0]).toContain('key ARN');
-    const au = { ...ECS, CONTROL_PLANE_DATABASE_URL: 'x', RESTORE_TEST_DATABASE_URL: 'y', BACKUP_BUCKET: 'b', BACKUP_KMS_KEY_ARN: ARN, ALERT_TOPIC_ARN: 't', ALERT_RULE_NAMES: 'a,b', TRAIL_NAME: 'tr', DLQ_ALARM_NAME: 'd', AWS_REGION: 'us-east-1' };
+    const au = { ...ECS, CONTROL_PLANE_DATABASE_URL: 'x', RESTORE_TEST_DATABASE_URL: 'y', BACKUP_BUCKET: 'b', BACKUP_KMS_KEY_ARN: ARN, ALERT_TOPIC_ARN: 't', ALERT_RULE_NAMES: 'a,b', TRAIL_NAME: 'tr', DLQ_ALARM_NAME: 'd', AWS_REGION: 'us-east-1', EXPORT_BUCKET: 'eb', EXPORT_KEY_ARN: ARN.replace('1234abcd', '5678efab') };
     expect(await main(['audit'], au, { log: () => {}, checksOnly: true })).toBe(0);
-    for (const k of ['ALERT_TOPIC_ARN', 'ALERT_RULE_NAMES', 'TRAIL_NAME', 'DLQ_ALARM_NAME']) {
+    for (const k of ['ALERT_TOPIC_ARN', 'ALERT_RULE_NAMES', 'TRAIL_NAME', 'DLQ_ALARM_NAME', 'EXPORT_BUCKET', 'EXPORT_KEY_ARN']) {
       expect(await main(['audit'], { ...au, [k]: '' }, { log: () => {}, checksOnly: true }), k).toBe(1);
     }
+    // feature-plan-cloud-export.md §6.2: the export key's ARN, never its alias.
+    const exportAlias = capture();
+    expect(await main(['audit'], { ...au, EXPORT_KEY_ARN: 'arn:aws:kms:us-east-1:111122223333:alias/cadenzpoint-exports' }, { log: exportAlias.log, checksOnly: true })).toBe(1);
+    expect(exportAlias.lines).toEqual(['fatal: EXPORT_KEY_ARN must be a key ARN']);
   });
 
   it('an unknown command prints the usage', async () => {
@@ -158,7 +162,7 @@ describe('T2: the backup id in ECS', () => {
   }
 
   it('audit and --self-check never read it', async () => {
-    const au = { ...ECS, CONTROL_PLANE_DATABASE_URL: 'x', RESTORE_TEST_DATABASE_URL: 'y', BACKUP_BUCKET: 'b', BACKUP_KMS_KEY_ARN: ARN, ALERT_TOPIC_ARN: 't', ALERT_RULE_NAMES: 'a,b', TRAIL_NAME: 'tr', DLQ_ALARM_NAME: 'd', AWS_REGION: 'us-east-1' };
+    const au = { ...ECS, CONTROL_PLANE_DATABASE_URL: 'x', RESTORE_TEST_DATABASE_URL: 'y', BACKUP_BUCKET: 'b', BACKUP_KMS_KEY_ARN: ARN, ALERT_TOPIC_ARN: 't', ALERT_RULE_NAMES: 'a,b', TRAIL_NAME: 'tr', DLQ_ALARM_NAME: 'd', AWS_REGION: 'us-east-1', EXPORT_BUCKET: 'eb', EXPORT_KEY_ARN: ARN.replace('1234abcd', '5678efab') };
     expect(await main(['audit'], au, { log: () => {}, checksOnly: true })).toBe(0);
     expect(await main(['audit'], { ...au, BACKUP_CONTROL_PLANE_ID: 'junk' }, { log: () => {}, checksOnly: true })).toBe(0);
     expect(await main(['--self-check'], { BACKUP_CONTROL_PLANE_ID: 'junk' }, { log: () => {}, runVersion: pg16 })).toBe(0);

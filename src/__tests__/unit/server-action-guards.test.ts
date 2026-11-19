@@ -69,6 +69,14 @@ const PUBLIC_ACTIONS: Record<string, { names: string[]; reason: string }> = {
       'Pre-login lockout banner: the client calls this before any authentication has ' +
       'happened, so there is no session yet. Read-only, keyed by email, no sensitive data.',
   },
+  'export-download.ts': {
+    names: ['prepareExportDownload'],
+    reason:
+      'The workspace export download page on the apex (feature-plan-cloud-export.md §6.6): the recipients are not ' +
+      'users of the app, so there is no session. Identity is the 32-byte link token (stored only as its SHA-256), ' +
+      're-checked on every POST (expiry, revoke, erasure, the policy-hold rule); IP rate-limited before any token ' +
+      'lookup and per delivery after. It returns only a 5-minute presigned URL for that one delivery.',
+  },
   'workspace-finder.ts': {
     names: ['goToWorkspace'],
     reason:

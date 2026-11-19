@@ -99,7 +99,8 @@ describe('T13: the task constructs no SSM-write, Vercel or Stripe client (invari
     const r = await build({ ...(BUNDLE_OPTIONS as import('esbuild').BuildOptions), absWorkingDir: ROOT, write: false, metafile: true, logLevel: 'silent' });
     const inputs = Object.keys(r.metafile!.inputs);
     expect(inputs.filter((i) => /@aws-sdk\/client-ssm|node_modules\/stripe\/|@vercel\/|node_modules\/vercel\//.test(i))).toEqual([]);
-    for (const f of inputs.filter((i) => !i.startsWith('node_modules/'))) {
+    // feature-plan-cloud-export.md §10: `app-version:package.json` is the bundle plugin's virtual module (no file to read).
+    for (const f of inputs.filter((i) => !i.startsWith('node_modules/') && !i.startsWith('app-version:'))) {
       const text = read(f);
       expect(text, f).not.toMatch(/PutParameterCommand|ssm:PutParameter|api\.vercel\.com|api\.stripe\.com|STRIPE_SECRET_KEY|VERCEL_TOKEN/);
     }

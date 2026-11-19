@@ -30,24 +30,80 @@ A restored workspace goes back to `active` (or `suspended` for a policy suspensi
 
 ## Final export
 
-Customers export everything themselves (Settings → Export Workspace Data) and receive three notices during
-the 90 days. **A founder copy is not taken by default (F2).** Take one only when the customer asks for it to
-be sent, or for a legal request:
+**Take the export and wait until the Export workspace run has passed (the run's result, or the "export delivered"
+email) before running `tenant:delete`.**
 
-```bash
-npm run tenant:export -- <slug> <out-dir>
-```
+Customers export everything themselves (Settings → Export Workspace Data) and receive three notices during the 90
+days. **The founder never downloads customer data** (`BUSINESS-DECISIONS.md` §5; `feature-plan-cloud-export.md`). When a
+customer asks for their export to be sent, or for a legal or policy case, it's a cloud job:
 
-- The output is AES-256 encrypted; the password is printed **once** and never stored.
-- `<out-dir>` must be outside the repo and outside `~/Documents`, `~/Desktop`, `~/Library/Mobile Documents`,
-  `~/Library/CloudStorage`, and any iCloud/Dropbox/OneDrive/Google Drive folder; the tool refuses those, and
-  excludes the folder from Time Machine (`tmutil addexclusion`, verified).
-- **Never email the file unencrypted.** Send it through an expiring link, and the password separately.
-- **Destroy it** once delivered, and in every case by its destroy-by date: 30 days after the export, or 30 days
-  after the workspace is deleted if sooner (the deletion receipt prints it). Then record it:
-  `npm run tenant:admin -- export-destroyed <slug> --yes` (or `--legal-hold "<reason>"` to keep it only as long
-  as a legal obligation requires). The digest alerts when a destroy-by date passes without a record.
-- Decrypt: `openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -md sha256 -in <file> -out <file>.zip`
+1. GitHub → Actions → **Export workspace** → Run workflow (main):
+   - **mode** `deliver`; **target** the workspace id (`npm run tenant:admin -- show <slug>` prints it);
+   - **extra_recipient** / **extra_recipient_again**: only for a legal or policy case: one verified address, typed twice
+     (they must match). Check the address with the requester out of band first (a phone call to a known number) and say
+     so in the reason;
+   - **reason**: required with an extra address (at most 200 characters);
+   - **confirm** `deliver` → approve the `aws-disaster` environment.
+2. A task in the backup AWS account builds the ZIP from the workspace's database into the exports bucket. You get an
+   email: `export delivered: workspace <id>, delivery <id>, <n> recipient(s), expires <time>`.
+3. The recipients (the notice recipients: active admins and the billing email, or the signup email when there's no
+   active admin, plus the extra address) each get their own email with a link on cadenzpoint.com. No recipient sees
+   another. The link works for **7 days**: each click on "Prepare download" makes a fresh 5-minute download. Access ends
+   at 7 days, and the copy is erased within the hour after (the hourly sweep; S3's own 8-day expiry is the backstop).
+
+**Policy hold (F5, A1):** for a workspace suspended for a policy breach whose export you haven't re-enabled
+(`set-policy-export … on`), the extra address is **required** and the link goes **only** to it, never to the workspace's
+admins. Any link sent earlier to the normal recipients stops working while the hold lasts (the page shows it as expired;
+it isn't revoked), including after the workspace is deleted. Lifting the hold or re-enabling export within the 7 days
+makes those links work again; after a deletion that's no longer possible. A link sent to the extra address alone keeps
+working.
+
+**More than 50 recipients:** the button refuses (`too-many-recipients`); the customer uses the in-app self-export.
+
+**A wrong address, or a link that must stop:** `npm run tenant:admin -- export-revoke <delivery-id>` (prints what it
+will do; add `--yes`). The link stops working at once, an unsent email is never sent, and the sweep erases the copy. It
+warns if the email may already be going out.
+
+**If you get `export outcome unknown`:** run `npm run tenant:admin -- show <slug>` and look for an `export-delivered`
+(or `export-held`) audit event whose detail has that delivery (or hold) id.
+- **Found:** it worked. Don't press again.
+- **Not found after 10 minutes:** press again. A leftover delivery copy is erased by the sweep after a day; a leftover
+  **hold** copy raises `export-orphan-hold` instead, so tell the lead.
+
+**If a run failed and no export email arrived** (the task was killed): treat it as outcome unknown. Use `show`, and look
+for a recent `export-delivered`/`export-held` event. Nothing technical stops a deletion during an export build; the
+export then fails `changed` (press again).
+
+**What the email can say, and what to do** (`export refused: <mode>, <target>, <code>` or `export failed: …`):
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `schema-skew` | the workspace's migrations differ from the backup image's | approve the pending Backup system deploy (or run it from Actions → Backup system deploy if none is pending), or run Deploy to Production; then press again |
+| `not-exportable` | the workspace is deleted, being deleted, still provisioning, or has no database | nothing to export |
+| `extra-required` | a policy-hold workspace without re-enabled export needs the verified extra address | press again with the address typed twice |
+| `no-recipients` | no active admin, billing or signup email (and no extra address) | add an extra address (press again), or ask the customer for an admin |
+| `too-many-recipients` | more than 50 recipients | the customer uses the in-app self-export |
+| `changed` | the workspace's status, suspension or database changed during the build | press again |
+| `released` | that hold is already released | nothing to do |
+| `unknown-hold` | no hold has that id | check the id in the "export held" email |
+| `another-export-running` | another Export workspace task is running (one at a time) | wait for its email, then press again |
+| `lock-timeout` | the workspace was busy (another change held its lock for 5 seconds) | press again |
+| `ecs-unreadable` | the task couldn't read its own ECS record | press again; if it repeats, tell the lead |
+| `not-from-button` | the task was started some other way than the button or the CloudShell fallback | if you didn't start it, investigate (you also got the RunTask email) |
+| `extra-needs-button` | an extra address was passed from CloudShell (only the button checks it twice) | use the button |
+| `delete-unverified` | a release deleted the copy but S3 still shows it | press release again; if it repeats, tell the lead |
+| `too-large` | over the ZIP limits (65,000 files or about 3.94 GiB) | contact the lead |
+| `database-error`, `upload-error`, `s3-error`, `deadline`, `stopped`, `internal-error` | the run failed (nothing was recorded) | press again; if it repeats, tell the lead |
+
+**Legal holds:** mode `hold` (target the workspace id, a reason) keeps a copy in the exports bucket until you release it;
+no customer email. The `export held: workspace <id>, hold <id>` email carries the hold id. Open holds are counted in the
+daily digest and listed in full on the 1st of each month. A hold survives the workspace's deletion by design (a legal
+exception, Terms §9.3). When the legal reason ends: mode `release`, target the **hold id**, a reason → the copy is deleted
+and verified gone.
+
+**The manifest's app version:** an export built by the cloud task carries the version of the last backup-system deploy,
+not necessarily the newest app release (the backup image is rebuilt only when its own files change). The data is read
+with the schema of that deploy, and the task refuses (`schema-skew`) if the workspace's migrations differ from it.
 
 ## Running it
 
@@ -99,7 +155,8 @@ The steps, in order (each idempotent; a re-run resumes while `status = deleting`
    of deletion, and the slug stays reserved.
 
 The receipt lists the dates, the database, any forced reason, every notice (sent / forced / superseded), and the
-founder export destroy-by date if one was taken. Running it again against a deleted tenant prints the tombstone.
+export copies ("Export copies: N delivered (expire automatically); M open hold(s)"). Running it again against a deleted
+tenant prints the tombstone.
 
 ## How to verify
 
@@ -157,11 +214,12 @@ Confirmed against Neon's own documentation (fetched 2026-10-21):
 `deleting`, and its earlier backups in the backup AWS account expire automatically within 30 days (the S3 rule at 25
 days, an alert at 29). Nothing to do.
 
-`BACKUP_RETENTION_DAYS = 30` in `src/lib/tenant/lifecycle-config.ts` (D11) matches the longest
-window on any currently-published Neon plan (Scale's 30-day history window). **If CadenzPoint ends
-up on a negotiated enterprise plan with a longer PITR/history window than 30 days, D11 needs to be
-revisited** — that is not something these docs can confirm, since Neon's public pages don't publish
-enterprise-tier numbers.
+**Copies after deletion** (D11): backups expire per 3b (above: the S3 rule at 25 days); export delivery copies expire
+7 days after they were sent (erased within the hour after; S3's 8-day rule is the backstop, `feature-plan-cloud-export.md`
+§6.7); legal-hold copies are kept until the founder releases them (§6.3). Neon's own point-in-time history on a tenant
+project is LB-D1's 7 days (`tenantDbHistoryRetentionSeconds`, `lifecycle-config.ts`). **If CadenzPoint ends up on a negotiated enterprise plan
+with a longer PITR/history window than 30 days, D11 needs to be revisited**: that is not something these docs can
+confirm, since Neon's public pages don't publish enterprise-tier numbers.
 
 ## What is retained and why
 
@@ -175,5 +233,6 @@ enterprise-tier numbers.
   if it were somehow still readable).
 - **Kept, not deleted by this tool**: the Stripe **customer** record (billing/tax history —
   Privacy §7 allows this). Subscriptions are canceled and open invoices voided.
-- **Founder export (if one was taken)**: destroyed by its destroy-by date and recorded with
-  `tenant:admin export-destroyed` (see "Final export").
+- **Export copies**: delivery copies expire on their own (7 days, erased within the hour after); open legal-hold copies
+  are kept until released. The deletion receipt prints "Export copies: N delivered (expire automatically); M open
+  hold(s)" (see "Final export").

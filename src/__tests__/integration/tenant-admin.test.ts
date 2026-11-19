@@ -5,11 +5,11 @@ vi.mock('@/lib/email/client', async () => (await import('./fakes/fake-resend')).
 
 import { controlDb } from '@/db/control-plane';
 import {
-  AdminCommandError, applyAdminPlan, findForceableNotice, forceNoticeSent, plans, recordFounderExportDisposal,
+  AdminCommandError, applyAdminPlan, findForceableNotice, forceNoticeSent, plans,
   recordFounderNote, recordProvisionTerms, resolveAlertById,
 } from '@/lib/tenant/admin-commands';
 import { runTenantLifecycle } from '@/lib/tenant/lifecycle-runner';
-import { raiseAlert, recordAudit } from '@/lib/tenant/lifecycle-store';
+import { raiseAlert } from '@/lib/tenant/lifecycle-store';
 import { deliverPendingNotices, setNoticeTimingForTests } from '@/lib/tenant/notices';
 import { canExport, getTenantAccess } from '@/lib/tenant/lifecycle';
 import { toLifecycleFacts } from '@/lib/tenant/registry';
@@ -189,17 +189,12 @@ describe.skipIf(!cpReady)('tenant:admin commands (§5.6)', () => {
     await expect(findForceableNotice(t.id, 'trial-ended')).rejects.toThrow(/No non-superseded/);
   });
 
-  it('resolve-alert resolves once (bookkeeping only); export-destroyed requires a recorded export', async () => {
+  it('resolve-alert resolves once (bookkeeping only)', async () => {
     const t = await makeTenant();
     await raiseAlert(controlDb, { tenantId: t.id, kind: 'paused-subscription', dedupKey: 'sub_1' }, NOW);
     const [alert] = await allAlertsOf(t.id);
     await resolveAlertById(alert.id, 'handled in Stripe', 'test');
     await expect(resolveAlertById(alert.id, 'again', 'test')).rejects.toThrow(/Already resolved/);
-
-    await expect(recordFounderExportDisposal(t.id, undefined, 'test')).rejects.toThrow(/No founder export/);
-    await recordAudit(controlDb, { tenantId: t.id, kind: 'founder-export-taken', actor: 'test', detail: '{}' });
-    await recordFounderExportDisposal(t.id, undefined, 'test');
-    expect((await auditOf(t.id)).map((e) => e.kind)).toContain('founder-export-destroyed');
   });
 
   it('resolve-alert refuses the disaster kinds (rebuild-*, disaster-*): they close only on the facts (feature-plan-disaster-restore.md §6.8)', async () => {

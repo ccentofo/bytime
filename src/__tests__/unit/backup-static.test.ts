@@ -13,6 +13,7 @@ import { parse } from 'yaml';
  */
 import {
   ALL_ROLES, expectedDocuments, normalize, PROTECTION_EVENTS, ROLE_EVENTS, statementDrift, NAMES, taskRoleName, execRoleName, SCHEDULER_ROLE, type Statement,
+  EXPORT_TASK_ROLE, EXPORT_EXEC_ROLE, EXPORT_DOWNLOAD_ROLE, VERCEL_TEAM_SLUG, VERCEL_PROJECT, FAMILIES,
 } from '../../../scripts/backup/lib/expected-policies';
 
 const ROOT = path.resolve(__dirname, '../../..');
@@ -20,12 +21,14 @@ const read = (p: string) => readFileSync(path.join(ROOT, p), 'utf8');
 type Node = Record<string, unknown>;
 const ACCT = '111122223333';
 const KEY_ARN = `arn:aws:kms:us-east-1:${ACCT}:key/1234abcd-12ab-34cd-56ef-1234567890ab`;
+// (EXPORT_KEY_ARN is declared next to `exp` below.)
 
 const stackText = read('ops/aws/backup-stack.yml');
 const bootText = read('ops/aws/bootstrap.yml');
 const stack = parse(stackText) as { Parameters: Node; Resources: Record<string, { Type: string; Properties: Node; DeletionPolicy?: string; UpdateReplacePolicy?: string; DependsOn?: string[] }> };
 const boot = parse(bootText) as typeof stack;
-const exp = expectedDocuments({ accountId: ACCT, keyArn: KEY_ARN });
+const EXPORT_KEY_ARN = `arn:aws:kms:us-east-1:${ACCT}:key/5678efab-12ab-34cd-56ef-1234567890ab`;
+const exp = expectedDocuments({ accountId: ACCT, keyArn: KEY_ARN, exportKeyArn: EXPORT_KEY_ARN });
 
 /** Substitute the intrinsics used in policy documents: Fn::Sub with pseudo-parameters, Ref AWS::AccountId, the key ARN. */
 function resolve(v: unknown): unknown {
@@ -35,6 +38,7 @@ function resolve(v: unknown): unknown {
     if ('Fn::Sub' in o && typeof o['Fn::Sub'] === 'string') return (o['Fn::Sub'] as string).replace(/\$\{AWS::AccountId\}/g, ACCT).replace(/\$\{AWS::Region\}/g, 'us-east-1');
     if ('Ref' in o && o.Ref === 'AWS::AccountId') return ACCT;
     if ('Fn::GetAtt' in o && JSON.stringify(o['Fn::GetAtt']) === JSON.stringify(['BackupKey', 'Arn'])) return KEY_ARN;
+    if ('Fn::GetAtt' in o && JSON.stringify(o['Fn::GetAtt']) === JSON.stringify(['ExportKey', 'Arn'])) return EXPORT_KEY_ARN;
     return Object.fromEntries(Object.entries(o).map(([k, x]) => [k, resolve(x)]));
   }
   return v;
@@ -67,13 +71,20 @@ describe('U6: parameters (FR1)', () => {
 });
 
 describe('U6: the protection documents equal expected-policies.ts (the audit\'s single source)', () => {
-  it('bucket, key and topic policies', () => {
-    const bp = ofType(stack, 'AWS::S3::BucketPolicy')[0][1];
+  it('bucket, key and topic policies (3d: each bucket and key its own; both selected by name)', () => {
+    const bp = stack.Resources.BackupBucketPolicy;
+    expect((bp.Properties.Bucket as Node).Ref).toBe('BackupBucket');
     expect(statementDrift('bucket', exp.bucketPolicy, resolve((bp.Properties.PolicyDocument as Node).Statement))).toEqual([]);
     const key = stack.Resources.BackupKey;
     expect(statementDrift('key', exp.keyPolicy, resolve((key.Properties.KeyPolicy as Node).Statement))).toEqual([]);
     const tp = ofType(stack, 'AWS::SNS::TopicPolicy')[0][1];
     expect(statementDrift('topic', exp.topicPolicy, resolve((tp.Properties.PolicyDocument as Node).Statement))).toEqual([]);
+    // feature-plan-cloud-export.md §6.1.
+    const ebp = stack.Resources.ExportBucketPolicy;
+    expect((ebp.Properties.Bucket as Node).Ref).toBe('ExportBucket');
+    expect(statementDrift('export-bucket', exp.exportBucketPolicy, resolve((ebp.Properties.PolicyDocument as Node).Statement))).toEqual([]);
+    expect(statementDrift('export-key', exp.exportKeyPolicy, resolve((stack.Resources.ExportKey.Properties.KeyPolicy as Node).Statement))).toEqual([]);
+    expect(ofType(stack, 'AWS::S3::BucketPolicy').map(([k]) => k).sort()).toEqual(['BackupBucketPolicy', 'ExportBucketPolicy']);
   });
 
   it('every backup role: trust and inline policy; nothing attached; one policy named as expected', () => {
@@ -94,7 +105,7 @@ describe('U6: the protection documents equal expected-policies.ts (the audit\'s 
       const name = r.Properties.Name as string;
       expect(JSON.stringify(normalize(resolve(r.Properties.EventPattern))), name).toBe(JSON.stringify(normalize(exp.rulePatterns[name])));
     }
-    expect(ofType(stack, 'AWS::Events::Rule').map(([, r]) => r.Properties.Name).sort()).toEqual([NAMES.protectionsRule, NAMES.rolesRule, NAMES.disasterStartedRule, NAMES.disasterRunTaskRule].sort());
+    expect(ofType(stack, 'AWS::Events::Rule').map(([, r]) => r.Properties.Name).sort()).toEqual([NAMES.protectionsRule, NAMES.rolesRule, NAMES.disasterStartedRule, NAMES.disasterRunTaskRule, NAMES.exportStartedRule, NAMES.exportRunTaskRule].sort());
   });
 });
 
@@ -120,7 +131,7 @@ describe('U6: the backup can only add; the audit can only look', () => {
   });
 
   it('the bucket policy denies versioning, Object Lock, deletes, Gets (except restore), PUT without If-None-Match, policy/lifecycle changes (except CfnExecRole)', () => {
-    const st = resolve((ofType(stack, 'AWS::S3::BucketPolicy')[0][1].Properties.PolicyDocument as Node).Statement) as Statement[];
+    const st = resolve((stack.Resources.BackupBucketPolicy.Properties.PolicyDocument as Node).Statement) as Statement[];
     const deny = (sid: string) => st.find((s) => s.Sid === sid && s.Effect === 'Deny' && s.Principal === '*');
     expect(deny('DenyVersioningAndObjectLock')!.Action).toEqual(['s3:PutBucketVersioning', 's3:PutBucketObjectLockConfiguration']);
     expect(deny('DenyDeletes')!.Action).toBe('s3:DeleteObject*');
@@ -165,7 +176,7 @@ describe('U6: the backup can only add; the audit can only look', () => {
 describe('U6: schedules, tasks, alerting', () => {
   const schedules = ofType(stack, 'AWS::Scheduler::Schedule');
   it('every schedule pins a revision (Ref to the task definition), UTC, FlexibleTimeWindow OFF, a retry policy, the DLQ, created last', () => {
-    expect(schedules.length).toBe(7); // 3c-2 §6.2 item 3 adds the control-plane rehearsal
+    expect(schedules.length).toBe(8); // 3c-2 §6.2 item 3 adds the control-plane rehearsal; 3d §6.7 the hourly export sweep
     const others = Object.entries(stack.Resources).filter(([, r]) => r.Type !== 'AWS::Scheduler::Schedule').map(([k]) => k).sort();
     for (const [name, s] of schedules) {
       const p = s.Properties;
@@ -188,13 +199,19 @@ describe('U6: schedules, tasks, alerting', () => {
     expect(byName['cadenzpoint-backup-restore-test-catchup'].ScheduleExpression).toBe('cron(17 8 ? * SUN,TUE-SAT *)');
     expect(JSON.parse((byName['cadenzpoint-backup-catchup'].Target as Node).Input as string)).toEqual({ containerOverrides: [{ name: 'backup', command: ['backup', '--if-missing-today'] }] });
     expect(JSON.parse((byName['cadenzpoint-backup-restore-test-catchup'].Target as Node).Input as string)).toEqual({ containerOverrides: [{ name: 'restore-test', command: ['restore-test', '--if-missed'] }] });
+    // feature-plan-cloud-export.md §6.7: hourly, the sweep family (its own task definition), the pinned input shape.
+    const sweep = byName[NAMES.exportSweepSchedule];
+    expect(sweep.ScheduleExpression).toBe('rate(1 hour)');
+    expect(((sweep.Target as Node).EcsParameters as Node).TaskDefinitionArn).toEqual({ Ref: 'SweepTaskDefinition' });
+    expect(JSON.parse((sweep.Target as Node).Input as string)).toEqual({ containerOverrides: [{ name: 'sweep', command: ['export', 'sweep'] }] });
   });
 
-  it('task definitions: the key ARN (never the alias) from Fn::GetAtt BackupKey.Arn (G6); init process; StopTimeout 120; secrets from the fixed SSM names', () => {
+  it('task definitions: the key ARN (never the alias) from Fn::GetAtt BackupKey.Arn (G6; 3d: except the export and sweep families, which never touch the backup key); init process; StopTimeout 120; secrets from the fixed SSM names', () => {
     for (const [name, td] of ofType(stack, 'AWS::ECS::TaskDefinition')) {
       const c = (td.Properties.ContainerDefinitions as Node[])[0];
       const env = Object.fromEntries((c.Environment as Array<{ Name: string; Value: unknown }>).map((e) => [e.Name, e.Value]));
-      expect(env.BACKUP_KMS_KEY_ARN, name).toEqual({ 'Fn::GetAtt': ['BackupKey', 'Arn'] });
+      if (['cadenzpoint-backup-export', 'cadenzpoint-backup-sweep'].includes(td.Properties.Family as string)) expect(env.BACKUP_KMS_KEY_ARN, name).toBeUndefined();
+      else expect(env.BACKUP_KMS_KEY_ARN, name).toEqual({ 'Fn::GetAtt': ['BackupKey', 'Arn'] });
       expect(env.AWS_REGION).toBe('us-east-1');
       expect(c.LinuxParameters).toEqual({ InitProcessEnabled: true });
       expect(c.StopTimeout).toBe(120);
@@ -234,6 +251,161 @@ describe('U6: schedules, tasks, alerting', () => {
     expect(matches(role, ct('PutRolePolicy', { roleName: 'cadenzpoint-backup-x' }))).toBe(true);
     expect(matches(role, ct('PutRolePolicy', { roleName: 'other-role' }))).toBe(false);
     expect(matches(prot, ct('PutRolePolicy', { roleName: 'other-role' }))).toBe(false);
+  });
+});
+
+describe('T13 (3d): the exports bucket, its key, the export roles, families, rules, schedule and outputs', () => {
+  const R = stack.Resources;
+  const containerEnv = (logical: string) => Object.fromEntries(((R[logical].Properties.ContainerDefinitions as Node[])[0].Environment as Array<{ Name: string; Value: unknown }>).map((e) => [e.Name, e.Value]));
+  const secrets = (logical: string) => ((R[logical].Properties.ContainerDefinitions as Node[])[0].Secrets as Array<{ Name: string }>).map((x) => x.Name).sort();
+
+  it('the bucket: SSE-KMS with ExportKey and the bucket key, public access blocked, BucketOwnerEnforced, no versioning; delivery/ expires at 8 days, aborts after 1, no hold/ rule; RetainExceptOnCreate on the bucket and the key', () => {
+    const b = R.ExportBucket.Properties;
+    expect(b.BucketName).toEqual({ 'Fn::Sub': 'cadenzpoint-exports-${AWS::AccountId}' });
+    expect(b.VersioningConfiguration).toBeUndefined();
+    expect(b.PublicAccessBlockConfiguration).toEqual({ BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true });
+    expect(b.OwnershipControls).toEqual({ Rules: [{ ObjectOwnership: 'BucketOwnerEnforced' }] });
+    expect(b.BucketEncryption).toEqual({ ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: 'aws:kms', KMSMasterKeyID: { 'Fn::GetAtt': ['ExportKey', 'Arn'] } }, BucketKeyEnabled: true }] });
+    expect((b.LifecycleConfiguration as Node).Rules).toEqual([
+      { Id: 'expire-delivery', Status: 'Enabled', Prefix: 'delivery/', ExpirationInDays: 8 },
+      { Id: 'abort-mpu', Status: 'Enabled', AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 } },
+    ]);
+    // The audit's expected array matches the template (the whole-bucket rule reads back with an empty prefix).
+    expect(exp.lifecycle.exports).toEqual([
+      { id: 'expire-delivery', status: 'Enabled', prefix: 'delivery/', expirationDays: 8, abortDays: null },
+      { id: 'abort-mpu', status: 'Enabled', prefix: '', expirationDays: null, abortDays: 1 },
+    ]);
+    expect(exp.lifecycle.backup).toEqual([{ id: 'expire-v1', status: 'Enabled', prefix: 'v1/', expirationDays: 25, abortDays: 1 }]);
+    for (const r of [R.ExportBucket, R.ExportKey]) {
+      expect(r.DeletionPolicy).toBe('RetainExceptOnCreate');
+      expect(r.UpdateReplacePolicy).toBe('Retain');
+    }
+    expect(R.ExportKey.Properties).toMatchObject({ PendingWindowInDays: 30, EnableKeyRotation: true, KeySpec: 'SYMMETRIC_DEFAULT' });
+    expect(R.ExportKeyAlias.Properties).toEqual({ AliasName: 'alias/cadenzpoint-exports', TargetKeyId: { Ref: 'ExportKey' } });
+  });
+
+  it('the bucket policy: deny-only; writes only by the task role; reads by the task and download roles, hold/ by the task role only; encryption, policy and lifecycle changes only by CfnExecRole; TLS only', () => {
+    const st = resolve((R.ExportBucketPolicy.Properties.PolicyDocument as Node).Statement) as Statement[];
+    expect(st.every((x) => x.Effect === 'Deny' && x.Principal === '*')).toBe(true);
+    const task = `arn:aws:iam::${ACCT}:role/cadenzpoint-backup/${EXPORT_TASK_ROLE}`;
+    const dl = `arn:aws:iam::${ACCT}:role/cadenzpoint-backup/${EXPORT_DOWNLOAD_ROLE}`;
+    const by = (id: string) => st.find((x) => x.Sid === id)!;
+    expect(by('DenyWritesExceptExportTask')).toMatchObject({ Action: ['s3:PutObject*', 's3:DeleteObject*', 's3:AbortMultipartUpload'], Condition: { ArnNotEquals: { 'aws:PrincipalArn': task } } });
+    expect(by('DenyReadsExceptExportRoles')).toMatchObject({ Action: 's3:GetObject*', Resource: `arn:aws:s3:::cadenzpoint-exports-${ACCT}/*`, Condition: { ArnNotEquals: { 'aws:PrincipalArn': [task, dl] } } });
+    expect(by('DenyHoldReadsExceptExportTask')).toMatchObject({ Action: 's3:GetObject*', Resource: `arn:aws:s3:::cadenzpoint-exports-${ACCT}/hold/*`, Condition: { ArnNotEquals: { 'aws:PrincipalArn': task } } });
+    expect(by('DenyPolicyAndLifecycleChangesExceptDeploy').Action).toEqual(['s3:PutBucketPolicy', 's3:DeleteBucketPolicy', 's3:PutLifecycleConfiguration', 's3:PutEncryptionConfiguration']);
+    expect(by('DenyVersioningAndObjectLock').Action).toEqual(['s3:PutBucketVersioning', 's3:PutBucketObjectLockConfiguration']);
+    expect(by('DenyInsecureTransport').Condition).toEqual({ Bool: { 'aws:SecureTransport': 'false' } });
+  });
+
+  it('the key policy is deny-only by aws:PrincipalArn (Decrypt/ReEncrypt: task and download roles; GenerateDataKey: the task role); the grants live in the roles, with the bucket-ARN encryption context (bucket key)', () => {
+    const st = resolve((R.ExportKey.Properties.KeyPolicy as Node).Statement) as Statement[];
+    expect(st.filter((x) => x.Effect === 'Allow').map((x) => x.Sid)).toEqual(['AccountRootAdministers']);
+    expect(st.map((x) => x.Sid)).toEqual(['AccountRootAdministers', 'DenyDecryptExceptExportRoles', 'DenyGenerateDataKeyExceptExportTask', 'DenyShortDeletionWindow', 'DenyKeyPolicyChangesExceptDeploy']);
+    // G2: the exact principal lists, in the template AND in expected-policies.ts.
+    const task = `arn:aws:iam::${ACCT}:role/cadenzpoint-backup/${EXPORT_TASK_ROLE}`;
+    const dl = `arn:aws:iam::${ACCT}:role/cadenzpoint-backup/${EXPORT_DOWNLOAD_ROLE}`;
+    for (const doc of [st, exp.exportKeyPolicy]) {
+      expect(doc.find((x) => x.Sid === 'DenyDecryptExceptExportRoles')).toMatchObject({ Effect: 'Deny', Action: ['kms:Decrypt', 'kms:ReEncrypt*'], Condition: { ArnNotEquals: { 'aws:PrincipalArn': [task, dl] } } });
+      expect(doc.find((x) => x.Sid === 'DenyGenerateDataKeyExceptExportTask')).toMatchObject({ Effect: 'Deny', Action: 'kms:GenerateDataKey*', Condition: { ArnNotEquals: { 'aws:PrincipalArn': task } } });
+    }
+    const ctx = { 'kms:EncryptionContext:aws:s3:arn': `arn:aws:s3:::cadenzpoint-exports-${ACCT}` };
+    expect(policyOf(roleByName(stack, EXPORT_TASK_ROLE)!).find((x) => x.Sid === 'UseExportKey')).toMatchObject({ Action: ['kms:GenerateDataKey', 'kms:Decrypt'], Resource: EXPORT_KEY_ARN, Condition: { StringEquals: ctx } });
+    expect(policyOf(roleByName(stack, EXPORT_DOWNLOAD_ROLE)!).find((x) => x.Sid === 'DecryptDeliveries')).toMatchObject({ Action: 'kms:Decrypt', Resource: EXPORT_KEY_ARN, Condition: { StringEquals: { 'kms:ViaService': 's3.us-east-1.amazonaws.com', ...ctx } } });
+  });
+
+  it('the three roles: exact names and path; the task role has no backup-bucket or backup-key access and has the ECS reads; the download role reads delivery/ only, from Vercel production (exact StringEquals), MaxSessionDuration 3600', () => {
+    for (const n of [EXPORT_TASK_ROLE, EXPORT_EXEC_ROLE, EXPORT_DOWNLOAD_ROLE]) {
+      expect(roleByName(stack, n)!.Properties.Path, n).toBe('/cadenzpoint-backup/');
+      expect(ALL_ROLES).toContain(n);
+    }
+    const taskText = JSON.stringify(policyOf(roleByName(stack, EXPORT_TASK_ROLE)!));
+    // G3: the task role's S3 actions, exactly (template and expected-policies.ts).
+    for (const doc of [policyOf(roleByName(stack, EXPORT_TASK_ROLE)!), exp.roles[EXPORT_TASK_ROLE].policy]) {
+      expect(actionsOf(doc).filter((a) => a.startsWith('s3:')).sort()).toEqual(['s3:AbortMultipartUpload', 's3:DeleteObject', 's3:GetObject', 's3:ListBucket', 's3:PutObject']);
+    }
+    expect(taskText).not.toMatch(/cadenzpoint-backups-|key\/1234abcd/);
+    expect(actionsOf(policyOf(roleByName(stack, EXPORT_TASK_ROLE)!))).toEqual(expect.arrayContaining(['ecs:ListTasks', 'ecs:DescribeTasks', 'sns:Publish', 's3:ListBucket']));
+    const dl = roleByName(stack, EXPORT_DOWNLOAD_ROLE)!;
+    expect(dl.Properties.MaxSessionDuration).toBe(3600);
+    expect(actionsOf(policyOf(dl)).sort()).toEqual(['kms:Decrypt', 's3:GetObject']);
+    expect(policyOf(dl).find((x) => x.Sid === 'ReadDeliveries')!.Resource).toBe(`arn:aws:s3:::cadenzpoint-exports-${ACCT}/delivery/*`);
+    expect(trustOf(dl)[0]).toEqual({
+      Sid: 'TrustVercelProduction', Effect: 'Allow', Principal: { Federated: `arn:aws:iam::${ACCT}:oidc-provider/oidc.vercel.com/${VERCEL_TEAM_SLUG}` }, Action: 'sts:AssumeRoleWithWebIdentity',
+      Condition: { StringEquals: { [`oidc.vercel.com/${VERCEL_TEAM_SLUG}:aud`]: `https://vercel.com/${VERCEL_TEAM_SLUG}`, [`oidc.vercel.com/${VERCEL_TEAM_SLUG}:sub`]: `owner:${VERCEL_TEAM_SLUG}:project:${VERCEL_PROJECT}:environment:production` } },
+    });
+    // The exec role writes both log groups and reads only the two parameters.
+    const execSt = policyOf(roleByName(stack, EXPORT_EXEC_ROLE)!);
+    expect(execSt.find((x) => x.Sid === 'WriteLogs')!.Resource).toEqual([`arn:aws:logs:us-east-1:${ACCT}:log-group:/cadenzpoint/backup/export:*`, `arn:aws:logs:us-east-1:${ACCT}:log-group:/cadenzpoint/backup/sweep:*`]);
+    expect(execSt.find((x) => x.Sid === 'ReadParameters')!.Resource).toEqual([`arn:aws:ssm:us-east-1:${ACCT}:parameter/cadenzpoint/backup/control-plane-url`, `arn:aws:ssm:us-east-1:${ACCT}:parameter/cadenzpoint/backup/encryption-key`]);
+  });
+
+  it('SchedulerRole runs the sweep family and passes the export roles (explicit entries; FAMILIES unchanged)', () => {
+    expect([...FAMILIES]).toEqual(['backup', 'audit', 'restore-test', 'disaster']);
+    const st = policyOf(roleByName(stack, SCHEDULER_ROLE)!);
+    expect(st.find((x) => x.Sid === 'RunTasks')!.Resource).toContain(`arn:aws:ecs:us-east-1:${ACCT}:task-definition/cadenzpoint-backup-sweep:*`);
+    expect(st.find((x) => x.Sid === 'RunTasks')!.Resource).not.toContain(`arn:aws:ecs:us-east-1:${ACCT}:task-definition/cadenzpoint-backup-export:*`);
+    expect(st.find((x) => x.Sid === 'PassTaskRoles')!.Resource).toEqual(expect.arrayContaining([`arn:aws:iam::${ACCT}:role/cadenzpoint-backup/${EXPORT_TASK_ROLE}`, `arn:aws:iam::${ACCT}:role/cadenzpoint-backup/${EXPORT_EXEC_ROLE}`]));
+  });
+
+  it('the export and sweep task definitions: their families, sizes, the shared roles, their env and secrets, their log groups (365 and 30 days)', () => {
+    expect(R.ExportTaskDefinition.Properties).toMatchObject({ Family: 'cadenzpoint-backup-export', Cpu: '1024', Memory: '4096', TaskRoleArn: { 'Fn::GetAtt': ['ExportTaskRole', 'Arn'] }, ExecutionRoleArn: { 'Fn::GetAtt': ['ExportExecRole', 'Arn'] } });
+    expect(R.SweepTaskDefinition.Properties).toMatchObject({ Family: 'cadenzpoint-backup-sweep', Cpu: '256', Memory: '512', TaskRoleArn: { 'Fn::GetAtt': ['ExportTaskRole', 'Arn'] }, ExecutionRoleArn: { 'Fn::GetAtt': ['ExportExecRole', 'Arn'] } });
+    expect(containerEnv('ExportTaskDefinition')).toEqual({ AWS_REGION: 'us-east-1', EXPORT_BUCKET: { Ref: 'ExportBucket' }, ALERT_TOPIC_ARN: { Ref: 'AlertTopic' } });
+    expect(containerEnv('SweepTaskDefinition')).toEqual({ AWS_REGION: 'us-east-1', EXPORT_BUCKET: { Ref: 'ExportBucket' } });
+    expect(secrets('ExportTaskDefinition')).toEqual(['CONTROL_PLANE_DATABASE_URL', 'ENCRYPTION_KEY']);
+    expect(secrets('SweepTaskDefinition')).toEqual(['CONTROL_PLANE_DATABASE_URL']);
+    expect((R.SweepTaskDefinition.Properties.ContainerDefinitions as Node[])[0]).toMatchObject({ Name: 'sweep', Command: ['export', 'sweep'] });
+    expect(R.ExportLogGroup.Properties).toEqual({ LogGroupName: '/cadenzpoint/backup/export', RetentionInDays: 365 });
+    expect(R.SweepLogGroup.Properties).toEqual({ LogGroupName: '/cadenzpoint/backup/sweep', RetentionInDays: 30 });
+  });
+
+  it('the separate export start and RunTask rules match the export family only (never the sweep); every press is emailed with export wording', () => {
+    const r = Object.fromEntries(ofType(stack, 'AWS::Events::Rule').map(([, x]) => [x.Properties.Name as string, x.Properties]));
+    const started = resolve(r[NAMES.exportStartedRule].EventPattern) as { detail: { taskDefinitionArn: Array<{ prefix: string }> } };
+    expect(started.detail.taskDefinitionArn).toEqual([{ prefix: `arn:aws:ecs:us-east-1:${ACCT}:task-definition/cadenzpoint-backup-export:` }]);
+    const runTask = resolve(r[NAMES.exportRunTaskRule].EventPattern) as { detail: { requestParameters: { taskDefinition: Array<{ prefix: string }> } } };
+    const prefixes = runTask.detail.requestParameters.taskDefinition.map((p) => p.prefix);
+    expect(prefixes.some((p) => 'cadenzpoint-backup-sweep'.startsWith(p) || `arn:aws:ecs:us-east-1:${ACCT}:task-definition/cadenzpoint-backup-sweep:3`.startsWith(p))).toBe(false);
+    expect(prefixes.some((p) => 'cadenzpoint-backup-export:7'.startsWith(p))).toBe(true);
+    for (const n of [NAMES.exportStartedRule, NAMES.exportRunTaskRule]) {
+      expect((((r[n].Targets as Node[])[0].InputTransformer) as Node).InputTemplate as string).toMatch(/Export workspace task/);
+    }
+  });
+
+  it('outputs: ExportModes (deliver hold release), ExportDownloadRoleArn and ExportBucket (copied into Vercel), ExportKeyArn', () => {
+    const outputs = (parse(stackText) as { Outputs: Record<string, { Value: unknown }> }).Outputs;
+    expect(outputs.ExportModes.Value).toBe('deliver hold release');
+    expect(outputs.ExportDownloadRoleArn.Value).toEqual({ 'Fn::GetAtt': ['ExportDownloadRole', 'Arn'] });
+    expect(outputs.ExportBucket.Value).toEqual({ Ref: 'ExportBucket' });
+    expect(outputs.ExportKeyArn.Value).toEqual({ 'Fn::GetAtt': ['ExportKey', 'Arn'] });
+  });
+
+  it('the audit: its env names the export key and bucket; its role reads the exports bucket\'s policy, lifecycle and encryption (encryption for the exports bucket only) and the export key', () => {
+    expect(containerEnv('AuditTaskDefinition')).toMatchObject({ EXPORT_BUCKET: { Ref: 'ExportBucket' }, EXPORT_KEY_ARN: { 'Fn::GetAtt': ['ExportKey', 'Arn'] } });
+    const st = policyOf(roleByName(stack, taskRoleName('audit'))!);
+    expect(st.find((x) => x.Sid === 'InspectExportBucket')).toMatchObject({ Action: ['s3:GetBucketPolicy', 's3:GetLifecycleConfiguration', 's3:GetEncryptionConfiguration'], Resource: `arn:aws:s3:::cadenzpoint-exports-${ACCT}` });
+    expect(st.find((x) => x.Sid === 'InspectExportKey')).toMatchObject({ Action: ['kms:DescribeKey', 'kms:GetKeyPolicy'], Resource: EXPORT_KEY_ARN });
+    expect(actionsOf(st.filter((x) => x.Sid === 'InspectBucket'))).not.toContain('s3:GetEncryptionConfiguration');
+  });
+
+  it('bootstrap: the Vercel OIDC provider (no thumbprints); CfnExecRole manages the exports bucket and the alias; the team slug and project constants are equal in the three files', () => {
+    const p = boot.Resources.VercelOidcProvider.Properties;
+    expect(p).toEqual({ Url: `https://oidc.vercel.com/${VERCEL_TEAM_SLUG}`, ClientIdList: [`https://vercel.com/${VERCEL_TEAM_SLUG}`] });
+    const st = resolve(((boot.Resources.CfnExecRole.Properties.Policies as Node[])[0].PolicyDocument as Node).Statement) as Statement[];
+    expect(st.find((x) => x.Sid === 'BackupBucket')!.Resource).toEqual([`arn:aws:s3:::cadenzpoint-backups-${ACCT}`, `arn:aws:s3:::cadenzpoint-exports-${ACCT}`]);
+    expect(st.find((x) => x.Sid === 'ManageTheBackupKey')!.Resource).toContain(`arn:aws:kms:us-east-1:${ACCT}:alias/cadenzpoint-exports`);
+    // The constants: P1's fail-closed placeholders until the founder gives the real values (13b).
+    const slugsIn = (t: string) => [...new Set([...t.matchAll(/oidc\.vercel\.com\/([A-Za-z0-9_-]+)/g)].map((m) => m[1]))];
+    const projectsIn = (t: string) => [...new Set([...t.matchAll(/:project:([A-Za-z0-9_-]+):environment/g)].map((m) => m[1]))];
+    expect(slugsIn(bootText)).toEqual([VERCEL_TEAM_SLUG]);
+    expect(slugsIn(stackText)).toEqual([VERCEL_TEAM_SLUG]);
+    expect(projectsIn(stackText)).toEqual([VERCEL_PROJECT]);
+    expect(read('scripts/backup/lib/expected-policies.ts')).toContain(`export const VERCEL_TEAM_SLUG = '${VERCEL_TEAM_SLUG}';`);
+    expect(VERCEL_TEAM_SLUG).toBe('PENDING_TEAM');
+    expect(VERCEL_PROJECT).toBe('PENDING_PROJECT');
+    // FR8: a value no Vercel slug can hold (they are lowercase letters, digits and hyphens), so nothing registrable matches.
+    for (const v of [VERCEL_TEAM_SLUG, VERCEL_PROJECT]) expect(/^[a-z0-9-]+$/.test(v), v).toBe(false);
   });
 });
 
@@ -328,21 +500,57 @@ describe('U6: the Dockerfile and the bundle inputs', () => {
   });
 
   let inputs: string[] = [];
+  let bundleText = '';
   beforeAll(async () => {
     const { build } = await import('esbuild');
-    const { BUNDLE_OPTIONS } = await import('../../../scripts/backup/bundle.mjs');
-    const r = await build({ ...(BUNDLE_OPTIONS as import('esbuild').BuildOptions), absWorkingDir: ROOT, write: false, metafile: true, logLevel: 'silent' });
+    const { BUNDLE_OPTIONS, bundleDefines } = await import('../../../scripts/backup/bundle.mjs');
+    const r = await build({ ...(BUNDLE_OPTIONS as import('esbuild').BuildOptions), define: bundleDefines(ROOT), absWorkingDir: ROOT, write: false, metafile: true, logLevel: 'silent' });
     inputs = Object.keys(r.metafile!.inputs);
+    bundleText = r.outputFiles![0].text;
   }, 120_000);
 
-  it('every non-node_modules input of the esbuild bundle matches the deploy list; the src/ inputs are only the six named modules (3c adds db-name, lifecycle-config; 3c-2 adds slug-rules)', () => {
-    const own = inputs.filter((i) => !i.startsWith('node_modules/'));
+  /** feature-plan-cloud-export.md §10: the plugin's virtual `{ version }` module is not a file, so not on the deploy list. */
+  const VIRTUAL = 'app-version:';
+
+  it('every non-node_modules input of the esbuild bundle matches the deploy list; the src/ inputs are exactly the named modules (3c adds db-name, lifecycle-config; 3c-2 adds slug-rules; 3d adds the export closure)', () => {
+    const own = inputs.filter((i) => !i.startsWith('node_modules/') && !i.startsWith(VIRTUAL));
     expect(own.length).toBeGreaterThan(10);
     expect(own.filter((i) => !listed(i))).toEqual([]);
-    expect(own.filter((i) => i.startsWith('src/')).sort()).toEqual(['src/lib/encryption.ts', 'src/lib/tenant/backup-locks.ts', 'src/lib/tenant/db-name.ts', 'src/lib/tenant/direct-url.ts', 'src/lib/tenant/lifecycle-config.ts', 'src/lib/tenant/slug-rules.ts']);
-    for (const f of ['tsconfig.backup.json', '.npmrc', 'ops/aws/pgdg-ACCC4CF8.asc', 'Dockerfile.backup', 'ops/aws/backup-stack.yml', '.github/workflows/backup-deploy.yml']) expect(listed(f), f).toBe(true);
+    expect(own.filter((i) => i.startsWith('src/')).sort()).toEqual([
+      'src/db/schema.ts', 'src/lib/calendar-date.ts', 'src/lib/csv/escape.ts', 'src/lib/db/pg-url.ts', 'src/lib/encryption.ts',
+      'src/lib/export/allowlists.ts', 'src/lib/export/manifest.ts', 'src/lib/export/workspace-export.ts', 'src/lib/provenance.ts',
+      'src/lib/tenant/backup-locks.ts', 'src/lib/tenant/db-name.ts', 'src/lib/tenant/direct-url.ts', 'src/lib/tenant/lifecycle-config.ts',
+      'src/lib/tenant/slug-rules.ts',
+    ]);
+    // Never the export page's AWS code (feature-plan-cloud-export.md §10: not download-url.ts).
+    expect(inputs.some((i) => i.includes('download-url'))).toBe(false);
+    for (const f of ['tsconfig.backup.json', '.npmrc', 'ops/aws/pgdg-ACCC4CF8.asc', 'Dockerfile.backup', 'ops/aws/backup-stack.yml', '.github/workflows/backup-deploy.yml', 'drizzle/meta/_journal.json']) expect(listed(f), f).toBe(true);
     expect(listed('ops/aws/bootstrap.yml')).toBe(false);
     expect(listed('package.json')).toBe(false);
+  });
+
+  it('G5 (3d): bundleDefines() gives the tenant journal\'s entry count, as a number literal', async () => {
+    const { bundleDefines } = await import('../../../scripts/backup/bundle.mjs');
+    const journal = (JSON.parse(read('drizzle/meta/_journal.json')) as { entries: unknown[] }).entries.length;
+    expect(bundleDefines(ROOT)).toEqual({ __TENANT_JOURNAL_LENGTH__: String(journal) });
+  });
+
+  it('T22 (3d): package.json is never a bundle input (the plugin serves only its version); the bundled APP_VERSION is package.json\'s; the journal length is defined at build time', () => {
+    expect(inputs).not.toContain('package.json');
+    expect(inputs.filter((i) => i.endsWith('package.json') && !i.startsWith('node_modules/') && !i.startsWith(VIRTUAL))).toEqual([]);
+    expect(inputs).toContain(`${VIRTUAL}package.json`);
+    const version = (JSON.parse(read('package.json')) as { version: string }).version;
+    const m = /app-version:package\.json\s*\n\s*var (\w+) = \{ version: "([^"]+)" \};/.exec(bundleText);
+    expect(m?.[2]).toBe(version);
+    expect(bundleText).not.toMatch(/\{\s*version:\s*"[^"]+",\s*private/); // never the whole package.json
+    expect(bundleText).not.toContain('__TENANT_JOURNAL_LENGTH__');
+    const journal = (JSON.parse(read('drizzle/meta/_journal.json')) as { entries: unknown[] }).entries.length;
+    expect(__TENANT_JOURNAL_LENGTH__).toBe(journal); // the vitest define equals the journal too
+    // The Dockerfile copies the journal (read at build time) and the tsconfig resolves `@/` (the export closure's imports).
+    const builder = docker.split(/^FROM /m)[1];
+    expect(builder).toMatch(/^COPY drizzle\/meta\/_journal\.json drizzle\/meta\/_journal\.json$/m);
+    expect(builder.indexOf('COPY drizzle/meta/_journal.json')).toBeLessThan(builder.indexOf('RUN npm run backup:bundle'));
+    expect((JSON.parse(read('tsconfig.backup.json')) as { compilerOptions: { paths: Record<string, string[]> } }).compilerOptions.paths).toEqual({ '@/*': ['./src/*'] });
   });
 
   it('D2 (3c-2): every src/ input of the bundle has an exact `COPY <path> <path>` line in the builder stage, and tsconfig.backup.json includes it', () => {
@@ -403,15 +611,28 @@ describe('U6: the vendored PGDG signing key', () => {
   });
 });
 
-describe('U6: src/ never imports the AWS SDK', () => {
-  it('no src/ file imports @aws-sdk/* or @aws-crypto/*', () => {
-    const walk = (d: string): string[] => readdirSync(d).flatMap((n) => {
-      const f = path.join(d, n);
-      if (n === 'node_modules' || n === '__tests__') return [];
-      return statSync(f).isDirectory() ? walk(f) : /\.(ts|tsx)$/.test(n) ? [f] : [];
-    });
-    const offenders = walk(path.join(ROOT, 'src')).filter((f) => /from ['"]@aws-(sdk|crypto)\//.test(readFileSync(f, 'utf8')));
-    expect(offenders).toEqual([]);
+describe('U6: src/ never imports the AWS SDK (T14, 3d: except the export download page\'s presign module)', () => {
+  const walk = (d: string): string[] => readdirSync(d).flatMap((n) => {
+    const f = path.join(d, n);
+    if (n === 'node_modules' || n === '__tests__') return [];
+    return statSync(f).isDirectory() ? walk(f) : /\.(ts|tsx)$/.test(n) ? [f] : [];
+  });
+  const rel = (f: string) => path.relative(ROOT, f);
+  it('the only src/ importer of @aws-sdk/* is src/lib/export/download-url.ts; nothing in src/ imports @aws-crypto/*', () => {
+    const files = walk(path.join(ROOT, 'src'));
+    expect(files.filter((f) => /from ['"]@aws-sdk\//.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['src/lib/export/download-url.ts']);
+    expect(files.filter((f) => /from ['"]@aws-crypto\//.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+  it('the Vercel OIDC provider is imported there only, too (feature-plan-cloud-export.md §6.6)', () => {
+    const files = walk(path.join(ROOT, 'src'));
+    expect(files.filter((f) => /['"]@vercel\/oidc/.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['src/lib/export/download-url.ts']);
+  });
+  it('the three runtime packages are dependencies at exact versions; the presigner at client-s3\'s version', () => {
+    const pkg = JSON.parse(read('package.json')) as { dependencies: Record<string, string>; devDependencies: Record<string, string> };
+    expect(pkg.dependencies['@aws-sdk/client-s3']).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(pkg.dependencies['@aws-sdk/s3-request-presigner']).toBe(pkg.dependencies['@aws-sdk/client-s3']);
+    expect(pkg.dependencies['@vercel/oidc-aws-credentials-provider']).toMatch(/^\d+\.\d+\.\d+$/);
+    for (const p of ['@aws-sdk/client-s3', '@aws-sdk/s3-request-presigner', '@vercel/oidc-aws-credentials-provider']) expect(pkg.devDependencies[p], p).toBeUndefined();
   });
 });
 

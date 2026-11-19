@@ -25,7 +25,6 @@
     "tenant:admin": "node --conditions=react-server --import tsx scripts/tenant-admin.ts",
     "report:cost-basis-change": "node --conditions=react-server --import tsx scripts/report-cost-basis-change.ts",
     "tenant:delete": "node --conditions=react-server --import tsx scripts/delete-tenant.ts",
-    "tenant:export": "node --conditions=react-server --import tsx scripts/tenant-export.ts",
     "backfill:neon-project-ids": "node --conditions=react-server --import tsx scripts/backfill-neon-project-ids.ts",
     "backfill:neon-retention": "node --conditions=react-server --import tsx scripts/backfill-neon-retention.ts",
     "db:seed": "tsx scripts/seed-users.ts",
@@ -47,6 +46,8 @@
     "postinstall": "node scripts/patch-mantine-react-table.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1170.0",
+    "@aws-sdk/s3-request-presigner": "3.1170.0",
     "@mantine/core": "^9.2.1",
     "@mantine/dates": "^9.2.1",
     "@mantine/hooks": "^9.2.1",
@@ -57,6 +58,7 @@
     "@tabler/icons-react": "^3.44.0",
     "@upstash/ratelimit": "2.2.1",
     "@upstash/redis": "1.41.0",
+    "@vercel/oidc-aws-credentials-provider": "3.3.21",
     "bcryptjs": "^3.0.3",
     "dayjs": "^1.11.20",
     "drizzle-orm": "^0.45.2",
@@ -85,7 +87,6 @@
     "@aws-sdk/client-eventbridge": "3.1170.0",
     "@aws-sdk/client-iam": "3.1170.0",
     "@aws-sdk/client-kms": "3.1170.0",
-    "@aws-sdk/client-s3": "3.1170.0",
     "@aws-sdk/client-sns": "3.1170.0",
     "@aws-sdk/lib-storage": "3.1170.0",
     "@testing-library/dom": "10.4.0",

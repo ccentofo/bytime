@@ -310,6 +310,27 @@ The checklist is `PRODUCTION-DEPLOY.md`, Phase 13c. About 30 minutes, plus waiti
 
 **Once, after the 3c-2 deploy** (PRODUCTION-DEPLOY 13c-2): add `CONTROL_PLANE_PROJECT_ID` (production's control-plane project id) to your own `.env.local`, and press the control-plane rehearsal once (mode `rehearse`, targets `control-plane`, confirm `rehearse`).
 
+## Part 6c. The Export workspace button (after 3d is built; we do this together)
+The checklist is `PRODUCTION-DEPLOY.md`, Phase 13d. You never download a customer's export: the button builds it in AWS and
+emails the customer a 7-day link on cadenzpoint.com.
+
+1. **Before the bootstrap stack is created or updated:** send me two names from Vercel:
+   - your **team slug**: the path in your Vercel team's URL (`vercel.com/<team-slug>`);
+   - your **project name**: the CadenzPoint project's name in that team.
+
+   I commit them as template constants (they replace the placeholders `PENDING_TEAM` and
+   `PENDING_PROJECT`). The download role then trusts only that project's **production** environment.
+2. **Vercel → team settings → OIDC Federation:** set the issuer mode to **Team**.
+3. **After the approved Backup system deploy:** CloudFormation → `cadenzpoint-backup` → **Outputs** → copy
+   `ExportDownloadRoleArn` into Vercel's production env as `EXPORT_DOWNLOAD_ROLE_ARN`, and `ExportBucket` as
+   `EXPORT_BUCKET`. Redeploy production.
+4. **One test delivery** to your own address against the `rehearsal` workspace, then revoke it (PRODUCTION-DEPLOY 13d
+   steps 5–7).
+
+The button uses the same `aws-disaster` environment and role as Disaster restore: every press needs your approval, and
+every press is emailed to you (start, finish, and the RunTask call). The hourly sweep that erases expired copies is not
+emailed.
+
 ## Part 7. After setup: what you'll see, and what you never do
 **You'll see:**
 - a "Backups" section in the daily digest, with the newest backup and the last restore test;

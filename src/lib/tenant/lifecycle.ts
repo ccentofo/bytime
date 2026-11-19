@@ -158,7 +158,9 @@ export type NoticeKind =
   | 'deletion-final-reminder'
   | 'policy-suspended'
   /** feature-plan-per-user-billing.md §6.9 (Q6, Q11): a payment failed while no grace notice covers it. */
-  | 'bank-payment-failed';
+  | 'bank-payment-failed'
+  /** feature-plan-cloud-export.md §6.5: a sent workspace export's link (stored recipients; never D10 at send time). */
+  | 'export-ready';
 
 /** What the cron needs to know about a notice row. `anchor` is the row's `scheduled_for`. */
 export interface NoticeState {
@@ -183,6 +185,10 @@ export function noticeGivenAt(notices: NoticeState[], kind: NoticeKind, anchor: 
  * sent (§4.5 Deliver step 2).
  */
 export function isNoticeSuperseded(kind: string, anchor: Date, f: LifecycleFacts, now: Date): boolean {
+  // feature-plan-cloud-export.md §6.5: never consulted for export-ready (deliverNotice's own branch decides: its delivery
+  // revoked, expired, erased or missing). The backstop sits before the deleting/deleted line: a deleted workspace's export
+  // email is still sent to its stored recipients.
+  if (kind === 'export-ready') return false;
   if (f.status === 'deleting' || f.status === 'deleted') return true;
   switch (kind) {
     case 'trial-reminder-7d':

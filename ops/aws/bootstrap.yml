@@ -4,7 +4,7 @@
 # path list, and no deploy can touch it: its roles live under /cadenzpoint-bootstrap/, outside what CfnExecRole manages.
 # Long-form intrinsic functions only (U6 parses this with a plain YAML parser).
 AWSTemplateFormatVersion: '2010-09-09'
-Description: CadenzPoint backups - bootstrap (GitHub OIDC, deploy roles, image registry, artifacts bucket, account trail)
+Description: CadenzPoint backups - bootstrap (GitHub and Vercel OIDC, deploy roles, image registry, artifacts bucket, account trail)
 
 Resources:
   GitHubOidcProvider:
@@ -13,6 +13,17 @@ Resources:
       Url: https://token.actions.githubusercontent.com
       ClientIdList:
         - sts.amazonaws.com
+
+  # feature-plan-cloud-export.md §6.1: the Vercel OIDC provider (team issuer mode) the export download role trusts, so the
+  # download page reads the exports bucket with no stored key. No thumbprints, as the GitHub provider. The team slug is a
+  # template constant, equal in backup-stack.yml and scripts/backup/lib/expected-policies.ts (U6). P1 (2026-11-18): a
+  # FAIL-CLOSED placeholder until the founder gives the real slug; replace it (all three files) before deploying (13b).
+  VercelOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://oidc.vercel.com/PENDING_TEAM
+      ClientIdList:
+        - https://vercel.com/PENDING_TEAM
 
   DeployRole:
     Type: AWS::IAM::Role
@@ -131,7 +142,9 @@ Resources:
                   - s3:PutEncryptionConfiguration
                   - s3:PutLifecycleConfiguration
                 Resource:
-                  Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}
+                  - Fn::Sub: arn:aws:s3:::cadenzpoint-backups-${AWS::AccountId}
+                  # feature-plan-cloud-export.md §6.1: the exports bucket.
+                  - Fn::Sub: arn:aws:s3:::cadenzpoint-exports-${AWS::AccountId}
               - Sid: CreateKeys
                 Effect: Allow
                 Action:
@@ -157,6 +170,7 @@ Resources:
                 Resource:
                   - Fn::Sub: arn:aws:kms:us-east-1:${AWS::AccountId}:key/*
                   - Fn::Sub: arn:aws:kms:us-east-1:${AWS::AccountId}:alias/cadenzpoint-backup
+                  - Fn::Sub: arn:aws:kms:us-east-1:${AWS::AccountId}:alias/cadenzpoint-exports
               - Sid: Network
                 Effect: Allow
                 Action:

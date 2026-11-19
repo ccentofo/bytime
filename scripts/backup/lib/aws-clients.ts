@@ -2,7 +2,7 @@
  * The audit's AWS seams (feature-plan-database-backups.md §6.6, §11; impact analysis G9.4). Production wires the SDK
  * clients below (each with a 30-second request timeout, §6.6 step 9); tests fake `AuditClients` and `KeyProbeClient`.
  */
-import { S3Client, GetBucketVersioningCommand, ListMultipartUploadsCommand, GetBucketPolicyCommand, GetBucketLifecycleConfigurationCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetBucketVersioningCommand, ListMultipartUploadsCommand, GetBucketPolicyCommand, GetBucketLifecycleConfigurationCommand, GetBucketEncryptionCommand } from '@aws-sdk/client-s3';
 import { KMSClient, DescribeKeyCommand, GetKeyPolicyCommand, DecryptCommand, ReEncryptCommand } from '@aws-sdk/client-kms';
 import { SNSClient, ListSubscriptionsByTopicCommand, GetSubscriptionAttributesCommand, GetTopicAttributesCommand, PublishCommand } from '@aws-sdk/client-sns';
 import { ECSClient, ListTasksCommand, DescribeTasksCommand } from '@aws-sdk/client-ecs';
@@ -32,7 +32,25 @@ export interface AlarmInfo {
   dimensions: Record<string, string>;
 }
 
+/** A bucket's default encryption (GetBucketEncryption, the first rule), or null when none is set. */
+export interface EncryptionInfo {
+  algorithm: string | null;
+  keyId: string | null;
+  bucketKeyEnabled: boolean;
+  rules: number;
+}
+
 export interface AuditClients {
+  /** feature-plan-cloud-export.md §6.2 (3d): the exports bucket (encryption is checked for it only) and its key. */
+  exports: {
+    policy(): Promise<string | null>;
+    lifecycle(): Promise<LifecycleRuleInfo[] | null>;
+    encryption(): Promise<EncryptionInfo | null>;
+  };
+  exportKey: {
+    state(): Promise<string>;
+    policy(): Promise<string | null>;
+  };
   bucket: {
     versioning(): Promise<string>;
     multipartUploads(): Promise<Array<{ key: string; initiated: Date }>>;
@@ -67,7 +85,38 @@ const TIMEOUT = { requestHandler: { requestTimeout: 30_000, connectionTimeout: 1
 const errName = (e: unknown) => (e as { name?: string })?.name;
 
 /** The real clients. `names` are the fixed resource names from expected-policies.ts. */
-export function realAuditClients(o: { region: string; bucket: string; keyArn: string; topicArn: string; trailName: string }): AuditClients {
+function policyOf(s3: S3Client, bucket: string) {
+  return async () => {
+    try {
+      return (await s3.send(new GetBucketPolicyCommand({ Bucket: bucket }))).Policy ?? null;
+    } catch (e) {
+      if (errName(e) === 'NoSuchBucketPolicy') return null;
+      throw e;
+    }
+  };
+}
+
+function lifecycleOf(s3: S3Client, bucket: string) {
+  return async (): Promise<LifecycleRuleInfo[] | null> => {
+    try {
+      const r = await s3.send(new GetBucketLifecycleConfigurationCommand({ Bucket: bucket }));
+      return (r.Rules ?? []).map((x) => ({
+        id: x.ID ?? null,
+        status: x.Status ?? null,
+        prefix: x.Filter?.Prefix ?? x.Prefix ?? null,
+        expirationDays: x.Expiration?.Days ?? null,
+        abortDays: x.AbortIncompleteMultipartUpload?.DaysAfterInitiation ?? null,
+        other: Boolean(x.Transitions?.length || x.NoncurrentVersionExpiration || x.NoncurrentVersionTransitions?.length || x.Filter?.Tag || x.Filter?.And
+          || x.Expiration?.Date || x.Expiration?.ExpiredObjectDeleteMarker),
+      }));
+    } catch (e) {
+      if (errName(e) === 'NoSuchLifecycleConfiguration') return null;
+      throw e;
+    }
+  };
+}
+
+export function realAuditClients(o: { region: string; bucket: string; keyArn: string; exportBucket: string; exportKeyArn: string; topicArn: string; trailName: string }): AuditClients {
   const s3 = new S3Client({ region: o.region, ...TIMEOUT });
   const kms = new KMSClient({ region: o.region, ...TIMEOUT });
   const sns = new SNSClient({ region: o.region, ...TIMEOUT });
@@ -90,34 +139,35 @@ export function realAuditClients(o: { region: string; bucket: string; keyArn: st
         } while (keyMarker);
         return out;
       },
-      policy: async () => {
-        try {
-          return (await s3.send(new GetBucketPolicyCommand({ Bucket: o.bucket }))).Policy ?? null;
-        } catch (e) {
-          if (errName(e) === 'NoSuchBucketPolicy') return null;
-          throw e;
-        }
-      },
-      lifecycle: async () => {
-        try {
-          const r = await s3.send(new GetBucketLifecycleConfigurationCommand({ Bucket: o.bucket }));
-          return (r.Rules ?? []).map((x) => ({
-            id: x.ID ?? null,
-            status: x.Status ?? null,
-            prefix: x.Filter?.Prefix ?? x.Prefix ?? null,
-            expirationDays: x.Expiration?.Days ?? null,
-            abortDays: x.AbortIncompleteMultipartUpload?.DaysAfterInitiation ?? null,
-            other: Boolean(x.Transitions?.length || x.NoncurrentVersionExpiration || x.NoncurrentVersionTransitions?.length || x.Filter?.Tag || x.Filter?.And),
-          }));
-        } catch (e) {
-          if (errName(e) === 'NoSuchLifecycleConfiguration') return null;
-          throw e;
-        }
-      },
+      policy: policyOf(s3, o.bucket),
+      lifecycle: lifecycleOf(s3, o.bucket),
     },
     key: {
       state: async () => (await kms.send(new DescribeKeyCommand({ KeyId: o.keyArn }))).KeyMetadata?.KeyState ?? 'unknown',
       policy: async () => (await kms.send(new GetKeyPolicyCommand({ KeyId: o.keyArn, PolicyName: 'default' }))).Policy ?? null,
+    },
+    exports: {
+      policy: policyOf(s3, o.exportBucket),
+      lifecycle: lifecycleOf(s3, o.exportBucket),
+      encryption: async () => {
+        try {
+          const rules = (await s3.send(new GetBucketEncryptionCommand({ Bucket: o.exportBucket }))).ServerSideEncryptionConfiguration?.Rules ?? [];
+          const r = rules[0];
+          return {
+            algorithm: r?.ApplyServerSideEncryptionByDefault?.SSEAlgorithm ?? null,
+            keyId: r?.ApplyServerSideEncryptionByDefault?.KMSMasterKeyID ?? null,
+            bucketKeyEnabled: Boolean(r?.BucketKeyEnabled),
+            rules: rules.length,
+          };
+        } catch (e) {
+          if (errName(e) === 'ServerSideEncryptionConfigurationNotFoundError') return null;
+          throw e;
+        }
+      },
+    },
+    exportKey: {
+      state: async () => (await kms.send(new DescribeKeyCommand({ KeyId: o.exportKeyArn }))).KeyMetadata?.KeyState ?? 'unknown',
+      policy: async () => (await kms.send(new GetKeyPolicyCommand({ KeyId: o.exportKeyArn, PolicyName: 'default' }))).Policy ?? null,
     },
     topic: {
       subscriptions: async () => {

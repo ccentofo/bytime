@@ -252,7 +252,7 @@ describe('founder-script target banner', () => {
   });
 
   it('every founder script prints it', () => {
-    for (const s of ['tenant-admin', 'delete-tenant', 'tenant-export', 'backfill-trial-dates', 'backfill-neon-project-ids',
+    for (const s of ['tenant-admin', 'delete-tenant', 'backfill-trial-dates', 'backfill-neon-project-ids',
       'backfill-neon-retention', 'migrate-all', 'provision-tenant', 'seed-tenant', 'seed-demo']) {
       expect(readFileSync(path.join(ROOT, `scripts/${s}.ts`), 'utf8'), s).toMatch(/printTargetBanner\(\)/);
     }

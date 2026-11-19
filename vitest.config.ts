@@ -1,7 +1,13 @@
 import { defineConfig, configDefaults } from 'vitest/config';
 import path from 'path';
+import { readFileSync } from 'fs';
+
+// feature-plan-cloud-export.md §10 (3d): the same build-time constant esbuild defines for the backup image
+// (scripts/backup/bundle.mjs): the tenant migration journal's entry count.
+const TENANT_JOURNAL_LENGTH = (JSON.parse(readFileSync(path.resolve(__dirname, 'drizzle/meta/_journal.json'), 'utf8')) as { entries: unknown[] }).entries.length;
 
 export default defineConfig({
+  define: { __TENANT_JOURNAL_LENGTH__: String(TENANT_JOURNAL_LENGTH) },
   test: {
     globals: true,
     environment: 'node', // Server-side tests (default)

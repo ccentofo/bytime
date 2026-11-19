@@ -1,7 +1,7 @@
 import 'server-only';
-import { and, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import {
-  opsAlerts, paymentPendingObservations, tenantAuditEvents, tenantNotices, tenants,
+  exportDeliveries, exportHolds, opsAlerts, paymentPendingObservations, tenantAuditEvents, tenantNotices, tenants,
 } from '@/db/control-plane/schema';
 import { withLockedPool, withTenantLock } from '@/db/control-plane/locked';
 import { decrypt } from '@/lib/encryption';
@@ -12,12 +12,11 @@ import {
 } from '@/lib/billing/stripe-state';
 import type { StripeSubSnapshot } from '@/lib/billing/subscription-transitions';
 import { addDays, cycleAnchor, isDunning, isGood, noticeGivenAt, type NoticeState } from './lifecycle';
-import { BACKUP_RETENTION_DAYS, DELETION_NOTICE_DAYS } from './lifecycle-config';
+import { DELETION_NOTICE_DAYS } from './lifecycle-config';
 import { hasPaymentProcessing, voidSubscriptionInvoices } from './lifecycle-runner';
 import { raiseAlert, readTenant, recordAudit, updateTenantGuarded, type TenantRow } from './lifecycle-store';
 import { databaseExists, deleteNeonProjectVerified, directNeonHost, dropDatabaseVerified, neonProjectExists } from './neon';
 import { invalidateTenant } from './registry';
-import type { FounderExportDetail } from './ops-digest';
 import { proveProjectGone, type ProvenGoneSeams } from './proven-gone';
 
 /**
@@ -60,7 +59,8 @@ export interface DeletionReceipt {
   deletedAt: Date | null;
   database: string;
   forcedReason: string | null;
-  founderExportDestroyBy: Date | null;
+  /** feature-plan-cloud-export.md §6.8: the export copies on record (deliveries expire automatically; holds survive). */
+  exportCopies: { delivered: number; openHolds: number };
   notices: Array<{ kind: string; anchor: Date; sentAt: Date | null; forcedAt: Date | null; supersededAt: Date | null }>;
 }
 
@@ -408,23 +408,13 @@ async function receipt(row: TenantRow, forcedReason: string | null): Promise<Del
   const [started] = await withLockedPool((db) => db.select({ detail: tenantAuditEvents.detail }).from(tenantAuditEvents)
     .where(and(eq(tenantAuditEvents.tenantId, row.id), eq(tenantAuditEvents.kind, 'deletion-started'))).orderBy(desc(tenantAuditEvents.createdAt)).limit(1));
   const proven = started?.detail ? new RegExp(`\\(${PROVEN_GONE_MARK} ([^)]+)\\)`).exec(started.detail)?.[1] ?? null : null;
-  // F2: a founder export taken earlier must be destroyed by min(its own destroy-by, deletion + 30 days).
-  const events = await withLockedPool((db) => db.select().from(tenantAuditEvents)
-    .where(and(eq(tenantAuditEvents.tenantId, row.id), inArray(tenantAuditEvents.kind, ['founder-export-taken', 'founder-export-destroyed', 'founder-export-legal-hold'])))
-    .orderBy(desc(tenantAuditEvents.createdAt)));
-  let founderExportDestroyBy: Date | null = null;
-  const latest = events[0];
-  if (latest?.kind === 'founder-export-taken') {
-    let destroyBy = addDays(latest.createdAt, BACKUP_RETENTION_DAYS);
-    try { destroyBy = new Date((JSON.parse(latest.detail ?? '{}') as FounderExportDetail).destroyBy); } catch { /* keep default */ }
-    if (row.deletedAt) {
-      const byDeletion = addDays(row.deletedAt, BACKUP_RETENTION_DAYS);
-      if (byDeletion.getTime() < destroyBy.getTime()) destroyBy = byDeletion;
-    }
-    founderExportDestroyBy = destroyBy;
-  }
+  // feature-plan-cloud-export.md §6.8: the export copies (a hold survives the deletion by design: Terms §9.3).
+  const [delivered] = await withLockedPool((db) => db.select({ n: count() }).from(exportDeliveries).where(eq(exportDeliveries.tenantId, row.id)));
+  const [openHolds] = await withLockedPool((db) => db.select({ n: count() }).from(exportHolds)
+    .where(and(eq(exportHolds.tenantId, row.id), isNull(exportHolds.releasedAt))));
   return {
     slug: row.slug, name: row.name, status: row.status, deletionScheduledFor: row.deletionScheduledFor, deletedAt: row.deletedAt,
-    database: row.neonProjectId ? `Neon project ${row.neonProjectId}${proven ? ` (already gone; proven at ${proven})` : ''}` : 'database dropped', forcedReason, founderExportDestroyBy, notices,
+    database: row.neonProjectId ? `Neon project ${row.neonProjectId}${proven ? ` (already gone; proven at ${proven})` : ''}` : 'database dropped', forcedReason,
+    exportCopies: { delivered: delivered.n, openHolds: openHolds.n }, notices,
   };
 }

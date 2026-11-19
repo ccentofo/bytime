@@ -18,7 +18,8 @@ const ACCT = '111122223333';
 const KEY_ARN = `arn:aws:kms:us-east-1:${ACCT}:key/1234abcd-12ab-34cd-56ef-1234567890ab`;
 const stack = parse(read('ops/aws/backup-stack.yml')) as { Resources: Record<string, { Type: string; Properties: Node; DependsOn?: string[] }>; Outputs: Record<string, Node> };
 const boot = parse(read('ops/aws/bootstrap.yml')) as typeof stack;
-const exp = expectedDocuments({ accountId: ACCT, keyArn: KEY_ARN });
+const EXPORT_KEY_ARN = `arn:aws:kms:us-east-1:${ACCT}:key/5678efab-12ab-34cd-56ef-1234567890ab`;
+const exp = expectedDocuments({ accountId: ACCT, keyArn: KEY_ARN, exportKeyArn: EXPORT_KEY_ARN });
 
 function resolve(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(resolve);
@@ -55,15 +56,17 @@ describe('D7: the roles', () => {
     expect((boot.Resources.GitHubOidcProvider.Properties as Node).Url).toBe('https://token.actions.githubusercontent.com');
   });
 
-  it('the button role starts only the disaster family in the backup cluster; ListTasks on * with ecs:cluster; Describe/Stop on task/; PassRole only the two disaster roles to ecs-tasks', () => {
+  it('the button role starts only the disaster and (3d) export families in the backup cluster; ListTasks on * with ecs:cluster; Describe/Stop on task/; PassRole only those families\' roles to ecs-tasks', () => {
     const st = policyOf(DISASTER_BUTTON_ROLE);
     const cluster = { ArnEquals: { 'ecs:cluster': `arn:aws:ecs:us-east-1:${ACCT}:cluster/cadenzpoint-backup` } };
-    expect(sid(st, 'RunDisasterTask')).toMatchObject({ Action: 'ecs:RunTask', Resource: `arn:aws:ecs:us-east-1:${ACCT}:task-definition/cadenzpoint-backup-disaster:*`, Condition: cluster });
+    // feature-plan-cloud-export.md §6.2: the same button role starts the export family (never the sweep or backup families).
+    expect(sid(st, 'RunDisasterTask')).toMatchObject({ Action: 'ecs:RunTask', Resource: [`arn:aws:ecs:us-east-1:${ACCT}:task-definition/cadenzpoint-backup-disaster:*`, `arn:aws:ecs:us-east-1:${ACCT}:task-definition/cadenzpoint-backup-export:*`], Condition: cluster });
     expect(sid(st, 'ListTasks')).toMatchObject({ Action: 'ecs:ListTasks', Resource: '*', Condition: cluster });
     expect(sid(st, 'DescribeAndStopTasks')).toMatchObject({ Action: ['ecs:DescribeTasks', 'ecs:StopTask'], Resource: `arn:aws:ecs:us-east-1:${ACCT}:task/cadenzpoint-backup/*` });
     expect(sid(st, 'PassDisasterRoles')).toMatchObject({
       Action: 'iam:PassRole', Condition: { StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } },
-      Resource: [`arn:aws:iam::${ACCT}:role/cadenzpoint-backup/cadenzpoint-backup-disaster-task`, `arn:aws:iam::${ACCT}:role/cadenzpoint-backup/cadenzpoint-backup-disaster-exec`],
+      Resource: [`arn:aws:iam::${ACCT}:role/cadenzpoint-backup/cadenzpoint-backup-disaster-task`, `arn:aws:iam::${ACCT}:role/cadenzpoint-backup/cadenzpoint-backup-disaster-exec`,
+        `arn:aws:iam::${ACCT}:role/cadenzpoint-backup/cadenzpoint-backup-export-task`, `arn:aws:iam::${ACCT}:role/cadenzpoint-backup/cadenzpoint-backup-export-exec`],
     });
     expect(sid(st, 'ReadStackOutputs').Resource).toBe(`arn:aws:cloudformation:us-east-1:${ACCT}:stack/cadenzpoint-backup/*`);
     expect(actions(st).sort()).toEqual(['cloudformation:DescribeStacks', 'ecs:DescribeTasks', 'ecs:ListTasks', 'ecs:RunTask', 'ecs:StopTask', 'ecs:TagResource', 'iam:PassRole'].sort());
@@ -192,9 +195,9 @@ describe('D7: the alerting rules', () => {
     expect(PROTECTION_EVENTS).toEqual(expect.arrayContaining(['PutParameter', 'DeleteParameter', 'DeleteParameters']));
   });
 
-  it('the audit inspects and expects all four rules', () => {
+  it('the audit inspects and expects all six rules (3d adds the two export rules)', () => {
     const insp = sid(policyOf(taskRoleName('audit')), 'InspectRules').Resource as string[];
-    for (const n of [NAMES.protectionsRule, NAMES.rolesRule, NAMES.disasterStartedRule, NAMES.disasterRunTaskRule]) {
+    for (const n of [NAMES.protectionsRule, NAMES.rolesRule, NAMES.disasterStartedRule, NAMES.disasterRunTaskRule, NAMES.exportStartedRule, NAMES.exportRunTaskRule]) {
       expect(insp).toContain(`arn:aws:events:us-east-1:${ACCT}:rule/${n}`);
       expect(Object.keys(exp.rulePatterns)).toContain(n);
     }

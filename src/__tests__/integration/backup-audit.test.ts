@@ -13,7 +13,7 @@ import { runBackup } from '../../../scripts/backup/backup';
 import { acquireLock } from '../../../scripts/backup/lib/locks';
 import { withDatabase } from '../../../scripts/backup/lib/pg-url';
 import { controlPlaneId } from '../../../scripts/backup/lib/keys';
-import { deniedKeyClient, FakeBucket, fakeAuditClients, fakeDumpArgs, TEST_KEY_ARN, testKeyring } from '../helpers/backup-fakes';
+import { deniedKeyClient, FakeBucket, fakeAuditClients, fakeDumpArgs, TEST_EXPORT_KEY_ARN, TEST_KEY_ARN, testKeyring } from '../helpers/backup-fakes';
 import { adminUrl, createScratchDb, dropScratchDb, listRtDatabases, SERVER_URL } from './backup-helpers';
 
 const DAY = 86_400_000;
@@ -49,7 +49,7 @@ describe.skipIf(!SERVER_URL)('audit', () => {
     const lines: string[] = [];
     const d: AuditDeps = {
       controlPlaneUrl: cp.url, restoreTestUrl: rtUrl, reader: bucket, store: bucket, clients: f.clients, keyClient: deniedKeyClient(),
-      keyArn: TEST_KEY_ARN, runId: `test-${randomUUID().slice(0, 8)}`, log: (l) => lines.push(l), hostGuardOverride: true, ...o,
+      keyArn: TEST_KEY_ARN, exportKeyArn: TEST_EXPORT_KEY_ARN, runId: `test-${randomUUID().slice(0, 8)}`, log: (l) => lines.push(l), hostGuardOverride: true, ...o,
     };
     return { d, bucket, f, lines };
   }

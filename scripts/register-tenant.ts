@@ -43,7 +43,8 @@ export async function registerTenant(controlUrl: string, input: {
       if (input.exempt && !existing?.lifecycle_exempt) {
         await tx`
           update tenant_notices set superseded_at = ${now}
-          where tenant_id = ${row.id} and sent_at is null and forced_at is null and superseded_at is null`;
+          where tenant_id = ${row.id} and sent_at is null and forced_at is null and superseded_at is null
+            and kind <> 'export-ready'`; // feature-plan-cloud-export.md §6.5: an export email is not a lifecycle email
         await tx`
           insert into tenant_audit_events (tenant_id, kind, detail, actor)
           values (${row.id}, 'exempt-on', 'demo workspace (seed-demo)', ${input.actor})`;

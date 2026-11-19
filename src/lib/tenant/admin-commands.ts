@@ -1,12 +1,12 @@
 import 'server-only';
-import { and, desc, eq, gte, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
-import { opsAlerts, signups, tenantAuditEvents, tenantNotices, tenants } from '@/db/control-plane/schema';
+import { and, desc, eq, gte, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
+import { exportDeliveries, opsAlerts, signups, tenantNotices, tenants } from '@/db/control-plane/schema';
 import { withLockedPool, withTenantLock, type ControlTx } from '@/db/control-plane/locked';
 import { addDays, cycleAnchor, deletionDateFrom, getTenantAccess, hasSubscribed, type LifecycleFacts } from './lifecycle';
 import { DELETION_NOTICE_DAYS, POST_END_RETENTION_DAYS } from './lifecycle-config';
 import { invalidateTenant, toLifecycleFacts } from './registry';
 import { readTenant, recordAudit, resolveAlertsOfKind, updateTenantGuarded, type TenantRow } from './lifecycle-store';
-import { enqueueNotice } from './notices';
+import { enqueueNotice, LEASE_MINUTES, redactExportPayload } from './notices';
 
 /**
  * Founder commands behind `tenant:admin` (feature-plan-terms-compliance-fixes.md §5.6, F1, F2, F4). Each change is
@@ -118,8 +118,10 @@ export const plans = {
         auditKind: 'exempt-on',
         auditDetail: reason,
         after: async (tx, t) => {
+          // feature-plan-cloud-export.md §6.5: an export email is not a lifecycle email; set-exempt never supersedes it.
           await tx.update(tenantNotices).set({ supersededAt: t }).where(and(
             eq(tenantNotices.tenantId, row.id), isNull(tenantNotices.sentAt), isNull(tenantNotices.forcedAt), isNull(tenantNotices.supersededAt),
+            ne(tenantNotices.kind, 'export-ready'),
           ));
         },
       };
@@ -254,6 +256,7 @@ export async function applyAdminPlan(tenantId: string, planner: Planner, actor: 
 
 /** The one pending notice `force-notice-sent` may mark. Refuses missing, superseded, ambiguous, sent or forced. */
 export async function findForceableNotice(tenantId: string, kind: string, anchor?: Date) {
+  if (kind === 'export-ready') throw new AdminCommandError('An export-ready notice can\'t be forced; use export-revoke.');
   const candidates = await withLockedPool((db) => db.select().from(tenantNotices)
     .where(and(eq(tenantNotices.tenantId, tenantId), eq(tenantNotices.kind, kind))).orderBy(desc(tenantNotices.createdAt)));
   const live = candidates.filter((n) => n.supersededAt === null && (!anchor || n.scheduledFor.getTime() === anchor.getTime()));
@@ -272,6 +275,7 @@ export async function forceNoticeSent(tenantId: string, noticeId: string, reason
     const row = await readTenant(tx, tenantId);
     if (!row) throw new AdminCommandError('Tenant disappeared.');
     const [current] = await tx.select().from(tenantNotices).where(eq(tenantNotices.id, noticeId));
+    if (current?.kind === 'export-ready') throw new AdminCommandError('An export-ready notice can\'t be forced; use export-revoke.');
     if (!current || current.tenantId !== tenantId || current.supersededAt || current.sentAt || current.forcedAt) {
       throw new AdminCommandError('The notice changed meanwhile; re-run.');
     }
@@ -282,19 +286,62 @@ export async function forceNoticeSent(tenantId: string, noticeId: string, reason
   });
 }
 
-/** F2: record that a founder export was destroyed, or is kept under a legal hold. */
-export async function recordFounderExportDisposal(tenantId: string, legalHold: string | undefined, actor: string): Promise<string> {
-  const [taken] = await withLockedPool((db) => db.select().from(tenantAuditEvents)
-    .where(and(eq(tenantAuditEvents.tenantId, tenantId), eq(tenantAuditEvents.kind, 'founder-export-taken')))
-    .orderBy(desc(tenantAuditEvents.createdAt)).limit(1));
-  if (!taken) throw new AdminCommandError('No founder export was recorded for this workspace.');
-  await withLockedPool((db) => recordAudit(db, {
-    tenantId,
-    kind: legalHold ? 'founder-export-legal-hold' : 'founder-export-destroyed',
-    actor,
-    detail: legalHold ?? `export of ${taken.createdAt.toISOString()} destroyed`,
-  }));
-  return taken.detail ?? '';
+export interface ExportRevokePlan {
+  deliveryId: string;
+  tenantId: string;
+  slug: string;
+  expiresAt: Date;
+  /** The notice is claimed by a send in flight (its lease is live): the email may already be going out. */
+  sendInFlight: boolean;
+  noticePending: boolean;
+}
+
+type PlanReader = Pick<ControlTx, 'select'>;
+
+/** The plan, read through `db` (the pool for the dry run, the locked transaction for the revoke itself). */
+async function readRevokePlan(db: PlanReader, deliveryId: string, now: Date): Promise<ExportRevokePlan> {
+  const [d] = await db.select({ d: exportDeliveries, slug: tenants.slug, n: tenantNotices }).from(exportDeliveries)
+    .innerJoin(tenants, eq(tenants.id, exportDeliveries.tenantId))
+    .innerJoin(tenantNotices, eq(tenantNotices.id, exportDeliveries.noticeId))
+    .where(eq(exportDeliveries.id, deliveryId)).limit(1);
+  if (!d) throw new AdminCommandError('No export delivery has that id.');
+  if (d.d.erasedAt) throw new AdminCommandError('That delivery\'s copy is already erased; nothing to revoke.');
+  if (d.d.revokedAt) throw new AdminCommandError('That delivery is already revoked.');
+  const noticePending = d.n.sentAt === null && d.n.supersededAt === null && d.n.forcedAt === null;
+  // notices.ts's claim lease (audit round 1, FR4: one constant).
+  const leaseLive = d.n.lastAttemptAt !== null && now.getTime() - d.n.lastAttemptAt.getTime() < LEASE_MINUTES * 60_000;
+  return { deliveryId, tenantId: d.d.tenantId, slug: d.slug, expiresAt: d.d.expiresAt, sendInFlight: noticePending && leaseLive, noticePending };
+}
+
+/** `export-revoke` (feature-plan-cloud-export.md §6.5): what it would revoke. Refuses an unknown, revoked or erased delivery. */
+export async function planExportRevoke(deliveryId: string, now: Date = new Date()): Promise<ExportRevokePlan> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(deliveryId)) throw new AdminCommandError('export-revoke takes a delivery id (uuid).');
+  return withLockedPool((db) => readRevokePlan(db, deliveryId, now));
+}
+
+/**
+ * Revoke a delivery, under the tenant lock: `revoked_at`, an `export-revoked` audit, and the pending notice superseded
+ * (its token nulled and the link redacted from the frozen message), in one transaction. The link is dead at once; the
+ * hourly sweep erases the copy. The plan returned (and audited) is re-read INSIDE the lock (audit round 1, FR3), so the
+ * in-flight warning reflects a claim that landed after the dry run. `beforeLock` is a test seam.
+ */
+export async function exportRevoke(deliveryId: string, actor: string, now: Date = new Date(), hooks: { beforeLock?: () => Promise<void> } = {}): Promise<ExportRevokePlan> {
+  const first = await planExportRevoke(deliveryId, now);
+  await hooks.beforeLock?.();
+  return withTenantLock(first.tenantId, async (tx) => {
+    const plan = await readRevokePlan(tx, deliveryId, now);
+    const updated = await tx.update(exportDeliveries).set({ revokedAt: now, tokenEncrypted: null })
+      .where(and(eq(exportDeliveries.id, deliveryId), isNull(exportDeliveries.revokedAt), isNull(exportDeliveries.erasedAt)))
+      .returning({ noticeId: exportDeliveries.noticeId });
+    if (updated.length === 0) throw new AdminCommandError('The delivery changed meanwhile; re-run.');
+    const [notice] = await tx.select().from(tenantNotices).where(eq(tenantNotices.id, updated[0].noticeId));
+    if (notice && notice.sentAt === null && notice.supersededAt === null && notice.forcedAt === null) {
+      await tx.update(tenantNotices).set({ supersededAt: now, payload: redactExportPayload(notice.payload as { html?: unknown } | null) })
+        .where(eq(tenantNotices.id, notice.id));
+    }
+    await recordAudit(tx, { tenantId: plan.tenantId, kind: 'export-revoked', actor, detail: JSON.stringify({ deliveryId, noticeWasPending: plan.noticePending, sendInFlight: plan.sendInFlight }) });
+    return plan;
+  });
 }
 
 /**

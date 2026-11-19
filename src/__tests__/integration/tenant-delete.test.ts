@@ -11,7 +11,6 @@ import { encrypt } from '@/lib/encryption';
 import { deleteTenant, type DeleteTenantOptions } from '@/lib/tenant/delete-tenant';
 import { getTenantAccess } from '@/lib/tenant/lifecycle';
 import { toLifecycleFacts } from '@/lib/tenant/registry';
-import { recordAudit } from '@/lib/tenant/lifecycle-store';
 import { stripeState } from './fakes/fake-stripe';
 import {
   cpReady, auditOf, cleanupLifecycleTenants, daysFrom, getTenantRow, insertNotice, makeTenant, observationsOf, openAlertsOf,
@@ -332,13 +331,35 @@ describe.skipIf(!isLocal)('deleteTenant (§5.3) — throwaway local databases on
     expect((await run(t.slug)).outcome).toBe('deleted');
   });
 
-  it('the receipt tightens a founder export destroy-by date to deletion + 30 days', async () => {
+  it('T16 (3d): the receipt counts the export copies ("N delivered (expire automatically); M open hold(s)"), and an open hold refuses nothing', async () => {
     const t = await eligibleTenant();
-    await recordAudit(controlDb, { tenantId: t.id, kind: 'founder-export-taken', actor: 'test', detail: JSON.stringify({ path: '/x', destroyBy: daysFrom(NOW, 60).toISOString() }) });
+    const sqlc = postgres(process.env.CONTROL_PLANE_DATABASE_URL!, { max: 1, onnotice: () => {} });
+    try {
+      for (const [i, erased] of [[1, false], [2, true]] as const) {
+        const [n] = await sqlc<{ id: string }[]>`INSERT INTO tenant_notices (tenant_id, kind, scheduled_for) VALUES (${t.id}, 'export-ready', now() - make_interval(secs => ${i})) RETURNING id::text AS id`;
+        await sqlc`INSERT INTO export_deliveries (id, tenant_id, notice_id, s3_key, bytes, sha256, token_hash, recipients_encrypted, time_zone, extra_recipient, extra_only, expires_at, erased_at, run_id)
+          VALUES (gen_random_uuid(), ${t.id}, ${n.id}, ${`delivery/x${i}/a.zip`}, 1, ${'a'.repeat(64)}, ${String(i).repeat(64)}, ${encrypt('[]')}, 'UTC', false, false, now() + interval '7 days', ${erased ? new Date() : null}, 'test')`;
+      }
+      await sqlc`INSERT INTO export_holds (id, tenant_id, s3_key, bytes, sha256, reason, run_id, released_at) VALUES
+        (gen_random_uuid(), ${t.id}, 'hold/h1/a.zip', 1, ${'b'.repeat(64)}, 'litigation', 'test', null),
+        (gen_random_uuid(), ${t.id}, 'hold/h2/a.zip', 1, ${'b'.repeat(64)}, 'closed', 'test', now())`;
+      const r = await run(t.slug);
+      expect(r.outcome).toBe('deleted');
+      if (r.outcome === 'deleted') expect(r.receipt.exportCopies).toEqual({ delivered: 2, openHolds: 1 });
+    } finally {
+      await sqlc`DELETE FROM export_deliveries WHERE tenant_id = ${t.id}`;
+      await sqlc`DELETE FROM export_holds WHERE tenant_id = ${t.id}`;
+      await sqlc.end({ timeout: 5 });
+    }
+  });
+
+  it('T16 (3d): with no export copies the receipt says 0 and 0; the receipt no longer has a founder-export field', async () => {
+    const t = await eligibleTenant();
     const r = await run(t.slug);
     expect(r.outcome).toBe('deleted');
     if (r.outcome === 'deleted') {
-      expect(r.receipt.founderExportDestroyBy!.getTime()).toBe(daysFrom(r.receipt.deletedAt!, 30).getTime());
+      expect(r.receipt.exportCopies).toEqual({ delivered: 0, openHolds: 0 });
+      expect('founderExportDestroyBy' in r.receipt).toBe(false);
     }
   });
 

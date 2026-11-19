@@ -129,10 +129,12 @@ import { expectedDocuments, NAMES, ALL_ROLES } from '../../../scripts/backup/lib
 
 export const TEST_ACCOUNT = '111122223333';
 export const TEST_KEY_ARN = `arn:aws:kms:us-east-1:${TEST_ACCOUNT}:key/1234abcd-12ab-34cd-56ef-1234567890ab`;
+/** feature-plan-cloud-export.md §6.1: the exports bucket's key. */
+export const TEST_EXPORT_KEY_ARN = `arn:aws:kms:us-east-1:${TEST_ACCOUNT}:key/5678efab-12ab-34cd-56ef-1234567890ab`;
 
 /** AuditClients reporting a perfectly protected stack (rendered from expected-policies.ts); tests mutate the state. */
 export function fakeAuditClients() {
-  const exp = expectedDocuments({ accountId: TEST_ACCOUNT, keyArn: TEST_KEY_ARN });
+  const exp = expectedDocuments({ accountId: TEST_ACCOUNT, keyArn: TEST_KEY_ARN, exportKeyArn: TEST_EXPORT_KEY_ARN });
   const doc = (s: unknown) => JSON.stringify({ Version: '2012-10-17', Statement: s });
   const state = {
     versioning: '',
@@ -141,6 +143,16 @@ export function fakeAuditClients() {
     lifecycle: [{ id: NAMES.lifecycleRule, status: 'Enabled', prefix: 'v1/', expirationDays: 25, abortDays: 1, other: false }] as Array<{ id: string | null; status: string | null; prefix: string | null; expirationDays: number | null; abortDays: number | null; other: boolean }> | null,
     keyState: 'Enabled',
     keyPolicy: doc(exp.keyPolicy) as string | null,
+    // feature-plan-cloud-export.md §6.2: the exports bucket (lifecycle as GetBucketLifecycleConfiguration maps it: the
+    // whole-bucket abort rule has an empty prefix) and its key.
+    exportBucketPolicy: doc(exp.exportBucketPolicy) as string | null,
+    exportLifecycle: [
+      { id: 'expire-delivery', status: 'Enabled', prefix: 'delivery/', expirationDays: 8, abortDays: null, other: false },
+      { id: 'abort-mpu', status: 'Enabled', prefix: '', expirationDays: null, abortDays: 1, other: false },
+    ] as Array<{ id: string | null; status: string | null; prefix: string | null; expirationDays: number | null; abortDays: number | null; other: boolean }> | null,
+    exportEncryption: { algorithm: 'aws:kms', keyId: TEST_EXPORT_KEY_ARN, bucketKeyEnabled: true, rules: 1 } as { algorithm: string | null; keyId: string | null; bucketKeyEnabled: boolean; rules: number } | null,
+    exportKeyState: 'Enabled',
+    exportKeyPolicy: doc(exp.exportKeyPolicy) as string | null,
     subscriptions: [{ arn: `${exp.topicArn}:0000-sub`, protocol: 'email' }],
     filterPolicy: null as string | null,
     topicPolicy: doc(exp.topicPolicy) as string | null,
@@ -160,6 +172,12 @@ export function fakeAuditClients() {
       lifecycle: async () => { guard('lifecycle'); return state.lifecycle; },
     },
     key: { state: async () => { guard('key-state'); return state.keyState; }, policy: async () => { guard('key-policy'); return state.keyPolicy; } },
+    exports: {
+      policy: async () => { guard('exports-bucket-policy'); return state.exportBucketPolicy; },
+      lifecycle: async () => { guard('exports-lifecycle'); return state.exportLifecycle; },
+      encryption: async () => { guard('exports-encryption'); return state.exportEncryption; },
+    },
+    exportKey: { state: async () => { guard('export-key-state'); return state.exportKeyState; }, policy: async () => { guard('export-key-policy'); return state.exportKeyPolicy; } },
     topic: {
       subscriptions: async () => { guard('subscriptions'); return state.subscriptions; },
       filterPolicy: async () => state.filterPolicy,

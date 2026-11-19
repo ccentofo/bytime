@@ -1,15 +1,14 @@
 import 'server-only';
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, ne } from 'drizzle-orm';
+import { and, desc, eq, gte, isNotNull, isNull, lt, ne } from 'drizzle-orm';
 import { opsAlerts, tenantAuditEvents, tenantNotices, tenants } from '@/db/control-plane/schema';
 import { withLockedPool } from '@/db/control-plane/locked';
 import { resend, EMAIL_FROM } from '@/lib/email/client';
-import { BACKUP_RETENTION_DAYS } from './lifecycle-config';
-import { addDays } from './lifecycle';
 import { raiseAlert, resolveAlert } from './lifecycle-store';
 import type { TenantRunResult } from './lifecycle-runner';
 import { cronProblems, readCronRuns, type CronProblem } from '@/lib/cron/heartbeat';
 import { signupsDueForDeletion, waitlistedSignups } from '@/lib/signup/maintenance';
 import { backupDigest } from './backup-status';
+import { checkExportCopies, exportDigest } from './export-status';
 
 /**
  * Founder digest (feature-plan-terms-compliance-fixes.md §4.4, D4): sent to OPS_ALERT_EMAIL by the daily lifecycle
@@ -22,46 +21,8 @@ import { backupDigest } from './backup-status';
 
 const MS_PER_HOUR = 3600_000;
 
-/** Founder export audit detail (written by scripts/tenant-export.ts). */
-export interface FounderExportDetail {
-  path: string;
-  destroyBy: string; // ISO instant
-}
-
 function esc(s: unknown): string {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-}
-
-/** Raise/resolve the "founder export past its destroy-by date" alert for every taken export (F2). */
-async function checkFounderExports(now: Date): Promise<void> {
-  await withLockedPool(async (db) => {
-    const events = await db.select().from(tenantAuditEvents)
-      .where(inArray(tenantAuditEvents.kind, ['founder-export-taken', 'founder-export-destroyed', 'founder-export-legal-hold']))
-      .orderBy(desc(tenantAuditEvents.createdAt));
-    const deleted = new Map((await db.select({ id: tenants.id, deletedAt: tenants.deletedAt }).from(tenants)
-      .where(isNotNull(tenants.deletedAt))).map((t) => [t.id, t.deletedAt!]));
-    for (const taken of events.filter((e) => e.kind === 'founder-export-taken')) {
-      const closed = events.some((e) => e.tenantId === taken.tenantId && e.kind !== 'founder-export-taken'
-        && e.createdAt.getTime() >= taken.createdAt.getTime());
-      let destroyBy: Date;
-      try {
-        destroyBy = new Date((JSON.parse(taken.detail ?? '{}') as FounderExportDetail).destroyBy);
-      } catch {
-        destroyBy = addDays(taken.createdAt, BACKUP_RETENTION_DAYS);
-      }
-      const deletedAt = deleted.get(taken.tenantId);
-      if (deletedAt) {
-        const byDeletion = addDays(deletedAt, BACKUP_RETENTION_DAYS);
-        if (byDeletion.getTime() < destroyBy.getTime()) destroyBy = byDeletion;
-      }
-      const alert = { tenantId: taken.tenantId, kind: 'founder-export-overdue', dedupKey: taken.id };
-      if (!closed && now.getTime() > destroyBy.getTime()) {
-        await raiseAlert(db, { ...alert, detail: { destroyBy: destroyBy.toISOString() } }, now);
-      } else {
-        await resolveAlert(db, alert, now);
-      }
-    }
-  });
 }
 
 /** feature-plan-per-user-billing.md §6.6: one line per `seat-quantity-corrected` event (exported for tests). */
@@ -77,7 +38,8 @@ export function cronProblemLines(problems: CronProblem[]): string[] {
 }
 
 export async function sendOpsDigest(results: TenantRunResult[], now: Date, incomplete: boolean): Promise<'sent' | 'failed' | 'disabled'> {
-  await checkFounderExports(now);
+  // feature-plan-cloud-export.md §6.7: the export findings, in the slot the retired F2 founder-export check left.
+  await checkExportCopies(now);
 
   const data = await withLockedPool(async (db) => {
     const alerts = await db.select({ a: opsAlerts, slug: tenants.slug }).from(opsAlerts)
@@ -105,12 +67,15 @@ export async function sendOpsDigest(results: TenantRunResult[], now: Date, incom
   const signupDeletions = await signupsDueForDeletion(now);
   // feature-plan-database-backups.md §6.9: the Backups section (backupDigest never throws; "could not be read" is news).
   const backups = await backupDigest(now);
+  // feature-plan-cloud-export.md §6.7: a line every day, and the open legal holds listed on UTC day 1.
+  const exportsSection = await exportDigest(now);
 
   const ready = results.filter((r) => r.readyForDeletion);
   const blocked = results.filter((r) => r.blockedDeletion);
   const hasNews = data.alerts.length > 0 || ready.length > 0 || blocked.length > 0 || data.deleting.length > 0
     || data.stalePending.length > 0 || incomplete || crons.length > 0 || waitlisted.length > 0 || signupDeletions.length > 0
-    || data.corrections.length > 0 || backups.news;
+    || data.corrections.length > 0 || backups.news
+    || exportsSection.holds.length > 0; // the monthly open-hold list is news (audit round 1, FR13); the daily line alone isn't
 
   const to = process.env.OPS_ALERT_EMAIL;
   if (!to || !resend) {
@@ -139,6 +104,9 @@ export async function sendOpsDigest(results: TenantRunResult[], now: Date, incom
   section('Stuck in "deleting" (abandoned deletion run — resume tenant:delete)', data.deleting.map((d) => `${esc(d.slug)} since ${esc(d.updatedAt.toISOString())}`));
   section('Seat quantities corrected (last 24 h)', correctionLines(data.corrections));
   section('Backups', backups.lines.map((l) => esc(l)));
+  section('Exports', [esc(exportsSection.line)]);
+  section('Open legal holds (monthly list; release each when its legal reason ends)', exportsSection.holds.map((h) =>
+    `hold ${esc(h.holdId)} — workspace ${esc(h.tenantId)}, ${h.ageDays} days old: ${esc(h.reason)}`));
   section('Unresolved alerts', data.alerts.map(({ a, slug }) =>
     `${esc(slug ?? a.scope)} — <strong>${esc(a.kind)}</strong>${a.dedupKey ? ` (${esc(a.dedupKey)})` : ''} × ${a.occurrences}, last ${esc(a.lastSeenAt.toISOString())}${a.detail ? ` — ${esc(JSON.stringify(a.detail))}` : ''} [id ${esc(a.id)}]`));
   section('Notices pending more than 24 hours', data.stalePending.map((n) =>
