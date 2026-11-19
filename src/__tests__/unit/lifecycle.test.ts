@@ -12,6 +12,7 @@ import {
   type NoticeState,
   type ReconcileContext,
 } from '@/lib/tenant/lifecycle';
+import { SUSPENDED_DAYS_UNTIL_TERMINATION } from '@/lib/tenant/lifecycle-config';
 
 // feature-plan-terms-compliance-fixes.md §4 / §7: table-driven tests for every access row and every cron rule,
 // including the scenarios that broke the first implementation (paying customer treated as a lapsed trial,
@@ -366,7 +367,7 @@ describe('U10: shouldReconcile for invoiced subscriptions (§6.7)', () => {
 });
 
 describe('U12: isNoticeSuperseded for the new kind (§6.9)', () => {
-  it("'bank-payment-failed' states a past fact: superseded only for deleting/deleted", () => {
+  it("'bank-payment-failed' states a past fact: superseded only for deleting/deleted (and a policy hold: A2-D1 below)", () => {
     const kind: NoticeKind = 'bank-payment-failed'; // a NoticeKind (type-checked: fails tsc without the new kind)
     expect(kind).toBe('bank-payment-failed');
     const anchor = d(-1);
@@ -381,5 +382,130 @@ describe('U12: isNoticeSuperseded for the new kind (§6.9)', () => {
     const oldP = d(-10);
     expect(isNoticeSuperseded('payment-failed', oldP, facts({ ...paying, collectionMethod: 'send_invoice', pastDueSince: d(-3) }), NOW)).toBe(true);
     expect(isNoticeSuperseded('payment-failed', oldP, facts({ ...paying, collectionMethod: 'send_invoice', pastDueSince: oldP }), NOW)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SWEEP-FINDINGS.md §5 (pre-staging sweep, fix round S2)
+// ---------------------------------------------------------------------------
+
+describe('A2-D1: no payment, trial or suspension emails while policy-held (PO decision 3)', () => {
+  const Sa = d(-2);
+  const P = d(-13);
+  const policy = { status: 'suspended', suspensionReason: 'policy', suspendedAt: Sa } as const;
+  const nonpayment = { status: 'suspended', suspensionReason: 'nonpayment', suspendedAt: Sa } as const;
+  const lifted = { status: 'active', suspensionReason: null, suspendedAt: null } as const;
+  // Each held kind with facts under which it is otherwise current (not superseded).
+  const cases: Array<[NoticeKind, Date, Partial<LifecycleFacts>]> = [
+    ['trial-reminder-7d', d(5), { trialEndsAt: d(5) }],
+    ['trial-reminder-1d', d(0.5), { trialEndsAt: d(0.5) }],
+    ['trial-ended', d(-1), { trialEndsAt: d(-1) }],
+    ['payment-failed', P, { ...paying, subscriptionStatus: 'past_due', pastDueSince: P }],
+    ['bank-payment-failed', d(-1), { ...paying }],
+    ['suspension-warning', P, { ...paying, subscriptionStatus: 'past_due', pastDueSince: P }],
+    ['suspended', Sa, { ...paying, subscriptionStatus: 'unpaid', pastDueSince: d(-20) }],
+  ];
+
+  for (const [kind, anchor, base] of cases) {
+    it(`${kind}: superseded while policy-held; current under a non-payment suspension${kind === 'suspended' ? '' : ' and once the hold is lifted'}`, () => {
+      expect(isNoticeSuperseded(kind, anchor, facts({ ...base, ...policy }), NOW)).toBe(true);
+      expect(isNoticeSuperseded(kind, anchor, facts({ ...base, ...nonpayment }), NOW)).toBe(false);
+      // `suspended` is anchored on the suspension itself: lifting the hold leaves no suspension for it to describe.
+      if (kind !== 'suspended') expect(isNoticeSuperseded(kind, anchor, facts({ ...base, ...lifted }), NOW)).toBe(false);
+    });
+  }
+
+  it('not affected: deletion notices, export-ready and the policy-suspended notice itself', () => {
+    const E = d(-80);
+    const ended = facts({ ...paying, subscriptionStatus: 'canceled', subscriptionEndedAt: E, deletionScheduledFor: d(10), ...policy });
+    expect(isNoticeSuperseded('deletion-notice', E, ended, NOW)).toBe(false);
+    expect(isNoticeSuperseded('deletion-final-reminder', E, ended, NOW)).toBe(false);
+    expect(isNoticeSuperseded('export-ready', E, ended, NOW)).toBe(false);
+    expect(isNoticeSuperseded('policy-suspended', Sa, facts({ ...paying, ...policy }), NOW)).toBe(false);
+  });
+
+  it('nothing held is queued during the hold; after unsuspend the next run queues it again (resume)', () => {
+    const trial7 = { trialEndsAt: d(5) };
+    const trialOver = { trialEndsAt: d(-1) };
+    const dunning = { ...paying, subscriptionStatus: 'past_due', pastDueSince: P };
+    expect(kinds(run(facts({ ...trial7, ...policy })))).toEqual([]);
+    expect(kinds(run(facts({ ...trialOver, ...policy })))).toEqual([]);
+    expect(kinds(run(facts({ ...dunning, ...policy })))).toEqual([]);
+    expect(kinds(run(facts({ ...trial7, ...lifted })))).toEqual(['trial-reminder-7d']);
+    const over = run(facts({ ...trialOver, ...lifted }));
+    expect(kinds(over)).toContain('trial-ended');
+    expect(over.setDeletionScheduledFor).toBeDefined(); // A2-D6: the deletion clock starts once the hold is lifted
+    expect(kinds(run(facts({ ...dunning, ...lifted })))).toEqual(['suspension-warning']);
+  });
+});
+
+describe('A2-G3: a lapsed trial\'s deletion date is set once', () => {
+  const T = d(-80);
+  const D = addDays(T, 90); // d(10), set by the run the day the trial ended
+  const lapsed = facts({ trialEndsAt: T, deletionScheduledFor: D });
+  it('80 days after the trial ended, with D set → no new D (it never moves forward every day)', () => {
+    expect(run(lapsed).setDeletionScheduledFor).toBeUndefined();
+  });
+  it('and the workspace is ready for deletion at D (deletion notice given ≥ 14 days before)', () => {
+    const notices = [sent('deletion-notice', T, addDays(D, -20))];
+    expect(run(lapsed, notices, false, D).readyForDeletion).toBe(true);
+    expect(run(lapsed, notices, false, D).setDeletionScheduledFor).toBeUndefined();
+  });
+});
+
+describe('A2-G4: termination after exactly 30 days suspended', () => {
+  const Sa = d(-40);
+  const suspended = facts({ ...paying, subscriptionStatus: 'unpaid', pastDueSince: d(-55), status: 'suspended', suspendedAt: Sa, suspensionReason: 'nonpayment' });
+  const given = [sent('suspended', Sa, Sa)];
+  it('the constant is 30 days (Terms §4.7, D9)', () => expect(SUSPENDED_DAYS_UNTIL_TERMINATION).toBe(30));
+  it('not at 29 days 23 hours', () => {
+    expect(run(suspended, given, false, new Date(addDays(Sa, 30).getTime() - 3600_000)).terminate).toBeUndefined();
+  });
+  it('yes at exactly 30 days', () => {
+    expect(run(suspended, given, false, addDays(Sa, 30)).terminate).toBe(true);
+  });
+});
+
+describe('A2-G6: a pending deletion notice is superseded once D is cleared', () => {
+  const T = d(-80);
+  it('a trial-lapsed tenant subscribes: same anchor (the trial end), D cleared → superseded', () => {
+    const subscribed = facts({ trialEndsAt: T, subscriptionStatus: 'active', stripeSubscriptionId: 'sub_1', firstGoodAt: d(-1), deletionScheduledFor: null });
+    expect(isNoticeSuperseded('deletion-notice', T, subscribed, NOW)).toBe(true);
+    expect(isNoticeSuperseded('deletion-final-reminder', T, subscribed, NOW)).toBe(true);
+    // Control: before subscribing (D set, same anchor) the notice is current.
+    expect(isNoticeSuperseded('deletion-notice', T, facts({ trialEndsAt: T, deletionScheduledFor: d(10) }), NOW)).toBe(false);
+  });
+});
+
+describe('A2-G8: the exact-instant edges', () => {
+  it('closed at exactly the deletion date; not 1 ms before', () => {
+    const D = d(5);
+    const f = facts({ trialEndsAt: d(-85), deletionScheduledFor: D });
+    expect(getTenantAccess(f, D)).toBe('closed');
+    expect(getTenantAccess(f, new Date(D.getTime() - 1))).toBe('read_only');
+  });
+  it('a trial is read-only at exactly its end; full 1 ms before', () => {
+    const T = d(3);
+    const f = facts({ trialEndsAt: T });
+    expect(getTenantAccess(f, T)).toBe('read_only');
+    expect(getTenantAccess(f, new Date(T.getTime() - 1))).toBe('full');
+  });
+});
+
+describe('A2-G10: suspended trials and the blocked-transition delay', () => {
+  it('no trial notices while suspended (non-payment or policy)', () => {
+    for (const reason of ['nonpayment', 'policy'] as const) {
+      for (const T of [d(5), d(0.5), d(-1)]) {
+        const a = run(facts({ trialEndsAt: T, status: 'suspended', suspensionReason: reason, suspendedAt: d(-2) }));
+        expect(kinds(a).filter((k) => k.startsWith('trial')), `${reason} ${T.toISOString()}`).toEqual([]);
+      }
+    }
+  });
+  it('blocked-transition waits 2 days from the notice\'s creation: not at 2 d − 1 ms, yes at 2 d', () => {
+    const P = d(-20);
+    const dunning = facts({ ...paying, subscriptionStatus: 'past_due', pastDueSince: P });
+    const blocked = { kind: 'blocked-transition', notice: 'suspension-warning', anchor: P };
+    expect(run(dunning, [pending('suspension-warning', P, new Date(d(-2).getTime() + 1))]).alerts).not.toContainEqual(blocked);
+    expect(run(dunning, [pending('suspension-warning', P, d(-2))]).alerts).toContainEqual(blocked);
   });
 });

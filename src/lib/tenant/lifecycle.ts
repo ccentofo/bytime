@@ -180,6 +180,25 @@ export function noticeGivenAt(notices: NoticeState[], kind: NoticeKind, anchor: 
   return row.sentAt ?? row.forcedAt ?? null;
 }
 
+/** Suspended for a policy breach (F5): the `policy_hold` access mode's test. */
+export function isPolicyHeld(f: Pick<LifecycleFacts, 'status' | 'suspensionReason'>): boolean {
+  return f.status === 'suspended' && f.suspensionReason === 'policy';
+}
+
+/**
+ * SWEEP-FINDINGS.md §2 decision 3: the payment, trial and suspension emails held back while policy-held. Deletion
+ * notices, export-ready and policy-suspended are not affected.
+ */
+export const POLICY_HELD_KINDS = [
+  'trial-reminder-7d',
+  'trial-reminder-1d',
+  'trial-ended',
+  'payment-failed',
+  'bank-payment-failed',
+  'suspension-warning',
+  'suspended',
+] as const satisfies readonly NoticeKind[];
+
 /**
  * True if a pending notice no longer applies to the current facts and must be marked superseded instead of
  * sent (§4.5 Deliver step 2).
@@ -190,6 +209,9 @@ export function isNoticeSuperseded(kind: string, anchor: Date, f: LifecycleFacts
   // email is still sent to its stored recipients.
   if (kind === 'export-ready') return false;
   if (f.status === 'deleting' || f.status === 'deleted') return true;
+  // SWEEP-FINDINGS.md §2 decision 3 (product owner, 2026-11-19): no payment, trial or suspension emails while a workspace
+  // is policy-held. The normal lifecycle re-queues them once the hold is lifted (enqueueNotice revives the row).
+  if (isPolicyHeld(f) && (POLICY_HELD_KINDS as readonly string[]).includes(kind)) return true;
   switch (kind) {
     case 'trial-reminder-7d':
     case 'trial-reminder-1d': {
@@ -213,7 +235,7 @@ export function isNoticeSuperseded(kind: string, anchor: Date, f: LifecycleFacts
     case 'deletion-final-reminder':
       return !sameInstant(cycleAnchor(f), anchor) || f.deletionScheduledFor === null;
     case 'bank-payment-failed':
-      return false; // it states a past fact; only deleting/deleted (above) supersede it
+      return false; // it states a past fact; only deleting/deleted and a policy hold (above) supersede it
     default:
       return false;
   }
