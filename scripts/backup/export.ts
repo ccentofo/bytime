@@ -276,9 +276,15 @@ export async function runExport(args: ExportArgs, deps: ExportDeps): Promise<Exp
   const log = deps.log;
   const mode = args.mode;
   const target = mode === 'release' ? `hold ${args.holdId}` : `workspace ${args.workspaceId}`;
+  // Exactly one closing line per run (audit round 1, FR6): the hard exit and finish() share this. Whichever comes first
+  // publishes; the other waits for that publish instead of sending a second line.
+  let closing: Promise<void> | null = null;
   const finish = async (exitCode: number, line: string): Promise<ExportResult> => {
-    log(line);
-    await publishLine(deps.publish, log, line);
+    if (!closing) {
+      log(line);
+      closing = publishLine(deps.publish, log, line);
+    }
+    await closing;
     return { exitCode, line };
   };
 
@@ -331,9 +337,12 @@ export async function runExport(args: ExportArgs, deps: ExportDeps): Promise<Exp
   const hardExit = setTimeout(() => {
     void (async () => {
       log('hard exit: still running 5 minutes after the deadline');
-      const line = state.phase === 'record' && state.unknownLine ? state.unknownLine : state.failedLine;
-      log(line);
-      await Promise.race([publishLine(deps.publish, log, line), new Promise((r) => setTimeout(r, 10_000))]);
+      if (!closing) {
+        const line = state.phase === 'record' && state.unknownLine ? state.unknownLine : state.failedLine;
+        log(line);
+        closing = publishLine(deps.publish, log, line);
+      }
+      await Promise.race([closing, new Promise((r) => setTimeout(r, 10_000))]);
       (deps.hardExit ?? ((c: number) => process.exit(c)))(1);
     })();
   }, deadlineMs + (deps.hardExitAfterDeadlineMs ?? EXPORT_DEFAULTS.hardExitAfterDeadlineMs));

@@ -302,6 +302,13 @@ describe('T13 (3d): the exports bucket, its key, the export roles, families, rul
     const st = resolve((R.ExportKey.Properties.KeyPolicy as Node).Statement) as Statement[];
     expect(st.filter((x) => x.Effect === 'Allow').map((x) => x.Sid)).toEqual(['AccountRootAdministers']);
     expect(st.map((x) => x.Sid)).toEqual(['AccountRootAdministers', 'DenyDecryptExceptExportRoles', 'DenyGenerateDataKeyExceptExportTask', 'DenyShortDeletionWindow', 'DenyKeyPolicyChangesExceptDeploy']);
+    // G2: the exact principal lists, in the template AND in expected-policies.ts.
+    const task = `arn:aws:iam::${ACCT}:role/cadenzpoint-backup/${EXPORT_TASK_ROLE}`;
+    const dl = `arn:aws:iam::${ACCT}:role/cadenzpoint-backup/${EXPORT_DOWNLOAD_ROLE}`;
+    for (const doc of [st, exp.exportKeyPolicy]) {
+      expect(doc.find((x) => x.Sid === 'DenyDecryptExceptExportRoles')).toMatchObject({ Effect: 'Deny', Action: ['kms:Decrypt', 'kms:ReEncrypt*'], Condition: { ArnNotEquals: { 'aws:PrincipalArn': [task, dl] } } });
+      expect(doc.find((x) => x.Sid === 'DenyGenerateDataKeyExceptExportTask')).toMatchObject({ Effect: 'Deny', Action: 'kms:GenerateDataKey*', Condition: { ArnNotEquals: { 'aws:PrincipalArn': task } } });
+    }
     const ctx = { 'kms:EncryptionContext:aws:s3:arn': `arn:aws:s3:::cadenzpoint-exports-${ACCT}` };
     expect(policyOf(roleByName(stack, EXPORT_TASK_ROLE)!).find((x) => x.Sid === 'UseExportKey')).toMatchObject({ Action: ['kms:GenerateDataKey', 'kms:Decrypt'], Resource: EXPORT_KEY_ARN, Condition: { StringEquals: ctx } });
     expect(policyOf(roleByName(stack, EXPORT_DOWNLOAD_ROLE)!).find((x) => x.Sid === 'DecryptDeliveries')).toMatchObject({ Action: 'kms:Decrypt', Resource: EXPORT_KEY_ARN, Condition: { StringEquals: { 'kms:ViaService': 's3.us-east-1.amazonaws.com', ...ctx } } });
@@ -313,6 +320,10 @@ describe('T13 (3d): the exports bucket, its key, the export roles, families, rul
       expect(ALL_ROLES).toContain(n);
     }
     const taskText = JSON.stringify(policyOf(roleByName(stack, EXPORT_TASK_ROLE)!));
+    // G3: the task role's S3 actions, exactly (template and expected-policies.ts).
+    for (const doc of [policyOf(roleByName(stack, EXPORT_TASK_ROLE)!), exp.roles[EXPORT_TASK_ROLE].policy]) {
+      expect(actionsOf(doc).filter((a) => a.startsWith('s3:')).sort()).toEqual(['s3:AbortMultipartUpload', 's3:DeleteObject', 's3:GetObject', 's3:ListBucket', 's3:PutObject']);
+    }
     expect(taskText).not.toMatch(/cadenzpoint-backups-|key\/1234abcd/);
     expect(actionsOf(policyOf(roleByName(stack, EXPORT_TASK_ROLE)!))).toEqual(expect.arrayContaining(['ecs:ListTasks', 'ecs:DescribeTasks', 'sns:Publish', 's3:ListBucket']));
     const dl = roleByName(stack, EXPORT_DOWNLOAD_ROLE)!;
@@ -391,8 +402,10 @@ describe('T13 (3d): the exports bucket, its key, the export roles, families, rul
     expect(slugsIn(stackText)).toEqual([VERCEL_TEAM_SLUG]);
     expect(projectsIn(stackText)).toEqual([VERCEL_PROJECT]);
     expect(read('scripts/backup/lib/expected-policies.ts')).toContain(`export const VERCEL_TEAM_SLUG = '${VERCEL_TEAM_SLUG}';`);
-    expect(VERCEL_TEAM_SLUG).toBe('vercel-team-slug-pending');
-    expect(VERCEL_PROJECT).toBe('vercel-project-pending');
+    expect(VERCEL_TEAM_SLUG).toBe('PENDING_TEAM');
+    expect(VERCEL_PROJECT).toBe('PENDING_PROJECT');
+    // FR8: a value no Vercel slug can hold (they are lowercase letters, digits and hyphens), so nothing registrable matches.
+    for (const v of [VERCEL_TEAM_SLUG, VERCEL_PROJECT]) expect(/^[a-z0-9-]+$/.test(v), v).toBe(false);
   });
 });
 
@@ -514,6 +527,12 @@ describe('U6: the Dockerfile and the bundle inputs', () => {
     for (const f of ['tsconfig.backup.json', '.npmrc', 'ops/aws/pgdg-ACCC4CF8.asc', 'Dockerfile.backup', 'ops/aws/backup-stack.yml', '.github/workflows/backup-deploy.yml', 'drizzle/meta/_journal.json']) expect(listed(f), f).toBe(true);
     expect(listed('ops/aws/bootstrap.yml')).toBe(false);
     expect(listed('package.json')).toBe(false);
+  });
+
+  it('G5 (3d): bundleDefines() gives the tenant journal\'s entry count, as a number literal', async () => {
+    const { bundleDefines } = await import('../../../scripts/backup/bundle.mjs');
+    const journal = (JSON.parse(read('drizzle/meta/_journal.json')) as { entries: unknown[] }).entries.length;
+    expect(bundleDefines(ROOT)).toEqual({ __TENANT_JOURNAL_LENGTH__: String(journal) });
   });
 
   it('T22 (3d): package.json is never a bundle input (the plugin serves only its version); the bundled APP_VERSION is package.json\'s; the journal length is defined at build time', () => {

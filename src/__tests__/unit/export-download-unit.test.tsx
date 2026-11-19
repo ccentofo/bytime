@@ -19,7 +19,9 @@ const h = vi.hoisted(() => ({
   row: null as null | Record<string, unknown>,
   allow: { exportDownloadIp: true, exportDownload: true } as Record<string, boolean>,
   presign: null as null | { ok: true; url: string } | { ok: false; reason: 'misconfigured' | 'error'; errorName?: string },
-  tenantSlug: '',
+  tenantSlug: '' as string | Error,
+  whereArgs: [] as unknown[],
+  alerts: [] as Array<Record<string, unknown>>,
   getSignedUrl: vi.fn(),
   provider: vi.fn(),
 }));
@@ -27,7 +29,7 @@ const h = vi.hoisted(() => ({
 vi.mock('server-only', () => ({}));
 vi.mock('@/db/control-plane', () => {
   const chain = {
-    from: () => chain, innerJoin: () => chain, where: () => chain,
+    from: () => chain, innerJoin: () => chain, where: (c: unknown) => { h.whereArgs.push(c); return chain; },
     limit: async () => { h.calls.push('lookup'); return h.row ? [h.row] : []; },
     set: () => chain,
   };
@@ -40,11 +42,11 @@ vi.mock('@/db/control-plane', () => {
 });
 vi.mock('@/db/control-plane/locked', () => ({ withLockedPool: async (fn: (db: unknown) => unknown) => fn({}) }));
 vi.mock('@/lib/tenant/lifecycle-store', () => ({ resolveAlert: async (_db: unknown, a: { kind: string }) => { h.calls.push(`resolve:${a.kind}`); } }));
-vi.mock('@/lib/tenant/ops-alert-email', () => ({ raiseAlertWithEmail: async (a: { kind: string }) => { h.calls.push(`alert:${a.kind}`); return { opened: true, emailed: true }; } }));
+vi.mock('@/lib/tenant/ops-alert-email', () => ({ raiseAlertWithEmail: async (a: { kind: string }) => { h.calls.push(`alert:${a.kind}`); h.alerts.push(a); return { opened: true, emailed: true }; } }));
 vi.mock('@/lib/rate-limit/store', () => ({
   consume: async (name: string, id: string) => { h.calls.push(`consume:${name}:${id}`); return { allowed: h.allow[name], retryAfterMs: 0, source: 'memory', resetAt: 0 }; },
 }));
-vi.mock('@/lib/tenant/context', () => ({ getTenantSlug: async () => h.tenantSlug }));
+vi.mock('@/lib/tenant/context', () => ({ getTenantSlug: async () => { if (h.tenantSlug instanceof Error) throw h.tenantSlug; return h.tenantSlug; } }));
 vi.mock('next/navigation', () => ({ redirect: (to: string) => { throw Object.assign(new Error('NEXT_REDIRECT'), { to }); } }));
 vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: h.getSignedUrl }));
 vi.mock('@vercel/oidc-aws-credentials-provider', () => ({ awsCredentialsProvider: h.provider }));
@@ -53,7 +55,8 @@ vi.mock('@/server/actions/export-download', () => ({ prepareExportDownload: asyn
 import { prepareDownload, readDeliveryByToken, TOKEN_RE } from '@/lib/export/delivery-access';
 import { presignDeliveryUrl, __resetDownloadClientForTests } from '@/lib/export/download-url';
 import { EXPIRED_TEXT } from '@/lib/export/format';
-import { deepScrub, scrubString } from '@/lib/sentry-scrub';
+import { deepScrub, scrubString, FILTERED } from '@/lib/sentry-scrub';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import ExportDownloadPage from '@/app/export/[token]/page';
 
 const ROOT = path.resolve(__dirname, '../../..');
@@ -69,6 +72,8 @@ beforeEach(() => {
   h.row = valid();
   h.allow = { exportDownloadIp: true, exportDownload: true };
   h.tenantSlug = '';
+  h.whereArgs = [];
+  h.alerts = [];
   h.getSignedUrl.mockReset();
   h.provider.mockReset();
   h.provider.mockImplementation(() => async () => ({ accessKeyId: 'AKIA', secretAccessKey: 's', sessionToken: 't' }));
@@ -140,6 +145,13 @@ describe('T8: the page', () => {
     await expect(render('bad')).rejects.toMatchObject({ to: 'https://cadenzpoint.example/export/' });
   });
 
+  it('T-5: getTenantSlug throwing (a host/header mismatch) also sends the visitor to the apex page', async () => {
+    h.tenantSlug = new Error('host mismatch');
+    process.env.NEXT_PUBLIC_APP_URL = 'https://cadenzpoint.example';
+    await expect(render(TOKEN)).rejects.toMatchObject({ to: `https://cadenzpoint.example/export/${TOKEN}` });
+    expect(h.calls).toEqual([]); // nothing read
+  });
+
   it('metadata: no-referrer and noindex; force-dynamic', async () => {
     const mod = await import('@/app/export/[token]/page');
     expect(mod.metadata).toMatchObject({ referrer: 'no-referrer', robots: { index: false, follow: false } });
@@ -194,6 +206,15 @@ describe('T10: misconfiguration', () => {
     });
   }
 
+  it('T-3: EXPORT_DOWNLOAD_ROLE_ARN alone missing → misconfigured; the provider is never built; the alert says why', async () => {
+    delete process.env.EXPORT_DOWNLOAD_ROLE_ARN;
+    expect(await prepareDownload(TOKEN, '203.0.113.9', NOW)).toEqual({ status: 'misconfigured' });
+    expect(h.provider).not.toHaveBeenCalled();
+    expect(h.getSignedUrl).not.toHaveBeenCalled();
+    expect(h.alerts).toEqual([expect.objectContaining({ tenantId: null, kind: 'export-download-misconfigured', detail: expect.objectContaining({ reason: 'misconfigured', deliveryId: 'd1' }) })]);
+    expect(String(h.alerts[0].summary)).toContain('EXPORT_DOWNLOAD_ROLE_ARN');
+  });
+
   it('with an env value missing the provider is never built (no CLI token refresh locally, D11)', async () => {
     delete process.env.EXPORT_BUCKET;
     expect(await presignDeliveryUrl('delivery/x/y.zip', 'y.zip')).toEqual({ ok: false, reason: 'misconfigured' });
@@ -244,6 +265,37 @@ describe('T8: headers and the Sentry scrub', () => {
     expect(scrubString(`a /export/${TOKEN} b /export/${TOKEN}`)).toBe('a /export/[token] b /export/[token]');
   });
 
+  it('FR1 (a): the router-state, next-url and referer headers lose their values in request.headers and in span attributes (any case, - or _)', () => {
+    // What Next sends with the "Prepare download" POST: the URL-encoded router tree, holding the BARE token.
+    const tree = encodeURIComponent(JSON.stringify(['', { children: ['export', { children: [['token', TOKEN, 'd', null], { children: ['__PAGE__', {}, null, null] }, null, null] }, null, null] }, null, null, true]));
+    expect(tree).toContain(TOKEN);
+    const event = {
+      request: { url: 'https://cadenzpoint.com/export/[token]', headers: { 'Next-Router-State-Tree': tree, 'next-url': `/export/${TOKEN}`, Referer: 'https://mail.example/inbox', accept: 'text/x-component' } },
+      spans: [{ data: { 'http.request.header.next_router_state_tree': [tree], 'http.request.header.next-url': `/export/${TOKEN}`, 'http.request.header.referer': ['x'], 'http.request.header.accept': ['text/x-component'] } }],
+      contexts: { trace: { data: { 'http.request.header.Next-Router-State-Tree': tree } } },
+    };
+    const out = deepScrub(event);
+    expect(out.request.headers).toEqual({ 'Next-Router-State-Tree': FILTERED, 'next-url': FILTERED, Referer: FILTERED, accept: 'text/x-component' });
+    expect(out.spans[0].data).toEqual({ 'http.request.header.next_router_state_tree': FILTERED, 'http.request.header.next-url': FILTERED, 'http.request.header.referer': FILTERED, 'http.request.header.accept': ['text/x-component'] });
+    expect(out.contexts.trace.data['http.request.header.Next-Router-State-Tree']).toBe(FILTERED);
+    expect(JSON.stringify(out)).not.toContain(TOKEN);
+  });
+
+  it('FR1 (b): defence in depth in every string and key: the decoded tree, the URL-encoded path and quoted forms, a standalone token', () => {
+    const encodedTree = encodeURIComponent(JSON.stringify([['token', TOKEN, 'd', null]]));
+    const event = {
+      extra: { decoded: JSON.stringify(['token', TOKEN, 'd', null]), encodedPath: `https%3A%2F%2Fcadenzpoint.com%2Fexport%2F${TOKEN}`, encodedTree, bare: TOKEN, [TOKEN]: 'as a key' },
+      message: `state ${TOKEN}.`,
+    };
+    const out = deepScrub(event);
+    expect(JSON.stringify(out)).not.toContain(TOKEN);
+    expect(out.extra.bare).toBe('[token]');
+    expect(out.extra.encodedPath).toBe('https%3A%2F%2Fcadenzpoint.com/export/[token]');
+    // A 42- or 44-character run isn't the token's shape and is left alone.
+    expect(scrubString('a'.repeat(42))).toBe('a'.repeat(42));
+    expect(scrubString('a'.repeat(44))).toBe('a'.repeat(44));
+  });
+
   it('all three Sentry inits wire the scrub into beforeSend, beforeSendTransaction and beforeBreadcrumb', () => {
     for (const f of ['sentry.server.config.ts', 'sentry.edge.config.ts', 'src/instrumentation-client.ts']) {
       const text = readFileSync(path.join(ROOT, f), 'utf8');
@@ -253,7 +305,10 @@ describe('T8: headers and the Sentry scrub', () => {
     }
   });
 
-  it('the token hash the page looks up is sha256 hex of the token (the task stores the same)', () => {
-    expect(createHash('sha256').update(TOKEN).digest('hex')).toMatch(/^[0-9a-f]{64}$/);
+  it('T-2: the lookup uses sha256(token) as its parameter, never the plain token (the task stores the same hash)', async () => {
+    await readDeliveryByToken(TOKEN, NOW);
+    const { params } = new PgDialect().sqlToQuery(h.whereArgs[0] as Parameters<PgDialect['sqlToQuery']>[0]);
+    expect(params).toEqual([createHash('sha256').update(TOKEN).digest('hex')]);
+    expect(JSON.stringify(params)).not.toContain(TOKEN);
   });
 });

@@ -27,7 +27,7 @@ import { neonApi } from './lib/neon-api';
 import { realDisasterLogReader, realLogReader } from './lib/log-reader';
 import { kmsKeyringFactory } from './lib/crypto';
 import { s3Reader, s3Store } from './lib/store';
-import { realAuditClients, realKeyProbeClient, realDisasterEcs, realPublisher } from './lib/aws-clients';
+import { realAuditClients, realKeyProbeClient, realDisasterEcs, realPublisher, type Publisher } from './lib/aws-clients';
 import { checkToolVersion, defaultToolPath, FatalError, intEnv, isInEcs, listEnv, requireEnv, requireHexKey, runVersion, type Env, type VersionRunner } from './lib/env';
 import { isLoopbackUrl } from './lib/loopback';
 import { installCrashHandler, summaryOf } from './lib/summarize-error';
@@ -44,6 +44,8 @@ export interface MainSeams {
   runVersion?: VersionRunner;
   /** Tests: stop before any work once the run context and environment checks pass. */
   checksOnly?: boolean;
+  /** Tests: replaces the SNS publisher for the export parse-failure line (no AWS). */
+  publisher?: Publisher;
 }
 
 export const OUTSIDE_ECS_REFUSAL = 'refused: outside ECS only `--self-check` and `backup --dry-run` against a local control plane may run';
@@ -225,9 +227,12 @@ export async function main(argv: string[], env: Env, seams: MainSeams = {}): Pro
         const parsed = parseExportArgs(argv.slice(1), now);
         if (!parsed.ok) {
           log(`refused: ${parsed.message}`);
-          // D16 (impact analysis): the closing line, published leniently: a missing topic or region only logs.
-          if (parsed.mode !== 'sweep') {
-            if (env.ALERT_TOPIC_ARN && env.AWS_REGION === 'us-east-1') {
+          // D16 (impact analysis): the closing line, published leniently: a missing topic or region only logs. The sweep is
+          // never emailed, decided from the raw mode argument (an exit-2 parse failure has no parsed mode: FR7).
+          if (parsed.mode !== 'sweep' && argv[1] !== 'sweep') {
+            if (seams.publisher) {
+              await publishLine(seams.publisher, log, parseFailureLine(parsed));
+            } else if (env.ALERT_TOPIC_ARN && env.AWS_REGION === 'us-east-1') {
               await publishLine(realPublisher({ region: env.AWS_REGION, topicArn: env.ALERT_TOPIC_ARN }), log, parseFailureLine(parsed));
             } else {
               log('the parse failure could not be emailed (no ALERT_TOPIC_ARN / AWS_REGION)');
@@ -247,7 +252,8 @@ export async function main(argv: string[], env: Env, seams: MainSeams = {}): Pro
         const topicArn = requireEnv(env, 'ALERT_TOPIC_ARN');
         const metadataUri = requireEnv(env, 'ECS_CONTAINER_METADATA_URI_V4');
         if (seams.checksOnly) return 0;
-        const s3 = new S3Client({ region });
+        // Per-request timeouts (FR5): safe for 8 MiB parts, and a hung S3 call can't outlive the run's deadline.
+        const s3 = new S3Client({ region, requestHandler: { requestTimeout: 60_000, connectionTimeout: 10_000 } });
         return (await runExport(parsed.args, {
           controlPlaneUrl, store: s3ExportStore(s3, bucket), ecs: realDisasterEcs({ region, metadataUri, family: EXPORT_FAMILY }),
           publish: realPublisher({ region, topicArn }), log, stopSignal: stop.signal,

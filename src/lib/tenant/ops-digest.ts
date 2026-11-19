@@ -74,7 +74,8 @@ export async function sendOpsDigest(results: TenantRunResult[], now: Date, incom
   const blocked = results.filter((r) => r.blockedDeletion);
   const hasNews = data.alerts.length > 0 || ready.length > 0 || blocked.length > 0 || data.deleting.length > 0
     || data.stalePending.length > 0 || incomplete || crons.length > 0 || waitlisted.length > 0 || signupDeletions.length > 0
-    || data.corrections.length > 0 || backups.news;
+    || data.corrections.length > 0 || backups.news
+    || exportsSection.holds.length > 0; // the monthly open-hold list is news (audit round 1, FR13); the daily line alone isn't
 
   const to = process.env.OPS_ALERT_EMAIL;
   if (!to || !resend) {

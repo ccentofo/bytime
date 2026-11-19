@@ -6,7 +6,7 @@ import { addDays, cycleAnchor, deletionDateFrom, getTenantAccess, hasSubscribed,
 import { DELETION_NOTICE_DAYS, POST_END_RETENTION_DAYS } from './lifecycle-config';
 import { invalidateTenant, toLifecycleFacts } from './registry';
 import { readTenant, recordAudit, resolveAlertsOfKind, updateTenantGuarded, type TenantRow } from './lifecycle-store';
-import { enqueueNotice, redactExportPayload } from './notices';
+import { enqueueNotice, LEASE_MINUTES, redactExportPayload } from './notices';
 
 /**
  * Founder commands behind `tenant:admin` (feature-plan-terms-compliance-fixes.md §5.6, F1, F2, F4). Each change is
@@ -286,9 +286,6 @@ export async function forceNoticeSent(tenantId: string, noticeId: string, reason
   });
 }
 
-/** feature-plan-cloud-export.md §6.5: the lease a notice claim holds (notices.ts LEASE_MINUTES). */
-const NOTICE_LEASE_MINUTES = 10;
-
 export interface ExportRevokePlan {
   deliveryId: string;
   tenantId: string;
@@ -299,31 +296,40 @@ export interface ExportRevokePlan {
   noticePending: boolean;
 }
 
+type PlanReader = Pick<ControlTx, 'select'>;
+
+/** The plan, read through `db` (the pool for the dry run, the locked transaction for the revoke itself). */
+async function readRevokePlan(db: PlanReader, deliveryId: string, now: Date): Promise<ExportRevokePlan> {
+  const [d] = await db.select({ d: exportDeliveries, slug: tenants.slug, n: tenantNotices }).from(exportDeliveries)
+    .innerJoin(tenants, eq(tenants.id, exportDeliveries.tenantId))
+    .innerJoin(tenantNotices, eq(tenantNotices.id, exportDeliveries.noticeId))
+    .where(eq(exportDeliveries.id, deliveryId)).limit(1);
+  if (!d) throw new AdminCommandError('No export delivery has that id.');
+  if (d.d.erasedAt) throw new AdminCommandError('That delivery\'s copy is already erased; nothing to revoke.');
+  if (d.d.revokedAt) throw new AdminCommandError('That delivery is already revoked.');
+  const noticePending = d.n.sentAt === null && d.n.supersededAt === null && d.n.forcedAt === null;
+  // notices.ts's claim lease (audit round 1, FR4: one constant).
+  const leaseLive = d.n.lastAttemptAt !== null && now.getTime() - d.n.lastAttemptAt.getTime() < LEASE_MINUTES * 60_000;
+  return { deliveryId, tenantId: d.d.tenantId, slug: d.slug, expiresAt: d.d.expiresAt, sendInFlight: noticePending && leaseLive, noticePending };
+}
+
 /** `export-revoke` (feature-plan-cloud-export.md §6.5): what it would revoke. Refuses an unknown, revoked or erased delivery. */
 export async function planExportRevoke(deliveryId: string, now: Date = new Date()): Promise<ExportRevokePlan> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(deliveryId)) throw new AdminCommandError('export-revoke takes a delivery id (uuid).');
-  return withLockedPool(async (db) => {
-    const [d] = await db.select({ d: exportDeliveries, slug: tenants.slug, n: tenantNotices }).from(exportDeliveries)
-      .innerJoin(tenants, eq(tenants.id, exportDeliveries.tenantId))
-      .innerJoin(tenantNotices, eq(tenantNotices.id, exportDeliveries.noticeId))
-      .where(eq(exportDeliveries.id, deliveryId)).limit(1);
-    if (!d) throw new AdminCommandError('No export delivery has that id.');
-    if (d.d.erasedAt) throw new AdminCommandError('That delivery\'s copy is already erased; nothing to revoke.');
-    if (d.d.revokedAt) throw new AdminCommandError('That delivery is already revoked.');
-    const noticePending = d.n.sentAt === null && d.n.supersededAt === null && d.n.forcedAt === null;
-    const leaseLive = d.n.lastAttemptAt !== null && now.getTime() - d.n.lastAttemptAt.getTime() < NOTICE_LEASE_MINUTES * 60_000;
-    return { deliveryId, tenantId: d.d.tenantId, slug: d.slug, expiresAt: d.d.expiresAt, sendInFlight: noticePending && leaseLive, noticePending };
-  });
+  return withLockedPool((db) => readRevokePlan(db, deliveryId, now));
 }
 
 /**
  * Revoke a delivery, under the tenant lock: `revoked_at`, an `export-revoked` audit, and the pending notice superseded
  * (its token nulled and the link redacted from the frozen message), in one transaction. The link is dead at once; the
- * hourly sweep erases the copy.
+ * hourly sweep erases the copy. The plan returned (and audited) is re-read INSIDE the lock (audit round 1, FR3), so the
+ * in-flight warning reflects a claim that landed after the dry run. `beforeLock` is a test seam.
  */
-export async function exportRevoke(deliveryId: string, actor: string, now: Date = new Date()): Promise<ExportRevokePlan> {
-  const plan = await planExportRevoke(deliveryId, now);
-  await withTenantLock(plan.tenantId, async (tx) => {
+export async function exportRevoke(deliveryId: string, actor: string, now: Date = new Date(), hooks: { beforeLock?: () => Promise<void> } = {}): Promise<ExportRevokePlan> {
+  const first = await planExportRevoke(deliveryId, now);
+  await hooks.beforeLock?.();
+  return withTenantLock(first.tenantId, async (tx) => {
+    const plan = await readRevokePlan(tx, deliveryId, now);
     const updated = await tx.update(exportDeliveries).set({ revokedAt: now, tokenEncrypted: null })
       .where(and(eq(exportDeliveries.id, deliveryId), isNull(exportDeliveries.revokedAt), isNull(exportDeliveries.erasedAt)))
       .returning({ noticeId: exportDeliveries.noticeId });
@@ -334,8 +340,8 @@ export async function exportRevoke(deliveryId: string, actor: string, now: Date 
         .where(eq(tenantNotices.id, notice.id));
     }
     await recordAudit(tx, { tenantId: plan.tenantId, kind: 'export-revoked', actor, detail: JSON.stringify({ deliveryId, noticeWasPending: plan.noticePending, sendInFlight: plan.sendInFlight }) });
+    return plan;
   });
-  return plan;
 }
 
 /**

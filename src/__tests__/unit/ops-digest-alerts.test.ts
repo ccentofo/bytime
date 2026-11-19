@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   sentryMessages: [] as string[],
   waitlisted: [] as Array<{ id: string; slug: string; email: string; waitlistedAt: Date }>,
   backups: { lines: [] as string[], news: false },
+  exportHolds: [] as Array<{ holdId: string; tenantId: string; ageDays: number; reason: string }>,
 }));
 
 vi.mock('server-only', () => ({}));
@@ -46,7 +47,7 @@ vi.mock('@/lib/tenant/backup-status', () => ({ backupDigest: async () => h.backu
 // feature-plan-cloud-export.md §6.7: the export findings and line come from export-status (export-digest.test.ts).
 vi.mock('@/lib/tenant/export-status', () => ({
   checkExportCopies: async () => ({ overdue: 0 }),
-  exportDigest: async () => ({ line: 'Exports in the last 7 days: 0 delivered, 0 downloads, 0 not yet emailed. Open legal holds: 0', holds: [] }),
+  exportDigest: async () => ({ line: `Exports in the last 7 days: 0 delivered, 0 downloads, 0 not yet emailed. Open legal holds: ${h.exportHolds.length}`, holds: h.exportHolds }),
 }));
 
 import { sendOpsDigest } from '@/lib/tenant/ops-digest';
@@ -86,6 +87,20 @@ describe('daily digest', () => {
     h.backups = { lines: [], news: false };
     await sendOpsDigest([], NOW, false);
     expect(h.sends[0].html).not.toContain('Backups');
+  });
+
+  it('FR13 (3d): the export line alone is not news; the day-1 open-hold list is (no "All quiet" above it)', async () => {
+    h.exportHolds = [];
+    await sendOpsDigest([], NOW, false);
+    expect(h.sends[0].subject).toContain('(all quiet)');
+    expect(h.sends[0].html).toContain('<h3>Exports</h3>');
+    h.sends = [];
+    h.exportHolds = [{ holdId: 'h1', tenantId: 't1', ageDays: 31, reason: 'litigation' }];
+    await sendOpsDigest([], NOW, false);
+    expect(h.sends[0].subject).not.toContain('all quiet');
+    expect(h.sends[0].html).not.toContain('All quiet');
+    expect(h.sends[0].html).toContain('hold h1 — workspace t1, 31 days old: litigation');
+    h.exportHolds = [];
   });
 
   it('is sent even with no news — a short "all quiet" version', async () => {

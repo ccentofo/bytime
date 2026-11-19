@@ -21,9 +21,9 @@ Resources:
   VercelOidcProvider:
     Type: AWS::IAM::OIDCProvider
     Properties:
-      Url: https://oidc.vercel.com/vercel-team-slug-pending
+      Url: https://oidc.vercel.com/PENDING_TEAM
       ClientIdList:
-        - https://vercel.com/vercel-team-slug-pending
+        - https://vercel.com/PENDING_TEAM
 
   DeployRole:
     Type: AWS::IAM::Role

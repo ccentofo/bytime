@@ -7,7 +7,7 @@ vi.mock('@/lib/email/client', async () => (await import('./fakes/fake-resend')).
 import { controlDb } from '@/db/control-plane';
 import { exportDeliveries, opsAlerts, tenantAuditEvents, tenantNotices, tenants } from '@/db/control-plane/schema';
 import { decrypt } from '@/lib/encryption';
-import { deliverNotice, LINK_REMOVED, resolveRecipientsAndTimezone, setNoticeTimingForTests } from '@/lib/tenant/notices';
+import { deliverNotice, deliverPendingNotices, LINK_REMOVED, resolveRecipientsAndTimezone, setNoticeTimingForTests } from '@/lib/tenant/notices';
 import { applyAdminPlan, exportRevoke, findForceableNotice, forceNoticeSent, planExportRevoke, plans, AdminCommandError } from '@/lib/tenant/admin-commands';
 import { resendState } from './fakes/fake-resend';
 import { dropScratchDb } from './backup-helpers';
@@ -231,6 +231,32 @@ d('T27: the batch outcome rules', () => {
   });
 });
 
+d('FR2: an export notice\'s query error is logged by name and code only (never the link or the recipients)', () => {
+  it('a failing freeze update (a real DrizzleQueryError carrying the payload in its params) logs no token and no address', async () => {
+    const w = await world({ admins: ['secret.admin@acme.test'] });
+    const { token, noticeId } = await delivered(w);
+    const cp = postgres(CP!, { max: 1, onnotice: () => {} });
+    const fn = `test_fail_freeze_${w.tenant.id.replace(/-/g, '')}`;
+    const errors: unknown[][] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { errors.push(a); });
+    try {
+      await cp.unsafe(`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'freeze refused' USING ERRCODE = '23514'; END $$`);
+      await cp.unsafe(`CREATE TRIGGER ${fn} BEFORE UPDATE OF payload ON tenant_notices FOR EACH ROW WHEN (NEW.id = '${noticeId}' AND NEW.payload IS NOT NULL) EXECUTE FUNCTION ${fn}()`);
+      const counts = await deliverPendingNotices(30_000, undefined, [w.tenant.id]);
+      expect(counts.failed).toBe(1);
+      const logged = JSON.stringify(errors.map((a) => a.map((x) => (x instanceof Error ? { name: x.name, message: x.message, stack: x.stack, cause: String((x as { cause?: unknown }).cause) } : x))));
+      expect(logged).toContain('export-ready notice failed');
+      expect(logged).toContain('23514');
+      for (const secret of [token, 'secret.admin@acme.test', 'billing@acme.test', '/export/']) expect(logged, secret).not.toContain(secret);
+    } finally {
+      spy.mockRestore();
+      await cp.unsafe(`DROP TRIGGER IF EXISTS ${fn} ON tenant_notices`);
+      await cp.unsafe(`DROP FUNCTION IF EXISTS ${fn}()`);
+      await cp.end({ timeout: 5 });
+    }
+  });
+});
+
 d('T21/T24: export-revoke', () => {
   it('refusals: a non-uuid, an unknown id, an already revoked or erased delivery', async () => {
     await expect(planExportRevoke('acme')).rejects.toThrow(AdminCommandError);
@@ -261,6 +287,17 @@ d('T21/T24: export-revoke', () => {
     const audits = await controlDb.select().from(tenantAuditEvents).where(eq(tenantAuditEvents.tenantId, w.tenant.id));
     expect(audits.map((a) => a.kind)).toContain('export-revoked');
     expect(await deliverNotice(noticeId)).toBe('skipped'); // a superseded notice is never claimed
+  });
+
+  it('FR3: a claim landing between the dry-run plan and the lock is reported (the plan is re-read inside the lock)', async () => {
+    const w = await world();
+    const { row, noticeId } = await delivered(w);
+    const plan = await exportRevoke(row.id, 'test', new Date(), {
+      beforeLock: async () => { await controlDb.update(tenantNotices).set({ lastAttemptAt: new Date() }).where(eq(tenantNotices.id, noticeId)); },
+    });
+    expect(plan.sendInFlight).toBe(true);
+    const [a] = (await controlDb.select().from(tenantAuditEvents).where(eq(tenantAuditEvents.tenantId, w.tenant.id))).filter((x) => x.kind === 'export-revoked');
+    expect(JSON.parse(a.detail!)).toMatchObject({ deliveryId: row.id, sendInFlight: true });
   });
 
   it('T24: a live lease (a send in flight) is reported: "the email may already be going out"', async () => {

@@ -1,15 +1,38 @@
 /**
- * feature-plan-cloud-export.md §6.6 (invariant 5): the export download page's path carries its link's token. One shared
+ * feature-plan-cloud-export.md §6.6 (invariant 5): the export download link's token must never reach Sentry. One shared
  * deep scrub, wired into `beforeSend`, `beforeSendTransaction` and `beforeBreadcrumb` in all three Sentry inits (server,
- * edge, browser), replaces `/export/<43-character token>` with `/export/[token]` in every string field: URLs, transaction
- * names, span descriptions and data, breadcrumbs, `request.url`. No imports: safe in every runtime.
+ * edge, browser). No imports: safe in every runtime. No regex lookbehind (older browsers can't parse it).
+ *
+ * 1. Headers that carry the page's URL or router state lose their values wherever headers appear (`request.headers`,
+ *    span/transaction attributes `http.request.header.*`), matched case-insensitively and with `_` or `-`:
+ *    `next-router-state-tree` (the URL-encoded router tree holds the bare token: `["token","<TOKEN>","d",null]`),
+ *    `next-url` and `referer` (audit round 1, FR1).
+ * 2. Every string and key, as defence in depth: `/export/<token>` and its URL-encoded form `%2Fexport%2F<token>` become
+ *    `/export/[token]`; a URL-encoded quoted token `%22<token>%22` (the router tree's form) becomes `%22[token]%22`; and any
+ *    standalone 43-character base64url run (the token's exact shape) becomes `[token]`.
  */
 
 const TOKEN_IN_PATH = /\/export\/[A-Za-z0-9_-]{43}/g;
+const TOKEN_IN_ENCODED_PATH = /%2Fexport%2F[A-Za-z0-9_-]{43}/gi;
+/** The URL-encoded router tree quotes the token (`%22<TOKEN>%22`), which glues `22` onto both ends of the run. */
+const TOKEN_IN_ENCODED_QUOTES = /%22[A-Za-z0-9_-]{43}%22/gi;
+const STANDALONE_TOKEN = /(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?=$|[^A-Za-z0-9_-])/g;
+const SENSITIVE_HEADERS = ['next-router-state-tree', 'next-url', 'referer'];
 const MAX_DEPTH = 32;
+export const FILTERED = '[Filtered]';
 
 export function scrubString(s: string): string {
-  return s.includes('/export/') ? s.replace(TOKEN_IN_PATH, '/export/[token]') : s;
+  return s
+    .replace(TOKEN_IN_PATH, '/export/[token]')
+    .replace(TOKEN_IN_ENCODED_PATH, '/export/[token]')
+    .replace(TOKEN_IN_ENCODED_QUOTES, '%22[token]%22')
+    .replace(STANDALONE_TOKEN, '$1[token]');
+}
+
+/** A header name, or an attribute such as `http.request.header.next_router_state_tree`, that must lose its value. */
+export function isSensitiveHeaderKey(key: string): boolean {
+  const k = key.toLowerCase().replace(/_/g, '-');
+  return SENSITIVE_HEADERS.some((h) => k === h || k.endsWith(`.${h}`));
 }
 
 function scrub(v: unknown, depth: number, seen: WeakMap<object, unknown>): unknown {
@@ -26,11 +49,13 @@ function scrub(v: unknown, depth: number, seen: WeakMap<object, unknown>): unkno
   if (proto !== Object.prototype && proto !== null) return v; // Dates, Errors, typed arrays: left as they are
   const out: Record<string, unknown> = {};
   seen.set(v, out);
-  for (const [k, x] of Object.entries(v as Record<string, unknown>)) out[scrubString(k)] = scrub(x, depth + 1, seen);
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+    out[scrubString(k)] = isSensitiveHeaderKey(k) && x !== undefined && x !== null ? FILTERED : scrub(x, depth + 1, seen);
+  }
   return out;
 }
 
-/** A deep copy with every token in a string replaced (plain objects and arrays; other objects kept as they are). */
+/** A deep copy with sensitive headers filtered and every token replaced (plain objects and arrays; others kept as they are). */
 export function deepScrub<T>(value: T): T {
   return scrub(value, 0, new WeakMap()) as T;
 }

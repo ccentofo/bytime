@@ -37,7 +37,7 @@ import { fmtDateTime } from '@/lib/export/format';
  * - deliverPendingNotices: the 10-minute delivery cron (and the lifecycle cron) retry every pending row.
  */
 
-const LEASE_MINUTES = 10;
+export const LEASE_MINUTES = 10;
 const REFREEZE_AFTER_HOURS = 23; // Resend remembers an idempotency key for 24 h
 // throttleMs: the shared cron send budget (≤ 2 sends/second, src/lib/email/rate.ts).
 const timing = { sendTimeoutMs: 10_000, backoffBaseMs: 1000, throttleMs: CRON_SEND_INTERVAL_MS };
@@ -205,6 +205,29 @@ export async function deliverNotice(noticeId: string, now: Date = new Date()): P
   const notice = await withLockedPool(async (db) =>
     (await db.select().from(tenantNotices).where(eq(tenantNotices.id, noticeId)).limit(1))[0]);
   if (!notice) return 'skipped';
+  if (notice.kind !== 'export-ready') return deliverLoaded(notice, noticeId, now);
+  // feature-plan-cloud-export.md invariant 5 (audit round 1, FR2): an export notice's query errors carry the frozen html
+  // (the link) and the decrypted recipients in their message and params. Only the error's name and codes leave here.
+  try {
+    return await deliverLoaded(notice, noticeId, now);
+  } catch (err) {
+    throw exportSafeError(err);
+  }
+}
+
+/** An error safe to log for an export-ready notice: its name and SQLSTATE codes only, never its message or params. */
+export function exportSafeError(err: unknown): Error {
+  const e = (err ?? {}) as { name?: unknown; code?: unknown; cause?: { name?: unknown; code?: unknown } };
+  const parts = [typeof e.name === 'string' ? e.name : 'Error'];
+  if (typeof e.code === 'string') parts.push(`code ${e.code}`);
+  if (e.cause && typeof e.cause === 'object') {
+    if (typeof e.cause.name === 'string') parts.push(`cause ${e.cause.name}`);
+    if (typeof e.cause.code === 'string') parts.push(`cause code ${e.cause.code}`);
+  }
+  return Object.assign(new Error(`export-ready notice failed: ${parts.join(', ')}`), { name: 'ExportNoticeError' });
+}
+
+async function deliverLoaded(notice: typeof tenantNotices.$inferSelect, noticeId: string, now: Date): Promise<DeliveryOutcome> {
   // Email off: don't claim or freeze anything, so the message is rendered fresh (current dates, current
   // recipients) once email works again.
   if (!isEmailEnabled() || !resend) {

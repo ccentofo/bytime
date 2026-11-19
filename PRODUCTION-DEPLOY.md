@@ -887,8 +887,8 @@ this order**. Steps 6–11 are also the **staging rehearsal**, a production-read
    **3b may merge only after this check.** With `AWS_BACKUPS_ENABLED` unset, the deploy workflow does nothing.
 4. **Bootstrap stack:** first give the lead your **Vercel team slug** and **project name** (feature-plan-cloud-export.md
    §6.1; FOUNDER-ACCOUNTS-SETUP Part 6c). Until then `ops/aws/bootstrap.yml`, `ops/aws/backup-stack.yml` and
-   `scripts/backup/lib/expected-policies.ts` hold the fail-closed placeholders `vercel-team-slug-pending` /
-   `vercel-project-pending`; the lead replaces them in all three (U6 checks they're equal) and that change is merged
+   `scripts/backup/lib/expected-policies.ts` hold the fail-closed placeholders `PENDING_TEAM` /
+   `PENDING_PROJECT`; the lead replaces them in all three (U6 checks they're equal) and that change is merged
    first. Then: AWS console (your admin login, us-east-1) → CloudFormation → Create stack → upload
    `ops/aws/bootstrap.yml` → acknowledge IAM → Submit. Copy its four outputs into `aws-backups` **environment
    secrets**: `AWS_DEPLOY_ROLE_ARN`, `AWS_CFN_EXEC_ROLE_ARN`, `AWS_BACKUP_REPOSITORY_URI`, `AWS_ARTIFACTS_BUCKET`.

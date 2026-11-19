@@ -40,10 +40,12 @@ export const NAMES = {
  * feature-plan-cloud-export.md §6.1 (3d): the Vercel team slug and project name, template constants equal in three files
  * (bootstrap.yml's OIDC provider, backup-stack.yml's download role trust, and here; U6 asserts it). P1 (product owner,
  * 2026-11-18): FAIL-CLOSED placeholders until the founder gives the real values; PRODUCTION-DEPLOY 13b replaces them before
- * the bootstrap is deployed. With the placeholders no Vercel token can satisfy the trust, so downloads fail closed.
+ * the bootstrap is deployed. They are UPPERCASE with an underscore, which no Vercel team slug or project name can be
+ * (Vercel slugs are lowercase letters, digits and hyphens; audit round 1, FR8), so no real Vercel token's `sub` can ever
+ * match them, whoever registers what: downloads fail closed until the real values are committed.
  */
-export const VERCEL_TEAM_SLUG = 'vercel-team-slug-pending';
-export const VERCEL_PROJECT = 'vercel-project-pending';
+export const VERCEL_TEAM_SLUG = 'PENDING_TEAM';
+export const VERCEL_PROJECT = 'PENDING_PROJECT';
 export const VERCEL_OIDC_HOST = `oidc.vercel.com/${VERCEL_TEAM_SLUG}`;
 export const VERCEL_OIDC_AUDIENCE = `https://vercel.com/${VERCEL_TEAM_SLUG}`;
 export const VERCEL_OIDC_SUBJECT = `owner:${VERCEL_TEAM_SLUG}:project:${VERCEL_PROJECT}:environment:production`;

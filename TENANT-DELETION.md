@@ -74,10 +74,26 @@ warns if the email may already be going out.
 for a recent `export-delivered`/`export-held` event. Nothing technical stops a deletion during an export build; the
 export then fails `changed` (press again).
 
-**Refusals** (emailed as `export refused: <mode>, <target>, <code>`): `schema-skew` (approve the pending Backup system
-deploy, or run it from Actions → Backup system deploy if none is pending, or run Deploy to Production), `not-exportable`
-(deleted, deleting, provisioning, or no database), `extra-required`, `no-recipients`, `too-many-recipients`, `changed`
-(press again), `released`.
+**What the email can say, and what to do** (`export refused: <mode>, <target>, <code>` or `export failed: …`):
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `schema-skew` | the workspace's migrations differ from the backup image's | approve the pending Backup system deploy (or run it from Actions → Backup system deploy if none is pending), or run Deploy to Production; then press again |
+| `not-exportable` | the workspace is deleted, being deleted, still provisioning, or has no database | nothing to export |
+| `extra-required` | a policy-hold workspace without re-enabled export needs the verified extra address | press again with the address typed twice |
+| `no-recipients` | no active admin, billing or signup email (and no extra address) | add an extra address (press again), or ask the customer for an admin |
+| `too-many-recipients` | more than 50 recipients | the customer uses the in-app self-export |
+| `changed` | the workspace's status, suspension or database changed during the build | press again |
+| `released` | that hold is already released | nothing to do |
+| `unknown-hold` | no hold has that id | check the id in the "export held" email |
+| `another-export-running` | another Export workspace task is running (one at a time) | wait for its email, then press again |
+| `lock-timeout` | the workspace was busy (another change held its lock for 5 seconds) | press again |
+| `ecs-unreadable` | the task couldn't read its own ECS record | press again; if it repeats, tell the lead |
+| `not-from-button` | the task was started some other way than the button or the CloudShell fallback | if you didn't start it, investigate (you also got the RunTask email) |
+| `extra-needs-button` | an extra address was passed from CloudShell (only the button checks it twice) | use the button |
+| `delete-unverified` | a release deleted the copy but S3 still shows it | press release again; if it repeats, tell the lead |
+| `too-large` | over the ZIP limits (65,000 files or about 3.94 GiB) | contact the lead |
+| `database-error`, `upload-error`, `s3-error`, `deadline`, `stopped`, `internal-error` | the run failed (nothing was recorded) | press again; if it repeats, tell the lead |
 
 **Legal holds:** mode `hold` (target the workspace id, a reason) keeps a copy in the exports bucket until you release it;
 no customer email. The `export held: workspace <id>, hold <id>` email carries the hold id. Open holds are counted in the

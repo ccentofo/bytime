@@ -157,6 +157,18 @@ describe('T15: a press that starts and finishes', () => {
     expect(parseExportArgs(commandOf(r).slice(1))).toMatchObject({ ok: true, args: { mode: 'deliver', extra: ADDR, reason: REASON, runId: 'gh-515151-1' } });
   });
 
+  it('FR9: `%` is escaped before masking (GitHub unescapes %25 in workflow-command data), and the raw value is still passed on', () => {
+    const addr = 'a%25b@law.example';
+    const reason = 'case 50%25 done';
+    const r = runStep(withExtra({ extra_recipient: addr, extra_recipient_again: addr, reason }));
+    expect(r.status, r.out).toBe(0);
+    const masks = r.out.split('\n').filter((l) => l.startsWith('::add-mask::'));
+    expect(masks).toEqual([`::add-mask::${WS}`, '::add-mask::a%2525b@law.example', '::add-mask::a%2525b@law.example', '::add-mask::case 50%2525 done']);
+    expect(visible(r.out)).not.toContain(addr);
+    expect(visible(r.out)).not.toContain(reason);
+    expect(commandOf(r)).toEqual(['export', 'deliver', '--workspace', WS, '--extra', addr, '--reason', reason, '--run-id', 'gh-515151-1']);
+  });
+
   it('a plain deliver, a hold and a release build their commands (release targets --hold)', () => {
     const d = runStep(deliver());
     expect(commandOf(d)).toEqual(['export', 'deliver', '--workspace', WS, '--run-id', 'gh-515151-1']);

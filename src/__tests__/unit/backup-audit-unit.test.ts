@@ -48,6 +48,8 @@ describe('S20: protection drift', () => {
     ['a hold/ expiry rule added', ({ state }) => { state.exportLifecycle = [...state.exportLifecycle!, { id: 'expire-hold', status: 'Enabled', prefix: 'hold/', expirationDays: 30, abortDays: null, other: false }]; }, 'exports-lifecycle'],
     ['delivery/ expiring at 30 days', ({ state }) => { state.exportLifecycle = state.exportLifecycle!.map((r) => (r.id === 'expire-delivery' ? { ...r, expirationDays: 30 } : r)); }, 'exports-lifecycle'],
     ['the exports lifecycle removed', ({ state }) => { state.exportLifecycle = null; }, 'exports-lifecycle'],
+    // G6: an extra kind on a matching rule (an Expiration.Date on the whole-bucket abort-mpu rule reads back as `other`).
+    ['an Expiration.Date added to abort-mpu', ({ state }) => { state.exportLifecycle = state.exportLifecycle!.map((r) => (r.id === 'abort-mpu' ? { ...r, other: true } : r)); }, 'exports-lifecycle'],
     ['the exports bucket on S3-managed keys', ({ state }) => { state.exportEncryption = { algorithm: 'AES256', keyId: null, bucketKeyEnabled: false, rules: 1 }; }, 'exports-encryption'],
     ['the exports bucket on another KMS key', ({ state }) => { state.exportEncryption = { ...state.exportEncryption!, keyId: TEST_KEY_ARN }; }, 'exports-encryption'],
     ['the exports bucket without the bucket key', ({ state }) => { state.exportEncryption = { ...state.exportEncryption!, bucketKeyEnabled: false }; }, 'exports-encryption'],

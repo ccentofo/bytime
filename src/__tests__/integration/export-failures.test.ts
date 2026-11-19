@@ -201,6 +201,26 @@ d('T20: the 45-minute deadline (injected short) aborts a stalled build before th
   }, 60_000); // the world's set-up (a migrated workspace) alone can take 20 s on a loaded runner
 });
 
+d('FR6: exactly one closing SNS line per run', () => {
+  it('the hard exit firing while finish() is still publishing waits for that publish instead of sending a second line', async () => {
+    const w = await world({ tenant: { status: 'deleted' } });
+    const sent: string[] = [];
+    let exitedAt = 0;
+    let publishedAt = 0;
+    const slowPublish = async (_s: string, m: string) => { await new Promise((r) => setTimeout(r, 1_500)); sent.push(m); publishedAt = Date.now(); };
+    const exited = new Promise<void>((resolve) => {
+      void w.run({ mode: 'deliver' }, {
+        publish: slowPublish, deadlineMs: 200, hardExitAfterDeadlineMs: 200,
+        hardExit: () => { exitedAt = Date.now(); resolve(); },
+      });
+    });
+    await exited;
+    expect(sent).toEqual([`export refused: deliver, workspace ${w.tenant.id}, not-exportable`]);
+    expect(exitedAt).toBeGreaterThanOrEqual(publishedAt); // it waited for the in-flight line
+    expect(w.lines.filter((l) => /^export (refused|failed|delivered|held|released|outcome unknown):/.test(l))).toEqual([`export refused: deliver, workspace ${w.tenant.id}, not-exportable`]);
+  }, 60_000);
+});
+
 d('T25: openExportSnapshot(url, opts): the task\'s server-side timeouts; the app\'s call unchanged', () => {
   it('statement_timeout and idle_in_transaction_session_timeout are 45 minutes inside the task\'s snapshot', async () => {
     const w = await world();

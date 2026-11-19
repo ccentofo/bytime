@@ -318,8 +318,8 @@ emails the customer a 7-day link on cadenzpoint.com.
    - your **team slug**: the path in your Vercel team's URL (`vercel.com/<team-slug>`);
    - your **project name**: the CadenzPoint project's name in that team.
 
-   I commit them as template constants (they replace the placeholders `vercel-team-slug-pending` and
-   `vercel-project-pending`). The download role then trusts only that project's **production** environment.
+   I commit them as template constants (they replace the placeholders `PENDING_TEAM` and
+   `PENDING_PROJECT`). The download role then trusts only that project's **production** environment.
 2. **Vercel → team settings → OIDC Federation:** set the issuer mode to **Team**.
 3. **After the approved Backup system deploy:** CloudFormation → `cadenzpoint-backup` → **Outputs** → copy
    `ExportDownloadRoleArn` into Vercel's production env as `EXPORT_DOWNLOAD_ROLE_ARN`, and `ExportBucket` as

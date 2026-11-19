@@ -985,12 +985,12 @@ Resources:
             Effect: Allow
             Principal:
               Federated:
-                Fn::Sub: arn:aws:iam::${AWS::AccountId}:oidc-provider/oidc.vercel.com/vercel-team-slug-pending
+                Fn::Sub: arn:aws:iam::${AWS::AccountId}:oidc-provider/oidc.vercel.com/PENDING_TEAM
             Action: sts:AssumeRoleWithWebIdentity
             Condition:
               StringEquals:
-                'oidc.vercel.com/vercel-team-slug-pending:aud': 'https://vercel.com/vercel-team-slug-pending'
-                'oidc.vercel.com/vercel-team-slug-pending:sub': 'owner:vercel-team-slug-pending:project:vercel-project-pending:environment:production'
+                'oidc.vercel.com/PENDING_TEAM:aud': 'https://vercel.com/PENDING_TEAM'
+                'oidc.vercel.com/PENDING_TEAM:sub': 'owner:PENDING_TEAM:project:PENDING_PROJECT:environment:production'
       Policies:
         - PolicyName: cadenzpoint-backup-policy
           PolicyDocument:

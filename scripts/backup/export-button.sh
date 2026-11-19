@@ -68,9 +68,10 @@ EXTRA_AGAIN=$(jq -r '.inputs.extra_recipient_again // ""' "$GITHUB_EVENT_PATH")
 REASON=$(jq -r '.inputs.reason // ""' "$GITHUB_EVENT_PATH")
 CONFIRM=$(jq -r '.inputs.confirm // ""' "$GITHUB_EVENT_PATH")
 
-# Mask before anything else can print: the target, both address inputs, the reason.
+# Mask before anything else can print: the target, both address inputs, the reason. GitHub unescapes %25 (and %0D, %0A)
+# in workflow-command data, so `%` is escaped first, or a value holding "%25" would register a different mask (FR9).
 for value in "$TARGET" "$EXTRA" "$EXTRA_AGAIN" "$REASON"; do
-  if [ -n "$value" ]; then echo "::add-mask::$value"; fi
+  if [ -n "$value" ]; then echo "::add-mask::${value//%/%25}"; fi
 done
 
 case "$MODE" in deliver|hold|release) ;; *) fail "mode must be deliver, hold or release" ;; esac
