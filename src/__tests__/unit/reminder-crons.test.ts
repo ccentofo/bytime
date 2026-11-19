@@ -4,6 +4,8 @@ import { users, timesheetEntries, notificationPreferences, workspaceSettings, ti
 import type { ReminderMessage } from '@/lib/email/reminder-messages';
 import type { BatchOutcome } from '@/lib/email/send-batch';
 import type { CronStopReason } from '@/lib/cron/tenant-sweep';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import { EXPECTED_SUBMITTER_ROLES } from '@/lib/submitter-roles';
 
 /**
  * feature-plan-launch-blockers.md P6 §4 / §9 "Crons": the reminder crons skip SEED_EMAIL_DOMAINS recipients (demo
@@ -46,6 +48,12 @@ const h = vi.hoisted(() => ({
   sendCutoff: 0,
   /** The Resend client the REAL batch helper sees (C14(f) only; null = disabled). */
   client: null as unknown,
+  /** SWEEP-FINDINGS.md A3-D7: every WHERE the users query is built with. */
+  userWheres: [] as unknown[],
+  /** A2-G5: the access mode per tenant slug (default 'full'). */
+  access: {} as Record<string, string>,
+  /** A3-G10: the deadline (last weekday) is today + this many days; 0 = today. */
+  deadlineOffset: 0,
 }));
 
 vi.mock('server-only', () => ({}));
@@ -83,7 +91,7 @@ vi.mock('@/db/control-plane', () => ({
   controlDb: { select: () => ({ from: () => ({ where: async () => h.tenants }) }) },
 }));
 vi.mock('@/lib/tenant/registry', () => ({ toLifecycleFacts: (t: unknown) => t }));
-vi.mock('@/lib/tenant/lifecycle', () => ({ getTenantAccess: () => 'full' }));
+vi.mock('@/lib/tenant/lifecycle', () => ({ getTenantAccess: (t: Tenant) => h.access[t.slug] ?? 'full' }));
 vi.mock('@/lib/encryption', () => ({ decrypt: (s: string) => s }));
 vi.mock('@/lib/email/rate', () => ({ createSendThrottle: () => async () => { h.log.push('throttle'); } }));
 vi.mock('@/lib/email/client', () => ({
@@ -99,8 +107,9 @@ vi.mock('@/lib/tenant/host', () => ({ tenantBaseUrl: (s: string) => `https://${s
 vi.mock('@/server/internal/pay-period-config', () => ({ configAt: async () => ({}) }));
 vi.mock('@/lib/date-utils', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/date-utils')>();
-  // Deadline today (daysUntilDeadline 0) so the submission-deadline cron sends.
-  return { ...real, getCurrentPeriodStart: (today: string) => today, getNumDaysInPeriod: () => 14, getLastWeekdayInPeriod: (start: string) => start };
+  const { addDays } = await import('@/lib/calendar-date');
+  // Deadline today (daysUntilDeadline 0) so the submission-deadline cron sends; A3-G10 moves it with h.deadlineOffset.
+  return { ...real, getCurrentPeriodStart: (today: string) => today, getNumDaysInPeriod: () => 14, getLastWeekdayInPeriod: (start: string) => addDays(start as never, h.deadlineOffset) };
 });
 vi.mock('@/db', () => ({
   getDbForUrl: (url: string) => ({
@@ -112,7 +121,7 @@ vi.mock('@/db', () => ({
           : table === timesheetEntries || table === timesheetPeriods ? []
           : (() => { throw new Error('unexpected table'); })();
         const whereResult = Object.assign(Promise.resolve(rows), { orderBy: async () => rows });
-        return Object.assign(Promise.resolve(rows), { limit: async () => rows, where: () => whereResult });
+        return Object.assign(Promise.resolve(rows), { limit: async () => rows, where: (cond: unknown) => { if (table === users) h.userWheres.push(cond); return whereResult; } });
       },
     }),
   }),
@@ -151,6 +160,9 @@ beforeEach(() => {
   h.gtCalls = [];
   h.prefRows = [];
   h.throwOnPrefs = false;
+  h.userWheres = [];
+  h.access = {};
+  h.deadlineOffset = 0;
   h.tenants = [
     { id: '00000000-0000-4000-8000-0000000000d1', slug: 'demo', status: 'active', lifecycleExempt: true, dbUrlEncrypted: 'db-demo' },
     { id: '00000000-0000-4000-8000-0000000000c1', slug: 'comped', status: 'active', lifecycleExempt: true, dbUrlEncrypted: 'db-comped' },
@@ -414,5 +426,55 @@ describe('daily-reminder: always on (H1)', () => {
     // Positive check: the sweep would swallow the throw, so a missing send is how a lookup would show.
     expect(sentTo()).toEqual(['real@comped-customer.com']);
     expect(body.sent).toBe(1);
+  });
+});
+
+/**
+ * SWEEP-FINDINGS.md A3-D7 (PO decision 2): both crons remind everyone in EXPECTED_SUBMITTER_ROLES (employees AND
+ * supervisors), never admins. A2-G5: only `full` workspaces are reminded. A3-G10: the deadline cron sends only 2 days
+ * before and on the deadline; the daily cron skips Saturday and Sunday.
+ */
+describe.each([
+  ['daily-reminder', () => dailyReminder(req('/api/cron/daily-reminder'))],
+  ['submission-deadline', () => submissionDeadline(req('/api/cron/submission-deadline'))],
+] as const)('%s: who and which workspaces', (_cron, run) => {
+  it('A3-D7: the people query selects active users in EXPECTED_SUBMITTER_ROLES (employee, supervisor), not admins', async () => {
+    h.tenants = [h.tenants[1]];
+    await run();
+    expect(h.userWheres).toHaveLength(1);
+    const q = new PgDialect().sqlToQuery(h.userWheres[0] as never);
+    expect(q.sql).toBe('("users"."is_active" = $1 and "users"."role" in ($2, $3))');
+    expect(q.params).toEqual([true, 'employee', 'supervisor']);
+    expect(q.params.slice(1)).toEqual([...EXPECTED_SUBMITTER_ROLES]);
+  });
+
+  it.each(['read_only', 'billing_only', 'policy_hold', 'closed', 'provisioning'])('A2-G5: a %s workspace gets no batch; a full one does', async (mode) => {
+    h.access.comped = mode;
+    h.tenants = [h.tenants[1], { id: '00000000-0000-4000-8000-0000000000f1', slug: 'fullco', status: 'active', lifecycleExempt: false, dbUrlEncrypted: 'db-fullco' }];
+    h.employees['db-fullco'] = [{ id: 'f1', fullName: 'Full Person', email: 'f1@fullco-customer.com' }];
+    await run();
+    expect(sentTo()).toEqual(['f1@fullco-customer.com']);
+    expect(h.userWheres).toHaveLength(1); // the comped workspace's database is never even queried
+  });
+});
+
+describe('submission-deadline: schedule (A3-G10)', () => {
+  it.each([[-1, 0], [1, 0], [3, 0], [2, 2], [0, 2]])('deadline in %i day(s) → %i reminders', async (offset, sent) => {
+    h.deadlineOffset = offset;
+    await submissionDeadline(req('/api/cron/submission-deadline'));
+    expect(sentTo()).toHaveLength(sent);
+  });
+});
+
+describe('daily-reminder: schedule (A3-G10)', () => {
+  it.each([
+    ['Saturday', '2026-10-24T20:00:00Z', 0],
+    ['Sunday', '2026-10-25T20:00:00Z', 0],
+    ['Friday', '2026-10-23T20:00:00Z', 2],
+    ['Monday', '2026-10-26T20:00:00Z', 2],
+  ])('%s in New York → %i reminders', async (_day, at, sent) => {
+    vi.setSystemTime(new Date(at));
+    await dailyReminder(req('/api/cron/daily-reminder'));
+    expect(sentTo()).toHaveLength(sent);
   });
 });

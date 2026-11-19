@@ -4,11 +4,12 @@ import { controlDb } from '@/db/control-plane';
 import { tenants } from '@/db/control-plane/schema';
 import { decrypt } from '@/lib/encryption';
 import { users, timesheetEntries, workspaceSettings } from '@/db/schema';
-import { eq, and, gt } from 'drizzle-orm';
+import { eq, and, gt, inArray } from 'drizzle-orm';
 import { dailyReminderMessage, type ReminderMessage } from '@/lib/email/reminder-messages';
 import { deliverReminderBatch, reminderBatchKey, REMINDER_BATCH_SIZE, type BatchOutcome } from '@/lib/email/send-batch';
 import { createSendThrottle } from '@/lib/email/rate';
 import { tenantBaseUrl } from '@/lib/tenant/host';
+import { EXPECTED_SUBMITTER_ROLES } from '@/lib/submitter-roles';
 import { runCron } from '@/lib/cron/run-cron';
 import { isSeedRecipient, sweepTenants, type CronStopReason } from '@/lib/cron/tenant-sweep';
 import { getTenantAccess } from '@/lib/tenant/lifecycle';
@@ -24,7 +25,7 @@ const MAX_CONSECUTIVE_BATCH_FAILURES = 3;
  * Cron endpoint: Send daily time entry reminders.
  * Should be called once per day (e.g., 4:00 PM local time) on weekdays.
  *
- * Iterates all active tenants and sends reminders to employees who have
+ * Iterates all active tenants and sends reminders to employees and supervisors (EXPECTED_SUBMITTER_ROLES) who have
  * NOT entered time for today.
  *
  * feature-plan-reminder-capacity.md §6.4: reminders go out through Resend's batch endpoint, up to 100 per request,
@@ -88,12 +89,13 @@ async function sendReminders(): Promise<Record<string, unknown>> {
       const dow = dayOfWeek(today);
       if (dow === 0 || dow === 6) return 'done';
 
-      // Get all active employees for this tenant
+      // Get everyone in this tenant expected to submit (active employees and supervisors)
       const allEmployees = await db
         .select({ id: users.id, fullName: users.fullName, email: users.email })
         .from(users)
         // Audit A10: id order, resuming after the last employee a stopped run finished in this tenant.
-        .where(and(eq(users.isActive, true), eq(users.role, 'employee'), resumeAfter ? gt(users.id, resumeAfter) : undefined))
+        // SWEEP-FINDINGS.md A3-D7 (PO decision 2): everyone expected to submit (employees and supervisors).
+        .where(and(eq(users.isActive, true), inArray(users.role, [...EXPECTED_SUBMITTER_ROLES]), resumeAfter ? gt(users.id, resumeAfter) : undefined))
         .orderBy(users.id);
 
       // Find who has entered time today
