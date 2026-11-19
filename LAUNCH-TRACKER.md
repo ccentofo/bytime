@@ -97,7 +97,7 @@ Next: the early CI push when C2 exists (**CI only**). |
     - D8: existing tests keep the `ip:unknown` bucket, and new scenarios use distinct IPs;
     - D9: the test seam resolves per name, and T8 uses the real constructor. Branch `upstash-rate-limiting` from `02059b0`. |
 | 7 | ~~UX-5 accessibility (Section 508) verification~~ | **not doing** (product owner, 2026-11-12) |
-| 8 | Staging rehearsal (PRODUCTION-DEPLOY Phase 12), then production (Phase 13) | after the above. The approval-scope release is fix-forward only, with the window check. |
+| 8 | Staging rehearsal (PRODUCTION-DEPLOY Phase 12), then production (Phase 13) | **Next (2026-11-19).** First a **regression and test-gap sweep** of `main` (in progress, branch `regression-sweep`): every gate, integration alone, all 10 checks files re-run on today's `main`, and 3 independent mutation auditors on the critical paths; gaps go to a test-only fix round. Then Phases 3–11 with the lead (none started yet), then Phase 12, then Phase 13 and 13b–13d. The approval-scope release is fix-forward only, with the window check. |
 
 ## Launch hardening follow-ups: done (PR #26, 2026-11-12)
 - **Fixed:** daily reminders can't be switched off (H1); employee screens say "Self-returned" (H2); slow-CI flaky tests (H3); progress line counts from the account's creation day (H4; the old "Late" badge was already gone); connect is a POST-only server action (H5); one QuickBooks token refresh at a time (H6).
@@ -108,6 +108,7 @@ Next: the early CI push when C2 exists (**CI only**). |
 ## Decisions log (product owner)
 | Date | Decision |
 |---|---|
+| 2026-11-19 | **Before staging (product owner):** a full regression and test-gap sweep of `main` runs first (the lead's recommendation), then the account setup (Phases 3–11, none started) and the staging rehearsal. |
 | 2026-11-06 | UX: polished, usable, professional; not overengineered. Batch 2 mockups approved. |
 | 2026-11-06 | Audit trail Admin changes tab, admin two-step reset and audit CSV: in. QuickBooks auto-send switch: hidden. |
 | 2026-11-10 | Charging never grants approval. Approval scope comes only from explicit, logged grants. Converted once with a review list. Promotion starts empty; demotion removes scope. |
