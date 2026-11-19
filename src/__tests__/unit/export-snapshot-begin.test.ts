@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   urls: [] as string[],
-  unsafe: vi.fn(async (_q: string) => []),
+  unsafe: vi.fn(async (q: string) => (q ? [] : [])),
   release: vi.fn(),
   end: vi.fn(async () => {}),
 }));
