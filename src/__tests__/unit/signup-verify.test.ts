@@ -242,3 +242,27 @@ describe('verify pages: landmarks and contrast (feature-plan-ux-page-fixes.md C9
     expect(ratio('#4f6bff', '#ffffff')).toBeGreaterThanOrEqual(3);
   });
 });
+
+describe('A1-G18 (SWEEP-FINDINGS.md): the verify pages escape what they echo', () => {
+  const HOSTILE_EMAIL = '"><script>alert(1)</script>@x.test';
+  const HOSTILE_TOKEN = 'tok"><img src=x onerror=alert(2)>';
+  const hostileGet = () => GET(new NextRequest(`https://cadenzpoint.com/signup/verify?token=${encodeURIComponent(HOSTILE_TOKEN)}&email=${encodeURIComponent(HOSTILE_EMAIL)}`));
+
+  it('the confirm page: email, slug and the hidden token are HTML-escaped (no tag, no attribute break-out)', async () => {
+    db.onSelect(signups, [signupRow({ email: HOSTILE_EMAIL, slug: 'new<b>co' })]);
+    const html = await (await hostileGet()).text();
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).not.toContain('<img src=x');
+    expect(html).not.toContain('<b>co');
+    expect(html).toContain('&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;@x.test');
+    expect(html).toContain(`value="tok&quot;&gt;&lt;img src=x onerror=alert(2)&gt;"`);
+    expect(html).toContain('new&lt;b&gt;co.');
+  });
+
+  it('the waitlist page: the email is escaped too', async () => {
+    db.onSelect(signups, [signupRow({ email: HOSTILE_EMAIL, waitlistedAt: new Date() })]);
+    const html = await (await hostileGet()).text();
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+  });
+});
