@@ -467,12 +467,17 @@ describe.skipIf(!cpReady)('tenant lifecycle cron (§4.4)', () => {
       const holder = postgres(process.env.CONTROL_PLANE_DATABASE_URL!, { max: 1 });
       let release!: () => void;
       const released = new Promise<void>((r) => { release = r; });
+      // Wait until the lock is actually held (a fixed 200 ms sleep lost the race under CPU load: the run took the lock
+      // first and returned 'ok').
+      let acquired!: () => void;
+      const lockHeld = new Promise<void>((r) => { acquired = r; });
       const holding = holder.begin(async (tx) => {
         await tx`SELECT pg_advisory_xact_lock(hashtext(${'tenant:' + t.id}))`;
+        acquired();
         await released;
       });
       try {
-        await new Promise((r) => setTimeout(r, 200));
+        await lockHeld;
         const res = await runTenantLifecycle(t.id, NOW);
         expect(res.outcome).toBe('lock-timeout');
         expect((await getTenantRow(t.id)).lifecycleFailures).toBe(1);
