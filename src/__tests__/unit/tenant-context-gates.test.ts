@@ -41,6 +41,14 @@ import { rootDomain } from '@/lib/tenant/host';
 
 const ACME_HOST = `acme.${rootDomain()}:3000`;
 
+/**
+ * The URL a client was built for (drizzle keeps the postgres.js client as `$client`; the fake records its URL). Every
+ * pool assertion compares these small strings or a boolean, never the drizzle objects themselves: a failing
+ * `toBe(drizzleInstance)` makes vitest format the whole schema graph and the worker runs out of memory (lead's audit:
+ * the shared-pool mutation crashed the file instead of failing the G5 assertion).
+ */
+const urlOf = (db: unknown) => (db as { $client: { __url: string } }).$client.__url;
+
 const DAY = 86_400_000;
 const URL_A = 'postgresql://app@db-a.internal/acme';
 function record(o: Record<string, unknown> = {}) {
@@ -108,7 +116,9 @@ describe('A1-G1: the write gate (getTenantForWrite)', () => {
 
 describe('A1-G1: getDbForWrite goes through the write gate', () => {
   it('full → the pooled client for the tenant URL', async () => {
-    await expect(getDbForWrite()).resolves.toBe(getDbForUrl(URL_A));
+    const db = await getDbForWrite();
+    expect(urlOf(db)).toBe(URL_A);
+    expect(db === getDbForUrl(URL_A), 'the pooled client').toBe(true);
   });
 
   it.each(['read_only', 'billing_only', 'policy_hold', 'closed', 'provisioning'] as const)('%s → WorkspaceReadOnlyError, no client constructed', async (mode) => {
@@ -126,11 +136,13 @@ describe('A1-G5: one pool per connection string', () => {
     const b = 'postgresql://app@pool-b.internal/two';
     postgresSpy.mockClear();
     const a1 = getDbForUrl(a);
-    expect(getDbForUrl(a)).toBe(a1);
+    expect(urlOf(a1)).toBe(a);
+    expect(getDbForUrl(a) === a1, 'the same URL reuses its client').toBe(true);
     const b1 = getDbForUrl(b);
-    expect(b1).not.toBe(a1);
+    expect(urlOf(b1)).toBe(b);                                        // not a's pool
+    expect(b1 === a1, 'another URL gets another client').toBe(false);
     expect(postgresSpy.mock.calls.map((c) => c[0])).toEqual([a, b]);
-    expect(getDbForUrl(b)).toBe(b1);
+    expect(getDbForUrl(b) === b1, 'and reuses it').toBe(true);
     expect(postgresSpy).toHaveBeenCalledTimes(2);
   });
 });
@@ -143,7 +155,9 @@ describe('A1-G7: getDbForAuth refuses only a closed workspace', () => {
 
   it.each(['full', 'read_only', 'billing_only', 'policy_hold'] as const)('%s → the tenant client (sign-in and account security keep working)', async (mode) => {
     h.record = MODES[mode];
-    await expect(getDbForAuth()).resolves.toBe(getDbForUrl(URL_A));
+    const db = await getDbForAuth();
+    expect(urlOf(db)).toBe(URL_A);
+    expect(db === getDbForUrl(URL_A), 'the pooled client').toBe(true);
   });
 });
 
