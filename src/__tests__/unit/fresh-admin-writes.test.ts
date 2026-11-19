@@ -49,6 +49,13 @@ import * as gusto from '@/server/actions/gusto';
 import * as slins from '@/server/actions/slins';
 import * as users from '@/server/actions/users';
 import * as importActions from '@/server/actions/import';
+import * as apiKeys from '@/server/actions/api-keys';
+import * as billing from '@/server/actions/billing';
+import * as migration from '@/server/actions/migration';
+import * as mfa from '@/server/actions/mfa';
+import * as password from '@/server/actions/password';
+import * as payPeriodConfig from '@/server/actions/pay-period-config';
+import * as workspaceSettings from '@/server/actions/workspace-settings';
 
 type AnyAction = (...args: never[]) => Promise<unknown>;
 const call = (fn: unknown, ...args: unknown[]) => (fn as (...a: unknown[]) => Promise<unknown>)(...args);
@@ -119,6 +126,62 @@ describe('the 43 admin-only writes refuse a stale JWT-admin (requireAdminFresh)'
   it.each(ADMIN_WRITES)('%s', async (_name, fn, args) => {
     writes.count = 0;
     await expectRefused(call(fn, ...args));
+    expect(writes.count).toBe(0);
+  });
+});
+
+/**
+ * SWEEP-FINDINGS.md A1-G6: 27 more admin-only actions (writes, previews and validations an admin alone may run) must
+ * authorize with an ADMIN-level fresh guard — not just any guard. Swapping one for requireSession() or the cached
+ * requireAdmin() lets this stale JWT-admin through, and its row fails. Arguments are placeholders: nothing after the
+ * refused guard may run (the DB fake throws on any touch).
+ */
+const ADMIN_ONLY_MORE: Array<[string, AnyAction | unknown, unknown[]]> = [
+  ['createApiKey', apiKeys.createApiKey, [{ name: 'k' }]],
+  ['revokeApiKey', apiKeys.revokeApiKey, ['k1']],
+  ['deleteApiKey', apiKeys.deleteApiKey, ['k1']],
+  ['startCheckout', billing.startCheckout, ['month']],
+  ['openBillingPortal', billing.openBillingPortal, []],
+  ['previewChargeCodeCategoryImpact', ccats.previewChargeCodeCategoryImpact, [{ chargeCodeId: 'cc1', effectiveDate: '2027-01-01', laborCategoryId: 'l1' }]],
+  ['reactivateChargeCode', chargeCodes.reactivateChargeCode, ['cc1']],
+  ['previewRateChangeImpact', rates.previewRateChangeImpact, [{ laborCategoryId: 'l1', effectiveDate: '2027-01-01', hourlyRate: '110' }]],
+  ['bulkImportEmployees', importActions.bulkImportEmployees, [[{ email: 'a@x.dev', fullName: 'A' }]]],
+  ['bulkImportContracts', importActions.bulkImportContracts, [[{ contractNumber: 'K', name: 'K' }]]],
+  ['bulkImportClins', importActions.bulkImportClins, [[{ contractNumber: 'K', clinNumber: '0001' }]]],
+  ['bulkImportLaborCategories', importActions.bulkImportLaborCategories, [[{ lcatCode: 'L', title: 'L' }]]],
+  ['bulkImportAssignments', importActions.bulkImportAssignments, [[{ email: 'a@x.dev', clinNumber: '0001' }]]],
+  ['disconnectIntegration', integrations.disconnectIntegration, ['conn1']],
+  ['validateMigrationData', migration.validateMigrationData, [[]]],
+  ['validateMigrationPeriods', migration.validateMigrationPeriods, [[]]],
+  ['importMigrationData', migration.importMigrationData, [[]]],
+  ['importMigrationPeriods', migration.importMigrationPeriods, [[]]],
+  ['adminResetMfa', mfa.adminResetMfa, [{ userId: '00000000-0000-4000-8000-000000000002', currentPassword: 'x' }]],
+  ['adminResetPassword', password.adminResetPassword, [{ targetUserId: '00000000-0000-4000-8000-000000000002', newPassword: 'brand-new-pass' }]],
+  ['updateUser', users.updateUser, ['00000000-0000-4000-8000-000000000002', { fullName: 'X' }]],
+  ['createUserWithPassword', users.createUserWithPassword, [{ email: 'n@x.dev', fullName: 'N', role: 'employee', password: 'brand-new-pass', flsaExempt: false }]],
+  ['setUserApprover', users.setUserApprover, [{ userId: '00000000-0000-4000-8000-000000000002', approverId: null }]],
+  ['updatePayPeriodConfig', payPeriodConfig.updatePayPeriodConfig, [{ type: 'weekly' }]],
+  ['updateWorkspaceTimezone', workspaceSettings.updateWorkspaceTimezone, ['America/New_York']],
+  ['updateWorkweekStartDay', workspaceSettings.updateWorkweekStartDay, [1]],
+];
+
+describe('A1-G6: 27 more admin-only actions refuse a stale JWT-admin (admin-level fresh guard)', () => {
+  it('covers exactly the 27 (26 returning a result + startQuickBooksConnect, which redirects), all exported', () => {
+    expect(ADMIN_ONLY_MORE).toHaveLength(26);
+    expect(new Set([...ADMIN_ONLY_MORE.map(([n]) => n), 'startQuickBooksConnect']).size).toBe(27);
+    for (const [name, fn] of ADMIN_ONLY_MORE) expect(typeof fn, name).toBe('function');
+  });
+
+  it.each(ADMIN_ONLY_MORE)('%s', async (_name, fn, args) => {
+    writes.count = 0;
+    await expectRefused(call(fn, ...args));
+    expect(writes.count).toBe(0);
+  });
+
+  it('startQuickBooksConnect (a form action): refused → redirected to /timesheet before any state is minted', async () => {
+    writes.count = 0;
+    const err = await integrations.startQuickBooksConnect().then(() => null, (e: unknown) => e as { digest?: string });
+    expect(err?.digest).toMatch(/^NEXT_REDIRECT;[^;]*;\/timesheet;/);
     expect(writes.count).toBe(0);
   });
 });
