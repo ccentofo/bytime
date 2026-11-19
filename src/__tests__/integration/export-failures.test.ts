@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createWorkspaceZipStream, ExportTooLargeError, type ExportSnapshot, type WorkspaceZipOptions } from '@/lib/export/workspace-export';
@@ -164,12 +164,35 @@ d('T5: a record error after the transaction started → the object is kept, outc
 d('T20: the 45-minute deadline (injected short) aborts a stalled build before the upload completes', () => {
   it('a stalled stream: the deadline aborts the upload, deletes the partial object, records nothing; failed deadline', async () => {
     const w = await world();
-    const r = await w.run({ mode: 'deliver' }, { deadlineMs: 1_500, zipStream: stalledZip });
-    expect(r.line).toBe(`export failed: deliver, workspace ${w.tenant.id}, deadline`);
-    expect(w.bucket.aborted.length).toBe(1);
-    expect(w.bucket.completed).toEqual([]);
-    expect(w.bucket.deleted.length).toBe(1);
-    await nothingRecorded(w);
+    // SWEEP-FINDINGS.md T-1: the deadline fires only after the stalled upload has begun, never on the wall clock (on a
+    // loaded runner a 1.5 s timer could land before the upload started). The run's deadline timer is recognised by its
+    // distinctive delay and held; the fake bucket fires it once the first upload chunk arrives. 600,000 ms never elapses
+    // in-test, and with the default hard exit (+5 min) stays well under setTimeout's 2^31-1 ms limit.
+    const DEADLINE_MS = 600_000;
+    const realSetTimeout = globalThis.setTimeout;
+    let fireDeadline: (() => void) | undefined;
+    const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number, ...args: unknown[]) => {
+      if (ms === DEADLINE_MS) { fireDeadline = fn; return realSetTimeout(() => {}, DEADLINE_MS); }
+      return realSetTimeout(fn, ms, ...args);
+    }) as unknown as typeof setTimeout);
+    const put = w.bucket.putStream.bind(w.bucket);
+    let uploadBegan = false;
+    w.bucket.putStream = (key, body) => {
+      const upload = put(key, body);
+      body.once('data', () => { uploadBegan = true; setImmediate(() => fireDeadline!()); });
+      return upload;
+    };
+    try {
+      const r = await w.run({ mode: 'deliver' }, { deadlineMs: DEADLINE_MS, zipStream: stalledZip });
+      expect(uploadBegan).toBe(true);
+      expect(r.line).toBe(`export failed: deliver, workspace ${w.tenant.id}, deadline`);
+      expect(w.bucket.aborted.length).toBe(1);
+      expect(w.bucket.completed).toEqual([]);
+      expect(w.bucket.deleted.length).toBe(1);
+      await nothingRecorded(w);
+    } finally {
+      spy.mockRestore();
+    }
   }, 30_000);
 
   it('a SIGTERM stop mid-build → failed stopped', async () => {

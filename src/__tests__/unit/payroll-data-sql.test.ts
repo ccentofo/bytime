@@ -41,3 +41,14 @@ describe('loadPayrollData SQL (P-1 companion)', () => {
     expect(h.built.filter((q) => flat(q.toSQL().sql).includes('workspace_settings'))).toHaveLength(1);
   });
 });
+
+describe('loadPayrollData reads from the workweek start (SWEEP-FINDINGS.md A3-G7)', () => {
+  it('a range starting Thu 2026-10-01 with Monday workweeks reads entries from Mon 2026-09-28 (the FLSA week it is in)', async () => {
+    h.built = [];
+    h.queue = [[{ day: 1, timezone: 'America/New_York' }], [], [], [], []];
+    await loadPayrollData(db as never, '2026-10-01' as never, '2026-10-15' as never);
+    const entries = h.built.map((q) => q.toSQL()).find((q) => flat(q.sql).startsWith('select "timesheet_entries"."user_id", "timesheet_entries"."entry_date"'))!;
+    expect(flat(entries.sql)).toMatch(/where \("timesheet_entries"\."entry_date" >= \$1 and "timesheet_entries"\."entry_date" <= \$2 /);
+    expect(entries.params.slice(0, 2)).toEqual(['2026-09-28', '2026-10-15']);
+  });
+});

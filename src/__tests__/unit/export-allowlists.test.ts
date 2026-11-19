@@ -160,3 +160,49 @@ describe('every tenant table is exported or on the never-exported list (certifie
     expect(event).toContain(`"period_events"."event" = 'approved' AND "period_events"."source" <> 'migration' AND "period_events"."actor_id" = "period_events"."user_id"`);
   });
 });
+
+/**
+ * SWEEP-FINDINGS.md A3-G12: the secret check also looks at the column KEY and the column it reads (not only the CSV
+ * header), so a secret can't be exported under a harmless header.
+ * A3-G5: every schema column of every exported table is either exported or on an explicit never-exported list, so a
+ * new column forces a decision (export it, with a description, or list it here with the reason).
+ */
+const FORBIDDEN_COLUMN_KEYS = [
+  'passwordHash', 'totpSecret', 'totpRecoveryCodes', 'totpLastUsedStep', 'sessionVersion',
+  'keyHash', 'tokenHash', 'accessTokenEncrypted', 'refreshTokenEncrypted',
+];
+
+/** Columns deliberately never exported, per table file: sign-in secrets and session state (T6/R8). */
+const NEVER_EXPORTED_COLUMNS: Record<string, string[]> = {
+  users: ['passwordHash', 'sessionVersion', 'totpSecret', 'totpRecoveryCodes', 'totpLastUsedStep'],
+};
+
+describe('EXPORT_TABLES: secrets by key, and column completeness (A3-G12, A3-G5)', () => {
+  it('no allowlisted column has a forbidden key or reads a forbidden database column, whatever its header', () => {
+    for (const table of EXPORT_TABLES) {
+      const columns = getTableColumns(table.table) as Record<string, { name: string }>;
+      for (const col of table.columns) {
+        expect(FORBIDDEN_COLUMN_KEYS, `${table.file}: key ${col.key}`).not.toContain(col.key);
+        if (!col.expr) expect(FORBIDDEN_COLUMN_HEADERS, `${table.file}: ${col.key} reads ${columns[col.key]?.name}`).not.toContain(columns[col.key]?.name);
+      }
+    }
+  });
+
+  it('every schema column of each exported table is exported or on the never-exported list', () => {
+    for (const table of EXPORT_TABLES) {
+      const exported = new Set(table.columns.filter((c) => !c.expr).map((c) => c.key));
+      const never = NEVER_EXPORTED_COLUMNS[table.file] ?? [];
+      for (const key of Object.keys(getTableColumns(table.table))) {
+        expect(exported.has(key) || never.includes(key), `${table.file}.${key}: export it (with a description) or list it as never exported`).toBe(true);
+      }
+      for (const key of never) expect(exported.has(key), `${table.file}.${key} is listed as never exported but is exported`).toBe(false);
+    }
+  });
+
+  it('timesheet_entries: every schema column is a TIMESHEET_COLUMNS header', () => {
+    const headers = new Set(TIMESHEET_COLUMNS.map((c) => c.header));
+    for (const col of Object.values(getTableColumns(schema.timesheetEntries))) {
+      expect(headers.has(col.name), `timesheet_entries.${col.name}`).toBe(true);
+    }
+  });
+});

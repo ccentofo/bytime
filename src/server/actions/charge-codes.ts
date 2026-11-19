@@ -295,10 +295,22 @@ export async function assignChargeCodesToUser(data: { userId: string; chargeCode
 
 export async function unassignChargeCodeFromUser(userId: string, chargeCodeId: string) {
   return userAction(async () => {
-    await requireAdminFresh();
+    const actor = await requireAdminFresh();
+    // SWEEP-FINDINGS.md A3-D9: malformed ids are refused (not a database error), and a removal is logged in the same
+    // transaction (PO decision 4) — only when an active assignment actually ended.
+    const person = validateUUID(userId, 'Person');
+    const code = validateUUID(chargeCodeId, 'Charge code');
     const db = await getDbForWrite();
-    await db.update(userChargeCodes).set({ isActive: false })
-      .where(and(eq(userChargeCodes.userId, userId), eq(userChargeCodes.chargeCodeId, chargeCodeId)));
+    await db.transaction(async (tx) => {
+      const ended = await tx.update(userChargeCodes).set({ isActive: false })
+        .where(and(eq(userChargeCodes.userId, person), eq(userChargeCodes.chargeCodeId, code), eq(userChargeCodes.isActive, true)))
+        .returning({ userId: userChargeCodes.userId });
+      if (ended.length === 0) return;
+      await logAdminChange(tx, {
+        actorId: actor.id, entity: 'user_charge_code', entityId: person, action: 'removed',
+        oldValue: { chargeCodeId: code, isActive: true }, newValue: { chargeCodeId: code, isActive: false },
+      });
+    });
   });
 }
 

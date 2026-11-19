@@ -1,12 +1,17 @@
 import { NextRequest } from 'next/server';
 import { getDb } from '@/db';
 import { timesheetEntries, users, clins, contracts, indirectChargeCodes, importBatches } from '@/db/schema';
-import { eq, and, gte, lt, sql } from 'drizzle-orm';
+import { eq, and, gte, lt, sql, count } from 'drizzle-orm';
 import { handleApiRequest, apiResponse, apiError } from '@/lib/api-auth';
 import { addDays, isCalendarDate } from '@/lib/calendar-date';
 
 // Date format: `startDate`/`endDate` query params and every `entryDate` in the response are
 // plain 'YYYY-MM-DD' calendar-date strings — never an ISO instant/timestamp.
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const WHOLE_NUMBER_RE = /^\d+$/;
+const MAX_PAGE_SIZE = 500;
+
 export async function GET(request: NextRequest) {
   return handleApiRequest(request, () => listTimesheetEntries(request));
 }
@@ -18,12 +23,24 @@ async function listTimesheetEntries(request: NextRequest): Promise<Response> {
   const startDate = searchParams.get('startDate');
   const endDate = searchParams.get('endDate');
   const userId = searchParams.get('userId');
-  const page = parseInt(searchParams.get('page') ?? '1');
-  const pageSize = Math.min(parseInt(searchParams.get('pageSize') ?? '100'), 500);
+  const pageParam = searchParams.get('page');
+  const pageSizeParam = searchParams.get('pageSize');
 
   if (!startDate || !endDate || !isCalendarDate(startDate) || !isCalendarDate(endDate)) {
     return apiError('startDate and endDate query parameters are required (YYYY-MM-DD format).');
   }
+  // SWEEP-FINDINGS.md A3-D4: a bad parameter is a 400, not a database error (500). A pageSize over 500 is still capped.
+  if (pageParam !== null && (!WHOLE_NUMBER_RE.test(pageParam) || Number(pageParam) < 1)) {
+    return apiError('page must be a whole number of 1 or more.');
+  }
+  if (pageSizeParam !== null && (!WHOLE_NUMBER_RE.test(pageSizeParam) || Number(pageSizeParam) < 1)) {
+    return apiError('pageSize must be a whole number of 1 or more.');
+  }
+  if (userId !== null && !UUID_RE.test(userId)) {
+    return apiError('userId must be a valid UUID.');
+  }
+  const page = pageParam === null ? 1 : Number(pageParam);
+  const pageSize = Math.min(pageSizeParam === null ? 100 : Number(pageSizeParam), MAX_PAGE_SIZE);
 
   const start = startDate;
   const end = addDays(endDate, 1);
@@ -76,9 +93,17 @@ async function listTimesheetEntries(request: NextRequest): Promise<Response> {
     .leftJoin(indirectChargeCodes, eq(timesheetEntries.indirectCodeId, indirectChargeCodes.id))
     .leftJoin(importBatches, eq(timesheetEntries.importBatchId, importBatches.id))
     .where(and(...conditions))
-    .orderBy(users.fullName, timesheetEntries.entryDate)
+    // A3-D1: the entry id last makes the order total, so pages never overlap or skip rows that tie on name and date.
+    .orderBy(users.fullName, timesheetEntries.entryDate, timesheetEntries.id)
     .limit(pageSize)
     .offset((page - 1) * pageSize);
 
-  return apiResponse(rows, { total: rows.length, page, pageSize });
+  // A3-D1: meta.total is every matching entry (same joins and conditions), not this page's length.
+  const [{ total }] = await db
+    .select({ total: count() })
+    .from(timesheetEntries)
+    .innerJoin(users, eq(timesheetEntries.userId, users.id))
+    .where(and(...conditions));
+
+  return apiResponse(rows, { total, page, pageSize });
 }

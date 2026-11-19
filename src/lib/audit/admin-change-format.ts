@@ -26,7 +26,7 @@ type Table = { [E in AdminChangeEntity]: Record<AdminChangeReadAction<E>, Descri
 
 const ENTITY_NAMES: Record<string, string> = {
   self_approval: 'Self-approval', charge_code: 'Charge code', workspace_settings: 'Workspace', charge_code_labor_category: 'Charge code',
-  user: 'User', labor_category_rate: 'Labor category', approval_scope: 'Approval scope',
+  user: 'User', labor_category_rate: 'Labor category', approval_scope: 'Approval scope', user_charge_code: 'Charge code access',
 };
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const ROLE: Record<string, string> = { admin: 'Admin', supervisor: 'Supervisor', employee: 'Employee' };
@@ -86,6 +86,11 @@ export const ADMIN_CHANGE_TEXT: Table = {
       const day = (v: unknown) => (typeof v === 'number' && DAYS[v] ? DAYS[v] : 'Not set');
       return { change: 'Workweek start day changed', details: join('Workspace', `${day(obj(row.oldValue).workweekStartDay)} → ${day(obj(row.newValue).workweekStartDay)}`) };
     },
+    // SWEEP-FINDINGS.md A3-D6: old → new IANA name ("Not set" when there was no settings row).
+    timezone_changed: (row) => {
+      const tz = (v: unknown) => (typeof v === 'string' && v ? v : 'Not set');
+      return { change: 'Time zone changed', details: join('Workspace', `${tz(obj(row.oldValue).timezone)} → ${tz(obj(row.newValue).timezone)}`) };
+    },
   },
   charge_code_labor_category: {
     category_change_added: categoryChange('change added'),
@@ -129,6 +134,11 @@ export const ADMIN_CHANGE_TEXT: Table = {
     granted: scopeChange('Approval scope added'),
     removed: scopeChange('Approval scope removed'),
     kept: scopeChange('Approval scope kept'),
+  },
+  // SWEEP-FINDINGS.md A3-D9: "{person} · {code}" from entity_id and `{ chargeCodeId }`.
+  user_charge_code: {
+    assigned: (row, names) => ({ change: 'Charge code assigned', details: join(subject(row, names), nameOf(names, obj(row.newValue).chargeCodeId)) }),
+    removed: (row, names) => ({ change: 'Charge code removed', details: join(subject(row, names), nameOf(names, obj(row.newValue).chargeCodeId)) }),
   },
 };
 
