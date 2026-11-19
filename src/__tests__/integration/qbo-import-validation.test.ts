@@ -80,7 +80,8 @@ describe('QuickBooks imports: validated, all or nothing (A3-D2)', () => {
 
   it.each([
     ['a bad work location', { workLocation: 'moon' }, '"Bad": Location must be Onsite, Telework or Other.'],
-    ['a name too long for a code', { name: 'x'.repeat(101) }, `"${'x'.repeat(101)}": The code must be 100 characters or fewer.`],
+    // The code is the name cut to 100 characters, so the name's own 255-character limit is the one an item can break.
+    ['a name over 255 characters', { name: 'x'.repeat(256) }, `"${'x'.repeat(256)}": The name must be 255 characters or fewer.`],
     ['a malformed CLIN id', { clinId: 'not-a-uuid' }, '"Bad": CLIN is not a valid identifier.'],
     ['a malformed class id', { classId: 'nope' }, '"Bad": Class is not a valid identifier.'],
   ])('%s is refused after a valid item, and nothing is written', async (_label, override, message) => {
