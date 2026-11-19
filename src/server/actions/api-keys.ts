@@ -50,8 +50,8 @@ export async function createApiKey(data: {
  * Get all API keys (without the actual key — only prefix shown).
  */
 export async function getApiKeys() {
-  const db = await getDb();
   await requireAdmin();
+  const db = await getDb();
   return db.select({
     id: apiKeys.id,
     name: apiKeys.name,

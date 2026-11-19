@@ -25,10 +25,10 @@ vi.mock('@/lib/session', () => {
 });
 
 import * as dbModule from '@/db';
-import { chargeCodes, userAssignments, userChargeCodes, users } from '@/db/schema';
+import { adminChangeLog, chargeCodes, userAssignments, userChargeCodes, users } from '@/db/schema';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import type { FakeControlDb } from '../helpers/fake-control-db';
-import { assignChargeCodesToUser } from '@/server/actions/charge-codes';
+import { assignChargeCodesToUser, unassignChargeCodeFromUser } from '@/server/actions/charge-codes';
 import { grantApprovalScope } from '@/server/actions/assignments';
 
 const db = (dbModule as unknown as { __db: FakeControlDb }).__db;
@@ -59,8 +59,13 @@ describe('assignChargeCodesToUser (AS-3 companion)', () => {
     db.onSelect(userChargeCodes, [{ chargeCodeId: A }]);
     db.onSelect(chargeCodes, [{ clinId: ID(21), slinId: null }]);                      // assignChargeCodeToUserInternal(B)
     expect(await assignChargeCodesToUser({ userId: U, chargeCodeIds: [A, B, B] })).toEqual({ ok: true, data: { assigned: 1 } });
-    expect(db.inserts.map((i) => [i.table === userChargeCodes ? 'ucc' : i.table === userAssignments ? 'ua' : '?', (i.values as { chargeCodeId?: string; clinId?: string }).chargeCodeId ?? (i.values as { clinId?: string }).clinId])).toEqual([
-      ['ucc', B], ['ua', ID(21)],
+    expect(db.inserts.map((i) => [i.table === userChargeCodes ? 'ucc' : i.table === userAssignments ? 'ua' : i.table === adminChangeLog ? 'log' : '?', (i.values as { chargeCodeId?: string; clinId?: string }).chargeCodeId ?? (i.values as { clinId?: string }).clinId])).toEqual([
+      ['ucc', B], ['ua', ID(21)], ['log', undefined],
+    ]);
+    // SWEEP-FINDINGS.md A3-D9 (PO decision 4): one log row per NEWLY assigned code (B), none for the held code (A),
+    // who and what, through the same transaction client.
+    expect(db.inserts.filter((i) => i.table === adminChangeLog).map((i) => i.values)).toEqual([
+      { actorId: 'admin-1', entity: 'user_charge_code', entityId: U, action: 'assigned', oldValue: null, newValue: { chargeCodeId: B } },
     ]);
   });
 
@@ -94,6 +99,32 @@ describe('grantApprovalScope (AS-7 companion)', () => {
     expect(await grantApprovalScope({ supervisorId: U, clinIds: Array.from({ length: 201 }, (_, i) => ID(100 + i)) })).toMatchObject({ ok: false, error: 'Choose 200 CLINs or fewer at a time.' });
     expect(await grantApprovalScope({ supervisorId: U, clinIds: ['nope'] })).toMatchObject({ ok: false });
     expect(await grantApprovalScope({ supervisorId: '', clinIds: [A] })).toMatchObject({ ok: false, error: 'Choose an active supervisor.' });
+    expect(db.ops).toEqual([]);
+  });
+});
+
+describe('unassignChargeCodeFromUser (SWEEP-FINDINGS.md A3-D9)', () => {
+  it('ends an active assignment and logs the removal (who, person, code) in the same transaction', async () => {
+    db.onReturning('update', userChargeCodes, [{ userId: U }]);
+    expect(await unassignChargeCodeFromUser(U, A)).toEqual({ ok: true, data: undefined });
+    expect(db.updates.map((u) => [u.table === userChargeCodes, u.set])).toEqual([[true, { isActive: false }]]);
+    const where = new PgDialect().sqlToQuery(db.updates[0].where as never);
+    expect(where.sql).toContain('"is_active" = $3'); // only an ACTIVE assignment counts as removed
+    expect(where.params).toEqual([U, A, true]);
+    expect(db.inserts.map((i) => [i.table === adminChangeLog, i.values])).toEqual([
+      [true, { actorId: 'admin-1', entity: 'user_charge_code', entityId: U, action: 'removed', oldValue: { chargeCodeId: A, isActive: true }, newValue: { chargeCodeId: A, isActive: false } }],
+    ]);
+  });
+
+  it('nothing to end (not assigned, or already removed) → still ok, and nothing logged', async () => {
+    db.onReturning('update', userChargeCodes, []);
+    expect(await unassignChargeCodeFromUser(U, A)).toEqual({ ok: true, data: undefined });
+    expect(db.inserts).toEqual([]);
+  });
+
+  it('malformed ids are refused before any write (not a database error)', async () => {
+    expect(await unassignChargeCodeFromUser('nope', A)).toMatchObject({ ok: false, error: 'Person is not a valid identifier.' });
+    expect(await unassignChargeCodeFromUser(U, 'x')).toMatchObject({ ok: false, error: 'Charge code is not a valid identifier.' });
     expect(db.ops).toEqual([]);
   });
 });

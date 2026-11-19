@@ -170,6 +170,34 @@ describe('calendar-dates audit fixes', () => {
     expect(hours).toEqual(['3', '5']); // latest of each code; the second code's rev 1 is not dropped
   });
 
+  it('SWEEP-FINDINGS.md A3-G3: /api/v1/timesheets/approved leaves out submitted and draft periods, and the day after an approved period', async () => {
+    const db = getTestDb();
+    const rawKey = await seedApiKey(admin.id);
+    const submitter = await createTestUser({ role: 'employee' });
+    const drafter = await createTestUser({ role: 'employee' });
+    await db.insert(schema.timesheetPeriods).values([
+      { userId: employee.id, periodStart: '2026-01-01', status: 'approved', reviewedAt: new Date(), periodNumDays: 15 },
+      { userId: submitter.id, periodStart: '2026-01-01', status: 'submitted', submittedAt: new Date(), periodNumDays: 15 },
+      { userId: drafter.id, periodStart: '2026-01-01', status: 'draft', periodNumDays: 15 },
+    ]);
+    await db.insert(schema.timesheetEntries).values([
+      { userId: employee.id, chargeCodeId, clinId, entryDate: '2026-01-15', hours: '4', revisionNumber: 1, createdBy: employee.id }, // last day
+      { userId: employee.id, chargeCodeId, clinId, entryDate: '2026-01-16', hours: '6', revisionNumber: 1, createdBy: employee.id }, // the day after
+      { userId: submitter.id, chargeCodeId, clinId, entryDate: '2026-01-05', hours: '7', revisionNumber: 1, createdBy: submitter.id },
+      { userId: drafter.id, chargeCodeId, clinId, entryDate: '2026-01-05', hours: '3', revisionNumber: 1, createdBy: drafter.id },
+    ]);
+
+    const response = await getApprovedTimesheets(new Request(
+      'http://localhost:3000/api/v1/timesheets/approved?startDate=2026-01-01&endDate=2026-01-31',
+      { headers: { Authorization: `Bearer ${rawKey}`, 'x-forwarded-for': '203.0.113.32' } },
+    ) as never);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.data).toHaveLength(1); // the approved period only
+    const entries = body.data[0].entries as Array<{ userId: string; entryDate: string; hours: string }>;
+    expect(entries.map((e) => [e.userId, e.entryDate, e.hours])).toEqual([[employee.id, '2026-01-15', '4']]);
+  });
+
   it('a stored period that does not match today\'s schedule stays readable', async () => {
     const db = getTestDb();
     // Monday Jan 5 is not a semimonthly period start; no length snapshot (imported history).

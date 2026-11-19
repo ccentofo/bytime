@@ -65,3 +65,57 @@ describe('getLockoutsForEmails (US-2 companion)', () => {
     expect(db.ops).toEqual([]);
   });
 });
+
+/**
+ * SWEEP-FINDINGS.md A1-G10: the lockout is per EMAIL — both of getLockoutInfo's queries filter by the normalized email,
+ * so one address's failures never lock another. The fake answers each query from a row store using the values the
+ * query actually binds (rendered with drizzle's PgDialect): an email bound → that email's rows only; none → everyone's.
+ */
+describe('A1-G10: the lockout query filters by email', () => {
+  type Row = { email: string; successful: boolean; attemptedAt: Date };
+  async function lockoutWith(store: Row[], email: string) {
+    const { PgDialect } = await import('drizzle-orm/pg-core');
+    const rendered: Array<{ sql: string; params: unknown[] }> = [];
+    const answer = (where: unknown) => {
+      const q = new PgDialect().sqlToQuery(where as never);
+      rendered.push(q);
+      const emails = q.params.filter((p) => typeof p === 'string' && p.includes('@'));
+      const flags = q.params.filter((p): p is boolean => typeof p === 'boolean');
+      return store
+        .filter((r) => emails.length === 0 || emails.includes(r.email))
+        .filter((r) => flags.length === 0 || r.successful === flags[0])
+        .map(({ successful, attemptedAt }) => ({ successful, attemptedAt }));
+    };
+    const db = {
+      select: () => {
+        let rows: unknown[] = [];
+        const c: Record<string, unknown> = {
+          from: () => c,
+          where: (w: unknown) => { rows = answer(w); return c; },
+          orderBy: () => c,
+          limit: () => c,
+          then: (res: (v: unknown[]) => unknown) => Promise.resolve(rows).then(res),
+        };
+        return c;
+      },
+    };
+    const info = await getLockoutInfo(db as never, email, NOW);
+    return { info, rendered };
+  }
+  const store: Row[] = Array.from({ length: 5 }, (_, i) => ({ email: 'a@acme.test', successful: false, attemptedAt: ago(M + i * S) }));
+
+  it("a@'s 5 failures lock a@ but not b@", async () => {
+    expect((await lockoutWith(store, 'a@acme.test')).info).toMatchObject({ isLocked: true, failedAttempts: 5 });
+    expect((await lockoutWith(store, 'b@acme.test')).info).toMatchObject({ isLocked: false, failedAttempts: 0 });
+  });
+
+  it('both queries bind the lowercased, trimmed email', async () => {
+    const { rendered, info } = await lockoutWith(store, '  A@Acme.TEST ');
+    expect(info.isLocked).toBe(true);
+    expect(rendered).toHaveLength(2);
+    for (const q of rendered) {
+      expect(q.sql).toMatch(/"login_attempts"\."email" = \$1/);
+      expect(q.params[0]).toBe('a@acme.test');
+    }
+  });
+});

@@ -12,6 +12,7 @@ import { getTenantSlug } from '@/lib/tenant/context';
 import { tenantBaseUrl } from '@/lib/tenant/host';
 import { UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
+import { validatePassword } from '@/lib/password-rules';
 import { headers } from 'next/headers';
 import { getClientIpFromHeaders } from '@/lib/rate-limit';
 import { consume } from '@/lib/rate-limit/store';
@@ -164,13 +165,9 @@ export async function resetPassword(data: {
     const db = await getDbForAuth();
     const normalizedEmail = data.email.toLowerCase().trim();
 
-    // Validate password
-    if (!data.newPassword || data.newPassword.length < 8) {
-      throw new UserFacingError('Password must be at least 8 characters.');
-    }
-    if (data.newPassword.length > 128) {
-      throw new UserFacingError('Password must not exceed 128 characters.');
-    }
+    // Validate password: the one shared rule (A1-D8), which also refuses a non-string (a server action takes any JSON).
+    const passwordError = validatePassword(data.newPassword);
+    if (passwordError) throw new UserFacingError(passwordError);
 
     const tokenHash = crypto.createHash('sha256').update(data.token).digest('hex');
 

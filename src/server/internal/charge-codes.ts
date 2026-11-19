@@ -5,6 +5,7 @@ import { chargeCodes, clins, contracts, costClasses, laborCategories, slins, use
 import { UserFacingError } from '@/lib/errors';
 import { validateOptionalString } from '@/lib/validation';
 import { CATEGORY_MESSAGES, categoryFitsCode } from '@/lib/labor-rates';
+import { logAdminChange } from '@/server/internal/admin-change-log';
 
 /**
  * Charge-code writers shared by the charge-code and QBO-import actions (feature-plan-launch-blockers.md P4 §2:
@@ -31,7 +32,7 @@ export interface ChargeCodeInput {
 
 // ── Validation (feature-plan-ux-people-codes.md §3.4; feature-plan-ux-setup-import.md §4.3): validateChargeCodeInput is
 // shared by createChargeCode and the charge-code import; updateChargeCode shares only validCode / validName (and
-// assertSlinOnClin). Not inside createChargeCodeInternal, so the QBO import keeps its own rules. ────────────────────────────────────────────────────────────────────────────────────────────────────
+// assertSlinOnClin). Not inside createChargeCodeInternal; the QuickBooks charge-code import calls it too (A3-D2). ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export function validCode(value: unknown): string {
   const code = typeof value === 'string' ? value.trim() : '';
@@ -131,5 +132,11 @@ export async function assignChargeCodeToUserInternal(db: TenantWriter, actorId: 
   }).onConflictDoUpdate({
     target: [userAssignments.userId, userAssignments.clinId],
     set: { isActive: true },
+  });
+
+  // SWEEP-FINDINGS.md A3-D9 (PO decision 4): every assignment is logged, in the caller's transaction. Both callers
+  // (assignChargeCodesToUser and the Assignments import) call this only for codes the person doesn't actively hold.
+  await logAdminChange(db, {
+    actorId, entity: 'user_charge_code', entityId: userId, action: 'assigned', oldValue: null, newValue: { chargeCodeId },
   });
 }

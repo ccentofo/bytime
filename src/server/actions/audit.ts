@@ -435,12 +435,13 @@ async function adminChangeNames(db: Awaited<ReturnType<typeof getDb>>, rows: Arr
   const val = (v: unknown) => (v && typeof v === 'object' ? v as Record<string, unknown> : {});
   const add = (set: Set<string>, id: unknown) => { if (typeof id === 'string' && UUID_RE.test(id)) set.add(id); };
   for (const r of rows) {
-    if (r.entity === 'user' || r.entity === 'self_approval') add(userIds, r.entityId);
+    if (r.entity === 'user' || r.entity === 'self_approval' || r.entity === 'user_charge_code') add(userIds, r.entityId);
     if (r.entity === 'charge_code' || r.entity === 'charge_code_labor_category') add(codeIds, r.entityId);
     if (r.entity === 'labor_category_rate') add(lcIds, r.entityId);
     for (const v of [val(r.oldValue), val(r.newValue)]) {
       add(userIds, v.approverId);
       add(lcIds, v.laborCategoryId);
+      add(codeIds, v.chargeCodeId); // SWEEP-FINDINGS.md A3-D9: user_charge_code rows
       if (Array.isArray(v.clinIds)) for (const id of v.clinIds) add(clinIds, id);
       // feature-plan-approval-scope.md §4.2: approval_scope rows and a demotion's membershipRemoved.
       add(userIds, v.supervisorId);

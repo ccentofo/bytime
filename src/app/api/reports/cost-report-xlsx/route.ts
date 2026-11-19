@@ -8,6 +8,8 @@ import { isCalendarDate } from '@/lib/calendar-date';
 import { noHours, noHoursMessage } from '@/lib/reports/empty-range';
 import { EXCEL_COST_MAX_ROWS, EXCEL_COST_TOO_MANY_ROWS } from '@/lib/reports/limits';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function GET(request: NextRequest) {
   const rateLimited = checkReportRateLimit(request);
   if (rateLimited) return rateLimited;
@@ -20,6 +22,10 @@ export async function GET(request: NextRequest) {
 
   if (!startDate || !endDate || !isCalendarDate(startDate) || !isCalendarDate(endDate)) {
     return NextResponse.json({ error: 'Missing or invalid startDate/endDate (expected YYYY-MM-DD)' }, { status: 400 });
+  }
+  // SWEEP-FINDINGS.md A3-D5: a malformed contractId is a 400 (as /api/v1/costs), not a database error (500).
+  if (contractId && !UUID_RE.test(contractId)) {
+    return NextResponse.json({ error: 'contractId must be a valid UUID.' }, { status: 400 });
   }
 
   const dateRange = `${startDate} to ${endDate}`;

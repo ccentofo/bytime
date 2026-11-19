@@ -9,6 +9,7 @@ import { submissionDeadlineMessage, type ReminderMessage } from '@/lib/email/rem
 import { deliverReminderBatch, reminderBatchKey, REMINDER_BATCH_SIZE, type BatchOutcome } from '@/lib/email/send-batch';
 import { createSendThrottle } from '@/lib/email/rate';
 import { tenantBaseUrl } from '@/lib/tenant/host';
+import { EXPECTED_SUBMITTER_ROLES } from '@/lib/submitter-roles';
 import { getCurrentPeriodStart, getLastWeekdayInPeriod, getNumDaysInPeriod } from '@/lib/date-utils';
 import { runCron } from '@/lib/cron/run-cron';
 import { isSeedRecipient, sweepTenants, type CronStopReason } from '@/lib/cron/tenant-sweep';
@@ -105,7 +106,8 @@ async function sendReminders(): Promise<Record<string, unknown>> {
         .select({ id: users.id, fullName: users.fullName, email: users.email })
         .from(users)
         // Audit A10: id order, resuming after the last employee a stopped run finished in this tenant.
-        .where(and(eq(users.isActive, true), eq(users.role, 'employee'), resumeAfter ? gt(users.id, resumeAfter) : undefined))
+        // SWEEP-FINDINGS.md A3-D7 (PO decision 2): everyone expected to submit (employees and supervisors).
+        .where(and(eq(users.isActive, true), inArray(users.role, [...EXPECTED_SUBMITTER_ROLES]), resumeAfter ? gt(users.id, resumeAfter) : undefined))
         .orderBy(users.id);
 
       // §6.7: one read each per workspace (not per employee). Same rules: a draft or rejected period, or none, gets a

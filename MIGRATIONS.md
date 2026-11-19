@@ -61,7 +61,9 @@ Concretely, this means:
 
 - **Never** ship, in one migration: `DROP TABLE`, `DROP COLUMN`, a column `RENAME`, an `ALTER COLUMN
   ... TYPE`, or `ALTER COLUMN ... SET NOT NULL` on a column that already has rows. `npm run db:safety`
-  (wired into CI) blocks all of these for any migration added after this rule was introduced.
+  (wired into CI) blocks all of these for any migration added after this rule was introduced. It also
+  blocks `ADD CONSTRAINT` (except on a table created in the same migration file), `DROP INDEX`,
+  `DROP CONSTRAINT`, `DROP TRIGGER`, `TRUNCATE` and `DELETE FROM` (SWEEP-FINDINGS.md A3-D8).
 - **Do** ship destructive changes as two separate deploys:
   1. **Expand** — add the new column/table (nullable, or with a default), and update the code to
      *write* to both the old and new shape while still *reading* the old one. Deploy this first.
@@ -71,9 +73,13 @@ Concretely, this means:
      complete, ship a second deploy that switches the code to the new shape and, in a *later* third
      migration, drops the old column/table.
 - A genuinely safe destructive statement (e.g. dropping a column that was added and never used in
-  the same uncommitted change set) can opt out of the `db:safety` guard with a comment immediately
-  above the statement: `-- migration-safety: allow <reason>`. The reason is printed in CI output —
-  use it to explain *why* it's safe, not just to silence the check.
+  the same uncommitted change set) can opt out of the `db:safety` guard with a comment above the
+  statement that **names the pattern**: `-- migration-safety: allow <PATTERN>: <reason>`, e.g.
+  `-- migration-safety: allow ADD CONSTRAINT: the column is added in this migration and is all NULL`.
+  The comment waives only that pattern; a statement with two needs two lines. An allow with an unknown
+  pattern or no reason fails the check. The reason is printed in CI output — use it to explain *why*
+  it's safe, not just to silence the check. Shipped migrations are never edited: the findings already
+  reviewed in them are listed in `REVIEWED_FINDINGS` (`scripts/lib/migration-safety.ts`).
 
 ### Note: tenant migration 0014 (certified outputs)
 

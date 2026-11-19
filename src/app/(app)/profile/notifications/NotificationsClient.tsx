@@ -17,6 +17,7 @@ import { runAction } from '@/lib/run-action';
 import { updateNotificationPreferences } from '@/server/actions/notifications';
 import type { NotificationPrefs } from '@/server/internal/notifications';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { isExpectedSubmitter } from '@/lib/submitter-roles';
 
 type Props = {
   initialPrefs: NotificationPrefs;
@@ -88,9 +89,10 @@ export function NotificationsClient({ initialPrefs, userRole }: Props) {
             disabled={isPending}
           />
 
-          {/* feature-plan-launch-hardening.md H1 / Q1: both reminders only ever go to employees. The daily one can't be
-              switched off; the deadline switch is shown to employees only, and supervisors and admins get no reminder section. */}
-          {userRole === 'employee' && <>
+          {/* feature-plan-launch-hardening.md H1 / Q1: the daily reminder can't be switched off. SWEEP-FINDINGS.md A3-D7 (PO
+              decision 2): both reminders go to everyone expected to submit (EXPECTED_SUBMITTER_ROLES: employees and supervisors),
+              so they all see this section and the deadline switch; admins get no reminder section. */}
+          {isExpectedSubmitter(userRole) && <>
             <Divider label="Reminder Notifications" labelPosition="left" />
 
             <Text size="sm">Daily time entry reminders are always on. You’ll get one on weekdays when you haven’t entered time.</Text>
