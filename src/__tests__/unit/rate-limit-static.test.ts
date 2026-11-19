@@ -20,6 +20,9 @@ describe('FR7: the shared limits are exactly the approved numbers (Q2, Q3, Q4)',
       signup: { limit: 8, windowMs: 3_600_000 },
       signInFailure: { limit: 20, windowMs: 900_000 },
       resetRequest: { limit: 10, windowMs: 3_600_000 },
+      // feature-plan-cloud-export.md §6.6 (T23): the export download page.
+      exportDownloadIp: { limit: 30, windowMs: 3_600_000 },
+      exportDownload: { limit: 20, windowMs: 3_600_000 },
     });
   });
 });

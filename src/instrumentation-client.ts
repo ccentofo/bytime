@@ -1,4 +1,5 @@
 import * as Sentry from '@sentry/nextjs';
+import { scrubBreadcrumb, scrubEvent } from './lib/sentry-scrub';
 
 // Browser-side Sentry init. Next.js loads this file automatically before the app hydrates
 // (replaces the legacy sentry.client.config.ts convention).
@@ -16,6 +17,12 @@ Sentry.init({
 
   // Setting this option to true will print useful information to the console while you're setting up Sentry.
   debug: false,
+
+  // feature-plan-cloud-export.md §6.6: the export download link's token never reaches Sentry (URLs, transaction names,
+  // spans, breadcrumbs).
+  beforeSend: scrubEvent,
+  beforeSendTransaction: scrubEvent,
+  beforeBreadcrumb: scrubBreadcrumb,
 });
 
 // Lets Sentry trace client-side navigations.

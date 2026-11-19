@@ -592,15 +592,28 @@ describe('U6: the vendored PGDG signing key', () => {
   });
 });
 
-describe('U6: src/ never imports the AWS SDK', () => {
-  it('no src/ file imports @aws-sdk/* or @aws-crypto/*', () => {
-    const walk = (d: string): string[] => readdirSync(d).flatMap((n) => {
-      const f = path.join(d, n);
-      if (n === 'node_modules' || n === '__tests__') return [];
-      return statSync(f).isDirectory() ? walk(f) : /\.(ts|tsx)$/.test(n) ? [f] : [];
-    });
-    const offenders = walk(path.join(ROOT, 'src')).filter((f) => /from ['"]@aws-(sdk|crypto)\//.test(readFileSync(f, 'utf8')));
-    expect(offenders).toEqual([]);
+describe('U6: src/ never imports the AWS SDK (T14, 3d: except the export download page\'s presign module)', () => {
+  const walk = (d: string): string[] => readdirSync(d).flatMap((n) => {
+    const f = path.join(d, n);
+    if (n === 'node_modules' || n === '__tests__') return [];
+    return statSync(f).isDirectory() ? walk(f) : /\.(ts|tsx)$/.test(n) ? [f] : [];
+  });
+  const rel = (f: string) => path.relative(ROOT, f);
+  it('the only src/ importer of @aws-sdk/* is src/lib/export/download-url.ts; nothing in src/ imports @aws-crypto/*', () => {
+    const files = walk(path.join(ROOT, 'src'));
+    expect(files.filter((f) => /from ['"]@aws-sdk\//.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['src/lib/export/download-url.ts']);
+    expect(files.filter((f) => /from ['"]@aws-crypto\//.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+  it('the Vercel OIDC provider is imported there only, too (feature-plan-cloud-export.md §6.6)', () => {
+    const files = walk(path.join(ROOT, 'src'));
+    expect(files.filter((f) => /['"]@vercel\/oidc/.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['src/lib/export/download-url.ts']);
+  });
+  it('the three runtime packages are dependencies at exact versions; the presigner at client-s3\'s version', () => {
+    const pkg = JSON.parse(read('package.json')) as { dependencies: Record<string, string>; devDependencies: Record<string, string> };
+    expect(pkg.dependencies['@aws-sdk/client-s3']).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(pkg.dependencies['@aws-sdk/s3-request-presigner']).toBe(pkg.dependencies['@aws-sdk/client-s3']);
+    expect(pkg.dependencies['@vercel/oidc-aws-credentials-provider']).toMatch(/^\d+\.\d+\.\d+$/);
+    for (const p of ['@aws-sdk/client-s3', '@aws-sdk/s3-request-presigner', '@vercel/oidc-aws-credentials-provider']) expect(pkg.devDependencies[p], p).toBeUndefined();
   });
 });
 

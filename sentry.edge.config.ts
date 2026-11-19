@@ -1,4 +1,5 @@
 import * as Sentry from '@sentry/nextjs';
+import { scrubBreadcrumb, scrubEvent } from './src/lib/sentry-scrub';
 
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
@@ -14,4 +15,10 @@ Sentry.init({
 
   // Setting this option to true will print useful information to the console while you're setting up Sentry.
   debug: false,
+
+  // feature-plan-cloud-export.md §6.6: the export download link's token never reaches Sentry (URLs, transaction names,
+  // spans, breadcrumbs).
+  beforeSend: scrubEvent,
+  beforeSendTransaction: scrubEvent,
+  beforeBreadcrumb: scrubBreadcrumb,
 });

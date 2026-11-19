@@ -56,6 +56,17 @@ const nextConfig: NextConfig = {
         source: "/:path*",
         headers: securityHeaders,
       },
+      // feature-plan-cloud-export.md §6.6: the export download page carries its link's token in the path. Appended AFTER the
+      // global entry: when two entries set the same key, the last one wins (Next headers docs), so no-referrer replaces
+      // the global Referrer-Policy here while the CSP, HSTS and the rest still apply.
+      {
+        source: "/export/:path*",
+        headers: [
+          { key: "Cache-Control", value: "no-store" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "X-Robots-Tag", value: "noindex" },
+        ],
+      },
     ];
   },
   // feature-plan-ux-navigation-home.md §4.1: moved pages. Old bookmarks, emails already sent and Stripe sessions
