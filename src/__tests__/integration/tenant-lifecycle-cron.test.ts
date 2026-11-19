@@ -490,11 +490,11 @@ describe.skipIf(!cpReady)('tenant lifecycle cron (§4.4)', () => {
 
     it('version retries are capped at 3, then the run fails with an alert', async () => {
       const { tenant } = await dunningTenant(daysFrom(NOW, -5));
-      // Something outside the lock bumps the version during every attempt.
+      // Something outside the lock bumps the version during every attempt. The Stripe read waits for the bump to commit
+      // (a one-shot blocker set on each call): a fire-and-forget bump with a fixed 150 ms delay lost the race under CPU load.
       stripeState.hooks.set('subscriptions.list', () => {
-        void controlDb.update(tenants).set({ lifecycleVersion: sql`${tenants.lifecycleVersion} + 1` }).where(eq(tenants.id, tenant.id)).then(() => {});
+        stripeState.blockers.set('subscriptions.list', controlDb.update(tenants).set({ lifecycleVersion: sql`${tenants.lifecycleVersion} + 1` }).where(eq(tenants.id, tenant.id)).then(() => {}));
       });
-      stripeState.delays.set('subscriptions.list', 150);
       const res = await runTenantLifecycle(tenant.id, NOW);
       expect(res.outcome).toBe('failed');
       expect(stripeState.calls.filter((c) => c === 'subscriptions.list')).toHaveLength(3);
