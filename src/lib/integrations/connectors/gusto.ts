@@ -92,8 +92,9 @@ export const gustoConnector: IntegrationConnector = {
     if (!companyId) {
       console.log('Gusto: Trying /v1/token_info for company UUID...');
       try {
+        // SWEEP-FINDINGS.md A1-D7: never log the response — `resource_owner` is a person (name, email). Only the company
+        // UUID below is logged.
         const tokenInfo = await gustoGetRaw(tokens.accessToken, '/v1/token_info');
-        console.log('Gusto /v1/token_info response:', JSON.stringify(tokenInfo, null, 2));
         if (tokenInfo && typeof tokenInfo === 'object') {
           const info = tokenInfo as Record<string, unknown>;
 

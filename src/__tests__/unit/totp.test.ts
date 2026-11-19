@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import {
   generateTOTPSecret,
   verifyTOTPCode,
@@ -162,5 +162,37 @@ describe('verifyRecoveryCode', () => {
     // Lowercase version should still match
     const lowerCode = codes[0].toLowerCase();
     expect(verifyRecoveryCode(lowerCode, hashedCodes)).toBe(0);
+  });
+});
+
+describe('A1-G20 (SWEEP-FINDINGS.md): getTOTPStep accepts ±1 step and returns that step', () => {
+  // A fixed secret and a fixed clock (mid-step), so every code below is deterministic.
+  const SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
+  const NOW_MS = Date.UTC(2026, 10, 19, 12, 0, 15); // 15 s into a 30 s step
+  const STEP = Math.floor(NOW_MS / 1000 / 30);
+  const codeAt = (step: number) => new OTPAuth.TOTP({ secret: OTPAuth.Secret.fromBase32(SECRET), algorithm: 'SHA1', digits: 6, period: 30 })
+    .generate({ timestamp: step * 30_000 + 1_000 });
+
+  let getTOTPStep: (secret: string, code: string) => number | null;
+  beforeAll(async () => { ({ getTOTPStep } = await import('@/lib/totp')); });
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW_MS); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('the current code → the current step; one step old → step − 1; one ahead → step + 1', () => {
+    expect(getTOTPStep(SECRET, codeAt(STEP))).toBe(STEP);
+    expect(getTOTPStep(SECRET, codeAt(STEP - 1))).toBe(STEP - 1);
+    expect(getTOTPStep(SECRET, codeAt(STEP + 1))).toBe(STEP + 1);
+  });
+
+  it('a code two steps old (or two ahead) is rejected', () => {
+    for (const s of [STEP - 2, STEP + 2, STEP - 3]) {
+      if ([STEP - 1, STEP, STEP + 1].some((ok) => codeAt(ok) === codeAt(s))) continue; // a 1-in-a-million code collision
+      expect(getTOTPStep(SECRET, codeAt(s)), `step offset ${s - STEP}`).toBeNull();
+    }
+  });
+
+  it('spaces in the typed code are ignored; the step is the same', () => {
+    const c = codeAt(STEP);
+    expect(getTOTPStep(SECRET, `${c.slice(0, 3)} ${c.slice(3)}`)).toBe(STEP);
   });
 });

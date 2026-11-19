@@ -9,6 +9,7 @@ import { verifyCurrentPassword } from '@/server/internal/login-attempts';
 import { UserFacingError } from '@/lib/errors';
 import { userAction, type ActionResult } from '@/lib/action-result';
 import { validatePassword } from '@/lib/password-rules';
+import { validateUUID } from '@/lib/validation';
 import { logAdminChange } from '@/server/internal/admin-change-log';
 
 // ---------------------------------------------------------------------------
@@ -31,9 +32,9 @@ export async function changePassword(data: {
       throw new UserFacingError(validationError);
     }
 
-    // Get current user
+    // Get current user (the email from the database: the session's email isn't refreshed when it changes — A1-D3)
     const [user] = await db
-      .select({ id: users.id, passwordHash: users.passwordHash })
+      .select({ id: users.id, email: users.email, passwordHash: users.passwordHash })
       .from(users)
       .where(eq(users.id, actor.id));
 
@@ -47,7 +48,7 @@ export async function changePassword(data: {
 
     // Verify current password — lockout checked before bcrypt; a wrong password counts toward the sign-in lockout
     // (shared login_attempts counter, intended: a stolen session can't be used to guess the password freely).
-    const reauth = await verifyCurrentPassword(db, actor.email, user.passwordHash, data.currentPassword);
+    const reauth = await verifyCurrentPassword(db, user.email, user.passwordHash, data.currentPassword);
     if (!reauth.ok) {
       throw new UserFacingError(reauth.error);
     }
@@ -84,10 +85,15 @@ export async function changePassword(data: {
 // Admin Password Reset
 // ---------------------------------------------------------------------------
 
+/** SWEEP-FINDINGS.md §2 decision 1: an admin changes their own password on their profile, never with the admin reset. */
+const ADMIN_RESET_SELF = 'To change your own password, use Change Password under Profile and security.';
+
 /**
  * Reset a user's password (admin action). Does NOT require the current password.
  * Bumps the target's sessionVersion (in SQL) so their existing sessions end, and logs `password_reset` in the same
- * transaction (feature-plan-ux-people-codes.md R5). The hash is computed before the transaction opens.
+ * transaction (feature-plan-ux-people-codes.md R5). The hash is computed before the transaction opens. Refuses the
+ * acting admin's own account (product owner, 2026-11-19), like adminResetMfa; the id is validated and lower-cased first
+ * so a re-cased copy of the admin's own id can't slip past the comparison.
  */
 export async function adminResetPassword(data: {
   targetUserId: string;
@@ -95,6 +101,8 @@ export async function adminResetPassword(data: {
 }): Promise<ActionResult<void>> {
   return userAction(async () => {
     const actor = await requireAdminFresh();
+    const targetUserId = validateUUID(data?.targetUserId, 'User');
+    if (targetUserId === actor.id) throw new UserFacingError(ADMIN_RESET_SELF);
     const db = await getDbForAuth();
     // Validate new password
     const validationError = validatePassword(data.newPassword);
@@ -114,10 +122,10 @@ export async function adminResetPassword(data: {
           updatedAt: new Date(),
           sessionVersion: sql`${users.sessionVersion} + 1`,
         })
-        .where(eq(users.id, data.targetUserId))
+        .where(eq(users.id, targetUserId))
         .returning({ id: users.id });
       if (updated.length === 0) throw new UserFacingError('User not found.', 'not_found');
-      await logAdminChange(tx, { actorId: actor.id, entity: 'user', entityId: data.targetUserId, action: 'password_reset', oldValue: null, newValue: null });
+      await logAdminChange(tx, { actorId: actor.id, entity: 'user', entityId: targetUserId, action: 'password_reset', oldValue: null, newValue: null });
     });
   });
 }

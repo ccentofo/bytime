@@ -46,8 +46,8 @@ import { formatDate } from '@/lib/format';
 // ---------------------------------------------------------------------------
 
 export async function getConnections() {
-  const db = await getDb();
   await requireAdmin();
+  const db = await getDb();
   return db
     .select({
       id: integrationConnections.id,
@@ -146,8 +146,8 @@ export async function toggleAutoSync(connectionId: string, enabled: boolean) {
 // ---------------------------------------------------------------------------
 
 export async function getMappings(connectionId: string) {
-  const db = await getDb();
   await requireAdmin();
+  const db = await getDb();
   return db
     .select()
     .from(integrationEntityMappings)
@@ -220,8 +220,8 @@ export type SyncLog = Omit<typeof integrationSyncLogs.$inferSelect, 'periodStart
 };
 
 export async function getSyncLogs(connectionId: string, limit = 20): Promise<SyncLog[]> {
-  const db = await getDb();
   await requireAdmin();
+  const db = await getDb();
   // UX-4C2B-AUDIT.md F11: a valid id, and 1–100 rows.
   const id = validateUUID(connectionId, 'Connection');
   const n = Number(limit);
@@ -244,8 +244,8 @@ export async function getSyncLogs(connectionId: string, limit = 20): Promise<Syn
 }
 
 export async function getSyncRecords(syncLogId: string) {
-  const db = await getDb();
   await requireAdmin();
+  const db = await getDb();
   return db
     .select()
     .from(integrationSyncRecords)
