@@ -184,3 +184,11 @@ Three dev sessions, **each on its own branch from the latest `main`, in its own 
 - The lead audits each branch: diff read, gates, integration alone, and a break-it run of the new tests' mutations.
 - The product owner pushes and merges each branch's PR after the lead's READY.
 - Then: the account setup (PRODUCTION-DEPLOY Phases 3–11) and the staging rehearsal (Phase 12).
+
+## 8. Open questions for the product owner (raised during the fix round)
+- **Q-N2 (from S2):** during a policy hold, a customer can still open Stripe's billing portal (`openBillingPortal`), although new checkouts are refused. Blocking the portal would also stop a held customer from cancelling or updating their card. **Left as is** until the product owner decides.
+
+## 9. Lead decisions during the fix round (inside the product owner's decisions)
+- **S2:** `bank-payment-failed` is held during a policy hold too (decision 3); after `unsuspend`, an unpaid invoice brings back `payment-failed`. A pending `subscription-ended` is superseded during a hold, and `unsuspend` re-queues it, so the customer is told exactly once. That also fixes the existing gap where a subscription ending during a hold was never announced. Its stated deletion date follows the deletion notice's rule: at least now + 14 days, and never shrinking.
+- **S1:** "Reset password" is hidden on the admin's own row (decision 1 in the UI). `checkLockout` is rate-limited as a refunded peek, so sign-in costs don't change. The Sentry scrub filters `token`, `*token`, `email`, `code` and `state` after `?`, `&` or `#`, including their encoded forms. `session-invalidation.test.ts` is repaired to run through the real writers and `jwtCallback`.
+- **S3:** supervisors see the Notifications reminder section and the deadline switch (decision 2 carried through). `db:safety` keeps a baseline list of already-reviewed findings in the script, and **no shipped migration is edited**. Charge-code assignments are logged in `assignChargeCodeToUserInternal`, so bulk imports log too.
