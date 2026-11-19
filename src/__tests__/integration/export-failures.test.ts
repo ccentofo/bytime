@@ -100,7 +100,7 @@ d('T5: a record error after the transaction started → the object is kept, outc
     expect(w.pub.sent).toEqual([r.line]);
   });
 
-  it('a stop landing mid-record: outcome unknown at once; the delayed commit then lands and the object is still there', async () => {
+  it('a stop landing mid-record (before COMMIT is sent): outcome unknown at once, the object kept; the run never deletes it afterwards', async () => {
     const w = await world();
     const stop = new AbortController();
     let release!: () => void;
@@ -112,9 +112,11 @@ d('T5: a record error after the transaction started → the object is kept, outc
     expect(r.exitCode).toBe(1);
     expect(r.line).toMatch(new RegExp(`^export outcome unknown: deliver, workspace ${w.tenant.id}, delivery [0-9a-f-]{36}$`));
     const id = r.line.split(' ').pop()!;
-    expect((await rows(w)).deliveries.length).toBe(0); // not committed yet
     release();
-    await waitUntil(async () => (await w.cp`SELECT 1 FROM export_deliveries WHERE id = ${id}`).length === 1);
+    // The run closed its client (production: the process exits), so the open transaction ends without its COMMIT. Wait on
+    // the real state: no session of the control plane is still inside a transaction.
+    await waitUntil(async () => (await w.cp`SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND state LIKE 'idle in transaction%' AND pid <> pg_backend_pid()`).length === 0);
+    expect((await rows(w)).deliveries.length).toBe(0); // it never committed: the sweep erases the orphan after a day
     expect([...w.bucket.objects.keys()].some((k) => k.startsWith(`delivery/${id}/`))).toBe(true);
     expect(w.bucket.deleted).toEqual([]);
   });
@@ -172,6 +174,9 @@ d('T20: the 45-minute deadline (injected short) aborts a stalled build before th
 
   it('D2: a run hung past its deadline exits through the hard exit, publishing its line', async () => {
     const w = await world();
+    // Hang wherever the deadline lands (a loaded runner may still be building at 300 ms): after the upload (the hook) and
+    // in the abort path's delete. Either way the run never returns, and only the hard exit ends it.
+    w.bucket.delete = () => new Promise<void>(() => {});
     let code: number | null = null;
     const exited = new Promise<void>((resolve) => {
       void w.run({ mode: 'deliver' }, {
@@ -185,7 +190,7 @@ d('T20: the 45-minute deadline (injected short) aborts a stalled build before th
     expect(w.lines).toContain('hard exit: still running 5 minutes after the deadline');
     await waitUntil(() => w.pub.sent.length > 0);
     expect(w.pub.sent).toEqual([`export failed: deliver, workspace ${w.tenant.id}, deadline`]);
-  }, 30_000);
+  }, 60_000); // the world's set-up (a migrated workspace) alone can take 20 s on a loaded runner
 });
 
 d('T25: openExportSnapshot(url, opts): the task\'s server-side timeouts; the app\'s call unchanged', () => {
