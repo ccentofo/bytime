@@ -24,10 +24,6 @@ import { userAction, type ActionResult } from '@/lib/action-result';
 const VERIFY_EXPIRY_HOURS = 24;
 const TOO_MANY_FROM_NETWORK = 'Too many workspaces have been created from your network today. Please try again tomorrow.';
 
-export async function checkSlugAvailable(slug: string): Promise<{ available: boolean; reason?: string }> {
-  return checkSlugAvailableInternal(slug);
-}
-
 export async function startSignup(input: {
   companyName: string;
   email: string;

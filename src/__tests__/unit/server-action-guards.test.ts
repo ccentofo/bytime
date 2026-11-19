@@ -17,8 +17,7 @@ import {
 // fails if a 'use server' file exists anywhere else under src/) and
 // asserts that each exported function either:
 //   (a) calls one of the session guards (requireSession/requireAdmin/
-//       requireApprover) or getTenantForBilling (which itself requires a
-//       session) somewhere in its body, or
+//       requireApprover and their Fresh forms) somewhere in its body, or
 //   (b) is explicitly listed in PUBLIC_ACTIONS below, with a justification.
 //
 // It also asserts that no exported function's parameter list accepts an
@@ -28,7 +27,9 @@ import {
 
 const ACTIONS_DIR = path.resolve(__dirname, '../../server/actions');
 
-const GUARD_PATTERN = /\b(requireSession|requireAdmin|requireApprover|requireAdminFresh|requireApproverFresh|getTenantForBilling)\s*\(/;
+// SWEEP-FINDINGS.md A1-G23: getTenantForBilling is NOT a guard (it resolves the workspace; it authenticates no one), so
+// a billing action counts as guarded only through its own requireAdmin*() call.
+const GUARD_PATTERN = /\b(requireSession|requireAdmin|requireApprover|requireAdminFresh|requireApproverFresh)\s*\(/;
 const IDENTITY_PARAM_PATTERN = /\b(adminUserId|reviewedBy|createdByUserId|assignedBy)\s*(\?)?\s*:/;
 const DB_QUERY_PATTERN = /\b(db|tx)\.(select|insert|update|delete|execute|transaction|query)\b/;
 // §3.2 write gate: a DB write (insert/update/delete, direct or inside a transaction) must run
@@ -55,7 +56,7 @@ const PUBLIC_ACTIONS: Record<string, { names: string[]; reason: string }> = {
       'supplied id — equivalent to a session for this purpose. Rate-limited.',
   },
   'signup.ts': {
-    names: ['checkSlugAvailable', 'startSignup', 'resendSignupVerification'],
+    names: ['startSignup', 'resendSignupVerification'],
     reason:
       'Unauthenticated new-tenant signup flow — there is no session to require before a ' +
       'workspace exists. IP rate-limited; startSignup only mints a verification email, it ' +
@@ -67,7 +68,9 @@ const PUBLIC_ACTIONS: Record<string, { names: string[]; reason: string }> = {
     names: ['checkLockout'],
     reason:
       'Pre-login lockout banner: the client calls this before any authentication has ' +
-      'happened, so there is no session yet. Read-only, keyed by email, no sensitive data.',
+      'happened, so there is no session yet. Read-only, keyed by email, no sensitive data. ' +
+      'Gated by the IP\'s sign-in failure budget (SWEEP-FINDINGS.md A1-D6): a spent budget answers null with no ' +
+      'database read; an allowed check is given back at once, so it never costs a sign-in.',
   },
   'export-download.ts': {
     names: ['prepareExportDownload'],
@@ -212,13 +215,15 @@ const CACHED_ADMIN_PATTERN = /\brequireAdmin\s*\(/;
  * Launch-blockers audit A1: in a userAction-wrapped action the FIRST awaited call must be the session guard. Anything
  * awaited before it (getDbForWrite above all) can throw a state-specific error — "suspended", "read-only", "on hold" —
  * that userAction returns to the caller, letting an anonymous POST to victim.<root> learn the workspace's billing state.
+ * SWEEP-FINDINGS.md A1-D4: the same holds for EVERY exported action that isn't public, wrapped or not (a plain read such
+ * as `getDb()` before `requireAdmin()` throws "suspended" / "Unknown workspace" to an anonymous caller first).
  */
 const SESSION_GUARD_CALLEE = /^(?:requireSession|requireAdmin|requireApprover|requireAdminFresh|requireApproverFresh)$/;
 const FIRST_AWAIT = /\bawait\s+([\w.]+)/;
 
 function guardNotFirstAwait(fns: Array<{ name: string; bodyText: string }>, publicNames: string[]): string[] {
   return fns
-    .filter((fn) => /\buserAction\s*\(/.test(fn.bodyText) && !publicNames.includes(fn.name))
+    .filter((fn) => !publicNames.includes(fn.name))
     .map((fn) => ({ name: fn.name, first: FIRST_AWAIT.exec(fn.bodyText)?.[1] ?? '(no await)' }))
     .filter(({ first }) => !SESSION_GUARD_CALLEE.test(first))
     .map(({ name, first }) => `${name} (first await: ${first})`);
@@ -301,7 +306,7 @@ describe('Server action guard coverage', () => {
       ).toEqual([]);
     });
 
-    it(`${file}: in every userAction callback the first await is the session guard (audit A1)`, () => {
+    it(`${file}: in every non-public action (userAction callback or not) the first await is the session guard (audit A1, A1-D4)`, () => {
       const late = guardNotFirstAwait(fns, allowlist);
       expect(late, `${file}: ${late.join('; ')}`).toEqual([]);
     });
@@ -494,9 +499,21 @@ describe('Server action guard coverage', () => {
           const db = await getDbForAuth();
           return db.select().from(apiKeys).where(eq(apiKeys.id, id));
         });
+      }
+      export async function plainReadFirst() {
+        const db = await getDb();
+        await requireAdmin();
+        return db.select().from(apiKeys);
+      }
+      export async function plainGuardFirst() {
+        await requireAdmin();
+        const db = await getDb();
+        return db.select().from(apiKeys);
       }`;
     const fns = parseExportedFunctions(stripComments(fixture));
-    expect(guardNotFirstAwait(fns, ['publicOne'])).toEqual(['dbFirst (first await: getDbForWrite)', 'parallel (first await: Promise.all)']);
+    expect(guardNotFirstAwait(fns, ['publicOne'])).toEqual([
+      'dbFirst (first await: getDbForWrite)', 'parallel (first await: Promise.all)', 'plainReadFirst (first await: getDb)', // A1-D4: not only userAction
+    ]);
   });
 
   it('cached-admin ban: adding requireAdmin() to a writer fails (mutation check)', () => {

@@ -152,11 +152,14 @@ const PARTIAL_SAVE = "The role was saved, but the approver couldn't be updated. 
 
 const EMPTY_FORM: UserForm = { email: '', fullName: '', role: 'employee', password: '', overtime: '', approverId: '', approvalClinIds: [] };
 
-/** What applies to a user's ⋯ menu (§5.2): Unlock only when locked; two-step reset only when on and not yourself. */
+/**
+ * What applies to a user's ⋯ menu (§5.2): Unlock only when locked; password reset only for someone else (SWEEP-FINDINGS.md
+ * §2 decision 1: your own password is changed on your profile); two-step reset only when on and not yourself.
+ */
 export function userMenuKeys(u: Pick<User, 'id' | 'isActive' | 'mfaEnabled' | 'lock'>, currentUserId: string): string[] {
   return [
     ...(u.lock ? ['unlock'] : []),
-    'reset-password',
+    ...(u.id !== currentUserId ? ['reset-password'] : []),
     ...(u.mfaEnabled && u.id !== currentUserId ? ['reset-mfa'] : []),
     'flsa',
     u.isActive ? 'deactivate' : 'reactivate',

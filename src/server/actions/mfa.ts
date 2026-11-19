@@ -51,11 +51,13 @@ export async function completeMFASetup(data: {
     const actor = await requireSession();
     const db = await getDbForAuth();
 
+    // The email from the database (the session's email isn't refreshed when it changes — A1-D3). A missing row has no
+    // hash, so verifyCurrentPassword answers no_password before the email is used.
     const [user] = await db
-      .select({ passwordHash: users.passwordHash })
+      .select({ email: users.email, passwordHash: users.passwordHash })
       .from(users)
       .where(eq(users.id, actor.id));
-    const reauth = await verifyCurrentPassword(db, actor.email, user?.passwordHash ?? null, data.currentPassword);
+    const reauth = await verifyCurrentPassword(db, user?.email ?? actor.email, user?.passwordHash ?? null, data.currentPassword);
     if (!reauth.ok) {
       throw new UserFacingError(reauth.error);
     }
@@ -96,12 +98,13 @@ export async function disableMFA(currentPassword: string): Promise<ActionResult<
     const db = await getDbForAuth();
 
     const [user] = await db
-      .select({ passwordHash: users.passwordHash })
+      .select({ email: users.email, passwordHash: users.passwordHash })
       .from(users)
       .where(eq(users.id, actor.id));
 
-    // Lockout checked before bcrypt; a wrong password counts toward the sign-in lockout (shared counter, intended).
-    const reauth = await verifyCurrentPassword(db, actor.email, user?.passwordHash ?? null, currentPassword);
+    // Lockout checked before bcrypt; a wrong password counts toward the sign-in lockout (shared counter, intended),
+    // keyed on the database email (A1-D3), as in adminResetMfa.
+    const reauth = await verifyCurrentPassword(db, user?.email ?? actor.email, user?.passwordHash ?? null, currentPassword);
     if (!reauth.ok) {
       throw new UserFacingError(reauth.error);
     }

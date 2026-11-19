@@ -101,7 +101,7 @@ describe('U11: the seat line per plan', () => {
 describe('the ⋯ menu (US-7)', () => {
   it('Unlock now only when locked; Reset two-step only when on and not yourself', async () => {
     expect(userMenuKeys(PEOPLE[2] as never, 'me')).toEqual(['unlock', 'reset-password', 'flsa', 'deactivate']);
-    expect(userMenuKeys(PEOPLE[0] as never, 'me')).toEqual(['reset-password', 'flsa', 'deactivate']);
+    expect(userMenuKeys(PEOPLE[0] as never, 'me')).toEqual(['flsa', 'deactivate']); // yourself: no password reset (decision 1), no two-step reset
     expect(userMenuKeys(PEOPLE[1] as never, 'me')).toEqual(['reset-password', 'reset-mfa', 'flsa', 'deactivate']);
     await render();
     await openRowMenu('John Doe');
@@ -113,6 +113,16 @@ describe('the ⋯ menu (US-7)', () => {
     expect(actions.list).toHaveBeenCalled();
     await openRowMenu('Sam Super');
     expect(menuItems().map((i) => i.textContent)).toContain('Reset two-step sign-in…');
+  });
+
+  it('SWEEP-FINDINGS.md §2 decision 1: no "Reset password…" on your own row; still there for another admin', async () => {
+    expect(userMenuKeys({ ...PEOPLE[3], mfaEnabled: false } as never, 'a1')).not.toContain('reset-password');
+    expect(userMenuKeys(PEOPLE[3] as never, 'me')).toContain('reset-password');
+    await render();
+    await openRowMenu('Ann Admin');
+    expect(menuItems().map((i) => i.textContent)).not.toContain('Reset password…');
+    await openRowMenu('Al Admin');
+    expect(menuItems().map((i) => i.textContent)).toContain('Reset password…');
   });
 
   it('Reset two-step sign-in: needs your password; sends it; a stale "already off" says so and refetches', async () => {
