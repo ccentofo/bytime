@@ -199,8 +199,9 @@ export function computeSubscriptionTransition(
       // keep P1 while suspended (an earlier anchor can't reach a suspended workspace in practice)
     } else {
       p.pastDueSince = P2;
-      // Every reconcile, like the DUNNING branch: enqueueNotice dedups and revives a superseded unsent row.
-      result.notices.push({ kind: 'payment-failed', anchor: P2 });
+      // Every reconcile, like the DUNNING branch: enqueueNotice dedups and revives a superseded unsent row. Not while
+      // policy-held (SWEEP-FINDINGS.md §2 decision 3): the first reconcile after the hold is lifted queues it.
+      if (notPolicy) result.notices.push({ kind: 'payment-failed', anchor: P2 });
       if (P1 !== null && P2.getTime() > P1.getTime()) unsuspend(); // old debt paid: fresh grace for the newer one
     }
     return result;
@@ -225,7 +226,8 @@ export function computeSubscriptionTransition(
       p.firstGoodAt = f.firstGoodAt ?? now; // past_due/unpaid implies the subscription was active
       const P = f.pastDueSince ?? now;
       p.pastDueSince = P;
-      result.notices.push({ kind: 'payment-failed', anchor: P });
+      // Not while policy-held (SWEEP-FINDINGS.md §2 decision 3): the first reconcile after the hold is lifted queues it.
+      if (notPolicy) result.notices.push({ kind: 'payment-failed', anchor: P });
     }
     return result;
   }

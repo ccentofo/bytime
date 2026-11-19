@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   waitlisted: [] as Array<{ id: string; slug: string; email: string; waitlistedAt: Date }>,
   backups: { lines: [] as string[], news: false },
   exportHolds: [] as Array<{ holdId: string; tenantId: string; ageDays: number; reason: string }>,
+  /** A2-G7: rows for the digest's control-plane queries, in query order (alerts, deleting, …); empty when exhausted. */
+  queryRows: [] as unknown[][],
 }));
 
 vi.mock('server-only', () => ({}));
@@ -23,11 +25,11 @@ vi.mock('@/lib/email/client', () => ({
   resend: { emails: { send: async (p: { to: string; subject: string; html: string }) => { h.sends.push(p); return h.sendResult; } } },
 }));
 
-/** A drizzle-shaped stub: every query chain resolves to no rows. */
+/** A drizzle-shaped stub: each query chain resolves to the next `h.queryRows` entry (no rows once they run out). */
 function emptyChain(): unknown {
   const fn = () => proxy;
   const proxy: unknown = new Proxy(fn, {
-    get: (_t, key) => (key === 'then' ? (resolve: (v: unknown[]) => void) => resolve([]) : () => proxy),
+    get: (_t, key) => (key === 'then' ? (resolve: (v: unknown[]) => void) => resolve(h.queryRows.shift() ?? []) : () => proxy),
   });
   return proxy;
 }
@@ -53,6 +55,7 @@ vi.mock('@/lib/tenant/export-status', () => ({
 import { sendOpsDigest } from '@/lib/tenant/ops-digest';
 import { raiseAlertWithEmail } from '@/lib/tenant/ops-alert-email';
 import { CRON_NAMES } from '@/lib/cron/heartbeat';
+import type { TenantRunResult } from '@/lib/tenant/lifecycle-runner';
 
 const NOW = new Date('2026-10-21T13:00:00Z');
 const allFresh = () => CRON_NAMES.map((name) => ({ name, lastStartedAt: NOW, lastSucceededAt: new Date(NOW.getTime() - 5 * 60_000), lastSummary: {} }));
@@ -65,6 +68,7 @@ beforeEach(() => {
   h.sentryMessages = [];
   h.waitlisted = [];
   h.backups = { lines: [], news: false };
+  h.queryRows = [];
   process.env.OPS_ALERT_EMAIL = 'ops@example.com';
 });
 afterEach(() => { delete process.env.OPS_ALERT_EMAIL; });
@@ -153,5 +157,50 @@ describe('immediate-email alert', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     await expect(raiseAlertWithEmail({ tenantId: null, kind: 'k', summary: 'x' }, NOW)).resolves.toEqual({ opened: true, emailed: false });
     spy.mockRestore();
+  });
+});
+
+// SWEEP-FINDINGS.md §5 A2-G7: the deletion sections and the "All quiet" rule.
+describe('A2-G7: daily digest — deletion lists and open alerts', () => {
+  const run = (o: Partial<TenantRunResult>) => ({ slug: 'x', ...o }) as TenantRunResult;
+  const D = new Date('2026-10-10T00:00:00Z');
+
+  it('"Ready for deletion" lists each ready workspace with its date; OVERDUE only when overdue', async () => {
+    await sendOpsDigest([
+      run({ slug: 'lapsed-co', readyForDeletion: { deletionScheduledFor: D, overdue: false } }),
+      run({ slug: 'late-co', readyForDeletion: { deletionScheduledFor: D, overdue: true } }),
+    ], NOW, false);
+    const { subject, html } = h.sends[0];
+    expect(subject).not.toContain('all quiet');
+    expect(html).not.toContain('All quiet');
+    expect(html).toContain('<h3>Ready for deletion (D4: run tenant:delete)</h3>');
+    expect(html).toContain('<li>lapsed-co — deletion date 2026-10-10T00:00:00.000Z</li>');
+    expect(html).toContain('<li>late-co — deletion date 2026-10-10T00:00:00.000Z <strong>OVERDUE</strong></li>');
+  });
+
+  it('"Deletion blocked by payment activity" lists the blocked workspace and why', async () => {
+    await sendOpsDigest([run({ slug: 'paying-again', blockedDeletion: 'payment activity' })], NOW, false);
+    const { subject, html } = h.sends[0];
+    expect(subject).not.toContain('all quiet');
+    expect(html).toContain('<h3>Deletion blocked by payment activity</h3><ul><li>paying-again: payment activity</li></ul>');
+  });
+
+  it('"Stuck in deleting" lists an abandoned deletion run', async () => {
+    h.queryRows = [[], [{ slug: 'half-gone', updatedAt: new Date('2026-10-20T08:00:00Z') }]]; // alerts, then deleting
+    await sendOpsDigest([], NOW, false);
+    const { subject, html } = h.sends[0];
+    expect(subject).not.toContain('all quiet');
+    expect(html).toContain('<li>half-gone since 2026-10-20T08:00:00.000Z</li>');
+    expect(html).toContain('Stuck in &quot;deleting&quot;');
+  });
+
+  it('one open alert means no "All quiet"', async () => {
+    const alert = { id: 'al-1', scope: 't1', kind: 'blocked-transition', dedupKey: 'k', occurrences: 2, lastSeenAt: NOW, detail: null };
+    h.queryRows = [[{ a: alert, slug: 'acme-test' }]];
+    await sendOpsDigest([], NOW, false);
+    const { subject, html } = h.sends[0];
+    expect(subject).toBe('CadenzPoint ops digest — 2026-10-21');
+    expect(html).not.toContain('All quiet');
+    expect(html).toContain('acme-test — <strong>blocked-transition</strong> (k) × 2');
   });
 });

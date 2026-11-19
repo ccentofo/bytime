@@ -364,3 +364,50 @@ describe('U5: GOOD reconcile facts', () => {
     expect(r.patch.firstGoodAt?.getTime()).toBe(NOW.getTime());
   });
 });
+
+// SWEEP-FINDINGS.md §2 decision 3 / §5 A2-D1: no payment emails while a workspace is policy-held; they resume once the
+// hold is lifted (the next reconcile queues them again).
+describe('A2-D1: no payment-failed while policy-held; it resumes after unsuspend', () => {
+  const held = { status: 'suspended', suspendedAt: d(-2), suspensionReason: 'policy' } as const;
+  const lifted = { status: 'active', suspendedAt: null, suspensionReason: null } as const;
+
+  it('DUNNING under a policy hold records past_due_since but queues no payment-failed', () => {
+    const r = transition(facts({ subscriptionStatus: 'active', stripeSubscriptionId: 's', firstGoodAt: d(-60), ...held }), [sub('s', 'past_due')]);
+    expect(r.patch.pastDueSince?.getTime()).toBe(NOW.getTime());
+    expect(r.notices).toEqual([]);
+    expect(r.patch.status).toBeUndefined(); // the hold stays
+  });
+
+  it('after unsuspend, the same DUNNING reconcile queues payment-failed for the SAME anchor (resume)', () => {
+    const P = d(-5);
+    const before = transition(facts({ subscriptionStatus: 'past_due', stripeSubscriptionId: 's', firstGoodAt: d(-60), pastDueSince: P, ...held }), [sub('s', 'past_due')]);
+    expect(before.notices).toEqual([]);
+    const after = transition(facts({ subscriptionStatus: 'past_due', stripeSubscriptionId: 's', firstGoodAt: d(-60), pastDueSince: P, ...lifted }), [sub('s', 'past_due')]);
+    expect(after.notices).toEqual([{ kind: 'payment-failed', anchor: P }]);
+  });
+
+  it('a non-payment suspension still gets payment-failed (only the policy reason holds it)', () => {
+    const r = transition(facts({ subscriptionStatus: 'past_due', stripeSubscriptionId: 's', firstGoodAt: d(-60), pastDueSince: d(-20), status: 'suspended', suspendedAt: d(-5), suspensionReason: 'nonpayment' }), [sub('s', 'unpaid')]);
+    expect(r.notices).toEqual([{ kind: 'payment-failed', anchor: d(-20) }]);
+  });
+
+  it('invoiced and overdue under a policy hold → pastDueSince = the due date, no payment-failed ("Invoice overdue")', () => {
+    const P2 = d(-3);
+    const base = { subscriptionStatus: 'active', stripeSubscriptionId: 'si', firstGoodAt: d(-100), collectionMethod: 'send_invoice' } as const;
+    const r = sendInvoiceTransition(facts({ ...base, ...held }), 'active', invoiced(P2));
+    expect(r.patch.pastDueSince?.getTime()).toBe(P2.getTime());
+    expect(r.notices).toEqual([]);
+    expect(r.patch.status).toBeUndefined();
+    // Lifted: the same reconcile queues it (resume).
+    const after = sendInvoiceTransition(facts({ ...base, ...lifted, pastDueSince: P2 }), 'active', invoiced(P2));
+    expect(after.notices).toEqual([{ kind: 'payment-failed', anchor: P2 }]);
+  });
+
+  it('Q1 (lead, 2026-11-19): a held bank-payment-failed is not re-queued, but an unpaid invoice after unsuspend yields payment-failed', () => {
+    const anchor = d(-1);
+    const heldFacts = facts({ subscriptionStatus: 'past_due', stripeSubscriptionId: 's', firstGoodAt: d(-60), pastDueSince: d(-1), ...held });
+    expect(isNoticeSuperseded('bank-payment-failed', anchor, heldFacts, NOW)).toBe(true);
+    const r = transition(facts({ subscriptionStatus: 'past_due', stripeSubscriptionId: 's', firstGoodAt: d(-60), pastDueSince: d(-1), ...lifted }), [sub('s', 'past_due')]);
+    expect(r.notices.map((n) => n.kind)).toEqual(['payment-failed']);
+  });
+});

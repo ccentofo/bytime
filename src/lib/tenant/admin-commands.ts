@@ -101,6 +101,12 @@ export const plans = {
       patch: { status: 'active', suspendedAt: null, suspensionReason: null, policyExportAllowed: false },
       auditKind: 'policy-unsuspended',
       auditDetail: '',
+      // SWEEP-FINDINGS.md §2 decision 3 (lead, N1): an ended subscription's email is held during a policy hold (or was
+      // never queued: applyEnded under policy), and nothing else re-queues it once E is recorded. Queue it now:
+      // enqueueNotice inserts it, revives a superseded unsent row, or does nothing if it was already sent.
+      after: row.subscriptionEndedAt && !row.lifecycleExempt
+        ? async (tx) => { await enqueueNotice(tx, row.id, 'subscription-ended', row.subscriptionEndedAt!); }
+        : undefined,
     };
   },
 
@@ -257,6 +263,7 @@ export async function applyAdminPlan(tenantId: string, planner: Planner, actor: 
 /** The one pending notice `force-notice-sent` may mark. Refuses missing, superseded, ambiguous, sent or forced. */
 export async function findForceableNotice(tenantId: string, kind: string, anchor?: Date) {
   if (kind === 'export-ready') throw new AdminCommandError('An export-ready notice can\'t be forced; use export-revoke.');
+  if (anchor && Number.isNaN(anchor.getTime())) throw new AdminCommandError('--anchor must be an ISO date-time.');
   const candidates = await withLockedPool((db) => db.select().from(tenantNotices)
     .where(and(eq(tenantNotices.tenantId, tenantId), eq(tenantNotices.kind, kind))).orderBy(desc(tenantNotices.createdAt)));
   const live = candidates.filter((n) => n.supersededAt === null && (!anchor || n.scheduledFor.getTime() === anchor.getTime()));

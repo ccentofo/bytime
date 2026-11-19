@@ -370,6 +370,17 @@ describe.skipIf(!cpReady)('tenant lifecycle cron (§4.4)', () => {
       expect(overdue.readyForDeletion!.overdue).toBe(true);
     });
 
+    // SWEEP-FINDINGS.md §5 A2-G10: DELETION_SLA_DAYS (7) is a strict "more than": not overdue at exactly D + 7 days.
+    it('A2-G10: OVERDUE only past D + 7 days (not at exactly D + 7 d; yes 1 ms later)', async () => {
+      const { t, E } = await endedTenant(daysFrom(NOW, -95), daysFrom(NOW, -1));
+      await insertNotice(t.id, 'deletion-notice', E, { sentAt: daysFrom(NOW, -30), providerMessageId: 'msg_dn' });
+      const D = (await getTenantRow(t.id)).deletionScheduledFor!;
+      const atSla = await runTenantLifecycle(t.id, daysFrom(D, 7));
+      expect(atSla.readyForDeletion).toEqual({ deletionScheduledFor: D, overdue: false });
+      const past = await runTenantLifecycle(t.id, new Date(daysFrom(D, 7).getTime() + 1));
+      expect(past.readyForDeletion!.overdue).toBe(true);
+    });
+
     it('a deletion notice for an OLD anchor never makes the workspace ready', async () => {
       const { t } = await endedTenant(daysFrom(NOW, -95), daysFrom(NOW, -1));
       await insertNotice(t.id, 'deletion-notice', daysFrom(NOW, -400), { sentAt: daysFrom(NOW, -30), providerMessageId: 'msg_old' });
@@ -456,12 +467,17 @@ describe.skipIf(!cpReady)('tenant lifecycle cron (§4.4)', () => {
       const holder = postgres(process.env.CONTROL_PLANE_DATABASE_URL!, { max: 1 });
       let release!: () => void;
       const released = new Promise<void>((r) => { release = r; });
+      // Wait until the lock is actually held (a fixed 200 ms sleep lost the race under CPU load: the run took the lock
+      // first and returned 'ok').
+      let acquired!: () => void;
+      const lockHeld = new Promise<void>((r) => { acquired = r; });
       const holding = holder.begin(async (tx) => {
         await tx`SELECT pg_advisory_xact_lock(hashtext(${'tenant:' + t.id}))`;
+        acquired();
         await released;
       });
       try {
-        await new Promise((r) => setTimeout(r, 200));
+        await lockHeld;
         const res = await runTenantLifecycle(t.id, NOW);
         expect(res.outcome).toBe('lock-timeout');
         expect((await getTenantRow(t.id)).lifecycleFailures).toBe(1);
@@ -474,11 +490,11 @@ describe.skipIf(!cpReady)('tenant lifecycle cron (§4.4)', () => {
 
     it('version retries are capped at 3, then the run fails with an alert', async () => {
       const { tenant } = await dunningTenant(daysFrom(NOW, -5));
-      // Something outside the lock bumps the version during every attempt.
+      // Something outside the lock bumps the version during every attempt. The Stripe read waits for the bump to commit
+      // (a one-shot blocker set on each call): a fire-and-forget bump with a fixed 150 ms delay lost the race under CPU load.
       stripeState.hooks.set('subscriptions.list', () => {
-        void controlDb.update(tenants).set({ lifecycleVersion: sql`${tenants.lifecycleVersion} + 1` }).where(eq(tenants.id, tenant.id)).then(() => {});
+        stripeState.blockers.set('subscriptions.list', controlDb.update(tenants).set({ lifecycleVersion: sql`${tenants.lifecycleVersion} + 1` }).where(eq(tenants.id, tenant.id)).then(() => {}));
       });
-      stripeState.delays.set('subscriptions.list', 150);
       const res = await runTenantLifecycle(tenant.id, NOW);
       expect(res.outcome).toBe('failed');
       expect(stripeState.calls.filter((c) => c === 'subscriptions.list')).toHaveLength(3);

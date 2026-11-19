@@ -36,12 +36,9 @@ export const DELETION_NOTICE_DAYS = 14;
 export const DELETION_FINAL_REMINDER_DAYS = 3;
 
 /**
- * D4: false = the cron only flags tenants due for deletion; the founder runs `tenant:delete`.
- * Due tenants must be deleted within DELETION_SLA_DAYS of `deletion_scheduled_for` (Privacy §7 says "deleted").
+ * D4: deletion is never automatic. The cron only flags tenants due for deletion; the founder runs `tenant:delete`, within
+ * this many days of `deletion_scheduled_for` (Privacy §7 says "deleted"). Past it, the digest marks the tenant OVERDUE.
  */
-export const AUTO_DELETE = false;
-
-/** D4: the founder's commitment to run due deletions within this many days of the scheduled date. */
 export const DELETION_SLA_DAYS = 7;
 
 /**

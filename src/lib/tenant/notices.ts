@@ -267,7 +267,9 @@ async function deliverLoaded(notice: typeof tenantNotices.$inferSelect, noticeId
       && now.getTime() - claimed.firstAttemptAt.getTime() > REFREEZE_AFTER_HOURS * 3600_000;
     if (!payload || stale) {
       let current = row;
-      if (claimed.kind === 'deletion-notice' && row.deletionScheduledFor) {
+      // `subscription-ended` too (lead, N1): after a long policy hold, E + 90 days may be close or past by the time it is
+      // sent, and it states the deletion date.
+      if ((claimed.kind === 'deletion-notice' || claimed.kind === 'subscription-ended') && row.deletionScheduledFor) {
         // The stated deletion date is never earlier than the real one: push D before rendering.
         const minD = addDays(now, DELETION_NOTICE_DAYS);
         if (row.deletionScheduledFor.getTime() < minD.getTime()) {

@@ -281,6 +281,11 @@ backup (the "window"). It writes nothing outside the new project; you repoint ev
 The old control plane is watched for 30 days: if the digest shows `rebuild-original-returned` for it, don't use it; delete
 it in the Neon console once you're satisfied. If it shows as recoverable, don't recover it.
 
+**Expected after a rebuild:** each paying workspace's first seat sync may add a line to the digest's "Seat quantities
+corrected" section ending "changed outside the sync". The restored control plane remembers the quantity from its backup,
+and Stripe has changed since. This is expected once per workspace after a rebuild; nothing to do. The same line again later
+for the same workspace isn't explained by the rebuild.
+
 ### Customer email: template B (after a control-plane rebuild)
 
 > Subject: A short CadenzPoint service interruption on <date>

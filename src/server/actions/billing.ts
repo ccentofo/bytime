@@ -92,6 +92,9 @@ export async function openBillingPortal(): Promise<ActionResult<{ url: string }>
     await requireAdminFresh();
     const tenant = await getTenantForBilling();
     const row = await readTenantRow(tenant.slug);
+    if (getTenantAccess(toLifecycleFacts(row), new Date()) === 'closed') {
+      throw new UserFacingError('This workspace is closed and can no longer be subscribed.');
+    }
     if (!row.stripeCustomerId) throw new UserFacingError('No billing account yet — subscribe first.');
     if (row.stripeCustomerDeletedAt) throw new UserFacingError('Your billing account was closed — subscribe again to create a new one.');
 

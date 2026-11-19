@@ -23,6 +23,10 @@ All three come from the database; this tool never takes your word for it. For a 
 sooner (e.g. a legal request or the customer's own written request), pass `--force-with-reason "<text>"`:
 it bypasses 1–2 only, and the reason is recorded in `tenant_audit_events`.
 
+A **trial workspace suspended for a policy breach before its trial ends** gets no deletion date while the hold lasts:
+a policy hold keeps the data. The 90-day clock starts when the hold is lifted (`tenant:admin unsuspend`): the next cron
+run sets the deletion date to the trial end + 90 days, but never sooner than 14 days after that run.
+
 Deletion **aborts and restores the workspace** whenever payment activity appears: an active/trialing or
 incomplete subscription, a payment processing on an open invoice (ACH), or an invoice void still pending.
 A restored workspace goes back to `active` (or `suspended` for a policy suspension), the abort is audited
