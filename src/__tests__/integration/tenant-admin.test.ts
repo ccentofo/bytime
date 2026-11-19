@@ -10,7 +10,8 @@ import {
 } from '@/lib/tenant/admin-commands';
 import { runTenantLifecycle } from '@/lib/tenant/lifecycle-runner';
 import { raiseAlert } from '@/lib/tenant/lifecycle-store';
-import { deliverPendingNotices, setNoticeTimingForTests } from '@/lib/tenant/notices';
+import { deliverPendingNotices, resolveRecipientsAndTimezone, setNoticeTimingForTests } from '@/lib/tenant/notices';
+import { calendarDayOf, formatCalendarDate } from '@/lib/calendar-date';
 import { canExport, getTenantAccess } from '@/lib/tenant/lifecycle';
 import { toLifecycleFacts } from '@/lib/tenant/registry';
 import { stripeState } from './fakes/fake-stripe';
@@ -129,6 +130,140 @@ describe.skipIf(!cpReady)('tenant:admin commands (§5.6)', () => {
     expect(lifted.policyExportAllowed).toBe(false);
     const again = await applyAdminPlan(t.id, plans.suspend('second incident'), 'founder:test');
     expect(again.policyExportAllowed).toBe(false);
+  });
+
+  // SWEEP-FINDINGS.md §5 A2-D1 (PO decision 3): no payment emails during a policy hold; they resume after unsuspend.
+  // The revival lives in SQL (enqueueNotice's ON CONFLICT … WHERE sent_at IS NULL AND superseded_at IS NOT NULL).
+  it('A2-D1: a pending payment-failed is superseded during a policy hold (never sent); after unsuspend the next run revives the SAME row and sends it once', async () => {
+    const P = daysFrom(NOW, -5);
+    const customer = stripeState.addCustomer();
+    const sub = stripeState.addSub(customer, 'past_due');
+    const t = await makeTenant({
+      stripeCustomerId: customer, stripeSubscriptionId: sub, subscriptionStatus: 'past_due', firstGoodAt: daysFrom(P, -60),
+      pastDueSince: P, currentPeriodEnd: daysFrom(NOW, 10), billingEmail: 'billing@test.dev',
+    });
+    const pendingRow = await insertNotice(t.id, 'payment-failed', P);
+    const paymentEmails = () => resendState.delivered.filter((m) => m.subject.startsWith('Payment failed'));
+
+    await applyAdminPlan(t.id, plans.suspend('A2-D1 test'), 'founder:test');
+    await deliverPendingNotices(10_000, undefined, [t.id]);
+    let pf = (await noticesOf(t.id)).filter((n) => n.kind === 'payment-failed');
+    expect(pf).toHaveLength(1);
+    expect(pf[0].supersededAt).not.toBeNull();
+    expect(pf[0].sentAt).toBeNull();
+    expect(resendState.delivered.map((m) => m.subject)).toEqual([expect.stringMatching(/is on hold$/)]); // policy-suspended only
+    const generation = pf[0].idempotencyGeneration;
+
+    // The daily run during the hold reconciles (still past_due) but queues nothing: the row stays superseded and is
+    // never revived (a revival bumps the idempotency generation).
+    await runTenantLifecycle(t.id, NOW);
+    pf = (await noticesOf(t.id)).filter((n) => n.kind === 'payment-failed');
+    expect(pf[0].supersededAt).not.toBeNull();
+    expect(pf[0].idempotencyGeneration).toBe(generation);
+    expect(paymentEmails()).toEqual([]);
+
+    await applyAdminPlan(t.id, plans.unsuspend(), 'founder:test');
+    // The next daily run (a day later: past the 10-minute claim lease the supersede attempt left on the row).
+    const nextDay = daysFrom(new Date(), 1);
+    await runTenantLifecycle(t.id, nextDay); // the reconcile queues it again
+    pf = (await noticesOf(t.id)).filter((n) => n.kind === 'payment-failed');
+    expect(pf).toHaveLength(1);
+    expect(pf[0].id).toBe(pendingRow.id);
+    expect(pf[0].supersededAt).toBeNull();
+    expect(pf[0].sentAt).not.toBeNull();
+    expect(paymentEmails()).toHaveLength(1);
+
+    // Never re-sent by later runs.
+    await runTenantLifecycle(t.id, daysFrom(nextDay, 1));
+    expect(paymentEmails()).toHaveLength(1);
+  });
+
+  // N1 (lead, 2026-11-19): subscription-ended is held during a policy hold; unsuspend queues it again (both orders), and it
+  // states the CURRENT deletion date, at least 14 days ahead (the deletion notice's push-at-render rule).
+  describe('N1: subscription-ended during a policy hold', () => {
+    const endedEmails = () => resendState.delivered.filter((m) => /subscription has ended$/.test(m.subject));
+    const endedRows = async (id: string) => (await noticesOf(id)).filter((n) => n.kind === 'subscription-ended');
+
+    it('ended BEFORE the hold: the pending email is superseded during the hold; after unsuspend the same row is sent, exactly once', async () => {
+      const E = daysFrom(NOW, -10);
+      const t = await makeTenant({ firstGoodAt: daysFrom(NOW, -200), subscriptionStatus: 'canceled', subscriptionEndedAt: E, deletionScheduledFor: daysFrom(E, 90), billingEmail: 'billing@test.dev' });
+      const pendingRow = await insertNotice(t.id, 'subscription-ended', E);
+      await applyAdminPlan(t.id, plans.suspend('N1 test'), 'founder:test');
+      await deliverPendingNotices(10_000, undefined, [t.id]);
+      expect((await endedRows(t.id))[0].supersededAt).not.toBeNull();
+      expect(endedEmails()).toEqual([]);
+
+      await applyAdminPlan(t.id, plans.unsuspend(), 'founder:test');
+      // A delivery run after the 10-minute claim lease the supersede attempt left on the row.
+      const afterLease = new Date(Date.now() + 11 * 60_000);
+      await deliverPendingNotices(10_000, afterLease, [t.id]);
+      const rows = await endedRows(t.id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].id).toBe(pendingRow.id);
+      expect(rows[0].sentAt).not.toBeNull();
+      expect(endedEmails()).toHaveLength(1);
+      await deliverPendingNotices(10_000, new Date(afterLease.getTime() + 11 * 60_000), [t.id]);
+      expect(endedEmails()).toHaveLength(1);
+    });
+
+    it('ended DURING the hold: no email then (applyEnded under policy); after unsuspend exactly one is sent', async () => {
+      const customer = stripeState.addCustomer();
+      const sub = stripeState.addSub(customer, 'active');
+      const t = await makeTenant({ stripeCustomerId: customer, stripeSubscriptionId: sub, subscriptionStatus: 'active', firstGoodAt: daysFrom(NOW, -200), currentPeriodEnd: daysFrom(NOW, -3), billingEmail: 'billing@test.dev' });
+      await applyAdminPlan(t.id, plans.suspend('N1 test'), 'founder:test');
+      stripeState.subs.get(sub)!.status = 'canceled';
+      stripeState.subs.get(sub)!.ended_at = Math.floor(daysFrom(NOW, -1).getTime() / 1000);
+      await runTenantLifecycle(t.id, NOW); // the reconcile records the end; still held, no email queued
+      const held = await getTenantRow(t.id);
+      expect(held.subscriptionEndedAt).not.toBeNull();
+      expect(held.suspensionReason).toBe('policy');
+      expect(await endedRows(t.id)).toEqual([]);
+
+      await applyAdminPlan(t.id, plans.unsuspend(), 'founder:test');
+      await deliverPendingNotices(10_000, undefined, [t.id]);
+      const rows = await endedRows(t.id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].scheduledFor.getTime()).toBe(held.subscriptionEndedAt!.getTime());
+      expect(rows[0].sentAt).not.toBeNull();
+      expect(endedEmails()).toHaveLength(1);
+      await runTenantLifecycle(t.id, NOW);
+      await deliverPendingNotices(10_000, undefined, [t.id]);
+      expect(endedEmails()).toHaveLength(1);
+    });
+
+    it('sent BEFORE the hold: unsuspend never re-sends it', async () => {
+      const E = daysFrom(NOW, -10);
+      const t = await makeTenant({ firstGoodAt: daysFrom(NOW, -200), subscriptionStatus: 'canceled', subscriptionEndedAt: E, deletionScheduledFor: daysFrom(E, 90), billingEmail: 'billing@test.dev' });
+      const sentRow = await insertNotice(t.id, 'subscription-ended', E, { sentAt: daysFrom(NOW, -10), providerMessageId: 'msg_before' });
+      await applyAdminPlan(t.id, plans.suspend('N1 test'), 'founder:test');
+      await applyAdminPlan(t.id, plans.unsuspend(), 'founder:test');
+      await deliverPendingNotices(10_000, undefined, [t.id]);
+      const rows = await endedRows(t.id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ id: sentRow.id, providerMessageId: 'msg_before', supersededAt: null, idempotencyGeneration: sentRow.idempotencyGeneration });
+      expect(endedEmails()).toEqual([]);
+    });
+
+    it('a hold longer than 90 days: after unsuspend the email states a deletion date at least 14 days ahead, equal to deletion_scheduled_for', async () => {
+      const E = daysFrom(NOW, -120);
+      const t = await makeTenant({
+        firstGoodAt: daysFrom(NOW, -400), subscriptionStatus: 'canceled', subscriptionEndedAt: E, deletionScheduledFor: daysFrom(E, 90), // 30 days ago
+        status: 'suspended', suspendedAt: daysFrom(NOW, -119), suspensionReason: 'policy', billingEmail: 'billing@test.dev',
+      });
+      await applyAdminPlan(t.id, plans.unsuspend(), 'founder:test');
+      const before = new Date();
+      await deliverPendingNotices(10_000, undefined, [t.id]);
+      const row = await getTenantRow(t.id);
+      const D = row.deletionScheduledFor!;
+      expect(D.getTime()).toBeGreaterThanOrEqual(daysFrom(before, 14).getTime());
+      const [notice] = await endedRows(t.id);
+      expect(notice.sentAt).not.toBeNull();
+      const { timeZone } = await resolveRecipientsAndTimezone(row);
+      const statedD = formatCalendarDate(calendarDayOf(D, timeZone), 'MMMM D, YYYY');
+      expect((notice.payload as { stated: Record<string, string> }).stated.deletionDate).toBe(statedD);
+      expect(endedEmails()).toHaveLength(1);
+      expect(endedEmails()[0].html).toContain(statedD);
+    });
   });
 
   it('set-policy-export refuses a workspace that is not on a policy hold', async () => {

@@ -186,10 +186,12 @@ export function isPolicyHeld(f: Pick<LifecycleFacts, 'status' | 'suspensionReaso
 }
 
 /**
- * SWEEP-FINDINGS.md §2 decision 3: the payment, trial and suspension emails held back while policy-held. Deletion
- * notices, export-ready and policy-suspended are not affected.
+ * SWEEP-FINDINGS.md §2 decision 3: the payment, trial and suspension emails held back while policy-held, plus
+ * `subscription-ended` (lead, N1: §9.2's no-export-window rule, which applyEnded already applies; `unsuspend` re-queues
+ * it). Deletion notices, export-ready and policy-suspended are not affected.
  */
 export const POLICY_HELD_KINDS = [
+  'subscription-ended',
   'trial-reminder-7d',
   'trial-reminder-1d',
   'trial-ended',

@@ -101,6 +101,12 @@ export const plans = {
       patch: { status: 'active', suspendedAt: null, suspensionReason: null, policyExportAllowed: false },
       auditKind: 'policy-unsuspended',
       auditDetail: '',
+      // SWEEP-FINDINGS.md §2 decision 3 (lead, N1): an ended subscription's email is held during a policy hold (or was
+      // never queued: applyEnded under policy), and nothing else re-queues it once E is recorded. Queue it now:
+      // enqueueNotice inserts it, revives a superseded unsent row, or does nothing if it was already sent.
+      after: row.subscriptionEndedAt && !row.lifecycleExempt
+        ? async (tx) => { await enqueueNotice(tx, row.id, 'subscription-ended', row.subscriptionEndedAt!); }
+        : undefined,
     };
   },
 

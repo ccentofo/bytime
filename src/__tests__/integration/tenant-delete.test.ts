@@ -13,7 +13,7 @@ import { getTenantAccess } from '@/lib/tenant/lifecycle';
 import { toLifecycleFacts } from '@/lib/tenant/registry';
 import { stripeState } from './fakes/fake-stripe';
 import {
-  cpReady, auditOf, cleanupLifecycleTenants, daysFrom, getTenantRow, insertNotice, makeTenant, observationsOf, openAlertsOf,
+  cpReady, auditOf, cleanupLifecycleTenants, daysFrom, getTenantRow, insertNotice, makeTenant, observationsOf, openAlertsOf, setTenant,
   type TenantRow,
 } from './lifecycle-helpers';
 
@@ -99,6 +99,44 @@ describe.skipIf(!isLocal)('deleteTenant (§5.3) — throwaway local databases on
       } finally {
         await controlDb.delete(opsAlerts).where(eq(opsAlerts.id, alert.id));
       }
+    });
+  });
+
+  // SWEEP-FINDINGS.md §5 A2-G2 (HIGH): never drop a database another live workspace still points at (step 2).
+  describe('A2-G2: a database another workspace uses is never dropped', () => {
+    it('refuses (naming the sibling) when another non-deleted workspace has the same database URL; the database and status are unchanged', async () => {
+      const t = await eligibleTenant();
+      const sibling = await makeTenant({ dbUrlEncrypted: encrypt(db.url) }); // a fresh ciphertext of the same URL
+      const r = await run(t.slug, { forceWithReason: 'A2-G2' });
+      expect(r).toEqual({ outcome: 'refused', reason: `Another workspace uses the same database (${sibling.slug}); refusing.` });
+      expect(await dbExists(db.name)).toBe(true);
+      const row = await getTenantRow(t.id);
+      expect(row.status).toBe('active');
+      expect(row.deletedAt).toBeNull();
+      expect(row.lifecycleVersion).toBe(t.lifecycleVersion);
+      expect(await auditOf(t.id)).toEqual([]); // refused before step 3: nothing audited
+      // A suspended sibling counts too (any status but deleted).
+      await setTenant(sibling.id, { status: 'suspended', suspendedAt: new Date(), suspensionReason: 'policy' });
+      expect((await run(t.slug, { forceWithReason: 'A2-G2' })).outcome).toBe('refused');
+      expect(await dbExists(db.name)).toBe(true);
+    });
+
+    it('refuses when a sibling\'s database URL can\'t be decrypted (sharing can\'t be ruled out); nothing changes', async () => {
+      const t = await eligibleTenant();
+      const broken = await makeTenant({ dbUrlEncrypted: 'not-a-ciphertext' });
+      const r = await run(t.slug, { forceWithReason: 'A2-G2' });
+      expect(r).toEqual({ outcome: 'refused', reason: `Cannot decrypt workspace ${broken.slug}'s database URL, so sharing can't be ruled out; refusing.` });
+      expect(await dbExists(db.name)).toBe(true);
+      expect((await getTenantRow(t.id)).status).toBe('active');
+      // The dry run refuses the same way, before anything else.
+      expect((await deleteTenant({ slug: t.slug, apply: false, actor: 'test', log: () => {} })).outcome).toBe('refused');
+    });
+
+    it('a DELETED workspace (a tombstone) on the same URL doesn\'t block', async () => {
+      const t = await eligibleTenant();
+      await makeTenant({ dbUrlEncrypted: encrypt(db.url), status: 'deleted', deletedAt: new Date() });
+      const r = await deleteTenant({ slug: t.slug, apply: false, actor: 'test', log: () => {} });
+      expect(r.outcome).toBe('dry-run');
     });
   });
 

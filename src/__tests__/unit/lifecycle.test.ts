@@ -389,7 +389,7 @@ describe('U12: isNoticeSuperseded for the new kind (§6.9)', () => {
 // SWEEP-FINDINGS.md §5 (pre-staging sweep, fix round S2)
 // ---------------------------------------------------------------------------
 
-describe('A2-D1: no payment, trial or suspension emails while policy-held (PO decision 3)', () => {
+describe('A2-D1: no payment, trial, suspension or subscription-ended emails while policy-held (PO decision 3, N1)', () => {
   const Sa = d(-2);
   const P = d(-13);
   const policy = { status: 'suspended', suspensionReason: 'policy', suspendedAt: Sa } as const;
@@ -404,6 +404,8 @@ describe('A2-D1: no payment, trial or suspension emails while policy-held (PO de
     ['bank-payment-failed', d(-1), { ...paying }],
     ['suspension-warning', P, { ...paying, subscriptionStatus: 'past_due', pastDueSince: P }],
     ['suspended', Sa, { ...paying, subscriptionStatus: 'unpaid', pastDueSince: d(-20) }],
+    // N1 (lead): the no-export-window email, re-queued by unsuspend.
+    ['subscription-ended', d(-10), { ...paying, subscriptionStatus: 'canceled', subscriptionEndedAt: d(-10), deletionScheduledFor: d(80) }],
   ];
 
   for (const [kind, anchor, base] of cases) {
