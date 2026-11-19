@@ -194,6 +194,23 @@ describe('updateUser logs (US-4 companion)', () => {
     expect(viaTx()).toEqual(['tx', 'tx', 'tx', 'tx']);                                 // M2
   });
 
+  it('SWEEP-FINDINGS.md A3-G11: supervisor → ADMIN also ends their approval scope (logged), like a demotion to employee', async () => {
+    const A = ID(22);
+    db.onSelect(users, [{ role: 'supervisor', isActive: true, flsaExempt: false }]);  // the old values
+    db.onReturning('update', users, [safe({ role: 'admin' })]);
+    db.onSelect(approvalScopes, []);                                                     // loadApprovalFacts' read (before)
+    db.onSelect(approvalScopes, [{ id: ID(41) }]);                                       // their active scope row
+    db.onReturning('update', approvalScopes, [{ id: ID(41), supervisorId: ID(3), clinId: A }]);
+    expect(await updateUser(ID(3), { role: 'admin' })).toMatchObject({ ok: true });
+    const scopeUpdates = db.updates.filter((u) => u.table === approvalScopes);
+    expect(scopeUpdates).toHaveLength(1);
+    expect(scopeUpdates[0].set).toMatchObject({ isActive: false });
+    expect(logs().map((l) => [l.action, l.newValue])).toEqual([
+      ['removed', { supervisorId: ID(3), clinId: A }],
+      ['role_changed', expect.objectContaining({ role: 'admin' })],
+    ]);
+  });
+
   it('overtime and active state log their own action; a name-only edit logs nothing; a missing user is not_found', async () => {
     db.onSelect(users, [{ role: 'employee', isActive: true, flsaExempt: false }]);
     db.onReturning('update', users, [safe({ flsaExempt: true })]);

@@ -96,3 +96,17 @@ describe('/api/v1/costs streams (large-report-responses §6.3)', () => {
     spy.mockRestore();
   });
 });
+
+describe('/api/v1/costs?contractId= (SWEEP-FINDINGS.md A3-G2)', () => {
+  it('passes the contract id to the query (and nothing without one)', async () => {
+    const { getDetailedCostReportData } = await import('@/server/internal/reports');
+    vi.mocked(getDetailedCostReportData).mockClear();
+    const UUID = '6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b';
+    const withContract = new Request(`https://acme-test.example.com/api/v1/costs?startDate=2026-01-01&endDate=2026-12-31&contractId=${UUID}`, {
+      headers: { Authorization: `Bearer ${KEY}`, 'x-forwarded-for': `198.51.100.${(ip++ % 250) + 1}` },
+    }) as never;
+    expect((await GET(withContract)).status).toBe(200);
+    expect((await GET(request())).status).toBe(200);
+    expect(vi.mocked(getDetailedCostReportData).mock.calls).toEqual([['2026-01-01', '2026-12-31', UUID], ['2026-01-01', '2026-12-31', undefined]]);
+  });
+});
