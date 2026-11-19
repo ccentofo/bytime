@@ -184,10 +184,10 @@ export const EXPORT_FAMILY = 'cadenzpoint-backup-export';
 export interface ExportHooks {
   /** After the upload completed, before the recipients are re-resolved (T3 mid-build suspension, T29 deactivation). */
   afterUpload?: () => Promise<void>;
-  /** Immediately before BEGIN (the deadline-before-BEGIN case). */
-  beforeBegin?: () => Promise<void>;
-  /** Inside the record transaction, after every write, before COMMIT. */
-  beforeCommit?: (tx: postgres.TransactionSql) => Promise<void>;
+  /** Immediately before BEGIN (the deadline-before-BEGIN case), with the run's deadline/stop signal. */
+  beforeBegin?: (signal: AbortSignal) => Promise<void>;
+  /** Inside the record transaction, after every write, before COMMIT (with the run's deadline/stop signal). */
+  beforeCommit?: (tx: postgres.TransactionSql, signal: AbortSignal) => Promise<void>;
   /** After COMMIT returned: throwing simulates a lost acknowledgement. */
   afterCommit?: () => Promise<void>;
 }
@@ -433,7 +433,7 @@ async function runBuildMode(
   }
 
   if (signal.aborted) return deleteNow('failed', String(signal.reason ?? 'deadline'));
-  await deps.hooks?.beforeBegin?.();
+  await deps.hooks?.beforeBegin?.(signal);
   if (signal.aborted) return deleteNow('failed', String(signal.reason ?? 'deadline'));
 
   // 4. Record, in one control-plane transaction under the export lock and the tenant lock (D1).
@@ -473,7 +473,7 @@ async function runBuildMode(
       await tx`INSERT INTO tenant_audit_events (tenant_id, kind, detail, actor)
         VALUES (${wsId}, 'export-held', ${JSON.stringify(detail)}, ${`export:${args.runId}`.slice(0, 100)})`;
     }
-    await deps.hooks?.beforeCommit?.(tx);
+    await deps.hooks?.beforeCommit?.(tx, signal);
     callbackReturned = true;
     return expiresAt;
   });
