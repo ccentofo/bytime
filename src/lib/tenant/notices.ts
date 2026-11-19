@@ -2,7 +2,7 @@ import 'server-only';
 import React from 'react';
 import { render } from '@react-email/components';
 import { and, asc, eq, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
-import { tenantNotices } from '@/db/control-plane/schema';
+import { exportDeliveries, tenantNotices } from '@/db/control-plane/schema';
 import { withLockedPool, withTenantLock, type ControlTx } from '@/db/control-plane/locked';
 import { getDbForUrl } from '@/db';
 import { users, workspaceSettings } from '@/db/schema';
@@ -10,7 +10,7 @@ import { decrypt } from '@/lib/encryption';
 import { resend, EMAIL_FROM, isEmailEnabled } from '@/lib/email/client';
 import { CRON_SEND_INTERVAL_MS } from '@/lib/email/rate';
 import { calendarDayOf, canonicalTimeZone, formatCalendarDate } from '@/lib/calendar-date';
-import { tenantBaseUrl } from './host';
+import { apexBaseUrl, tenantBaseUrl } from './host';
 import { addDays, isNoticeSuperseded, type NoticeKind } from './lifecycle';
 import { DELETION_NOTICE_DAYS, NOTICE_RECIPIENTS, PAYMENT_GRACE_DAYS, SUSPENDED_DAYS_UNTIL_TERMINATION, SUSPENSION_NOTICE_DAYS } from './lifecycle-config';
 import { toLifecycleFacts } from './registry';
@@ -25,6 +25,8 @@ import { DeletionScheduledEmail } from '@/lib/email/templates/deletion-scheduled
 import { PolicySuspendedEmail } from '@/lib/email/templates/policy-suspended';
 import { InvoiceOverdueEmail } from '@/lib/email/templates/invoice-overdue';
 import { BankPaymentFailedEmail } from '@/lib/email/templates/bank-payment-failed';
+import { ExportReadyEmail } from '@/lib/email/templates/export-ready';
+import { fmtDateTime } from '@/lib/export/format';
 
 /**
  * Lifecycle notice OUTBOX (feature-plan-terms-compliance-fixes.md §4.5, R14 proof of notice).
@@ -69,8 +71,11 @@ interface FrozenPayload {
   stated: Record<string, string>;
 }
 
-/** D10: active admins + Stripe billing email; the signup email whenever there is no active admin. */
-async function resolveRecipientsAndTimezone(row: TenantRow): Promise<{ to: string[]; timeZone: string }> {
+/**
+ * D10: active admins + Stripe billing email; the signup email whenever there is no active admin. Exported (internal) for
+ * the shared fixture test against the export task's copy (feature-plan-cloud-export.md §6.3 step 2, T29).
+ */
+export async function resolveRecipientsAndTimezone(row: TenantRow): Promise<{ to: string[]; timeZone: string }> {
   const emails = new Set<string>();
   let timeZone = 'America/New_York';
   let hasActiveAdmin = false;
@@ -97,8 +102,17 @@ export function statedSuspensionDate(anchor: Date, now: Date): Date {
   return graceEnd.getTime() >= earliest.getTime() ? graceEnd : earliest;
 }
 
+/** A date and time in the given zone (feature-plan-cloud-export.md §6.5; `fmt` is date only). Re-exported for tests. */
+export { fmtDateTime };
+
+/** feature-plan-cloud-export.md §6.5: the export-ready facts that don't live on the tenant row. */
+interface ExportRenderFacts {
+  link: string;
+  expiresAt: Date;
+}
+
 /** Render a notice from the CURRENT facts (called once per generation, then frozen). */
-async function renderNotice(kind: string, anchor: Date, row: TenantRow, timeZone: string, now: Date): Promise<{ subject: string; html: string; stated: Record<string, string> }> {
+async function renderNotice(kind: string, anchor: Date, row: TenantRow, timeZone: string, now: Date, exportFacts?: ExportRenderFacts): Promise<{ subject: string; html: string; stated: Record<string, string> }> {
   const fmt = (d: Date) => formatCalendarDate(calendarDayOf(d, timeZone), 'MMMM D, YYYY');
   const appUrl = tenantBaseUrl(row.slug);
   const tenantName = row.name;
@@ -170,6 +184,14 @@ async function renderNotice(kind: string, anchor: Date, row: TenantRow, timeZone
       element = React.createElement(PolicySuspendedEmail, { tenantName, suspendedAtFormatted: stated.suspendedAt });
       break;
     }
+    case 'export-ready': {
+      // feature-plan-cloud-export.md §6.5: `stated` never holds the link (only the payload's html does, until it's sent).
+      if (!exportFacts) throw new Error('export-ready needs its delivery');
+      stated.worksUntil = fmtDateTime(exportFacts.expiresAt, canonicalTimeZone(timeZone) ?? 'America/New_York');
+      subject = `Your ${tenantName} workspace export is ready`;
+      element = React.createElement(ExportReadyEmail, { tenantName, link: exportFacts.link, worksUntilFormatted: stated.worksUntil });
+      break;
+    }
     default:
       throw new Error(`Unknown notice kind: ${kind}`);
   }
@@ -205,6 +227,10 @@ export async function deliverNotice(noticeId: string, now: Date = new Date()): P
       ))
       .returning();
     if (!claimed) return null;
+
+    // feature-plan-cloud-export.md §6.5: its own branch, BEFORE the generic supersede (which would supersede it for a
+    // deleting/deleted workspace). It reads only the control plane: its stored recipients and time zone, never D10.
+    if (claimed.kind === 'export-ready') return prepareExportNotice(tx, claimed, now);
 
     const row = await readTenant(tx, claimed.tenantId);
     if (!row || isNoticeSuperseded(claimed.kind, claimed.scheduledFor, toLifecycleFacts(row), now)) {
@@ -246,6 +272,7 @@ export async function deliverNotice(noticeId: string, now: Date = new Date()): P
   if (prepared.superseded) return 'superseded';
   if ('noRecipients' in prepared) return 'failed';
   const { payload, generation } = prepared;
+  if ('deliveryId' in prepared && prepared.deliveryId) return sendExportBatch(noticeId, prepared.deliveryId, payload, generation, prepared.tenantId, now);
 
   const fail = async (message: string) => {
     await withLockedPool((db) => db.update(tenantNotices).set({ lastError: message }).where(eq(tenantNotices.id, noticeId)));
@@ -286,6 +313,125 @@ export async function deliverNotice(noticeId: string, now: Date = new Date()): P
     }
     const retryable = name === 'concurrent_idempotent_requests' || name === 'rate_limit_exceeded' || outcome.error?.statusCode === 429;
     if (!retryable || attempt === 3) return fail(`${name}: ${outcome.error?.message ?? 'unknown error'}`);
+    await new Promise((r) => setTimeout(r, timing.backoffBaseMs * 2 ** attempt));
+  }
+  return 'failed';
+}
+
+// ---- export-ready (feature-plan-cloud-export.md §6.5) ----------------------------------------------------------------
+
+/** The download link's token in a frozen message, wherever it appears (it's 43 base64url characters after /export/). */
+const EXPORT_TOKEN_RE = /\/export\/[A-Za-z0-9_-]{43}/g;
+export const LINK_REMOVED = '[link removed after sending]';
+
+/** The frozen message with the link's token removed (on send and on supersede). */
+export function redactExportPayload<T extends { html?: unknown } | null>(payload: T): T {
+  if (!payload || typeof payload.html !== 'string') return payload;
+  return { ...payload, html: payload.html.replace(EXPORT_TOKEN_RE, `/export/${LINK_REMOVED}`) };
+}
+
+type ClaimedNotice = typeof tenantNotices.$inferSelect;
+
+/** Supersede an export notice: null the delivery's token and redact the frozen payload, in the caller's transaction. */
+async function supersedeExportNotice(tx: ControlTx, claimed: ClaimedNotice, deliveryId: string | null, now: Date): Promise<void> {
+  await tx.update(tenantNotices).set({ supersededAt: now, payload: redactExportPayload(claimed.payload as FrozenPayload | null) })
+    .where(eq(tenantNotices.id, claimed.id));
+  if (deliveryId) await tx.update(exportDeliveries).set({ tokenEncrypted: null }).where(eq(exportDeliveries.id, deliveryId));
+}
+
+/**
+ * The export branch of the locked section: the delivery by `notice_id`, the tenant's control-plane row (a tombstone is
+ * fine). Missing, revoked, expired or erased → supersede (never D10). Otherwise freeze (or, after 23 hours, refreeze with
+ * the next generation) from the stored recipients, time zone and token.
+ */
+async function prepareExportNotice(tx: ControlTx, claimed: ClaimedNotice, now: Date) {
+  const [delivery] = await tx.select().from(exportDeliveries).where(eq(exportDeliveries.noticeId, claimed.id)).limit(1);
+  const row = await readTenant(tx, claimed.tenantId);
+  if (!delivery || !row || delivery.revokedAt || delivery.erasedAt || delivery.expiresAt.getTime() <= now.getTime() || !delivery.tokenEncrypted) {
+    await supersedeExportNotice(tx, claimed, delivery?.id ?? null, now);
+    return { superseded: true as const };
+  }
+  let payload = claimed.payload as FrozenPayload | null;
+  let generation = claimed.idempotencyGeneration;
+  const stale = claimed.firstAttemptAt !== null
+    && now.getTime() - claimed.firstAttemptAt.getTime() > REFREEZE_AFTER_HOURS * 3600_000;
+  if (!payload || stale) {
+    const to = JSON.parse(decrypt(delivery.recipientsEncrypted)) as string[];
+    if (to.length === 0) {
+      await tx.update(tenantNotices).set({ lastError: 'no recipients' }).where(eq(tenantNotices.id, claimed.id));
+      return { superseded: false as const, noRecipients: true as const };
+    }
+    const link = `${apexBaseUrl()}/export/${decrypt(delivery.tokenEncrypted)}`;
+    const rendered = await renderNotice('export-ready', claimed.scheduledFor, row, delivery.timeZone, now, { link, expiresAt: delivery.expiresAt });
+    payload = { to, ...rendered };
+    if (stale) generation += 1;
+    await tx.update(tenantNotices).set({
+      payload, payloadFrozenAt: now, idempotencyGeneration: generation,
+      ...(stale ? { firstAttemptAt: null } : {}),
+    }).where(eq(tenantNotices.id, claimed.id));
+  }
+  return {
+    superseded: false as const, payload, generation, tenantId: claimed.tenantId, kind: claimed.kind,
+    firstAttemptAt: stale ? null : claimed.firstAttemptAt, deliveryId: delivery.id,
+  };
+}
+
+/**
+ * Send an export notice: ONE batch, one message per stored recipient (`to: [address]`, the same subject and html; no
+ * bcc, no support copy), `batchValidation: 'strict'` (all or nothing), raced against the attempt timeout, with the
+ * notice's idempotency key. Sent ONLY when Resend returns exactly N `{ id }`s (the permissive reminder helper is not
+ * reused: it counts a partial success as sent). On sent, in one transaction: sent_at, the first id (the full list in
+ * payload.providerIds), the real recipients, the payload's link redacted, and the delivery's token nulled.
+ */
+async function sendExportBatch(noticeId: string, deliveryId: string, payload: FrozenPayload, generation: number, tenantId: string, now: Date): Promise<DeliveryOutcome> {
+  const fail = async (message: string) => {
+    await withLockedPool((db) => db.update(tenantNotices).set({ lastError: message.slice(0, 500) }).where(eq(tenantNotices.id, noticeId)));
+    return 'failed' as const;
+  };
+  const client = resend;
+  if (!client) return fail('email disabled');
+  await withLockedPool((db) => db.update(tenantNotices)
+    .set({ firstAttemptAt: sql`coalesce(${tenantNotices.firstAttemptAt}, ${now.toISOString()}::timestamptz)` })
+    .where(eq(tenantNotices.id, noticeId)));
+  const key = `${noticeId}:${generation}`;
+  const messages = payload.to.map((to) => ({ from: EMAIL_FROM, to: [to], subject: payload.subject, html: payload.html }));
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    type BatchOutcome = { data: { data?: unknown } | null; error: { name?: string; message?: string; statusCode?: number | null } | null };
+    let outcome: BatchOutcome;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      outcome = await Promise.race([
+        client.batch.send(messages, { idempotencyKey: key, batchValidation: 'strict' }) as Promise<BatchOutcome>,
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('send timed out')), timing.sendTimeoutMs); }),
+      ]);
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : String(err)); // retried later with the same key
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!outcome.error) {
+      const ids = outcome.data?.data;
+      const ok = Array.isArray(ids) && ids.length === payload.to.length
+        && ids.every((e) => typeof (e as { id?: unknown } | null)?.id === 'string' && (e as { id: string }).id !== '');
+      if (!ok) return fail(`batch: expected ${payload.to.length} message ids, got ${Array.isArray(ids) ? ids.length : 'none'}`);
+      const providerIds = (ids as Array<{ id: string }>).map((e) => e.id);
+      await withLockedPool((db) => db.transaction(async (tx) => {
+        await tx.update(tenantNotices).set({
+          sentAt: now, providerMessageId: providerIds[0], recipients: payload.to, lastError: null,
+          payload: { ...redactExportPayload(payload), providerIds },
+        }).where(eq(tenantNotices.id, noticeId));
+        await tx.update(exportDeliveries).set({ tokenEncrypted: null }).where(eq(exportDeliveries.id, deliveryId));
+      }));
+      return 'sent';
+    }
+    // By name, exactly as the single-send path.
+    const name = outcome.error.name ?? '';
+    if (name === 'invalid_idempotent_request') {
+      await withLockedPool((db) => raiseAlert(db, { tenantId, kind: 'notice-idempotency-mismatch', dedupKey: noticeId }, now));
+      return fail(`idempotency mismatch: ${outcome.error.message ?? ''}`);
+    }
+    const retryable = name === 'concurrent_idempotent_requests' || name === 'rate_limit_exceeded' || outcome.error.statusCode === 429;
+    if (!retryable || attempt === 3) return fail(`${name}: ${outcome.error.message ?? 'unknown error'}`);
     await new Promise((r) => setTimeout(r, timing.backoffBaseMs * 2 ** attempt));
   }
   return 'failed';

@@ -25,7 +25,6 @@
     "tenant:admin": "node --conditions=react-server --import tsx scripts/tenant-admin.ts",
     "report:cost-basis-change": "node --conditions=react-server --import tsx scripts/report-cost-basis-change.ts",
     "tenant:delete": "node --conditions=react-server --import tsx scripts/delete-tenant.ts",
-    "tenant:export": "node --conditions=react-server --import tsx scripts/tenant-export.ts",
     "backfill:neon-project-ids": "node --conditions=react-server --import tsx scripts/backfill-neon-project-ids.ts",
     "backfill:neon-retention": "node --conditions=react-server --import tsx scripts/backfill-neon-retention.ts",
     "db:seed": "tsx scripts/seed-users.ts",

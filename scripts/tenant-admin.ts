@@ -12,7 +12,8 @@
  *   set-policy-export <slug> on|off --reason "<why>" --yes  (F5: export for a policy-suspended workspace)
  *   set-exempt <slug> on|off --reason "<why>" --yes (F1 demo/internal workspaces only)
  *   force-notice-sent <slug> <kind> --reason "<why>" [--anchor <iso>] --yes
- *   export-destroyed <slug> [--legal-hold "<reason>"] --yes
+ *   export-revoke <delivery-id> [--yes]             (feature-plan-cloud-export.md §6.5: the link stops working at once and
+ *                                                   the pending email is superseded; the hourly sweep erases the copy)
  *   resolve-alert <alert-id> --note "<text>" --yes
  *   audit-note <slug> --note "<text>" --yes        (append a founder note to the audit trail, e.g. RESTORE.md)
  *   reopen-import-window <slug> --days <1-30> --reason "<why>" --yes  (certified-outputs C1: let one workspace import a
@@ -52,7 +53,7 @@ import type { TenantRow } from '../src/lib/tenant/lifecycle-store';
 import { deliverPendingNotices } from '../src/lib/tenant/notices';
 import {
   AdminCommandError, applyAdminPlan, checkStripeMode, ensureCustomerCommand, findForceableNotice, forceNoticeSent, plans,
-  recordFounderExportDisposal, recordFounderNote, resolveAlertById, seatSyncCommand, setPlanPlanner, stripeKeyMode, stripeResyncCommand,
+  exportRevoke, planExportRevoke, recordFounderNote, resolveAlertById, seatSyncCommand, setPlanPlanner, stripeKeyMode, stripeResyncCommand,
   windowSignupCommand, type Planner,
 } from '../src/lib/tenant/admin-commands';
 import { printTargetBanner } from './lib/target';
@@ -240,7 +241,7 @@ async function main() {
     process.exit(0);
   }
   const [command, target, ...rest] = process.argv.slice(2);
-  if (!command || !target) fail('Usage: tenant-admin.ts <command> <slug|alert-id> [args] [--yes] (see the header of scripts/tenant-admin.ts)');
+  if (!command || !target) fail('Usage: tenant-admin.ts <command> <slug|alert-id|delivery-id> [args] [--yes] (see the header of scripts/tenant-admin.ts)');
   const yes = rest.includes('--yes');
   const positional = rest.filter((a, i) => !a.startsWith('--') && !(i > 0 && rest[i - 1].startsWith('--') && rest[i - 1] !== '--yes'));
 
@@ -292,13 +293,15 @@ async function main() {
       console.log(`✓ Forced. ${CACHE_NOTE}`);
       break;
     }
-    case 'export-destroyed': {
-      const hold = flag(rest, '--legal-hold');
-      const t = await loadBySlug(target);
-      console.log(hold ? `Would record a LEGAL HOLD: ${hold}` : 'Would record that the founder export was DESTROYED (all copies).');
+    case 'export-revoke': {
+      const plan = await planExportRevoke(target);
+      console.log(`Would REVOKE export delivery ${plan.deliveryId} of ${plan.slug} (link valid until ${plan.expiresAt.toISOString()}).`);
+      console.log(plan.noticePending ? 'Its export email has not been sent yet: it will be superseded (never sent).' : 'Its export email was already sent: the link stops working at once.');
+      if (plan.sendInFlight) console.log('⚠ A send is in flight (the notice\'s lease is live): the email may already be going out; the link is dead either way.');
       confirmOrExit(yes);
-      const detail = await recordFounderExportDisposal(t.id, hold, ACTOR);
-      console.log(`✓ Recorded (export: ${detail}).`);
+      const done = await exportRevoke(target, ACTOR);
+      if (done.sendInFlight) console.log('⚠ The email may already be going out; the link is dead either way.');
+      console.log(`✓ Revoked. The hourly sweep erases the copy within the hour.`);
       break;
     }
     case 'resolve-alert': {

@@ -48,7 +48,7 @@ function printReceipt(r: DeletionReceipt) {
   console.log(`  deleted_at:              ${iso(r.deletedAt)}`);
   console.log(`  database:                ${r.database}`);
   if (r.forcedReason) console.log(`  FORCED:                  ${r.forcedReason}`);
-  if (r.founderExportDestroyBy) console.log(`  founder export: DESTROY BY ${iso(r.founderExportDestroyBy)} (then: npm run tenant:admin -- export-destroyed ${r.slug} --yes)`);
+  console.log(`  Export copies: ${r.exportCopies.delivered} delivered (expire automatically); ${r.exportCopies.openHolds} open hold(s)`);
   console.log(`  notices (${r.notices.length}):`);
   for (const n of r.notices) {
     const state = n.sentAt ? `sent ${iso(n.sentAt)}` : n.forcedAt ? `FORCED ${iso(n.forcedAt)}` : n.supersededAt ? 'superseded' : 'NOT SENT';

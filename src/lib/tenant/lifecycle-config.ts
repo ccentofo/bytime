@@ -45,13 +45,6 @@ export const AUTO_DELETE = false;
 export const DELETION_SLA_DAYS = 7;
 
 /**
- * D11: maximum days deleted data may survive in backups (§9.3, Privacy §7).
- * Must be ≥ every retention mechanism: Neon's deleted-project recovery period is 7 days (per Neon docs,
- * Oct 2026). Any backup system added later must expire deleted tenants' data within this window.
- */
-export const BACKUP_RETENTION_DAYS = 30;
-
-/**
  * LB-D1 (feature-plan-launch-blockers.md §0): point-in-time history kept on every tenant Neon project — 7 days, the
  * Launch plan maximum. Mistake-undo backups (restore into a branch, RESTORE.md), not DCAA retention. Revisit on Scale.
  * Sent at project creation; existing projects via `npm run backfill:neon-retention`.

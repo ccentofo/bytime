@@ -43,6 +43,11 @@ vi.mock('@/lib/cron/heartbeat', async (importOriginal) => ({
 
 // feature-plan-database-backups.md §6.9 (U9): the Backups section's content comes from backupDigest (backup-status.test.ts).
 vi.mock('@/lib/tenant/backup-status', () => ({ backupDigest: async () => h.backups }));
+// feature-plan-cloud-export.md §6.7: the export findings and line come from export-status (export-digest.test.ts).
+vi.mock('@/lib/tenant/export-status', () => ({
+  checkExportCopies: async () => ({ overdue: 0 }),
+  exportDigest: async () => ({ line: 'Exports in the last 7 days: 0 delivered, 0 downloads, 0 not yet emailed. Open legal holds: 0', holds: [] }),
+}));
 
 import { sendOpsDigest } from '@/lib/tenant/ops-digest';
 import { raiseAlertWithEmail } from '@/lib/tenant/ops-alert-email';
