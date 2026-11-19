@@ -31,7 +31,7 @@ export interface ChargeCodeInput {
 
 // ── Validation (feature-plan-ux-people-codes.md §3.4; feature-plan-ux-setup-import.md §4.3): validateChargeCodeInput is
 // shared by createChargeCode and the charge-code import; updateChargeCode shares only validCode / validName (and
-// assertSlinOnClin). Not inside createChargeCodeInternal, so the QBO import keeps its own rules. ────────────────────────────────────────────────────────────────────────────────────────────────────
+// assertSlinOnClin). Not inside createChargeCodeInternal; the QuickBooks charge-code import calls it too (A3-D2). ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export function validCode(value: unknown): string {
   const code = typeof value === 'string' ? value.trim() : '';
