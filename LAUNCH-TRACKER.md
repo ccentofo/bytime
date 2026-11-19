@@ -108,6 +108,7 @@ Next: the early CI push when C2 exists (**CI only**). |
 ## Decisions log (product owner)
 | Date | Decision |
 |---|---|
+| 2026-11-19 | **Sweep decisions (product owner), all as recommended:** (1) the admin password reset refuses the admin's own account (use Change password), matching the MFA reset; (2) supervisors get the daily and deadline timesheet reminders, like employees; (3) no payment, trial or suspension emails while a workspace is policy-held (they resume if the hold is lifted); (4) the admin change log records workspace time-zone changes and charge-code assignments and removals. |
 | 2026-11-19 | **Before staging (product owner):** a full regression and test-gap sweep of `main` runs first (the lead's recommendation), then the account setup (Phases 3–11, none started) and the staging rehearsal. |
 | 2026-11-06 | UX: polished, usable, professional; not overengineered. Batch 2 mockups approved. |
 | 2026-11-06 | Audit trail Admin changes tab, admin two-step reset and audit CSV: in. QuickBooks auto-send switch: hidden. |
